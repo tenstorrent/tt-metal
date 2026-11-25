@@ -1,0 +1,32 @@
+{
+  "repository": "https://github.com/tenstorrent/tt-metal",
+  "revision": "236717d1e2d670dbdf3df7802683b38e1fc8f2c2",
+  "path": "models/demos/k2_horizon_mova_36b_a4b_qb2",
+  "import_rewrite": {
+    "from": "models.demos.k2_horizon_mova_36b_a4b_qb2",
+    "to": "agentic_models.models.k2_horizon_mova_36b_a4b.vllm",
+    "applies_to": "*.py, *.json"
+  },
+  "source_sha256": {
+    "README.md": "81ca01ea9036eb1ce79ddf42081ff179dbd949d766a97257c42d5ccf2e47ef23",
+    "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "doc/datatype_sweep/selected_precision_config.json": "9c6049da0b1fafcb3b52611098b0be0b2787d0d70808b67eceef36b62a4cced6",
+    "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/generator.py": "531a7baf9a82431900b04cdf731d77f13362569fec362ec4f4cc6066909b1e02",
+    "tt/generator_vllm.py": "f094cef10d16b4aa023e59d6cc4bb35a59fb805058faeaf287c6f42cd41111ff",
+    "tt/model.py": "ee351c160496a06fe7a648be49dbeb413c0c429a5336a5ef7c8312c438eb8008",
+    "tt/multichip_decoder.py": "01017f8d85132ba99a1fcdab8927eec8b68a8ef9bf7d75152a288d4b81ffad0e",
+    "tt/optimized_decoder.py": "993f42916582b770d18177360350440bf39cc389011afb2b0be9a789269d7a9f",
+    "tt/precision.py": "1cff72e3e476fc1a457cb4a5d1833070a98d1034a660f1311db7f92d5ad69156",
+    "tt/readiness_contract.py": "c03271513e669cef6154b1a97364aa61cb8a9316aae30c7180d0cdfde5fed8d9",
+    "vllm_metadata.json": "43f4871e32a6757aa3c91bfef764d04fbbca5df7b0f94415975dc4dfc00e5973"
+  },
+  "excluded": [
+    "tests/"
+  ],
+  "modified_sha256": {
+    "README.md": "1c43cc49b22a7cf942b85398c774fafbcd181124c3741deff19dd40dbe17af2a",
+    "tt/generator.py": "f5766078c5688e065fefa90d112b48d11b111ec8a42564466c4f66221300b370",
+    "tt/generator_vllm.py": "251fc7d96abe321af8c25fc6d7b7d2e18272d42f1c202c2b2ba401a7540bd4b7"
+  }
+}

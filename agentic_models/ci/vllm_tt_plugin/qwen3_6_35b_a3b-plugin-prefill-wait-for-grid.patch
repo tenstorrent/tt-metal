@@ -1,0 +1,112 @@
+From 97774cae108ea6c37548c6e9c946e41d7a7d0643 Mon Sep 17 00:00:00 2001
+From: Nicholas Smith <nsmith@tenstorrent.com>
+Date: Wed, 25 Nov 2026 17:21:17 +0000
+Subject: [PATCH] [perf] Opt-in wait for the alignment grid on partial prefill
+
+agentic-models patch P7 (qwen3_6_35b_a3b-plugin-prefill-wait-for-grid.patch).
+
+With TT_PREFILL_WAIT_FOR_GRID=1, a partial prefill of a running or
+prefix-hit request whose leftover chunk cannot reach the alignment grid waits
+for a full step instead of taking a block-aligned sliver that leaves every
+later chunk off the grid. Base: m2 ebdbc95 (round-6 perf), default flipped
+from '1' to '0': gemma serves with prefill_chunk_alignment 8192, and only the
+Qwen3.6-35B-A3B spec sets it (with prefill_chunk_alignment=256). Unset or '0',
+_align_prefill_chunk_end is the f6fe76b body.
+
+Tests: tests/test_prefill_wait_for_grid.py.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/vllm_tt_plugin/scheduler.py     | 13 ++++++++
+ tests/test_prefill_wait_for_grid.py | 51 +++++++++++++++++++++++++++++
+ 2 files changed, 64 insertions(+)
+ create mode 100644 tests/test_prefill_wait_for_grid.py
+
+diff --git a/src/vllm_tt_plugin/scheduler.py b/src/vllm_tt_plugin/scheduler.py
+index 51a9d35..abf7b76 100644
+--- a/src/vllm_tt_plugin/scheduler.py
++++ b/src/vllm_tt_plugin/scheduler.py
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
+ 
++import os
+ import sys
+ from enum import Enum
+ from typing import TYPE_CHECKING, cast
+@@ -885,6 +886,18 @@ class TTScheduler(AsyncScheduler):
+         aligned_end = end // align * align
+         if aligned_end <= start:
+             if start != 0:
++                # Opt-in (TT_PREFILL_WAIT_FOR_GRID=1, default off): when only
++                # this step's leftover budget keeps the chunk off the grid, wait
++                # for a full step instead of a block-aligned sliver. A sliver
++                # (e.g. a prefix-cache hit at 1024 given 32 leftover tokens)
++                # leaves every later chunk of the request off the grid, where a
++                # model whose attention prefill needs aligned chunk starts
++                # crawls token by token.
++                if (
++                    os.environ.get("TT_PREFILL_WAIT_FOR_GRID", "0") == "1"
++                    and num_new_tokens < self._full_step_prefill_cap()
++                ):
++                    return 0
+                 # The next chunk resumes where this one ends, and the model
+                 # takes a resume offset only on a KV block boundary. A running
+                 # request whose chunk cannot reach the grid still ends on a
+diff --git a/tests/test_prefill_wait_for_grid.py b/tests/test_prefill_wait_for_grid.py
+new file mode 100644
+index 0000000..e996def
+--- /dev/null
++++ b/tests/test_prefill_wait_for_grid.py
+@@ -0,0 +1,51 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""``TT_PREFILL_WAIT_FOR_GRID=1``: a partial prefill whose leftover chunk cannot
++reach the alignment grid waits a step instead of taking a block-aligned sliver.
++
++Unset (the default) or ``0``, the scheduler ends the chunk on a KV block exactly
++as before.
++"""
++
++import pytest
++
++from tests.test_prefill_chunk_alignment import _request, _scheduler
++
++# (computed, budget) -> the f6fe76b chunk: ends on a KV block short of the grid.
++CASES = [((157, 50), 35), ((192, 50), 0), ((1024, 32), 0), ((1024, 100), 64)]
++
++
++@pytest.mark.parametrize("value", [None, "0", ""])
++@pytest.mark.parametrize("case,expected", CASES)
++def test_default_off_ends_on_a_kv_block(monkeypatch, value, case, expected):
++    if value is None:
++        monkeypatch.delenv("TT_PREFILL_WAIT_FOR_GRID", raising=False)
++    else:
++        monkeypatch.setenv("TT_PREFILL_WAIT_FOR_GRID", value)
++    computed, budget = case
++    s = _scheduler(alignment=256)
++    assert s._mamba_block_aligned_split(_request(32612, computed), budget) == expected
++
++
++@pytest.mark.parametrize("case", [c for c, _ in CASES])
++def test_opted_in_partial_chunk_waits_for_a_full_step(monkeypatch, case):
++    monkeypatch.setenv("TT_PREFILL_WAIT_FOR_GRID", "1")
++    computed, budget = case
++    s = _scheduler(alignment=256)
++    assert s._mamba_block_aligned_split(_request(32612, computed), budget) == 0
++
++
++def test_opted_in_still_progresses_when_a_full_step_cannot_reach_the_grid(
++    monkeypatch,
++):
++    monkeypatch.setenv("TT_PREFILL_WAIT_FOR_GRID", "1")
++    s = _scheduler(alignment=256)
++    monkeypatch.setattr(s, "_full_step_prefill_cap", lambda: 100)
++    assert s._mamba_block_aligned_split(_request(32612, 1024), 100) == 64
++
++
++def test_opted_in_leaves_on_grid_and_final_chunks_alone(monkeypatch):
++    monkeypatch.setenv("TT_PREFILL_WAIT_FOR_GRID", "1")
++    s = _scheduler(alignment=256)
++    assert s._mamba_block_aligned_split(_request(32612, 1024), 300) == 256
++    assert s._mamba_block_aligned_split(_request(1100, 1024), 76) == 76

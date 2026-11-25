@@ -1,0 +1,84 @@
+{
+  "config_id": "baseline_bfp8",
+  "schema_version": 1,
+  "weight_groups": {
+    "expert_gu": "bfp8",
+    "expert_down": "bfp8",
+    "expert_ep": "bfp8",
+    "attention_input": "bfp8",
+    "attention_output": "bfp8",
+    "shared_packed": "bfp8",
+    "shared_down": "bfp8",
+    "lm_head": "bfp8"
+  },
+  "compute_fidelities": {
+    "expert_gu": {
+      "math_fidelity": "LoFi",
+      "fp32_dest_acc_en": true,
+      "math_approx_mode": false,
+      "packer_l1_acc": false
+    },
+    "expert_down": {
+      "math_fidelity": "LoFi",
+      "fp32_dest_acc_en": true,
+      "math_approx_mode": false,
+      "packer_l1_acc": false
+    },
+    "expert_ep": {
+      "math_fidelity": "LoFi",
+      "fp32_dest_acc_en": false,
+      "math_approx_mode": false,
+      "packer_l1_acc": false
+    },
+    "attention_input": {
+      "math_fidelity": "HiFi2",
+      "fp32_dest_acc_en": true,
+      "math_approx_mode": false,
+      "packer_l1_acc": false
+    },
+    "attention_output": {
+      "math_fidelity": "HiFi2",
+      "fp32_dest_acc_en": true,
+      "math_approx_mode": false,
+      "packer_l1_acc": false
+    },
+    "shared_packed": {
+      "math_fidelity": "HiFi2",
+      "fp32_dest_acc_en": true,
+      "math_approx_mode": false,
+      "packer_l1_acc": false
+    },
+    "shared_down": {
+      "math_fidelity": "HiFi2",
+      "fp32_dest_acc_en": true,
+      "math_approx_mode": false,
+      "packer_l1_acc": false
+    },
+    "lm_head": {
+      "math_fidelity": "HiFi2",
+      "fp32_dest_acc_en": true,
+      "math_approx_mode": false,
+      "packer_l1_acc": false
+    }
+  },
+  "layer_exceptions": [],
+  "ccl_dtype": "bf16",
+  "kv_cache_dtype": "bf16",
+  "activation_dtype": "bf16",
+  "residual_dtype": "bf16",
+  "logits_dtype": "bf16",
+  "sampling_dtype": "bf16",
+  "embedding_dtype": "bf16",
+  "linear_attention_weight_dtype": "bf16",
+  "linear_attention_arithmetic": "ordered_fp32",
+  "router_weight_dtype": "fp32_native_bf16_ordered_scan",
+  "router_logits_dtype": "fp32",
+  "routing_scores_dtype": "bf16",
+  "recurrent_state_dtype": "fp32",
+  "convolution_state_dtype": "bf16",
+  "norm_weight_dtype": "fp32_native_bf16_sharded_helpers",
+  "norm_fidelity": "HiFi4_layer_HiFi2_terminal",
+  "kv_layout": "TILE",
+  "shared_scalar_dtype": "bfp8",
+  "shared_scalar_fidelity": "HiFi2"
+}

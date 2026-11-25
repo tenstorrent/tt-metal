@@ -1,0 +1,74 @@
+{
+  "repository": "tt-metal bring-up checkout (not public)",
+  "host": "m5 (QB2)",
+  "host_path": "/home/ttuser/ornith-35b-a3b/tt-metal",
+  "branch": "main",
+  "revision": "050f4a6b10961e152ffa1679722773b6bdd003c6",
+  "validated_revision": "5d86db0b (evals; tt/, selected_precision_config.json and kv_capacity.json identical to 050f4a6b)",
+  "path": "models/autoports/ornith_ai_ornith_1_5_35b_a3b",
+  "import_rewrite": {
+    "from": "models.autoports.ornith_ai_ornith_1_5_35b_a3b",
+    "to": "agentic_models.models.ornith_1_5_35b_a3b.vllm",
+    "applies_to": "*.py, *.json"
+  },
+  "path_rewrite": {
+    "from": "models/autoports/ornith_ai_ornith_1_5_35b_a3b",
+    "to": "agentic_models/models/ornith_1_5_35b_a3b/vllm",
+    "applies_to": "*.py, *.json"
+  },
+  "source_sha256": {
+    "doc/datatype_sweep/selected_precision_config.json": "2b8ad6322f428de6d7475e60c3da0646f95c8179a80a7598e0f4b1796182358f",
+    "doc/full_model/kv_capacity.json": "3206c287e122c7549d78f049b0c975e8ac8754553ae508cf7f013fabcfd61efa",
+    "doc/optimized_vllm/native_tail_capacity/prediction_v3.json": "ee76a08725a8fdb6221eeafe7ba5f3a3cbc7e3691d876563452487b1a24b3b36",
+    "doc/optimized_vllm/native_tail_capacity/promotion_review.json": "b497db5aab136b4c8ec93badfa32fa97c399659ec6f65080ab7b43b95a1cc85f",
+    "doc/optimized_vllm/native_tail_capacity/summaries_v3/60620.summary.json": "f7b9661866c2457d51d43b3bd93629285728550149b0774a99cfc7ed1a6e2749",
+    "doc/optimized_vllm/native_tail_capacity/summaries_v3/60621.summary.json": "deca9355d4b21d78de31aaeac89112fcf21fb8b06ae4d65649a984406931ec1b",
+    "doc/optimized_vllm/native_tail_capacity/summaries_v3/baseline_v3.summary.json": "852485e039b75401dd96b23ab9bf9db3c5988b55e87df0ec44139b3ce5f0d848",
+    "tt/benchmark_timing.py": "27976bfd543ac02594f392889dafde414f2c96f0303dc5a00394c61d4c1d881a",
+    "tt/generator.py": "0ff7b850e04f0211ebd2fb50b997e158ecc489a375f72734eaf4428936e2fb36",
+    "tt/generator_vllm.py": "8cafd233446f0b2948ba109eaa11f92a39a110ee03460870279dce79a30c2518",
+    "tt/model.py": "38eefe7173a1b9a8aae3893001c538c650def2c4cd6089a8ae84c87246d1926f",
+    "tt/multichip_decoder.py": "9f47ea0f205ac6560df5377955e526cb0120ae96b62de60e53dc48b471f6dd7e",
+    "tt/optimized_decoder.py": "63045b5ed35fb996595aebb5f3c5d3be5e268727207375e8421209c48d4f5c47",
+    "tt/precision.py": "609bc75ab9dfb151032da03c2bd5dcb8ad9e5c01ff935b5cd39ae382eaa3bcb2",
+    "tt/serving_observer.py": "97e3ee57097e09761ad9aca582176e5e0408bb30816ab51893e894c0740514f9"
+  },
+  "excluded": [
+    "tests/",
+    "readiness/",
+    "readiness_autoregressive/",
+    "readiness_vllm/",
+    "readiness_aime24_chat.refpt",
+    "README.md",
+    "tt/fused_decoder.py",
+    "tt/functional_decoder.py",
+    "doc/ (except the precision config, kv_capacity.json and its 5 evidence files)"
+  ],
+  "vendored_modules": {
+    "tt/readiness_contract.py": {
+      "origin": "tenstorrent/skills tt-model-bringup 0.1.24 plugins/tt-model-bringup/runtime/readiness_check/contract.py",
+      "origin_revision": "834cda79cc37bf9eae686bc5a4cf3e27f7e6b29d",
+      "host_path": "m5:/home/ttuser/ornith-35b-a3b/skills-v24",
+      "replaces_import": "readiness_check.contract",
+      "source_sha256": "42417eab48a87b6e9c31dee15ef68bac5c67970e487a295f78ee7f968ef93358",
+      "modified_sha256": "271560d25df6ef64ffeefbf316d1cf74a0ffa79b42fef907dfa091c7154c53c3",
+      "modification": "provenance header comment; docstring example path models/autoports/<model_name> -> models/<bring-up dir>/<model_name>"
+    }
+  },
+  "modified_sha256": {
+    "doc/full_model/kv_capacity.json": "7b915873b276465daa40491a43036ed076f683e8a3e4a44d1425b08c70d02ddb",
+    "tt/generator.py": "89e5bbf585680c00be22525a89530deaf1b83f046b903454127369395fac4f0a",
+    "tt/generator_vllm.py": "68ed43ab531d47ce2cc2213b773f0562c539eb9d3985cd650c685cd32cec805f",
+    "tt/model.py": "71f52290aaa6a36c8243346372ca9485ee9e4e518d5a933019220f8db2619d76",
+    "tt/multichip_decoder.py": "d281b8fb1743ec4014f21484b691bb3496c16cfd0c8c698fe1ced625b417d573",
+    "tt/optimized_decoder.py": "29a3c08428496422c1f115b1d58ecb840468b91db650ffbe999942de7c21b8c1"
+  },
+  "modifications": [
+    "tt/generator.py: readiness_check.contract and the absolute model import become relative imports.",
+    "tt/generator.py: device top_k limited to 32 (max_device_top_k, TTSampling max_top_k, top_k validation); requests with top_k > 32 sample on the host.",
+    "tt/generator_vllm.py: model_capabilities gains preserve_prefill_state_slots=True (plugin patch P1).",
+    "tt/multichip_decoder.py, tt/optimized_decoder.py: moe_fused_swiglu and post_combine_reduce call the ttnn.bringup forks (tt_metal patches tt-metal-bringup-moe-fused-swiglu / -post-combine-reduce).",
+    "doc/full_model/kv_capacity.json: source_sha256 of the 5 gated runtime files set to the vendored bytes (measured_source_sha256 keeps the bring-up hashes); the 60620-block measurement is from the bring-up base and must be re-measured at the pins.",
+    "tt/model.py: resolve_checkpoint() prefers the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else $HF_HOME as before; kv_capacity.json source_sha256 tracks the edited file."
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "arch": "Qwen3_5ForConditionalGeneration",
+  "main_class": "agentic_models.models.ornith_1_5_9b.vllm.tt.generator_vllm:OrnithForCausalLM"
+}

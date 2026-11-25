@@ -1,0 +1,117 @@
+{
+  "repository": "https://github.com/tenstorrent/tt-metal",
+  "source": "m3:/home/ttuser/ornith-9b/tt-metal",
+  "branch": "metrics/gpqa-gap",
+  "revision": "b43970c8dede6ce3e080d187863193c72cb9d95d",
+  "path": "models/autoports/ornith_ai_ornith_1_5_9b",
+  "note": "Bring-up checkout on a QB2 host; the revision is not published. Only the runtime closure of tt/generator_vllm.py, its kernels and the selected precision config are vendored.",
+  "import_rewrite": {
+    "from": "models.autoports.ornith_ai_ornith_1_5_9b",
+    "to": "agentic_models.models.ornith_1_5_9b.vllm",
+    "applies_to": "*.py, *.json (imports and string literals)"
+  },
+  "source_sha256": {
+    "doc/datatype_sweep/selected_precision_config.json": "f630cff53b109955e578a739edcf45060001d969064607a3201dd1bc16b4d06c",
+    "tt/batch_state.py": "6e8a7301cf147fe8c69a5ada9593ea01296c2ea288a79a1969ea261b4fee5d8c",
+    "tt/benchmark_timing.py": "2fd0ad612f898dc5b834a3d8f0dbbec7865f47ff69d10d6d319171471aa1d554",
+    "tt/cache_contract.py": "47fcc51a5a43ed2f41a801a9f4408ff8f91e4cca7240b9dde597b8d4ae62c343",
+    "tt/conv_gates.py": "18d7b4a7cbc2c3de6de7d7430b43cd2925b5494b417f37b9c5016d1b62f4971d",
+    "tt/decode_contract.py": "334469ffa5f3fac8dde746491a62d14298a53f0e70babd7d711927a24e987fcc",
+    "tt/flat_ordered_conv_gates.py": "fd53b5e6ff08363e5b08094b64649e053cf7e07e86e8ced0c93bea5f252726c9",
+    "tt/generator.py": "77b4e4427fc7fd3cdd3d9f79e52f550f1e9bbecebd36506b67e4ffe58f9dfe29",
+    "tt/generator_contract.py": "42417eab48a87b6e9c31dee15ef68bac5c67970e487a295f78ee7f968ef93358",
+    "tt/generator_vllm.py": "feb2e5dc97a4ebff28177774f1d8242384793cc69bdc8a01a05d7af87986696f",
+    "tt/history_row_write.py": "d5dc56724b2bdb1eec57d5d4c86334ab359f9829829d23213f33714b8bdf8dd8",
+    "tt/inactive_state_copy.py": "d76d4f7174b4face63e8259904b8f167ebe47ef7110aac8bb82ffb795c4803f0",
+    "tt/kernels/conv_gates/compute.cpp": "baf94727676681004047de9b2b3a52daeac4c21d2e6e1e9d2777b8f2a675c4a1",
+    "tt/kernels/conv_gates/reader.cpp": "1f654a43b6031a191712b9777422481c93cd024142f02e6aa94c4f0cef8509d9",
+    "tt/kernels/conv_gates/writer.cpp": "97502cd5d493716df521faf8ff7dfcf69fb305d8836f654dc3b704b5eeb98d43",
+    "tt/kernels/conv_gates_chain/reader.cpp": "9543c0517f3111210adaf678be7a62b351e117b84b5f50ab014293783d59005d",
+    "tt/kernels/flat_ordered_conv_gates/compute.cpp": "6d65665808ac070e55a250184ff9eda290018d5e57cb3bd23831bc8e10455b39",
+    "tt/kernels/flat_ordered_conv_gates/norm_stages.hpp": "5ec2f1563c3bf9f37d65c1bd0f45e0f5da71c050312795afb5f6963df0c8a75d",
+    "tt/kernels/flat_ordered_conv_gates/reader.cpp": "66d914c48da67f6fa6bad0b86ea238d13f1a4da880f139765b326cc8fd30a5fe",
+    "tt/kernels/flat_ordered_conv_gates/writer.cpp": "5232f2b228ccc453e4c0c45a01014ba50c32b4f7a1c9b07070aa6839186d05a8",
+    "tt/kernels/gdn_chain/reader.cpp": "2c1b9a764419c5531a301e4fe42563127e204d8cea8d91d4b925a875cf43afbf",
+    "tt/kernels/gdn_chain/writer.cpp": "9e55be2470c0ecd4f5093fdfb996bacf6254c87e4efc02250742e7a78d565f16",
+    "tt/kernels/gdn_commit/copy.cpp": "6558acea28c46e218672e95c1f2362c2cbf18772c743c6f8dbf95bd97ae24352",
+    "tt/kernels/history_row_write/write.cpp": "da7b534a7a63b84f16c483aee19e8f7fb43add9c5b1769dd748ead3987ca5a30",
+    "tt/kernels/inactive_state_copy/copy.cpp": "028586dd0a1b7da02e1c77e13f01a1daf997a8f33e2cb6d3cbb6d18eb4f875ec",
+    "tt/kernels/partial_norm_rope/compute.cpp": "68180074e64c82f4285e1a8137728d714742fac1a1697c35f4e35e29b42507b9",
+    "tt/kernels/partial_norm_rope/norm_rope_stages.hpp": "68a0f9ed6d802791bed55d6774beba75e2988e4ae3a96610901cbdac544a4367",
+    "tt/kernels/partial_norm_rope/reader.cpp": "0d9205a767555e2914b413975a865d32a0bf71b0fb6f5f8c813ce5bf12703254",
+    "tt/kernels/partial_norm_rope/writer.cpp": "4f8ba927a911f3ad93167d066ae33d9de57d8533f4b710560099c301f321f840",
+    "tt/model.py": "c740c6062ea07ec961d3c91033fd0bd47ea693032ea33406a68d37a828fb30ce",
+    "tt/mtp_spec.py": "974c07ee1c5238b68ee0bfa8fd0b28bf0903e5c5c38d359c50d44ee5bd001629",
+    "tt/multichip_decoder.py": "44775a881bbeac20da13a27db2acfb427be81cd36e5a21b6d2f0f44ecb2582f7",
+    "tt/partial_norm_rope.py": "03bf02ca51f4ef76c5c784e7c74f790d394cd611a8fa393fae64935193444306",
+    "tt/precision.py": "befbc12a56b9fe561415e058b8d7293492079eb41de481022d69a1d7666d45e7",
+    "tt/prefill_contract.py": "8b23beea49601a5692ecac9973f3e53d0370cde3aa49d1629689dc5603f99d83",
+    "tt/prefill_ops.py": "b6520fba11f09b219d5c5b3d8b02668132aaa2e5633d538fbb364beed54f2a4c",
+    "tt/prefill_plan.py": "46ffee24d30f706feb5432bbb3812a1ad465c9fdde738c60a92daed4948a7c13",
+    "tt/prefill_runtime.py": "ec0e1540d06fe49e1a9d41e072411c0e330e13c3217a2ad17936f02b9241d155",
+    "tt/prefix_snapshots.py": "011eb2e69477a9346c6ff132aff948c80fadf98c1db83499676bff3305386982",
+    "tt/sampling_state.py": "96f4e9613c6ea18c3c585d1ac70f24838f76e53ac7fa17198ab10d55d83835b6",
+    "tt/spec_chain.py": "78d6040b81d53f9db39dbc808e00b829fcaecef88381257d6e8632b784ff9064"
+  },
+  "excluded": [
+    "tests/",
+    "tools/",
+    "readiness*/",
+    "metrics/",
+    "doc/ (except doc/datatype_sweep/selected_precision_config.json)",
+    "README.md",
+    "requirements.txt",
+    "readiness_aime24_chat.refpt",
+    "tt/{flat_ordered_post_loop,functional_decoder,fused_decoder,optimized_decoder,tiled_conv}.py (not imported by the adapter)",
+    "tt/kernels/{flat_ordered_post_loop,tiled_conv}/ (their wrappers are not vendored)"
+  ],
+  "modified_sha256": {
+    "tt/generator.py": "202e357593e328e2fe1cf9764b8a7f9e7d5743ebb3a4f2a8cc9729eae78740ef",
+    "tt/generator_contract.py": "a0ecfdc3dbbe167d71fda520c413c91cad67441032a4daad25b6db04f44836f8",
+    "tt/generator_vllm.py": "2119ac4d8ab86de4c9e0e70a83529a4d2bdadfd063e9288b80690c6f5b457abc",
+    "tt/model.py": "b2f32770530e065038420ae042cd1a97ece506c6a38fa9d5ed4ab2f80dc68537",
+    "tt/sampling_state.py": "16d5088f7f483254ddb879d7c9ec3ff473bb17e0e8771e671e11d314cfd89f04"
+  },
+  "vendored": [
+    {
+      "name": "models.common.sampling (generator, tt_sampling)",
+      "repository": "https://github.com/tenstorrent/tt-metal",
+      "revision": "58afa8579450ba8afd6df45d05ad01b2860cd32b",
+      "path": "models/common/sampling",
+      "destination": "tt/sampling",
+      "edits": [
+        "m3 aa3d320cd Python hunks (m3:/home/ttuser/ornith-9b/tt-metal): format_sampling_params(max_top_k=) keyword with 32/64 validation; TTSampling validates args.max_top_k in {32, 64} and forwards max_top_k to ttnn.sampling only when it is not 32",
+        "generator.py: the relative imports of _utils, tt_log_probs and tt_penalties become absolute models.common.sampling.* (pin); tt_sampling stays the vendored module"
+      ],
+      "source_sha256": {
+        "tt/sampling/generator.py": "c312de9a39b5d7b787716b2803bfec028e2e8438f27c02ec5b72b8494612eeb3",
+        "tt/sampling/tt_sampling.py": "e53677b04b112c5f282f1ec38974e7e82d32c6620fb5f376a74ff58d51ab2fe6"
+      },
+      "modified_sha256": {
+        "tt/sampling/generator.py": "b47a0a2c62ed6318803909bc4350656efce9fa6758139525b89c6b57e4495d92",
+        "tt/sampling/tt_sampling.py": "771a7736abe2632ea583bf1ed013eead250cf7ef53114e512a7b57c04f07142c"
+      }
+    },
+    {
+      "name": "tt_transformers (LazyWeight, LMHead1D and their imports)",
+      "repository": "https://github.com/tenstorrent/tt-transformers",
+      "source": "m3:/home/ttuser/ornith-9b/dependencies/tt-transformers (editable install used at bring-up)",
+      "revision": "25ebcdb3311bb86d1cb4ceff77bb8bf481f4cc73",
+      "path": "src/tt_transformers",
+      "destination": "tt/_tt_transformers",
+      "import_rewrite": {
+        "from": "tt_transformers.",
+        "to": "agentic_models.models.ornith_1_5_9b.vllm.tt._tt_transformers.",
+        "applies_to": "*.py"
+      },
+      "source_sha256": {
+        "tt/_tt_transformers/device_ownership.py": "ffd93523892ca7fcbbe26e1d168527e3fcf276f49e06e43599f3d6b5231095d6",
+        "tt/_tt_transformers/modules/lazy_weight.py": "2a9943751de2791265caa6750d6cc668ced85d3f866fcb97af14a894a6f58072",
+        "tt/_tt_transformers/modules/lightweightmodule.py": "43080707583a45925b2cab1c6e5b541eeb137dbbe6771f272571bb293148fd20",
+        "tt/_tt_transformers/modules/lm_head/lm_head_1d.py": "39d39cf8312da72569c2edfbff6dfbf0180af1d9ac51b0f23dda600e97bfd13c",
+        "tt/_tt_transformers/tensor_utils.py": "3b415d49309bfe006f5249cab938cf7c5c954fd8212e10244412a966bcf0c330"
+      },
+      "modified_sha256": {}
+    }
+  ]
+}

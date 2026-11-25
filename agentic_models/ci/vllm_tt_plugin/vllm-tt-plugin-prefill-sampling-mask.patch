@@ -1,0 +1,491 @@
+From 9d6a2d4f0c0a916f7b1d5c5257fb688334a0ef16 Mon Sep 17 00:00:00 2001
+From: Nicholas Smith <nsmith@tenstorrent.com>
+Date: Wed, 25 Nov 2026 17:13:59 +0000
+Subject: [PATCH] [feat] Opt-in prefill sampling mask for chunked prefill
+
+agentic-models patch P2 (vllm-tt-plugin-prefill-sampling-mask.patch).
+
+A model declaring model_capabilities['supports_prefill_sampling_mask']=True
+receives prefill_forward(prefill_sampling_mask=[...]) (True = final row) on
+every route, and a submission with intermediate rows is no longer forced onto
+host sampling for it. Base: m5 c018beb F1 (config helper, boolean validation,
+input_batch, model_runner, platform, docs) and tests/test_prefill_sampling_mask.py.
+c018beb's state-slot change (F2) is not taken here (P1 covers it, gated), nor
+its test_tile_size / bad_words / reasoning test edits.
+
+Without the declaration the routing, the prefill call and the lane
+device-output assert are the f6fe76b ones (the assert is kept verbatim on the
+undeclared path).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/MODEL_CAPABILITIES.md          |   1 +
+ docs/MODEL_EXECUTION.md             |  27 +++-
+ docs/SCHEDULING.md                  |  13 +-
+ src/vllm_tt_plugin/config.py        |  12 ++
+ src/vllm_tt_plugin/input_batch.py   |  22 +++-
+ src/vllm_tt_plugin/model_runner.py  |  31 ++++-
+ src/vllm_tt_plugin/platform.py      |   2 +
+ tests/test_lane_input_batch.py      |  12 +-
+ tests/test_prefill_sampling_mask.py | 184 ++++++++++++++++++++++++++++
+ 9 files changed, 286 insertions(+), 18 deletions(-)
+ create mode 100644 tests/test_prefill_sampling_mask.py
+
+diff --git a/docs/MODEL_CAPABILITIES.md b/docs/MODEL_CAPABILITIES.md
+index 0785a1a..19d5369 100644
+--- a/docs/MODEL_CAPABILITIES.md
++++ b/docs/MODEL_CAPABILITIES.md
+@@ -83,6 +83,7 @@ Sources: [platform.py](../src/vllm_tt_plugin/platform.py),
+ | `model_capabilities` key | Default when absent | Meaning and current validation |
+ |---|---|---|
+ | `supports_sample_on_device` | `False` | Permits the requested `sample_on_device_mode`. The platform rejects any non-`None` sampling mode when this declaration is false. Runtime sampling requirements can still select host sampling. |
++| `supports_prefill_sampling_mask` | `False` | Declares that `prefill_forward` accepts the row-aligned `prefill_sampling_mask` boolean list described in [model execution](MODEL_EXECUTION.md#prefill). `True` rows may emit a token; `False` rows update state only, without changing device token/RNG state or reading logits. The plugin forwards the mask on device and host routes and no longer forces an otherwise eligible batch to host sampling just because it contains intermediate rows. Host-only request features retain their existing routing. Non-boolean declarations are rejected at platform setup and runtime. Absent or false preserves the existing calls and routing. |
+ | `max_device_top_k` | `None` | Bounds stochastic device sampling. `TTModelRunner.check_perform_device_sampling` selects host sampling when any selected sampling row has nonzero temperature and `top_k < 1` or `top_k > max_device_top_k`. Greedy rows do not trigger this restriction. The platform rejects any non-`None` value on a block-output model. The plugin does not otherwise validate the numeric type or range of `max_device_top_k`; model authors must supply the actual supported bound. |
+ | `supports_device_penalties` | `True` | Permits device sampling with active penalties. When this declaration is false and `InputBatch.no_penalties` is false, `TTModelRunner.check_perform_device_sampling` selects host sampling. The default preserves the existing behavior of model implementations that predate this declaration. |
+ | `supports_device_grammar` | `False` | Declares that decode sampling accepts vLLM's packed grammar bitmask after forward. The platform rejects a non-boolean value, a `True` value without `supports_sample_on_device`, and a `True` value on a block-output model. `TTModelRunner` keeps host grammar sampling without a `sample_on_device_mode`, when tracing without model warmup, or when the loaded model has no compatible sampler. Structured prefill remains host-sampled. The [device grammar contract](DEVICE_GRAMMAR_CONTRACT.md) lists what the model must implement. |
+diff --git a/docs/MODEL_EXECUTION.md b/docs/MODEL_EXECUTION.md
+index cc5d7d6..cc55813 100644
+--- a/docs/MODEL_EXECUTION.md
++++ b/docs/MODEL_EXECUTION.md
+@@ -46,6 +46,7 @@ keyword arguments below, not a `TTModelInput` object. Source:
+ | `empty_slots` | When supplied, one destination device-state slot per submitted row. Preserve state belonging to other slots. |
+ | `page_tables_per_layer` | Supplied for multiple KV groups, as described above. |
+ | `sampling_params` | Supplied only when this prefill uses device sampling. See the sampling section. |
++| `prefill_sampling_mask` | Supplied only when `supports_prefill_sampling_mask=True`, on both device and host sampling routes. A boolean list with one entry per submitted row: `True` means the scheduled prefill/replay completes and may emit a token; `False` means update model/KV state only. See the masked-prefill contract below. |
+ | `stage_inputs` | Supplied only when the model declares `supports_stage_inputs`. One entry per row: the request's stage payload as a plain dict, or `None`. The same payload arrives with every prefill of a request, so a chunked or resumed prefill sees it again. Decode receives none; see [stage inputs](MODEL_LIFECYCLE.md#stage-inputs). |
+ 
+ For row `i`, `prefill_forward` computes
+@@ -56,9 +57,29 @@ Resume prefill can replay generated tokens to rebuild KV state.
+ 
+ The model adapter returns host logits `[B, 1, V]` for host sampling, or sampled
+ token IDs for device sampling. The plugin has no separate prefill readback
+-hook. `TTModelRunner` suppresses output for intermediate prefill chunks and
+-selects host sampling when a submitted prefill contains intermediate chunks,
+-so intermediate chunks must not advance a device sampler.
++hook. `TTModelRunner` suppresses output for intermediate prefill chunks.
++Without `supports_prefill_sampling_mask=True`, it selects host sampling when a
++submitted prefill contains intermediate chunks, so they do not advance the
++device sampler. Existing model calls and routing remain unchanged.
++
++With `supports_prefill_sampling_mask=True`, the plugin passes the inverse of
++its intermediate-row mask in submitted row order, independent of `empty_slots`.
++An unchunked/final-only submission receives all `True`. This declaration permits
++an otherwise device-eligible mixed batch to remain on the device sampler; it
++does not enable device sampling or override host-only features such as logprobs,
++penalties, token filters, or structured-prefill requirements.
++
++The adapter must process every row's scheduled tokens and preserve its resulting
++KV/recurrent state. For a `False` row, it must skip terminal-logit readback and
++must not sample, advance that request's RNG, or overwrite its resident sampled
++token. For `True` rows it follows the selected device or host sampling contract.
++Device output still has one token/placeholder row per submitted row; the plugin
++suppresses masked placeholders. Host output retains `[B, 1, V]` row order, with
++host-created placeholders for intermediate rows and actual logits read only for
++final rows. Existing host sampling protects intermediate request generators and
++suppresses their outputs. An all-intermediate step has no token to sample.
++Models must validate mask length and boolean values, preserve off-batch state,
++and prepare every supported masked execution shape before trace capture.
+ 
+ ### Multimodal inputs and request-specific RoPE
+ 
+diff --git a/docs/SCHEDULING.md b/docs/SCHEDULING.md
+index 3a9e4a9..a105404 100644
+--- a/docs/SCHEDULING.md
++++ b/docs/SCHEDULING.md
+@@ -219,10 +219,15 @@ Two things follow for the TT execution path:
+   sequence length. The generator processes `tokens[start_pos:prompt_lens]`.
+ - A chunk that does not finish the prompt is *intermediate*: its forward writes
+   KV state but emits no token. Those rows are marked in
+-  `TTModelInput.intermediate_prefill_mask`, force the step onto host sampling
+-  (device sampling would advance device RNG state for them), get a generator
+-  clone so the request's RNG does not drift, and report `[]` in the
+-  `ModelRunnerOutput` instead of a sampled token.
++  `TTModelInput.intermediate_prefill_mask` and report `[]` in the
++  `ModelRunnerOutput` instead of a sampled token. By default, they force the
++  step onto host sampling and get a generator clone so their request RNG does
++  not drift. A model declaring `supports_prefill_sampling_mask=True` receives
++  the inverse mask as `prefill_sampling_mask` and preserves intermediate token
++  and RNG state itself; otherwise device-eligible batches then stay on device.
++  Existing host-only request features still select the host path. The mask also
++  reaches opted-in models on that path so they can avoid intermediate logits
++  readback. See [masked prefill](MODEL_EXECUTION.md#prefill).
+ 
+ ### Decode interleave
+ 
+diff --git a/src/vllm_tt_plugin/config.py b/src/vllm_tt_plugin/config.py
+index 6898d74..01c7904 100644
+--- a/src/vllm_tt_plugin/config.py
++++ b/src/vllm_tt_plugin/config.py
+@@ -17,6 +17,18 @@ TT_SCHEDULER_CLS = "vllm_tt_plugin.scheduler.TTScheduler"
+ TT_LANE_SCHEDULER_CLS = "vllm_tt_plugin.lane_scheduler.TTLaneCoordinator"
+ 
+ 
++def get_model_supports_prefill_sampling_mask(model: Any) -> bool:
++    """Validate the class/instance opt-in to scheduler-owned prefill masks."""
++    capabilities = getattr(model, "model_capabilities", None) or {}
++    value = capabilities.get("supports_prefill_sampling_mask", False)
++    if not isinstance(value, bool):
++        raise ValueError(
++            "model_capabilities['supports_prefill_sampling_mask'] must be a "
++            f"boolean, got {value!r}"
++        )
++    return value
++
++
+ def _extract_tt_config(
+     config: dict[str, Any], config_name: str
+ ) -> tuple[dict[str, Any], bool]:
+diff --git a/src/vllm_tt_plugin/input_batch.py b/src/vllm_tt_plugin/input_batch.py
+index 77490b1..11df2dc 100644
+--- a/src/vllm_tt_plugin/input_batch.py
++++ b/src/vllm_tt_plugin/input_batch.py
+@@ -24,6 +24,7 @@ from vllm.v1.sample.metadata import SamplingMetadata
+ from vllm.v1.worker.block_table import MultiGroupBlockTable
+ from vllm.v1.worker.gpu_input_batch import CachedRequestState
+ 
++from vllm_tt_plugin.config import get_model_supports_prefill_sampling_mask
+ from vllm_tt_plugin.logger import init_tt_logger
+ from vllm_tt_plugin.logprobs import build_device_logprobs
+ from vllm_tt_plugin.model_input import (
+@@ -1647,10 +1648,16 @@ class TTLaneInputBatch(InputBatch):
+             has_structured_outputs=has_structured,
+             sampling_rows=rows,
+         )
+-        if intermediate_prefill_mask.any():
++        if (
++            intermediate_prefill_mask.any()
++            and not get_model_supports_prefill_sampling_mask(
++                getattr(runner, "model", None)
++            )
++        ):
+             # Device sampling advances device RNG state for every row it reads,
+             # which an intermediate chunk must not do. Host sampling can hand
+-            # those rows a generator clone instead.
++            # those rows a generator clone instead. Only a model declaring
++            # supports_prefill_sampling_mask suppresses those updates itself.
+             perform_device_sampling = False
+ 
+         # Device-side penalties only; host sampling rebuilds these in
+@@ -1744,10 +1751,13 @@ class TTLaneInputBatch(InputBatch):
+                 # tokens are dropped by the caller.
+                 return torch.zeros((n, 1), dtype=torch.int32), None
+         if model_input.perform_device_sampling:
+-            assert not intermediate_rows, (
+-                "Intermediate prefill rows must use host sampling so their "
+-                "device RNG state is not advanced."
+-            )
++            if not get_model_supports_prefill_sampling_mask(
++                getattr(runner, "model", None)
++            ):
++                assert not intermediate_rows, (
++                    "Intermediate prefill rows must use host sampling so their "
++                    "device RNG state is not advanced."
++                )
+             assert model_input.grammar_bitmask[0] is None, (
+                 "grammar bitmask is set but device sampling can't apply it"
+             )
+diff --git a/src/vllm_tt_plugin/model_runner.py b/src/vllm_tt_plugin/model_runner.py
+index 5f68019..220895d 100644
+--- a/src/vllm_tt_plugin/model_runner.py
++++ b/src/vllm_tt_plugin/model_runner.py
+@@ -42,6 +42,7 @@ from vllm_tt_plugin.async_decode import (
+     TTDecodeSubmission,
+ )
+ from vllm_tt_plugin.config import (
++    get_model_supports_prefill_sampling_mask,
+     get_tt_data_parallel_size,
+     get_tt_max_batch_size,
+     get_tt_output_tokens_per_step,
+@@ -2744,10 +2745,18 @@ class TTModelRunner:
+             # (``_decode_device_sampled``, the structured-output rule
+             # included); the overrides below are this submission's own.
+             perform_device_sampling = device_sampled
+-        if intermediate_prefill_mask is not None and intermediate_prefill_mask.any():
++        if (
++            intermediate_prefill_mask is not None
++            and intermediate_prefill_mask.any()
++            and not get_model_supports_prefill_sampling_mask(
++                getattr(self, "model", None)
++            )
++        ):
+             # Device sampling advances device RNG state for every row it reads,
+             # which an intermediate chunk must not do. Host sampling can hand
+-            # those rows a generator clone instead.
++            # those rows a generator clone instead. A model declaring
++            # supports_prefill_sampling_mask receives the final-row mask and
++            # preserves intermediate token/RNG state itself.
+             perform_device_sampling = False
+         if spec_mode == ACCEPT_MODE_LOGITS:
+             # The host walk samples from the logits this verify returns, so the
+@@ -4201,6 +4210,24 @@ class TTModelRunner:
+             "prompt_lens": model_input.prompt_lens,
+             "start_pos": model_input.input_positions,
+         }
++        if get_model_supports_prefill_sampling_mask(self.model):
++            intermediate = model_input.intermediate_prefill_mask
++            row_count = len(model_input.prompt_lens)
++            if intermediate is not None and (
++                not isinstance(intermediate, torch.Tensor)
++                or intermediate.dtype != torch.bool
++                or intermediate.ndim != 1
++                or intermediate.numel() != row_count
++            ):
++                raise ValueError(
++                    "intermediate_prefill_mask must be a one-dimensional boolean "
++                    f"tensor with {row_count} rows, got {intermediate!r}"
++                )
++            # Forward even on the host-compatibility route: intermediate rows
++            # need state updates, not terminal projection or logits readback.
++            kwargs["prefill_sampling_mask"] = (
++                [True] * row_count if intermediate is None else (~intermediate).tolist()
++            )
+         # Hybrid attention models route per-layer block tables; the
+         # runner already expanded ``block_tables_per_group`` into a
+         # per-layer list at submission time when the kv_cache_config has
+diff --git a/src/vllm_tt_plugin/platform.py b/src/vllm_tt_plugin/platform.py
+index bbbd6ec..0e79f68 100644
+--- a/src/vllm_tt_plugin/platform.py
++++ b/src/vllm_tt_plugin/platform.py
+@@ -18,6 +18,7 @@ from vllm.utils import length_from_prompt_token_ids_or_embeds
+ 
+ from vllm_tt_plugin.config import (
+     TT_WORKER_CLS,
++    get_model_supports_prefill_sampling_mask,
+     get_tt_config,
+     get_tt_data_parallel_size,
+     get_tt_decode_interleave_config,
+@@ -2193,6 +2194,7 @@ class TTPlatform(Platform):
+         store_tt_block_kv_extent_tokens(vllm_config, block_kv_extent)
+         is_block_output_model = is_tt_block_output_model(vllm_config)
+         resolve_tt_preserve_prefill_state_slots(model_capabilities)
++        get_model_supports_prefill_sampling_mask(model_class)
+         supports_device_grammar = (
+             model_capabilities.get("supports_device_grammar", False)
+             if model_capabilities
+diff --git a/tests/test_lane_input_batch.py b/tests/test_lane_input_batch.py
+index 12dd742..80860fc 100644
+--- a/tests/test_lane_input_batch.py
++++ b/tests/test_lane_input_batch.py
+@@ -308,7 +308,10 @@ def test_apply_step_plan_finished_request_releases_slot():
+     assert b.occupied_rows() == []
+ 
+ 
+-def test_lane_prefill_input_ends_at_scheduled_chunk_boundary(monkeypatch):
++@pytest.mark.parametrize("masked_sampling", [False, True])
++def test_lane_prefill_input_ends_at_scheduled_chunk_boundary(
++    monkeypatch, masked_sampling
++):
+     from vllm.v1.core.sched.output import SchedulerOutput
+ 
+     from vllm_tt_plugin.lane_scheduler import TTStepPlan
+@@ -340,6 +343,9 @@ def test_lane_prefill_input_ends_at_scheduled_chunk_boundary(monkeypatch):
+             check_perform_device_sampling=lambda **_: True,
+             _output_tokens_per_step=1,
+             model_config=SimpleNamespace(is_multimodal_model=False),
++            model=SimpleNamespace(
++                model_capabilities={"supports_prefill_sampling_mask": masked_sampling}
++            ),
+             requests={"request": request},
+         )
+     )
+@@ -358,8 +364,8 @@ def test_lane_prefill_input_ends_at_scheduled_chunk_boundary(monkeypatch):
+     assert model_input.prompt_lens.tolist() == [3]
+     assert model_input.input_tokens.tolist() == [[0, 1, 2]]
+     assert model_input.intermediate_prefill_mask.tolist() == [True]
+-    # An intermediate chunk must not advance device RNG state.
+-    assert model_input.perform_device_sampling is False
++    # Opted-in models suppress intermediate RNG updates on device.
++    assert model_input.perform_device_sampling is masked_sampling
+ 
+ 
+ def test_lane_structured_decode_captures_expected_grammar_request_ids():
+diff --git a/tests/test_prefill_sampling_mask.py b/tests/test_prefill_sampling_mask.py
+new file mode 100644
+index 0000000..9c0256b
+--- /dev/null
++++ b/tests/test_prefill_sampling_mask.py
+@@ -0,0 +1,184 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""Opt-in completion-row sampling; model behavior below is a host test double."""
++
++from dataclasses import replace
++from types import MethodType, SimpleNamespace
++
++import pytest
++import torch
++from vllm.sampling_params import SamplingParams
++from vllm.v1.worker.gpu_input_batch import CachedRequestState
++
++from tests.test_lane_model_runner import _lane_batch
++from tests.test_model_runner import (
++    VOCAB_SIZE,
++    _batch_with_one_request,
++    _fake_runner,
++    _prepare,
++)
++from vllm_tt_plugin import config
++from vllm_tt_plugin.model_runner import TTModelRunner
++
++
++class MaskedModel:
++    def __init__(self, declaration):
++        self.model_capabilities = {"supports_sample_on_device": True}
++        if declaration is not None:
++            self.model_capabilities["supports_prefill_sampling_mask"] = declaration
++        self.calls = []
++        self.draws = []
++
++    def prefill_forward(self, **kwargs):
++        self.calls.append(kwargs)
++        count = len(kwargs["prompt_lens"])
++        mask = kwargs.get("prefill_sampling_mask", [True] * count)
++        device = "sampling_params" in kwargs
++        self.draws = [int(device and may_emit) for may_emit in mask]
++        if device:
++            return torch.tensor([[7 if may_emit else 0] for may_emit in mask])
++        return torch.zeros(count, 1, VOCAB_SIZE)
++
++
++def _runner(declaration, ends, host_compat=False):
++    params = SamplingParams(
++        temperature=0.0, allowed_token_ids=[1, 2] if host_compat else None
++    )
++    batch, request = _batch_with_one_request(8, 0, 0, params)
++    runner = _fake_runner(batch, request)
++    for row in range(1, len(ends)):
++        req = CachedRequestState(
++            req_id=f"r{row}",
++            prompt_token_ids=list(range(8)),
++            mm_features=None,
++            sampling_params=params,
++            generator=None,
++            block_ids=([row],),
++            num_computed_tokens=0,
++            output_token_ids=[],
++        )
++        batch.add_request(req)
++        runner.requests[req.req_id] = req
++    batch.refresh_logitsprocs()
++    runner.model = MaskedModel(declaration)
++    runner.model_config.logits_processors = []
++    runner.sample_on_device_mode = "all"
++    runner.seeded_sampling_policy = "auto"
++    runner.num_devices = 4
++    runner.supports_device_grammar = False
++    runner.supports_topk_logprobs = False
++    runner.check_perform_device_sampling = MethodType(
++        TTModelRunner.check_perform_device_sampling, runner
++    )
++    runner.kv_caches = object()
++    runner.trace_mode = "all"
++    runner.request_specific_rope = False
++    runner.async_decode = SimpleNamespace(note_prefill_submitted=lambda: None)
++    rows = [("r" if i == 0 else f"r{i}", end, 0, 0) for i, end in enumerate(ends)]
++    return runner, _prepare(runner, *rows)
++
++
++@pytest.mark.parametrize("declaration", [None, False, True])
++@pytest.mark.parametrize("ends", [[2], [2, 8], [8, 2], [8, 8]])
++@pytest.mark.parametrize("host_compat", [False, True])
++def test_prefill_mask_routing_and_submission(declaration, ends, host_compat):
++    runner, model_input = _runner(declaration, ends, host_compat)
++    has_intermediate = any(end < 8 for end in ends)
++    expected_device = not host_compat and (not has_intermediate or declaration is True)
++    assert model_input.perform_device_sampling is expected_device
++    result = TTModelRunner.submit_prefill(runner, model_input, [len(ends)])
++    call = runner.model.calls[-1]
++    expected_mask = [end == 8 for end in ends]
++    if declaration is True:
++        assert call["prefill_sampling_mask"] == expected_mask
++        assert runner.model.draws == [
++            int(expected_device and final) for final in expected_mask
++        ]
++    else:
++        assert "prefill_sampling_mask" not in call
++    assert ("sampling_params" in call) is expected_device
++    assert result.shape[0] == len(ends)
++
++
++@pytest.mark.parametrize(
++    "mask", [torch.tensor([1]), torch.tensor([[True]]), torch.tensor([True, False])]
++)
++def test_submission_rejects_invalid_intermediate_mask_before_model(mask):
++    runner, model_input = _runner(True, [2])
++    model_input = replace(model_input, intermediate_prefill_mask=mask)
++    with pytest.raises(ValueError, match="intermediate_prefill_mask"):
++        TTModelRunner.submit_prefill(runner, model_input, [1])
++    assert not runner.model.calls
++
++
++def test_no_intermediate_metadata_means_all_final_rows():
++    runner, model_input = _runner(True, [8, 8])
++    model_input = replace(model_input, intermediate_prefill_mask=None)
++    TTModelRunner.submit_prefill(runner, model_input, [2])
++    assert runner.model.calls[-1]["prefill_sampling_mask"] == [True, True]
++
++
++@pytest.mark.parametrize("invalid", [0, 1, "true", None, []])
++def test_capability_rejects_non_boolean(invalid):
++    model = SimpleNamespace(
++        model_capabilities={"supports_prefill_sampling_mask": invalid}
++    )
++    with pytest.raises(ValueError, match="supports_prefill_sampling_mask.*boolean"):
++        config.get_model_supports_prefill_sampling_mask(model)
++
++
++@pytest.mark.parametrize(
++    "model", [None, SimpleNamespace(), SimpleNamespace(model_capabilities={})]
++)
++def test_absent_capability_defaults_false(model):
++    assert config.get_model_supports_prefill_sampling_mask(model) is False
++
++
++@pytest.mark.parametrize("ends", [[2], [2, 8], [8, 2]])
++def test_device_output_suppresses_intermediate_emissions(ends):
++    runner, model_input = _runner(True, ends)
++    runner.vocab_size = VOCAB_SIZE
++    runner._is_block_output_model = False
++    tt_out = TTModelRunner.submit_prefill(runner, model_input, [len(ends)])
++    tokens, logprobs = TTModelRunner._get_output_tokens(
++        runner,
++        tt_out,
++        None,
++        model_input.tt_sampling_params,
++        model_input,
++        [len(ends)],
++        True,
++        False,
++    )
++    runner._apply_sampled_tokens_to_state = lambda *args, **kwargs: None
++    result = TTModelRunner._build_chunked_prefill_output(
++        runner,
++        model_input.row_req_ids,
++        tokens[0],
++        logprobs[0],
++        model_input.intermediate_prefill_mask.numpy(),
++    )
++    assert result.sampled_token_ids == [[7] if end == 8 else [] for end in ends]
++
++
++def test_lane_device_output_accepts_opted_in_mixed_mask():
++    batch = _lane_batch()
++    runner = SimpleNamespace(model=MaskedModel(True))
++    model_input = SimpleNamespace(
++        perform_device_sampling=True,
++        intermediate_prefill_mask=torch.tensor([True, False]),
++        tt_sampling_params=SimpleNamespace(
++            enable_log_probs=torch.zeros(2, dtype=torch.bool)
++        ),
++        max_num_logprobs=[None],
++        grammar_bitmask=[None],
++    )
++    tokens, logprobs = batch.extract_output(
++        runner,
++        torch.tensor([[0], [7]]),
++        None,
++        model_input,
++        [4, 1],
++        False,
++    )
++    assert tokens.tolist() == [[0], [7]] and logprobs is None

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "model": "ornith_1_5_9b",
+  "phase": "vllm",
+  "entrypoint": "agentic_models.models.ornith_1_5_9b.vllm.model.entry",
+  "tests": [
+    "model/tests"
+  ],
+  "dependencies": {
+    "targets": [
+      "bh_qb2"
+    ]
+  },
+  "coverage": "full-model-serving",
+  "hf_model": "ornith-ai/Ornith-1.5-9B",
+  "hf_revision": "489cb97981b8654bcfcf30ce1f94ed1b62e07b53",
+  "validation": {
+    "status": "pending",
+    "deployment": "manual_qb2",
+    "host": "QB2 (P300x2, 1x4 mesh)",
+    "revisions": {
+      "tt_metal": "58afa8579450ba8afd6df45d05ad01b2860cd32b + patches.json",
+      "vllm_tt_plugin": "f6fe76b63366053b648a7152e087daa3a507d033 + patches.json (P1 state-slot continuation, P3 original prompt lengths)",
+      "vllm": "0.32.0"
+    },
+    "bring_up_reference": {
+      "revisions": {
+        "tt_metal": "8c48b4e4 + bring-up branch metrics/gpqa-gap b43970c8dede6ce3e080d187863193c72cb9d95d",
+        "vllm_tt_plugin": "042a9486 + a09b0ef, 215effd, 2a15045",
+        "vllm": "0.31.0"
+      },
+      "evals": {
+        "gpqa_diamond": {
+          "score": 87.54,
+          "runs": [89.39, 86.36, 86.87],
+          "card": 86.4,
+          "max_gen_toks": 131072,
+          "note": "bfp8_all_hifi2, before the prefill GDN exact-state change (not carried here)"
+        }
+      },
+      "perf": {
+        "isl128_osl128_c1": {
+          "ttft_ms": 64,
+          "tok_s_user": 102.4
+        },
+        "isl1024_osl1024_c16": {
+          "tok_s_user": 77.6,
+          "output_tok_s": 1152
+        }
+      }
+    },
+    "source": "README.md"
+  }
+}

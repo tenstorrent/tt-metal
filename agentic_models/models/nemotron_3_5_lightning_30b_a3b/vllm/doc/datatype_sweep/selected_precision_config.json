@@ -1,0 +1,37 @@
+{
+  "config_id": "bfp8_hifi2_ccl8",
+  "weight_groups": {
+    "qkv": "bfloat8_b",
+    "o": "bfloat8_b",
+    "in_proj": "bfloat8_b",
+    "out_proj": "bfloat8_b",
+    "up": "bfloat8_b",
+    "down": "bfloat8_b",
+    "shared_up": "bfloat8_b",
+    "shared_down": "bfloat8_b",
+    "lm_head": "bfloat8_b"
+  },
+  "compute_fidelities": {
+    "qkv": "HiFi2",
+    "o": "HiFi2",
+    "in_proj": "HiFi2",
+    "out_proj": "HiFi2",
+    "up": "HiFi2",
+    "down": "HiFi2",
+    "shared_up": "HiFi2",
+    "shared_down": "HiFi2",
+    "lm_head": "HiFi4"
+  },
+  "layer_exceptions": {},
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": "bfloat8_b",
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16",
+  "norm_dtype": "bfloat16",
+  "router_dtype": "float32",
+  "recurrent_dtype": "float32",
+  "fp32_dest_acc_en": true,
+  "math_approx_mode": false
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "model": "nemotron_3_5_lightning_30b_a3b",
+  "phase": "vllm",
+  "entrypoint": "agentic_models.models.nemotron_3_5_lightning_30b_a3b.vllm.model.entry",
+  "tests": [
+    "model/tests"
+  ],
+  "dependencies": {
+    "targets": [
+      "bh_qb2"
+    ]
+  },
+  "coverage": "full-model-serving",
+  "hf_model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+  "hf_revision": "a9904d24bcc1d289a1950fa9d2b978c47cf903b9",
+  "validation": {
+    "status": "pending",
+    "deployment": "manual_qb2",
+    "host": "QB2 (P300x2, 1x4 mesh)",
+    "revisions": {
+      "tt_metal": "58afa8579450ba8afd6df45d05ad01b2860cd32b + patches.json",
+      "vllm_tt_plugin": "f6fe76b63366053b648a7152e087daa3a507d033 + patches.json vllm_tt_plugin",
+      "vllm": "0.32.0"
+    },
+    "reference": {
+      "gpqa_diamond": {
+        "score": 76.09,
+        "runs": [77.27, 75.76, 75.25],
+        "card": 75.44,
+        "ci_bar": 71.7
+      },
+      "perf": {
+        "isl128_osl128_c1": {
+          "output_tok_s_per_user": 70.3
+        },
+        "isl1024_osl1024_c16": {
+          "output_tok_s_per_user": 29.8,
+          "output_tok_s": 444
+        }
+      },
+      "note": "Bring-up values at tt-metal 8c48b4e4-based perf/multiuser and vllm-tt-plugin 042a9486 + local commits, not at these pins"
+    },
+    "source": "README.md"
+  }
+}

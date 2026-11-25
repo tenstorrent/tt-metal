@@ -1,0 +1,4 @@
+{
+  "arch": "Gemma4_12BQB2ForCausalLM",
+  "main_class": "agentic_models.models.gemma_4_12b_it.vllm.tt.generator_vllm:Gemma4_12BQB2ForCausalLM"
+}

@@ -1,0 +1,140 @@
+From 222bd5f5ffdc5149b7d2a880e27f0fcf9cbb22fb Mon Sep 17 00:00:00 2001
+From: Nicholas Smith <nsmith@tenstorrent.com>
+Date: Wed, 25 Nov 2026 17:19:56 +0000
+Subject: [PATCH] [bug] Keep chunked MM input in mamba align mode
+
+agentic-models patch P5 (qwen3_6_35b_a3b-plugin-hybrid-align-chunked-mm.patch).
+
+Do not force scheduler_config.disable_chunked_mm_input=True when
+cache_config.mamba_cache_mode == 'align': vLLM 0.32's engine core asserts it is
+False there (VllmConfig.validate_block_size), so a hybrid model with prefix
+caching in align mode could not start. Base: m2 0001 (uncommitted on m2).
+
+Reach: only hybrid archs with APC in align mode, which fail at engine init at
+f6fe76b; gemma and K2 never run in align mode. A model declaring
+prefix_cache_recurrent_state_in_model (P4) is excluded and keeps the flag, as
+validated (it leaves align mode later in the platform hook).
+
+Tests: tests/test_align_chunked_mm_input.py.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/vllm_tt_plugin/platform.py       | 12 +++-
+ tests/test_align_chunked_mm_input.py | 85 ++++++++++++++++++++++++++++
+ 2 files changed, 96 insertions(+), 1 deletion(-)
+ create mode 100644 tests/test_align_chunked_mm_input.py
+
+diff --git a/src/vllm_tt_plugin/platform.py b/src/vllm_tt_plugin/platform.py
+index f769315..7fdcb51 100644
+--- a/src/vllm_tt_plugin/platform.py
++++ b/src/vllm_tt_plugin/platform.py
+@@ -284,7 +284,17 @@ def _apply_chunked_prefill_policy(
+     # their positions. Only meaningful while prefill can be split, and vLLM
+     # rejects the flag outright when one item exceeds the token budget, so it
+     # stays off for every model that does not reach here.
+-    scheduler_config.disable_chunked_mm_input = True
++    # Exception: hybrid (mamba/linear-attention) prefix caching in vLLM's mamba
++    # "align" mode, which must be free to cut a chunk at any block boundary
++    # (vLLM asserts disable_chunked_mm_input is False there, so such a launch
++    # cannot start otherwise). Text-only adapters reject multimodal items anyway.
++    # A model declaring prefix_cache_recurrent_state_in_model leaves align mode
++    # later in the platform hook, so it keeps the flag.
++    cache_config = getattr(vllm_config, "cache_config", None)
++    if getattr(cache_config, "mamba_cache_mode", None) != "align" or (
++        (model_capabilities or {}).get("prefix_cache_recurrent_state_in_model", False)
++    ):
++        scheduler_config.disable_chunked_mm_input = True
+ 
+     # The only signal from outside the process that chunked prefill is active and
+     # at what budget: the scheduler config is absent from /metrics and an
+diff --git a/tests/test_align_chunked_mm_input.py b/tests/test_align_chunked_mm_input.py
+new file mode 100644
+index 0000000..cff236b
+--- /dev/null
++++ b/tests/test_align_chunked_mm_input.py
+@@ -0,0 +1,85 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""Hybrid prefix caching in vLLM's mamba "align" mode keeps chunked MM input.
++
++vLLM's engine core asserts ``disable_chunked_mm_input`` is False in align mode
++(``VllmConfig.validate_block_size``), so forcing it True made such a launch
++unstartable. Every other chunked-prefill launch still gets the flag.
++"""
++
++import pytest
++from vllm.config import (
++    CacheConfig,
++    DeviceConfig,
++    ModelConfig,
++    ParallelConfig,
++    SchedulerConfig,
++    VllmConfig,
++)
++
++from tests.test_block_scheduler import (
++    LOCAL_MODEL_CONFIG,
++    _stub_model_resolution,
++    _StubModel,
++)
++
++APC = {"supports_prefix_caching": True, "supports_chunked_prefill": True}
++
++
++def _config(monkeypatch, capabilities, cache_config):
++    monkeypatch.setattr(_StubModel, "model_capabilities", capabilities, raising=False)
++    model_config = ModelConfig(
++        model=str(LOCAL_MODEL_CONFIG),
++        dtype="float16",
++        seed=42,
++        skip_tokenizer_init=True,
++    )
++    with _stub_model_resolution():
++        return VllmConfig(
++            model_config=model_config,
++            scheduler_config=SchedulerConfig(
++                max_model_len=model_config.max_model_len,
++                is_encoder_decoder=model_config.is_encoder_decoder,
++            ),
++            cache_config=cache_config,
++            parallel_config=ParallelConfig(),
++            device_config=DeviceConfig(device="cpu"),
++        )
++
++
++def _align():
++    return CacheConfig(
++        block_size=128,
++        enable_prefix_caching=True,
++        mamba_cache_mode="align",
++        mamba_block_size=256,
++    )
++
++
++@pytest.mark.parametrize(
++    "cache_config",
++    [
++        CacheConfig(block_size=128),
++        CacheConfig(block_size=128, enable_prefix_caching=True),
++    ],
++    ids=["no-apc", "apc-attention-only"],
++)
++def test_outside_align_mode_chunked_mm_input_stays_disabled(monkeypatch, cache_config):
++    cfg = _config(monkeypatch, APC, cache_config)
++    assert cfg.scheduler_config.enable_chunked_prefill
++    assert cfg.scheduler_config.disable_chunked_mm_input is True
++
++
++def test_align_mode_leaves_chunked_mm_input_to_vllm(monkeypatch):
++    cfg = _config(monkeypatch, APC, _align())
++    assert cfg.cache_config.mamba_cache_mode == "align"
++    assert cfg.scheduler_config.disable_chunked_mm_input is False
++    cfg.validate_block_size()  # the engine-core check that used to assert
++
++
++def test_a_model_owning_its_recurrent_state_keeps_the_flag(monkeypatch):
++    cfg = _config(
++        monkeypatch, {**APC, "prefix_cache_recurrent_state_in_model": True}, _align()
++    )
++    assert cfg.cache_config.mamba_cache_mode == "none"
++    assert cfg.scheduler_config.disable_chunked_mm_input is True

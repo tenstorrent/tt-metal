@@ -1,0 +1,4 @@
+{
+  "arch": "NemotronHForCausalLM",
+  "main_class": "agentic_models.models.nemotron_3_5_lightning_30b_a3b.vllm.tt.generator_vllm:NemotronForCausalLM"
+}

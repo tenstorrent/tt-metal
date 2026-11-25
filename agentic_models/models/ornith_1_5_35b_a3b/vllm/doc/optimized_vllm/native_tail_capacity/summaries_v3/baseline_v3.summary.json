@@ -1,0 +1,2798 @@
+{
+  "status": "passed",
+  "mode": "baseline",
+  "num_blocks": 8192,
+  "context": 262144,
+  "batch": 32,
+  "layers": 40,
+  "num_devices": 4,
+  "tracking": true,
+  "program_cache_included": true,
+  "command": [
+    "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/tests/validate_full_capacity.py",
+    "--mode",
+    "baseline",
+    "--num-blocks",
+    "8192",
+    "--expect-native-family",
+    "--output",
+    "agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.json"
+  ],
+  "source_sha256": {
+    "tests/validate_full_capacity.py": "3c3df37b8668b8b678b742f24e723c14829db6a73291ff7933b48ebe1f7eeb0b",
+    "tt/model.py": "38eefe7173a1b9a8aae3893001c538c650def2c4cd6089a8ae84c87246d1926f",
+    "tt/generator.py": "0ff7b850e04f0211ebd2fb50b997e158ecc489a375f72734eaf4428936e2fb36",
+    "tt/multichip_decoder.py": "9f47ea0f205ac6560df5377955e526cb0120ae96b62de60e53dc48b471f6dd7e",
+    "tt/optimized_decoder.py": "63045b5ed35fb996595aebb5f3c5d3be5e268727207375e8421209c48d4f5c47",
+    "tt/precision.py": "609bc75ab9dfb151032da03c2bd5dcb8ad9e5c01ff935b5cd39ae382eaa3bcb2"
+  },
+  "serving_source_sha256": {
+    "tt/generator_vllm.py": "dc1967c1f41d0cf799ad477f010305ef85ece8197bfb7b26d125ad6d4d29d816"
+  },
+  "harness_source_sha256": {
+    "tests/capacity_graph_io.py": "9b46e312cc680f643d6a766d53d7b68cfc3fb419cd3706c72b2e4d1ce227880b"
+  },
+  "expected_native_family": true,
+  "validation": "Actual weights/full-layer runtime memory smoke; distant-position decode uses zero cache. No accuracy or maximum-context prefill claim.",
+  "started": 1795057814.162907,
+  "memory_after_open": {
+    "dram": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 0,
+      "total_bytes_free_per_bank": 4255564160,
+      "largest_contiguous_bytes_free_per_bank": 4255564160,
+      "allocator_base": 5848704
+    },
+    "l1": {
+      "num_banks": 110,
+      "total_bytes_per_bank": 1441792,
+      "total_bytes_allocated_per_bank": 0,
+      "total_bytes_free_per_bank": 1441792,
+      "largest_contiguous_bytes_free_per_bank": 1441792,
+      "allocator_base": 131072
+    },
+    "trace": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 16777216,
+      "total_bytes_allocated_per_bank": 0,
+      "total_bytes_free_per_bank": 16777216,
+      "largest_contiguous_bytes_free_per_bank": 16777216
+    }
+  },
+  "precision_policy": {
+    "config_id": "bfp8_attention_lofi_bf16kv",
+    "weight_groups": {
+      "attention": "bfloat8_b",
+      "expert_gate_up": "bfloat8_b",
+      "expert_down": "bfloat8_b",
+      "shared_gate_up": "bfloat8_b",
+      "shared_down": "bfloat8_b",
+      "lm_head": "bfloat8_b",
+      "embedding": "bfloat16",
+      "norm": "float32",
+      "router": "float32"
+    },
+    "compute_fidelities": {
+      "attention_decode": "LoFi",
+      "attention_prefill": "HiFi4",
+      "experts": "LoFi",
+      "shared": "LoFi",
+      "lm_head": "HiFi2",
+      "router": "HiFi4",
+      "norm_recurrence": "HiFi4",
+      "sdpa": "HiFi2"
+    },
+    "layer_exceptions": [],
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat16",
+    "logits_sampling": {
+      "logits_dtype": "bfloat16",
+      "token_dtype": "uint32",
+      "recurrent_state_dtype": "float32"
+    }
+  },
+  "bytes_per_pool_block_per_chip": 16384,
+  "memory_after_weights": {
+    "dram": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 1456477568,
+      "total_bytes_free_per_bank": 2799086592,
+      "largest_contiguous_bytes_free_per_bank": 2798702976,
+      "allocator_base": 5848704
+    },
+    "l1": {
+      "num_banks": 110,
+      "total_bytes_per_bank": 1441792,
+      "total_bytes_allocated_per_bank": 172928,
+      "total_bytes_free_per_bank": 1268864,
+      "largest_contiguous_bytes_free_per_bank": 1266816,
+      "allocator_base": 131072
+    },
+    "trace": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 16777216,
+      "total_bytes_allocated_per_bank": 0,
+      "total_bytes_free_per_bank": 16777216,
+      "largest_contiguous_bytes_free_per_bank": 16777216
+    }
+  },
+  "graph_capture_io": {
+    "run_mode": "NORMAL",
+    "python_io_recording": false,
+    "python_stack_traces": false,
+    "detailed_buffer_tracing": false,
+    "allocator_nodes_retained": true
+  },
+  "native_family_resources": {
+    "logical_lengths": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99,
+      100,
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108,
+      109,
+      110,
+      111,
+      112,
+      113,
+      114,
+      115,
+      116,
+      117,
+      118,
+      119,
+      120,
+      121,
+      122,
+      123,
+      124,
+      125,
+      126,
+      127,
+      128,
+      512,
+      2048
+    ],
+    "physical_full_attention": {
+      "1": 1,
+      "2": 32,
+      "3": 32,
+      "4": 32,
+      "5": 32,
+      "6": 32,
+      "7": 32,
+      "8": 32,
+      "9": 32,
+      "10": 32,
+      "11": 32,
+      "12": 32,
+      "13": 32,
+      "14": 32,
+      "15": 32,
+      "16": 32,
+      "17": 32,
+      "18": 32,
+      "19": 32,
+      "20": 32,
+      "21": 32,
+      "22": 32,
+      "23": 32,
+      "24": 32,
+      "25": 32,
+      "26": 32,
+      "27": 32,
+      "28": 32,
+      "29": 32,
+      "30": 32,
+      "31": 32,
+      "32": 32,
+      "33": 64,
+      "34": 64,
+      "35": 64,
+      "36": 64,
+      "37": 64,
+      "38": 64,
+      "39": 64,
+      "40": 64,
+      "41": 64,
+      "42": 64,
+      "43": 64,
+      "44": 64,
+      "45": 64,
+      "46": 64,
+      "47": 64,
+      "48": 64,
+      "49": 64,
+      "50": 64,
+      "51": 64,
+      "52": 64,
+      "53": 64,
+      "54": 64,
+      "55": 64,
+      "56": 64,
+      "57": 64,
+      "58": 64,
+      "59": 64,
+      "60": 64,
+      "61": 64,
+      "62": 64,
+      "63": 64,
+      "64": 64,
+      "65": 96,
+      "66": 96,
+      "67": 96,
+      "68": 96,
+      "69": 96,
+      "70": 96,
+      "71": 96,
+      "72": 96,
+      "73": 96,
+      "74": 96,
+      "75": 96,
+      "76": 96,
+      "77": 96,
+      "78": 96,
+      "79": 96,
+      "80": 96,
+      "81": 96,
+      "82": 96,
+      "83": 96,
+      "84": 96,
+      "85": 96,
+      "86": 96,
+      "87": 96,
+      "88": 96,
+      "89": 96,
+      "90": 96,
+      "91": 96,
+      "92": 96,
+      "93": 96,
+      "94": 96,
+      "95": 96,
+      "96": 96,
+      "97": 128,
+      "98": 128,
+      "99": 128,
+      "100": 128,
+      "101": 128,
+      "102": 128,
+      "103": 128,
+      "104": 128,
+      "105": 128,
+      "106": 128,
+      "107": 128,
+      "108": 128,
+      "109": 128,
+      "110": 128,
+      "111": 128,
+      "112": 128,
+      "113": 128,
+      "114": 128,
+      "115": 128,
+      "116": 128,
+      "117": 128,
+      "118": 128,
+      "119": 128,
+      "120": 128,
+      "121": 128,
+      "122": 128,
+      "123": 128,
+      "124": 128,
+      "125": 128,
+      "126": 128,
+      "127": 128,
+      "128": 128,
+      "512": 512,
+      "2048": 2048
+    },
+    "required_workspace_capacities": [
+      256,
+      512,
+      768,
+      1024,
+      1280,
+      1536,
+      1792,
+      2048,
+      2080,
+      2112,
+      2144,
+      2176,
+      2208,
+      2240,
+      2272,
+      2304,
+      2336,
+      2368,
+      2400,
+      2432,
+      2464,
+      2496,
+      2528,
+      2560,
+      2592,
+      2624,
+      2656,
+      2688,
+      2720,
+      2752,
+      2784,
+      2816,
+      2848,
+      2880,
+      2912,
+      2944,
+      2976,
+      3008,
+      6080,
+      18368
+    ],
+    "expert_output_capacities": [
+      256,
+      512,
+      768,
+      1024,
+      1280,
+      1536,
+      1792,
+      2048,
+      2080,
+      2112,
+      2144,
+      2176,
+      2208,
+      2240,
+      2272,
+      2304,
+      2336,
+      2368,
+      2400,
+      2432,
+      2464,
+      2496,
+      2528,
+      2560,
+      2592,
+      2624,
+      2656,
+      2688,
+      2720,
+      2752,
+      2784,
+      2816,
+      2848,
+      2880,
+      2912,
+      2944,
+      2976,
+      3008,
+      6080,
+      18368
+    ],
+    "route_payload_capacities": [],
+    "retained_input_length_count": 130
+  },
+  "raw_graph": "agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.graph_manifest.json",
+  "raw_graph_sha256": "f2a6f5eb921abf282b97de0761bb4da74a671f3775538209d5c1b987c736a2e8",
+  "raw_graph_format": "segmented_allocator_graph_v1",
+  "raw_graph_nodes": 31172239,
+  "graph_segments": 299,
+  "graph_ingestion": {
+    "strategy": "model-call segments with allocator-generation stitching",
+    "segment_live_address_reconciliation": true,
+    "observation_scope": "Sole-owner synchronous device allocations on the capture thread; boundary equality does not prove absence of balanced allocations on another thread",
+    "python_full_graph_materialized": false,
+    "native_graph_bound": "At most one wrapped full-model call plus intervening helpers per segment; measured peak still required"
+  },
+  "memory_after_state": {
+    "dram": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 1942625728,
+      "total_bytes_free_per_bank": 2312938432,
+      "largest_contiguous_bytes_free_per_bank": 2312935808,
+      "allocator_base": 5848704
+    },
+    "l1": {
+      "num_banks": 110,
+      "total_bytes_per_bank": 1441792,
+      "total_bytes_allocated_per_bank": 172928,
+      "total_bytes_free_per_bank": 1268864,
+      "largest_contiguous_bytes_free_per_bank": 1266816,
+      "allocator_base": 131072
+    },
+    "trace": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 16777216,
+      "total_bytes_allocated_per_bank": 0,
+      "total_bytes_free_per_bank": 16777216,
+      "largest_contiguous_bytes_free_per_bank": 16777216
+    }
+  },
+  "pool_addresses": [
+    1468962432,
+    1485739648,
+    1509201536,
+    1525978752,
+    1549440640,
+    1566217856,
+    1589679744,
+    1606456960,
+    1629918848,
+    1646696064,
+    1670157952,
+    1686935168,
+    1710397056,
+    1727174272,
+    1750636160,
+    1767413376,
+    1790875264,
+    1807652480,
+    1831114368,
+    1847891584,
+    1864738432
+  ],
+  "scalar_prefill_trace_plan": {
+    "captured_slots": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "eager_slots": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "bytes_per_bank": [
+      2678784,
+      2678784,
+      2678784,
+      2678784
+    ]
+  },
+  "memory_after_prepare": {
+    "dram": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 1969328256,
+      "total_bytes_free_per_bank": 2286235904,
+      "largest_contiguous_bytes_free_per_bank": 2285209216,
+      "allocator_base": 5848704
+    },
+    "l1": {
+      "num_banks": 110,
+      "total_bytes_per_bank": 1441792,
+      "total_bytes_allocated_per_bank": 202688,
+      "total_bytes_free_per_bank": 1239104,
+      "largest_contiguous_bytes_free_per_bank": 1239104,
+      "allocator_base": 131072
+    },
+    "trace": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 16777216,
+      "total_bytes_allocated_per_bank": 16097280,
+      "total_bytes_free_per_bank": 679936,
+      "largest_contiguous_bytes_free_per_bank": 679936
+    }
+  },
+  "native_family_runtime": {
+    "status": "passed",
+    "slot": 31,
+    "prepared": true,
+    "cache_after_prepare": 8951,
+    "trace_ids": {
+      "decode": "MeshTraceId(0)",
+      "split": "MeshTraceId(1)",
+      "greedy32": "MeshTraceId(2)",
+      "argmax": "MeshTraceId(3)",
+      "split_penalties": "MeshTraceId(4)",
+      "greedy32_penalties": "MeshTraceId(5)",
+      "argmax_penalties": "MeshTraceId(6)",
+      "prefill_1_0": "MeshTraceId(7)",
+      "prefill_1_1": "MeshTraceId(8)",
+      "prefill_1_2": "MeshTraceId(9)",
+      "prefill_1_3": "MeshTraceId(10)"
+    },
+    "captures": 11,
+    "retirements": 0,
+    "vocab_size": 248320,
+    "resources_unchanged": true,
+    "completed_before_runtime_snapshot": true,
+    "case_summary": {
+      "count": 128,
+      "logical_lengths": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128
+      ],
+      "slots": [
+        31
+      ],
+      "program_cache_counts": [
+        8951
+      ],
+      "capture_counts": [
+        11
+      ],
+      "retirement_counts": [
+        0
+      ],
+      "sampling_modes": [
+        "greedy32"
+      ],
+      "prefill_chunk_counts": [
+        1
+      ],
+      "note": "Raw artifact retains individual sampled tokens and every per-case assertion value."
+    }
+  },
+  "sampled_subset_storage": {
+    "scope": "Prepared retained-row terminal assembly, greedy sampling and token restoration; no additional decoder prefill",
+    "completed_before_runtime_snapshot": true,
+    "trace_ids": {
+      "decode": "MeshTraceId(0)",
+      "split": "MeshTraceId(1)",
+      "greedy32": "MeshTraceId(2)",
+      "argmax": "MeshTraceId(3)",
+      "split_penalties": "MeshTraceId(4)",
+      "greedy32_penalties": "MeshTraceId(5)",
+      "argmax_penalties": "MeshTraceId(6)",
+      "prefill_1_0": "MeshTraceId(7)",
+      "prefill_1_1": "MeshTraceId(8)",
+      "prefill_1_2": "MeshTraceId(9)",
+      "prefill_1_3": "MeshTraceId(10)"
+    },
+    "cases": [
+      {
+        "mode": "split",
+        "slots": [
+          0
+        ],
+        "sampled_tokens": [
+          271
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "split",
+        "slots": [
+          31
+        ],
+        "sampled_tokens": [
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "split",
+        "slots": [
+          2,
+          17,
+          31
+        ],
+        "sampled_tokens": [
+          95802,
+          95802,
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "split",
+        "slots": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ],
+        "sampled_tokens": [
+          271,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "split",
+        "slots": [
+          31
+        ],
+        "sampled_tokens": [
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "greedy32",
+        "slots": [
+          0
+        ],
+        "sampled_tokens": [
+          271
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "greedy32",
+        "slots": [
+          31
+        ],
+        "sampled_tokens": [
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "greedy32",
+        "slots": [
+          2,
+          17,
+          31
+        ],
+        "sampled_tokens": [
+          95802,
+          95802,
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "greedy32",
+        "slots": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ],
+        "sampled_tokens": [
+          271,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "greedy32",
+        "slots": [
+          31
+        ],
+        "sampled_tokens": [
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "argmax",
+        "slots": [
+          0
+        ],
+        "sampled_tokens": [
+          271
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "argmax",
+        "slots": [
+          31
+        ],
+        "sampled_tokens": [
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "argmax",
+        "slots": [
+          2,
+          17,
+          31
+        ],
+        "sampled_tokens": [
+          95802,
+          95802,
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "argmax",
+        "slots": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ],
+        "sampled_tokens": [
+          271,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          95802,
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "mode": "argmax",
+        "slots": [
+          31
+        ],
+        "sampled_tokens": [
+          220
+        ],
+        "unsubmitted_tokens_preserved": true,
+        "unsubmitted_seed_counters_preserved": true,
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      }
+    ]
+  },
+  "distant_position": 262143,
+  "program_cache": {
+    "after_prepare": 8951,
+    "after_runtime": 8951
+  },
+  "memory_after_runtime": {
+    "dram": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 1969328256,
+      "total_bytes_free_per_bank": 2286235904,
+      "largest_contiguous_bytes_free_per_bank": 2285209216,
+      "allocator_base": 5848704
+    },
+    "l1": {
+      "num_banks": 110,
+      "total_bytes_per_bank": 1441792,
+      "total_bytes_allocated_per_bank": 202688,
+      "total_bytes_free_per_bank": 1239104,
+      "largest_contiguous_bytes_free_per_bank": 1239104,
+      "allocator_base": 131072
+    },
+    "trace": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 16777216,
+      "total_bytes_allocated_per_bank": 16097280,
+      "total_bytes_free_per_bank": 679936,
+      "largest_contiguous_bytes_free_per_bank": 679936
+    }
+  },
+  "scaled_allocation_events": [
+    2022,
+    2037,
+    4068,
+    4083,
+    6114,
+    6129,
+    8160,
+    8175,
+    10206,
+    10221,
+    12252,
+    12267,
+    14298,
+    14313,
+    16344,
+    16359,
+    18390,
+    18405,
+    20436,
+    20451,
+    20487
+  ],
+  "baseline_allocator_validation": {
+    "passed": true,
+    "min_free_bytes_per_bank": 2257001216,
+    "final_free_bytes_per_bank": 2286235904,
+    "largest_final_free_bytes_per_bank": 2285209216,
+    "necessary_total_byte_upper_blocks": 60670
+  },
+  "source_sha256_unchanged": true,
+  "serving_source_sha256_unchanged": true,
+  "harness_source_sha256_unchanged": true,
+  "elapsed_s": 552.5630028247833,
+  "summary_metadata": {
+    "scope": "Evidence packaging only; not a validation, promotion, or capacity/accuracy verdict.",
+    "raw_artifact": {
+      "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.json",
+      "bytes": 697737025,
+      "sha256": "57c428fe6617d387f70dc90b924e984eba6660f0ee0a6960537c4662d2d27de2"
+    },
+    "omitted_dram_event_count": 2611083,
+    "omitted_fields": [
+      "dram_events",
+      "allocator block_table rows",
+      "native prefill buffer shapes/addresses",
+      "native per-case rows"
+    ],
+    "raw_graph_opened": true,
+    "raw_graph_hash_verified": true,
+    "source_script_sha256": "0b7dc5da999bc5f44dbcf4f58d62b13d2644c340c07b71202a33fd14c456cc36",
+    "raw_graph": {
+      "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.graph_manifest.json",
+      "bytes": 449584,
+      "sha256": "f2a6f5eb921abf282b97de0761bb4da74a671f3775538209d5c1b987c736a2e8"
+    },
+    "verified_raw_segments": [
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00000.graph.json.gz",
+        "bytes": 703056,
+        "sha256": "894e576471ad613a4a488b0ac9ea764a703d42e4897108268ec3cdd5b94f9a77"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00001.graph.json.gz",
+        "bytes": 1421,
+        "sha256": "3edbb0c40853d6173e4fc2fb8def9cd29add64acf8394535b6dce4dc4788a17d"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00002.graph.json.gz",
+        "bytes": 2250321,
+        "sha256": "309aee1624f39ee880178e075cb6e5b88dd82ef6bcf95831f32a2feaef15e03c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00003.graph.json.gz",
+        "bytes": 2360070,
+        "sha256": "17988c8cf12ad71051d0cd0363a13abbcbf3e3075c9ffaab4009d9204e43e272"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00004.graph.json.gz",
+        "bytes": 2331676,
+        "sha256": "1ef9af02bbbc1c7e96f4d8c080ae518fb5022aa405529000f30bfd9305730dd9"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00005.graph.json.gz",
+        "bytes": 2338673,
+        "sha256": "92292064f32aaebea8f8289ca232708594e91aaf6b1b5f2885a4ec4087705702"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00006.graph.json.gz",
+        "bytes": 2353961,
+        "sha256": "6c981ff62bd7cc66cc957987b2e05c8e10fa5e4a09027433eafba5cae5213872"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00007.graph.json.gz",
+        "bytes": 2354572,
+        "sha256": "275d7f56d1cff44aee9258a375d5b930f3e475439cf208fe0717f77a0d45913b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00008.graph.json.gz",
+        "bytes": 2353039,
+        "sha256": "36e7ba5bcb15f2b0bff25561bfc606cba1ac82119b195679760fdd045b4bdfaa"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00009.graph.json.gz",
+        "bytes": 2334823,
+        "sha256": "b254cc184a3f78a792e9f18425fc5e88cac7e6c0985bac6c841e9c88aade460f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00010.graph.json.gz",
+        "bytes": 2352925,
+        "sha256": "cdc8584888a142dda2d49e061081adec67653a08bd81199e74a7dc9fa9c31069"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00011.graph.json.gz",
+        "bytes": 2352338,
+        "sha256": "643b75e37251b4d44ecfa97ea79da3436f5bc66c94a9e7b253e1557ccb088d2f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00012.graph.json.gz",
+        "bytes": 2353455,
+        "sha256": "77d9b302d1c07793269dc575b8a7fe7f85026b4dcedb85f99dabf6bfcc593400"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00013.graph.json.gz",
+        "bytes": 2342245,
+        "sha256": "eef4730d0bae2dc4ddf17993ed71f19814529e68dd882bd724a9bbb1faeae487"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00014.graph.json.gz",
+        "bytes": 2355666,
+        "sha256": "3042d3d1a955dd3339c127f5b1f2d86c5bcd81ca0b650ec334e08007a4382df5"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00015.graph.json.gz",
+        "bytes": 2354472,
+        "sha256": "ba90927d721230027b8e6ab7fa1226c31e70222e626503ff931881b6d3a4ff4f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00016.graph.json.gz",
+        "bytes": 2354330,
+        "sha256": "35ad5b40d0d36b565b530ec3ec094bd2c71234788be62f12c19a935e38ea99fa"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00017.graph.json.gz",
+        "bytes": 2336208,
+        "sha256": "4a029492e3d2a166239be6f49c9178c9e74c26a7a394354f1e2f62a8cf15b884"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00018.graph.json.gz",
+        "bytes": 2358938,
+        "sha256": "2dfd29b214207e77dd2c31249f8176c0b721f2d09c494eb41dd79c9a5ce34b2c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00019.graph.json.gz",
+        "bytes": 2359866,
+        "sha256": "1204f365c52fe4c38dcbcd5f2433e32e56fc25bce3d127b7c60bf76251ecbd33"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00020.graph.json.gz",
+        "bytes": 2356876,
+        "sha256": "8bba9c578bcf45403212eb73d6a9aaf77897be8a68ad4b15b8535dd9e5100bdb"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00021.graph.json.gz",
+        "bytes": 2346121,
+        "sha256": "57f3a4417d3c691e08ecab40b30d7b986bef772528aa9c81fd959d6b9ba1c76c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00022.graph.json.gz",
+        "bytes": 2359864,
+        "sha256": "b915052519a06b4b7f213bc712866ddf4c4cedc100cf7396086f2a90c4d5ce65"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00023.graph.json.gz",
+        "bytes": 2357871,
+        "sha256": "20d4f41b5135720878103603bf930dc7be93d1a53f8b5b64a1c64ab3e99b49bc"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00024.graph.json.gz",
+        "bytes": 2359171,
+        "sha256": "18bec16522796e980efd72b19e05503bdb22e488b1f86c43e085340d3a89f2b7"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00025.graph.json.gz",
+        "bytes": 2342525,
+        "sha256": "1d014b0ea58986d33b40927f8d2d2bed429991a178946c4d19d13c2f05ba0655"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00026.graph.json.gz",
+        "bytes": 2357102,
+        "sha256": "93471f9f01b649af9dbbd73537343066ad01629d51c49e28a2baaf9122a5a0cc"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00027.graph.json.gz",
+        "bytes": 2356068,
+        "sha256": "faf272fcdb5567310fef3d5489d1f4263c29b0f415e949b65031ec3b4e4b938a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00028.graph.json.gz",
+        "bytes": 2357623,
+        "sha256": "0e8141dfdc70dba2e855e862d90202c69683380227f63691c7932a20c94ee4a6"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00029.graph.json.gz",
+        "bytes": 2345516,
+        "sha256": "7aa36a95550d7f37ddd6d132c2ecd62ae19af254cebbe42cb90a3eb898099727"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00030.graph.json.gz",
+        "bytes": 2357191,
+        "sha256": "119c9ea49c5e30242a02f52b8c1d2e8fe5ab2c489bf9af60c48b5feea7c9054b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00031.graph.json.gz",
+        "bytes": 2354211,
+        "sha256": "19e1302b5c68654ae42d24812a4c41b4f541cae88988f6905027ca2bdca0aa2b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00032.graph.json.gz",
+        "bytes": 2354406,
+        "sha256": "9dedfead5478f7205be739678bfa563be3970c40ecc0c28dfb1807766f93c462"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00033.graph.json.gz",
+        "bytes": 2105291,
+        "sha256": "b43b9ac693c39e47640dc54416b2d6ce5effa42c12efeb18b8fb65dd592d938e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00034.graph.json.gz",
+        "bytes": 2304548,
+        "sha256": "a8a0552963c23727023078efb754448a47c6904f76ef8886eefdda56e774163d"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00035.graph.json.gz",
+        "bytes": 2302412,
+        "sha256": "d3588ce572b9a461b5a9cf7f5b14ba46d867900e59555d25b9678267a2e24779"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00036.graph.json.gz",
+        "bytes": 2286926,
+        "sha256": "a04e8122d5f635a5a74fcb7ff4468f738dfcc0943607041a20048d908f3907f8"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00037.graph.json.gz",
+        "bytes": 2293650,
+        "sha256": "963e52092e0ec5df6502e08a6eac0be6be74dd0226654deefd96fabb95e607f8"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00038.graph.json.gz",
+        "bytes": 2306028,
+        "sha256": "1002fecbcac16ddaf3ead16f683f1a78c8fbdd7a683c5c899805726e673f4911"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00039.graph.json.gz",
+        "bytes": 2305782,
+        "sha256": "49e7860643e61b09b4f49f9a497d025115c4358bf92bd7800a5290192ec50a91"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00040.graph.json.gz",
+        "bytes": 2305521,
+        "sha256": "43cdcd07f665e3ebc0429925508e2a6d07c5d6f02c6ead84f9ce064cc7d5325e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00041.graph.json.gz",
+        "bytes": 2288596,
+        "sha256": "d2f67c099724dcd90c610557e68a0b099d60de31bed0b9d209e5a6ab2ef1fdbd"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00042.graph.json.gz",
+        "bytes": 2306837,
+        "sha256": "4121a98fe516b6ad76f559ee993814f8209dd04bcd4746ca03b512779b95a795"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00043.graph.json.gz",
+        "bytes": 2304585,
+        "sha256": "4e1341b5b974b9d04b7c3c23c0c13573dad1156e4d28c22f301aa7bcc5a87126"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00044.graph.json.gz",
+        "bytes": 2306599,
+        "sha256": "0a58bfad913bc81891f6d44c1eabc26477e15030afb20ba893562ab754bb5d9d"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00045.graph.json.gz",
+        "bytes": 2292481,
+        "sha256": "1fde5e051a9d6882ec73adbdf1aa1a390b3302b993c026fdbd89a6eb8f2e542b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00046.graph.json.gz",
+        "bytes": 2307701,
+        "sha256": "f7275e77c85a4009fa76f32371d09acb0387dc6d10c776b3c74544f68f08cc76"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00047.graph.json.gz",
+        "bytes": 2304946,
+        "sha256": "01524232f98f4aff7bcc23c2039b7212989306d1326338ee64682243b4e99f3a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00048.graph.json.gz",
+        "bytes": 2304310,
+        "sha256": "0ee87aaa529d98309059d99779945979f449d470b6423b84cd43f4672cfb7d36"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00049.graph.json.gz",
+        "bytes": 2292428,
+        "sha256": "1857dacfc38340bca8033b1d6f89c95dc8e041c72123eefdcea33a901999c66e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00050.graph.json.gz",
+        "bytes": 2308601,
+        "sha256": "3cb7bfdd553fcd515c2b8134d2193bcff6292a52c6f829791b59300db92c10db"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00051.graph.json.gz",
+        "bytes": 2304464,
+        "sha256": "d74e4b6141b024c9131ba79d7e0ae26fd5643f2a2c3138527e88a8eec305a018"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00052.graph.json.gz",
+        "bytes": 2306375,
+        "sha256": "ff3e1f49ce245171a3f367ee7d5f0840cac68e9b47100464c55d864ed0c456df"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00053.graph.json.gz",
+        "bytes": 2294572,
+        "sha256": "3ae01f3a7bde676a20bf6bb11df7503c2134bca9b2e2b9100bfaff6d1e27f2e6"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00054.graph.json.gz",
+        "bytes": 2308616,
+        "sha256": "a88e2124ee0e45458f88bec5cf02885ab095c0bff5f410ee760f0d30130cfe76"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00055.graph.json.gz",
+        "bytes": 2304238,
+        "sha256": "11ce5d1e08c8aa39be1e6bd6d52c3645aef811f46b633b6774a54b0c3de808a4"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00056.graph.json.gz",
+        "bytes": 2306268,
+        "sha256": "cf3000b9a79f6684b558b641d4c2853c542d8fdb446aea07ec769e3fc46a3027"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00057.graph.json.gz",
+        "bytes": 2291547,
+        "sha256": "6335de92959d8cb2a7c46421b457f2904b189945bf20987c3e4d29dd9167f4fd"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00058.graph.json.gz",
+        "bytes": 2303942,
+        "sha256": "34ac6d549298efbf61273cdb6d18caf0208638d9f263ab09f1ddbd516a811a41"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00059.graph.json.gz",
+        "bytes": 2304927,
+        "sha256": "71dc30a6ff934efdf090145f1feb8960ce0c4c42a7eb04f68b72baa39b340dcf"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00060.graph.json.gz",
+        "bytes": 2304814,
+        "sha256": "5659b00fca5c35aaa5df3eb4abe299424672caa142387eae4389d9b529715fbd"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00061.graph.json.gz",
+        "bytes": 2291871,
+        "sha256": "fbe4c7b86d2f3c588438a56d83ccc94f38ada9e705e0e4756456a5000795370e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00062.graph.json.gz",
+        "bytes": 2301864,
+        "sha256": "b5a590476ed86da7397dcf6640ec3d49f3685c0339976145792c45d9f1884468"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00063.graph.json.gz",
+        "bytes": 2300319,
+        "sha256": "a27db72517382c6a03014853a1ff3212903f233ac43e735fe16628e6128adfbf"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00064.graph.json.gz",
+        "bytes": 2301433,
+        "sha256": "d0d4f43583432864b2d1d561602a6bc6015c7204fed2d898f1b7f17fd7242a37"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00065.graph.json.gz",
+        "bytes": 2002063,
+        "sha256": "55d41a6d4f778f1b74d607654d9accebfffc7f75f6aaf40d30be0336d5f8f243"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00066.graph.json.gz",
+        "bytes": 2336937,
+        "sha256": "0a90bdc38dcd07283decbf47fc765b3f3d9c846060679fa442d5b293733d4ff2"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00067.graph.json.gz",
+        "bytes": 2333264,
+        "sha256": "a5a115b5a165efce3a701adc69708b4684bcab61e73829e1e2229c4b61f010a3"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00068.graph.json.gz",
+        "bytes": 2317536,
+        "sha256": "f598ffde8ce2abb317d51ae749dc54be42afa39a5007d63b79f77bf91a284514"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00069.graph.json.gz",
+        "bytes": 2322294,
+        "sha256": "5cdcc68795a3bf91d7ccac7161bce606cd9dd140cd3c9888b35426e33fb36cb3"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00070.graph.json.gz",
+        "bytes": 2337551,
+        "sha256": "9e440a1a1c3f8a6ab579275509931408fbf4017c9f07c324022037085be1edb8"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00071.graph.json.gz",
+        "bytes": 2334847,
+        "sha256": "0c0f61a208408b10de776b9a6a05cd53b89ce2d79f9bb6bc423e11f6bb38526f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00072.graph.json.gz",
+        "bytes": 2336773,
+        "sha256": "948bf2e48f0aac2f4fc35ec2911aa95289670c66c6dea984c4b89352ad715a19"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00073.graph.json.gz",
+        "bytes": 2321599,
+        "sha256": "2490a445b48b92ff0b9124db9e1a83a471fcfb1fab3f158e669456459007ec4c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00074.graph.json.gz",
+        "bytes": 2338884,
+        "sha256": "71b489eabd5a9bbde315c470ee4404dd9de2df8fbeef7764f3bfdd15bba664b5"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00075.graph.json.gz",
+        "bytes": 2335801,
+        "sha256": "05e486bc92f33d097b968269eb6a61e84b9c3afc2e38d9c3f53713ef5d924fb2"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00076.graph.json.gz",
+        "bytes": 2335587,
+        "sha256": "68e701447e3f91a529585682a3a7ce042c6cb093cfc4dbdce7f42aa5c41e9d33"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00077.graph.json.gz",
+        "bytes": 2322502,
+        "sha256": "630ba0798f3b123457e97f33e40522900534333ebe76f0fc4c6e3546b236d9d8"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00078.graph.json.gz",
+        "bytes": 2338603,
+        "sha256": "9eefa132c737ca2f3813f088ac13daa71651a3e3955b45f91aed3ac48e474718"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00079.graph.json.gz",
+        "bytes": 2336865,
+        "sha256": "19830376d2887bf6f9999cf042c28e680be2c68f31f4fe827325ba1a626321b7"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00080.graph.json.gz",
+        "bytes": 2336959,
+        "sha256": "fcdabdd7128050839520e0365aabce4e5fdd4d7167d1521e2c3219c078e36ac5"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00081.graph.json.gz",
+        "bytes": 2318966,
+        "sha256": "0bee29fcd5227406d7b876bcc02f66f07b09119c303f7a512ca213d16f32e14f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00082.graph.json.gz",
+        "bytes": 2336688,
+        "sha256": "1aced9e4e0849ac147c638cb95002877cd8fce7732e90703a37ad28da66f75e7"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00083.graph.json.gz",
+        "bytes": 2334547,
+        "sha256": "86ce76563e8bc8f0cd68cf27376f892ae54714716501daaf79e5d0b866bbae02"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00084.graph.json.gz",
+        "bytes": 2335659,
+        "sha256": "a0317d50dba2c1b32b6636e4fabfeb89dbb15a9127a81f59b98afe95fbbefc2e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00085.graph.json.gz",
+        "bytes": 2323636,
+        "sha256": "807d5793631681b5c019784d0b9c4f744cbbac28b14f0deea3021522b244ce5b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00086.graph.json.gz",
+        "bytes": 2336940,
+        "sha256": "1ba091cb4fde4b53165c01d59c27e249d9ea407e9d060157454315154da24a0a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00087.graph.json.gz",
+        "bytes": 2334351,
+        "sha256": "2d61ea982106267545db7825d43bf4ec0bece98e9c7974950446f3a444bc02e8"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00088.graph.json.gz",
+        "bytes": 2335227,
+        "sha256": "79362ba12683bfac9f2c899efa0e522a2358782b682e09c0050b4e10eb786f0a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00089.graph.json.gz",
+        "bytes": 2320765,
+        "sha256": "0d290872a96225bdfd23c385713bc9caeb609275989e3b137e1b06d34d358fb4"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00090.graph.json.gz",
+        "bytes": 2338089,
+        "sha256": "f6f689b1d5af4dea8b8438672a56ba28076ed83595abe4d2fb4cd2e78f19bfbd"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00091.graph.json.gz",
+        "bytes": 2334827,
+        "sha256": "0f3bc508954e4d6338fc75954524fb80e3d9bfa782715a51708f17e6ba85e279"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00092.graph.json.gz",
+        "bytes": 2334389,
+        "sha256": "2cdf323a43da8abc12cb6529b3678b8b34225ac3d4d8b38449e00a454042e605"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00093.graph.json.gz",
+        "bytes": 2324164,
+        "sha256": "972db4150c6cb6102d72892c35ef15a63c1530c702eb6c13a85e1a6bcc5286b1"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00094.graph.json.gz",
+        "bytes": 2332990,
+        "sha256": "a52a77bec04193e94a16fb11afb8f3ff2d80aa0a9b5a3e2cfee126116da24365"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00095.graph.json.gz",
+        "bytes": 2331602,
+        "sha256": "c7551ef214a65083db12e755284302a683414e38f0ef761cbe2ab0ccc31d17af"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00096.graph.json.gz",
+        "bytes": 2331654,
+        "sha256": "0334b5de75ebf6903c44062370b6e54a216ab0e94246d6924b912df219dfbbbc"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00097.graph.json.gz",
+        "bytes": 2080557,
+        "sha256": "2d841b012ecb59961e2d7531a41a9d50fc3236690543f55a4269548cbf0efec1"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00098.graph.json.gz",
+        "bytes": 2322858,
+        "sha256": "eb274f4fad0200e580437a116492477d97a947030bafc55dc12e3fc882e9af1e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00099.graph.json.gz",
+        "bytes": 2312080,
+        "sha256": "5a5ba63322cf907b64dae4897df35b4a61288d9c3c7e2c89c88df6c4dac5b330"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00100.graph.json.gz",
+        "bytes": 2296761,
+        "sha256": "4ed66f3cfb89cfc361100a55ce6ee300d658821c6f8d57c469243cbca2375c89"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00101.graph.json.gz",
+        "bytes": 2300340,
+        "sha256": "d212cb94914452beac65db479c65dde6407032785211660ea497f280c8b928d2"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00102.graph.json.gz",
+        "bytes": 2315586,
+        "sha256": "11f6042a9f434745e9be3c7e39b2a7f9843117a0e70319a27100e90b399cb26c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00103.graph.json.gz",
+        "bytes": 2313856,
+        "sha256": "92ea63ea4701c09d0130fb9f2265c3796325c1f3a85f9a5f95fa23e63349cbd3"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00104.graph.json.gz",
+        "bytes": 2314176,
+        "sha256": "f2ea9a92a6424dc58ea8c6be7d51ee3325904a86bcc72e3750ca17b7995aa7c8"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00105.graph.json.gz",
+        "bytes": 2300896,
+        "sha256": "8f80ce23e69e3b73b48e6674b666534bc49f64745f7760e08cb547a94f8194a3"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00106.graph.json.gz",
+        "bytes": 2317492,
+        "sha256": "177bda09ce13df9bc468a0cc59b0cb75e89837588eed547d01099718c1820446"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00107.graph.json.gz",
+        "bytes": 2315026,
+        "sha256": "a82ab206e0964e36ba8330f4a7291ba346eff816c23adc36dc608c5477ce3eee"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00108.graph.json.gz",
+        "bytes": 2316534,
+        "sha256": "77690dc05deb215af0fd97cb99be95acd78014bc3ebe5b0882c983d6184684ea"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00109.graph.json.gz",
+        "bytes": 2301349,
+        "sha256": "e4d5b63e69abe44e3f63765abc3d8a3e52dc6f1d108dab9564b114c0cbc943dc"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00110.graph.json.gz",
+        "bytes": 2317305,
+        "sha256": "8d609b5feca7fb5cf3f302e566cd97d13b69ac3324c67c3934042f244d1ce03c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00111.graph.json.gz",
+        "bytes": 2313631,
+        "sha256": "2acb1f54fa083f77306199703db9be31d2c26a3539c98f677626cc6431ab0081"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00112.graph.json.gz",
+        "bytes": 2315910,
+        "sha256": "f7f9edc9b5e9927e4856e3bf14fe6951e0f8748ac19f7e90304ba1bd39e5e06f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00113.graph.json.gz",
+        "bytes": 2300780,
+        "sha256": "7a3c17f27b0f85511f8b6b8ba6e22ed70d484ae932168f67cc89772d2c2ffce7"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00114.graph.json.gz",
+        "bytes": 2317671,
+        "sha256": "bce04ce6061c27ebba94fecec80f252654fa487df8b06ed5089a22811121972e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00115.graph.json.gz",
+        "bytes": 2315174,
+        "sha256": "1250000d6f5b08e031d7e17c7edbe901c05bb9003d6b7ce6159274f75bfa019b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00116.graph.json.gz",
+        "bytes": 2313628,
+        "sha256": "10ce57ec2a02a0c2e729176dd6bb690aa088d3caa0261adfe1b6738fb057867d"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00117.graph.json.gz",
+        "bytes": 2303728,
+        "sha256": "1ed1e762d6f110a438e65cbf6efc498c4f14909087e957e2366363252dc6810e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00118.graph.json.gz",
+        "bytes": 2317410,
+        "sha256": "1bf457ac5e1f6c8b3a50828e4e77117c06f95b6ab922054730b61cd27e9cba75"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00119.graph.json.gz",
+        "bytes": 2314242,
+        "sha256": "3d7e43f2f7612e54145a19e780745560c97ea087f5f36d48825f140c77b185cc"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00120.graph.json.gz",
+        "bytes": 2315501,
+        "sha256": "6cce0dc0cb291878e2c5156159e6e67f2f4f795be642927a0b8572d40b380fa6"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00121.graph.json.gz",
+        "bytes": 2296579,
+        "sha256": "7b11fb8ff92e39ee482efafda62e653990962c99513748942595d04cb2fe5d60"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00122.graph.json.gz",
+        "bytes": 2315553,
+        "sha256": "513e40ae4d46479eeb2a0116d1dffc94f7bd1b45b17ea498b3dc9f4fd941f6c5"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00123.graph.json.gz",
+        "bytes": 2314977,
+        "sha256": "8a55791bc375ce8a4fad8b3dcb95c95b9d4b6a411edaf70a66aec50ca401667c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00124.graph.json.gz",
+        "bytes": 2313334,
+        "sha256": "547282918bd756497e34077450569624f45b3d82d63be99bf97c0ce6d450160d"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00125.graph.json.gz",
+        "bytes": 2302343,
+        "sha256": "c177f1f3ae0f4212e17316a37d53b5d4188fe14c3ccc376c9487bcd5fa0891e4"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00126.graph.json.gz",
+        "bytes": 2307043,
+        "sha256": "33fecdcb83405bc7316111dafba94bd35233e2626580f808ae91732945802967"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00127.graph.json.gz",
+        "bytes": 2307501,
+        "sha256": "7480dd4c9237d3a56d609ad04f99186ce8c65ba771c1391ee5fbac1b245b3f9b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00128.graph.json.gz",
+        "bytes": 2307097,
+        "sha256": "b1e983e867cae45656fef80146a6aae3843e9931c25d44bb1e84cd8cbbbea231"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00129.graph.json.gz",
+        "bytes": 2011163,
+        "sha256": "f9968496c149a7a51b64468b3a8b7a26eb23da6f24151ef1fd40199556d6e58f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00130.graph.json.gz",
+        "bytes": 2006462,
+        "sha256": "d172bc3253bc6a0a9e324d8bcb4af1a127703c381a3508ae4a86cfcd5036e0d6"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00131.graph.json.gz",
+        "bytes": 3018340,
+        "sha256": "4cc928e9fd297c8c2d087b0e9996cfbfc832287fda75248c0983c1d20e03d8da"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00132.graph.json.gz",
+        "bytes": 4336859,
+        "sha256": "062534cbbe522e50dc4627958f9069434977282dc6a9efd00d8499f4536bcd41"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00133.graph.json.gz",
+        "bytes": 2095551,
+        "sha256": "6b03df110ee88fc1d3077d060dc35adf46a767ff0fa167f51ea2f4d31e6f2ced"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00134.graph.json.gz",
+        "bytes": 2095504,
+        "sha256": "2962aa37a9db8d63245d5dd3f8c067ff533bf78ff8df78b269c9af94f4adf76f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00135.graph.json.gz",
+        "bytes": 2095428,
+        "sha256": "4adff53c47494d10de9f22e96c37fbebe8c6053cd9998433d3cbc448f94b8707"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00136.graph.json.gz",
+        "bytes": 2095440,
+        "sha256": "06ace1d5af14c56f0425c80a9490877d82e5f472fe4ba88c0b8a2a6f591bbc89"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00137.graph.json.gz",
+        "bytes": 2095236,
+        "sha256": "87ee2e6f57fb50bba81efb860068d782a31c0846ad99a46b167914b0f46cdccf"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00138.graph.json.gz",
+        "bytes": 2095885,
+        "sha256": "1d49c81a2f71f11593e720db1afe46d5a10533087c10543a922bbd2396bd989b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00139.graph.json.gz",
+        "bytes": 2095115,
+        "sha256": "7d08a596316a4b45d4b216e3e839a5d6aba15e3bb9580e31f671f2d2640fbd1a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00140.graph.json.gz",
+        "bytes": 2095374,
+        "sha256": "53fa8205c89e21e15ae542dfad28d42b827290b8b39c3e28802b81c11200aea9"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00141.graph.json.gz",
+        "bytes": 2095341,
+        "sha256": "a0161d1cfaef432c83be815279b63095ef81c2dc40d2fece4878bdc2f3833c45"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00142.graph.json.gz",
+        "bytes": 2095235,
+        "sha256": "8e4960ab965408efc25b7ff4fb771454ecc531680b6654d0025be8a9d228dbd4"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00143.graph.json.gz",
+        "bytes": 2095382,
+        "sha256": "c93887f0f154d1362ce3ddc213e5adf2d0672dfa8bdb46241cbe0543bb525056"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00144.graph.json.gz",
+        "bytes": 2095352,
+        "sha256": "2e1246ca2fecc4a5aabad3128f15a71f1c66b2a2c6acc56aee7d1fb9e0913d30"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00145.graph.json.gz",
+        "bytes": 2095245,
+        "sha256": "9b73c26775a8813d5b2fa2932a82391c07bee34750b617d29304665ecc7e5d0e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00146.graph.json.gz",
+        "bytes": 2095148,
+        "sha256": "b3975ce88753fadd79a6056d0352137ab863ef3ecacb4b7cec77580247ff9ed1"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00147.graph.json.gz",
+        "bytes": 2095436,
+        "sha256": "b252f9ed50da7a627df35196742c3075bd1e895901dce3361af926c36ddb5487"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00148.graph.json.gz",
+        "bytes": 2095232,
+        "sha256": "eca8a4ea28e48a6a62b1cd0313366e41fcb2eee9a173b547383d27f621aef85b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00149.graph.json.gz",
+        "bytes": 2095577,
+        "sha256": "bfae050ddd5a6656cc99be45b88220afb6b2d9037a8f10dcec2fdfdceb52478d"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00150.graph.json.gz",
+        "bytes": 2095446,
+        "sha256": "cedaf104e9b851c32c80876fc08f0fe58b529ff9c4cf7af472f0e8fd7b27549b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00151.graph.json.gz",
+        "bytes": 2095255,
+        "sha256": "b0be6a209ffdfdded5a00f51b1650cbccce1d796c54c599e7e294cb4d2ded6c0"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00152.graph.json.gz",
+        "bytes": 2095743,
+        "sha256": "af23dc1116a1d23c966f89cf910627a074f11b4ae23c93e74f6ec1bde9e55098"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00153.graph.json.gz",
+        "bytes": 2095410,
+        "sha256": "bc8d230523bd6934ab78a3a569757b1881e246ac8791839b42b474b0c8999bc3"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00154.graph.json.gz",
+        "bytes": 2095398,
+        "sha256": "f94fbb91f8ca79c2f311143d5f575d63fb1054a57d112f4a0dab13f8a0ce2ec2"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00155.graph.json.gz",
+        "bytes": 2095692,
+        "sha256": "8678971860f404ccb2371595e4accd6b99603c19729fbad0ca366e03df124699"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00156.graph.json.gz",
+        "bytes": 2095507,
+        "sha256": "1ed0ada0d7141ad294629d41f570dbf94ac7dcf1132c67d4b1c5324440b4a6db"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00157.graph.json.gz",
+        "bytes": 2095277,
+        "sha256": "f3541500fe3eb16d879b68d3f6e46fe8e4d501f468c83a4c196fce4ce221a2e8"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00158.graph.json.gz",
+        "bytes": 2095540,
+        "sha256": "4381688ed8de89503bc22e9f3e80a428ed0c8163b4c9179a9a8d236da8b3aab8"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00159.graph.json.gz",
+        "bytes": 2095496,
+        "sha256": "5bb7dd567c5dda0d8b5bca7c3f57e63b2de5f1c3e6bec9199042c1a7aaf98bf1"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00160.graph.json.gz",
+        "bytes": 2095216,
+        "sha256": "378948559edd153c721697d391cf0ae245f19afbd0de209d9f4f78a08f881387"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00161.graph.json.gz",
+        "bytes": 2095274,
+        "sha256": "f4936f092c6155cb728b4562a9d77d0f620bb8418a4e5285e4c888e7d257f108"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00162.graph.json.gz",
+        "bytes": 2095443,
+        "sha256": "e0f3fa7395cc30176622b07c273f723b88fcdfb8601af478744ecc9039fd34a5"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00163.graph.json.gz",
+        "bytes": 2095509,
+        "sha256": "ff26447d75bd9ff1b4ab70833ee83b178ebaf8daf933427a7dbc1abfcda1a5a0"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00164.graph.json.gz",
+        "bytes": 2456470,
+        "sha256": "44c860bb5cc7d99bf31149e33823c371029699b0ae1d639cc1f4664482446983"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00165.graph.json.gz",
+        "bytes": 4281734,
+        "sha256": "0e69a3b1cfe58bd5cb8ce260642fbc27e49fe8e7a81bf57f1e1803b3c6f09652"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00166.graph.json.gz",
+        "bytes": 2095595,
+        "sha256": "9cdbf6645bb5448ed39358950ecb233738b82c91661c8d5846cbaba3e00d612e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00167.graph.json.gz",
+        "bytes": 2095593,
+        "sha256": "016e55e788532026761c6833f0bf148ca39ebc56e3107366cc0f44c16f119a31"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00168.graph.json.gz",
+        "bytes": 2095273,
+        "sha256": "6184e5f5e58f12b845e44c92e677aaf10b2195d8b7dd096da5f9564afa998ab3"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00169.graph.json.gz",
+        "bytes": 2460596,
+        "sha256": "55f0efd6dba560423605414bd3214e85eada9b03038bd52eee12665555ef6c7c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00170.graph.json.gz",
+        "bytes": 2309422,
+        "sha256": "adeaef15d446fda9ae1f6f741b00ce02b01a92a6c505d5eb5e9cd81f5a45b7fb"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00171.graph.json.gz",
+        "bytes": 2127953,
+        "sha256": "3622a1c937f2829c9214ca645d354e011c98d7258760af977a081171aa36afef"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00172.graph.json.gz",
+        "bytes": 2376398,
+        "sha256": "3e671753e3d7d0853bdf9a4d151ff4d796d3342485592bf585102274c3cb7265"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00173.graph.json.gz",
+        "bytes": 2353035,
+        "sha256": "a40c884987e279fc89eedd1c534b26427117e72c6fd6c5c6044db9b7bcd68632"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00174.graph.json.gz",
+        "bytes": 2360228,
+        "sha256": "e22c080f3f89d5d8fad225ee0662223c4a75423c2cb7153f6a13b5040233e8b3"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00175.graph.json.gz",
+        "bytes": 2371846,
+        "sha256": "cc821fc3be9d4dc748088d1bb042e0f02a6e675eab52ba196da71de4aadfa43f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00176.graph.json.gz",
+        "bytes": 2371445,
+        "sha256": "b15e63bd7a3a5f16781edd15ed6cee8d9f07504ec73012559c0b821e220ac905"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00177.graph.json.gz",
+        "bytes": 2373283,
+        "sha256": "a960d455c8fce3034983005ca4d0e0e635454e65b605e6082e80e9d7bb1bef52"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00178.graph.json.gz",
+        "bytes": 2355860,
+        "sha256": "73f25451c73e906a97ec4e33d6e6d55423b19f19b8c4084fd30c85a2c1f6181a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00179.graph.json.gz",
+        "bytes": 2375379,
+        "sha256": "dd7b10878821866652a28808a9e39a3dea123eb61126dd0053e9a5d25db71daf"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00180.graph.json.gz",
+        "bytes": 2374237,
+        "sha256": "7f48f6b4de9d108f05fbcfcd66f86ced88488c8904e40598749f371941ef0b10"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00181.graph.json.gz",
+        "bytes": 2376028,
+        "sha256": "0d3549a066e26ae02e6a063bc3559ff65b9b587ea32b4feefd9d40be71092890"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00182.graph.json.gz",
+        "bytes": 2363787,
+        "sha256": "4c379c2a02949217a5f9355fd40fe03d4f2d87476d4b76feb5e6915a7894c182"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00183.graph.json.gz",
+        "bytes": 2376216,
+        "sha256": "b474076bceb4429dfa844f1c339eaa01f14cb08082ea659895f125fa8405f499"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00184.graph.json.gz",
+        "bytes": 2375094,
+        "sha256": "ef7bc7fc7443ba9fdeb1966b56a17251a3bffdf12de2c21433c4655b9b7a18f6"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00185.graph.json.gz",
+        "bytes": 2373243,
+        "sha256": "f6bbcff87e4d5bc0314aad0bf79eed6173b90022b0fbb92b9c703bbfaa10fe6a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00186.graph.json.gz",
+        "bytes": 2356905,
+        "sha256": "9b794e8733587d94d95eea31572f76ee936d22bc8c05060c6bc8c2335687484d"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00187.graph.json.gz",
+        "bytes": 2377542,
+        "sha256": "f5133becc88ccb8d5e6b049057cb69ea13c87c25bddaced29794d3bec7c4e87b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00188.graph.json.gz",
+        "bytes": 2377623,
+        "sha256": "9a287aa4c440ea52d87e44dc283b25ede8845ec02b7f1edf6d8b6799a605765c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00189.graph.json.gz",
+        "bytes": 2377590,
+        "sha256": "4b989ef61e0b5c4d9ebcdc60b598261dc540978085d0b80aaca20b4c1e76537e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00190.graph.json.gz",
+        "bytes": 2364657,
+        "sha256": "d45a2e36acceacb0c90f4294a12754b8c86ec0a9c4329611b9a64b38ec1192d4"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00191.graph.json.gz",
+        "bytes": 2378566,
+        "sha256": "a6aa3ecbb63b40ad074f980f877be0c49e9192ba06c174200c0fa5a66c2394e2"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00192.graph.json.gz",
+        "bytes": 2376259,
+        "sha256": "d1bcb627815d2d2dbc0b18abe9d2a90f289e5645207507a251a9d3e747632ec2"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00193.graph.json.gz",
+        "bytes": 2378816,
+        "sha256": "f123b6f9e6ee5f013afba3a3faa0d3498816c67223b32e6afc00298e4b15c3a6"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00194.graph.json.gz",
+        "bytes": 2362023,
+        "sha256": "59174a89a932a3635588b89bf7d385cdc1a7591ff9dbdcec2d43f0eceb82825c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00195.graph.json.gz",
+        "bytes": 2376041,
+        "sha256": "67c92bf0e7a2f9e2ddfb204964744c474dacec4f3bdab2df35ea97a3670bfe3e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00196.graph.json.gz",
+        "bytes": 2376932,
+        "sha256": "4cc4e64a8fec7da181153eeebf9cd22268fd074d6f988ae29933982aff6086c7"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00197.graph.json.gz",
+        "bytes": 2376936,
+        "sha256": "14c1e71ab08b1f8dd8a72ee69bd9050409ebd66110408b84a8a60557d9b00e0c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00198.graph.json.gz",
+        "bytes": 2365361,
+        "sha256": "434890f93135ff4bafa011934d7d94d3c66e4993429436c36284f0e09465070f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00199.graph.json.gz",
+        "bytes": 2376283,
+        "sha256": "80dfe847ac8f05e49bab19ee8d7e34e06ed8d168a776b4a2bab554a8a4900559"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00200.graph.json.gz",
+        "bytes": 2373345,
+        "sha256": "5658527d46ff928a4a6ba0cae9e3b805715c2a04a4bd3c550dbc216db17750a2"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00201.graph.json.gz",
+        "bytes": 2373979,
+        "sha256": "60fe8c97f6bbeac12851adf70d490a104b09addcd3f3dfc965c01f506c9e940d"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00202.graph.json.gz",
+        "bytes": 2119915,
+        "sha256": "821f9f7815498dcb596f561dd4b04a8d4fbb6932698503327e8e42aff6cf2ebe"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00203.graph.json.gz",
+        "bytes": 2322182,
+        "sha256": "46c708ca84d82b0185c95165854ef20a1c3e88adef2e649d8adf093c7da1fa24"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00204.graph.json.gz",
+        "bytes": 2320460,
+        "sha256": "f1f8c5f8236e5a1d3edfeb508d62bd5a48c3868ee8cddb898fd116cf93f862f8"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00205.graph.json.gz",
+        "bytes": 2303885,
+        "sha256": "2da0c1c74d24b79d0533de236f66235b41b7e2f7cf448f6a78c73ebd5db9d7f9"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00206.graph.json.gz",
+        "bytes": 2311230,
+        "sha256": "9b8def5ef7f0b8bc22baeca9570ae7ad6f078b1d2d20e2162d3cea13179f6f14"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00207.graph.json.gz",
+        "bytes": 2323050,
+        "sha256": "b46a00420080406a38e9f1194f2705c00186403976fbec9f35c162d83addd977"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00208.graph.json.gz",
+        "bytes": 2322954,
+        "sha256": "2117ccae18b509d6e3c826f2b517dc8bc7346afe1d56c07b70169754530a8406"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00209.graph.json.gz",
+        "bytes": 2322867,
+        "sha256": "63cc1962f45a1a65878c9aa61e74050d18385c570b8e7260231a11054a6b601a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00210.graph.json.gz",
+        "bytes": 2304880,
+        "sha256": "4d079eb4e3e63d17b4878732e359c1ceed43f8de55560c83ea5b1903a5065f31"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00211.graph.json.gz",
+        "bytes": 2322412,
+        "sha256": "1da4093fde86b3d78592051dfa95a8759c9d0eaf37d3732a8f64bb10a867ba75"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00212.graph.json.gz",
+        "bytes": 2322403,
+        "sha256": "80633f226015ac1d62c42253241129a8db68d4338ad4e2f6deb988233ee6aa0f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00213.graph.json.gz",
+        "bytes": 2323783,
+        "sha256": "eaef55c6b3429aed1e96396416589df5e2c982be3abe1a0f48ebe46c8568431c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00214.graph.json.gz",
+        "bytes": 2309664,
+        "sha256": "ff327938725e2f4e1f79b2d7b75fa50cbefd516767851e8f1e5f3e8a7f2fb920"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00215.graph.json.gz",
+        "bytes": 2322118,
+        "sha256": "fc31ab1e9f49777dbbb97ab89d5fbd37860d34ce13b9be91b056c4dc23c8db11"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00216.graph.json.gz",
+        "bytes": 2323182,
+        "sha256": "dec1ad9f9ff42038c19344d6bc9561a3a96827a437a764c41491ca3fbe8ad40f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00217.graph.json.gz",
+        "bytes": 2323264,
+        "sha256": "387eb3c239cd619ea30fa799cce1f444f79490e5fa6a38e8b0e96c92c59278fb"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00218.graph.json.gz",
+        "bytes": 2307230,
+        "sha256": "97b0e0de2dfb372ab4f7744690f5f5a848f78ad6f032256780aad42422481494"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00219.graph.json.gz",
+        "bytes": 2323899,
+        "sha256": "5b9cca304d773d2601fa67695a2634c4a78474722edca4b8b03f3d7a346da78a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00220.graph.json.gz",
+        "bytes": 2320950,
+        "sha256": "0692c21952741e241231b876964bc35afbd13731204950d49093fa3667e31714"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00221.graph.json.gz",
+        "bytes": 2324120,
+        "sha256": "5e6edba6267cbddad0a2b0b7970370d27c07252b13608b2fdc840dfb64553005"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00222.graph.json.gz",
+        "bytes": 2311491,
+        "sha256": "0b95e61152694eac31952da57c4f29833454f51b9ed1cdf8619ace120dbb3502"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00223.graph.json.gz",
+        "bytes": 2324372,
+        "sha256": "3a3ef2a2c17a6d5a6d5835e18c25b300256fb3f564bc9d758f3d8d088167f48a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00224.graph.json.gz",
+        "bytes": 2324332,
+        "sha256": "2487c16ae18e6088348233d050e2dab5f9c614a98bb247801ef1bfcc203eafa6"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00225.graph.json.gz",
+        "bytes": 2325419,
+        "sha256": "fff17cf0389a31baf01932594e0853dfd409ef503a987c4b11fedcf0488e4459"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00226.graph.json.gz",
+        "bytes": 2309980,
+        "sha256": "6dc78299cfe54b56d67bf00833c9609174f7d3cf1ef8754454971552dd432231"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00227.graph.json.gz",
+        "bytes": 2326193,
+        "sha256": "3a4b4628d1cc871dfb878a48d3a552377dad941f36c6c281cf1e4b5873b4ba70"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00228.graph.json.gz",
+        "bytes": 2325894,
+        "sha256": "edf28e89540e0b805546ddf87132cad27d690871bd3ac4de28a26b90a4c0d36f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00229.graph.json.gz",
+        "bytes": 2326538,
+        "sha256": "a34047230115f5bbbb57e7e7f2fec08a85d0bf8b27d29836bda1714051139184"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00230.graph.json.gz",
+        "bytes": 2311288,
+        "sha256": "a25c2d7510317d7477c9d2c40b6698e85cb3eae3609e5e6cd2ad1256e84347c2"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00231.graph.json.gz",
+        "bytes": 2322614,
+        "sha256": "c692ad700ed8286418d793213ccff2badbeaafba991054fcce246bec4ecfb876"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00232.graph.json.gz",
+        "bytes": 2322286,
+        "sha256": "235172c20c98528fa9d9284c05600935418ecdb1144072b180b13186f658f66e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00233.graph.json.gz",
+        "bytes": 2321688,
+        "sha256": "401fc07122c17f72c352304cac2ef83558287205c8132996355e382a9d176296"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00234.graph.json.gz",
+        "bytes": 2019416,
+        "sha256": "0f099e502ccee24381d61a87f5148a5367c74700fdf79f42509c245d95f4c379"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00235.graph.json.gz",
+        "bytes": 2347376,
+        "sha256": "7679f3e72aa850076c4addd094a05c6171c213a9667c2420d163b38b33186912"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00236.graph.json.gz",
+        "bytes": 2346956,
+        "sha256": "56a557bede0431bff1373dbb19e58d30cbe3b6b23a860fcdd7cda5228138c7ed"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00237.graph.json.gz",
+        "bytes": 2331014,
+        "sha256": "4ef39092c54ca8e6b161555bded1695c3543493951b9da5254ffb0e48532c2e4"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00238.graph.json.gz",
+        "bytes": 2336910,
+        "sha256": "4a197b5c6d987499c7f8c6ebcadb99a11295b8f69d76bc96b9ddb317df64ab89"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00239.graph.json.gz",
+        "bytes": 2348647,
+        "sha256": "7bb4b2beee7de1adc51ef747eaade5c9a9c855582eda6e71a88632a7e4817d90"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00240.graph.json.gz",
+        "bytes": 2347733,
+        "sha256": "055ddc1efda995db92e20b62f3e1e21729bad6f093b54dd47291b37c9f3bec85"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00241.graph.json.gz",
+        "bytes": 2348648,
+        "sha256": "5c48b3839dc7b70a807c7b3a247c6978beedd2e286f9aa56cb2ffb577e0a9f4e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00242.graph.json.gz",
+        "bytes": 2333085,
+        "sha256": "66e781831f153f49214411cd9405b930099c3723296572f56de7db12c623d22b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00243.graph.json.gz",
+        "bytes": 2348382,
+        "sha256": "06805d932a611e0b55b616887c6eeae0e5063a557b54146b90561b07801f0909"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00244.graph.json.gz",
+        "bytes": 2347505,
+        "sha256": "a5d7e6079aedad7d828f3e428074ab53dd6af6bd3492eef9a234ad72848f42ae"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00245.graph.json.gz",
+        "bytes": 2346864,
+        "sha256": "55e676d0451ece08aa8a6cb6084394fb311e441f581c9361eb61ed231ba7ec4d"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00246.graph.json.gz",
+        "bytes": 2335665,
+        "sha256": "248979f20f1ec5e4dd58a39991b3531965ae454b7d79514d316a89f3756d4ff3"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00247.graph.json.gz",
+        "bytes": 2349159,
+        "sha256": "5994caffc3461c751b1d5ff8282fdd90089aa6197bc1db368fc242492291210e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00248.graph.json.gz",
+        "bytes": 2347825,
+        "sha256": "fcc3dad25667b45b1f2d81375712487cc8e6505c075cf950661365a715d6fe36"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00249.graph.json.gz",
+        "bytes": 2348328,
+        "sha256": "7d423f1894cd80e01419733396639ca59ce503cac7dc0df8ad417f208c363a01"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00250.graph.json.gz",
+        "bytes": 2331844,
+        "sha256": "176ff0ba73e3ce6b3f81eb469d1963e979bebde895fe54cfc26f56221d453335"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00251.graph.json.gz",
+        "bytes": 2348747,
+        "sha256": "59c537ed0cc5e1bdd568257a3cd73d9e902476ec058ca085f67e1e12115ba63b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00252.graph.json.gz",
+        "bytes": 2348319,
+        "sha256": "590fe8fc0d396f10f6de7d0b9da00133719d61c80ae9ddf448e12c41fe4fe927"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00253.graph.json.gz",
+        "bytes": 2349231,
+        "sha256": "c6ebd62c5f98bef906bcfd23fa26b3d44618d6dcf99d3cf44488b80b9556ec96"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00254.graph.json.gz",
+        "bytes": 2336492,
+        "sha256": "81b64500d22e342b72d6d7e0ad2d5d324c958c72c29dfb6903d0c5e0bf03e110"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00255.graph.json.gz",
+        "bytes": 2348144,
+        "sha256": "de36e65c4e70df7b44820b6056e3a0a4218f0edae9f9554f8038c800b359153c"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00256.graph.json.gz",
+        "bytes": 2346602,
+        "sha256": "ba26b608fee54f7b19650e39c87443e2aa26f929651b81e1054f601dc8a51aac"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00257.graph.json.gz",
+        "bytes": 2348268,
+        "sha256": "98f34ff5e23835123c4faffab8d29b801943042ece083cc6e6f0a05c8018090f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00258.graph.json.gz",
+        "bytes": 2332850,
+        "sha256": "d6bec9b7c08129c40f72afdcd7af7574d5060096548bfe3b75a58b708f5a6f31"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00259.graph.json.gz",
+        "bytes": 2347854,
+        "sha256": "2b5289cfa5f1af64ddabff71fd2a819eb5372bb5559c1f76b303bd4feb02b639"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00260.graph.json.gz",
+        "bytes": 2346106,
+        "sha256": "4222b596a046a3598285de8f944943935aaf202ea7ebad1918eb2e440ddd0624"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00261.graph.json.gz",
+        "bytes": 2346801,
+        "sha256": "2b49c24525e4fd2dc930523238d52da42bd4f28ea7166f3a8f777f72c3d9490e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00262.graph.json.gz",
+        "bytes": 2334802,
+        "sha256": "e1d48f3788d53bc49a033b1c3b9ce57a0a486f59a97274c240723a84d3e24a02"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00263.graph.json.gz",
+        "bytes": 2345279,
+        "sha256": "2bac0c14fb9569c06ce36603d8b9da723341ed601ddc8a266c0df4c247414dde"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00264.graph.json.gz",
+        "bytes": 2344589,
+        "sha256": "73bf0ae823138c41676a5b297165628774839b1e72d079dba1719d0d37de2ff8"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00265.graph.json.gz",
+        "bytes": 2344064,
+        "sha256": "ef48f3dc0f10e4b6916dc84836b7fa183d79fb79341573cb7d4b6e05e926d431"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00266.graph.json.gz",
+        "bytes": 2094907,
+        "sha256": "ba457f13acf8422b6472bc09a9355885a1d2486896bb28efb9d2fd931540a104"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00267.graph.json.gz",
+        "bytes": 2323856,
+        "sha256": "c203f118ffe2c2da69bf5fcb89ab79b727d8cb49a49ed8e6dffedf893efd07e1"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00268.graph.json.gz",
+        "bytes": 2322984,
+        "sha256": "46f12dcd853dfe622871e914e9180dd7ee3c8d23210c3fec647bcee754becdca"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00269.graph.json.gz",
+        "bytes": 2305850,
+        "sha256": "048b015aee6a4a5c04186826f0fb423e9c9f49c0f5042dae82d84281d052a254"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00270.graph.json.gz",
+        "bytes": 2309638,
+        "sha256": "bd0a33d6a94aec77ce17e96ed44ec91f2eb5173164c6f9f45bd730506d5431e6"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00271.graph.json.gz",
+        "bytes": 2323651,
+        "sha256": "c447a8cd8c9a31f2f0f985de01d258aa60afe229fbbb947457972bd5bbd32785"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00272.graph.json.gz",
+        "bytes": 2323611,
+        "sha256": "d629a825918bf3e3fc4b213774c6db821d9a6d72c1619eacb0438d8683039029"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00273.graph.json.gz",
+        "bytes": 2324023,
+        "sha256": "5fc112c7eec3928ef420bebdfc955c7fef9f36e1bac78fb938ace5e5c5d0ebe7"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00274.graph.json.gz",
+        "bytes": 2307952,
+        "sha256": "e131610fd1733e3b7cfe1eb8e0e2a52b964b45e226ef21bb791bc8eb6e6a9507"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00275.graph.json.gz",
+        "bytes": 2323362,
+        "sha256": "024e17558b4cf1fabcf2f89f8ceaf725642ac236624b43ad43b60abc4b889d02"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00276.graph.json.gz",
+        "bytes": 2323524,
+        "sha256": "1620fa6daef857e3f737d7163214bc49239f2270ce6994d519dfdfdc0497212b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00277.graph.json.gz",
+        "bytes": 2323795,
+        "sha256": "cf0f64adcdecfc494932cddb77e4da9d9306108387256399a875bfcff92ebe6b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00278.graph.json.gz",
+        "bytes": 2310311,
+        "sha256": "420c41fc4d15e1df392d93ab6956d0741602a339674c6a771acaa797f4dade2b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00279.graph.json.gz",
+        "bytes": 2323166,
+        "sha256": "9e35d56728ac508aff3c1dafab82d7ab4e58afbd9529b51f3a7f37bb083590b3"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00280.graph.json.gz",
+        "bytes": 2322835,
+        "sha256": "aa7d82dbdd95c3ea8839bfc0f27835102829254d860b28077aad2e2c0c25a499"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00281.graph.json.gz",
+        "bytes": 2323425,
+        "sha256": "94acaef1729b972b6dc8f41ab0b2bd7da7cfd3e43518042a763eef04dfe28b5a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00282.graph.json.gz",
+        "bytes": 2308335,
+        "sha256": "acfdead02df1abc00704544e6c09b5ea59be443e0fbc4f28af8d14dd74d1820f"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00283.graph.json.gz",
+        "bytes": 2323884,
+        "sha256": "1ddb70de5c19a9f2ac92c22814900820f56a345c6b85a99f722814cefcf3603a"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00284.graph.json.gz",
+        "bytes": 2323129,
+        "sha256": "ad6946ac07ffb871181441a0c9e4f123269bfbe4f8c7a5fe3283d426bdd5eaab"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00285.graph.json.gz",
+        "bytes": 2323329,
+        "sha256": "8ff8b541c638e3091908d09857903a21c77a35f4951c6b73bb5ad38483898763"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00286.graph.json.gz",
+        "bytes": 2312296,
+        "sha256": "3b8d3dd1e2daf31a95625fc257fcb9d6fa9898aa08b2a9a2aaf5c8f567e5d206"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00287.graph.json.gz",
+        "bytes": 2323643,
+        "sha256": "9afd0c4783ed94ede5675cca3abbeb12163304d34135b2b376de30146571ef64"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00288.graph.json.gz",
+        "bytes": 2321802,
+        "sha256": "632cf9df15de4bf7da96734e8fc0ce4fdbf2807f8c99052f81a0595b60a3eb03"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00289.graph.json.gz",
+        "bytes": 2323260,
+        "sha256": "69b32795d132b8f8d57f83f83453da611b8c47b5a1214ac4a208f02a12b3ffce"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00290.graph.json.gz",
+        "bytes": 2305598,
+        "sha256": "e93423e286b82cadab7fa94466a659a32997e16e78fe408d4c54b3a6c3d41e31"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00291.graph.json.gz",
+        "bytes": 2320909,
+        "sha256": "ef3a0d0d31e94da99c079ebceffb9de8d8e6f8460862e758e710f2f0e34af094"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00292.graph.json.gz",
+        "bytes": 2320879,
+        "sha256": "7b054a8c8dd54922b0ff8846d602b9a2f45cf811d3343ea04958e0cab3a7f979"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00293.graph.json.gz",
+        "bytes": 2321857,
+        "sha256": "027efa303e0e6c873f532ecffddc73b2ba21b4f7cf6b2c9dec7fea79453158aa"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00294.graph.json.gz",
+        "bytes": 2309222,
+        "sha256": "12ca040298a8d1a0ee5f9d48d4d7958bb92378b509a3f8a5a1e8a588c7b58f0e"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00295.graph.json.gz",
+        "bytes": 2312175,
+        "sha256": "96f1ce8fe419d04f8d3afc49ced46b16da9ffbdad8ecdec884a8d7985abe0dd6"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00296.graph.json.gz",
+        "bytes": 2314068,
+        "sha256": "d8bed698d2f4273b6458fff7aaeeb3767411647ee41dcf20d0dd33f784e811ab"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00297.graph.json.gz",
+        "bytes": 2314468,
+        "sha256": "596e50d814f59c8497742f53d010c1e389136966c4c20831663fce4230f5f14b"
+      },
+      {
+        "path": "/home/ttuser/ornith-35b-a3b/tt-metal/agentic_models/models/ornith_1_5_35b_a3b/vllm/doc/optimized_vllm/native_tail_capacity/baseline_v3.segment_00298.graph.json.gz",
+        "bytes": 3377286,
+        "sha256": "3dd8d4f05a37d69e9a23b23cb30805bdb787382c4968108521faf8454036c1e6"
+      }
+    ]
+  }
+}

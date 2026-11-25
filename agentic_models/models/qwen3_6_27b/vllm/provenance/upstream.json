@@ -1,0 +1,112 @@
+{
+  "repository": "m4:/home/ttuser/qwen36-27b/tt-metal (QB2 bring-up workspace; not published)",
+  "revision": "c4912f0d1a2ed66879659e295279e0903044f983",
+  "branch": "perf/multiuser",
+  "path": "models/autoports/qwen_qwen3_6_27b",
+  "import_rewrite": {
+    "from": "models.autoports.qwen_qwen3_6_27b",
+    "to": "agentic_models.models.qwen3_6_27b.vllm",
+    "applies_to": "*.py, *.json (string literals included)"
+  },
+  "source_sha256": {
+    "doc/datatype_sweep/selected_precision_config.json": "9d4400a772e91cef08d1579c1e42d399c3dbb699b358a5839e558315982e799f",
+    "tt/attention_gate_candidate.py": "888f6ebbd5b501c59a838513ecb55d2cfe4f82121af3eac3a1d4973dc521097f",
+    "tt/batched_cache_fill_candidate.py": "7f843ed0bc1afb47a4cd78249cdfdef85b8fc6c235be882048290f7a4a952411",
+    "tt/benchmark_timing.py": "bedbf7ba1062ad91487d68fa9ea941d9b29abb08d05f9475067a00d709881d86",
+    "tt/bounded_prefill.py": "f3cfca461e32e271e4e283783fc2c23923114169c3bcc7974b3b7712aab5455e",
+    "tt/column_recurrent_runtime.py": "7f87af4cfadf77bfdb10bfa6cd8137ff7d66791f9cdee115890d5eb9787c6237",
+    "tt/flat_gdn_prefill_candidate.py": "c11dc8e5829d97437ceaefac74a3de5f578a37912cb1233a0706163e031d19c6",
+    "tt/flat_prefill.py": "292d97c890a33c031b1381da45d2497e26b092eef96c8391bdefa06743108ef0",
+    "tt/fused_decode_norm.py": "b60e24a299e35f7176977f0e2bc65b07de14da527957687014c726e7c6f03b37",
+    "tt/generator.py": "a3a5d1e0f078cc00a31a21e7f9725ef982351484dc21b6783aa165e4c1b6bb1d",
+    "tt/generator_vllm.py": "c4beaf0827dd8a78ff72efab8d807e6c6c03aa93b0f2ef2047cb68cbe8bf1d22",
+    "tt/hidden_norm_fused_candidate.py": "29f451eeaeeb602b8ba68fe0279fe4a4d9c60e67059901cd6036104676f7a7ab",
+    "tt/kernels/qkv_causal_conv1d_silu.cpp": "b79f1109b702132baafa483bcf066a7a46adb85ff3c6f240a7d166767272b647",
+    "tt/local_affine_gate_candidate.py": "807dd82ff67dbce95dafe6d327be2f77a02554d3157e636dbe33f46f23512048",
+    "tt/local_beta_decay_candidate.py": "5cf869a052ad21dce5afcfa001e7c9036dc6c4a40ab9fd57fe6d5eae4b1c8d32",
+    "tt/local_norm_gate_candidate.py": "9804361b01100be2abcc84ff66badeecca3fb1c66ba906c74778a704e9c16789",
+    "tt/model.py": "3a996c4391694053894f37cf2b76d5780b53f0b2e823d30d6535173292f4aef7",
+    "tt/multichip_decoder.py": "724ce7b94641b9072ca3d41cfdc21dda48f60b77d1ec2376cf352be668bd421e",
+    "tt/optimized_decoder.py": "63d3096d69d31cd001b0e8687b044386e63e407f6907112119488eff359865d2",
+    "tt/packed_correction_candidate.py": "7f2d5199bea0a862df8cb899c972381984a0eec47349097788886e7d149f03af",
+    "tt/packed_qk_rope_candidate.py": "644967b7929ab37b6815f2360da045bbbbab0b98f55047badc191d987d239cea",
+    "tt/packed_swiglu_candidate.py": "77086d00c44d7d6ebe000eeda0c413e67de097b2e0d5fba099f4dffd9a76f93c",
+    "tt/page_table_ownership.py": "c498d96e28ae93032d8394eaf7dd3e237ce9124150f8250a2122cebfeffcc321",
+    "tt/parallel_qk_norm_candidate.py": "eadda2905a262eaaad1ad310bdc2ea865ec30e7ef07c5115f860c884f89501aa",
+    "tt/parallel_qk_rope_candidate.py": "23d22234e9eb4dbfcd79c92476575d19e1fe12d0974cf28f942dedeb565d0f43",
+    "tt/precision.py": "de63c2792c7720cc19013fc0eaeb184bc98222281c32c732067f86f159b59fab",
+    "tt/prefill_conv_candidate.py": "65254ebbac9616a1df42002f20a035831a7dabf5d75e5d72372518ac4726d7fa",
+    "tt/prefill_qkv_candidate.py": "8747283312e74d5f2af8c2dc135565b9797f917ad53cf5fabd3131b6d2a73e49",
+    "tt/prefill_rope_candidate.py": "28818e5ce0b64084db8b1c71a6f157a03674cd01ec60349395c9256be53074ef",
+    "tt/prefill_trace.py": "cfb1e536aa6fbe96304ed75697b4cbafa3c64bf41a380a94e5460b27d5dbe812",
+    "tt/readiness_contract.py": "42417eab48a87b6e9c31dee15ef68bac5c67970e487a295f78ee7f968ef93358",
+    "tt/recurrent_next_candidate.py": "c9be8566177150fd7636ebf41bf40b8aaeddfdce9e292f63723755652feb22ac",
+    "tt/recurrent_prediction_candidate.py": "ab9c1c500ef04942ae75841c55bc6d7e625d5054e28b32478881b2102e3dbd2a",
+    "tt/recurrent_variants.py": "e3227b1ba65ceb5a7ad056779d444ccd409838a31c6bd4ccd3c7632991811ccc",
+    "tt/row_move.py": "2fd624e486cf27f372e9fe2cd1b61a50ceb9abf82afc499a15ec05969e50bdf2",
+    "tt/sampling/generator.py": "c312de9a39b5d7b787716b2803bfec028e2e8438f27c02ec5b72b8494612eeb3",
+    "tt/sampling/tt_sampling.py": "e53677b04b112c5f282f1ec38974e7e82d32c6620fb5f376a74ff58d51ab2fe6",
+    "tt/sampling_history.py": "691f06f1fcb919d9e890ba1b50a8a543d97a8db9928519927371412f2bd26330",
+    "tt/tiled_prefill_conv_candidate.py": "f48d0bb47768109250083e696d0ee8fec1c9b95155bf552e131d433dc530265c"
+  },
+  "sources": {
+    "doc/datatype_sweep/selected_precision_config.json": {
+      "path": "models/autoports/qwen_qwen3_6_27b/doc/datatype_sweep/configs/bfp8_baseline.json",
+      "note": "config P (bfp8_baseline), the validated serving precision, installed as the selected config"
+    },
+    "tt/kernels/qkv_causal_conv1d_silu.cpp": {
+      "repository": "https://github.com/tenstorrent/tt-metal",
+      "revision": "58afa8579450ba8afd6df45d05ad01b2860cd32b",
+      "path": "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/compute/qkv_causal_conv1d_silu.cpp",
+      "note": "source text read by tt/tiled_prefill_conv_candidate.py (identical at the bring-up base 8c48b4e4)"
+    },
+    "tt/readiness_contract.py": {
+      "repository": "https://github.com/tenstorrent/skills",
+      "revision": "834cda79cc37bf9eae686bc5a4cf3e27f7e6b29d (tt-model-bringup 0.1.24, m4 skills-v24)",
+      "path": "plugins/tt-model-bringup/runtime/readiness_check/contract.py",
+      "note": "the Generator base class tt/generator.py imports as readiness_check.contract"
+    },
+    "tt/sampling/generator.py": {
+      "repository": "https://github.com/tenstorrent/tt-metal",
+      "revision": "58afa8579450ba8afd6df45d05ad01b2860cd32b",
+      "path": "models/common/sampling/generator.py",
+      "note": "pin file + m4 450c36d7 Python hunks (audit m4-ttmetal-G2); sibling imports made absolute"
+    },
+    "tt/sampling/tt_sampling.py": {
+      "repository": "https://github.com/tenstorrent/tt-metal",
+      "revision": "58afa8579450ba8afd6df45d05ad01b2860cd32b",
+      "path": "models/common/sampling/tt_sampling.py",
+      "note": "pin file + m4 450c36d7 Python hunks (audit m4-ttmetal-G2)"
+    }
+  },
+  "excluded": [
+    "tests/",
+    "readiness*/",
+    "readiness_*.refpt*",
+    "README.md",
+    "doc/ (except doc/datatype_sweep/configs/bfp8_baseline.json)",
+    "tt/ modules outside the generator_vllm import closure"
+  ],
+  "modified_sha256": {
+    "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/generator.py": "9c4b22f2728aa9a10b128e5b62cdb424188673fd6f74862da7134d33d6aafad3",
+    "tt/generator_vllm.py": "df80fc17e39bba495568c1d549c019029c1c031b37c7830838ba77ad47c66e1c",
+    "tt/model.py": "0d1601da71540b139778e2db48f64c4d0753c8d97aa473c74b303952efc2516f",
+    "tt/multichip_decoder.py": "6b5788b9f706ec873f39cc9bc9df52ceeeac753aba2d779dc50df5d58b764996",
+    "tt/sampling/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/sampling/generator.py": "e7d72d2bf504293b00ed30555d0b7b66e71969aab6c28ee10b2f098c6659b2ff",
+    "tt/sampling/tt_sampling.py": "ffa1b7a15b683cf4e47f40d7a664ef3240f7b635377f687711ddaaa641ae019f",
+    "tt/tiled_prefill_conv_candidate.py": "62c4a3b914584d2321d846e97cd0d5f774a005fd34c2eed12805a6f0d96c32a1"
+  },
+  "edits": {
+    "tt/__init__.py": "added (package marker)",
+    "tt/sampling/__init__.py": "added (package marker)",
+    "tt/generator.py": "Generator from the vendored tt/readiness_contract.py; SamplingGenerator, SamplingParams and _hash_request_seed_to_device_seed from the vendored tt/sampling; max_top_k 64 -> 32 at both SamplingGenerator sites (ttnn.sampling at the pin takes k <= 32)",
+    "tt/generator_vllm.py": "plugin contract at f6fe76b + patches.json plugin patches: supports_prefill_sampling_history -> supports_original_prompt_lens; preserve_prefill_state_slots True; prefix_cache_recurrent_state_in_model when QWEN_VLLM_PREFIX_CACHE > 0; max_device_top_k 64 -> 32; prefill kwarg prefill_sampling_mask (forwarded on every route) handed to the generator as sampling_mask on the device route only",
+    "tt/model.py": "Checkpoint path: prefer the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else the previous $HF_HOME resolution; config and tokenizer load from the same directory",
+    "tt/multichip_decoder.py": "fused prefill matmul_reduce_scatter_prefill call passes dedicated_read_noc=True (tt_metal patch qwen3_6_27b-matmul-reduce-scatter-prefill-dedicated-read-noc, the validated NoC routing)",
+    "tt/sampling/generator.py": "pin models/common/sampling/generator.py + m4 450c36d7 hunks (format_sampling_params(max_top_k=)); relative imports of _utils, tt_log_probs, tt_penalties made absolute models.common.sampling (pin); tt_sampling stays relative (vendored)",
+    "tt/sampling/tt_sampling.py": "pin models/common/sampling/tt_sampling.py + m4 450c36d7 hunks (max_top_k validation, 64-candidate path; unused at max_top_k 32)",
+    "tt/tiled_prefill_conv_candidate.py": "reads the vendored tt/kernels/qkv_causal_conv1d_silu.cpp instead of parents[4] of the tt-metal tree"
+  }
+}

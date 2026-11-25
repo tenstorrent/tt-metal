@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "model": "ornith_1_5_35b_a3b",
+  "phase": "vllm",
+  "entrypoint": "agentic_models.models.ornith_1_5_35b_a3b.vllm.model.entry",
+  "tests": [
+    "model/tests"
+  ],
+  "dependencies": {
+    "targets": [
+      "bh_qb2"
+    ]
+  },
+  "coverage": "full-model-serving",
+  "hf_model": "ornith-ai/Ornith-1.5-35B-A3B",
+  "hf_revision": "10fbf86fed7ecee4a061f8b499a618f46001cac1",
+  "validation": {
+    "status": "pending",
+    "deployment": "manual_qb2",
+    "host": "QB2 (P300x2, 1x4 mesh)",
+    "revisions": {
+      "tt_metal": "58afa8579450ba8afd6df45d05ad01b2860cd32b + patches.json",
+      "vllm_tt_plugin": "f6fe76b63366053b648a7152e087daa3a507d033 + patches.json vllm_tt_plugin (P1, P2)",
+      "vllm": "0.32.0"
+    },
+    "bring_up_reference": {
+      "tt_metal": "bring-up base 8c48b4e4 (v0.83.0-dev20261108) family, model code 5d86db0b",
+      "vllm_tt_plugin": "042a9486 + c018beb",
+      "vllm": "0.31.0",
+      "evals": {
+        "gpqa_diamond": {
+          "correct": 186,
+          "of": 198,
+          "score": 93.9,
+          "card": 89.2
+        }
+      },
+      "perf": {
+        "isl128_osl128_c1": {
+          "ttft_ms": 94,
+          "tpot_ms": 66.7
+        },
+        "isl128_osl128_c32": {
+          "output_tok_s": 295
+        }
+      }
+    },
+    "source": "README.md"
+  }
+}

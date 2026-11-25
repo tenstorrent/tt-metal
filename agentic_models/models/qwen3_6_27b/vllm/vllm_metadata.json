@@ -1,0 +1,4 @@
+{
+  "arch": "Qwen3_5ForConditionalGeneration",
+  "main_class": "agentic_models.models.qwen3_6_27b.vllm.tt.generator_vllm:QwenVLLM"
+}

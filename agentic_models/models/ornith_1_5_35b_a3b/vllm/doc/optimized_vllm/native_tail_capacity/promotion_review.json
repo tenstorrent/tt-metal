@@ -1,0 +1,16 @@
+{
+  "scope": "Parent capacity evidence review; not independent stage review",
+  "passing_blocks": 60620,
+  "failing_blocks": 60621,
+  "previous_blocks": 61906,
+  "physical_capacity_cost_blocks": 1286,
+  "logical_context": 262144,
+  "validated_failure_phase": "max_prefill_bucket",
+  "review": "Adjacent real hardware pair matches validated segmented allocator prediction exactly. Full40/B32 strict tracker, all128 native public sampled lengths, all130 prepared lengths, subset restoration, distant-position memory decode and B32 decode pass at60620. Source/adapter/harness hashes are stable.60621fails at max_prefill_bucket with actual DRAM allocation exhaustion, not L1, host memory or timeout. Four scalar trace slots remain retained. Selected BF16 KV dtype/layout and262144per-request context unchanged. New-source real serving benchmarks and acceptance remain pending.",
+  "baseline": "baseline_v3.json",
+  "prediction": "prediction_v3.json",
+  "baseline_replay": "Every allocation address/direction and final free-block geometry;299segments,2611083DRAM events. Manifest/rawsegment hashes and all boundary/gap checks validated.",
+  "implementation_review": "segmented_capture_review.md",
+  "maximum_context_evidence": "../native_context.json",
+  "native_accuracy_evidence": "../unaligned_diagnosis/integrated_precision.json"
+}

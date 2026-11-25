@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "model": "qwen3_6_35b_a3b",
+  "phase": "vllm",
+  "entrypoint": "agentic_models.models.qwen3_6_35b_a3b.vllm.model.entry",
+  "tests": [
+    "model/tests"
+  ],
+  "dependencies": {
+    "targets": [
+      "bh_qb2"
+    ]
+  },
+  "coverage": "full-model-serving",
+  "hf_model": "Qwen/Qwen3.6-35B-A3B",
+  "hf_revision": "345d467b117d1fd5eda9b879a5988de9ae5f47a7",
+  "validation": {
+    "status": "pending",
+    "deployment": "manual_qb2",
+    "host": "QB2 (P300x2, 1x4 mesh)",
+    "revisions": {
+      "tt_metal": "58afa8579450ba8afd6df45d05ad01b2860cd32b + patches.json",
+      "vllm_tt_plugin": "f6fe76b63366053b648a7152e087daa3a507d033 + patches.json vllm_tt_plugin",
+      "vllm": "0.32.0"
+    },
+    "bring_up_reference": {
+      "note": "Not measured at the pins. Bring-up base tt-metal 8c48b4e4 (v0.83.0-dev20261108), vllm-tt-plugin 042a9486 + its local patches, vLLM 0.31.",
+      "gpqa_diamond": {
+        "correct": 168,
+        "of": 198,
+        "score": 84.8,
+        "card": 86.0
+      },
+      "perf": {
+        "isl128_osl128_c1": {
+          "tok_s_user": 47.2,
+          "ttft_ms": 180
+        },
+        "isl1024_osl1024_c16": {
+          "tok_s_user": 19.5,
+          "output_tok_s": 294.0
+        }
+      }
+    },
+    "source": "README.md"
+  }
+}

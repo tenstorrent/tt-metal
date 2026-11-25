@@ -1,0 +1,59 @@
+{
+  "repository": "not public: tt-model-bringup workspace",
+  "host": "m6",
+  "host_repo": "/home/vkovacevic/nemotron35-lightning/tt-metal",
+  "revision": "f1dd78ee13ca69194117580080df6b65f4023190",
+  "branch": "perf/multiuser",
+  "path": "models/autoports/nvidia_nvidia_nemotron_3_5_lightning_30b_a3b_bf16",
+  "import_rewrite": {
+    "from": "models.autoports.nvidia_nvidia_nemotron_3_5_lightning_30b_a3b_bf16",
+    "to": "agentic_models.models.nemotron_3_5_lightning_30b_a3b.vllm",
+    "applies_to": "*.py, *.json (all text, string literals included)"
+  },
+  "source_sha256": {
+    "doc/datatype_sweep/selected_precision_config.json": "9aeef58b8fae1d1aafb82f3e08100d83f24a7240f1e5d029607fef7591122fdd",
+    "tt/capacity.py": "b7c41ce9028346b337daa1e52b00f374cad08ce2a062d25be71a59f11289a51a",
+    "tt/generator.py": "8570e7f35ad318e719159b8251e3c406d2f957c25a08a1b868192a64c0bc0940",
+    "tt/generator_vllm.py": "4d122df91deeea6a4033a71a4bf770e505671c33d91b8cd41163a91b17ea6281",
+    "tt/model.py": "20eb56f9730d0f592a9aab07ea3931c79b3b0d7ffda85f0b958d7dc6ee0f7d36",
+    "tt/multichip_decoder.py": "77be5034f15c0f526f930f5f62ce0c861fcf72441dd9d0f4c60a510564e6fe2b",
+    "tt/optimized_decoder.py": "ac036a16e973d20ba9783b5bc9146e8f76e93974d8d30773ae5a5e3aabda2727",
+    "tt/precision.py": "dbd36553a1b36cfa3e54d658cf87241fd07f4f537c9659a04c709d97ba8e0001",
+    "tt/prefill_plan.py": "03950de1bd6e022396beb424753c33e14ab6195f67411f975fdec99c396d7d2d",
+    "tt/wide_sampling.py": "71306125663fb353035b215764ff405531a9564b31ecad0b5e49904c4e661141"
+  },
+  "excluded": [
+    "tests/",
+    "readiness*/",
+    "benchmark_*.py",
+    "README.md",
+    "doc/ except the files above",
+    "tt/fused_decoder.py and tt/functional_decoder.py (not imported at runtime)"
+  ],
+  "modified_sha256": {
+    "tt/generator.py": "60ac612c1a8df73308cbc5ac17d588fb4adb1cf9e28ba4c28e6e3e97619aa9f9",
+    "tt/generator_vllm.py": "e196daf2e751511f2ee142c58f6ca31ccd16d3865d1df72e24f65b22da446ecc",
+    "tt/model.py": "b8ff57f5c8423e19f30839c9bba29275dcc0cea3d971779ae1d7103aa20920e4",
+    "tt/readiness_contract.py": "6603e75c8a2d7fddb52b675949f9b96a8fbdd95356e57e1e6b95f8a4df328297",
+    "tt/tt_ccl.py": "1805fb9aa5907004c239ed685f5432125db005d6845d9a808b2af2e63fcf0430"
+  },
+  "additional_sources": {
+    "tt/readiness_contract.py": {
+      "source": "tt-model-bringup runtime/readiness_check/contract.py",
+      "host_path": "m6:/home/vkovacevic/nemotron35-lightning/skills-v24/plugins/tt-model-bringup/runtime/readiness_check/contract.py",
+      "revision": "tenstorrent skills b177a81b47a15eec4d226f21dafaa756aea0a9d8 (the bring-up runtime, 0.1.24 install; plugin.json at that commit reads 0.1.25)",
+      "upstream_sha256": "42417eab48a87b6e9c31dee15ef68bac5c67970e487a295f78ee7f968ef93358",
+      "edit": "docstring example model_dir path rewritten to models/<bring-up dir>/<model_name>"
+    },
+    "tt/tt_ccl.py": {
+      "source": "subclass of models.common.tt_ccl.TT_CCL at the tt_metal pin 58afa857 (file identical at 8c48b4e4) adding the bring-up eager=False lazy semaphores (m6 tt-metal 62cee5d6)",
+      "host_path": "m6:/home/vkovacevic/nemotron35-lightning/tt-metal models/common/tt_ccl.py",
+      "revision": "62cee5d698ee3fb5da43b1c3a40a00340b944e89",
+      "upstream_sha256": "5d52037f04c6885fd4cf28f046ba38510ccfb80866f3a1bde3e90b3dd9770686",
+      "edit": "new file: subclass of the pinned TT_CCL (pin file sha above) with eager=False lazy semaphores"
+    }
+  },
+  "edits": {
+    "tt/model.py": "Checkpoint path: prefer the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else the previous $HF_HOME resolution; config and tokenizer load from the same directory"
+  }
+}

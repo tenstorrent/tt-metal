@@ -1,0 +1,423 @@
+From 073011402b1425165ab1e76fcc7e75450f9988da Mon Sep 17 00:00:00 2001
+From: Nicholas Smith <nsmith@tenstorrent.com>
+Date: Wed, 25 Nov 2026 17:15:24 +0000
+Subject: [PATCH] [feat] Opt-in original prompt lengths on prefill
+
+agentic-models patch P3 (vllm-tt-plugin-original-prompt-lens.patch).
+
+A model declaring model_capabilities['supports_original_prompt_lens']=True gets
+TTModelInput.original_prompt_lens captured on the front-packed and lane prefill
+paths and passed as prefill_forward(original_prompt_lens=...) on every route.
+Base: m3 215effd part 1 only (capture/forward). Part 2, the host prefill
+penalty-history split, is not taken: it would change host sampling for every
+model.
+
+Undeclared, nothing is captured (the field stays None) and the prefill call is
+the f6fe76b one. The declaration is validated as a boolean at platform init.
+The lane decode TTModelInput construction keeps the default None.
+
+Tests: tests/test_original_prompt_lens.py, the capture/forward cases of
+215effd's test_prefill_penalty_history.py plus undeclared cases.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/MODEL_CAPABILITIES.md         |   1 +
+ docs/MODEL_EXECUTION.md            |   1 +
+ src/vllm_tt_plugin/config.py       |  11 ++
+ src/vllm_tt_plugin/input_batch.py  |  12 +-
+ src/vllm_tt_plugin/model_input.py  |   5 +
+ src/vllm_tt_plugin/model_runner.py |  15 ++
+ src/vllm_tt_plugin/platform.py     |   2 +
+ tests/test_original_prompt_lens.py | 231 +++++++++++++++++++++++++++++
+ 8 files changed, 277 insertions(+), 1 deletion(-)
+ create mode 100644 tests/test_original_prompt_lens.py
+
+diff --git a/docs/MODEL_CAPABILITIES.md b/docs/MODEL_CAPABILITIES.md
+index 19d5369..665bde9 100644
+--- a/docs/MODEL_CAPABILITIES.md
++++ b/docs/MODEL_CAPABILITIES.md
+@@ -84,6 +84,7 @@ Sources: [platform.py](../src/vllm_tt_plugin/platform.py),
+ |---|---|---|
+ | `supports_sample_on_device` | `False` | Permits the requested `sample_on_device_mode`. The platform rejects any non-`None` sampling mode when this declaration is false. Runtime sampling requirements can still select host sampling. |
+ | `supports_prefill_sampling_mask` | `False` | Declares that `prefill_forward` accepts the row-aligned `prefill_sampling_mask` boolean list described in [model execution](MODEL_EXECUTION.md#prefill). `True` rows may emit a token; `False` rows update state only, without changing device token/RNG state or reading logits. The plugin forwards the mask on device and host routes and no longer forces an otherwise eligible batch to host sampling just because it contains intermediate rows. Host-only request features retain their existing routing. Non-boolean declarations are rejected at platform setup and runtime. Absent or false preserves the existing calls and routing. |
++| `supports_original_prompt_lens` | `False` | Opts into `prefill_forward(original_prompt_lens=...)`: a CPU list of original prompt token counts, captured in submitted row order for every prefill, including chunked and resumed prefill. The platform and runner reject non-boolean declarations. An intermediate chunk may end before its original prompt length. Models use this boundary to distinguish prompt from replayed generated tokens. Absent or false keeps the existing prefill call. See [prefill](MODEL_EXECUTION.md#prefill). |
+ | `max_device_top_k` | `None` | Bounds stochastic device sampling. `TTModelRunner.check_perform_device_sampling` selects host sampling when any selected sampling row has nonzero temperature and `top_k < 1` or `top_k > max_device_top_k`. Greedy rows do not trigger this restriction. The platform rejects any non-`None` value on a block-output model. The plugin does not otherwise validate the numeric type or range of `max_device_top_k`; model authors must supply the actual supported bound. |
+ | `supports_device_penalties` | `True` | Permits device sampling with active penalties. When this declaration is false and `InputBatch.no_penalties` is false, `TTModelRunner.check_perform_device_sampling` selects host sampling. The default preserves the existing behavior of model implementations that predate this declaration. |
+ | `supports_device_grammar` | `False` | Declares that decode sampling accepts vLLM's packed grammar bitmask after forward. The platform rejects a non-boolean value, a `True` value without `supports_sample_on_device`, and a `True` value on a block-output model. `TTModelRunner` keeps host grammar sampling without a `sample_on_device_mode`, when tracing without model warmup, or when the loaded model has no compatible sampler. Structured prefill remains host-sampled. The [device grammar contract](DEVICE_GRAMMAR_CONTRACT.md) lists what the model must implement. |
+diff --git a/docs/MODEL_EXECUTION.md b/docs/MODEL_EXECUTION.md
+index cc55813..1de92c5 100644
+--- a/docs/MODEL_EXECUTION.md
++++ b/docs/MODEL_EXECUTION.md
+@@ -39,6 +39,7 @@ keyword arguments below, not a `TTModelInput` object. Source:
+ | Keyword | Meaning |
+ |---|---|
+ | `tokens` | CPU integer tensor `[B, T]`, containing token history from position 0 through the largest scheduled chunk end. |
++| `original_prompt_lens` | Supplied only when `supports_original_prompt_lens=True`: a CPU list of original prompt token counts, one per submitted row. Captured when building the submission, in the same order as `tokens` and `empty_slots`; stable across chunks and resumed replay. This count may exceed the end of an intermediate chunk. |
+ | `start_pos` | One absolute chunk start per row. Front-packed prefill supplies a NumPy array; lane-DP supplies a torch tensor. |
+ | `prompt_lens` | One exclusive chunk end per row, supplied as a NumPy array. `prompt_lens[i]` is not the chunk length. |
+ | `page_table`, `kv_cache` | Block addresses and the object returned by the adapter's KV allocator. |
+diff --git a/src/vllm_tt_plugin/config.py b/src/vllm_tt_plugin/config.py
+index 01c7904..3cc8f34 100644
+--- a/src/vllm_tt_plugin/config.py
++++ b/src/vllm_tt_plugin/config.py
+@@ -61,6 +61,17 @@ def resolve_tt_preserve_prefill_state_slots(model_capabilities: dict | None) ->
+     return preserve
+ 
+ 
++def resolve_tt_supports_original_prompt_lens(model_capabilities: dict | None) -> bool:
++    """Validate the opt-in to authoritative original prompt lengths on prefill."""
++    supported = (model_capabilities or {}).get("supports_original_prompt_lens", False)
++    if not isinstance(supported, bool):
++        raise ValueError(
++            "model_capabilities['supports_original_prompt_lens'] must be a boolean, "
++            f"got {supported!r}"
++        )
++    return supported
++
++
+ def get_tt_seeded_sampling_policy(
+     vllm_config: "VllmConfig",
+ ) -> Literal["auto", "host"]:
+diff --git a/src/vllm_tt_plugin/input_batch.py b/src/vllm_tt_plugin/input_batch.py
+index 11df2dc..6542731 100644
+--- a/src/vllm_tt_plugin/input_batch.py
++++ b/src/vllm_tt_plugin/input_batch.py
+@@ -24,7 +24,10 @@ from vllm.v1.sample.metadata import SamplingMetadata
+ from vllm.v1.worker.block_table import MultiGroupBlockTable
+ from vllm.v1.worker.gpu_input_batch import CachedRequestState
+ 
+-from vllm_tt_plugin.config import get_model_supports_prefill_sampling_mask
++from vllm_tt_plugin.config import (
++    get_model_supports_prefill_sampling_mask,
++    resolve_tt_supports_original_prompt_lens,
++)
+ from vllm_tt_plugin.logger import init_tt_logger
+ from vllm_tt_plugin.logprobs import build_device_logprobs
+ from vllm_tt_plugin.model_input import (
+@@ -1678,6 +1681,13 @@ class TTLaneInputBatch(InputBatch):
+             input_tokens=input_tokens,
+             input_positions=input_positions,
+             prompt_lens=prompt_lens,
++            original_prompt_lens=(
++                lane_batch.num_prompt_tokens[rows_np].tolist()
++                if resolve_tt_supports_original_prompt_lens(
++                    getattr(getattr(runner, "model", None), "model_capabilities", None)
++                )
++                else None
++            ),
+             block_tables=block_tables_per_group[0],
+             block_tables_per_group=block_tables_per_group,
+             block_tables_per_layer=runner._block_tables_per_layer(
+diff --git a/src/vllm_tt_plugin/model_input.py b/src/vllm_tt_plugin/model_input.py
+index 6875907..2f998de 100644
+--- a/src/vllm_tt_plugin/model_input.py
++++ b/src/vllm_tt_plugin/model_input.py
+@@ -223,6 +223,11 @@ class TTModelInput:
+     # ``supports_stage_inputs``.
+     stage_inputs: list[Any] | None = None
+ 
++    # Prefill-only, captured in submitted row order for a model declaring
++    # ``supports_original_prompt_lens``, including replayed outputs. The original
++    # prompt length can exceed an intermediate chunk's end.
++    original_prompt_lens: list[int] | None = None
++
+     # Decode-only: retain device logits until sample_tokens supplies the grammar,
+     # then invoke the model's device sampler. Structured prefills stay on host.
+     defer_device_sampling: bool = False
+diff --git a/src/vllm_tt_plugin/model_runner.py b/src/vllm_tt_plugin/model_runner.py
+index 220895d..eb4cf38 100644
+--- a/src/vllm_tt_plugin/model_runner.py
++++ b/src/vllm_tt_plugin/model_runner.py
+@@ -56,6 +56,7 @@ from vllm_tt_plugin.config import (
+     is_tt_block_output_model,
+     is_tt_device_grammar_preload_eligible,
+     resolve_tt_preserve_prefill_state_slots,
++    resolve_tt_supports_original_prompt_lens,
+ )
+ from vllm_tt_plugin.host_sampler import create_host_sampler
+ from vllm_tt_plugin.input_batch import (
+@@ -2870,6 +2871,14 @@ class TTModelRunner:
+             input_tokens=input_tokens,
+             input_positions=input_positions,
+             prompt_lens=prompt_lens,
++            original_prompt_lens=(
++                input_batch.num_prompt_tokens[req_indices].tolist()
++                if is_prompt
++                and resolve_tt_supports_original_prompt_lens(
++                    getattr(getattr(self, "model", None), "model_capabilities", None)
++                )
++                else None
++            ),
+             block_tables=block_tables,
+             block_tables_per_group=block_tables_per_group,
+             block_tables_per_layer=self._block_tables_per_layer(block_tables_per_group),
+@@ -4228,6 +4237,12 @@ class TTModelRunner:
+             kwargs["prefill_sampling_mask"] = (
+                 [True] * row_count if intermediate is None else (~intermediate).tolist()
+             )
++        if resolve_tt_supports_original_prompt_lens(
++            getattr(self.model, "model_capabilities", None)
++        ):
++            if model_input.original_prompt_lens is None:
++                raise ValueError("Prefill is missing captured original_prompt_lens")
++            kwargs["original_prompt_lens"] = list(model_input.original_prompt_lens)
+         # Hybrid attention models route per-layer block tables; the
+         # runner already expanded ``block_tables_per_group`` into a
+         # per-layer list at submission time when the kv_cache_config has
+diff --git a/src/vllm_tt_plugin/platform.py b/src/vllm_tt_plugin/platform.py
+index 0e79f68..32cdb1f 100644
+--- a/src/vllm_tt_plugin/platform.py
++++ b/src/vllm_tt_plugin/platform.py
+@@ -31,6 +31,7 @@ from vllm_tt_plugin.config import (
+     require_tt_output_tokens_per_step,
+     resolve_tt_preserve_prefill_state_slots,
+     resolve_tt_scheduler_cls,
++    resolve_tt_supports_original_prompt_lens,
+     resolve_tt_supports_stage_outputs,
+     store_tt_adaptive_block_max_prompt_tokens,
+     store_tt_adaptive_block_output,
+@@ -2195,6 +2196,7 @@ class TTPlatform(Platform):
+         is_block_output_model = is_tt_block_output_model(vllm_config)
+         resolve_tt_preserve_prefill_state_slots(model_capabilities)
+         get_model_supports_prefill_sampling_mask(model_class)
++        resolve_tt_supports_original_prompt_lens(model_capabilities)
+         supports_device_grammar = (
+             model_capabilities.get("supports_device_grammar", False)
+             if model_capabilities
+diff --git a/tests/test_original_prompt_lens.py b/tests/test_original_prompt_lens.py
+new file mode 100644
+index 0000000..1ff0eb3
+--- /dev/null
++++ b/tests/test_original_prompt_lens.py
+@@ -0,0 +1,231 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""Original prompt boundaries survive replay, row selection and submission.
++
++Only a model declaring ``supports_original_prompt_lens`` gets the lengths
++captured and forwarded; an undeclared model keeps the existing prefill call.
++"""
++
++from dataclasses import replace
++from types import SimpleNamespace
++
++import pytest
++from vllm.sampling_params import SamplingParams
++from vllm.v1.core.sched.output import SchedulerOutput
++
++from tests.test_lane_input_batch import (
++    _add_to_lane,
++    _lane_batch,
++    _make_req,
++    _without_speculation,
++)
++from tests.test_model_runner import _batch_with_one_request, _fake_runner, _prepare
++from tests.test_stage_inputs import _new_request, _runner, _step
++from vllm_tt_plugin import config
++from vllm_tt_plugin.lane_scheduler import TTStepPlan
++from vllm_tt_plugin.model_runner import TTModelRunner
++
++OPTED_IN = {"supports_original_prompt_lens": True}
++
++
++@pytest.mark.parametrize("value", [None, 0, 1, "true", [], {}])
++def test_original_prompt_capability_rejects_non_boolean(value):
++    with pytest.raises(ValueError, match="supports_original_prompt_lens"):
++        config.resolve_tt_supports_original_prompt_lens(
++            {"supports_original_prompt_lens": value}
++        )
++
++
++@pytest.mark.parametrize(
++    "capabilities,expected",
++    [
++        (None, False),
++        ({}, False),
++        ({"supports_original_prompt_lens": False}, False),
++        (OPTED_IN, True),
++    ],
++)
++def test_original_prompt_capability_defaults_and_boolean(capabilities, expected):
++    assert config.resolve_tt_supports_original_prompt_lens(capabilities) is expected
++
++
++@pytest.mark.parametrize("capabilities", [{}, {"supports_original_prompt_lens": False}])
++def test_legacy_prefill_signature_receives_no_new_keyword(capabilities):
++    runner = _runner(supports_stage_inputs=False)
++    received = []
++
++    def strict_prefill(
++        tokens, page_table, kv_cache, enable_trace, prompt_lens, start_pos, empty_slots
++    ):
++        received.append(prompt_lens.tolist())
++
++    runner.model = SimpleNamespace(
++        model_capabilities=capabilities, prefill_forward=strict_prefill
++    )
++    step = _step(new=[_new_request("a")], scheduled={"a": 4})
++    runner._update_states(step)
++    inputs = runner._prepare_model_inputs(step, None)
++    assert inputs.original_prompt_lens is None, "nothing is captured undeclared"
++    runner.submit_prefill(inputs, [1])
++    assert received == [[4]]
++
++
++def test_front_packed_original_lengths_are_submission_owned_through_chunks():
++    runner = _runner(supports_stage_inputs=False)
++    runner.model.model_capabilities = dict(OPTED_IN)
++    first, second = _new_request("a"), _new_request("b")
++    first.prompt_token_ids = [1, 2, 3, 4, 5]
++    second.prompt_token_ids = [6, 7]
++    step = _step(new=[first, second], scheduled={"a": 2, "b": 2})
++    runner._update_states(step)
++    inputs = runner._prepare_model_inputs(step, None)
++    # The first request is intermediate: its original length exceeds chunk end.
++    assert inputs.original_prompt_lens == [5, 2]
++    assert inputs.intermediate_prefill_mask.tolist() == [True, False]
++    runner.input_batch.num_prompt_tokens[:2] = [2, 5]
++    runner.submit_prefill(inputs, [2])
++    assert runner.model.prefills[-1]["original_prompt_lens"] == [5, 2]
++
++
++@pytest.mark.parametrize("original", [3, 2])
++def test_replayed_boundary_reaches_opted_in_model_without_request_identity(original):
++    """A resume replays prompt plus generated tokens; the model gets the prompt
++    boundary, not the replay length."""
++    batch, request = _batch_with_one_request(original, 3 - original, 0)
++    runner = _fake_runner(batch, request)
++    captured = []
++    runner.model = SimpleNamespace(
++        model_capabilities=dict(OPTED_IN),
++        prefill_forward=lambda target=captured, **kwargs: target.append(kwargs),
++    )
++    runner.kv_caches = object()
++    runner.trace_mode = "none"
++    runner.request_specific_rope = False
++    runner.async_decode = SimpleNamespace(note_prefill_submitted=lambda: None)
++    inputs = _prepare(runner, ("r", 3, 0, 3 - original))
++    TTModelRunner.submit_prefill(runner, inputs, [1])
++    assert captured[0]["tokens"].tolist() == [[0, 1, 2]]
++    assert captured[0]["original_prompt_lens"] == [original]
++
++
++def test_undeclared_replay_submits_the_existing_keywords():
++    batch, request = _batch_with_one_request(2, 1, 0, SamplingParams(temperature=0.0))
++    runner = _fake_runner(batch, request)
++    captured = []
++    runner.model = SimpleNamespace(
++        model_capabilities={},
++        prefill_forward=lambda target=captured, **kwargs: target.append(kwargs),
++    )
++    runner.kv_caches = object()
++    runner.trace_mode = "none"
++    runner.request_specific_rope = False
++    runner.async_decode = SimpleNamespace(note_prefill_submitted=lambda: None)
++    inputs = _prepare(runner, ("r", 3, 0, 1))
++    assert inputs.original_prompt_lens is None
++    TTModelRunner.submit_prefill(runner, inputs, [1])
++    assert "original_prompt_lens" not in captured[0]
++
++
++@pytest.mark.parametrize("capabilities", [None, {}, OPTED_IN])
++def test_lane_prefill_captures_selected_rows_only_when_declared(capabilities):
++    batch = _lane_batch(num_lanes=2, per_lane=2, with_custom=False)
++    fresh = _make_req(
++        "fresh", [0, 1, 2], [], dict(temperature=0.0, frequency_penalty=0.75)
++    )
++    resume = _make_req(
++        "resume", [0, 1], [2], dict(temperature=0.0, frequency_penalty=0.75)
++    )
++    fresh.num_computed_tokens = resume.num_computed_tokens = 0
++    fresh_row = _add_to_lane(batch, fresh, 0)
++    resume_row = _add_to_lane(batch, resume, 1)
++    batch.refresh_logitsprocs()
++    output = SchedulerOutput.make_empty()
++    output.num_scheduled_tokens = {"resume": 3, "fresh": 3}
++    output.total_num_scheduled_tokens = 6
++    rows = (resume_row, fresh_row)
++    plan = TTStepPlan(
++        is_decode=False,
++        capacity=4,
++        scheduled_req_ids=("resume", "fresh"),
++        scheduled_rows=rows,
++        input_rows=rows,
++        req_id_to_row={"resume": resume_row, "fresh": fresh_row},
++        batch_size_per_dp=(1, 1),
++        prefill_empty_slots=rows,
++    )
++    fields = dict(
++        input_batch=batch,
++        _output_tokens_per_step=1,
++        max_num_blocks_per_req=16,
++        requests={"fresh": fresh, "resume": resume},
++        model_config=SimpleNamespace(is_multimodal_model=False),
++        check_perform_device_sampling=lambda **kwargs: False,
++        _block_tables_per_layer=lambda _: None,
++    )
++    if capabilities is not None:
++        fields["model"] = SimpleNamespace(model_capabilities=capabilities)
++    runner = _without_speculation(SimpleNamespace(**fields))
++    inputs = batch._build_prefill_input(runner, output, None, plan)
++    assert inputs.prefill_empty_slots == list(rows)
++    if capabilities is not OPTED_IN:
++        assert inputs.original_prompt_lens is None
++        return
++    assert inputs.original_prompt_lens == [2, 3]
++    # Captured metadata survives changes to the persistent batch.
++    batch.num_prompt_tokens[list(rows)] = [3, 2]
++    assert inputs.original_prompt_lens == [2, 3]
++
++
++def test_platform_rejects_invalid_original_prompt_capability(monkeypatch):
++    from vllm.config import (
++        CacheConfig,
++        DeviceConfig,
++        ModelConfig,
++        ParallelConfig,
++        SchedulerConfig,
++        VllmConfig,
++    )
++
++    from tests.test_block_scheduler import (
++        LOCAL_MODEL_CONFIG,
++        _stub_model_resolution,
++        _StubModel,
++    )
++
++    monkeypatch.setattr(
++        _StubModel,
++        "model_capabilities",
++        {"supports_original_prompt_lens": 1},
++        raising=False,
++    )
++    model_config = ModelConfig(
++        model=str(LOCAL_MODEL_CONFIG),
++        dtype="float16",
++        seed=42,
++        skip_tokenizer_init=True,
++    )
++    with (
++        _stub_model_resolution(),
++        pytest.raises(ValueError, match="supports_original_prompt_lens"),
++    ):
++        VllmConfig(
++            model_config=model_config,
++            scheduler_config=SchedulerConfig(
++                max_model_len=model_config.max_model_len,
++                is_encoder_decoder=model_config.is_encoder_decoder,
++            ),
++            cache_config=CacheConfig(block_size=128),
++            parallel_config=ParallelConfig(),
++            device_config=DeviceConfig(device="cpu"),
++        )
++
++
++def test_opted_in_model_requires_captured_boundary():
++    runner = _runner(supports_stage_inputs=False)
++    runner.model.model_capabilities = dict(OPTED_IN)
++    step = _step(new=[_new_request("a")], scheduled={"a": 4})
++    runner._update_states(step)
++    inputs = runner._prepare_model_inputs(step, None)
++    with pytest.raises(ValueError, match="original_prompt_lens"):
++        runner.submit_prefill(replace(inputs, original_prompt_lens=None), [1])
++    assert not runner.model.prefills

@@ -1,0 +1,334 @@
+From 645557953073a32190d42bff81ecfef70d3d1332 Mon Sep 17 00:00:00 2001
+From: Nicholas Smith <nsmith@tenstorrent.com>
+Date: Wed, 25 Nov 2026 17:13:07 +0000
+Subject: [PATCH] [bug] Preserve state slots across prefill continuation
+ (opt-in)
+
+agentic-models patch P1 (vllm-tt-plugin-prefill-state-slot-continuation.patch).
+
+A model declaring model_capabilities['preserve_prefill_state_slots']=True keeps
+a continuing chunked prefill in the device-state slot it already owns, and all
+live owners are reserved before newcomers are placed (row order need not match
+the slot order of the previous chunk, and prefill has no gather). Base:
+m3 a09b0ef (m2 5d1785b is the same code). Without the declaration
+_alloc_prefill_state_slots runs the f6fe76b body unchanged. The declaration is
+validated as a boolean at platform init and at use.
+
+Tests: the a09b0ef cases with the capability on, a capability-off case
+asserting the f6fe76b slot choice, preempt/resume mid-prefill, and validation.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/MODEL_CAPABILITIES.md         |   1 +
+ docs/MODEL_LIFECYCLE.md            |   6 ++
+ src/vllm_tt_plugin/config.py       |  11 +++
+ src/vllm_tt_plugin/model_runner.py |  53 +++++++++++
+ src/vllm_tt_plugin/platform.py     |   2 +
+ tests/test_state_slots.py          | 148 +++++++++++++++++++++++++++++
+ 6 files changed, 221 insertions(+)
+
+diff --git a/docs/MODEL_CAPABILITIES.md b/docs/MODEL_CAPABILITIES.md
+index 904baa8..0785a1a 100644
+--- a/docs/MODEL_CAPABILITIES.md
++++ b/docs/MODEL_CAPABILITIES.md
+@@ -60,6 +60,7 @@ Sources: [platform.py](../src/vllm_tt_plugin/platform.py),
+ | `tt_adaptive_block_max_prompt_tokens` | `0` | Limits prompts eligible for an adaptive block session. `0` means no declared limit. Requests with longer prompts use one-token decoding throughout their lifetime. The platform converts the value with `int`, rejects negative values, and rejects a nonzero value without `tt_adaptive_block_output`. The model must apply the same prompt-length limit as the scheduler. |
+ | `tt_block_kv_extent_tokens` | `0` | Declares the total KV positions one block-output decode may touch, including verification and carried tokens beyond the committed output. `0` means undeclared. The platform converts the value with `int`, rejects negative values, and requires a nonzero value to cover at least `output_tokens_per_step`. `TTScheduler` reserves the maximum of existing lookahead, twice `output_tokens_per_step`, and `tt_block_kv_extent_tokens`. This declaration does not describe generic speculative proposal writes. |
+ | `folds_dp_into_lanes` | `False` | Declares that `--data_parallel_size N` runs as `N` in-process TT lanes on one device mesh instead of multi-process DP (the Galaxy generators and GPT-OSS fold without declaring it). A Boolean, or a zero-argument callable that `TTPlatform.check_and_update_config` evaluates for env-gated rails; a callable that raises fails the launch rather than falling back to standard DP. |
++| `preserve_prefill_state_slots` | `False` | Keeps a continuing chunked prefill in the device-state slot it already owns, reserving every live owner before new requests are placed (see [request state](MODEL_LIFECYCLE.md#request-state)). The platform and runner reject a non-boolean value. Absent or false keeps the existing slot choice. |
+ 
+ Plain block-output execution requires `max_num_seqs=1`, data-parallel size 1,
+ `distributed_executor_backend` unset or `uni`, synchronous scheduling, and
+diff --git a/docs/MODEL_LIFECYCLE.md b/docs/MODEL_LIFECYCLE.md
+index 082cbde..709bd19 100644
+--- a/docs/MODEL_LIFECYCLE.md
++++ b/docs/MODEL_LIFECYCLE.md
+@@ -45,6 +45,12 @@ Device-state slots identify adapter-owned request state. A prefill row is not
+ necessarily the slot that owns that request. KV page addresses and state slots
+ serve different purposes; the adapter must honor both.
+ 
++With `preserve_prefill_state_slots=True`, continuing prefill chunks keep their
++current state slot even when their packed row changes. The plugin reserves all
++live owners before allocating slots for new requests; prefill does not move
++existing state. A decode gather can subsequently move that state through the
++explicit remap contract below.
++
+ | Interface | Adapter responsibility |
+ |---|---|
+ | `prefill_forward(empty_slots=[...])` | Write each prefill row's state into the corresponding destination slot; preserve live state in other slots. Stateless adapters can ignore `empty_slots`. |
+diff --git a/src/vllm_tt_plugin/config.py b/src/vllm_tt_plugin/config.py
+index ce2a79c..6898d74 100644
+--- a/src/vllm_tt_plugin/config.py
++++ b/src/vllm_tt_plugin/config.py
+@@ -38,6 +38,17 @@ def get_tt_config(vllm_config: "VllmConfig") -> dict[str, Any]:
+     return dict(additional_config)
+ 
+ 
++def resolve_tt_preserve_prefill_state_slots(model_capabilities: dict | None) -> bool:
++    """Validate the opt-in that keeps a continuing prefill in its owned slot."""
++    preserve = (model_capabilities or {}).get("preserve_prefill_state_slots", False)
++    if not isinstance(preserve, bool):
++        raise ValueError(
++            "model_capabilities['preserve_prefill_state_slots'] must be a boolean, "
++            f"got {preserve!r}"
++        )
++    return preserve
++
++
+ def get_tt_seeded_sampling_policy(
+     vllm_config: "VllmConfig",
+ ) -> Literal["auto", "host"]:
+diff --git a/src/vllm_tt_plugin/model_runner.py b/src/vllm_tt_plugin/model_runner.py
+index 2ffd445..5f68019 100644
+--- a/src/vllm_tt_plugin/model_runner.py
++++ b/src/vllm_tt_plugin/model_runner.py
+@@ -54,6 +54,7 @@ from vllm_tt_plugin.config import (
+     is_tt_adaptive_block_output_model,
+     is_tt_block_output_model,
+     is_tt_device_grammar_preload_eligible,
++    resolve_tt_preserve_prefill_state_slots,
+ )
+ from vllm_tt_plugin.host_sampler import create_host_sampler
+ from vllm_tt_plugin.input_batch import (
+@@ -285,6 +286,52 @@ def _notify_model_slot_moves(runner, moves: dict[int, int]) -> None:
+         note(dict(moves))
+ 
+ 
++def _alloc_preserved_prefill_state_slots(runner, row_req_ids: list[str]) -> list[int]:
++    """``_alloc_prefill_state_slots`` for a model declaring
++    ``preserve_prefill_state_slots``: keep continuing prefills in their owned
++    slots. New requests prefer their decode row when free, without displacing any
++    live owner.
++
++    Exhaustion is unreachable: holders and new requests both count against
++    ``max_num_seqs``, which is ``n_slots``. Getting here means the map has stopped
++    describing the device, and nothing on the host can recover it, so fail rather
++    than guess and return plausible, wrong text.
++    """
++    n_slots = runner.tt_per_lane_max_num_seqs
++    if len(row_req_ids) > n_slots:
++        raise RuntimeError(
++            f"{len(row_req_ids)} prefill(s) exceed the {n_slots} device state "
++            "slots; admission is the scheduler's job, not this function's"
++        )
++    owners = {
++        req_id: slot
++        for req_id, slot in runner._req_state_slot.items()
++        if req_id in runner.requests
++    }
++    # Reserve continuations before assigning newcomers: row order need not
++    # match the slot order from the preceding chunk, and prefill has no gather.
++    held = set(owners.values())
++    slots: list[int] = []
++    for row, req_id in enumerate(row_req_ids):
++        if req_id in owners:
++            slot = owners[req_id]
++        elif row not in held:
++            slot = row
++        else:
++            free = [s for s in range(n_slots) if s not in held]
++            if not free:
++                raise RuntimeError(
++                    f"no free device state slot for {len(row_req_ids)} prefill(s): "
++                    f"held={sorted(held)}, capacity={n_slots}, "
++                    f"map={runner._req_state_slot}"
++                )
++            slot = free[0]
++        held.add(slot)
++        runner._req_state_slot[req_id] = slot
++        slots.append(slot)
++    return slots
++
++
+ # Multimodal item kinds a TT model forward may consume (images, video frames
+ # and audio clips); see ``TTModelRunner._validate_mm_feature``.
+ _SUPPORTED_MM_MODALITIES = frozenset({"image", "video", "audio"})
+@@ -1325,6 +1372,12 @@ class TTModelRunner:
+         stopped describing the device, and nothing on the host can recover it, so fail
+         rather than guess and return plausible, wrong text.
+         """
++        # Opt-in: a continuing chunked prefill keeps its owned slot. Without the
++        # declaration the body below runs unchanged.
++        if resolve_tt_preserve_prefill_state_slots(
++            getattr(getattr(self, "model", None), "model_capabilities", None)
++        ):
++            return _alloc_preserved_prefill_state_slots(self, row_req_ids)
+         n_slots = self.tt_per_lane_max_num_seqs
+         if len(row_req_ids) > n_slots:
+             raise RuntimeError(
+diff --git a/src/vllm_tt_plugin/platform.py b/src/vllm_tt_plugin/platform.py
+index 7afb91b..bbbd6ec 100644
+--- a/src/vllm_tt_plugin/platform.py
++++ b/src/vllm_tt_plugin/platform.py
+@@ -28,6 +28,7 @@ from vllm_tt_plugin.config import (
+     is_tt_adaptive_block_output_model,
+     is_tt_block_output_model,
+     require_tt_output_tokens_per_step,
++    resolve_tt_preserve_prefill_state_slots,
+     resolve_tt_scheduler_cls,
+     resolve_tt_supports_stage_outputs,
+     store_tt_adaptive_block_max_prompt_tokens,
+@@ -2191,6 +2192,7 @@ class TTPlatform(Platform):
+             )
+         store_tt_block_kv_extent_tokens(vllm_config, block_kv_extent)
+         is_block_output_model = is_tt_block_output_model(vllm_config)
++        resolve_tt_preserve_prefill_state_slots(model_capabilities)
+         supports_device_grammar = (
+             model_capabilities.get("supports_device_grammar", False)
+             if model_capabilities
+diff --git a/tests/test_state_slots.py b/tests/test_state_slots.py
+index 662f0ef..2c345ee 100644
+--- a/tests/test_state_slots.py
++++ b/tests/test_state_slots.py
+@@ -451,3 +451,151 @@ def test_a_model_without_the_move_hook_still_releases():
+     _decode(r, ["B"])  # a real gather, with nothing to notify
+     TTModelRunner._release_model_request(r, "B")
+     assert released == [0], "released by B's current slot"
++
++
++# --- ``preserve_prefill_state_slots``: continuing prefills keep their slot ---
++
++
++def _preserving_runner(slots=SLOTS):
++    r = _runner(slots=slots)
++    r.model = SimpleNamespace(model_capabilities={"preserve_prefill_state_slots": True})
++    return r
++
++
++@pytest.mark.parametrize("rows", [["C", "B"], ["B", "C"], ["B", "A"]])
++def test_prefill_continuation_keeps_state_when_rows_change(rows):
++    r = _preserving_runner(slots=3)
++    _prefill(r, ["A", "B"])
++    state = ["A", "B", None]
++    old_slots = dict(r._req_state_slot)
++
++    slots = _prefill(r, rows)
++    for req_id, slot in zip(rows, slots):
++        if req_id in old_slots:
++            assert slot == old_slots[req_id]
++            assert state[slot] == req_id
++        else:
++            assert state[slot] is None
++            state[slot] = req_id
++    _assert_state_found(r, state)
++
++
++def test_prefill_continuation_reserves_owner_after_peer_release():
++    r = _preserving_runner(slots=3)
++    _prefill(r, ["A", "B", "C"])
++    state = ["A", "B", "C"]
++    _release(r, preempted={"C"})
++    state[2] = None
++    slots = _prefill(r, ["D", "B"])
++    assert slots == [2, 1]
++    state[slots[0]] = "D"
++    # A preempted request remains in requests but owns no state until resumed.
++    r.requests.pop("C")
++    _assert_state_found(r, state)
++
++
++@pytest.mark.parametrize(
++    "capabilities", [None, {}, {"preserve_prefill_state_slots": False}]
++)
++@pytest.mark.parametrize(
++    "rows,expected", [(["B", "A"], [0, 1]), (["C", "B"], [1, 2]), (["A", "B"], [0, 1])]
++)
++def test_without_the_capability_the_slot_choice_is_unchanged(
++    capabilities, rows, expected
++):
++    """Undeclared, a continuation is re-placed by row exactly as before the opt-in
++    existed: only live requests that are not prefilling this step hold slots."""
++    r = _runner(slots=3)
++    if capabilities is not None:
++        r.model = SimpleNamespace(model_capabilities=capabilities)
++    assert _prefill(r, ["A", "B"]) == [0, 1]
++    assert _prefill(r, rows) == expected
++
++
++@pytest.mark.parametrize("value", [0, 1, "true", None, []])
++def test_a_non_boolean_declaration_is_rejected(value):
++    r = _runner(slots=3)
++    r.model = SimpleNamespace(
++        model_capabilities={"preserve_prefill_state_slots": value}
++    )
++    with pytest.raises(ValueError, match="preserve_prefill_state_slots"):
++        _prefill(r, ["A"])
++    assert r._req_state_slot == {}
++
++
++def test_preempted_mid_prefill_resume_takes_a_free_slot_without_moving_peers():
++    """Preemption during a chunked prefill, then the resume. Under vLLM 0.32 the
++    release of the preempted slot precedes the step's prefill allocation (in
++    ``_update_states``), whether the resume lands in that same step (V2 shape,
++    rebuilt from ``scheduled_new_reqs``) or later. The resume is a newcomer: it
++    must not reclaim its old slot from, or displace, a continuing peer."""
++    r = _preserving_runner(slots=3)
++    assert _prefill(r, ["A", "B"]) == [0, 1]  # both mid-prefill
++    state = ["A", "B", None]
++
++    # A is preempted; C is admitted ahead of A's resume and B continues at row 1.
++    _release(r, preempted={"A"})
++    state[0] = None
++    slots = _prefill(r, ["C", "B"])
++    assert slots == [0, 1]
++    state[slots[0]] = "C"
++
++    # A resumes (re-prefill from zero) while B still continues, at a reordered row.
++    _release(r)
++    slots = _prefill(r, ["B", "A"])
++    assert slots[0] == 1, "the continuing peer keeps its slot"
++    assert slots[1] == 2, "the resume takes the only free slot"
++    state[slots[1]] = "A"
++    _assert_state_found(r, state)
++
++    # Same-step preempt-and-resume: the release and the allocation share a step.
++    _release(r, preempted={"B"})
++    state[1] = None
++    slots = _prefill(r, ["A", "B"])
++    assert slots == [2, 1], "A continues in place; B re-prefills into its freed slot"
++    state[1] = "B"
++    _assert_state_found(r, state)
++
++
++def test_platform_rejects_a_non_boolean_preserve_declaration(monkeypatch):
++    from vllm.config import (
++        CacheConfig,
++        DeviceConfig,
++        ModelConfig,
++        ParallelConfig,
++        SchedulerConfig,
++        VllmConfig,
++    )
++
++    from tests.test_block_scheduler import (
++        LOCAL_MODEL_CONFIG,
++        _stub_model_resolution,
++        _StubModel,
++    )
++
++    monkeypatch.setattr(
++        _StubModel,
++        "model_capabilities",
++        {"preserve_prefill_state_slots": 1},
++        raising=False,
++    )
++    model_config = ModelConfig(
++        model=str(LOCAL_MODEL_CONFIG),
++        dtype="float16",
++        seed=42,
++        skip_tokenizer_init=True,
++    )
++    with (
++        _stub_model_resolution(),
++        pytest.raises(ValueError, match="preserve_prefill_state_slots"),
++    ):
++        VllmConfig(
++            model_config=model_config,
++            scheduler_config=SchedulerConfig(
++                max_model_len=model_config.max_model_len,
++                is_encoder_decoder=model_config.is_encoder_decoder,
++            ),
++            cache_config=CacheConfig(block_size=128),
++            parallel_config=ParallelConfig(),
++            device_config=DeviceConfig(device="cpu"),
++        )

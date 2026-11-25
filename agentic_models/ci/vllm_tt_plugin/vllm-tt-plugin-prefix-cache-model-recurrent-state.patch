@@ -1,0 +1,345 @@
+From 5d6888b5e4023dbce2448dbe1fc4e1182bce2bb5 Mon Sep 17 00:00:00 2001
+From: Nicholas Smith <nsmith@tenstorrent.com>
+Date: Wed, 25 Nov 2026 17:18:07 +0000
+Subject: [PATCH] [feat] Opt-in model-owned recurrent state for prefix caching
+
+agentic-models patch P4 (vllm-tt-plugin-prefix-cache-model-recurrent-state.patch).
+
+A hybrid model declaring
+model_capabilities['prefix_cache_recurrent_state_in_model']=True snapshots its
+own recurrent state, so with --enable-prefix-caching it uses plain attention
+APC: mamba_cache_mode != 'none' is renormalized with
+_renormalize_mamba_cache_config (m4 0001 semantics) and _install_prefix_hit_clip()
+(m6) wraps KVCacheManager.get_computed_blocks. The clip returns vLLM's result
+unless the adapter registers vllm_tt_plugin.prefix_hit_clip. Base: m6's
+uncommitted platform.py patch with the trigger merged from m4 0001. m4's own
+trigger (supports_prefix_caching, which K2 declares) is not used.
+
+Undeclared, or with prefix caching off, the config and KVCacheManager are left
+as at f6fe76b.
+
+Tests: tests/test_prefix_cache_model_state.py; tests/conftest.py restores
+KVCacheManager.get_computed_blocks after each test so the clip cannot leak.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/MODEL_CAPABILITIES.md             |   1 +
+ src/vllm_tt_plugin/config.py           |  16 +++
+ src/vllm_tt_plugin/platform.py         |  52 ++++++++
+ tests/conftest.py                      |   4 +
+ tests/test_prefix_cache_model_state.py | 161 +++++++++++++++++++++++++
+ 5 files changed, 234 insertions(+)
+ create mode 100644 tests/test_prefix_cache_model_state.py
+
+diff --git a/docs/MODEL_CAPABILITIES.md b/docs/MODEL_CAPABILITIES.md
+index 665bde9..e0f1d47 100644
+--- a/docs/MODEL_CAPABILITIES.md
++++ b/docs/MODEL_CAPABILITIES.md
+@@ -55,6 +55,7 @@ Sources: [platform.py](../src/vllm_tt_plugin/platform.py),
+ |---|---|---|
+ | `supports_chunked_prefill` | `False` | Permits scheduler-driven chunked prefill when `scheduler_config.enable_chunked_prefill` is also true. The platform disables chunked prefill for `output_tokens_per_step > 1` regardless of this declaration. When chunked prefill remains enabled, the platform sets `disable_chunked_mm_input=True`. |
+ | `supports_prefix_caching` | `False` | Permits vLLM automatic prefix caching. The platform disables requested prefix caching when this declaration is false. The platform rejects `supports_prefix_caching=True` together with `output_tokens_per_step > 1`. |
++| `prefix_cache_recurrent_state_in_model` | `False` | Declares that a hybrid model snapshots and restores its own recurrent state on a prefix-cache hit and exposes only attention KV to vLLM. With prefix caching enabled, the platform sets `mamba_cache_mode` to `none` (plain attention prefix caching instead of core's `align` mode) and wraps `KVCacheManager.get_computed_blocks` so a hit is clipped to `vllm_tt_plugin.prefix_hit_clip(token_ids, n)` when the model registers that function. The platform rejects a non-boolean value. Absent or false, or with prefix caching off, nothing changes. |
+ | `output_tokens_per_step` | `1` | Declares the committed output width. The platform requires an integer at least 1 and rejects Boolean values. A value above 1 selects block-output execution. Contract-based speculation instead uses `output_tokens_per_step=1` and an admitted `SpecPlan`. |
+ | `tt_adaptive_block_output` | `False` | Allows an eligible solo decode to commit a block and requires batched decode to use the ordinary one-token path. The platform rejects this declaration unless `output_tokens_per_step > 1`. Adaptive block output relaxes the plain block-output concurrency, data-parallel, executor, async-scheduling, and device-sampling restrictions described below. |
+ | `tt_adaptive_block_max_prompt_tokens` | `0` | Limits prompts eligible for an adaptive block session. `0` means no declared limit. Requests with longer prompts use one-token decoding throughout their lifetime. The platform converts the value with `int`, rejects negative values, and rejects a nonzero value without `tt_adaptive_block_output`. The model must apply the same prompt-length limit as the scheduler. |
+diff --git a/src/vllm_tt_plugin/config.py b/src/vllm_tt_plugin/config.py
+index 3cc8f34..a08024a 100644
+--- a/src/vllm_tt_plugin/config.py
++++ b/src/vllm_tt_plugin/config.py
+@@ -72,6 +72,22 @@ def resolve_tt_supports_original_prompt_lens(model_capabilities: dict | None) ->
+     return supported
+ 
+ 
++def resolve_tt_prefix_cache_recurrent_state_in_model(
++    model_capabilities: dict | None,
++) -> bool:
++    """Validate the declaration that the model snapshots its own recurrent state
++    for prefix caching (so vLLM only manages attention KV blocks)."""
++    in_model = (model_capabilities or {}).get(
++        "prefix_cache_recurrent_state_in_model", False
++    )
++    if not isinstance(in_model, bool):
++        raise ValueError(
++            "model_capabilities['prefix_cache_recurrent_state_in_model'] must be a "
++            f"boolean, got {in_model!r}"
++        )
++    return in_model
++
++
+ def get_tt_seeded_sampling_policy(
+     vllm_config: "VllmConfig",
+ ) -> Literal["auto", "host"]:
+diff --git a/src/vllm_tt_plugin/platform.py b/src/vllm_tt_plugin/platform.py
+index 32cdb1f..f769315 100644
+--- a/src/vllm_tt_plugin/platform.py
++++ b/src/vllm_tt_plugin/platform.py
+@@ -29,6 +29,7 @@ from vllm_tt_plugin.config import (
+     is_tt_adaptive_block_output_model,
+     is_tt_block_output_model,
+     require_tt_output_tokens_per_step,
++    resolve_tt_prefix_cache_recurrent_state_in_model,
+     resolve_tt_preserve_prefill_state_slots,
+     resolve_tt_scheduler_cls,
+     resolve_tt_supports_original_prompt_lens,
+@@ -1235,6 +1236,47 @@ def _install_tt_dp_prefix_cache_routing_patch() -> None:
+     client_cls.reset_prefix_cache_async = reset_prefix_cache_async_tt
+ 
+ 
++def _install_prefix_hit_clip() -> None:
++    """Clip vLLM attention prefix-cache hits to what the model can restore.
++
++    Installed only for a model declaring
++    ``prefix_cache_recurrent_state_in_model`` with prefix caching on. Such a
++    model snapshots its own recurrent state and may register
++    ``vllm_tt_plugin.prefix_hit_clip(token_ids, n) -> m`` (the longest
++    restorable prefix ``m <= n``, block aligned). Without the clip, a hit whose
++    recurrent state is not snapshotted makes the model re-prefill the whole
++    prefix inside one scheduler step that vLLM budgeted as a few tokens, stalling
++    every decoder; clipping keeps vLLM's token budget and chunking in charge of
++    the re-prefill. With no clip registered the wrapper returns vLLM's result.
++    """
++    from vllm.v1.core.kv_cache_manager import KVCacheManager
++
++    if getattr(KVCacheManager.get_computed_blocks, "_tt_prefix_hit_clip", False):
++        return
++    original = KVCacheManager.get_computed_blocks
++
++    def get_computed_blocks(self, request):
++        result = original(self, request)
++        blocks, num_computed = result[0], result[1]
++        import vllm_tt_plugin
++
++        clip = getattr(vllm_tt_plugin, "prefix_hit_clip", None)
++        if clip is None or num_computed <= 0:
++            return result
++        keep = int(clip(request.all_token_ids, num_computed))
++        if keep >= num_computed:
++            return result
++        if keep <= 0:
++            return (self.empty_kv_cache_blocks, 0, *result[2:])
++        return (self.truncate_computed_blocks(blocks, keep), keep, *result[2:])
++
++    get_computed_blocks._tt_prefix_hit_clip = True
++    KVCacheManager.get_computed_blocks = get_computed_blocks
++    logger.info(
++        "Prefix caching: hits clipped to model-restorable recurrent-state snapshots."
++    )
++
++
+ def _install_block_output_streaming_input_patch() -> None:
+     """Reject streaming-input sessions before vLLM creates a final request."""
+     import vllm.v1.engine.async_llm as async_llm
+@@ -2291,6 +2333,16 @@ class TTPlatform(Platform):
+                 model_class.__module__,
+             )
+             _renormalize_mamba_cache_config(vllm_config)
++        if vllm_config.cache_config.enable_prefix_caching and (
++            resolve_tt_prefix_cache_recurrent_state_in_model(model_capabilities)
++        ):
++            # A hybrid model that snapshots its own recurrent state and exposes
++            # only attention KV to vLLM uses plain attention prefix caching:
++            # core's hybrid "align" mode (recurrent state in KV blocks,
++            # block-aligned chunk splits) does not apply.
++            if getattr(vllm_config.cache_config, "mamba_cache_mode", "none") != "none":
++                _renormalize_mamba_cache_config(vllm_config)
++            _install_prefix_hit_clip()
+         logger.info(
+             "Automatic prefix caching is %s",
+             "enabled" if vllm_config.cache_config.enable_prefix_caching else "disabled",
+diff --git a/tests/conftest.py b/tests/conftest.py
+index de37e4b..779c546 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -28,6 +28,7 @@ def reset_tt_platform_class_state():
+     import vllm.v1.engine.core_client as core_client
+     import vllm.v1.engine.input_processor as input_processor
+     from vllm.entrypoints.launchers.utils import server_utils
++    from vllm.v1.core.kv_cache_manager import KVCacheManager
+     from vllm.v1.structured_output import backend_xgrammar
+ 
+     from vllm_tt_plugin.platform import TTPlatform
+@@ -74,6 +75,8 @@ def reset_tt_platform_class_state():
+         name: dp_client.__dict__.get(name, unset)
+         for name in ("get_core_engine_for_request", "reset_prefix_cache_async")
+     }
++    # The prefix-hit clip wraps a vLLM class method for the whole process.
++    saved_get_computed_blocks = KVCacheManager.get_computed_blocks
+     saved_dp_client_markers = {
+         name: core_client.__dict__.get(name, unset)
+         for name in (
+@@ -84,6 +87,7 @@ def reset_tt_platform_class_state():
+ 
+     yield
+ 
++    KVCacheManager.get_computed_blocks = saved_get_computed_blocks
+     for name, value in saved_dp_client_methods.items():
+         if value is unset:
+             if name in dp_client.__dict__:
+diff --git a/tests/test_prefix_cache_model_state.py b/tests/test_prefix_cache_model_state.py
+new file mode 100644
+index 0000000..fe85fec
+--- /dev/null
++++ b/tests/test_prefix_cache_model_state.py
+@@ -0,0 +1,161 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""``prefix_cache_recurrent_state_in_model``: a hybrid model that snapshots its
++own recurrent state gets plain attention prefix caching.
++
++Only the declaration together with ``--enable-prefix-caching`` changes the
++config (``mamba_cache_mode`` -> ``none``) and installs the prefix-hit clip;
++``supports_prefix_caching`` alone (K2) leaves both as they were.
++"""
++
++from types import SimpleNamespace
++
++import pytest
++from vllm.config import (
++    CacheConfig,
++    DeviceConfig,
++    ModelConfig,
++    ParallelConfig,
++    SchedulerConfig,
++    VllmConfig,
++)
++from vllm.v1.core.kv_cache_manager import KVCacheManager
++
++import vllm_tt_plugin
++from tests.test_block_scheduler import (
++    LOCAL_MODEL_CONFIG,
++    _stub_model_resolution,
++    _StubModel,
++)
++from vllm_tt_plugin import config as tt_config
++from vllm_tt_plugin.platform import _install_prefix_hit_clip
++
++APC = {"supports_prefix_caching": True, "supports_chunked_prefill": True}
++IN_MODEL = {**APC, "prefix_cache_recurrent_state_in_model": True}
++
++
++@pytest.fixture(autouse=True)
++def _no_registered_clip(monkeypatch):
++    # tests/conftest.py restores KVCacheManager.get_computed_blocks after each test.
++    monkeypatch.delattr(vllm_tt_plugin, "prefix_hit_clip", raising=False)
++
++
++def _is_wrapped() -> bool:
++    return bool(
++        getattr(KVCacheManager.get_computed_blocks, "_tt_prefix_hit_clip", False)
++    )
++
++
++def _config(monkeypatch, capabilities, *, prefix_caching=True):
++    monkeypatch.setattr(_StubModel, "model_capabilities", capabilities, raising=False)
++    model_config = ModelConfig(
++        model=str(LOCAL_MODEL_CONFIG),
++        dtype="float16",
++        seed=42,
++        skip_tokenizer_init=True,
++    )
++    cache_config = (
++        CacheConfig(
++            block_size=128,
++            enable_prefix_caching=True,
++            mamba_cache_mode="align",
++            mamba_block_size=256,
++        )
++        if prefix_caching
++        else CacheConfig(block_size=128, enable_prefix_caching=False)
++    )
++    with _stub_model_resolution():
++        return VllmConfig(
++            model_config=model_config,
++            scheduler_config=SchedulerConfig(
++                max_model_len=model_config.max_model_len,
++                is_encoder_decoder=model_config.is_encoder_decoder,
++            ),
++            cache_config=cache_config,
++            parallel_config=ParallelConfig(),
++            device_config=DeviceConfig(device="cpu"),
++        )
++
++
++def test_declared_with_prefix_caching_uses_plain_attention_apc(monkeypatch):
++    cfg = _config(monkeypatch, IN_MODEL)
++    assert cfg.cache_config.enable_prefix_caching is True
++    assert cfg.cache_config.mamba_cache_mode == "none"
++    assert cfg.cache_config.mamba_block_size == cfg.model_config.max_model_len
++    assert _is_wrapped()
++
++
++@pytest.mark.parametrize(
++    "capabilities",
++    [APC, {**APC, "prefix_cache_recurrent_state_in_model": False}],
++    ids=["k2-like-supports-prefix-caching-only", "declared-false"],
++)
++def test_undeclared_keeps_the_config_and_the_cache_manager(monkeypatch, capabilities):
++    cfg = _config(monkeypatch, capabilities)
++    assert cfg.cache_config.enable_prefix_caching is True
++    assert cfg.cache_config.mamba_cache_mode == "align"
++    assert cfg.cache_config.mamba_block_size == 256
++    assert not _is_wrapped()
++
++
++def test_declared_without_prefix_caching_changes_nothing(monkeypatch):
++    cfg = _config(monkeypatch, IN_MODEL, prefix_caching=False)
++    assert cfg.cache_config.enable_prefix_caching is False
++    assert cfg.cache_config.mamba_cache_mode == "none"
++    assert not _is_wrapped()
++
++
++@pytest.mark.parametrize("value", [0, 1, "true", None, []])
++def test_a_non_boolean_declaration_is_rejected(value):
++    with pytest.raises(ValueError, match="prefix_cache_recurrent_state_in_model"):
++        tt_config.resolve_tt_prefix_cache_recurrent_state_in_model(
++            {"prefix_cache_recurrent_state_in_model": value}
++        )
++
++
++class _Manager:
++    """Just what the wrapper reads from ``self``."""
++
++    empty_kv_cache_blocks = "EMPTY"
++
++    def truncate_computed_blocks(self, blocks, keep):
++        return (blocks, "truncated", keep)
++
++
++def _wrapped(monkeypatch, hit):
++    monkeypatch.setattr(
++        KVCacheManager,
++        "get_computed_blocks",
++        lambda self, request: ("BLOCKS", hit, 7),
++    )
++    _install_prefix_hit_clip()
++    _install_prefix_hit_clip()  # idempotent
++    assert _is_wrapped()
++    request = SimpleNamespace(all_token_ids=list(range(1000)))
++    return KVCacheManager.get_computed_blocks(_Manager(), request)
++
++
++def test_the_clip_is_a_no_op_until_a_model_registers_one(monkeypatch):
++    assert _wrapped(monkeypatch, 512) == ("BLOCKS", 512, 7)
++
++
++@pytest.mark.parametrize(
++    "hit,keep,expected",
++    [
++        (512, 600, ("BLOCKS", 512, 7)),
++        (512, 512, ("BLOCKS", 512, 7)),
++        (512, 256, (("BLOCKS", "truncated", 256), 256, 7)),
++        (512, 0, ("EMPTY", 0, 7)),
++        (0, 0, ("BLOCKS", 0, 7)),
++    ],
++)
++def test_a_registered_clip_shortens_the_hit(monkeypatch, hit, keep, expected):
++    seen = []
++
++    def clip(token_ids, n):
++        seen.append(n)
++        return keep
++
++    monkeypatch.setattr(vllm_tt_plugin, "prefix_hit_clip", clip, raising=False)
++    assert _wrapped(monkeypatch, hit) == expected
++    assert seen == ([hit] if hit > 0 else [])

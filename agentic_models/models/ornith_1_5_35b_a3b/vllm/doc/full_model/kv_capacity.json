@@ -1,0 +1,7940 @@
+{
+  "status": "measured",
+  "num_devices": 4,
+  "mesh": [
+    1,
+    4
+  ],
+  "layers": 40,
+  "fixed_slot_capacity": 32,
+  "logical_context_per_request": 262144,
+  "page_size": 32,
+  "physical_num_blocks": 60620,
+  "physical_token_capacity": 1939840,
+  "max_tokens_all_users": 1938816,
+  "plugin_output_reservation_tokens": 1024,
+  "plugin_output_reservation_blocks": 32,
+  "plugin_output_reservation_batch": 32,
+  "plugin_output_tokens_per_step": 1,
+  "plugin_sha": "c018beb97e650645081a881d7e3ef9bf2c29c3fe",
+  "plugin_budget_formula": "ceil((max_tokens_all_users + max(block_size, output_tokens_per_step) * per_lane_max_batch) / block_size); pinned worker.py:795-833",
+  "plugin_change": "No plugin edit by this promotion; verified clean checkout at the supplied current pin.",
+  "null_block_note": "The physical pool includes upstream null-block accounting. The model hook budget is not raw schedulable payload; one physical page is unavailable to payload.",
+  "measured_largest_passing_blocks": 60620,
+  "measured_smallest_failing_blocks": 60621,
+  "hardware_bracket_attempts": 2,
+  "source_sha256": {
+    "tests/validate_full_capacity.py": "3c3df37b8668b8b678b742f24e723c14829db6a73291ff7933b48ebe1f7eeb0b",
+    "tt/model.py": "71f52290aaa6a36c8243346372ca9485ee9e4e518d5a933019220f8db2619d76",
+    "tt/generator.py": "89e5bbf585680c00be22525a89530deaf1b83f046b903454127369395fac4f0a",
+    "tt/multichip_decoder.py": "d281b8fb1743ec4014f21484b691bb3496c16cfd0c8c698fe1ced625b417d573",
+    "tt/optimized_decoder.py": "29a3c08428496422c1f115b1d58ecb840468b91db650ffbe999942de7c21b8c1",
+    "tt/precision.py": "609bc75ab9dfb151032da03c2bd5dcb8ad9e5c01ff935b5cd39ae382eaa3bcb2"
+  },
+  "measured_source_sha256": {
+    "tests/validate_full_capacity.py": "3c3df37b8668b8b678b742f24e723c14829db6a73291ff7933b48ebe1f7eeb0b",
+    "tt/model.py": "38eefe7173a1b9a8aae3893001c538c650def2c4cd6089a8ae84c87246d1926f",
+    "tt/generator.py": "0ff7b850e04f0211ebd2fb50b997e158ecc489a375f72734eaf4428936e2fb36",
+    "tt/multichip_decoder.py": "9f47ea0f205ac6560df5377955e526cb0120ae96b62de60e53dc48b471f6dd7e",
+    "tt/optimized_decoder.py": "63045b5ed35fb996595aebb5f3c5d3be5e268727207375e8421209c48d4f5c47",
+    "tt/precision.py": "609bc75ab9dfb151032da03c2bd5dcb8ad9e5c01ff935b5cd39ae382eaa3bcb2"
+  },
+  "precision_policy": {
+    "config_id": "bfp8_attention_lofi_bf16kv",
+    "weight_groups": {
+      "attention": "bfloat8_b",
+      "expert_gate_up": "bfloat8_b",
+      "expert_down": "bfloat8_b",
+      "shared_gate_up": "bfloat8_b",
+      "shared_down": "bfloat8_b",
+      "lm_head": "bfloat8_b",
+      "embedding": "bfloat16",
+      "norm": "float32",
+      "router": "float32"
+    },
+    "compute_fidelities": {
+      "attention_decode": "LoFi",
+      "attention_prefill": "HiFi4",
+      "experts": "LoFi",
+      "shared": "LoFi",
+      "lm_head": "HiFi2",
+      "router": "HiFi4",
+      "norm_recurrence": "HiFi4",
+      "sdpa": "HiFi2"
+    },
+    "layer_exceptions": [],
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat16",
+    "logits_sampling": {
+      "logits_dtype": "bfloat16",
+      "token_dtype": "uint32",
+      "recurrent_state_dtype": "float32"
+    }
+  },
+  "bytes_per_pool_block_per_chip": 16384,
+  "kv_pool_count": 20,
+  "shared_zero_donor_count": 1,
+  "kv_and_donor_bytes_per_aggregate_block_per_chip": 344064,
+  "kv_pool_bytes_per_chip": 19863961600,
+  "kv_and_zero_donor_bytes_per_chip": 20857159680,
+  "measured_after_weights_allocated_bytes_per_chip": 11651820544,
+  "measured_after_weights_free_bytes_per_chip": 22392692736,
+  "measured_after_runtime_free_bytes_per_chip": 251299840,
+  "measured_after_runtime_largest_free_span_bytes_per_bank": 30385792,
+  "program_cache": {
+    "after_prepare": 8951,
+    "after_runtime": 8951
+  },
+  "memory_measurements": {
+    "memory_after_open": {
+      "dram": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 4255564160,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free_per_bank": 4255564160,
+        "largest_contiguous_bytes_free_per_bank": 4255564160
+      },
+      "l1": {
+        "num_banks": 110,
+        "total_bytes_per_bank": 1441792,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free_per_bank": 1441792,
+        "largest_contiguous_bytes_free_per_bank": 1441792
+      },
+      "trace": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 16777216,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free_per_bank": 16777216,
+        "largest_contiguous_bytes_free_per_bank": 16777216
+      }
+    },
+    "memory_after_weights": {
+      "dram": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 4255564160,
+        "total_bytes_allocated_per_bank": 1456477568,
+        "total_bytes_free_per_bank": 2799086592,
+        "largest_contiguous_bytes_free_per_bank": 2798702976
+      },
+      "l1": {
+        "num_banks": 110,
+        "total_bytes_per_bank": 1441792,
+        "total_bytes_allocated_per_bank": 172928,
+        "total_bytes_free_per_bank": 1268864,
+        "largest_contiguous_bytes_free_per_bank": 1266816
+      },
+      "trace": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 16777216,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free_per_bank": 16777216,
+        "largest_contiguous_bytes_free_per_bank": 16777216
+      }
+    },
+    "memory_after_state": {
+      "dram": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 4255564160,
+        "total_bytes_allocated_per_bank": 4197449152,
+        "total_bytes_free_per_bank": 58115008,
+        "largest_contiguous_bytes_free_per_bank": 58112384
+      },
+      "l1": {
+        "num_banks": 110,
+        "total_bytes_per_bank": 1441792,
+        "total_bytes_allocated_per_bank": 172928,
+        "total_bytes_free_per_bank": 1268864,
+        "largest_contiguous_bytes_free_per_bank": 1266816
+      },
+      "trace": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 16777216,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free_per_bank": 16777216,
+        "largest_contiguous_bytes_free_per_bank": 16777216
+      }
+    },
+    "memory_after_prepare": {
+      "dram": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 4255564160,
+        "total_bytes_allocated_per_bank": 4224151680,
+        "total_bytes_free_per_bank": 31412480,
+        "largest_contiguous_bytes_free_per_bank": 30385792
+      },
+      "l1": {
+        "num_banks": 110,
+        "total_bytes_per_bank": 1441792,
+        "total_bytes_allocated_per_bank": 202688,
+        "total_bytes_free_per_bank": 1239104,
+        "largest_contiguous_bytes_free_per_bank": 1239104
+      },
+      "trace": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 16777216,
+        "total_bytes_allocated_per_bank": 16097280,
+        "total_bytes_free_per_bank": 679936,
+        "largest_contiguous_bytes_free_per_bank": 679936
+      }
+    },
+    "memory_after_runtime": {
+      "dram": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 4255564160,
+        "total_bytes_allocated_per_bank": 4224151680,
+        "total_bytes_free_per_bank": 31412480,
+        "largest_contiguous_bytes_free_per_bank": 30385792
+      },
+      "l1": {
+        "num_banks": 110,
+        "total_bytes_per_bank": 1441792,
+        "total_bytes_allocated_per_bank": 202688,
+        "total_bytes_free_per_bank": 1239104,
+        "largest_contiguous_bytes_free_per_bank": 1239104
+      },
+      "trace": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 16777216,
+        "total_bytes_allocated_per_bank": 16097280,
+        "total_bytes_free_per_bank": 679936,
+        "largest_contiguous_bytes_free_per_bank": 679936
+      }
+    }
+  },
+  "scalar_prefill_trace_plan": {
+    "captured_slots": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "eager_slots": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "bytes_per_bank": [
+      2678784,
+      2678784,
+      2678784,
+      2678784
+    ]
+  },
+  "trace_region_bytes_per_chip": 134217728,
+  "measured_after_runtime_trace_allocated_bytes_per_chip": 128778240,
+  "measured_after_runtime_trace_free_bytes_per_chip": 5439488,
+  "failure": {
+    "phase": "max_prefill_bucket",
+    "operation": "See the new failing artifact's allocation traceback",
+    "requested_dram_bytes": 16777216,
+    "num_banks": 8,
+    "requested_bytes_per_bank": 2097152,
+    "free_bytes_per_bank": 4494080,
+    "largest_free_span_bytes_per_bank": 2064000,
+    "contiguous_shortfall_bytes_per_bank": 33152,
+    "source": "doc/optimized_vllm/native_tail_capacity/60621.json:error",
+    "adjacent_pair_measured": true,
+    "prediction_matched_exactly": true
+  },
+  "evidence": [
+    "doc/optimized_vllm/native_tail_capacity/summaries_v3/baseline_v3.summary.json",
+    "doc/optimized_vllm/native_tail_capacity/prediction_v3.json",
+    "doc/optimized_vllm/native_tail_capacity/summaries_v3/60620.summary.json",
+    "doc/optimized_vllm/native_tail_capacity/summaries_v3/60621.summary.json",
+    "doc/optimized_vllm/native_tail_capacity/promotion_review.json"
+  ],
+  "validation_scope": "Actual weights/full-layer runtime memory smoke; distant-position decode uses zero cache. No accuracy or maximum-context prefill claim. Strict tracking includes program cache; greedy32 and split sampling subset storage, distant-position and B32 decode pass. This is capacity evidence, not maximum-context numerical accuracy. All logical lengths 1..128/512/2048 prepared; public sampled native 1..128 at slot 31 retains program cache, traces and persistent input addresses.",
+  "limitations": [
+    "Measured adjacent physical boundary 60620/60621; no arbitrary safety reserve added.",
+    "Per-request logical context remains 262144 and fixed-slot capacity remains 32.",
+    "Scalar prefill slots 0..3 captured; slots 4..31 retain warmed eager scalar execution.",
+    "Inherited numerical/seeded-layout limitations remain in doc/eval_readiness/limitations.json.",
+    "Source/precision guards remain; explicit experimental budgets and external caches are caller-owned."
+  ],
+  "default_pool_selection": {
+    "formula": "min(batch_size * rounded_context / page_size, physical_num_blocks)",
+    "scope": "Owned shared pools for all 40 layers with the selected precision and matching MeshPolicy; explicit budgets and external caches remain caller-owned.",
+    "measurement_preservation": "Current exact source hashes and full measured precision policy are required."
+  },
+  "measurement_stage": "stage10 optimized_vllm native-tail family with greedy32 and parameter refresh cache",
+  "previous_stage10_record": "doc/optimized_vllm/kv_capacity.before_native_tail.json",
+  "stage10_capacity_review": "doc/optimized_vllm/native_tail_capacity/promotion_review.json",
+  "stage10_stage_review": "Capacity validation only; overall serving-stage acceptance and independent review are recorded separately in doc/optimized_vllm/README.md.",
+  "capacity_kind": "native_tail",
+  "serving_source_sha256": {
+    "tt/generator_vllm.py": "dc1967c1f41d0cf799ad477f010305ef85ece8197bfb7b26d125ad6d4d29d816"
+  },
+  "harness_source_sha256": {
+    "tests/capacity_graph_io.py": "9b46e312cc680f643d6a766d53d7b68cfc3fb419cd3706c72b2e4d1ce227880b"
+  },
+  "native_family_resources": {
+    "logical_lengths": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99,
+      100,
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108,
+      109,
+      110,
+      111,
+      112,
+      113,
+      114,
+      115,
+      116,
+      117,
+      118,
+      119,
+      120,
+      121,
+      122,
+      123,
+      124,
+      125,
+      126,
+      127,
+      128,
+      512,
+      2048
+    ],
+    "physical_full_attention": {
+      "1": 1,
+      "2": 32,
+      "3": 32,
+      "4": 32,
+      "5": 32,
+      "6": 32,
+      "7": 32,
+      "8": 32,
+      "9": 32,
+      "10": 32,
+      "11": 32,
+      "12": 32,
+      "13": 32,
+      "14": 32,
+      "15": 32,
+      "16": 32,
+      "17": 32,
+      "18": 32,
+      "19": 32,
+      "20": 32,
+      "21": 32,
+      "22": 32,
+      "23": 32,
+      "24": 32,
+      "25": 32,
+      "26": 32,
+      "27": 32,
+      "28": 32,
+      "29": 32,
+      "30": 32,
+      "31": 32,
+      "32": 32,
+      "33": 64,
+      "34": 64,
+      "35": 64,
+      "36": 64,
+      "37": 64,
+      "38": 64,
+      "39": 64,
+      "40": 64,
+      "41": 64,
+      "42": 64,
+      "43": 64,
+      "44": 64,
+      "45": 64,
+      "46": 64,
+      "47": 64,
+      "48": 64,
+      "49": 64,
+      "50": 64,
+      "51": 64,
+      "52": 64,
+      "53": 64,
+      "54": 64,
+      "55": 64,
+      "56": 64,
+      "57": 64,
+      "58": 64,
+      "59": 64,
+      "60": 64,
+      "61": 64,
+      "62": 64,
+      "63": 64,
+      "64": 64,
+      "65": 96,
+      "66": 96,
+      "67": 96,
+      "68": 96,
+      "69": 96,
+      "70": 96,
+      "71": 96,
+      "72": 96,
+      "73": 96,
+      "74": 96,
+      "75": 96,
+      "76": 96,
+      "77": 96,
+      "78": 96,
+      "79": 96,
+      "80": 96,
+      "81": 96,
+      "82": 96,
+      "83": 96,
+      "84": 96,
+      "85": 96,
+      "86": 96,
+      "87": 96,
+      "88": 96,
+      "89": 96,
+      "90": 96,
+      "91": 96,
+      "92": 96,
+      "93": 96,
+      "94": 96,
+      "95": 96,
+      "96": 96,
+      "97": 128,
+      "98": 128,
+      "99": 128,
+      "100": 128,
+      "101": 128,
+      "102": 128,
+      "103": 128,
+      "104": 128,
+      "105": 128,
+      "106": 128,
+      "107": 128,
+      "108": 128,
+      "109": 128,
+      "110": 128,
+      "111": 128,
+      "112": 128,
+      "113": 128,
+      "114": 128,
+      "115": 128,
+      "116": 128,
+      "117": 128,
+      "118": 128,
+      "119": 128,
+      "120": 128,
+      "121": 128,
+      "122": 128,
+      "123": 128,
+      "124": 128,
+      "125": 128,
+      "126": 128,
+      "127": 128,
+      "128": 128,
+      "512": 512,
+      "2048": 2048
+    },
+    "prefill_buffers": {
+      "1": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "address": 4142376896
+        },
+        "cos": {
+          "shape": [
+            1,
+            2,
+            32,
+            256
+          ],
+          "address": 4142536320
+        },
+        "sin": {
+          "shape": [
+            1,
+            2,
+            32,
+            256
+          ],
+          "address": 4142542464
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142379712
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142379776
+        }
+      },
+      "2": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            2
+          ],
+          "address": 4142379840
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142466944
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142546560
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142379904
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142379968
+        }
+      },
+      "3": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            3
+          ],
+          "address": 4142380032
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142548608
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142550656
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142380096
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142380160
+        }
+      },
+      "4": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            4
+          ],
+          "address": 4142380224
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142552704
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142554752
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142380288
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142380352
+        }
+      },
+      "5": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            5
+          ],
+          "address": 4142380416
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142556800
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142558848
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142380480
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142380544
+        }
+      },
+      "6": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            6
+          ],
+          "address": 4142380608
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142560896
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142562944
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142380672
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142380736
+        }
+      },
+      "7": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            7
+          ],
+          "address": 4142380800
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142564992
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142567040
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142380864
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142468992
+        }
+      },
+      "8": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            8
+          ],
+          "address": 4142469056
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142569088
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142571136
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142469120
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142469184
+        }
+      },
+      "9": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            9
+          ],
+          "address": 4142469248
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142573184
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142577280
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142469312
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142469376
+        }
+      },
+      "10": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            10
+          ],
+          "address": 4142469440
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142579328
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142581376
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142469504
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142469568
+        }
+      },
+      "11": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            11
+          ],
+          "address": 4142469632
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142583424
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142585472
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142469696
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142469760
+        }
+      },
+      "12": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            12
+          ],
+          "address": 4142469824
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142587520
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142589568
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142469888
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142469952
+        }
+      },
+      "13": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            13
+          ],
+          "address": 4142470016
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142591616
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142593664
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142470080
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142470144
+        }
+      },
+      "14": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            14
+          ],
+          "address": 4142470208
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142595712
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142597760
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142470272
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142470336
+        }
+      },
+      "15": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            15
+          ],
+          "address": 4142470400
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142599808
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142601856
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142470464
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142470528
+        }
+      },
+      "16": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            16
+          ],
+          "address": 4142470592
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142603904
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142605952
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142470656
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142470720
+        }
+      },
+      "17": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            17
+          ],
+          "address": 4142608000
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142612096
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142614144
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142608128
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142608192
+        }
+      },
+      "18": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            18
+          ],
+          "address": 4142608256
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142616192
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142618240
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142608384
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142608448
+        }
+      },
+      "19": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            19
+          ],
+          "address": 4142608512
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142620288
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142622336
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142608640
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142608704
+        }
+      },
+      "20": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            20
+          ],
+          "address": 4142608768
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142624384
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142626432
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142608896
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142608960
+        }
+      },
+      "21": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            21
+          ],
+          "address": 4142609024
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142628480
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142630528
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142609152
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142609216
+        }
+      },
+      "22": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            22
+          ],
+          "address": 4142609280
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142632576
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142634624
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142609408
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142609472
+        }
+      },
+      "23": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            23
+          ],
+          "address": 4142609536
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142636672
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142638720
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142609664
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142609728
+        }
+      },
+      "24": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            24
+          ],
+          "address": 4142609792
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142640768
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142642816
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142609920
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142609984
+        }
+      },
+      "25": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            25
+          ],
+          "address": 4142646912
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142647040
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142649088
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142651136
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142651200
+        }
+      },
+      "26": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            26
+          ],
+          "address": 4142651264
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142651392
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142653440
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142655488
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142655552
+        }
+      },
+      "27": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            27
+          ],
+          "address": 4142655616
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142655744
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142657792
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142659840
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142659904
+        }
+      },
+      "28": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            28
+          ],
+          "address": 4142659968
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142660096
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142662144
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142664192
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142664256
+        }
+      },
+      "29": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            29
+          ],
+          "address": 4142664320
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142664448
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142666496
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142668544
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142668608
+        }
+      },
+      "30": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            30
+          ],
+          "address": 4142668672
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142668800
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142670848
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142672896
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142672960
+        }
+      },
+      "31": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            31
+          ],
+          "address": 4142673024
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142673152
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142675200
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142677248
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142677312
+        }
+      },
+      "32": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            32
+          ],
+          "address": 4142677376
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142677504
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "address": 4142681728
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142679552
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            1
+          ],
+          "address": 4142679616
+        }
+      },
+      "33": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            33
+          ],
+          "address": 4142683776
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142683968
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142688064
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142692160
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142692224
+        }
+      },
+      "34": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            34
+          ],
+          "address": 4142692288
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142692480
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142696576
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142700672
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142700736
+        }
+      },
+      "35": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            35
+          ],
+          "address": 4142700800
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142700992
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142705088
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142709184
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142709248
+        }
+      },
+      "36": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            36
+          ],
+          "address": 4142709312
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142709504
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142716544
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142713600
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142713664
+        }
+      },
+      "37": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            37
+          ],
+          "address": 4142713728
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142720640
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142724736
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142713920
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142713984
+        }
+      },
+      "38": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            38
+          ],
+          "address": 4142714048
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142728832
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142732928
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142714240
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142714304
+        }
+      },
+      "39": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            39
+          ],
+          "address": 4142737024
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142737216
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142741312
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142714368
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142714432
+        }
+      },
+      "40": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            40
+          ],
+          "address": 4142745408
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142751360
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142755456
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142745600
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142745664
+        }
+      },
+      "41": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            41
+          ],
+          "address": 4142745728
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142759552
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142763648
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142745920
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142745984
+        }
+      },
+      "42": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            42
+          ],
+          "address": 4142746048
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142767744
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142771840
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142746240
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142746304
+        }
+      },
+      "43": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            43
+          ],
+          "address": 4142746368
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142775936
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142780032
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142746560
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142746624
+        }
+      },
+      "44": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            44
+          ],
+          "address": 4142746688
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142786176
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142790272
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142746880
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142746944
+        }
+      },
+      "45": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            45
+          ],
+          "address": 4142747008
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142794368
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142798464
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142747200
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142747264
+        }
+      },
+      "46": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            46
+          ],
+          "address": 4142747328
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142802560
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142806656
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142747520
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142747584
+        }
+      },
+      "47": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            47
+          ],
+          "address": 4142747648
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142810752
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142814848
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142747840
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142747904
+        }
+      },
+      "48": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            48
+          ],
+          "address": 4142747968
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142820992
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142825088
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142748160
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142748224
+        }
+      },
+      "49": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            49
+          ],
+          "address": 4142748288
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142829184
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142833280
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142748544
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142748608
+        }
+      },
+      "50": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            50
+          ],
+          "address": 4142748672
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142837376
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142841472
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142748928
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142748992
+        }
+      },
+      "51": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            51
+          ],
+          "address": 4142749056
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142845568
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142849664
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142855808
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142855872
+        }
+      },
+      "52": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            52
+          ],
+          "address": 4142855936
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142856192
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142860288
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142864384
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142864448
+        }
+      },
+      "53": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            53
+          ],
+          "address": 4142864512
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142864768
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142868864
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142872960
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142873024
+        }
+      },
+      "54": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            54
+          ],
+          "address": 4142873088
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142873344
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142877440
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142881536
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142881600
+        }
+      },
+      "55": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            55
+          ],
+          "address": 4142881664
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142881920
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142890624
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142886016
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142886080
+        }
+      },
+      "56": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            56
+          ],
+          "address": 4142886144
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142894720
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142898816
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142886400
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142886464
+        }
+      },
+      "57": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            57
+          ],
+          "address": 4142886528
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142902912
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142907008
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142886784
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142886848
+        }
+      },
+      "58": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            58
+          ],
+          "address": 4142886912
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142911104
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142915200
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142887168
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142887232
+        }
+      },
+      "59": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            59
+          ],
+          "address": 4142887296
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142919296
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142925440
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142887552
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142887616
+        }
+      },
+      "60": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            60
+          ],
+          "address": 4142887680
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142929536
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142933632
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142887936
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142888000
+        }
+      },
+      "61": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            61
+          ],
+          "address": 4142888064
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142937728
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142941824
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142888320
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142888384
+        }
+      },
+      "62": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            62
+          ],
+          "address": 4142945920
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142946176
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142950272
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142888448
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142888512
+        }
+      },
+      "63": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            63
+          ],
+          "address": 4142954368
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142960256
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142964352
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142954624
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142954688
+        }
+      },
+      "64": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            64
+          ],
+          "address": 4142954752
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142968448
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            64,
+            256
+          ],
+          "address": 4142972544
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142955008
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            2
+          ],
+          "address": 4142955072
+        }
+      },
+      "65": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            65
+          ],
+          "address": 4142955136
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4142976640
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4142982784
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142955456
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142955520
+        }
+      },
+      "66": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            66
+          ],
+          "address": 4142955584
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4142995072
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143001216
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142955904
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142955968
+        }
+      },
+      "67": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            67
+          ],
+          "address": 4142956032
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143007360
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143013504
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142956352
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142956416
+        }
+      },
+      "68": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            68
+          ],
+          "address": 4142956480
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143019648
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143029888
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142956800
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142956864
+        }
+      },
+      "69": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            69
+          ],
+          "address": 4142956928
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143036032
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143042176
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142957248
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142957312
+        }
+      },
+      "70": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            70
+          ],
+          "address": 4142957376
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143048320
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143054464
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142957696
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142957760
+        }
+      },
+      "71": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            71
+          ],
+          "address": 4142957824
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143064704
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143070848
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142958144
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142988928
+        }
+      },
+      "72": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            72
+          ],
+          "address": 4142988992
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143076992
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143083136
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142989312
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142989376
+        }
+      },
+      "73": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            73
+          ],
+          "address": 4142989440
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143089280
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143099520
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142989760
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142989824
+        }
+      },
+      "74": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            74
+          ],
+          "address": 4142989888
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143105664
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143111808
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142990208
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142990272
+        }
+      },
+      "75": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            75
+          ],
+          "address": 4142990336
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143117952
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143124096
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142990656
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142990720
+        }
+      },
+      "76": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            76
+          ],
+          "address": 4142990784
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143134336
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143140480
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142991104
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142991168
+        }
+      },
+      "77": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            77
+          ],
+          "address": 4142991232
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143146624
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143152768
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142991552
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142991616
+        }
+      },
+      "78": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            78
+          ],
+          "address": 4142991680
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143158912
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143169152
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142992000
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142992064
+        }
+      },
+      "79": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            79
+          ],
+          "address": 4142992128
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143175296
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143181440
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142992448
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142992512
+        }
+      },
+      "80": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            80
+          ],
+          "address": 4142992576
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143187584
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143193728
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4142992896
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4142992960
+        }
+      },
+      "81": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            81
+          ],
+          "address": 4143025792
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143203968
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143210112
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143026176
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143026240
+        }
+      },
+      "82": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            82
+          ],
+          "address": 4143026304
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143216256
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143222400
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143026688
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143026752
+        }
+      },
+      "83": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            83
+          ],
+          "address": 4143026816
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143228544
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143238784
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143027200
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143027264
+        }
+      },
+      "84": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            84
+          ],
+          "address": 4143027328
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143244928
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143251072
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143027712
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143027776
+        }
+      },
+      "85": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            85
+          ],
+          "address": 4143060608
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143257216
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143263360
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143060992
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143061056
+        }
+      },
+      "86": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            86
+          ],
+          "address": 4143061120
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143273600
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143279744
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143061504
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143061568
+        }
+      },
+      "87": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            87
+          ],
+          "address": 4143061632
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143285888
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143292032
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143062016
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143062080
+        }
+      },
+      "88": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            88
+          ],
+          "address": 4143062144
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143298176
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143308416
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143062528
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143062592
+        }
+      },
+      "89": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            89
+          ],
+          "address": 4143095424
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143314560
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143320704
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143095808
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143095872
+        }
+      },
+      "90": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            90
+          ],
+          "address": 4143095936
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143326848
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143332992
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143096320
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143096384
+        }
+      },
+      "91": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            91
+          ],
+          "address": 4143096448
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143343232
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143349376
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143096832
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143096896
+        }
+      },
+      "92": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            92
+          ],
+          "address": 4143096960
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143355520
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143361664
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143097344
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143097408
+        }
+      },
+      "93": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            93
+          ],
+          "address": 4143130240
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143367808
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143378048
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143130624
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143130688
+        }
+      },
+      "94": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            94
+          ],
+          "address": 4143130752
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143384192
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143390336
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143131136
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143131200
+        }
+      },
+      "95": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            95
+          ],
+          "address": 4143131264
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143396480
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143402624
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143131648
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143131712
+        }
+      },
+      "96": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            96
+          ],
+          "address": 4143131776
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143412864
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            96,
+            256
+          ],
+          "address": 4143419008
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143132160
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            3
+          ],
+          "address": 4143132224
+        }
+      },
+      "97": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            97
+          ],
+          "address": 4143165056
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143425152
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143433344
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143165504
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143165568
+        }
+      },
+      "98": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            98
+          ],
+          "address": 4143165632
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143447680
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143455872
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143166080
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143166144
+        }
+      },
+      "99": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            99
+          ],
+          "address": 4143166208
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143464064
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143472256
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143166656
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143166720
+        }
+      },
+      "100": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            100
+          ],
+          "address": 4143199872
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143548032
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143556224
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143166784
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143166848
+        }
+      },
+      "101": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            101
+          ],
+          "address": 4143200320
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143564416
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143572608
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143166912
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143166976
+        }
+      },
+      "102": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            102
+          ],
+          "address": 4143200768
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4143580800
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4182365824
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143167040
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143201216
+        }
+      },
+      "103": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            103
+          ],
+          "address": 4143201280
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4182374016
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4182382208
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143201728
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143201792
+        }
+      },
+      "104": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            104
+          ],
+          "address": 4143234688
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4182390400
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4182398592
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143201856
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143235136
+        }
+      },
+      "105": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            105
+          ],
+          "address": 4143235200
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4183864960
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4183873152
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143235648
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143235712
+        }
+      },
+      "106": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            106
+          ],
+          "address": 4143235776
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4183881344
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4183889536
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143236224
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143236288
+        }
+      },
+      "107": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            107
+          ],
+          "address": 4143269504
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4183897728
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4183905920
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143236352
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143236416
+        }
+      },
+      "108": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            108
+          ],
+          "address": 4143269952
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4183914112
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4183922304
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143236480
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143236544
+        }
+      },
+      "109": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            109
+          ],
+          "address": 4143270400
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4185405056
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4185413248
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143236608
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143236672
+        }
+      },
+      "110": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            110
+          ],
+          "address": 4143270848
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4185421440
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4185429632
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143271296
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143271360
+        }
+      },
+      "111": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            111
+          ],
+          "address": 4143304320
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4185437824
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4185446016
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143271424
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143271488
+        }
+      },
+      "112": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            112
+          ],
+          "address": 4143304768
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4185454208
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4185462400
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143305216
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143305280
+        }
+      },
+      "113": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            113
+          ],
+          "address": 4143305344
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4186961536
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4186969728
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143305856
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143305920
+        }
+      },
+      "114": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            114
+          ],
+          "address": 4143339136
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4186977920
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4186986112
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143305984
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143306048
+        }
+      },
+      "115": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            115
+          ],
+          "address": 4143339648
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4186994304
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4187002496
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143306112
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143306176
+        }
+      },
+      "116": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            116
+          ],
+          "address": 4143340160
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4187010688
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4187018880
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143306240
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143306304
+        }
+      },
+      "117": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            117
+          ],
+          "address": 4143340672
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4188534400
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4188542592
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143373952
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143374016
+        }
+      },
+      "118": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            118
+          ],
+          "address": 4143374080
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4188550784
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4188558976
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143374592
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143374656
+        }
+      },
+      "119": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            119
+          ],
+          "address": 4143374720
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4188567168
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4188575360
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143375232
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143375296
+        }
+      },
+      "120": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            120
+          ],
+          "address": 4143375360
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4188583552
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4188591744
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143375872
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143375936
+        }
+      },
+      "121": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            121
+          ],
+          "address": 4143408768
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190123648
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190131840
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143409280
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143409344
+        }
+      },
+      "122": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            122
+          ],
+          "address": 4143409408
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190140032
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190148224
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143409920
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143409984
+        }
+      },
+      "123": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            123
+          ],
+          "address": 4143410048
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190156416
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190164608
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143410560
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143410624
+        }
+      },
+      "124": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            124
+          ],
+          "address": 4143441536
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190172800
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190180992
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143410688
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143410752
+        }
+      },
+      "125": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            125
+          ],
+          "address": 4143442048
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190189184
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190197376
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143442560
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143442624
+        }
+      },
+      "126": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            126
+          ],
+          "address": 4143442688
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190205568
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190213760
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143443200
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143443264
+        }
+      },
+      "127": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            127
+          ],
+          "address": 4143443328
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190221952
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190230144
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143443840
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143443904
+        }
+      },
+      "128": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            128
+          ],
+          "address": 4143443968
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190238336
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            128,
+            256
+          ],
+          "address": 4190246528
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143444480
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            4
+          ],
+          "address": 4143444544
+        }
+      },
+      "512": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            512
+          ],
+          "address": 4143588992
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            512,
+            256
+          ],
+          "address": 4193367680
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            512,
+            256
+          ],
+          "address": 4193400448
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143444608
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            16
+          ],
+          "address": 4143444672
+        }
+      },
+      "2048": {
+        "tokens": {
+          "shape": [
+            1,
+            1,
+            1,
+            2048
+          ],
+          "address": 4202837632
+        },
+        "cos": {
+          "shape": [
+            1,
+            1,
+            2048,
+            256
+          ],
+          "address": 4202845824
+        },
+        "sin": {
+          "shape": [
+            1,
+            1,
+            2048,
+            256
+          ],
+          "address": 4202976896
+        },
+        "position": {
+          "shape": [
+            1
+          ],
+          "address": 4143444736
+        },
+        "chunk_page_table": {
+          "shape": [
+            1,
+            64
+          ],
+          "address": 4143444800
+        }
+      }
+    },
+    "required_workspace_capacities": [
+      256,
+      512,
+      768,
+      1024,
+      1280,
+      1536,
+      1792,
+      2048,
+      2080,
+      2112,
+      2144,
+      2176,
+      2208,
+      2240,
+      2272,
+      2304,
+      2336,
+      2368,
+      2400,
+      2432,
+      2464,
+      2496,
+      2528,
+      2560,
+      2592,
+      2624,
+      2656,
+      2688,
+      2720,
+      2752,
+      2784,
+      2816,
+      2848,
+      2880,
+      2912,
+      2944,
+      2976,
+      3008,
+      6080,
+      18368
+    ],
+    "expert_output_capacities": [
+      256,
+      512,
+      768,
+      1024,
+      1280,
+      1536,
+      1792,
+      2048,
+      2080,
+      2112,
+      2144,
+      2176,
+      2208,
+      2240,
+      2272,
+      2304,
+      2336,
+      2368,
+      2400,
+      2432,
+      2464,
+      2496,
+      2528,
+      2560,
+      2592,
+      2624,
+      2656,
+      2688,
+      2720,
+      2752,
+      2784,
+      2816,
+      2848,
+      2880,
+      2912,
+      2944,
+      2976,
+      3008,
+      6080,
+      18368
+    ],
+    "route_payload_capacities": []
+  },
+  "native_family_runtime": {
+    "status": "passed",
+    "slot": 31,
+    "prepared": true,
+    "cache_after_prepare": 8951,
+    "trace_ids": {
+      "decode": "MeshTraceId(0)",
+      "split": "MeshTraceId(1)",
+      "greedy32": "MeshTraceId(2)",
+      "argmax": "MeshTraceId(3)",
+      "split_penalties": "MeshTraceId(4)",
+      "greedy32_penalties": "MeshTraceId(5)",
+      "argmax_penalties": "MeshTraceId(6)",
+      "prefill_1_0": "MeshTraceId(7)",
+      "prefill_1_1": "MeshTraceId(8)",
+      "prefill_1_2": "MeshTraceId(9)",
+      "prefill_1_3": "MeshTraceId(10)"
+    },
+    "captures": 11,
+    "retirements": 0,
+    "vocab_size": 248320,
+    "cases": [
+      {
+        "logical_length": 1,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 198,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 2,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 95802,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 3,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 271,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 4,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 271,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 5,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 6,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 7,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 8,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 9,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 10,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 11,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 12,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 13,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 14,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 15,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 16,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 17,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 18,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 19,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 20,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 21,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 22,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 23,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 24,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 25,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 26,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 27,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 28,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 29,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 30,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 31,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 32,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 33,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 34,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 35,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 36,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 37,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 38,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 39,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 40,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 41,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 42,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 43,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 44,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 45,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 46,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 47,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 48,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 49,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 50,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 51,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 52,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 53,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 54,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 55,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 56,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 57,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 58,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 59,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 60,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 61,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 62,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 63,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 64,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 65,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 66,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 67,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 68,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 69,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 70,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 71,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 72,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 73,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 74,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 75,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 76,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 77,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 78,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 79,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 80,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 81,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 82,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 83,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 84,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 85,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 86,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 87,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 88,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 89,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 90,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 91,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 92,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 93,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 94,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 95,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 96,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 97,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 98,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 99,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 100,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 101,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 102,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 103,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 104,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 105,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 106,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 107,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 108,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 109,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 110,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 111,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 112,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 113,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 114,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 115,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 116,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 117,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 118,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 119,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 120,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 121,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 122,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 123,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 124,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 125,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 126,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 127,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      },
+      {
+        "logical_length": 128,
+        "slot": 31,
+        "output_shape": [
+          1,
+          1
+        ],
+        "token": 220,
+        "prefill_chunks": 1,
+        "sampling_mode": "greedy32",
+        "program_cache": 8951,
+        "captures": 11,
+        "retirements": 0
+      }
+    ],
+    "resources_unchanged": true,
+    "completed_before_runtime_snapshot": true
+  },
+  "raw_evidence": [
+    "doc/optimized_vllm/native_tail_capacity/baseline_v3.json",
+    "doc/optimized_vllm/native_tail_capacity/prediction_v3.json",
+    "doc/optimized_vllm/native_tail_capacity/60620.json",
+    "doc/optimized_vllm/native_tail_capacity/60621.json",
+    "doc/optimized_vllm/native_tail_capacity/promotion_review.json"
+  ],
+  "evidence_packaging": {
+    "scope": "Required runtime evidence paths use compact measured summaries for a portable local commit; original raw captures remain local and authoritative for re-running promotion. No numerical/policy/source guard changed.",
+    "manifest": "doc/optimized_vllm/native_tail_capacity/portable_evidence.json"
+  }
+}

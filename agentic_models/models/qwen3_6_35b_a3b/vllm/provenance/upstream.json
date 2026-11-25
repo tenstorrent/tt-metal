@@ -1,0 +1,119 @@
+{
+  "repository": "m2:/home/ttuser/qwen36-35b-a3b/tt-metal",
+  "note": "bring-up clone on QB2 host m2 (not public); branch perf/multiuser",
+  "revision": "32f487a9b8e42ef4ce777abb28889768e78a1827",
+  "path": "models/autoports/qwen_qwen3_6_35b_a3b",
+  "import_rewrite": {
+    "from": "models.autoports.qwen_qwen3_6_35b_a3b",
+    "to": "agentic_models.models.qwen3_6_35b_a3b.vllm",
+    "applies_to": "*.py, *.json, including string literals"
+  },
+  "source_sha256": {
+    "doc/datatype_sweep/selected_precision_config.json": "828782feb0110fa1678d9e3bec5379effa3e19c652b097fbb96d43feafadd8ec",
+    "tt/benchmark_phases.py": "0bfa11efe6e977bbf15edc950b28b25e983f44b30d3bc06174cef22fb2cfb408",
+    "tt/cache_contract.py": "f51c7783c0982a671643b53c0f33c8a1c87229059a76eeb87e600000f7842c3e",
+    "tt/fast_attn.py": "4009c20a32bd80df4ea2c8ac6677a8bc441b36c24afd054f83101cfead530a0c",
+    "tt/fast_gdn.py": "74dbc4c0db46101a9f9654332fb055c28dea20b11687d83b3926cacabed7c2ab",
+    "tt/fast_generator.py": "800fa95930ad5dec2d1ea2504ef66e8c3d3fddf554275ae97796586d16be8fd8",
+    "tt/fast_mtp.py": "2b3e306cdad1c9b3d0373a6ad4d312c8f9122304964d3030b1ce19f734773b33",
+    "tt/fast_spec.py": "69af82da305ebe50bade2c0a6774374eaf526ebf26ea58b42097961369e33b28",
+    "tt/fused_decoder.py": "d8106611f65edccdf069baab44acc9c0088baa709090b017a6a6df75f0a7bb87",
+    "tt/generator.py": "bceb5113cef28c027876f990391eb436789753f286f27aee9955a29045a17ef3",
+    "tt/generator_vllm.py": "6b69c83ac06727ab0b8c52c58f546c322632620c221af138642f22cc99403a47",
+    "tt/hidden_row_mask.py": "434a7c2a3596a40bb037b46a768150f3a7c2f98be8ce143fc07db2d03699f564",
+    "tt/lm_head.py": "c787f731a2f9dd63bc7de9c7dcba1f5f10c44be3b56cbe3e08364872b3517e90",
+    "tt/mesh_cached_scan.py": "8f1634e17659039b17a654bfa802610d99d9e0536a54f084c524ff5ae95a5fdc",
+    "tt/mesh_compensated_norm.py": "60a4ce0d30221e9c90f649eb4253b3960d5505e97f044773054c9a1fa31f89af",
+    "tt/mesh_decode_silu.py": "01fb664e3ea3b90ded9bf80f56bd2769c9e53565a783f2055217b9687829268c",
+    "tt/mesh_direct_recurrent_sum.py": "a30a709df55c198ab4c3fa451d0495c3fc7db7f990133e4128a4922a61588eff",
+    "tt/mesh_fp32_topk.py": "ad93175e09e78ec221f232d6900538f05d786aa7be7e692f3b222a5423732caf",
+    "tt/mesh_narrow_scan.py": "a125c7c516e75eb7d1e4518457a937daec6e6b93cd356ea1d2007499ccb26a05",
+    "tt/mesh_product_recurrent_sum.py": "4437eda2cb2e115e69cad632c8915d923712ba55586089a0a4829406db6594a5",
+    "tt/mesh_state_slab_recurrence.py": "cf303e80a32140e2c3f1dd592f87ae85ec948359b87f6e355808459e51052aef",
+    "tt/model.py": "df840a41dd63153ece6dbc74b5034b0c0e421bf5db77732740a911f380321b97",
+    "tt/moe_route_mask.py": "ecffdb3b4968759182cb7c1b1eafe1818d5217dd30c8e8e0047c9e14d1fe7b4d",
+    "tt/multichip_decoder.py": "4e5760bc2b76157e63874bacb359fc47fa25cf9e9c55511cbc3fcd966682b431",
+    "tt/optimized_decoder.py": "99e2a2fa1d4cb78f4dd0eb95079cc8288e8f7e0ebd92e6ffbc44ffb3be05cb00",
+    "tt/precision.py": "63ec2ba1e7aa01b339fd4650cda374fabbc8fdf832becc7701f6728d9292e88f",
+    "tt/prefill.py": "a76611f2020a0e1f501a16204a0a75363e1c8fc0832c037fd78a7dc5e0265da4",
+    "tt/prefill_transport.py": "bf436f0a8b82daa47bf0ffd6bc06f09b6ad876aaba7abbd555f432e606240061",
+    "tt/prefill_validation.py": "d74ab3e8ddf3ba51b0d3405dc5a0f14f137a3398236acf6970f1acee3cf08259",
+    "tt/prefix_cache.py": "fc0ffbe5847510461d35ef3f7ec219df81da86d828ec37289455bf37b0ab5722",
+    "tt/readiness_contract.py": "42417eab48a87b6e9c31dee15ef68bac5c67970e487a295f78ee7f968ef93358",
+    "tt/serving.py": "21609e68ae17ce0ce4fd388ab6c972d6eb6b79932d83571706b2afafe4ef4fa8",
+    "tt/serving_capabilities.py": "22f0258d29482954389d45b2709342ac58d3d0283b889c63d59abf2140c7c4d6",
+    "tt/serving_state.py": "2ed86cc2db02d45695261691f30a2c1c0682b11d05cc7b4a3b6a6db9588fdbcf",
+    "tt/slot_state.py": "8265153a603c37ff6705e315a4e3efc60942f81930d0da1fd5d2d9db2f135350",
+    "tt/weight_cache.py": "3bdd888f955e3901796bc45d8883558992e7deb5c5eea5169fdc8d762fe8cb7d"
+  },
+  "other_sources": {
+    "tt/readiness_contract.py": {
+      "repository": "tenstorrent/skills",
+      "path": "plugins/tt-model-bringup/runtime/readiness_check/contract.py",
+      "version": "tt-model-bringup 0.1.24 (as installed on m2 for the bring-up)",
+      "sha256": "42417eab48a87b6e9c31dee15ef68bac5c67970e487a295f78ee7f968ef93358"
+    }
+  },
+  "excluded": [
+    "tests/",
+    "readiness/",
+    "readiness_vllm/",
+    "readiness_aime24_chat.refpt",
+    "tools/",
+    "README.md",
+    ".gitignore",
+    "doc/ (except doc/datatype_sweep/selected_precision_config.json)",
+    "tt/functional_decoder.py and tt/*_probe.py (not reached from tt/generator_vllm.py)"
+  ],
+  "modified_sha256": {
+    "tt/fast_gdn.py": "bf3ce995947847edbc1e01c70d6f668aabe675c1aa357d8e30f433cc31a49501",
+    "tt/fast_generator.py": "300cceb38a9bbb20442df01c59b97f2ac1091189775ea004648d4e0f1af18632",
+    "tt/fast_mtp.py": "cd62ff9152caef62b0539c818436659a8444620baa1e77739a50d429b44c5c4f",
+    "tt/generator.py": "7970bdf133abb61e15750520c44d15bc3d23aa0fea1916a50e3ae040ef3f1b67",
+    "tt/generator_vllm.py": "fea34b2331d2fb3be3e25070c8dbc89e47a9b62c439ea500f8e3b03009a1cfaa",
+    "tt/model.py": "a5a6bd0b4b225c68498f79f5edd57b9f9504ba8d6b1c53627814f89287ac35ee",
+    "tt/multichip_decoder.py": "74504930610adab87e823c76085a68dc6e7c19de4e47f8ca100123a6123918c9",
+    "tt/readiness_contract.py": "271560d25df6ef64ffeefbf316d1cf74a0ffa79b42fef907dfa091c7154c53c3",
+    "tt/serving.py": "a17aae8505e7f19c410b14cfe1c769ecd9f1aa0fe2e4502972f374872b8bb771",
+    "tt/serving_capabilities.py": "17137aaa00f39edfc4a1f90efd4b4596b4d50017d074099d927086f4d9f4c69c"
+  },
+  "edits": {
+    "tt/fast_gdn.py": [
+      "fused_recurrent_gated_delta_rule(exact_state=True), segmented decode",
+      "fused_recurrent_gated_delta_rule(exact_state=True), narrow/spec decode",
+      "chunk_gated_delta_rule(exact_state=True), prefill"
+    ],
+    "tt/fast_generator.py": [
+      "do not capture the sampling_64 / sampling_64_pen traces"
+    ],
+    "tt/fast_mtp.py": [
+      "__import__ of the bring-up package path -> relative import"
+    ],
+    "tt/generator.py": [
+      "sampler max_top_k 32, no device_sampling_draw_width",
+      "vendored readiness_check.contract (tt-model-bringup 0.1.24) as tt/readiness_contract.py"
+    ],
+    "tt/generator_vllm.py": [
+      "declare preserve_prefill_state_slots (plugin patch P1)"
+    ],
+    "tt/model.py": [
+      "Checkpoint path: prefer the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else the previous $HF_HOME resolution; config and tokenizer load from the same directory"
+    ],
+    "tt/multichip_decoder.py": [
+      "call the ttnn.bringup.moe_fused_swiglu fork (8c48b4e4 op + stochastic_rounding + reader drain)",
+      "call the ttnn.bringup.post_combine_reduce fork (8c48b4e4 op + valid_token_rows)"
+    ],
+    "tt/readiness_contract.py": [
+      "provenance header (K2 precedent)",
+      "docstring example path names no bring-up package path"
+    ],
+    "tt/serving.py": [
+      "decode: require only the 32-wide sampling trace (sampling_64 is no longer captured)",
+      "prefill: require only the 32-wide sampling trace (sampling_64 is no longer captured)"
+    ],
+    "tt/serving_capabilities.py": [
+      "advertise max_device_top_k 32 to the plugin",
+      "serving limit matches the 32-wide sampler"
+    ]
+  }
+}

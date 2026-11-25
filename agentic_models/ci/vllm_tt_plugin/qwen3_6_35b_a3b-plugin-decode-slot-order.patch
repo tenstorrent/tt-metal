@@ -1,0 +1,138 @@
+From 46386aeb7b62798ac20aebc37a616d98b207d578 Mon Sep 17 00:00:00 2001
+From: Nicholas Smith <nsmith@tenstorrent.com>
+Date: Wed, 25 Nov 2026 17:20:44 +0000
+Subject: [PATCH] [perf] Opt-in decode rows in device-state-slot order
+
+agentic-models patch P6 (qwen3_6_35b_a3b-plugin-decode-slot-order.patch).
+
+With TT_DECODE_SLOT_ORDER=1, _update_states rebuilds the front-packed
+persistent batch in state-slot order on steps without new requests, so the
+decode after a join does not permute every live request's state. Base: m2
+4194082 (round-6 perf), with the default flipped from '1' to '0': only the
+Qwen3.6-35B-A3B spec sets it. Unset or '0', _update_states runs the f6fe76b
+body.
+
+Tests: tests/test_decode_slot_order.py (default-off layout identical to
+f6fe76b; opted-in rows follow the slots).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/vllm_tt_plugin/model_runner.py | 29 ++++++++++++++
+ tests/test_decode_slot_order.py    | 61 ++++++++++++++++++++++++++++++
+ 2 files changed, 90 insertions(+)
+ create mode 100644 tests/test_decode_slot_order.py
+
+diff --git a/src/vllm_tt_plugin/model_runner.py b/src/vllm_tt_plugin/model_runner.py
+index eb4cf38..751a482 100644
+--- a/src/vllm_tt_plugin/model_runner.py
++++ b/src/vllm_tt_plugin/model_runner.py
+@@ -3,6 +3,7 @@
+ 
+ from __future__ import annotations
+ 
++import os
+ import threading
+ import time
+ from collections import deque
+@@ -1162,6 +1163,34 @@ class TTModelRunner:
+         if removed_req_indices:
+             self.input_batch.condense(removed_req_indices)
+             persistent_batch_layout_changed = True
++        # Opt-in (TT_DECODE_SLOT_ORDER=1, default off): a TT step is prefill-only
++        # or decode-only, so every prefill step unschedules (removes) the running
++        # decoders and the new request lands at index 0. On the next decode step
++        # the decoders are re-added behind it, the rows come out rotated against
++        # the device state slots, and the model must permute every live
++        # request's state. Rebuilding the persistent batch in state-slot order
++        # (the same remove/add the decoders already go through on every prefill
++        # step) makes that remap the identity.
++        if (
++            os.environ.get("TT_DECODE_SLOT_ORDER", "0") == "1"
++            # Not lane mode: rows never move there.
++            and type(self.input_batch).__name__ == "InputBatch"
++            and not scheduler_output.scheduled_new_reqs
++            and self.input_batch.num_reqs > 1
++        ):
++            ids = [r for r in self.input_batch.req_ids if r is not None]
++            slots = [self._req_state_slot.get(r) for r in ids]
++            if (
++                None not in slots
++                and len(set(slots)) == len(slots)
++                and slots != sorted(slots)
++            ):
++                ordered = [r for _, r in sorted(zip(slots, ids))]
++                for req_id in ids:
++                    self.input_batch.remove_request(req_id)
++                for req_id in ordered:
++                    self.input_batch.add_request(self.requests[req_id], None)
++                persistent_batch_layout_changed = True
+         # Mark decode layout changed if persistent batch changed. This is
+         # sticky across steps and will be consumed by the next decode batch.
+         if persistent_batch_layout_changed:
+diff --git a/tests/test_decode_slot_order.py b/tests/test_decode_slot_order.py
+new file mode 100644
+index 0000000..50c7e54
+--- /dev/null
++++ b/tests/test_decode_slot_order.py
+@@ -0,0 +1,61 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""``TT_DECODE_SLOT_ORDER=1`` rebuilds the persistent batch in state-slot order.
++
++A prefill step unschedules the decoders, so the next decode step re-adds them
++behind the newcomer and the rows come out rotated against the state slots.
++Opted in, the runner reorders the rows so the decode remap is the identity.
++Unset (the default) or ``0``, ``_update_states`` decides exactly as before.
++"""
++
++import pytest
++from vllm.v1.core.sched.output import CachedRequestData
++
++from tests.test_stage_inputs import PROMPT_LEN, _new_request, _runner, _step
++
++
++def _decode_step(req_ids):
++    n = len(req_ids)
++    return _step(
++        cached=CachedRequestData(
++            req_ids=list(req_ids),
++            resumed_req_ids=set(),
++            new_token_ids=[[] for _ in req_ids],
++            all_token_ids={},
++            new_block_ids=[None] * n,
++            num_computed_tokens=[PROMPT_LEN] * n,
++            num_output_tokens=[0] * n,
++        ),
++        scheduled=dict.fromkeys(req_ids, 1),
++    )
++
++
++def _join_then_decode():
++    """A and B prefill at slots 0 and 1; C joins (slot 2) while they wait; then
++    one decode step for all three. Returns the rows and the layout flag."""
++    runner = _runner(supports_stage_inputs=False)
++    runner._update_states(
++        _step(new=[_new_request("A"), _new_request("B")], scheduled={"A": 4, "B": 4})
++    )
++    runner._req_state_slot.update({"A": 0, "B": 1})
++    runner._update_states(_step(new=[_new_request("C")], scheduled={"C": 4}))
++    runner._req_state_slot["C"] = 2
++    runner._decode_layout_changed_since_last_decode = False
++    runner._update_states(_decode_step(["A", "B", "C"]))
++    rows = [r for r in runner.input_batch.req_ids if r is not None]
++    return rows, runner._decode_layout_changed_since_last_decode
++
++
++@pytest.mark.parametrize("value", [None, "0", ""])
++def test_default_off_keeps_the_rotated_rows(monkeypatch, value):
++    if value is None:
++        monkeypatch.delenv("TT_DECODE_SLOT_ORDER", raising=False)
++    else:
++        monkeypatch.setenv("TT_DECODE_SLOT_ORDER", value)
++    # The f6fe76b layout: the newcomer kept row 0, the decoders came back behind it.
++    assert _join_then_decode() == (["C", "A", "B"], True)
++
++
++def test_opted_in_rows_follow_the_state_slots(monkeypatch):
++    monkeypatch.setenv("TT_DECODE_SLOT_ORDER", "1")
++    assert _join_then_decode() == (["A", "B", "C"], True)
