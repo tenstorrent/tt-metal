@@ -40,7 +40,7 @@ void kernel_main() {
 #ifdef WIDE_ALIGNMENT_SCRATCH
     static_assert(MISALIGNED, "host declared the scratch DFB but the kernel's own test disagrees");
     DataflowBuffer dfb_intermed(dfb::intermed);
-    uint32_t intermed_l1_scratch = MISALIGNED ? dfb_intermed.get_write_ptr() : 0;
+    uint32_t intermed_l1_scratch = dfb_intermed.get_write_ptr();
 #else
     static_assert(!MISALIGNED, "kernel needs the scratch DFB but the host did not declare it");
     uint32_t intermed_l1_scratch = 0;
