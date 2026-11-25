@@ -44,7 +44,9 @@ name = Path(sys.argv[0]).name
 root = Path(os.environ["TEST_ROOT"])
 
 def record(kind):
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=root / "records", delete=False) as f:
+    # Named by the host-wide monotonic clock, so the test reads the records back in the order they were written.
+    prefix = f"{time.monotonic_ns():020d}-"
+    with tempfile.NamedTemporaryFile(mode="w", prefix=prefix, suffix=".json", dir=root / "records", delete=False) as f:
         selected_env = {key: value for key, value in os.environ.items()
                         if key.startswith(("PREFILL_", "TEST_", "TT_MESH_", "TT_METAL_OPERATION_", "OMPI_COMM_WORLD_RANK"))}
         json.dump({"kind": kind, "args": args, "env": selected_env}, f)
@@ -337,7 +339,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             command.append(config)
         command.extend(args)
         result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
-        records = [json.loads(path.read_text()) for path in (root / "records").glob("*.json")]
+        records = [json.loads(path.read_text()) for path in sorted((root / "records").glob("*.json"))]
         return result, records
 
     def one_record(self, records, kind):
