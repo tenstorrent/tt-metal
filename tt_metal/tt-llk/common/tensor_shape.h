@@ -152,6 +152,34 @@ constexpr bool is_valid_face_r_dim(const std::uint8_t face_r_dim)
     return face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == MAX_FACE_R_DIM;
 }
 
+// Out of line because C++17 allows no asm (the assert) in a constexpr body.
+inline void assert_inexact_tile_dims_()
+{
+    LLK_ASSERT(false, "tile dims have no exact TensorShape");
+}
+
+/**
+ * @brief Build a TensorShape from total tile dimensions.
+ *
+ * Up to 16 rows is one face row with face_r_dim = tile_r_dim, 32 rows is two 16-row face rows; 16 columns is
+ * one face column, 32 columns is two. Examples: 8x32 -> {8, 16, 1, 2}, 32x16 -> {16, 16, 2, 1}.
+ *
+ * @param tile_r_dim: Tile rows (1, 2, 4, 8, 16, or 32).
+ * @param tile_c_dim: Tile columns (16 or 32).
+ * @note Asserts the dims map to a TensorShape exactly (when LLK asserts are on).
+ */
+constexpr TensorShape tensor_shape_from_tile_dims(const std::uint32_t tile_r_dim, const std::uint32_t tile_c_dim)
+{
+    const std::uint8_t face_r_dim      = static_cast<std::uint8_t>(tile_r_dim > MAX_FACE_R_DIM ? MAX_FACE_R_DIM : tile_r_dim);
+    const std::uint8_t num_faces_r_dim = tile_r_dim > MAX_FACE_R_DIM ? MAX_NUM_FACES_R_DIM : 1;
+    const std::uint8_t num_faces_c_dim = tile_c_dim > MAX_FACE_C_DIM ? MAX_NUM_FACES_C_DIM : 1;
+    if (!(face_r_dim * num_faces_r_dim == tile_r_dim && MAX_FACE_C_DIM * num_faces_c_dim == tile_c_dim && is_valid_face_r_dim(face_r_dim)))
+    {
+        assert_inexact_tile_dims_();
+    }
+    return TensorShape {face_r_dim, MAX_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
+}
+
 /**
  * @brief Returns whether Input 0 (SrcB) and Input 1 (SrcA) form a supported matmul TensorShape pair.
  *
@@ -187,6 +215,35 @@ constexpr bool validate_matmul_tensor_shapes_(const TensorShape src_b_shape, con
         }
     }
     return false;
+}
+
+/**
+ * @brief Returns whether the Wormhole/Blackhole matmul MOP supports this in0 (SrcB) x in1 (SrcA) tile-shape pair.
+ *
+ * Supported: in0 1/2/4/8/16/32x32 with in1 32x32 or 32x16, and in0 32x16 or 16x16 with in1 16x32. Rejected:
+ * - in0 columns != in1 rows (the contraction dims must match);
+ * - in1 shorter than a full 16-row face (MVMUL reads 16 SrcA rows per face);
+ * - in1 16x16: no MOP path, it falls into the 32x32 one (32x16 x 16x16 gives wrong results on
+ *   Wormhole and Blackhole; also covers the existing 16x16 x 16x16 assert);
+ * - in0 with short faces outside a 1x2 face grid (e.g. 1/2/4/8x16): the recorded MOP does not match
+ *   the replay length or unpacks fewer faces than the grid has; on Wormhole the math thread hangs
+ *   (1/2/4/8x16), on Blackhole the results are wrong. Short faces are allowed in a 1x2 grid only
+ *   (the 1/2/4/8/16x32 class), same as Quasar @ref validate_matmul_tensor_shapes_.
+ *
+ * Differs from the Quasar @ref validate_matmul_tensor_shapes_ on two pairs only: 16x16 x 16x32 (supported
+ * here, not on Quasar) and 16x16 x 16x16 (supported on Quasar, rejected here).
+ *
+ * @param in0_tensor_shape: Tile shape of in0 (loaded to SrcB).
+ * @param in1_tensor_shape: Tile shape of in1 (loaded to SrcA).
+ */
+constexpr bool matmul_supports_tensor_shapes(const TensorShape& in0_tensor_shape, const TensorShape& in1_tensor_shape)
+{
+    const bool k_dims_match   = in0_tensor_shape.num_faces_c_dim == in1_tensor_shape.num_faces_r_dim;
+    const bool in1_full_faces = in1_tensor_shape.face_r_dim == MAX_FACE_R_DIM;
+    const bool in1_is_16x16   = (in1_tensor_shape.num_faces_r_dim == 1) && (in1_tensor_shape.num_faces_c_dim == 1);
+    const bool in0_faces_ok =
+        in0_tensor_shape.face_r_dim == MAX_FACE_R_DIM || (in0_tensor_shape.num_faces_r_dim == 1 && in0_tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM);
+    return k_dims_match && in1_full_faces && !in1_is_16x16 && in0_faces_ok;
 }
 
 /**
@@ -243,4 +300,17 @@ constexpr bool is_tensor_shape_2x1_face_grid(const TensorShape& tensor_shape)
     return tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.total_num_faces() == MAX_NUM_FACES_R_DIM;
 }
 
+/**
+ * @brief Whether matmul unpacks this operand one face at a time.
+ *
+ * A tile with one row of faces (fewer than 32 rows) is unpacked face by face, so each face lands in its
+ * own 16-row slot of the source register. Same rule as the host-side Tile::partial_face (tile height < 32).
+ *
+ * @param tensor_shape: Operand tile shape.
+ */
+constexpr bool matmul_unpack_face_by_face(const TensorShape& tensor_shape)
+{
+    // Same as total_row_dim() < 32 on every valid shape (two face rows means 16-row faces), without a multiply.
+    return tensor_shape.num_faces_r_dim < MAX_NUM_FACES_R_DIM;
+}
 } // namespace ckernel
