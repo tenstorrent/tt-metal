@@ -6,9 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace tt::tt_metal::thread_binding {
@@ -26,9 +24,5 @@ void release_cpus(
     const std::vector<uint32_t>& cpus,
     std::unordered_map<uint32_t, uint32_t>& workers_per_cpu,
     std::unordered_map<int, size_t>& next_per_node);
-
-// Orders CPUs core by core, a core's hardware threads together (core_of: package, then core id), so that picks in
-// that order fill whole cores. CPUs of one core keep their order; if any CPU's core is unknown (-1), all do.
-void order_by_core(std::vector<uint32_t>& cpus, const std::function<std::pair<long, long>(uint32_t)>& core_of);
 
 }  // namespace tt::tt_metal::thread_binding

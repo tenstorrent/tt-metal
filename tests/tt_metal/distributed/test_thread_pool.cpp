@@ -15,7 +15,6 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include <tt-metalium/mesh_device.hpp>
@@ -191,31 +190,18 @@ TEST(ThreadPoolTest, PickCpuNextToLivePools) {
     EXPECT_EQ(distinct(placement.place({0, 0, 0, 0})), 4);
 }
 
-// CPUs ordered core by core: each pool's workers fill whole cores (hardware threads n and n + 4 share a core).
-TEST(ThreadPoolTest, PickCpuFillsWholeCores) {
-    std::vector<uint32_t> cpus = {0, 1, 2, 3, 4, 5, 6, 7};
-    thread_binding::order_by_core(cpus, [](uint32_t cpu) { return std::pair<long, long>{0, cpu % 4}; });
-    EXPECT_EQ(cpus, (std::vector<uint32_t>{0, 4, 1, 5, 2, 6, 3, 7}));
-    ExplicitTopology placement{.node_cpus = {cpus}};
-    const auto first = placement.place({0, 0, 0, 0});
-    const auto second = placement.place({0, 0});
-    EXPECT_EQ(first, (std::vector<uint32_t>{0, 4, 1, 5}));
-    EXPECT_EQ(second, (std::vector<uint32_t>{2, 6}));
-    // With every pool destroyed, the next ones start on whole cores again.
-    placement.release(first);
-    placement.release(second);
+// Once every pool is destroyed, the next one starts at the front of the node's CPUs again.
+TEST(ThreadPoolTest, PickCpuRestartsAfterAllPoolsDestroyed) {
+    ExplicitTopology placement{.node_cpus = {{0, 1, 2, 3}}};
+    placement.release(placement.place({0, 0}));
     placement.release(placement.place({0}));
-    EXPECT_EQ(placement.place({0, 0, 0, 0}), (std::vector<uint32_t>{0, 4, 1, 5}));
-    std::vector<uint32_t> unknown = {0, 1, 2, 3};
-    thread_binding::order_by_core(
-        unknown, [](uint32_t cpu) { return std::pair<long, long>{0, cpu == 2 ? -1 : 3 - static_cast<long>(cpu)}; });
-    EXPECT_EQ(unknown, (std::vector<uint32_t>{0, 1, 2, 3}));
+    EXPECT_EQ(placement.place({0, 0}), (std::vector<uint32_t>{0, 1}));
 }
 
-// Workers beyond the devices pick from the allowed list around the core-ordered node picks.
+// Workers beyond the devices pick from the allowed list around the node picks.
 TEST(ThreadPoolTest, PickCpuFallbackAfterNodePicks) {
-    ExplicitTopology placement{.node_cpus = {{0, 4, 1, 5, 2, 6, 3, 7}, {0, 1, 2, 3, 4, 5, 6, 7}}};
-    EXPECT_EQ(distinct(placement.place({0, 0, 1, 1, 1, 1, 1, 1})), 8);
+    ExplicitTopology placement{.node_cpus = {{0, 1, 2, 3}, {4, 5, 6, 7}, {0, 1, 2, 3, 4, 5, 6, 7}}};
+    EXPECT_EQ(distinct(placement.place({0, 0, 1, 1, 2, 2, 2, 2})), 8);
 }
 
 TEST(ThreadPoolTest, ParallelForOneWorkerRunsOnCaller) {

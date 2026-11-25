@@ -10,8 +10,6 @@
 #include <climits>
 #include <cstdint>
 #include <cstddef>
-#include <fstream>
-#include <string>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -69,17 +67,6 @@ std::vector<uint32_t> get_allowed_cpus() {
     }
 }
 
-// Package and core id of a CPU from sysfs; -1 where unknown.
-std::pair<long, long> core_of_cpu(uint32_t cpu) {
-    const auto read = [cpu](const char* name) {
-        std::ifstream file("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/" + name);
-        long value = -1;
-        file >> value;
-        return file ? value : -1;
-    };
-    return {read("physical_package_id"), read("core_id")};
-}
-
 // CPUs per NUMA node that worker threads may be pinned to, limited to the process's allowed CPUs so a process kept off
 // some CPUs (e.g. ones another process busy-polls) keeps its workers off them too. A node with no allowed CPU gets all
 // allowed CPUs; only if none can be determined does a node keep all of its own. A narrow binding (e.g. an MPI rank on
@@ -108,10 +95,6 @@ std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(const
         } else {
             chosen = allowed;
         }
-    }
-    // Core by core: a polling worker's other hardware thread then goes to a worker too, not to the caller.
-    for (auto& [node, cpus] : cpu_cores_per_numa_node) {
-        order_by_core(cpus, core_of_cpu);
     }
     return cpu_cores_per_numa_node;
 }
@@ -165,18 +148,6 @@ uint32_t pick_cpu(
             return cpu;
         }
     }
-}
-
-void order_by_core(std::vector<uint32_t>& cpus, const std::function<std::pair<long, long>(uint32_t)>& core_of) {
-    std::unordered_map<uint32_t, std::pair<long, long>> core;
-    for (const uint32_t cpu : cpus) {
-        const auto [package, core_id] = core_of(cpu);
-        if (package < 0 || core_id < 0) {
-            return;
-        }
-        core.emplace(cpu, std::pair{package, core_id});
-    }
-    std::stable_sort(cpus.begin(), cpus.end(), [&](uint32_t a, uint32_t b) { return core.at(a) < core.at(b); });
 }
 
 void release_cpus(
