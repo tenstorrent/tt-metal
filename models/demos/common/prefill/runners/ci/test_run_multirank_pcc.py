@@ -524,6 +524,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
     KIMI_REQUEST_LEN = {"kimi_k3": 1049600, "kimi_k3_1": 1049600}
     KIMI_4X4_USERS = {"kimi_k3": "127", "kimi_k3_1": "88"}
     KIMI_8X4_USERS = {"kimi_k3": "100", "kimi_k3_1": "76"}
+    KIMI_4X4_SP_AXIS = {"kimi_k3": 1, "kimi_k3_1": 0}
 
     def kimi_4x4_cache(self, model, sp_axis=1):
         """The [4,4] cache of the checkpoint, at the TP axis (KimiK3Adapter.weight_cache_key), below the cache root."""
@@ -557,7 +558,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertTrue(runner["PREFILL_MANIFEST"].endswith(f"manifests/{model}.json"))
         for key in ("PREFILL_SP", "PREFILL_TP", "PREFILL_SP_AXIS", "PREFILL_NUM_USERS"):
             self.assertNotIn(key, runner, key)
-        self.assert_kimi_4x4_cache_check(result, records, model)
+        self.assert_kimi_4x4_cache_check(result, records, model, self.KIMI_4X4_SP_AXIS[model])
         producer = self.one_record(records, "producer")["env"]
         self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith(f"manifests/{model}.json"))
         # The manifest's 2560-token chunk (640 tokens per chip), and the request in those chunks.
@@ -596,7 +597,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(runner["PREFILL_NUM_LAYERS"], "24")
         self.assertEqual(runner["PREFILL_NUM_USERS"], self.KIMI_4X4_USERS[model])
         self.assertNotIn("PREFILL_SP_AXIS", runner)
-        self.assert_kimi_4x4_cache_check(result, records, model)
+        self.assert_kimi_4x4_cache_check(result, records, model, self.KIMI_4X4_SP_AXIS[model])
         producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
         mpi_args = producer_mpi[0]["args"]
         self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "2")
@@ -781,7 +782,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 result, records = self.run_harness(model, hosts=self.SC4_HOSTS, missing_cache=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("no 4x4 weight cache at", result.stdout + result.stderr)
-                self.assertIn(self.kimi_4x4_cache(model), result.stdout + result.stderr)
+                self.assertIn(self.kimi_4x4_cache(model, self.KIMI_4X4_SP_AXIS[model]), result.stdout + result.stderr)
                 self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
     def test_glm53_sc4_and_sc1_are_8x4_stages_from_the_manifest(self):

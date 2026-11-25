@@ -35,7 +35,7 @@ esac
 # The galaxy count without the layout suffix: sc4_8x4 and sc4_4x4 run on sc4's descriptor.
 SCALE="${CONFIG%%_*}"
 # The SP-axis knob: a caller's PREFILL_SP_AXIS picks the mesh axis that carries SP on every stage, TP taking the
-# other; unset, each layout keeps its own (a 4x4 stage its manifest's axis 1, an 8x4 stage axis 0). The fabric
+# other; unset, each layout keeps its own (a 4x4 stage its manifest's axis, an 8x4 stage axis 0). The fabric
 # follows the stage's descriptor and the weight cache is keyed by the axis, so nothing else changes with it.
 SP_AXIS_KNOB="${PREFILL_SP_AXIS:-}"
 case "${SP_AXIS_KNOB}" in
@@ -55,8 +55,8 @@ manifest_env() {
 }
 
 # Kimi-K3's and Kimi-K3.1's stage layout for ${CONFIG}: <cache root> <cache model name> <8x4 slots> <checkpoint>.
-# The manifests describe a 4x4 stage: SP=4 on mesh axis 1 (the tray half's ring), 2560-token chunks
-# (640 tokens per chip), and the slots that layout fits. Runner and producer both read them.
+# The manifests describe a 4x4 stage: SP=4 on the mesh axis they name (K3's axis 1, K3.1's axis 0), 2560-token
+# chunks (640 tokens per chip), and the slots that layout fits. Runner and producer both read them.
 kimi_layout() {
   CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
   case "${CONFIG}" in
@@ -257,7 +257,7 @@ case "${MODEL}" in
     ;;
   kimi_k3_1)
     # Kimi-K3 with its 24 MLA layers changed to DSA: kimi_k3's depths, gate and layouts. kimi_k3_1.json holds
-    # the 4x4 stage (SP=4 on mesh axis 1, 2560-token chunks); the *_8x4 configs run one 8x4 stage per galaxy.
+    # the 4x4 stage (SP=4 on mesh axis 0, 2560-token chunks); the *_8x4 configs run one 8x4 stage per galaxy.
     # The adapter's defaults already name the K3.1 weights and golden, so only the 4x4 cache is resolved here.
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
@@ -528,7 +528,7 @@ if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   # The stage shape comes from the manifest (the runner applies it under the launch line's exports);
   # a manifest without it would bring 8x4 settings up on a 4x4 mesh.
   LAYOUT_SOURCE="${LAYOUT_MANIFEST:-${MANIFEST}}"
-  [ "$(MANIFEST="${LAYOUT_SOURCE}" manifest_env PREFILL_SP_AXIS)" = 1 ] || { echo "${LAYOUT_SOURCE} does not set the 4x4 stage's PREFILL_SP_AXIS=1" >&2; exit 2; }
+  [[ "$(MANIFEST="${LAYOUT_SOURCE}" manifest_env PREFILL_SP_AXIS)" == [01] ]] || { echo "${LAYOUT_SOURCE} does not set the 4x4 stage's PREFILL_SP_AXIS to 0 or 1" >&2; exit 2; }
   # The knob, exported after the stage layout so it overrides the runner's manifest axis (the producer sends one row per
   # SP chip in SP order and does not read the axis).
   if [ -n "${SP_AXIS_KNOB}" ]; then
