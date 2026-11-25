@@ -237,7 +237,7 @@ TEST(StreamAssignmentTest, InactiveConsumersEmitTheSentinel) {
 }
 
 // A Keraunos CCE has no stream registers: the router zeroes every named ack and completion register at init, so
-// none may be named. Every other id stays where it is with registers, as chippy compat's generator emits them.
+// none may be named. Every other id stays where it is with registers.
 TEST(StreamAssignmentTest, NoStreamRegistersNamesNoAckOrCompletionRegister) {
     CreditTransportPlan plan{};
     plan.stream_registers_available = false;

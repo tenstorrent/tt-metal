@@ -13,7 +13,7 @@
 // rather than sending them as plain data, so an architecture with a cheaper path for a credit supplies its own version
 // of this header on its include path, as with fabric_software_credit.hpp; callers include it by this root-relative path.
 //
-// This version: Ethernet data packets; on a Keraunos CCE, the snooped sends chippy compat makes.
+// This version: Ethernet data packets; on a Keraunos CCE, snooped sends.
 
 #ifdef KERAUNOS_CCE
 // Send @p value into the peer's 16-byte slot at @p dest_addr on TX queue @p txq, after the sends before it on that
