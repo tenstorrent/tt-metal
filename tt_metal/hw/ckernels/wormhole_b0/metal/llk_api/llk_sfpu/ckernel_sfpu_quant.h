@@ -26,40 +26,52 @@ namespace ckernel::sfpu {
 // (INT32 = 4 vs INT32_2S_COMP = 12), and those load/store instructions are
 // outside the replay window. So one slot per kernel suffices.
 //
-// Distinct slots between kernels are required so a single compute kernel
-// can mix all three ops without each init clobbering the others' recordings.
-// Each init must still run before its op since the LREG constants are shared.
-// Int8 output records a longer body (the extra SFPXOR) into the same family
-// slot; slot spacing uses each family's max body length so the three ops can
-// still coexist.
+// Each body processes TWO dst rows per replay: row 0 lives in LREG0 (A) /
+// LREG1 (B), row 1 in LREG3 (A) / LREG7 (B); the init constants (LREG2, LREG4,
+// LREG5, LREG6, LREG12, LREG13) are shared. The two rows' instruction chains are
+// interleaved so that every 2-cycle producer (SFPMAD/SFPADD/SFPMUL) is
+// followed by the other row's independent instruction, so no SFPNOP is needed:
+// each consumer still issues >= 2 slots after its producer, and the per-element
+// instruction sequence and operand order are unchanged.
 //
-// Body content (see the inits for the exact emission order). SFPMAD / SFPADD have a 2-cycle
-// write latency on WH and each is followed by one SFPNOP before its result is read.
-// <clamp + convert> is SFPSWAP (max lo), SFPSWAP (min hi), SFPIADD (see RNE_MAGIC_FP32).
-//   QUANT   (5)            : SFPMAD, SFPNOP, <clamp + convert>                               (int32 / uint8 output)
-//   QUANT   (int8-out, 6)  : SFPMAD, SFPNOP, <clamp + convert>, SFPXOR
-//   REQUANT (8)            : SFPCAST(int->fp32), SFPMAD, SFPNOP, SFPADD, SFPNOP, <clamp + convert>
-//   REQUANT (int8-out, 9)  : SFPCAST(int->fp32), SFPMAD, SFPNOP, SFPADD, SFPNOP, <clamp + convert>, SFPXOR
-//   DEQUANT (5)            : SFPCAST(int->fp32), SFPADD, SFPNOP, SFPMUL, SFPNOP
+// All three ops record at slot 0. The ops share LREG2 (and LREG5/LREG12/LREG13) with different
+// meanings, so a compute kernel that mixes them must run each op's init before switching to it,
+// and that init re-records the body. Sharing the slot keeps every body inside the SFPU half of the
+// replay buffer ([0, 16)); math-thread FPU LLKs (matmul, reduce, transpose_dest) record from
+// ckernel::math::replay_buf_offset = 16.
 //
-// The int32 and uint8 outputs differ only in the clamp constants and share one body length.
+// Body content (see the inits for the exact emission order; r0/r1 = row 0/1).
+// <clamp + convert> is SFPSWAP (max lo) r0/r1, then for Int32 output SFPSWAP (min hi) r0/r1 and SFPIADD r0/r1,
+// for UInt8 / Int8 output SFPIADD r0/r1 and SFP_STOCH_RND (saturate to 255) r0/r1 (see RNE_MAGIC_FP32).
+// The hardware stalls one cycle after each SFPSWAP, so each SFPSWAP costs two cycles.
+//   QUANT   (8)             : SFPMAD r0/r1, <clamp + convert>                                  (int32 / uint8 output)
+//   QUANT   (int8-out, 10)  : SFPMAD r0/r1, <clamp + convert>, SFPXOR r0/r1
+//   REQUANT (12)            : SFPCAST r0/r1, SFPMAD r0/r1, SFPADD r0/r1, <clamp + convert>
+//   REQUANT (int8-out, 14)  : SFPCAST r0/r1, SFPMAD r0/r1, SFPADD r0/r1, <clamp + convert>, SFPXOR r0/r1
+//   DEQUANT (6)             : SFPCAST r0/r1, SFPADD r0/r1, SFPMUL r0/r1
 constexpr std::uint32_t QUANT_REPLAY_SLOT = 0;
-constexpr std::uint32_t QUANT_REPLAY_LEN = 5;
-constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 6;
-constexpr std::uint32_t QUANT_REPLAY_LEN_MAX = QUANT_REPLAY_LEN_INT8_OUT;
+constexpr std::uint32_t QUANT_REPLAY_LEN = 8;
+constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 10;
 
-constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_MAX;
-constexpr std::uint32_t REQUANT_REPLAY_LEN = 8;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 9;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_MAX = REQUANT_REPLAY_LEN_INT8_OUT;
+constexpr std::uint32_t REQUANT_REPLAY_SLOT = 0;
+constexpr std::uint32_t REQUANT_REPLAY_LEN = 12;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 14;
 
-constexpr std::uint32_t DEQUANT_REPLAY_SLOT = REQUANT_REPLAY_SLOT + REQUANT_REPLAY_LEN_MAX;
-constexpr std::uint32_t DEQUANT_REPLAY_LEN = 5;
+constexpr std::uint32_t DEQUANT_REPLAY_SLOT = 0;
+constexpr std::uint32_t DEQUANT_REPLAY_LEN = 6;
+
+static_assert(REQUANT_REPLAY_LEN_INT8_OUT <= 16, "quant replay bodies must stay in the SFPU half of the replay buffer");
+
+// Row-pair register plan (see the replay-body comment above).
+constexpr std::uint32_t QUANT_ROW0_A = p_sfpu::LREG0;
+constexpr std::uint32_t QUANT_ROW0_B = p_sfpu::LREG1;
+constexpr std::uint32_t QUANT_ROW1_A = p_sfpu::LREG3;
+constexpr std::uint32_t QUANT_ROW1_B = p_sfpu::LREG7;
 
 // Int8 L1 pack path:
 // Int8 output is packed through the UInt8 packer, which saturates the dest word to [0, 255].
 // So the SFPU leaves the 2's complement byte there as a
-// value in [0, 255]: b = (n + 128) ^ 0x80, with n + 128 in [0, 255] after the SFPSWAP clamp.
+// value in [0, 255]: b = (n + 128) ^ 0x80, with n + 128 in [0, 255] after the clamp.
 // The byte is stored via INT32_2S_COMP and the UInt8 packer then emits raw b. (FP32_TO_INT8
 // rounding cannot be used: its sign-magnitude result has a 7-bit magnitude. It saturates at
 // +/-127 and cannot represent -128.)
@@ -85,14 +97,16 @@ constexpr std::uint32_t INT8_SIGN_MASK = 0x00000080u;
 // For requantization, the out_zp is added after RNE. We split out_zp the same way as above.
 //
 // Saturate to output dtype range:
-// FP32_TO_INT8 mode cannot produce -128. So we clamp m to [t + LO, t + HI] before subtracting to saturate
-// where LO/HI are [-128, 127] for int32/int8 and [0, 255] for uint8.
+// FP32_TO_INT8 mode cannot produce -128. So we clamp m from below to t + LO before subtracting, where
+// LO/HI are [-128, 127] for int32/int8 and [0, 255] for uint8. The upper bound is an SFPSWAP against
+// t + HI for Int32 output and an SFP_STOCH_RND saturation of the integer for UInt8 / Int8 output
+// (see _quant_clamp_convert_row_pair_).
 constexpr std::uint32_t RNE_MAGIC_FP32 = 0x4b400000u;  // 12582912.0f = 1.5 * 2^23
 constexpr std::uint32_t ZP_SPLIT_FP32 = 0x4c400000u;  // 50331648.0f = 1.5 * 2^25
 
 // T_LREG holds the zero point on entry. LREG0 and LREG1 are scratch.
 // On exit, LREG5 = RNE_MAGIC + zp_hi. This is the addend that rounds.
-// LREG12 = t + LO and LREG13 = t + HI, where t = RNE_MAGIC - zp_lo.
+// LREG12 = t + LO and, for Int32 output only, LREG13 = t + HI, where t = RNE_MAGIC - zp_lo.
 // T_LREG = -bits(t) with +128 for the int8 output.
 template <DataFormat OUTPUT_FORMAT, std::uint32_t T_LREG>
 inline void _rne_clamp_init_() {
@@ -116,8 +130,10 @@ inline void _rne_clamp_init_() {
     TTI_SFPNOP;
     TTI_SFPIADD(LO & IMM12_MASK, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-    TTI_SFPIADD(HI & IMM12_MASK, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    if constexpr (OUTPUT_FORMAT == DataFormat::Int32) {
+        TTI_SFPIADD(HI & IMM12_MASK, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    }
     TTI_SFPIADD(0, p_sfpu::LCONST_0, T_LREG, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         TTI_SFPIADD(-LO, T_LREG, T_LREG, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
@@ -136,7 +152,11 @@ inline void _rne_clamp_init_() {
 // SFPU then casts e to fp32 and runs the normal formula. The constant 128 term is cancelled on the
 // host by folding -128 into the zero point (dequant) or by an extra -128 * scale
 // term in the zero-point constant (requant).
-inline void _int8_input_unbias_() { TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0); }
+// Applied to both rows of the pair.
+inline void _int8_input_unbias_() {
+    TTI_SFPXOR(0, p_sfpu::LREG4, QUANT_ROW0_A, 0);
+    TTI_SFPXOR(0, p_sfpu::LREG4, QUANT_ROW1_A, 0);
+}
 
 // Configure the SFPU "dest += 2" addr_mod slot. With math::set_addr_mod_base()
 // active, the SFPU addr_mod field "2" indexes real config slot ADDR_MOD_6,
@@ -169,6 +189,28 @@ inline void _quant_kernels_configure_dest_incr_addrmod_() {
         .set(ADDR_MOD_6);
 }
 
+// Load operands A and B of two consecutive dst rows: row 0 at the current
+// dst_reg, row 1 one SFPU row (sfpi::SFP_DESTREG_STRIDE) further. The
+// immediate is added to the Dst RWC, so neither load moves dst_reg
+// (ADDR_MOD_3 = no increment). Variable addresses can't live inside the
+// replay buffer because TT_* macros write to instrn_buffer[0].
+template <InstrModLoadStore A_MODE>
+inline void _quant_load_row_pair_(const std::uint32_t in0_off, const std::uint32_t in1_off) {
+    TT_SFPLOAD(QUANT_ROW0_A, A_MODE, ADDR_MOD_3, in0_off);
+    TT_SFPLOAD(QUANT_ROW0_B, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);
+    TT_SFPLOAD(QUANT_ROW1_A, A_MODE, ADDR_MOD_3, in0_off + sfpi::SFP_DESTREG_STRIDE);
+    TT_SFPLOAD(QUANT_ROW1_B, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off + sfpi::SFP_DESTREG_STRIDE);
+}
+
+// Store both rows under ADDR_MOD_2 (real slot 6): each store auto-advances
+// dst_reg by one SFPU row, so the pair leaves dst_reg two rows further for
+// the next pair's loads.
+template <InstrModLoadStore OUT_MODE>
+inline void _quant_store_row_pair_(const std::uint32_t out_off) {
+    TT_SFPSTORE(QUANT_ROW0_A, OUT_MODE, ADDR_MOD_2, out_off);  // store row 0 + dst_reg += 2
+    TT_SFPSTORE(QUANT_ROW1_A, OUT_MODE, ADDR_MOD_2, out_off);  // store row 1 + dst_reg += 2
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input (fp32).
@@ -179,15 +221,16 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     //
     // Tile layout in Dest: each tile occupies 64 dest-address units. Each
     // SFPLOAD/SFPSTORE moves 4 dest rows x 8 SFPU lanes, so advancing dst_reg
-    // by +2 between iterations walks one face's eight 4-row x 8-col blocks
-    // (= one full call site, ITERATIONS == 8).
+    // by +2 between rows walks one face's eight 4-row x 8-col blocks
+    // (= one full call site, ITERATIONS == 8). Rows are processed in pairs.
     //
     // The replay-buffer body at QUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
     // slot are programmed by quant_init, which must run before the
     // first call here.
+    static_assert(ITERATIONS % 2 == 0, "quant kernels process dst rows in pairs");
     constexpr std::uint32_t dst_tile_size = 64;
 
-    // The recorded body leaves a 2's-complement int32 (or a non-negative uint8) in LREG0 and the
+    // The recorded body leaves a 2's-complement int32 (or a non-negative uint8) in the A registers and the
     // default 2's-complement output stores it raw. The sign-magnitude variant runs it through the
     // store's sign-magnitude <-> 2's-complement swap, which is its own inverse (untested, no caller uses it).
     constexpr InstrModLoadStore out_mode =
@@ -197,16 +240,14 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-    // Per iteration: inline TT_SFPLOADs (variable addresses can't live inside
-    // the replay buffer because TT_* macros write to instrn_buffer[0]), replay
-    // the recorded compute, then SFPSTORE under ADDR_MOD_2 (real slot 6) which
-    // also auto-advances dst_reg by 2 for the next iteration's loads.
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off);  // operand A (fp32)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN);                        // RNE MAD + clamp + convert
-        TT_SFPSTORE(p_sfpu::LREG0, out_mode, ADDR_MOD_2, out_off);                // store + dst_reg += 2
+    // Per row pair: inline TT_SFPLOADs, replay the recorded two-row compute,
+    // then two SFPSTOREs under ADDR_MOD_2 which also advance dst_reg for the
+    // next pair's loads.
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS / 2; d++) {
+        _quant_load_row_pair_<InstrModLoadStore::FP32>(in0_off, in1_off);  // A (fp32), B (fp32 scaler)
+        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN);                 // RNE MAD + clamp + convert, r0/r1
+        _quant_store_row_pair_<out_mode>(out_off);
     }
 }
 
@@ -224,11 +265,12 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
     // The replay-buffer body at REQUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
     // slot are programmed by requant_init, which must run before the
     // first call here.
+    static_assert(ITERATIONS % 2 == 0, "quant kernels process dst rows in pairs");
     constexpr std::uint32_t dst_tile_size = 64;
 
     constexpr InstrModLoadStore in_mode =
         (SIGN_MAGNITUDE_FORMAT && !INT8_INPUT) ? InstrModLoadStore::INT32 : InstrModLoadStore::INT32_2S_COMP;
-    // The recorded body leaves a 2's-complement int32 (or a non-negative uint8) in LREG0; see
+    // The recorded body leaves a 2's-complement int32 (or a non-negative uint8) in the A registers; see
     // calculate_quant_int32 for the output store mode.
     constexpr InstrModLoadStore out_mode =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : InstrModLoadStore::INT32;
@@ -237,19 +279,18 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
     const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-    // Per iteration: hoist both TT_SFPLOADs ahead of the recorded compute
-    // (the int->fp cast doesn't touch LREG1 so reordering is safe), replay
-    // the recorded body, then SFPSTORE under ADDR_MOD_2 which auto-advances
-    // dst_reg by 2 for the next iteration.
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, in_mode, ADDR_MOD_3, in0_off);  // operand A (int32 -> sign-magn LREG0)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
+    // Per row pair: the TT_SFPLOADs are hoisted ahead of the recorded compute
+    // (the int->fp cast doesn't touch the B registers so reordering is safe),
+    // replay the body, then two SFPSTOREs under ADDR_MOD_2 which auto-advance
+    // dst_reg for the next pair.
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS / 2; d++) {
+        _quant_load_row_pair_<in_mode>(in0_off, in1_off);  // A (int32 -> sign-magn), B (fp32 scaler)
         if constexpr (INT8_INPUT) {
-            _int8_input_unbias_();  // byte ^ 0x80 (excess-128)
+            _int8_input_unbias_();  // byte ^ 0x80 (excess-128), both rows
         }
-        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN);      // CAST + RNE MAD + clamp + convert
-        TT_SFPSTORE(p_sfpu::LREG0, out_mode, ADDR_MOD_2, out_off);  // store + dst_reg += 2
+        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN);  // CAST + RNE MAD + clamp + convert, r0/r1
+        _quant_store_row_pair_<out_mode>(out_off);
     }
 }
 
@@ -258,18 +299,18 @@ inline void calculate_quant_int32_int8_pack(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Int8 output:
     // The RNE MAD + clamp + convert + XOR body is recorded once into QUANT_REPLAY_SLOT and replayed.
+    static_assert(ITERATIONS % 2 == 0, "quant kernels process dst rows in pairs");
     constexpr std::uint32_t dst_tile_size = 64;
 
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
     const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off);  // operand A (fp32)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);               // RNE MAD + clamp + convert + XOR
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_2, out_off);
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS / 2; d++) {
+        _quant_load_row_pair_<InstrModLoadStore::FP32>(in0_off, in1_off);  // A (fp32), B (fp32 scaler)
+        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);        // RNE MAD + clamp + convert + XOR, r0/r1
+        _quant_store_row_pair_<InstrModLoadStore::INT32_2S_COMP>(out_off);
     }
 }
 
@@ -279,39 +320,41 @@ inline void calculate_requant_int32_int8_pack(
     // Int8 output:
     // The CAST + RNE MAD + clamp + convert + XOR body is recorded once into REQUANT_REPLAY_SLOT and replayed.
     // The int8-input unbias (byte ^ 0x80) stays inline before the replay.
+    static_assert(ITERATIONS % 2 == 0, "quant kernels process dst rows in pairs");
     constexpr std::uint32_t dst_tile_size = 64;
 
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
     const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, in0_off);  // operand A (int32/byte)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS / 2; d++) {
+        _quant_load_row_pair_<InstrModLoadStore::INT32_2S_COMP>(in0_off, in1_off);  // A (int32/byte), B (fp32 scaler)
         if constexpr (INT8_INPUT) {
-            _int8_input_unbias_();  // byte ^ 0x80
+            _int8_input_unbias_();  // byte ^ 0x80, both rows
         }
-        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_INT8_OUT);  // CAST + RNE MAD + clamp + convert + XOR
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_2, out_off);
+        lltt::replay(
+            REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_INT8_OUT);  // CAST + RNE MAD + clamp + convert + XOR, r0/r1
+        _quant_store_row_pair_<InstrModLoadStore::INT32_2S_COMP>(out_off);
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
 inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    // Operand A[LREG0] is input to dequant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte).
-    // Operand B[LREG1] is scaling factor (fp32).
+    // Operand A is input to dequant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte).
+    // Operand B is scaling factor (fp32).
     // LREG2 holds the (negated) zero-point constant loaded by dequant_init;
     // i.e. the formula computed is (A + LREG2) * B, which is (A - zero_point) * B
     // when the caller passes -zero_point through the init.
     //
-    // SFPLOAD's instr_mod0 normalizes both int32 representations to LREG0
+    // SFPLOAD's instr_mod0 normalizes both int32 representations to
     // sign-magnitude before the recorded compute runs, so the body is the
     // same for both SIGN_MAGNITUDE_FORMAT variants.
     //
     // The replay-buffer body at DEQUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
     // slot are programmed by dequant_init, which must run before the
     // first call here.
+    static_assert(ITERATIONS % 2 == 0, "quant kernels process dst rows in pairs");
     constexpr std::uint32_t dst_tile_size = 64;
 
     constexpr InstrModLoadStore in_mode =
@@ -321,24 +364,76 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
     const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-    // Per iteration: hoist both TT_SFPLOADs ahead of the recorded compute,
-    // replay the body, then SFPSTORE under ADDR_MOD_2 which auto-advances
-    // dst_reg by 2 for the next iteration.
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, in_mode, ADDR_MOD_3, in0_off);  // operand A (int32 -> sign-magn LREG0)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);   // operand B (fp32 scaler)
+    // Per row pair: hoist the TT_SFPLOADs ahead of the recorded compute,
+    // replay the body, then two SFPSTOREs under ADDR_MOD_2 which auto-advance
+    // dst_reg for the next pair.
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS / 2; d++) {
+        _quant_load_row_pair_<in_mode>(in0_off, in1_off);  // A (int32 -> sign-magn), B (fp32 scaler)
         if constexpr (INT8_INPUT) {
-            _int8_input_unbias_();  // byte ^ 0x80
+            _int8_input_unbias_();  // byte ^ 0x80, both rows
         }
-        lltt::replay(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);                     // CAST + ADD + SFPNOP + MUL + SFPNOP
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, out_off);  // store fp32 + dst_reg += 2
+        lltt::replay(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);     // CAST + ADD + MUL, r0/r1 interleaved
+        _quant_store_row_pair_<InstrModLoadStore::FP32>(out_off);  // store fp32
     }
 }
 
+// SFPSWAP clamp + SFPIADD convert for both rows (see RNE_MAGIC_FP32); T_LREG holds -bits(t) (+128 for Int8 output).
+// The hardware stalls one cycle after each SFPSWAP, so interleaving the rows saves nothing on the SFPSWAPs.
+//
+// For the 8-bit outputs HI - LO = 255, so the upper clamp is done on the integer instead: after the
+// lower SFPSWAP, m >= t + LO > 0 and bits(m) grows with m, so n - LO = bits(m) - bits(t) - LO is a
+// non-negative integer below 2^31 (also for +inf m), and SFP_STOCH_RND INT32_TO_UINT8 (shift 0, exact)
+// saturates it to 255 exactly where min(m, t + HI) would have. NaN m gives an unspecified byte. One
+// 1-cycle round replaces a 2-cycle SFPSWAP. The Int32 output needs n in [-128, 127] 2's complement,
+// which this can't produce.
+template <DataFormat OUTPUT_FORMAT, std::uint32_t T_LREG>
+inline void _quant_clamp_convert_row_pair_() {
+    TTI_SFPSWAP(0, p_sfpu::LREG12, QUANT_ROW0_A, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // m = max(m, t + LO)
+    TTI_SFPSWAP(0, p_sfpu::LREG12, QUANT_ROW1_A, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);
+    if constexpr (OUTPUT_FORMAT == DataFormat::Int32) {
+        TTI_SFPSWAP(0, p_sfpu::LREG13, QUANT_ROW0_A, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // m = min(m, t + HI)
+        TTI_SFPSWAP(0, p_sfpu::LREG13, QUANT_ROW1_A, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    }
+    // n = clamp(RNE(v) + zp) (+128); unclamped above for the 8-bit outputs
+    TTI_SFPIADD(0, T_LREG, QUANT_ROW0_A, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, T_LREG, QUANT_ROW1_A, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    if constexpr (OUTPUT_FORMAT != DataFormat::Int32) {
+        // SFP_STOCH_RND must not directly follow SFPSWAP: their LReg writes can collide (WH SFPSWAP.md).
+        // The two SFPIADDs above keep them apart.
+        // n - LO = min(n - LO, 255)
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_NEAREST,
+            0 /*shift*/,
+            p_sfpu::LCONST_0,
+            QUANT_ROW0_A,
+            QUANT_ROW0_A,
+            sfpi::SFPSTOCHRND_MOD1_IMM8 | sfpi::SFPSTOCHRND_MOD1_INT32_TO_UINT8);
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_NEAREST,
+            0 /*shift*/,
+            p_sfpu::LCONST_0,
+            QUANT_ROW1_A,
+            QUANT_ROW1_A,
+            sfpi::SFPSTOCHRND_MOD1_IMM8 | sfpi::SFPSTOCHRND_MOD1_INT32_TO_UINT8);
+    }
+}
+
+// int32 sign-magnitude (loaded that way regardless of input bit
+// representation, via SFPLOAD instr_mod0) -> fp32, both rows.
+inline void _quant_cast_row_pair_() {
+    TTI_SFPCAST(QUANT_ROW0_A, QUANT_ROW0_A, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
+    TTI_SFPCAST(QUANT_ROW1_A, QUANT_ROW1_A, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
+}
+
+inline void _int8_out_xor_row_pair_() {
+    TTI_SFPXOR(0, p_sfpu::LREG4, QUANT_ROW0_A, 0);  // b = (n + 128) ^ 0x80
+    TTI_SFPXOR(0, p_sfpu::LREG4, QUANT_ROW1_A, 0);
+}
+
 // OUTPUT_FORMAT selects the quantized output tensor dtype: Int32 (the default), UInt8, or Int8. All
-// three round to nearest even and saturate with the SFPSWAP clamp: Int32 holds int8-range values
-// [-128, 127] in an int32 container, UInt8 [0, 255], and Int8 packs the 2's complement byte.
+// three round to nearest even and saturate (see _quant_clamp_convert_row_pair_): Int32 holds int8-range
+// values [-128, 127] in an int32 container, UInt8 [0, 255], and Int8 packs the 2's complement byte.
 template <
     bool APPROXIMATION_MODE /*unused*/,
     bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false,
@@ -347,7 +442,7 @@ void quant_init(const uint zero_point) {
     static_assert(
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "quant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
-    // LREG2 holds the zero point. _rne_clamp_init_ sets up LREG5, LREG12, LREG13 and LREG2 for the body.
+    // LREG2 holds the zero point. _rne_clamp_init_ sets up LREG5, LREG12, LREG13 (Int32 out), LREG2.
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG2>();
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
@@ -355,24 +450,17 @@ void quant_init(const uint zero_point) {
     }
     _quant_kernels_configure_dest_incr_addrmod_();
 
-    // The replay buffer feeds the SFPU pipe directly. The recorded bodies use TTI_SFPNOP (SFPU NOP)
-    // rather than the generic Tensix TTI_NOP for their pipeline bubbles.
     constexpr std::uint32_t REPLAY_LEN =
         OUTPUT_FORMAT == DataFormat::Int8 ? QUANT_REPLAY_LEN_INT8_OUT : QUANT_REPLAY_LEN;
     lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
     {
-        // m = RNE(A * B + zp_hi) + RNE_MAGIC: the single rounding step of the MAD rounds to nearest even
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /*mod1*/);
-        TTI_SFPNOP;
-        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // m = max(m, t + LO)
-        TTI_SFPSWAP(0, p_sfpu::LREG13, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // m = min(m, t + HI)
-        TTI_SFPIADD(
-            0,
-            p_sfpu::LREG2,
-            p_sfpu::LREG0,
-            sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);  // n = clamp(RNE(A * B) + zp) (+128)
+        // m = RNE(A * B + zp_hi) + RNE_MAGIC: the single rounding step of the MAD rounds to nearest even.
+        // The row-1 MAD fills the row-0 MAD's 2-cycle write-latency slot.
+        TTI_SFPMAD(QUANT_ROW0_A, QUANT_ROW0_B, p_sfpu::LREG5, QUANT_ROW0_A, 0 /*mod1*/);
+        TTI_SFPMAD(QUANT_ROW1_A, QUANT_ROW1_B, p_sfpu::LREG5, QUANT_ROW1_A, 0 /*mod1*/);
+        _quant_clamp_convert_row_pair_<OUTPUT_FORMAT, p_sfpu::LREG2>();
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
-            TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);  // b = (n + 128) ^ 0x80
+            _int8_out_xor_row_pair_();
         }
     }
 }
@@ -388,7 +476,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         "requant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
     // The body rounds v = q * (s_in / s_out) + zp to nearest even and then adds out_zero_point.
     // zp is the host-folded -z_in * (s_in / s_out) in LREG2.
-    // LREG6 holds out_zero_point. _rne_clamp_init_ sets up LREG5, LREG12, LREG13 and LREG6 for the body.
+    // LREG6 holds out_zero_point. _rne_clamp_init_ sets up LREG5, LREG12, LREG13 (Int32 out), LREG6.
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     _sfpu_load_imm32_(p_sfpu::LREG6, out_zero_point);
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG6>();
@@ -401,23 +489,16 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         OUTPUT_FORMAT == DataFormat::Int8 ? REQUANT_REPLAY_LEN_INT8_OUT : REQUANT_REPLAY_LEN;
     lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REPLAY_LEN);
     {
-        // int32 sign-magnitude (loaded that way regardless of input bit
-        // representation, via SFPLOAD instr_mod0) -> fp32.
-        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);  // v = A * B + zp
-        TTI_SFPNOP;
+        _quant_cast_row_pair_();
+        // v = A * B + zp, both rows; each row's MAD/ADD fills the other row's 2-cycle write-latency slot.
+        TTI_SFPMAD(QUANT_ROW0_A, QUANT_ROW0_B, p_sfpu::LREG2, QUANT_ROW0_A, 0 /*mod1*/);
+        TTI_SFPMAD(QUANT_ROW1_A, QUANT_ROW1_B, p_sfpu::LREG2, QUANT_ROW1_A, 0 /*mod1*/);
         // m = RNE(v + zp_hi) + RNE_MAGIC
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /*mod1*/);
-        TTI_SFPNOP;
-        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // m = max(m, t + LO)
-        TTI_SFPSWAP(0, p_sfpu::LREG13, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // m = min(m, t + HI)
-        TTI_SFPIADD(
-            0,
-            p_sfpu::LREG6,
-            p_sfpu::LREG0,
-            sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);  // n = clamp(RNE(v) + out_zp) (+128)
+        TTI_SFPADD(QUANT_ROW0_A, p_sfpu::LCONST_1, p_sfpu::LREG5, QUANT_ROW0_A, 0 /*mod1*/);
+        TTI_SFPADD(QUANT_ROW1_A, p_sfpu::LCONST_1, p_sfpu::LREG5, QUANT_ROW1_A, 0 /*mod1*/);
+        _quant_clamp_convert_row_pair_<OUTPUT_FORMAT, p_sfpu::LREG6>();  // n = clamp(RNE(v) + out_zp) (+128)
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
-            TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);  // b = (n + 128) ^ 0x80
+            _int8_out_xor_row_pair_();
         }
     }
 }
@@ -438,21 +519,19 @@ void dequant_init(const uint zero_point) {
 
     lltt::record<lltt::NoExec>(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);
     {
-        // int32 sign-magnitude -> fp32.
-        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
+        _quant_cast_row_pair_();
         // SFPADD = VA*VB + VC ; with LCONST_1 (LREG10) = 1.0 this collapses
-        // to A + LREG2 (= A + zero_point as loaded by the caller).
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
-        // SFPADD has a 2-cycle write latency on LREG0; SFPMUL reads it next.
-        TTI_SFPNOP;
+        // to A + LREG2 (= A + zero_point as loaded by the caller). The second
+        // row's SFPADD fills the first one's 2-cycle write-latency slot.
+        TTI_SFPADD(QUANT_ROW0_A, p_sfpu::LCONST_1, p_sfpu::LREG2, QUANT_ROW0_A, 0 /*mod1*/);
+        TTI_SFPADD(QUANT_ROW1_A, p_sfpu::LCONST_1, p_sfpu::LREG2, QUANT_ROW1_A, 0 /*mod1*/);
         // SFPMUL with LCONST_0 (LREG9 = 0.0) ignored as +C :
-        // LREG0 = (A + LREG2) * LREG1.
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*mod1*/);
-        // SFPMUL has a 2-cycle write latency on LREG0; the SFPSTORE that
-        // follows the replay reads it. Keep this NOP inside the recorded
-        // body rather than relying on the implicit gap between the replay
-        // completing and TT_SFPSTORE issuing.
-        TTI_SFPNOP;
+        // A = (A + LREG2) * B, both rows. The first SFPSTORE that follows the
+        // replay issues two slots after the row-0 SFPMUL (the row-1 SFPMUL sits
+        // between them) and the second store two slots after the row-1 SFPMUL,
+        // so no trailing SFPNOP is needed.
+        TTI_SFPMUL(QUANT_ROW0_A, QUANT_ROW0_B, p_sfpu::LCONST_0, QUANT_ROW0_A, 0 /*mod1*/);
+        TTI_SFPMUL(QUANT_ROW1_A, QUANT_ROW1_B, p_sfpu::LCONST_0, QUANT_ROW1_A, 0 /*mod1*/);
     }
 }
 
