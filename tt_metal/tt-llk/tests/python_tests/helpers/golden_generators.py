@@ -5636,6 +5636,15 @@ class UntilizeGolden:
 
         operand = quantize_input_to_unpack_format(operand, input_format)
 
+        # untilize_block's cast wraps where the packer clamps to sign-magnitude, so a modelled pack
+        # saturates first; a caller that omits input_format is reshaping a device result, not packing.
+        if (
+            input_format is not None
+            and input_format.is_integer()
+            and data_format.is_integer()
+        ):
+            operand = saturate_integer(operand, data_format)
+
         result = untilize_block(
             operand,
             stimuli_format=data_format,

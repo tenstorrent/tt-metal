@@ -26,8 +26,8 @@
 #include <unistd.h>
 
 #include "gtest/gtest.h"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"

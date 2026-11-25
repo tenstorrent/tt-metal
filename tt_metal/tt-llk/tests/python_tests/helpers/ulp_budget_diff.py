@@ -27,14 +27,14 @@ from .ulp_table import (
     TABLE_PATHS,
     BudgetKey,
     Measurement,
-    Metric,
+    Resolved,
     Row,
     Table,
     arch_of_table,
     load_table,
     measured_arch,
-    most_specific,
     read_measurements,
+    resolve,
     steps_bind,
     table_arch,
 )
@@ -47,17 +47,6 @@ Cell = tuple[MathOperation, BudgetKey]
 _MAX_ROWS = 40
 
 _INF = float("inf")
-
-
-def resolve(
-    table: Table, op: MathOperation, query: BudgetKey, only=lambda row: True
-) -> Row | None:
-    """The row of *op* the registry would resolve *query* to, among those *only*
-    admits."""
-    found = most_specific(
-        {row.key: row for row in table.get(op, ()) if only(row)}, query
-    )
-    return None if found is None else found[1]
 
 
 # ── What a pull request does to the gates ─────────────────────────────────────
@@ -134,16 +123,11 @@ def _held_text(
 
 
 @dataclass(frozen=True)
-class Held:
-    """What one query variant is held to in one revision of the table: the row it
-    resolves to, whether that row's step budget binds, the most specific row declaring
-    ``atol``/``rtol``, and whether the variant is a full measured cell (every dimension
-    some row pins is set)."""
+class Held(Resolved):
+    """What one query variant is held to in one revision of the table, and whether the
+    variant is a *full* measured cell (every dimension some row pins is set)."""
 
-    row: Row | None
-    gated: bool
-    declared: Row | None
-    full: bool
+    full: bool = False
 
     @property
     def baseline(self) -> int | None:
@@ -194,18 +178,8 @@ def _held(
     full: bool,
     arch: ChipArchitecture,
 ) -> Held:
-    row = resolve(table, op, query)
-    gated = (
-        row is not None
-        and row.contract.metric is Metric.ULP
-        and steps_bind(row.key, query, arch)
-    )
-    declared = (
-        None
-        if gated
-        else resolve(table, op, query, only=lambda r: r.contract.declares_tolerance)
-    )
-    return Held(row, gated, declared, full)
+    held = resolve(table.get(op, ()), query, arch)
+    return Held(held.row, held.gated, held.declared, full)
 
 
 def _variants(
@@ -649,7 +623,8 @@ def judge(
         cells.items(), key=lambda item: (item[0][0].name, item[0][1].sort_key)
     ):
         op, key = cell
-        row = resolve(table, op, key)
+        held = resolve(table.get(op, ()), key, arch)
+        row = held.row
         if row is None:
             out.uncovered += 1
             continue
@@ -682,7 +657,7 @@ def judge(
                 elif entry.ulp is not None and seen < entry.ulp:
                     found(Finding(cell, Verdict.TIGHTENS, seen, entry.ulp, entry))
             continue
-        if row.contract.metric is Metric.ULP and steps_bind(row.key, key, arch):
+        if held.gated:
             budget = row.contract.max_ulp
             if reading.worst != budget:
                 verdict = (

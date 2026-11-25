@@ -6,8 +6,8 @@
 
 #include <array>
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"

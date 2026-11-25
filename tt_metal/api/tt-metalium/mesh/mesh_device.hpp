@@ -21,15 +21,15 @@
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_config.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/mesh_trace_id.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
+#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 // UMD: re-exports tt::ARCH (used in MeshDevice::arch return type).
 #include <tt-umd/types/arch.hpp>
 // UMD: re-exports CoreType (used in MeshDevice::virtual_core_from_logical_core parameter).

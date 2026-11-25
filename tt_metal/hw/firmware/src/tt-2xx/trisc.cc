@@ -25,6 +25,9 @@
 #include "api/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
 #include "ckernel_buf_desc.h"  // ckernel::trisc::BD_TABLE_NUM_ENTRIES
+#if defined(UCK_CHLKC_UNPACK)
+#include "llk_dest_borrow.h"  // _llk_dest_borrow_init_
+#endif
 #if defined(UCK_CHLKC_MATH)
 #include "cmath_common.h"    // ckernel::math::AluCfgTracker (definition of alu_cfg below)
 #endif
@@ -110,6 +113,10 @@ thread_local std::uint32_t op_info_offset __attribute__((used)) = 0;
 namespace trisc {
 // Flip between 0 and 1 to keep dest pointer between kernel calls
 thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
+// Tile-shape index (log2 Dest rows per tile) of the last math init; read on the per-tile Dest addressing path
+// instead of the TILE_SHAPE_IDX GPR. thread_local per TRISC (tt-llk#1678). Declared extern thread_local in
+// ckernel_trisc_common.h.
+thread_local std::uint32_t dest_tile_shape_idx __attribute__((used)) = 0;
 }  // namespace trisc
 namespace pack {
 // Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
@@ -130,7 +137,7 @@ thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
 
 // Called from trisc_irq_entry, which saves no vector registers, so built without the vector extension.
-extern "C" __attribute__((noinline, used, hot, target("arch=rv32im_zmmul_zaamo_zba_zbc_xtttensixqsr_xttzbkb"))) void
+extern "C" __attribute__((noinline, used, hot, target("cpu=tt-qsr32-tensix"))) void
 handle_interrupt() {
     uint32_t trisc_id = internal_::get_trisc_id();
     uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
@@ -305,6 +312,9 @@ extern "C" std::uint32_t _start1() {
         WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + i), 0u);
     }
     (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + num_pairs - 1));  // pairs cleared before signaling
+    _llk_dest_borrow_init_();
+    _llk_sync_init_(ckernel::trisc::semaphore::MATH_PACK, 2 /*max*/, 0 /*init*/);
+    tensix_sync();
     asm volatile("fence" ::: "memory");
 #endif
     *trisc_run = RUN_SYNC_MSG_DONE;

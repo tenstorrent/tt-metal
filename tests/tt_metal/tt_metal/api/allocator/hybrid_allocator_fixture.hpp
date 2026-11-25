@@ -7,8 +7,8 @@
 #include <cstdlib>
 #include <vector>
 #include <gtest/gtest.h>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 

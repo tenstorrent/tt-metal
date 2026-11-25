@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim::qsr {
 

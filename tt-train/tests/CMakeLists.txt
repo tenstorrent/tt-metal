@@ -16,6 +16,7 @@ set(SOURCES
     model/gpt2s_test.cpp
     model/linear_regression_full_test.cpp
     model/weight_tying_test.cpp
+    model/base_transformer_test.cpp
     ttnn_fixed/concat_op_test.cpp
     ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
     ttnn_fixed/trivial_ttnn_ops_test.cpp
@@ -60,6 +61,7 @@ set(SOURCES
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
     ops/distributed/ring_sdpa_schedule_test.cpp
+    ops/distributed/ring_attention_merge_test.cpp
     ops/distributed/mesh_workload_cache_hit_test.cpp
     ops/distributed/gumbel_sample_mesh_test.cpp
     ops/distributed/moe_ep_mesh_test.cpp

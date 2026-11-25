@@ -8,7 +8,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"

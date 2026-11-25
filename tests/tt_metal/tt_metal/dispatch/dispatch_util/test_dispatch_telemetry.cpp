@@ -22,10 +22,10 @@
 #include <vector>
 
 #include <tt-metalium/experimental/dispatch_telemetry.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-umd/pcie/pci_device.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
