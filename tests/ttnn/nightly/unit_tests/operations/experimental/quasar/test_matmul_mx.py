@@ -367,6 +367,6 @@ def test_unified_accumulation_modes_mx_out(device, mode):
 
 def test_dram_sharded_factories_unreachable(device):
     pytest.skip(
-        "MatmulMultiCoreReuseMultiCastDRAMSharded / BatchedDRAMSharded throw 'Unsupported architecture for DRAM "
-        "sharded matmul' on Quasar for every dtype (matmul_utilities.cpp noc_max_page_size), so MX cannot reach them"
+        "MatmulMultiCoreReuseMultiCastDRAMSharded / BatchedDRAMSharded still build legacy DataMovementKernels "
+        "(not ported to Metal 2.0), which Quasar rejects for every dtype, so MX cannot reach them"
     )
