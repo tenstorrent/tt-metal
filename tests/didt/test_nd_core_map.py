@@ -8,7 +8,7 @@
 import pytest
 import torch
 
-from tests.didt import nd_core_map
+from tt_py_test_utils_common import nd_core_map
 
 GRID = (12, 10)
 BLOCK = (4, 3)
