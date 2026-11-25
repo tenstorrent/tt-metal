@@ -750,7 +750,6 @@ jobs:
           ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
-        # Undefined inputs are empty (falsy) under workflow_dispatch, so the default path packages.
         if: ${{ !inputs.skip-package || inputs.publish-package }}
         timeout-minutes: 10
         run: |
@@ -766,8 +765,7 @@ jobs:
         if: ${{ inputs.skip-package && !inputs.publish-package }}
         timeout-minutes: 10
         run: |
-          # Run the install rules into a separate prefix. This catches broken install()
-          # rules without the cost of CPack, because nothing uploads the packages.
+          # Run the install rules into a separate prefix.
           install_dir="$(mktemp -d)"
           cmake --install build --prefix "${install_dir}"
           echo "Installed $(find "${install_dir}" -type f | wc -l) files into ${install_dir}"
