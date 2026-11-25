@@ -38,9 +38,10 @@ FORCE_INLINE void fabric_sender_side_handshake(
     uint32_t count = 0;
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE
 #ifndef ARCH_WORMHOLE
-           && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
+           && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr) &&
+           !abort()
 #endif
-           && !abort()) {
+    ) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
 
@@ -71,9 +72,10 @@ FORCE_INLINE void fabric_receiver_side_handshake(
     uint32_t count = 0;
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE
 #ifndef ARCH_WORMHOLE
-           && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
+           && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr) &&
+           !abort()
 #endif
-           && !abort()) {
+    ) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
 
@@ -93,10 +95,7 @@ FORCE_INLINE void fabric_receiver_side_handshake(
             scratch_addr, local_val_addr, tt::tt_fabric::PACKET_WORD_SIZE_BYTES);
     }
 #else
-    if (!abort() || handshake_info->local_value == MAGIC_HANDSHAKE_VALUE) {
-        SenderLinkTransport::send_with_context_switch(
-            scratch_addr, local_val_addr, tt::tt_fabric::PACKET_WORD_SIZE_BYTES);
-    }
+    SenderLinkTransport::send_with_context_switch(scratch_addr, local_val_addr, tt::tt_fabric::PACKET_WORD_SIZE_BYTES);
 #endif
 }
 
