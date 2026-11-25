@@ -97,7 +97,8 @@ def _stand_ins():
         except ImportError:
             continue
         for name, value in vars(module).items():
-            if name.startswith(tuple(prefixes.split())) and getattr(value, "__module__", "") == module.__name__:
+            is_own = callable(value) and getattr(value, "__module__", "") == module.__name__
+            if is_own and name.startswith(tuple(prefixes.split())):
                 stand_ins[id(value)] = _stop
     return stand_ins
 
