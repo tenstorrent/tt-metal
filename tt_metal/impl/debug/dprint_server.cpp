@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -339,6 +340,10 @@ private:
 
     // Direct per-core L1 polling. Used as the fallback when dispatch_s aggregation is unavailable.
     bool poll_device_print_data_l1(ChipId device_id, const std::vector<umd::CoreDescriptor>& logical_cores);
+
+    // Waits until each running dispatch_s aggregator has finished two full passes, so whatever
+    // the kernels left in L1 has reached DRAM. Throws if one hasn't by the deadline.
+    void await_dispatch_full_passes(std::chrono::steady_clock::time_point deadline);
 
     // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
     // stdout, or nothing.
@@ -735,23 +740,17 @@ bool DPrintServer::Impl::poll_device_print_data(
     auto& cluster = env_.get_cluster();
 
     try {
-        // Read 5 words from the rw-pointer cell:
-        //   [0] wpos/magic       kernel writes; host reads (current write position).
-        //   [1] rpos             host writes; kernel reads (host's consumed position).
-        //   [2] provided_size    kernel writes alongside DISABLED_MAGIC.
-        //   [3] required_size    kernel writes alongside DISABLED_MAGIC.
-        //   [4] finished_flag    kernel writes 1 in shutdown() right before exiting.
-        std::array<uint32_t, 5> rw = {0u, 0u, 0u, 0u, 0u};
-        cluster.read_dram_vec(rw.data(), sizeof(rw), device_id, data.dram_view, data.rw_pointers_address);
-        const uint32_t wpos = rw[0];
-        const uint32_t rpos = rw[1];
-        const bool dispatcher_finished = rw[4] != 0;
+        device_print_dispatch::DramRWHeader rw{};
+        cluster.read_dram_vec(&rw, sizeof(rw), device_id, data.dram_view, data.rw_pointers_address);
+        const uint32_t wpos = rw.wpos;
+        const uint32_t rpos = rw.rpos;
+        const bool dispatcher_finished = rw.finished_flag != 0;
 
         // Check if it dispatch disabled itself due to insufficient buffer
         if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
             data.disabled = true;
-            const uint32_t provided = rw[2];
-            const uint32_t required = rw[3];
+            const uint32_t provided = rw.provided_size;
+            const uint32_t required = rw.required_size;
             log_warning(
                 tt::LogMetal,
                 "DPRINT: dispatch DRAM aggregation self-disabled on device {} — L1 cache buffer was {} bytes but "
@@ -950,7 +949,7 @@ bool DPrintServer::Impl::poll_device_print_data(
             sizeof(uint32_t),
             device_id,
             data.dram_view,
-            data.rw_pointers_address + sizeof(uint32_t));
+            data.rw_pointers_address + offsetof(device_print_dispatch::DramRWHeader, rpos));
 
         if (dispatcher_finished) {
             // Dispatcher exited and we just drained its final batch. Also do one
@@ -1032,15 +1031,58 @@ DPrintServer::Impl::~Impl() {
     // Parser instances are automatically cleaned up via unique_ptr
 }  // Impl::~Impl
 
-void DPrintServer::Impl::await() {
-    // Wait for dispatch to collect all data into DRAM.
-    // Since this happens during full dispatch pass, we need to wait for it to happen.
-    if (!server_killed_due_to_hang_) {
-        const uint32_t full_us = env_.get_rtoptions().get_device_print_dispatch_full_us();
-        // 2 full-dispatch windows (full_us is in microseconds → divide by 1000 for ms), just in case.
-        const uint32_t initial_wait_ms = 2 * ((full_us + 999) / 1000);
-        std::this_thread::sleep_for(std::chrono::milliseconds(initial_wait_ms));
+void DPrintServer::Impl::await_dispatch_full_passes(std::chrono::steady_clock::time_point deadline) {
+    // Only devices whose dispatch_s aggregator is set up and hasn't disabled itself or finished.
+    std::vector<std::tuple<ChipId, int, uint64_t>> cells;
+    {
+        std::lock_guard lock(dispatch_dram_data_lock_);
+        for (const auto& [device_id, data] : dispatch_dram_data_) {
+            if (!data.disabled) {
+                cells.emplace_back(device_id, data.dram_view, data.rw_pointers_address);
+            }
+        }
     }
+    if (cells.empty()) {
+        return;
+    }
+
+    // Polls rather than sleeps: the full pass runs on device time, and a simulator's device time
+    // only moves when the host accesses it.
+    auto& cluster = env_.get_cluster();
+    std::map<ChipId, uint32_t> first_pass_count;
+    while (!server_killed_due_to_hang_) {
+        std::optional<ChipId> waiting_device;
+        for (const auto& [device_id, dram_view, rw_pointers_address] : cells) {
+            device_print_dispatch::DramRWHeader rw{};
+            cluster.read_dram_vec(&rw, sizeof(rw), device_id, dram_view, rw_pointers_address);
+            // Skip an aggregator that hasn't booted, disabled itself, or finished.
+            if (rw.wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC || rw.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC ||
+                rw.finished_flag != 0) {
+                continue;
+            }
+            // Two passes: the second started after the first was read here.
+            const uint32_t first = first_pass_count.try_emplace(device_id, rw.pass_count).first->second;
+            if (!waiting_device.has_value() && rw.pass_count - first < 2) {
+                waiting_device = device_id;
+            }
+        }
+        if (!waiting_device.has_value()) {
+            return;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            TT_THROW(
+                "Timed out waiting for dispatch_s print aggregation on device {} to finish two full passes.",
+                *waiting_device);
+        }
+    }
+}  // await_dispatch_full_passes
+
+void DPrintServer::Impl::await() {
+    const int await_timeout_sec = debug_server_wait_timeout_sec(env_.get_rtoptions());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(await_timeout_sec);
+    // Wait for dispatch to collect all data into DRAM. Since this happens during a full dispatch pass,
+    // we need to wait for it to happen.
+    await_dispatch_full_passes(deadline);
     auto poll_until_no_new_data = [&]() {
         // Simply poll the flag every few ms to check whether new data is still being processed,
         // or whether any cores are waiting for a signal to be raised.
@@ -1060,10 +1102,10 @@ void DPrintServer::Impl::await() {
         } while (num_riscs_waiting > 0 || new_data_last_iter_ || wait_loop_iterations_ < 2);
     };
     auto future = std::async(std::launch::async, poll_until_no_new_data);
-    const int await_timeout_sec = debug_server_wait_timeout_sec(env_.get_rtoptions());
-    if (future.wait_for(std::chrono::seconds(await_timeout_sec)) == std::future_status::timeout) {
+    if (future.wait_until(deadline) == std::future_status::timeout) {
         TT_THROW("Timed out waiting on debug print server to read data ({}s).", await_timeout_sec);
     }
+    future.get();
 }  // await
 
 void DPrintServer::Impl::init_device(ChipId device_id) {
@@ -1250,10 +1292,11 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     }
     log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
 
-    // Set up dispatch_s DRAM aggregation for this device (when dispatch_s is enabled). Under an ATT
-    // map dispatch_s is built without the aggregator (see DispatchSKernel), so the server polls the
+    // Set up dispatch_s DRAM aggregation for this device (when fast dispatch runs dispatch_s). Under an
+    // ATT map dispatch_s is built without the aggregator (see DispatchSKernel), so the server polls the
     // per-core L1 buffers directly.
-    if (!context_->get_dispatch_query_manager().dispatch_s_enabled() || env_.get_rtoptions().get_noc_att_map().has_value()) {
+    if (!env_.get_rtoptions().get_fast_dispatch() || !context_->get_dispatch_query_manager().dispatch_s_enabled() ||
+        env_.get_rtoptions().get_noc_att_map().has_value()) {
         return;
     }
 
@@ -1279,8 +1322,9 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     }
 
     // Initialize read/write pointers
-    std::array<uint32_t, 5> rw_init = {DEBUG_PRINT_SERVER_STARTING_MAGIC, 0u, 0u, 0u, 0u};
-    cluster.write_dram_vec(rw_init.data(), sizeof(rw_init), device_id, data.dram_view, data.rw_pointers_address);
+    device_print_dispatch::DramRWHeader rw_init{};
+    rw_init.wpos = DEBUG_PRINT_SERVER_STARTING_MAGIC;
+    cluster.write_dram_vec(&rw_init, sizeof(rw_init), device_id, data.dram_view, data.rw_pointers_address);
 
     // Store dispatch DRAM data for this device so that we can use it in poll_device_print_data.
     // There is race condition between poll_device_print_data and attach_device, so adding dispatch
