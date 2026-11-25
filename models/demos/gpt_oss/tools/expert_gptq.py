@@ -9,9 +9,9 @@ settings read (models/demos/gpt_oss/__init__.py) in the fused decode streams and
 The grid. A bfloat4_b block is 16 values that share one exponent; each value is a sign and a 3-bit magnitude in steps
 of 2^(e - 2), e the exponent of the block's largest value. tools/gptq_experts.py groups the 16 values along the
 output dimension N (one input row, 16 output columns: the normal tile layout). The release stores the expert tiles
-transposed within themselves (ttnn.Tile transpose_tile, unified_routed_expert_moe weights_tile_transposed), so each
-block is 16 consecutive input rows k .. k + 15 of one output column (k a multiple of 16). This tool rounds onto that
-grid. Values on it survive a transposed-tile bfloat4_b pack unchanged; a normal pack re-rounds them.
+transposed within themselves (ttnn.Tile transpose_tile, which ttnn.matmul and unified_routed_expert_moe read), so
+each block is 16 consecutive input rows k .. k + 15 of one output column (k a multiple of 16). This tool rounds onto
+that grid. Values on it survive a transposed-tile bfloat4_b pack unchanged; a normal pack re-rounds them.
 
 The rounding. GPTQ walks the input rows in order, rounds each row, and pushes the row's rounding error onto the rows
 not yet rounded through the inverse Hessian (H = X^T X of real expert inputs), so the errors cancel in the expert's
