@@ -23,11 +23,13 @@
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 TRACY_NO_SYS_TRACE=1
     T="models/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_block"
     S=models/tt_dit/tests/models/wan2_2/ci_op_profile_summary.py
+    K="2x2sp0tp1nl2_line_is_fsdp0 and 14b-480p"
+    # tracy joins its arguments and runs them through a shell: the pytest command is one -m string with -k quoted inside.
     export TT_SDPA_LLK2=0 TT_RING_SDPA_LLK2=0 TT_MINIMAL_MATMUL_LLK2=0
-    python -m tracy -r -v -o generated/profiler/wan-llk1 -m pytest --timeout 5400 "$T" -k "2x2sp0tp1nl2_line_is_fsdp0 and 14b-480p" || exit $?
+    python -m tracy -r -v -o generated/profiler/wan-llk1 -m "pytest --timeout 5400 $T -k \"$K\"" || exit $?
     python "$S" generated/profiler/wan-llk1 llk1 || exit $?
     export TT_SDPA_LLK2=1 TT_RING_SDPA_LLK2=1 TT_MINIMAL_MATMUL_LLK2=1
-    python -m tracy -r -v -o generated/profiler/wan-llk2 -m pytest --timeout 5400 "$T" -k "2x2sp0tp1nl2_line_is_fsdp0 and 14b-480p" || exit $?
+    python -m tracy -r -v -o generated/profiler/wan-llk2 -m "pytest --timeout 5400 $T -k \"$K\"" || exit $?
     python "$S" generated/profiler/wan-llk2 llk2 || exit $?
   model: wan-2.2-t2v
   skus:
