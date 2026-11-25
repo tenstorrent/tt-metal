@@ -20,12 +20,12 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "hostdev/l1_ecc_halt_constants.h"
 #include "impl/context/metal_context.hpp"
 #include <internal/l1_ecc_halt.hpp>
@@ -65,7 +65,7 @@ protected:
     }
 
     distributed::MeshWorkload single_core_workload(const char* kernel_path, const std::vector<uint32_t>& runtime_args) {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*devices_[0]);
         KernelHandle kernel = CreateKernel(
             program,
             kernel_path,

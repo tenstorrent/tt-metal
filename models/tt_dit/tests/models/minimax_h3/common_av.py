@@ -811,25 +811,35 @@ def _read_optional_image_path(label: str) -> str | None:
         print(f"no such file: {raw}", file=sys.stderr)
 
 
-def _read_prompt() -> str | None:
-    """The prompt text, or a file's contents when the entry names an existing file. `q` quits; EOFError aborts."""
+def _read_prompt(default_prompt: str | None = None) -> str | None:
+    """The prompt text, or a file's contents when the entry names an existing file. `q` quits; EOFError aborts.
+
+    A blank entry takes `default_prompt` when given and re-prompts otherwise.
+    """
+    label = "blank for default, " if default_prompt is not None else ""
     while True:
         try:
-            text = _prompt_line("User prompt (prompt or file path; q to quit): ").strip()
+            text = _prompt_line(f"User prompt (prompt or file path; {label}q to quit): ").strip()
         except EOFError:
             return None
         if text.lower() == "q":
             return None
         if not text:
+            if default_prompt is not None:
+                return default_prompt
             continue
         return Path(text).read_text().strip() if os.path.isfile(text) else text
 
 
 def _read_user_spec(
-    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int, default_seed: int = 0
+    default_aspect_ratio: tuple[int, int],
+    default_duration_s: float,
+    default_num_steps: int,
+    default_seed: int = 0,
+    default_prompt: str | None = None,
 ) -> tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None:
     """Host stdin: prompt (`q` quits), keyframes, then canvas/aspect (only without keyframes), duration, steps, seed."""
-    prompt = _read_prompt()
+    prompt = _read_prompt(default_prompt)
     if prompt is None:
         return None
     try:
@@ -1065,8 +1075,12 @@ def run_user_generations(
     seed: int,
     label: str = "t2va",
     artifact_name: str = "h3_t2va_artifacts",
+    default_prompt: str | None = None,
 ) -> None:
-    """Prompt/keyframes/canvas/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set."""
+    """Prompt/keyframes/canvas/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set.
+
+    A blank prompt reuses `default_prompt`; with None a prompt is required.
+    """
     if not user_input_enabled():
         return
     from PIL import Image
@@ -1075,7 +1089,9 @@ def run_user_generations(
     index = 0
     while True:
         spec = (
-            _read_user_spec(default_aspect_ratio, default_duration_s, num_inference_steps, seed) if is_host() else None
+            _read_user_spec(default_aspect_ratio, default_duration_s, num_inference_steps, seed, default_prompt)
+            if is_host()
+            else None
         )
         spec = _broadcast_user_spec(spec)
         if spec is None:

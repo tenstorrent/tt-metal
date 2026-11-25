@@ -11,7 +11,7 @@
 #include <core/xtensor_utils.hpp>
 #include <cstdint>
 #include <random>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <utility>
 #include <vector>
 

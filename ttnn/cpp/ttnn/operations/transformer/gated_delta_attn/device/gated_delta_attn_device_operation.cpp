@@ -7,7 +7,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 using namespace tt::tt_metal;
 
