@@ -1266,6 +1266,9 @@ namespace basic_tests {
 namespace compiler_workaround_hardware_bug_tests {
 
 TEST_F(UnitMeshCQFixture, TensixTestArbiterDoesNotHang) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar DM cores have no local data memory: MEM_LOCAL_BASE is TRISC local memory there";
+    }
     for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         Program program = CreateProgram(*device);
