@@ -13,6 +13,7 @@ import dataclasses
 import hashlib
 import os
 
+import pytest
 import torch
 from conftest import skip_for_wormhole
 from helpers.bfp_format_utils import QUANTIZE_TO_FORMAT
@@ -82,6 +83,7 @@ def _acc_modes(formats):
     return [DestAccumulation.No, DestAccumulation.Yes]
 
 
+@pytest.mark.nightly  # every format and sync; the smoke run takes the _smoke slice
 @skip_for_wormhole
 @parametrize(
     formats=FORMATS,
@@ -148,3 +150,17 @@ def test_pack_reconfig_live(formats, dest_acc, dest_sync, chain):
         ):
             bad.append(r)
     assert not bad, f"wrong output after reconfigure steps {bad} of chain {chain}"
+
+
+# The smoke run takes every chain in two configurations: a 16 bit DEST with half sync, a 32 bit DEST with full sync.
+@skip_for_wormhole
+@parametrize(
+    formats=[FORMATS[0], FORMATS[2]],
+    dest_acc=lambda formats: _acc_modes(formats)[0],
+    dest_sync=lambda dest_acc: (
+        DestSync.Full if dest_acc == DestAccumulation.Yes else DestSync.Half
+    ),
+    chain=CHAINS,
+)
+def test_pack_reconfig_live_smoke(formats, dest_acc, dest_sync, chain):
+    test_pack_reconfig_live(formats, dest_acc, dest_sync, chain)
