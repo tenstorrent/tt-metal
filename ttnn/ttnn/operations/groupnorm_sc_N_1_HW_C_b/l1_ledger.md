@@ -22,7 +22,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes, 
 | `cb_x_squared` (4) | `T` pages of 4 KB (alias group B; `total_size = 4 KB·T`) | `T`: a sequential helper intermediate (square → reduce) needs one full reduce block | `{n: streams → 1, ht: spans → h, wt: spans → W, g: streams → none, i: streams → none}` | Float32 (matches the fp32 DEST: x² is not rounded to 16 bits before the reduce) | compute | compute | pass 1 | **Shares** with `cb_output_tiles` (group B): the lifetimes are disjoint (pass 1 vs pass 2). Before the first x² push of block `b > 0`, compute drains the output view with `cb_reserve_back(cb_output_tiles, 2T)`. |
 | `cb_output_tiles` (5) | `2T` pages of 2 KB (group B) | `2T`: double buffer (normalize ∥ DRAM write) | `{n: streams → 1, ht: spans → h (streams over B chunks), wt: spans → W, g: streams → none, i: streams → none}` | Float16_b (output ABI: output dtype = input dtype) | compute | writer | pass 2 | **Shares** with `cb_x_squared` (group B). |
 | `cb_reduce_scaler` (6) | 1 (constant) | 1 | `{n: streams → none, ht: streams → none, wt: streams → none, g: streams → none, i: streams → none}` | Float16_b (the bf16 packed format the reduce scaler requires) | reader | compute | whole kernel | **Not shared.** It is a constant read in pass 1 of every block. Its tile layout is the helper's private pool-type-aware fill (reduce_helpers_dataflow.hpp:70), so it cannot stand in for the all-ones tile. |
-| `cb_sum_acc` (7) | `W` | `W`: every channel's running Σx is live across the chunks | `{n: streams → 1, ht: streams → (accumulates over B chunks), wt: spans → W, g: streams → none, i: streams → none}` | Float32 + `UnpackToDestFp32` (an exact reload; a TF32 reload biases the sum by about `B·2⁻¹²`) | compute | compute | pass 1, chunks `0..B−1`, then the publish copy | **Not shared.** It is concurrent with every pass-1 buffer. Implementation deviation: every chunk (including the last) accumulates here, and one exact `CopyTile` (UnpackToDestFp32 source) publishes the W tiles to `cb_chan_scale` after pass 1. The design's last-chunk reduce variant that packs straight into `cb_chan_scale` doubled the reduce instantiations (kernel text over the kernel-config ring under `--dev`); the copy costs W tile moves per block. Aliasing with `cb_chan_scale` stays illegal: the publish copy reads this CB while packing that one. |
+| `cb_sum_acc` (7) | `W` | `W`: every channel's running Σx is live across the chunks | `{n: streams → 1, ht: streams → (accumulates over B chunks), wt: spans → W, g: streams → none, i: streams → none}` | Float32 + `UnpackToDestFp32` (an exact reload; a TF32 reload biases the sum by about `B·2⁻¹²`) | compute | compute | pass 1, chunks `0..B−1`, then the publish copy | **Not shared.** It is concurrent with every pass-1 buffer. Implementation deviation: every chunk (including the last) accumulates here, and one exact `CopyTile` (UnpackToDestFp32 source) publishes the W tiles to `cb_chan_scale` after pass 1. The design's last-chunk reduce variant that packs straight into `cb_chan_scale` doubled the reduce instantiations (kernel text over the kernel-config ring under `--dev`); the copy costs W tile moves per block. Aliasing with `cb_chan_scale` stays illegal: the publish copy reads this CB while packing that one. *Verifier note:* the reason holds only while the publish copy exists. A lockstep two-view alias (this CB's bytes re-viewed as `cb_chan_scale` without `UnpackToDestFp32`, the way group A views the input ring) would drop the copy and `W` Float32 pages (`2·W` with `cb_sumsq_acc` → group C). That residency lever is folded into the DRAM perf refinement (op_requirements.md, Refinement 10). |
 | `cb_sumsq_acc` (8) | `W` | `W` | `{n: streams → 1, ht: streams → (accumulates over B chunks), wt: spans → W, g: streams → none, i: streams → none}` | Float32 + `UnpackToDestFp32` | compute | compute | pass 1, chunks `0..B−1`, then the publish copy (→ `cb_chan_work`) | **Not shared**, for the same reason as `cb_sum_acc` (the publish copy reads it while packing `cb_chan_work`). |
 | `cb_chan_scale` (9) | `W` | `W` | `{n: streams → 1, ht: streams → none, wt: spans → W, g: streams → none, i: streams → none}` | Float32 | compute | compute | Σx: publish copy (after pass 1) → collapse. Then a = rstd·γ: expand → end of pass 2. | **Shares with itself** across the two sequential lifetimes (Σx, then a). It is not shared with anything else: `a` is live through all of pass 2 together with `b'`, the input views and the output. |
 | `cb_chan_work` (10) | `W` (alias group C) | `W` | `{n: streams → 1, ht: streams → none, wt: spans → W, g: streams → none, i: streams → none}` | Float32 | compute | compute | Σx² (publish copy) → rstd_ch → mean_ch → b' (with β) through pass 2 | **Shares** with `cb_chan_shift` (group C): in-place lockstep hand-offs at 5d/5e. Every quantum is W in capacity W, so both views are at base at each hand-off. |
@@ -64,7 +64,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes, 
 | `D_IN`, `D_RM`, `D_OUT` | 2, 2, 2 (host constants) | — |
 | `HAS_GAMMA`, `HAS_BETA`, `RM`, `TILE` | 0/1 | the call |
 | `STREAM` | `[B_max > K_alloc]` | residency predicate |
-| `L1_budget` | `ttnn.get_max_worker_l1_unreserved_size()`. R1 subtracts the borrowed shard bytes. | device query |
+| `L1_budget` | `l1_cb_budget(device)` = `ttnn.get_memory_view(device, L1).total_bytes_per_bank` (L1 end − allocator base; 1 460 288 B on BH), capped at the lowest live L1 buffer offset in the view's block table. **Verifier fix:** the planner's `ttnn.get_max_worker_l1_unreserved_size()` is measured from the KERNEL_CONFIG base and includes the 70 688 B kernel-config ring that sits below the allocator base, so every shape solved to within 70 KB of it overflowed L1 (6 DRAM perf cases OOMed by 9–54 KB). The block-table cap excludes caller-owned L1 tensors (an R1 shard) automatically; CBs borrowed from a shard are not static CB space. | device query |
 
 ### Per-core footprint
 
@@ -99,12 +99,23 @@ What each term scales with:
 | `R` terms | `cpi` |
 | everything else | constant |
 
-Worked examples (BH, `L1_budget` ≈ 1.4 MB):
+Worked examples (BH, `L1_budget` = 1 460 288 B; verifier-measured plans, γ+β, TILE):
 
-| Case | Parameters | Fixed part | `K_max` | Result |
-|------|------------|------------|---------|--------|
-| `vae_dram_1048576x128` | W = 2, T = 32, R = 2, TILE, γ+β | `F_fixed` ≈ 2 KB·(64 + 1 + 2 + 6) + 4 KB·(32 + 8 + 4 + 6) + 0.25 KB ≈ 346 KB | ≈ 16 chunks | B ≈ 38 |
-| `refiner_dram_16384x1152` | W = 9, T = 27 (h = 3) | 171 tiles per core fit | — | `dram_resident` |
+| Case | Parameters | `K` / `B_max` | `ρ` (non-resident fraction) | Footprint | Regime |
+|------|------------|---------------|-----------------------------|-----------|--------|
+| `vae_dram_1048576x128` | gx = 2, W = 2, h = 16, T = 32, cpi = 55, R = 2 | 16 / 38 | 0.58 | 1 403 136 B | `dram_partial_resident` |
+| `vae_dram_262144x256` | gx = 2, W = 4, h = 8, T = 32, cpi = 55 | 16 / 19 | 0.16 | 1 448 448 B | partial |
+| `vae_dram_262144x512` | gx = 2, W = 8, h = 4, T = 32, cpi = 55 | 14 / 38 | 0.63 | 1 408 000 B | partial |
+| `vae_dram_1048576x256` | gx = 2, W = 4, h = 8, T = 32, cpi = 55 | 16 / 75 | 0.79 | 1 448 448 B | partial |
+| `flux1_dram_1048576x64` | gx = 2, W = 1, h = 32, T = 32, cpi = 55 | 17 / 19 | 0.11 | 1 446 016 B | partial |
+| `mochi_dram_8x407040x128` | gx = 1, W = 4, h = 8, T = 32, cpi = 13 (104 cores) | 16 / 123 | 0.87 | 1 438 208 B | partial |
+| `vae_dram_65536x512` | gx = 2, W = 8, h = 4, T = 32, cpi = 55 | 10 / 10 | 0 | 1 014 784 B | `dram_resident` |
+| `refiner_dram_16384x1152` | gx = 4, W = 9, h = 3, T = 27, cpi = 27 | 7 / 7 | 0 | 738 432 B | `dram_resident` |
+| `flux1_dram_16384x256` | gx = 4, W = 2, h = 16, T = 32, cpi = 27 | 2 / 2 | 0 | 344 320 B | `dram_resident` |
+
+`F_fixed` for `vae_dram_1048576x128` is 354 560 B. Of that, 256 KB is the two `T`-scaled terms: the TILE stream depth
+`D_IN·T` (128 KB) and group B `4 KB·T` (128 KB). Those two terms are the residency lever for the streaming rows: one
+resident chunk is `2 KB·T` = 64 KB.
 
 ## Data-movement budget
 

@@ -90,6 +90,24 @@ def _f32_bits(x):
     return struct.unpack("<I", struct.pack("<f", float(x)))[0]
 
 
+def l1_cb_budget(device):
+    """Bytes available to this program's statically allocated CBs on every worker core.
+
+    CBs are placed from the L1 allocator base upward, so the region is [allocator base, lowest live L1
+    buffer). ``ttnn.get_max_worker_l1_unreserved_size()`` is NOT this: it is measured from the
+    kernel-config base, so it also counts the kernel-config ring (70688 B on BH) that sits below the
+    allocator base, and the CBs it admits overflow L1 by exactly that much. The memory view's per-bank
+    size is measured from the allocator base, and its block table (offsets relative to that base)
+    gives the lowest live L1 buffer, so caller-owned L1 tensors (e.g. an R1 shard) are excluded too.
+    """
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    budget = int(view.total_bytes_per_bank)
+    for blk in view.block_table:
+        if blk.get("allocated") == "yes":
+            budget = min(budget, int(blk["address"]))
+    return budget
+
+
 def _tuning():
     from .groupnorm_sc_N_1_HW_C_b import TUNING_OVERRIDES
 
@@ -99,6 +117,11 @@ def _tuning():
 def input_ring_pages(*, T, K_alloc, stream, is_rm):
     """Input ring capacity: the resident tail plus the streaming depth (TILE: D_IN, RM: 1 tilized chunk)."""
     return K_alloc * T + int(stream) * (1 if is_rm else D_IN) * T
+
+
+def group_b_bytes(T):
+    """Alias group B (x^2 Float32 pass-1 intermediate / D_OUT-deep bf16 output ring): one allocation."""
+    return max(F32_TILE_BYTES * T, D_OUT * T * BF16_TILE_BYTES)
 
 
 def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta):
@@ -111,7 +134,7 @@ def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta):
         + R  # ones tiles
         + W * (1 + hg + hb)  # map, gamma rows, beta rows
     )
-    group_b = max(F32_TILE_BYTES * T, D_OUT * T * BF16_TILE_BYTES)
+    group_b = group_b_bytes(T)
     f32_bytes = group_b + F32_TILE_BYTES * (4 * W + 2 * R + 6)
     staging = _align_up((hg + hb) * W * 64, 64)
     return BF16_TILE_BYTES * bf16_pages + f32_bytes + staging
@@ -300,7 +323,7 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta):
         P = max(1, min(P, int(tuning["max_cores"])))
     chunk_target = CHUNK_TILES_TARGET if tuning.get("chunk_tiles_target") is None else int(tuning["chunk_tiles_target"])
     chunk_target = max(1, chunk_target)
-    l1_budget = ttnn.get_max_worker_l1_unreserved_size()
+    l1_budget = l1_cb_budget(device)
 
     best = _choose_gx(
         N=N,
@@ -427,7 +450,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     # Alias group B: x^2 (pass 1) / output (pass 2), disjoint lifetimes.
     cbs.append(
         _cb(
-            max(F32_TILE_BYTES * T, D_OUT * T * BF16_TILE_BYTES),
+            group_b_bytes(T),
             cores,
             [(CB_X_SQUARED, f32, F32_TILE_BYTES), (CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)],
         )
@@ -482,7 +505,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     )
 
     exp_sbw = _largest_divisor_at_most(W, 4)  # expand matmul out_subblock_w (<= DEST_AUTO_LIMIT fp32 half-sync)
-    out_cb_pages = max(F32_TILE_BYTES * T, D_OUT * T * BF16_TILE_BYTES) // BF16_TILE_BYTES
+    out_cb_pages = group_b_bytes(T) // BF16_TILE_BYTES  # cb_output_tiles capacity (drain barrier)
     compute_ct = [W, h, int(is_rm), hg, hb, R, exp_sbw, out_cb_pages]
 
     # The writer is built once per role (IS_ROOT is compile-time): each binary carries only its own mcast pipe

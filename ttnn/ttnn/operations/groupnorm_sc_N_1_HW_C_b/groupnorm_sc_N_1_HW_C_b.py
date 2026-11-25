@@ -116,7 +116,8 @@ def _shard_placement(input_tensor):
     """(grid_x, grid_y) of a sharded input's shard grid, or None for an interleaved one."""
     if not input_tensor.is_sharded():
         return None
-    spec = input_tensor.shard_spec()
+    # ttnn.Tensor has no shard_spec() method; the spec lives on the memory config.
+    spec = input_tensor.memory_config().shard_spec
     if spec is None:
         return None
     bbox = spec.grid.bounding_box()
