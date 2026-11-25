@@ -580,7 +580,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_MOCK_CLUSTER_DESC_PATH
         // Path to mock cluster descriptor for testing without hardware.
-        // Note: If MOCK and SIMULATOR are set, SIMULATOR takes precedence. MOCK and EMU_SERVER together are rejected.
+        // Note: If both MOCK and SIMULATOR are set, SIMULATOR takes precedence
         // Default: Hardware mode (no mock cluster)
         // Usage: export TT_METAL_MOCK_CLUSTER_DESC_PATH=/path/to/mock_cluster_desc.yaml
         case EnvVarID::TT_METAL_MOCK_CLUSTER_DESC_PATH:
@@ -2155,11 +2155,6 @@ void RunTimeOptions::InitializeFromEnvVars() {
     }
     if (this->runtime_target_device_ == tt::TargetDevice::EmuAxi && this->emu_soc_desc_path.empty()) {
         TT_THROW("TT_METAL_EMU_SERVER requires TT_METAL_EMU_SOC_DESC to be set");
-    }
-    if (!this->emu_server.empty() && !this->mock_cluster_desc_path.empty()) {
-        TT_THROW(
-            "TT_METAL_EMU_SERVER and TT_METAL_MOCK_CLUSTER_DESC_PATH are both set: an emulator run takes its test "
-            "cluster descriptor from TT_METAL_EMU_CLUSTER_DESC");
     }
     if (this->runtime_target_device_ != tt::TargetDevice::EmuAxi && !this->emu_cluster_desc_path.empty()) {
         TT_THROW(
