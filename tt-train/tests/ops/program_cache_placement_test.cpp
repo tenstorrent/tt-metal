@@ -17,7 +17,6 @@
 #include "metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp"
 #include "metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp"
 #include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
-#include "metal/ops/silu_bw/device/silu_bw_device_operation.hpp"
 #include "metal/ops/softmax/device/softmax_device_operation.hpp"
 #include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
 #include "metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
@@ -111,13 +110,6 @@ TEST_F(ProgramCachePlacementTest, RmsNormBw_L1InputAfterDramDoesNotReuseTheProgr
             /*compute_dgamma=*/true,
             zeros_on_device(kShape),
             zeros_on_device(kShape));
-    });
-}
-
-TEST_F(ProgramCachePlacementTest, SiluBw_L1InputAfterDramDoesNotReuseTheProgram) {
-    const auto dL_dout = random_input(kShape, 2U);
-    expect_l1_launch_throws_after_dram(random_input(kShape, 1U), [&](const ttnn::Tensor& input) {
-        ttnn::prim::ttml_silu_bw(input, dL_dout, zeros_on_device(kShape));
     });
 }
 
