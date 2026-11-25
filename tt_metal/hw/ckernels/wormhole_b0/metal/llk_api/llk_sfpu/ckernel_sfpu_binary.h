@@ -181,11 +181,14 @@ inline void calculate_sfpu_binary(
         rne_bias = kBf16RneBias;
         rne_mask = kBf16RneMask;
     }
-    // NEXTAFTER: the +inf bit pattern its NaN classifier compares both magnitudes against, held
-    // in an LREG across the loop for the same reason. Loaded only for NEXTAFTER; unassigned otherwise.
+    // NEXTAFTER: the +inf bit pattern its NaN classifier compares both magnitudes against, and
+    // the smallest step away from zero (one ULP of the entry point's format), held in LREGs across
+    // the loop for the same reason. Loaded only for NEXTAFTER; unassigned otherwise.
     sfpi::vInt inf_bits;
+    sfpi::vFloat tiny;
     if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
         inf_bits = 0x7F800000;
+        tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt((BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1));
     }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -270,7 +273,6 @@ inline void calculate_sfpu_binary(
             // the sign first is what brings -0.0 into the guard.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
-            sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
             v_if(mag_a == 0.0f) {
                 // The smallest step toward in1 carries in1's sign, except that a positive in1 the
                 // direction compares flush to zero (+0, +denormal) keeps in0. For a zero in0 those
