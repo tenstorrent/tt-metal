@@ -836,6 +836,9 @@ bool verify_rt_args(
     uint32_t addr,
     std::vector<uint32_t> expected_rt_args,
     uint32_t incr_val) {
+    if (expected_rt_args.empty()) {
+        return true;
+    }
     bool pass = true;
     std::string label = unique ? "Unique" : "Common";
     // Same idea as ReadFromDeviceL1() but with ETH support.
