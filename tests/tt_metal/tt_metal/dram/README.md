@@ -267,9 +267,8 @@ Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by
 | `noc/test_quasar_att_address.cpp` | out-of-scope | — | — | Host CPU test | — |
 | `noc/test_quasar_att_config.cpp` | out-of-scope | — | — | Host CPU test | — |
 | `noc/test_quasar_att_image.cpp` | out-of-scope | — | — | Host CPU test | — |
-| `api/test_dram_sender_global_cb.cpp` | no-analogue | — | — | Receivers are worker cores; `build_dram_sender_mapping` throws on Quasar (`dram_sender_topology.cpp:36-40`); Mimir DRAM-receiver GCB is covered by the `MimirPrefetcher` `GcbLayout*`, `GcbSmoke*`, `Prefetch*` and `PrefetchRecoversAfter*` tests | — |
 | `api/test_prefetcher_pipe.cpp` | no-analogue | — | — | Metal 2.0 KernelSpec worker kernels; no worker cores | — |
-| `api/test_prefetcher_pipe_dram_sender.cpp` | no-analogue | — | — | Same throw as above; the CCE sender returns BadCmd for a PrefetcherPipe target (`tensor_prefetcher_cce.cpp:74-75` for DRAIN, `:242-244` for PREFETCH) | — |
+| `api/test_prefetcher_pipe_dram_sender.cpp` | no-analogue | — | — | Receivers are worker cores; `build_dram_sender_mapping` throws on CCE DRAM cores (`dram_sender_topology.cpp:70-74`); the Mimir DRAM-receiver pipe set is covered by the `MimirPrefetcher` `PipeLayout*`, `PipeSmoke*`, `Prefetch*` and `PrefetchRecoversAfter*` tests | — |
 
 ### Data-movement port probe results
 

@@ -420,8 +420,8 @@ public:
     std::shared_ptr<experimental::HostRegion> host_region();
 
     // tt::tt_metal::pick_unused_dram_logical_core (impl/buffers/dram_sender_topology.hpp) against
-    // `device`'s SoC descriptor. Throws on Quasar outside DramSenderPlacement::DispatchEngine, where
-    // each view's CCE is its sender.
+    // `device`'s SoC descriptor. Throws where the DRAM cores are CCEs, outside
+    // DramSenderPlacement::DispatchEngine: each view's CCE is its sender.
     CoreCoord pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const;
 
     // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender
