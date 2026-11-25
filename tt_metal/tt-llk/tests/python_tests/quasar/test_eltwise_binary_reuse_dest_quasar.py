@@ -45,6 +45,8 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
     REUSE_DEST_TYPE,
@@ -52,16 +54,21 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.tile_constants import FACE_C_DIM, get_tile_params
+from helpers.tile_constants import (
+    FACE_C_DIM,
+    SUPPORTED_TILE_SIZES,
+    get_tile_params,
+    is_mx_unsupported_tile_dims,
+)
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test, result_tensor
 
-INPUT_DIMENSIONS = [
-    [512, 32],
-]
-OUTPUT_DIMENSIONS = [
-    [128, 32],
-]
+# INPUT_DIMENSIONS = [
+#     [512, 32],
+# ]
+# OUTPUT_DIMENSIONS = [
+#     [128, 32],
+# ]
 
 REUSE_DEST_FORMATS = input_output_formats(
     [
@@ -70,7 +77,7 @@ REUSE_DEST_FORMATS = input_output_formats(
     ],
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
-TILE_DIMENSIONS = [32, 32]
+# TILE_DIMENSIONS = [32, 32]
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
@@ -84,12 +91,29 @@ def reuse_dest_mathops(formats, *, is_perf=False):
     return supported_mathops
 
 
-def _reuse_dest_tile_count(dimensions) -> int:
-    tile_rows, tile_cols = TILE_DIMENSIONS
+def reuse_dest_tile_dimensions(formats):
+    return [
+        dims
+        for dims in SUPPORTED_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, dims
+        )
+    ]
+
+
+def reuse_dest_input_dimensions(tile_dimensions):
+    tile_rows, tile_cols = tile_dimensions
+    return [[16 * tile_rows, tile_cols]]  # 16 input tiles, as today (512x32 of 32x32)
+
+
+def _reuse_dest_tile_count(dimensions, tile_dimensions) -> int:
+    tile_rows, tile_cols = tile_dimensions
     return (dimensions[0] // tile_rows) * (dimensions[1] // tile_cols)
 
 
-def valid_output_dimensions(formats, dest_sync, input_dimensions) -> list:
+def valid_output_dimensions(
+    formats, dest_sync, input_dimensions, tile_dimensions
+) -> list:
     """Output dims compatible with reuse_dest for a given input size, format and dest_sync.
 
     Three constraints, all decidable at collection time so incompatible combinations are
@@ -99,10 +123,11 @@ def valid_output_dimensions(formats, dest_sync, input_dimensions) -> list:
       - the output must fit in a single block (the Quasar reuse_dest kernel uses
         block-relative indexing; multi-block accumulates wrongly).
     """
-    tile_cnt_input = _reuse_dest_tile_count(input_dimensions)
+    tile_cnt_input = _reuse_dest_tile_count(input_dimensions, tile_dimensions)
+    tile_rows, tile_cols = tile_dimensions
     valid = []
-    for out_dims in OUTPUT_DIMENSIONS:
-        tile_cnt_output = _reuse_dest_tile_count(out_dims)
+    for out_dims in [[4 * tile_rows, tile_cols]]:
+        tile_cnt_output = _reuse_dest_tile_count(out_dims, tile_dimensions)
         if tile_cnt_output == 0 or tile_cnt_input % tile_cnt_output != 0:
             continue
         if tile_cnt_input // tile_cnt_output <= 1:
@@ -113,7 +138,7 @@ def valid_output_dimensions(formats, dest_sync, input_dimensions) -> list:
                 DestAccumulation.No,
                 formats,
                 out_dims,
-                (TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]),
+                tuple(tile_dimensions),
                 BlocksCalculationAlgorithm.Standard,
             )
         except ValueError:
@@ -134,7 +159,8 @@ def valid_output_dimensions(formats, dest_sync, input_dimensions) -> list:
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
     dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
-    input_dimensions=runtime(INPUT_DIMENSIONS),
+    tile_dimensions=runtime(reuse_dest_tile_dimensions),
+    input_dimensions=runtime(reuse_dest_input_dimensions),
     output_dimensions=runtime(valid_output_dimensions),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -147,6 +173,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     dest_sync,
     input_dimensions,
     output_dimensions,
+    tile_dimensions,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -157,7 +184,7 @@ def test_eltwise_binary_reuse_dest_quasar(
 
     use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
 
-    tile_rows, tile_cols = TILE_DIMENSIONS
+    tile_rows, tile_cols = tile_dimensions
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
         [tile_rows, tile_cols]
     )
@@ -337,7 +364,9 @@ def test_eltwise_binary_reuse_dest_quasar(
             DEST_SYNC(dest_sync),
         ],
         "runtimes": [
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(
+                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+            ),
             TILE_COUNT(tile_cnt_input),
             INPUT_TILE_CNT(tile_cnt_input),
             OUTPUT_TILE_CNT(tile_cnt_output),
@@ -352,6 +381,8 @@ def test_eltwise_binary_reuse_dest_quasar(
                 output_num_blocks=output_num_blocks,
             ),
             NUM_FACES(num_faces),
+            NUM_FACES_R_DIM(num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim),
             TEST_FACE_DIMS(face_r_dim=face_r_dim, face_c_dim=FACE_C_DIM),
             LOOP_FACTOR(loop_factor),
         ],
@@ -414,7 +445,8 @@ REUSE_DEST_FLOAT32_FORMATS = [
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
     dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
-    input_dimensions=runtime(INPUT_DIMENSIONS),
+    tile_dimensions=runtime(reuse_dest_tile_dimensions),
+    input_dimensions=runtime(reuse_dest_input_dimensions),
     output_dimensions=runtime(valid_output_dimensions),
 )
 def test_eltwise_binary_reuse_dest_float32_quasar(
@@ -425,6 +457,7 @@ def test_eltwise_binary_reuse_dest_float32_quasar(
     dest_sync,
     input_dimensions,
     output_dimensions,
+    tile_dimensions,
 ):
     test_eltwise_binary_reuse_dest_quasar(
         formats,
@@ -434,6 +467,7 @@ def test_eltwise_binary_reuse_dest_float32_quasar(
         dest_sync,
         input_dimensions,
         output_dimensions,
+        tile_dimensions,
         [PerfRunType.L1_TO_L1],
         1,
     )

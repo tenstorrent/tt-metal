@@ -325,7 +325,7 @@ inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
-inline void move_d2a_fixed_face(const std::uint8_t addrmod)
+inline void move_d2a_fixed_face(const std::uint8_t addrmod, const std::uint8_t num_rows)
 {
     // MOVD2A src is relative to dest_section_base + dest_counter.
     // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch), so we emit
@@ -336,14 +336,18 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod)
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCA_VLD tests the bank that MOVD2A will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCA_VLD);
-#pragma GCC unroll 4
+#pragma GCC unroll 2
     for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
     {
+        if (row >= num_rows)
+        {
+            break;
+        }
         TTI_MOVD2A(0, row, addrmod, FPU_MOV_ROWS, row);
     }
 }
 
-inline void move_d2b_fixed_face(const std::uint8_t addrmod)
+inline void move_d2b_fixed_face(const std::uint8_t addrmod, const std::uint8_t num_rows)
 {
     // MOVD2B src is relative to dest_section_base + dest_counter.
     // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch), so we emit
@@ -354,23 +358,27 @@ inline void move_d2b_fixed_face(const std::uint8_t addrmod)
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCB_VLD tests the bank that MOVD2B will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
-#pragma GCC unroll 4
+#pragma GCC unroll 2
     for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
     {
+        if (row >= num_rows)
+        {
+            break;
+        }
         TTI_MOVD2B(0, row, addrmod, FPU_MOV_ROWS, 0, row);
     }
 }
 
 template <EltwiseBinaryReuseDestType binary_reuse_dest>
-inline void eltwise_binary_reuse_dest_as_src()
+inline void eltwise_binary_reuse_dest_as_src(const std::uint8_t num_rows)
 {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
     {
-        move_d2a_fixed_face(ADDR_MOD_3);
+        move_d2a_fixed_face(ADDR_MOD_3, num_rows);
     }
     else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
     {
-        move_d2b_fixed_face(ADDR_MOD_3);
+        move_d2b_fixed_face(ADDR_MOD_3, num_rows);
     }
 }
 
