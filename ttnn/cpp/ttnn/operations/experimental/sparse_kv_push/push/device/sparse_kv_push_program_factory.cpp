@@ -64,7 +64,7 @@ CoreLayout core_layout(const CoreRangeSet& grid, uint32_t links) {
     TT_FATAL(
         cores.size() >= cores_needed(links),
         "the sparse KV push needs {} sender cores, the grid has {}",
-        senders,
+        cores_needed(links),
         cores.size());
     CoreLayout layout{.links = links};
     layout.senders.assign(cores.begin(), cores.begin() + senders);
@@ -133,7 +133,12 @@ std::vector<uint32_t> writer_compile_args(
     const SparseKvPushInputs& tensor_args, uint32_t num_devices, const PacketShape& shape, const CoreLayout& layout) {
     const uint32_t page_bytes = tensor_args.output_tensor.buffer()->aligned_page_size();
     std::vector<uint32_t> ct = {
-        page_bytes, num_devices, layout.num_senders(), shape.pages_per_packet * page_bytes, layout.links};
+        page_bytes,
+        num_devices,
+        layout.num_senders(),
+        shape.pages_per_packet * page_bytes,
+        layout.links,
+        kSendersPerChannel};
     tt::tt_metal::TensorAccessorArgs(tensor_args.output_tensor.buffer()).append_to(ct);
     return ct;
 }
@@ -268,7 +273,10 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     reader.emplace_common_runtime_args(reader_common);
 
     // The rest of a requester's rows lands in the buffer its prefix push already filled, which no reader uses until
-    // this step's attention: nothing can still be reading it, so the rest push skips the start fence.
+    // this step's attention: nothing can still be reading it, so the rest push skips the start fence. This needs the
+    // push before a kRest to be the kPrefix into the same buffer (as in the model). Its done increments can then reach
+    // a chip still waiting on that kPrefix's count; the shared count carries them over, so every row has landed by the
+    // end of kRest.
     auto writer_defines = defines;
     if (params.part == SparseKvPushPart::kRest) {
         writer_defines.emplace_back("SKIP_START_FENCE", "1");

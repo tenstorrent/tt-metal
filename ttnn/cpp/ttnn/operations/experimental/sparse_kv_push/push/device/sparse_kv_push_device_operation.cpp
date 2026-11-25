@@ -153,6 +153,11 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
         cores_needed(params.num_links),
         params.num_links,
         params.core_grid.num_cores());
+    TT_FATAL(
+        mesh_device->num_dram_channels() % ::sparse_push::kBatch == 0,
+        "the sparse KV push needs a DRAM bank count that is a multiple of {}, got {}",
+        ::sparse_push::kBatch,
+        mesh_device->num_dram_channels());
     TT_FATAL(params.sp_axis < 2, "the sparse KV push's sp_axis must be 0 or 1, got {}", params.sp_axis);
     validate_stripe_chunk(params.stripe_chunk, params.max_rows);
     validate_semaphore_placement(params, mesh_device);

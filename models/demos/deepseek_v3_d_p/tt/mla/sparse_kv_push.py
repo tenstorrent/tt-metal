@@ -110,7 +110,7 @@ class SparseKvPushPlanner:
         # Plans built (sparse_push_plan + all-gather), counted on the host.
         self.builds = 0
         self._buffers = {}
-        self._managers = {}  # query rows -> sub-device manager of grids(query rows)
+        self._manager = None  # sub-device manager of grids()
         # layer index -> (plan, buffer parity): the plan whose prefix rows the previous attention step already pushed,
         # beside its attention, into that buffer (None: the dense gather buffer)
         self.prefetched = {}
@@ -142,21 +142,21 @@ class SparseKvPushPlanner:
 
     def prefetch_manager(self, query_rows: int):
         """Sub-device manager that runs attention (sub-device 0, whose cores sparse_sdpa takes by default) beside the
-        next layer's prefix push (sub-device 1), on grids(query_rows). Created at init, outside any trace capture."""
-        if query_rows not in self._managers:
+        next layer's prefix push (sub-device 1), on grids(query_rows). Created at init, outside any trace capture. The
+        grids don't depend on query_rows, so every caller shares one manager."""
+        if self._manager is None:
             attention, push = self.grids(query_rows)
-            self._managers[query_rows] = self.mesh_device.create_sub_device_manager(
+            self._manager = self.mesh_device.create_sub_device_manager(
                 [ttnn.SubDevice([attention]), ttnn.SubDevice([push])], 0
             )
-        return self._managers[query_rows]
+        return self._manager
 
     def release(self):
         """Unregister the sub-device managers before the mesh closes."""
-        if self._managers:
+        if self._manager is not None:
             self.mesh_device.clear_loaded_sub_device_manager()
-            for manager in self._managers.values():
-                self.mesh_device.remove_sub_device_manager(manager)
-            self._managers.clear()
+            self.mesh_device.remove_sub_device_manager(self._manager)
+            self._manager = None
 
     def buffer_spec(self, like: ttnn.Tensor, *, distinct_rows: int, max_rows: int, stripe_chunk: int):
         """The compact buffer's spec for up to `distinct_rows` pushed rows of `like`'s rows. A chip's distinct rows are

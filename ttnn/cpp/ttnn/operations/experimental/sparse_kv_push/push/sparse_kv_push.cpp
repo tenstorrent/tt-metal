@@ -53,7 +53,9 @@ bool is_sparse_kv_push_supported(MeshDevice* mesh_device, uint32_t stripe_chunk,
         mesh_shape.dims() == 2 && mesh_shape[0] >= 3 && mesh_shape[1] >= 3;
     const bool stripe = stripe_chunk > 0 && stripe_chunk % 32 == 0 && stripe_chunk <= ::sparse_push::kMaxStripeChunk &&
                         max_rows > 0 && max_rows % stripe_chunk == 0;
-    return torus && mesh_shape.mesh_size() <= ::sparse_push::plan_table::kMaxDevices && stripe &&
+    // A unit's packets (one per bank) fill whole writer batches.
+    const bool banks = mesh_device->num_dram_channels() % ::sparse_push::kBatch == 0;
+    return torus && mesh_shape.mesh_size() <= ::sparse_push::plan_table::kMaxDevices && stripe && banks &&
            plan_fits(mesh_device, max_rows);
 }
 

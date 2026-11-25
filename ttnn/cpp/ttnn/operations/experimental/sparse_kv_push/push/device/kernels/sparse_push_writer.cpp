@@ -49,7 +49,8 @@ void kernel_main() {
     constexpr uint32_t workers = get_compile_time_arg_val(2);
     constexpr uint32_t packet_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t links = get_compile_time_arg_val(4);
-    constexpr auto output_args = TensorAccessorArgs<5>();
+    constexpr uint32_t per_channel = get_compile_time_arg_val(5);  // senders per (link, direction)
+    constexpr auto output_args = TensorAccessorArgs<6>();
 
     constexpr uint32_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint32_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
@@ -178,10 +179,10 @@ void kernel_main() {
     run(conn);
     conn.close();
     // Worker 0 waits for this chip's done count: one increment from every remote sender whose channel serves this
-    // chip ((N - 1) * links), plus one from each of this chip's own senders. Then it resets the count
+    // chip ((N - 1) * links * per_channel), plus one from each of this chip's own senders. Then it resets the count
     // (semaphores only count up, so it adds the negated count, which wraps to zero).
     if (worker == 0) {
-        constexpr uint32_t done_count = (num_devices - 1) * links + workers;
+        constexpr uint32_t done_count = (num_devices - 1) * links * per_channel + workers;
         noc_semaphore_wait_min(done_ptr, done_count);
         noc_semaphore_inc(get_noc_addr(done_sem), uint32_t{0} - done_count);
         noc_async_atomic_barrier();

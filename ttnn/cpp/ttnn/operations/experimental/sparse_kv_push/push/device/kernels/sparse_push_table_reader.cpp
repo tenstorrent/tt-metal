@@ -13,7 +13,7 @@
 
 using namespace sparse_push;
 
-// One of the two senders of a (link, direction) fabric channel on an owner chip. For each requester the channel
+// The sender of a (link, direction) fabric channel on an owner chip. For each requester the channel
 // serves, it reads the requester's plan table, walks the bitmap over the blocks this chip owns, and hands the rows the
 // requester needs to the writer in packets (PacketBuilder), which sends them into the requester's compact buffer.
 
