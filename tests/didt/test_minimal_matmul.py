@@ -68,12 +68,44 @@ def test_minimal_matmul(
     subblock_w,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
+    grid_origin,
 ):
     M, K, N = 16384, 16384, 16384
 
     compute_grid = get_mesh_grid_size(mesh_device)
     compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
-    logger.info(f"Running on {compute_with_storage_grid_size} cores")
+    if grid_size is not None:
+        # x by y, like the other didt 11x10 grids
+        if grid_size[0] > compute_grid.x or grid_size[1] > compute_grid.y:
+            pytest.fail(
+                f"--grid-size {grid_size[0]}x{grid_size[1]} exceeds the device grid {compute_grid.x}x{compute_grid.y}"
+            )
+        compute_with_storage_grid_size = grid_size
+    origin = grid_origin or (0, 0)
+    if (
+        origin[0] + compute_with_storage_grid_size[0] > compute_grid.x
+        or origin[1] + compute_with_storage_grid_size[1] > compute_grid.y
+    ):
+        pytest.fail(
+            f"--grid-origin {origin[0]}x{origin[1]} + grid "
+            f"{compute_with_storage_grid_size[0]}x{compute_with_storage_grid_size[1]} "
+            f"exceeds the device grid {compute_grid.x}x{compute_grid.y}"
+        )
+    logger.info(f"Running on {compute_with_storage_grid_size} cores starting at logical {origin}")
+
+    # ND investigation knobs: TT_MM_IN0_SOURCE / TT_MM_IN1_SOURCE = partner (default: the input is forwarded core to
+    # core from the injector) or dram (every core reads its own block from DRAM; nothing is forwarded)
+    def from_dram(var):
+        source = os.environ.get(var, "partner")
+        if source not in ("partner", "dram"):
+            pytest.fail(f"{var} must be 'partner' or 'dram', got '{source}'")
+        return source == "dram"
+
+    in0_from_dram, in1_from_dram = from_dram("TT_MM_IN0_SOURCE"), from_dram("TT_MM_IN1_SOURCE")
+    logger.info(
+        f"in0 source {'dram' if in0_from_dram else 'partner'}, in1 source {'dram' if in1_from_dram else 'partner'}"
+    )
 
     in0_shape = [M, K]
     in1_shape = [K, N]
@@ -86,6 +118,10 @@ def test_minimal_matmul(
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
+    # Debug: override math fidelity with DIDT_MATH_FIDELITY (ttnn.MathFidelity name: LoFi, HiFi2, HiFi3, HiFi4)
+    if os.environ.get("DIDT_MATH_FIDELITY"):
+        math_fidelity = getattr(ttnn.MathFidelity, os.environ["DIDT_MATH_FIDELITY"])
+    logger.info(f"Math fidelity: {math_fidelity}")
     # Create compute config
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_config = ComputeConfigClass(
@@ -106,6 +142,9 @@ def test_minimal_matmul(
         subblock_h=subblock_h,
         subblock_w=subblock_w,
         compute_with_storage_grid_size=core_grid,
+        compute_with_storage_origin=ttnn.CoreCoord(origin[0], origin[1]),
+        in0_from_dram=in0_from_dram,
+        in1_from_dram=in1_from_dram,
     )
 
     minimalMatmulTest = MinimalMatmulWorstCaseTest(
@@ -122,5 +161,16 @@ def test_minimal_matmul(
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
     )
+
+    # ND core attribution (minimal_matmul_program_descriptor.cpp): M is split over grid_y and N over grid_x,
+    # each core owning one contiguous output block of round_up(tiles, cores) / cores tiles; the grid is
+    # transposed (M over grid_x) when M > N
+    grid_x, grid_y = compute_with_storage_grid_size
+    transpose = M > N
+    m_cores, n_cores = (grid_x, grid_y) if transpose else (grid_y, grid_x)
+    minimalMatmulTest.nd_core_block = (32 * -(-(M // 32) // m_cores), 32 * -(-(N // 32) // n_cores))
+    minimalMatmulTest.nd_core_transpose = transpose
+    minimalMatmulTest.nd_core_grid_size = (grid_x, grid_y)
+    minimalMatmulTest.nd_core_origin = origin
 
     minimalMatmulTest.run_op_test()

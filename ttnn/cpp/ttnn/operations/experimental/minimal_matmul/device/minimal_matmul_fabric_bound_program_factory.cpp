@@ -210,6 +210,11 @@ void minimal_matmul_fabric_bound_factory_helper_common(
 
     auto grid_size =
         config.has_value() ? config.value().compute_with_storage_grid_size : device->compute_with_storage_grid_size();
+    TT_FATAL(
+        !config.has_value() || (config->compute_with_storage_origin == CoreCoord{0, 0} && !config->in0_from_dram &&
+                                !config->in1_from_dram),
+        "compute_with_storage_origin and in0/in1_from_dram are supported by "
+        "ttnn.experimental.minimal_matmul and minimal_matmul_split only, not by the fused CCL variants");
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
 

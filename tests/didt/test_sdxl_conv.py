@@ -382,6 +382,14 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         slice_config=slice_config,
     )
 
+    # ND core attribution: conv2d picks its DRAM slicing and shard layout at run time, so each check observes the
+    # call (graph capture) and attributes through that call's slices
+    sdxlConvTest.nd_core_capture = "conv2d"
+    sdxlConvTest.nd_conv_out_hw = (
+        (input_height + 2 * pad_h - dilation * (filter_height - 1) - 1) // stride_h + 1,
+        (input_width + 2 * pad_w - dilation * (filter_width - 1) - 1) // stride_w + 1,
+    )
+
     sdxlConvTest.run_op_test()
 
 
@@ -403,8 +411,10 @@ def test_specific_chip_sdxl_conv(
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
+    # MeshDevice.get_device() no longer exists; select the chip via a 1x1 submesh
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_sdxl_conv(
-        mesh_device.get_device(logical_chip_id),
+        submesh_devices[logical_chip_id],
         didt_workload_iterations,
         determinism_check_interval,
         test_config,

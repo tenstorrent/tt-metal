@@ -245,11 +245,12 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
 def test_specific_chip_sdxl_conv(mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
+    # MeshDevice.get_device() no longer exists; select the chip via a 1x1 submesh
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_sdxl_conv(
-        mesh_device.get_device(logical_chip_id),
+        submesh_devices[logical_chip_id],
         didt_workload_iterations,
         determinism_check_interval,
-        False,
     )
 
 
@@ -262,4 +263,4 @@ def test_specific_chip_sdxl_conv(mesh_device, logical_chip_id, didt_workload_ite
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_specific_board_sdxl_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval):
-    test_sdxl_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, False)
+    test_sdxl_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval)

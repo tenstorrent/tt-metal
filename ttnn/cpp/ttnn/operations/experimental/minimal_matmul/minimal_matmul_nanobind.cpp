@@ -87,6 +87,10 @@ void bind_minimal_matmul(nb::module_& mod) {
             - subblock_h: Sub-block height (M dimension) used by compute kernel within a block.
             - subblock_w: Sub-block width (N dimension) used by compute kernel within a block.
             - compute_with_storage_grid_size: Core grid (x, y) to run the op on.
+            - compute_with_storage_origin: Logical core the grid starts at (default (0, 0)). For core-localization
+              sweeps.
+            - in0_from_dram / in1_from_dram: Every core reads its own in0 / in1 block from DRAM instead of receiving
+              it forwarded core to core (default False). For core-localization sweeps; slower.
 
             Required invariants:
             - All block/subblock sizes must be > 0.
@@ -169,14 +173,26 @@ void bind_minimal_matmul(nb::module_& mod) {
                             )doc")
                                         .def(nb::init<>())
                                         .def(
-                                            nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
+                                            nb::init<
+                                                uint32_t,
+                                                uint32_t,
+                                                uint32_t,
+                                                uint32_t,
+                                                uint32_t,
+                                                CoreCoord,
+                                                CoreCoord,
+                                                bool,
+                                                bool>(),
                                             nb::kw_only(),
                                             nb::arg("M_block_size") = 1,
                                             nb::arg("K_block_size") = 1,
                                             nb::arg("N_block_size") = 1,
                                             nb::arg("subblock_h") = 1,
                                             nb::arg("subblock_w") = 1,
-                                            nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
+                                            nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}),
+                                            nb::arg("compute_with_storage_origin") = nb::cast(CoreCoord{0, 0}),
+                                            nb::arg("in0_from_dram") = false,
+                                            nb::arg("in1_from_dram") = false);
 
     py_minimal_matmul_config.def_rw("M_block_size", &MinimalMatmulConfig::M_block_size, "");
     py_minimal_matmul_config.def_rw("K_block_size", &MinimalMatmulConfig::K_block_size, "");
@@ -185,6 +201,10 @@ void bind_minimal_matmul(nb::module_& mod) {
     py_minimal_matmul_config.def_rw("subblock_w", &MinimalMatmulConfig::subblock_w, "");
     py_minimal_matmul_config.def_rw(
         "compute_with_storage_grid_size", &MinimalMatmulConfig::compute_with_storage_grid_size, "");
+    py_minimal_matmul_config.def_rw(
+        "compute_with_storage_origin", &MinimalMatmulConfig::compute_with_storage_origin, "");
+    py_minimal_matmul_config.def_rw("in0_from_dram", &MinimalMatmulConfig::in0_from_dram, "");
+    py_minimal_matmul_config.def_rw("in1_from_dram", &MinimalMatmulConfig::in1_from_dram, "");
 
     py_minimal_matmul_config.def(
         "__repr__", [](const MinimalMatmulConfig& config) { return fmt::format("{}", config); });

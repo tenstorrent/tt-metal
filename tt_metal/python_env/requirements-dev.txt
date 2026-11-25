@@ -45,6 +45,7 @@ websockets==16.0
 pytest==9.0.3
 pytest-cov==7.0.0
 pytest-timeout==2.4.0
+pyluwen==0.10.0 ; platform_machine == 'x86_64'  # tests/didt VF sweep: telemetry interval (optional; x86_64 wheels only)
 pytest-split==0.11.0
 pytest-benchmark==5.2.3
 pytest-repeat==0.9.4

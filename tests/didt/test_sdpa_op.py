@@ -8,6 +8,7 @@ import torch
 
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
+from tt_py_test_utils_common import nd_core_map
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
 NUM_DEVICES = ttnn.distributed.get_num_devices()
@@ -105,5 +106,8 @@ def test_sdpa_op(
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
     )
+
+    # ND core attribution (non-causal SDPA): contiguous (batch, head, q-chunk) runs per core, row-major over the grid
+    sdpa_test.nd_core_owner = lambda shape: nd_core_map.owner_sdpa(shape, 256, core_grid.x, core_grid.y)
 
     sdpa_test.run_op_test()

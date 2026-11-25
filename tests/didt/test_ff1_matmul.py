@@ -55,11 +55,14 @@ def test_ff1_matmul(
 
     # Initialize input configurations
     compute_grid = get_mesh_grid_size(mesh_device)
+    if os.environ.get("DIDT_GRID_X") or os.environ.get("DIDT_GRID_Y"):
+        pytest.fail("DIDT_GRID_X / DIDT_GRID_Y were replaced by --grid-size XxY")
     if grid_size:
         # --grid-size XxY: cores per row x cores per column, a sub-grid anchored at core (0, 0)
-        assert (
-            grid_size[0] <= compute_grid.x and grid_size[1] <= compute_grid.y
-        ), f"--grid-size {grid_size} exceeds the device grid {compute_grid}"
+        if grid_size[0] > compute_grid.x or grid_size[1] > compute_grid.y:
+            pytest.fail(
+                f"--grid-size {grid_size[0]}x{grid_size[1]} exceeds the device grid {compute_grid.x}x{compute_grid.y}"
+            )
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
     logger.info(f"Running on {compute_grid} cores")
 
@@ -98,6 +101,10 @@ def test_ff1_matmul(
         fused_activation=[ttnn.UnaryOpType.GELU, True] if gelu else None,
     )
 
+    # Debug: override math fidelity with DIDT_MATH_FIDELITY (ttnn.MathFidelity name: LoFi, HiFi2, HiFi3, HiFi4)
+    if os.environ.get("DIDT_MATH_FIDELITY"):
+        math_fidelity = getattr(ttnn.MathFidelity, os.environ["DIDT_MATH_FIDELITY"])
+    logger.info(f"Math fidelity: {math_fidelity}")
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_config = ComputeConfigClass(
         math_fidelity=math_fidelity,
@@ -106,17 +113,23 @@ def test_ff1_matmul(
         packer_l1_acc=True,
     )
 
+    # Debug: override data types with DIDT_IN0_DTYPE / DIDT_IN1_DTYPE / DIDT_OUT_DTYPE (ttnn.DataType names, e.g. BFLOAT4_B)
+    in0_dtype = getattr(ttnn.DataType, os.environ.get("DIDT_IN0_DTYPE", "BFLOAT16"))
+    in1_dtype = getattr(ttnn.DataType, os.environ.get("DIDT_IN1_DTYPE", "BFLOAT8_B"))
+    out_dtype = getattr(ttnn.DataType, os.environ.get("DIDT_OUT_DTYPE", "BFLOAT16"))
+    logger.info(f"Data types: in0={in0_dtype} in1={in1_dtype} out={out_dtype}")
+
     in0_shape = [1, 1, 32 * per_core_M * compute_grid.y, 576 * compute_grid.x]
     in1_shape = [1, 1, 576 * compute_grid.x, 32 * per_core_N * compute_grid.x]
 
     ff1_test = FF1Test(
         mesh_device,
-        OpParameter(in0_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT, in0_mem_config),  # activations
+        OpParameter(in0_shape, in0_dtype, ttnn.TILE_LAYOUT, in0_mem_config),  # activations
         [
-            OpParameter(in1_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, in1_mem_config),  # inputs
+            OpParameter(in1_shape, in1_dtype, ttnn.TILE_LAYOUT, in1_mem_config),  # inputs
         ],
         out_mem_config=out_mem_config,
-        out_dtype=ttnn.DataType.BFLOAT16,
+        out_dtype=out_dtype,
         program_config=program_config,
         compute_config=compute_config,
         loop_count=didt_workload_iterations,
@@ -124,6 +137,10 @@ def test_ff1_matmul(
         determinism_check_interval=determinism_check_interval,
         sync_every_iteration=not didt_back_to_back,
     )
+
+    # Per-core output block, used to map non-deterministic elements back to the core that produced them
+    ff1_test.nd_core_block = (32 * per_core_M, 32 * per_core_N)
+    ff1_test.nd_core_grid_size = (compute_grid.x, compute_grid.y)
 
     # Run test
     ff1_test.run_op_test()

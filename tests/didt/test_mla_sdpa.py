@@ -9,6 +9,7 @@ import random
 
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
+from tt_py_test_utils_common import nd_core_map
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
 NUM_DEVICES = ttnn.distributed.get_num_devices()
@@ -110,6 +111,10 @@ def test_mla_sdpa(
     )
 
     # Run test
+    # ND core attribution (non-causal flash MLA prefill, same SDPA factory): contiguous (batch, head, q-chunk) runs
+    # per core, row-major over the grid
+    mla_sdpa_test.nd_core_owner = lambda shape: nd_core_map.owner_sdpa(shape, 128, compute_grid.x, compute_grid.y)
+
     mla_sdpa_test.run_op_test()
 
 

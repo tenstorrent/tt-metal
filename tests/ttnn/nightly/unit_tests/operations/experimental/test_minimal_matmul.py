@@ -519,6 +519,69 @@ def test_linear_core_grid(device, core_grid):
     assert check_result["relative_rmse"] < 0.02
 
 
+# Core-localization knobs (tests/didt): moving the grid and reading an input from DRAM on every core must not change
+# the math. Each core keeps the same output block and K order, so the output is bit-identical to the same-size grid at
+# (0, 0) with forwarding. M > N exercises the transposed grid, a 1-wide grid the receiver-less work units.
+@pytest.mark.parametrize(
+    "M, K, N",
+    [(512, 512, 512), (1024, 256, 512)],
+    ids=["square", "transposed"],
+)
+@pytest.mark.parametrize(
+    "grid, origin",
+    [((4, 4), (0, 0)), ((4, 4), (3, 2)), ((2, 4), (6, 4)), ((1, 4), (5, 1)), ((4, 1), (2, 6))],
+    ids=["4x4_at_0x0", "4x4_at_3x2", "2x4_at_6x4", "1x4_at_5x1", "4x1_at_2x6"],
+)
+@pytest.mark.parametrize(
+    "in0_from_dram, in1_from_dram",
+    [(False, False), (True, False), (False, True), (True, True)],
+    ids=["partner", "in0_dram", "in1_dram", "both_dram"],
+)
+def test_linear_grid_origin_and_dram_source(
+    device, monkeypatch, M, K, N, grid, origin, in0_from_dram, in1_from_dram
+):
+    device_grid = device.compute_with_storage_grid_size()
+    if origin[0] + grid[0] > device_grid.x or origin[1] + grid[1] > device_grid.y:
+        pytest.skip(f"grid {grid} at {origin} does not fit the {device_grid.x}x{device_grid.y} device grid")
+    if min(grid) == 1:
+        monkeypatch.setenv("TT_MM_ALLOW_THIN_GRID", "1")
+
+    torch.manual_seed(0)
+    torch_input = torch.randn((M, K), dtype=torch.float32)
+    weight_input = torch.randn((K, N), dtype=torch.float32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+
+    def run(origin, in0_from_dram, in1_from_dram):
+        config = ttnn.MinimalMatmulConfig(
+            M_block_size=2,
+            K_block_size=2,
+            N_block_size=2,
+            subblock_h=1,
+            subblock_w=1,
+            compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
+            compute_with_storage_origin=ttnn.CoreCoord(*origin),
+            in0_from_dram=in0_from_dram,
+            in1_from_dram=in1_from_dram,
+        )
+        out = ttnn.experimental.minimal_matmul(tt_input, tt_weight, compute_kernel_config=compute_config, config=config)
+        return ttnn.to_torch(out)
+
+    device.clear_program_cache()
+    baseline = run((0, 0), False, False)
+    variant = run(origin, in0_from_dram, in1_from_dram)
+    is_baseline = origin == (0, 0) and not in0_from_dram and not in1_from_dram
+    # The knobs change the program, so they must change the program-cache key
+    assert device.num_program_cache_entries() == (1 if is_baseline else 2)
+    device.clear_program_cache()
+
+    assert assert_quality(torch_input @ weight_input, variant)["pcc"] > 0.999_500
+    assert torch.equal(variant, baseline), "placement or input source changed the result"
+
+
 @pytest.mark.parametrize(
     "M, K, N",
     [(4096, 4096, 4096)],

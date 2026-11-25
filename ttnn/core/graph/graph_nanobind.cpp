@@ -16,11 +16,18 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unordered_set.h>
 #include <nanobind/stl/filesystem.h>
+#include <nanobind/stl/variant.h>
 #include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <any>
+#include <memory>
 
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_consts.hpp"
+#include "ttnn/graph/capture_program_config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include <tt-metalium/observability/capture_hooks.hpp>
 #include <internal/graph_function_abort.hpp>
 
@@ -28,6 +35,12 @@ namespace ttnn::graph {
 
 using IGraphProcessor = tt::tt_metal::IGraphProcessor;
 using GraphTracker = tt::tt_metal::GraphTracker;
+
+namespace {
+// Passive program-config listeners started from Python, innermost last. GraphTracker's processor stack is
+// per-thread, so this one is too.
+thread_local std::vector<std::shared_ptr<ProgramConfigCaptureProcessor>> python_program_config_listeners;
+}  // namespace
 
 void py_graph_module_types(nb::module_& m) {
     nb::enum_<IGraphProcessor::RunMode>(m, "RunMode", R"doc(
@@ -384,6 +397,58 @@ void py_graph_module(nb::module_& m) {
         R"doc(is_detailed_buffer_tracing_enabled() -> bool
 
         Check if detailed per-page buffer tracing is currently enabled.
+        )doc");
+
+    m.def(
+        "begin_program_config_capture",
+        []() {
+            auto listener = std::make_shared<ProgramConfigCaptureProcessor>(program_config_extractors());
+            GraphTracker::instance().push_processor(listener);
+            python_program_config_listeners.push_back(std::move(listener));
+        },
+        R"doc(begin_program_config_capture() -> None
+
+        Start a passive listener that records the program config each registered op actually runs with (today:
+        matmul, including the config it selects itself when none is passed). It does not change execution and
+        does not start a graph capture. Pair with end_program_config_capture(); calls nest, and any graph capture
+        started in between must end before it.
+        )doc");
+
+    m.def(
+        "end_program_config_capture",
+        []() -> nb::object {
+            TT_FATAL(!python_program_config_listeners.empty(), "end_program_config_capture without a begin");
+            auto listener = std::move(python_program_config_listeners.back());
+            python_program_config_listeners.pop_back();
+            // Take this listener off the tracker stack and leave every processor above it (a device's memory
+            // tracker, a capture left open) in place and in order, as graph_processor.cpp's remove does.
+            auto& tracker = GraphTracker::instance();
+            const auto& stack = tracker.get_processors();
+            TT_FATAL(
+                std::find(stack.begin(), stack.end(), listener) != stack.end(),
+                "program-config listener is no longer on the tracker stack");
+            std::vector<std::shared_ptr<IGraphProcessor>> above;
+            while (tracker.get_processors().back() != listener) {
+                above.push_back(tracker.get_processors().back());
+                tracker.pop_processor();
+            }
+            tracker.pop_processor();
+            for (auto it = above.rbegin(); it != above.rend(); ++it) {
+                tracker.push_processor(*it);
+            }
+            auto result = listener->take_result();
+            if (!result.has_value()) {
+                return nb::none();
+            }
+            if (const auto* cfg = std::any_cast<ttnn::operations::matmul::MatmulProgramConfig>(&*result)) {
+                return nb::cast(*cfg);
+            }
+            return nb::none();
+        },
+        R"doc(end_program_config_capture() -> Optional[program config]
+
+        Stop the innermost listener from begin_program_config_capture() and return the program config of the
+        last registered op it saw (for matmul, one of the ttnn.Matmul*ProgramConfig classes), or None.
         )doc");
 }
 

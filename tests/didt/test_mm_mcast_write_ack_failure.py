@@ -81,6 +81,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tt_py_test_utils_common.matmul_window import NoBlocksInWindow, NotWindowable, window_matmul
 from models.common.utility_functions import skip_for_wormhole_b0
 from tt_py_test_utils_common.op_test_base import OpParameter, OpTestBase
 
@@ -166,27 +167,13 @@ def describe(runtime_id, identity, asics=None):
 class McastWriteAckTest(OpTestBase):
     """The wkv_b1 multicast matmul on the OpTestBase loop, so it gets determinism checks and the VF sweep."""
 
-    def __init__(self, *args, gx, gy, per_core_m, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.gx, self.gy, self.per_core_m = gx, gy, per_core_m
-
     def run_device_operation(self):
         return ttnn.linear(
             self.activations,
             self.inputs[0],
             memory_config=self.out_mem_config,
             dtype=self.out_dtype,
-            program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(self.gx, self.gy),
-                in0_block_w=4,
-                out_subblock_h=1,
-                out_subblock_w=8,
-                per_core_M=self.per_core_m,
-                per_core_N=16,
-                fuse_batch=False,
-                fused_activation=None,
-                mcast_in0=False,
-            ),
+            program_config=self.program_config,
             compute_kernel_config=self.compute_config,
         )
 
@@ -200,7 +187,7 @@ class McastWriteAckTest(OpTestBase):
 )
 @skip_for_wormhole_b0("shapes and program config are tuned for Blackhole")
 @pytest.mark.timeout(0)
-def test_mm_mcast_write_ack_failure_scan(mesh_device, determinism_check_interval):
+def test_mm_mcast_write_ack_failure_scan(mesh_device, determinism_check_interval, grid_size, grid_origin):
     if float(os.environ.get(WATCHDOG_ENV, 0)) <= 0:
         pytest.fail(f"{WATCHDOG_ENV} is non-positive, which disables hang detection entirely")
 
@@ -213,10 +200,39 @@ def test_mm_mcast_write_ack_failure_scan(mesh_device, determinism_check_interval
     while m_tiles % per_core_m:
         per_core_m += 1
 
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_m,
+        per_core_N=16,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+    # --grid-size / --grid-origin: run on that window of the MATMUL_GRID grid with every core computing the rows it
+    # computes on the full grid (tt_py_test_utils_common/matmul_window.py), for core-exclusion checks
+    origin, window = (0, 0), None
+    if grid_size is not None:
+        origin, window = tuple(grid_origin or (0, 0)), tuple(grid_size)
+        try:
+            seq_window, _, program_config = window_matmul(program_config, seq, 512, window, origin, batch=heads)
+        except NoBlocksInWindow as e:
+            pytest.skip(f"nothing to verify: {e} (those cores are idle on the full grid too)")
+        except NotWindowable as e:
+            pytest.skip(f"cannot run this window with the full grid's per-core work: {e}")
+        logger.info(
+            f"window {window[0]}x{window[1]} at {origin[0]}x{origin[1]}: every core keeps its full-grid rows "
+            f"(per_core_M={per_core_m}); seq {seq_window} of {seq}"
+        )
+        seq = seq_window
+
     identity = chip_identity()
     for runtime_id in mesh_device.get_device_ids():
         logger.info(f"participating {describe(runtime_id, identity)}")
-    logger.info(f"matmul [1,{heads},{seq},128] @ [1,{heads},128,512] on {gx}x{gy} cores, per_core_M={per_core_m}")
+    where = f"window {window[0]}x{window[1]} at {origin[0]}x{origin[1]} of {gx}x{gy}" if window else f"{gx}x{gy}"
+    logger.info(f"matmul [1,{heads},{seq},128] @ [1,{heads},128,512] on {where} cores, per_core_M={per_core_m}")
 
     dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     mm_test = McastWriteAckTest(
@@ -225,7 +241,7 @@ def test_mm_mcast_write_ack_failure_scan(mesh_device, determinism_check_interval
         [OpParameter([1, heads, 128, 512], ttnn.bfloat8_b, ttnn.TILE_LAYOUT, dram)],  # in1
         out_mem_config=dram,
         out_dtype=ttnn.bfloat16,
-        program_config=None,  # built in run_device_operation
+        program_config=program_config,
         compute_config=ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -236,10 +252,15 @@ def test_mm_mcast_write_ack_failure_scan(mesh_device, determinism_check_interval
         loop_count=int(os.environ.get("MATMUL_ITERS", 20)),
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
-        gx=gx,
-        gy=gy,
-        per_core_m=per_core_m,
     )
+
+    # ND core attribution (matmul 1D factory, mcast_in1): core i = (i % gx, i // gx) computes and writes rows
+    # [32 * per_core_m * i, +32 * per_core_m) of every batch, all 512 columns; a window's core j = window origin +
+    # (j % width, j // width) owns windowed row block j
+    mm_test.nd_core_block = (32 * per_core_m, 512)
+    mm_test.nd_core_linear_x = window[0] if window else gx
+    mm_test.nd_core_origin = origin
+    mm_test.nd_core_grid_size = window or (gx, gy)
 
     try:
         mm_test.run_op_test()

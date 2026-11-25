@@ -29,6 +29,8 @@ from ttnn._ttnn.graph import (
     disable_detailed_buffer_tracing,
     is_detailed_buffer_tracing_enabled,
     is_graph_capture_active,
+    begin_program_config_capture,
+    end_program_config_capture,
     track_function_start as _cpp_track_function_start,
     track_function_end as _cpp_track_function_end,
     unwind_open_functions as _cpp_unwind_open_functions,

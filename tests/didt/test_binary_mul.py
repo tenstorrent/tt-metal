@@ -8,6 +8,7 @@ import torch
 
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
+from tt_py_test_utils_common import nd_core_map
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
 NUM_DEVICES = ttnn.distributed.get_num_devices()
@@ -86,4 +87,9 @@ def test_binary_mul(
     )
 
     # Run test
+    # ND core attribution (binary_ng, interleaved): contiguous output tile runs per core, row-major over the grid
+    binary_mul_test.nd_core_owner = lambda shape: nd_core_map.owner_contiguous_tiles(
+        shape, compute_grid.x, compute_grid.y
+    )
+
     binary_mul_test.run_op_test()

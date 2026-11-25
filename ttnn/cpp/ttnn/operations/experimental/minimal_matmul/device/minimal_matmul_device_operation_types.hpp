@@ -20,6 +20,14 @@ struct MinimalMatmulConfig {
     uint32_t subblock_w{};
 
     tt::tt_metal::CoreCoord compute_with_storage_grid_size = {0, 0};
+
+    // ND investigation knobs (tests/didt). The grid is [origin, origin + compute_with_storage_grid_size); the op
+    // indexes cores from 0 inside it, the origin only places it on the device.
+    tt::tt_metal::CoreCoord compute_with_storage_origin = {0, 0};
+    // Read the input from DRAM on every core instead of forwarding it core to core from the injector: every core
+    // runs the sender kernel as a sink, so a fault on the forwarding path drops out.
+    bool in0_from_dram = false;
+    bool in1_from_dram = false;
 };
 
 struct MinimalMatmulParams {

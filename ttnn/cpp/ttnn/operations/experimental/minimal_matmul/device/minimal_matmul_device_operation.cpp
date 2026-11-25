@@ -5,6 +5,8 @@
 #include "minimal_matmul_device_operation.hpp"
 #include "minimal_matmul_program_factory.hpp"
 
+#include <cstdlib>
+
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
@@ -377,7 +379,11 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         // Grid must be at least 2x2 on WH/BH (the sender/receiver split assumes both axes span more
         // than one core). Quasar: the factory declares only the regions/kernels that exist on the grid,
         // so a 1xN / Nx1 / 1x1 grid (the single-core Quasar emulator) is accepted there.
-        const uint32_t min_grid_dim = act_tensor.device()->arch() == tt::ARCH::QUASAR ? 1 : 2;
+        // TT_MM_ALLOW_THIN_GRID: ND investigation knob (tests/didt), lets a 1-wide / 1-tall grid run on WH/BH
+        // through the same Quasar path. Validation only: it does not change the program.
+        const bool allow_thin_grid =
+            act_tensor.device()->arch() == tt::ARCH::QUASAR || std::getenv("TT_MM_ALLOW_THIN_GRID") != nullptr;
+        const uint32_t min_grid_dim = allow_thin_grid ? 1 : 2;
         TT_FATAL(
             cfg.compute_with_storage_grid_size.x >= min_grid_dim &&
                 cfg.compute_with_storage_grid_size.y >= min_grid_dim,
@@ -388,9 +394,12 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         // Additional grid checks are performed when creating the program
         auto device_grid = act_tensor.device()->compute_with_storage_grid_size();
         TT_FATAL(
-            cfg.compute_with_storage_grid_size.x <= device_grid.x &&
-                cfg.compute_with_storage_grid_size.y <= device_grid.y,
-            "compute_with_storage_grid_size must be <= device grid size");
+            cfg.compute_with_storage_origin.x + cfg.compute_with_storage_grid_size.x <= device_grid.x &&
+                cfg.compute_with_storage_origin.y + cfg.compute_with_storage_grid_size.y <= device_grid.y,
+            "compute_with_storage_origin ({}) + compute_with_storage_grid_size ({}) must be <= device grid size ({})",
+            cfg.compute_with_storage_origin,
+            cfg.compute_with_storage_grid_size,
+            device_grid);
 
         const uint32_t max_dest_volume = get_dest_reg_count(operation_attributes.compute_kernel_config);
         TT_FATAL(

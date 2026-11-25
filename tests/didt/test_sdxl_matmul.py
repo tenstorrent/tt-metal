@@ -202,6 +202,10 @@ def test_sdxl_matmul(
     )
 
     # Run test
+    # ND core attribution (matmul 2D factory): core (x, y) computes and writes output block (by = y, bx = x)
+    sdxl_matmul_test.nd_core_block = (32 * per_core_M, 32 * per_core_N)
+    sdxl_matmul_test.nd_core_grid_size = (compute_grid.x, compute_grid.y)
+
     sdxl_matmul_test.run_op_test()
 
 
@@ -226,8 +230,10 @@ def test_specific_chip_sdxl_matmul(
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
+    # MeshDevice.get_device() no longer exists; select the chip via a 1x1 submesh
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_sdxl_matmul(
-        mesh_device.get_device(logical_chip_id),
+        submesh_devices[logical_chip_id],
         didt_workload_iterations,
         determinism_check_interval,
         test_config,

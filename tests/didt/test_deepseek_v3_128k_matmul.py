@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import (
     SHARED_EXPERT_MATMUL_PARAMS as SHARED_EXPERT_PARAMS,
 )
 from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import get_prefill_matmul_program_config
+from tt_py_test_utils_common.matmul_window import NoBlocksInWindow, NotWindowable, window_matmul
 from tt_py_test_utils_common.op_test_base import OpParameter, OpTestBase
 
 # ---------------------------------------------------------------------------
@@ -81,6 +82,46 @@ class DeepseekV3MatmulTest(OpTestBase):
 # ---------------------------------------------------------------------------
 
 
+def _auto_selected_config(mesh_device, batch, M, K, N, in1_dtype, compute_config):
+    """The program config matmul selects by itself for this full-size problem (no program_config passed), read with
+    the passive program-config listener. The call runs under a NO_DISPATCH graph capture, so nothing is sent to the
+    device: a core-exclusion check must not run the full grid, suspect core included, before its window."""
+    import torch
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    a = ttnn.from_torch(
+        torch.zeros(1, batch, M, K),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=dram,
+        mesh_mapper=mapper,
+    )
+    b = ttnn.from_torch(
+        torch.zeros(1, batch, K, N),
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=dram,
+        mesh_mapper=mapper,
+    )
+    ttnn.graph.begin_program_config_capture()
+    try:
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        try:
+            ttnn.matmul(a, b, memory_config=dram, dtype=ttnn.bfloat16, compute_kernel_config=compute_config)
+        finally:
+            ttnn.graph.end_graph_capture()
+    finally:
+        config = ttnn.graph.end_program_config_capture()
+    for t in (a, b):
+        t.deallocate(True)
+    if config is None:
+        raise RuntimeError("could not read the matmul's auto-selected program config")
+    return config
+
+
 def _run_matmul_test(
     mesh_device,
     M: int,
@@ -93,8 +134,14 @@ def _run_matmul_test(
     batch: int = 1,
     grid_size: tuple[int, int] = GRID_SIZE,
     workload_id: str | None = None,
+    window_size: tuple[int, int] | None = None,
+    window_origin: tuple[int, int] | None = None,
 ) -> None:
-    """Run one Deepseek V3 matmul DIDT test (DRAM, optional optimal program config)."""
+    """Run one Deepseek V3 matmul DIDT test (DRAM, optional optimal program config).
+
+    window_size / window_origin (--grid-size / --grid-origin): run on that window of the grid_size grid with every
+    core doing the work it does on the full grid (tt_py_test_utils_common/matmul_window.py), for core-exclusion
+    checks. Without a window the test is unchanged."""
     dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     optimal_config = OPTIMAL_PROGRAM_CONFIG.get(workload_id) if workload_id else None
     program_config = (
@@ -107,6 +154,22 @@ def _run_matmul_test(
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
+
+    if window_size is not None:
+        origin = tuple(window_origin or (0, 0))
+        full_config = program_config or _auto_selected_config(mesh_device, batch, M, K, N, in1_dtype, compute_config)
+        try:
+            M_window, N_window, program_config = window_matmul(full_config, M, N, tuple(window_size), origin, batch)
+        except NoBlocksInWindow as e:
+            pytest.skip(f"nothing to verify: {e} (those cores are idle on the full grid too)")
+        except NotWindowable as e:
+            pytest.skip(f"cannot run this window with the full grid's per-core work: {e}")
+        logger.info(
+            f"Deepseek V3 DIDT matmul window {window_size[0]}x{window_size[1]} at {origin[0]}x{origin[1]}: every core "
+            f"keeps its full-grid block ({full_config.per_core_M}x{full_config.per_core_N} tiles); "
+            f"output {M_window}x{N_window} of the full {M}x{N}"
+        )
+        M, N = M_window, N_window
 
     in0_shape = [1, batch, M, K]
     in1_shape = [1, batch, K, N]
@@ -135,6 +198,19 @@ def _run_matmul_test(
         determinism_check_interval=determinism_check_interval,
     )
 
+    # ND core attribution. With a program config (batch 1, 2D factory) core (x, y) computes and writes output block
+    # (by = y, bx = x). Without one (batch 32) matmul picks the config at run time, so each check observes it. A
+    # windowed run is observed too: its config carries the window origin (allowed_worker_cores).
+    if window_size is not None:
+        test.nd_core_capture = "matmul_config"
+    elif program_config is not None:
+        test.nd_core_block = (32 * program_config.per_core_M, 32 * program_config.per_core_N)
+        test.nd_core_transpose = bool(program_config.transpose_mcast)
+        grid = program_config.compute_with_storage_grid_size
+        test.nd_core_grid_size = (grid.x, grid.y)
+    else:
+        test.nd_core_capture = "matmul_config"
+
     test.run_op_test()
 
 
@@ -158,6 +234,8 @@ def test_deepseek_v3_mla_matmul(
     workload_id,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
+    grid_origin,
 ):
     """MLA matmuls: bfloat16 in0, bfloat8_b in1, HiFi2."""
     _run_matmul_test(
@@ -169,6 +247,8 @@ def test_deepseek_v3_mla_matmul(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         didt_workload_iterations=didt_workload_iterations,
         determinism_check_interval=determinism_check_interval,
+        window_size=grid_size,
+        window_origin=grid_origin,
         batch=batch,
         workload_id=workload_id,
     )
@@ -185,6 +265,8 @@ def test_deepseek_v3_gate_matmul(
     mesh_device,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
+    grid_origin,
 ):
     """MoE gate matmul: 4096×1792×256, bfloat16, HiFi2."""
     M, K, N, in1_dtype, workload_id = GATE_MATMUL_CONFIG
@@ -197,6 +279,8 @@ def test_deepseek_v3_gate_matmul(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         didt_workload_iterations=didt_workload_iterations,
         determinism_check_interval=determinism_check_interval,
+        window_size=grid_size,
+        window_origin=grid_origin,
         workload_id=workload_id,
     )
 
@@ -219,6 +303,8 @@ def test_deepseek_v3_dense_mlp_matmul(
     workload_id,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
+    grid_origin,
 ):
     """Dense MLP matmuls: bfloat4_b, LoFi."""
     _run_matmul_test(
@@ -230,6 +316,8 @@ def test_deepseek_v3_dense_mlp_matmul(
         math_fidelity=ttnn.MathFidelity.LoFi,
         didt_workload_iterations=didt_workload_iterations,
         determinism_check_interval=determinism_check_interval,
+        window_size=grid_size,
+        window_origin=grid_origin,
         workload_id=workload_id,
     )
 
@@ -252,6 +340,8 @@ def test_deepseek_v3_shared_expert_matmul(
     workload_id,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
+    grid_origin,
 ):
     """Shared expert matmuls: bfloat4_b, LoFi."""
     _run_matmul_test(
@@ -263,6 +353,8 @@ def test_deepseek_v3_shared_expert_matmul(
         math_fidelity=ttnn.MathFidelity.LoFi,
         didt_workload_iterations=didt_workload_iterations,
         determinism_check_interval=determinism_check_interval,
+        window_size=grid_size,
+        window_origin=grid_origin,
         workload_id=workload_id,
     )
 
@@ -285,6 +377,8 @@ def test_deepseek_v3_routed_expert_matmul(
     workload_id,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
+    grid_origin,
 ):
     """Routed expert matmuls: bfloat4_b, LoFi."""
     _run_matmul_test(
@@ -296,5 +390,7 @@ def test_deepseek_v3_routed_expert_matmul(
         math_fidelity=ttnn.MathFidelity.LoFi,
         didt_workload_iterations=didt_workload_iterations,
         determinism_check_interval=determinism_check_interval,
+        window_size=grid_size,
+        window_origin=grid_origin,
         workload_id=workload_id,
     )

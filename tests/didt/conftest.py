@@ -34,3 +34,15 @@ def didt_vf_sweep(request):
     OpTestBase.vf_sweep_defaults = {"freqs": freqs or None, "sweep_iterations": iterations, "vdd_offsets": offsets}
     yield
     OpTestBase.vf_sweep_defaults = saved
+
+
+@pytest.fixture(autouse=True)
+def didt_grid_origin_supported(request):
+    """--grid-origin moves the grid only in minimal_matmul (MinimalMatmulConfig.compute_with_storage_origin); the
+    other didt ops always start at core (0, 0), so refuse it there instead of ignoring it."""
+    origin = request.config.getoption("--grid-origin")
+    if origin and origin.replace(" ", "") != "0x0" and "grid_origin" not in request.fixturenames:
+        pytest.fail(
+            f"--grid-origin {origin}: this test cannot move its grid; test_minimal_matmul, "
+            "test_deepseek_v3_128k_matmul and test_mm_mcast_write_ack_failure can"
+        )

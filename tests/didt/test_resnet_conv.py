@@ -219,7 +219,9 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
 def test_specific_chip_resnet_conv(mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
-    test_resnet_conv(mesh_device.get_device(logical_chip_id), didt_workload_iterations, determinism_check_interval)
+    # MeshDevice.get_device() no longer exists; select the chip via a 1x1 submesh
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
+    test_resnet_conv(submesh_devices[logical_chip_id], didt_workload_iterations, determinism_check_interval)
 
 
 @skip_for_blackhole("Multi-board Blackhole has not been tested")
