@@ -130,7 +130,7 @@
   team: llk
   budget_type: pr_gate
   coverage: false
-  cmd: ./tests/run_sfpu_ulp_pr_check.sh --junitxml=pytest-report-wormhole-3.xml
+  cmd: GITHUB_EVENT_NAME=pull_request ./tests/run_sfpu_ulp_pr_check.sh --junitxml=pytest-report-wormhole-3.xml
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -142,7 +142,7 @@
   team: llk
   budget_type: pr_gate
   coverage: false
-  cmd: ./tests/run_sfpu_ulp_pr_check.sh --junitxml=pytest-report-blackhole-4.xml
+  cmd: GITHUB_EVENT_NAME=pull_request ./tests/run_sfpu_ulp_pr_check.sh --junitxml=pytest-report-blackhole-4.xml
   skus:
     bh_p150b_civ2_viommu:
       timeout: 10
