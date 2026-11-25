@@ -70,6 +70,11 @@ void kernel_main() {
     static_assert(!units || (ncc * units_per_core) % 2 == 0);
     static_assert(!units || h_tile_bytes == 2048 || h_tile_bytes == 1088, "16-column units: bf16 or bfp8 h tiles");
     auto write_h = [](uint32_t src, uint64_t dst, uint32_t bytes) {
+        if constexpr (get_named_compile_time_arg_val("x_fwd_brisc") != 0) {
+            // (FLAT_X_NOC1: the h writes carry transaction id 8 - its 8-bit outstanding count must not wrap)
+            while (NOC_STATUS_READ_REG(noc_index, NIU_MST_REQS_OUTSTANDING_ID(8)) > 128) {
+            }
+        }
         noc_async_write(src, dst, bytes, noc_index, h_vc);
     };
     constexpr uint32_t half_bytes = h_all_tiles * h_tile_bytes;
@@ -80,7 +85,11 @@ void kernel_main() {
     const uint32_t nh = moe_block_args::arg(2);
     const uint32_t gath_sem_id = moe_block_args::arg(3);
     const uint32_t h_all_addr = moe_block_args::arg(4);
-    constexpr uint32_t heads0 = 5;
+    // (MEASUREMENT ONLY, FLAT_X_NOC1: this RISC forwards x along the mirrored snake on NOC1 - RT 5 the x ring, 6 the
+    // successor xy (0: snake tail); its NCRISC (gate_up_x_forwarder.cpp) reports XCONS = min(consumed, forwarded) upstream)
+    constexpr bool x_fwd = get_named_compile_time_arg_val("x_fwd_brisc") != 0;
+    constexpr uint32_t depth = get_named_compile_time_arg_val("x_forward_depth");
+    constexpr uint32_t heads0 = x_fwd ? 7 : 5;
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
     // the landing slots granted so far (RT 0: the semaphore counting them, zero at launch): the weight reads
     // (gate_up_weight_read.hpp) read into granted slots only
@@ -114,13 +123,79 @@ void kernel_main() {
         }
         *sem(flat_options::gate_up_mailbox_sem) = 1;
     }
+    // (FLAT_X_NOC1) the x forwarding: stateful trid writes on the write-register command buffer (the h writes keep
+    // write_cmd_buf, with their own transaction id: their flush test must not wait on x writes in flight)
+    constexpr uint32_t x_cmd_buf = write_reg_cmd_buf;
+    constexpr uint32_t h_trid = 8;
+    static_assert(!x_fwd || (depth >= 1 && depth < h_trid));
+    constexpr uint32_t x_bytes = mt * flat_options::x_block_k_tiles * flat_options::x_tile_bytes;
+    constexpr uint32_t piece = x_bytes / xp;
+    constexpr uint32_t nb =
+        flat_options::super_blocks_per_sub_block * flat_options::super_block_tiles / flat_options::x_block_k_tiles;
+    const uint32_t x_ring = x_fwd ? moe_block_args::arg(5) : 0;
+    const uint32_t sxy = x_fwd ? moe_block_args::arg(6) : 0;
+    const uint64_t s_xarr = get_noc_addr(sxy >> 16, sxy & 0xFFFF, get_semaphore(xarr_sem_id));
+    volatile tt_l1_ptr uint32_t* sfree = sem(flat_options::x_slot_free_sem);
+    const volatile tt_l1_ptr uint32_t* xe =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(schedule_scratch(ScratchOwner::Ncrisc)) + 1 + schedule.loads;
+    const uint32_t n_ent = xe[0];
+    uint32_t iss = 0, fwd = 0;                       // pieces issued / acknowledged (+ XARR'd)
+    uint32_t ca = 0, cs = 0, cv_end = nb, cnp = xp;  // the block cursor (gate_up_x_forwarder.cpp)
+    auto set_np = [&]() {
+        const uint32_t subs = ca < n_ent ? (xe[1 + ca] & 0xFFFF) : 1u;
+        const uint32_t lr = ca < n_ent && cs + 1 == subs ? (xe[1 + ca] >> 16) : mt;
+        cnp = (lr * xp + mt - 1) / mt;
+    };
+    if constexpr (x_fwd) {
+        set_np();
+        noc_async_write_set_trid(h_trid);
+        if (sxy) {
+            noc_async_write_one_packet_with_trid_set_state(get_noc_addr(sxy >> 16, sxy & 0xFFFF, 0), x_cmd_buf);
+        }
+    }
+    auto x_step = [&]() {
+        if (!x_fwd || !sxy) {
+            return;
+        }
+        const uint32_t arrived = *xarr_sem;
+        while (iss < arrived && iss - fwd < depth && (iss / xp < x_slots || *sfree >= iss / xp + 1 - x_slots)) {
+            while (iss / xp >= cv_end) {
+                cv_end += nb;
+                if (ca < n_ent && ++cs == (xe[1 + ca] & 0xFFFF)) {
+                    cs = 0;
+                    ++ca;
+                }
+                set_np();
+            }
+            if (iss % xp >= cnp) {  // (an empty piece: counted, not written)
+                ++iss;
+                continue;
+            }
+            const uint32_t off = x_ring + ((iss / xp) % x_slots) * x_bytes + (iss % xp) * piece;
+            for (uint32_t o = 0; o < piece; o += NOC_MAX_BURST_SIZE) {
+                const uint32_t n = piece - o < NOC_MAX_BURST_SIZE ? piece - o : NOC_MAX_BURST_SIZE;
+                noc_async_write_one_packet_with_trid_with_state(off + o, off + o, n, 1 + iss % depth, x_cmd_buf);
+            }
+            ++iss;
+        }
+        while (fwd < iss && !noc_cmd_buf_ready(noc_index, x_cmd_buf)) {
+        }
+        while (fwd < iss && ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, 1 + fwd % depth)) {
+            noc_semaphore_inc(s_xarr, 1);
+            ++fwd;
+        }
+    };
+    // XCONS: the blocks consumed by compute and (FLAT_X_NOC1) forwarded
+    auto x_freed = [&](uint32_t cons) { return x_fwd && sxy && fwd / xp < cons ? fwd / xp : cons; };
     grant(w_slots);  // every landing slot starts free
     uint32_t granted = w_slots, pushed = 0;
     uint32_t x_pub = 0, x_cons = 0;
     uint32_t h_sent = 0, h_pending = 0;
 
+    const uint32_t x_total = num_v * nk_gu;
     while (h_sent < num_v || pushed < total_w) {
         invalidate_l1_cache();
+        x_step();
         while (granted < total_w && cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1) * slot)) {
             grant(1);
             ++granted;
@@ -138,7 +213,7 @@ void kernel_main() {
         if (x_cons < x_pub && cb_pages_reservable_at_back(x_cb, (x_slots - (x_pub - x_cons) + 1) * x_blk)) {
             ++x_cons;  // compute has consumed one more block
         }
-        *sem(flat_options::x_consumed_sem) = x_cons;
+        *sem(flat_options::x_consumed_sem) = x_freed(x_cons);
         if (!h_pending && h_sent < num_v && *go_sem + hbuf >= h_sent + 1 &&
             cb_pages_available_at_front(h_local_cb, mt * hpc)) {
             const uint32_t src = get_read_ptr(h_local_cb);
@@ -186,7 +261,9 @@ void kernel_main() {
             }
             h_pending = 1;
         }
-        if (h_pending && ncrisc_noc_nonposted_writes_flushed(noc_index)) {
+        if (h_pending && (x_fwd ? noc_cmd_buf_ready(noc_index, write_cmd_buf) &&
+                                      ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, h_trid)
+                                : ncrisc_noc_nonposted_writes_flushed(noc_index))) {
             // Slices of h(v) are counted per down-core buffer v % HBUF (h_gather_sem_1 / _2 give buffers 1, 2).
             const uint32_t gid = h_sent % hbuf == 0   ? gath_sem_id
                                  : h_sent % hbuf == 1 ? flat_options::h_gather_sem_1
@@ -203,16 +280,24 @@ void kernel_main() {
     // x_cons follows compute at most a block a loop pass, so the loop can end (all h sent) with it short of the call's
     // blocks; the end count must be the total (the forwarder ends at fwd == (end - 1) x pieces: a short count left it
     // spinning past it - a 1-in-13k whole-model hang - or would end it before the successor has every block)
-    for (const uint32_t x_total = num_v * nk_gu; x_cons < x_total;) {
+    while (x_cons < x_total || (x_fwd && sxy && fwd < x_total * xp)) {
         invalidate_l1_cache();
-        if (cb_pages_reservable_at_back(x_cb, (x_slots - (x_pub - x_cons) + 1) * x_blk)) {
+        x_step();
+        if (x_cons < x_total && cb_pages_reservable_at_back(x_cb, (x_slots - (x_pub - x_cons) + 1) * x_blk)) {
             ++x_cons;
+        }
+        if constexpr (x_fwd) {
+            *sem(flat_options::x_consumed_sem) = x_freed(x_cons);
         }
     }
     *sem(flat_options::x_consumed_sem) = x_cons;
     *sem(flat_options::x_end_sem) = x_cons + 1;
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+    if constexpr (x_fwd) {
+        noc_async_write_set_trid(0);
+        ncrisc_noc_set_transaction_id(noc_index, x_cmd_buf, 0);
+    }
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
 }

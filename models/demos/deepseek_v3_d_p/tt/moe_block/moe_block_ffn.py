@@ -124,6 +124,20 @@ class MoEBlockPacking:
 
 def _combine_config(opts: "MoEBlockFfnOptions"):
     """The combine's CombineConfig for these options (None: MoEBlock's default)."""
+    # MEASUREMENT ONLY (never commit): MOE_CMB_CREDIT_BATCH / MOE_CMB_DEPTH override the planner's (knob sweep)
+    import os as _os
+
+    _cb, _dp = _os.environ.get("MOE_CMB_CREDIT_BATCH"), _os.environ.get("MOE_CMB_DEPTH")
+    _md = _os.environ.get("MOE_CMB_MODE")  # (apart / onports: the accumulators apart from / on the port cores)
+    if opts.combine_landing is None and (_cb or _dp or _md):
+        cc = moe_block_utils.CombineConfig()
+        if _cb:
+            cc.credit_batch = int(_cb)
+        if _dp:
+            cc.depth = int(_dp)
+        if _md:
+            cc.mode = {"apart": moe_block_utils.CombineMode.PortsApart, "onports": moe_block_utils.CombineMode.AccOnPorts}[_md]
+        return cc
     if opts.combine_landing is None:
         return None
     landing = {
@@ -134,6 +148,10 @@ def _combine_config(opts: "MoEBlockFfnOptions"):
     }[opts.combine_landing]
     cc = moe_block_utils.CombineConfig()
     cc.landing = landing
+    if _cb:
+        cc.credit_batch = int(_cb)
+    if _dp:
+        cc.depth = int(_dp)
     return cc
 
 
@@ -267,6 +285,8 @@ class TtMoEBlockFfn:
             )
             cfg.sp_axis = opts.sp_axis
             cfg.forward_chunks = int(forward_chunks)
+            if os.environ.get("MOE_HEAD_ITERS"):  # MEASUREMENT ONLY (never commit): the head's router iterations at least
+                cfg.head_router_iterations = int(os.environ["MOE_HEAD_ITERS"])
             if opts.combine_snap is not None:  # (else the config's default snap)
                 cfg.combine_snap = opts.combine_snap
             # (the model's slab, the one its mesh opened L1_SMALL for: moe_impl.moe_block_words_slab)
@@ -283,6 +303,8 @@ class TtMoEBlockFfn:
                 # fitted into the combine's arena)
                 layout=moe_block_utils.FlatLayoutOptions(),
                 combine=_combine_config(opts),
+                # MEASUREMENT ONLY (never commit): MOE_CMB_A pins the accumulator count (knob sweep)
+                **(dict(accumulators=int(os.environ["MOE_CMB_A"])) if os.environ.get("MOE_CMB_A") else {}),
             )
             logger.info(f"MoE block: {opts}, flat layout {block.expert_kw['layout']}")
             logger.info(

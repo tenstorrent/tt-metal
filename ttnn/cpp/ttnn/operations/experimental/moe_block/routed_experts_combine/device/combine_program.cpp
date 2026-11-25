@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_program.hpp"
+
+#include <cstdlib>
 #include <tuple>
 #include <optional>
 #include <map>
@@ -30,6 +32,28 @@ namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 namespace names = combine_names;  // (the kernels' named compile-time args, shared with the kernels)
 
 namespace combine_program_detail {
+
+// MEASUREMENT ONLY (never commit): MOE_ZZ_DEFINES="A=1;B" -> kernel defines (probes)
+inline void zz_env_defines(tt::tt_metal::KernelDescriptor& k) {
+    const char* e = std::getenv("MOE_ZZ_DEFINES");
+    if (e == nullptr) {
+        return;
+    }
+    const std::string s(e);
+    for (size_t i = 0; i < s.size();) {
+        size_t j = s.find(';', i);
+        if (j == std::string::npos) {
+            j = s.size();
+        }
+        const std::string kv = s.substr(i, j - i);
+        i = j + 1;
+        if (kv.empty()) {
+            continue;
+        }
+        const size_t q = kv.find('=');
+        k.defines.emplace_back(kv.substr(0, q), q == std::string::npos ? std::string("1") : kv.substr(q + 1));
+    }
+}
 
 using tt::tt_metal::Buffer;
 using tt::tt_metal::CoreCoord;
@@ -176,6 +200,14 @@ tt::tt_metal::KernelHandle dm_kernel(
     kernel_descriptor.compile_time_args = std::move(ct);
     kernel_descriptor.named_compile_time_args = std::move(named);
     kernel_descriptor.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;  // (DataMovementConfig's default)
+    zz_env_defines(kernel_descriptor);  // (MEASUREMENT ONLY: probes)
+    // (MEASUREMENT ONLY: the tie split's header patch, the port loop's L1 data cache)
+    if (combine_tie_split()) {
+        kernel_descriptor.defines.emplace_back("CMB_TIE_SPLIT", "1");
+    }
+    if (const char* e = std::getenv("MOE_CMB_DCACHE"); e != nullptr && e[0] == '1') {
+        kernel_descriptor.defines.emplace_back("CMB_DCACHE", "1");
+    }
     kernel_descriptor.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor =
             riscv0 ? tt::tt_metal::DataMovementProcessor::RISCV_0 : tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -194,7 +226,8 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     auto plan = std::make_shared<CombinePlan>();
     plan->topo = mesh.topo;
     plan->mesh = mesh;
-    plan->hops = resources.first_hops();
+    plan->fabric_hops = resources.first_hops();
+    plan->hops = combine_first_hops(resources.first_hops(), mesh.topo);  // (MEASUREMENT: MOE_CMB_TIE_SPLIT)
     plan->fabric_links = mesh.num_links;
     plan->port_luts = resources.port_luts();
     plan->snap_step_bits = cfg.snap_step_bits();
@@ -676,7 +709,13 @@ CombineHandles add_combine_program(
     }
     const uint32_t W = flat.writers.size();
     // the RISC split: the sender (and the accumulator writer) on RISCV_0 / NoC1, the port reader on RISCV_1 / NoC0
-    constexpr bool s_riscv0 = true, r_riscv0 = false;
+    // (MEASUREMENT ONLY, MOE_CMB_SWAP_RISC=1: the senders - port writer, accumulator writer - on RISCV_1 / NoC 0 and the
+    // readers on RISCV_0 / NoC 1; the combine lab: the port's fabric sends off the NoC the y writers' hand-off uses)
+    const bool swap_risc = [] {
+        const char* e = std::getenv("MOE_CMB_SWAP_RISC");
+        return e != nullptr && e[0] == '1';
+    }();
+    const bool s_riscv0 = !swap_risc, r_riscv0 = swap_risc;
     constexpr uint32_t s_slot = 0, r_slot = 1;  // (bar call-count slots per RISC)
     // (each two-role kernel's roles are recorded - their compile-time args, named args and each core's args - and the
     // cores' two binaries composed after the accumulators: both RISCs' with ports apart, the BRISC's with accumulators
@@ -808,6 +847,20 @@ CombineHandles add_combine_program(
             a.buf(CombineBuf::Plan);
             a.lit(pid);
             a.lits(plan.chip_ids);
+            if (combine_tie_split()) {  // (MEASUREMENT: per destination, my neighbour its first hop goes to when the
+                                        // combine's differs from the fabric's; 0xFF: the fabric's - 4 a word)
+                std::vector<uint32_t> via((N + 3) / 4, 0xFFFFFFFFu);
+                for (uint32_t i = 0; i < N; ++i) {
+                    const auto t = topo.coord(i);
+                    if (t == ch || plan.hops.at(ch, t, topo) == plan.fabric_hops.at(ch, t, topo)) {
+                        continue;
+                    }
+                    const auto nb = topo.neighbor(ch, plan.hops.at(ch, t, topo));
+                    TT_FATAL(nb.has_value(), "routed_experts_combine: tie split toward no neighbour");
+                    via[i / 4] = (via[i / 4] & ~(0xFFu << (8 * (i % 4)))) | (idx(*nb) << (8 * (i % 4)));
+                }
+                a.lits(via);
+            }
             if (plan.per_chip_accumulator_table) {
                 a.buf(CombineBuf::Lut);
             } else {

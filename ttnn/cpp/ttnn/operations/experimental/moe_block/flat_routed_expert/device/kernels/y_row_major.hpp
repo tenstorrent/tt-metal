@@ -17,6 +17,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#ifdef ZZ_TIMING  // (MEASUREMENT ONLY: wait counters as profiler data)
+#include "api/debug/kernel_profiler.hpp"
+#endif
 #include "expert_schedule.hpp"
 #include "flat_accessors.hpp"
 #include "flat_options.hpp"
@@ -160,7 +163,18 @@ struct RowMajorYWriter {
         }
     }
     // after the last row
+#ifdef ZZ_TIMING
+    uint32_t zz_t0 = 0, zz_gt = 0, zz_grant = 0, zz_grant_port = 0;
+    bool zz_gblk = false, zz_gport = false;
+#endif
     void finish() {
+#ifdef ZZ_TIMING
+        if constexpr (hands_off) {
+            DeviceTimestampedData("ZZ-YGRANT", zz_grant);
+            DeviceTimestampedData("ZZ-YGPORT", zz_grant_port);
+            DeviceTimestampedData("ZZ-YSPAN", get_timestamp_32b() - zz_t0);
+        }
+#endif
         if constexpr (hands_off) {
             handoff.finish();
         }
@@ -177,6 +191,11 @@ struct RowMajorYWriter {
             return issued - retired < in_flight &&
                    cb_pages_available_at_front(out_cb, (issued - retired + 1) * columns);
         };
+#ifdef ZZ_TIMING
+        if (zz_t0 == 0) {
+            zz_t0 = get_timestamp_32b() | 1;
+        }
+#endif
         if constexpr (hands_off) {  // (a tile partly handed off is ready)
             if (handoff.units_issued - handoff.units_retired == in_flight ||
                 (handoff.tile_rows_issued == 0 && !tile_ready())) {
@@ -193,8 +212,25 @@ struct RowMajorYWriter {
         if constexpr (hands_off) {
             const UnitIssued unit = issue_handoff_unit(source, first_row, rows);
             if (unit == UnitIssued::None) {
+#ifdef ZZ_TIMING
+                if (!zz_gblk) {
+                    zz_gblk = true;
+                    zz_gt = get_timestamp_32b();
+                    zz_gport = zz_block_d < 8;  // (the hand-off's destinations: ports first)
+                }
+#endif
                 return false;
             }
+#ifdef ZZ_TIMING
+            if (zz_gblk) {
+                const uint32_t zz_dt = get_timestamp_32b() - zz_gt;
+                zz_grant += zz_dt;
+                if (zz_gport) {
+                    zz_grant_port += zz_dt;
+                }
+                zz_gblk = false;
+            }
+#endif
             if (unit == UnitIssued::PartOfTile) {  // the tile's other rows in a later unit: the cursor stays on it
                 return true;
             }
@@ -272,6 +308,9 @@ private:
     enum class UnitIssued { None, PartOfTile, WholeTile };
 
     // The L1 hand-off of the current row tile's next unit: its next rows while their destinations have granted slots.
+#ifdef ZZ_TIMING
+    uint32_t zz_block_d = 0;
+#endif
     UnitIssued issue_handoff_unit(uint32_t source, uint32_t first_row, uint32_t rows) {
         namespace fmt = combine_formats;
         using namespace combine_handoff;
@@ -305,6 +344,9 @@ private:
         for (; unit_end < rows; ++unit_end) {
             const uint32_t d = table_destination(table_rows[2 * unit_end]);
             if (state.grants[d] - state.grants_before[d] < state.rows_issued[d] + unit_rows[d] + 1) {
+#ifdef ZZ_TIMING
+                zz_block_d = d;
+#endif
                 break;
             }
             ++unit_rows[d];

@@ -102,6 +102,13 @@ struct FirstHops {
 };
 inline constexpr uint32_t kFirstHopsPerWord = 16;
 FirstHops fabric_first_hops(const tt::tt_metal::distributed::MeshDevice& mesh_device, const MeshTopology& topo);
+// MEASUREMENT (MOE_CMB_TIE_SPLIT=1): the combine's first hops with each source's ring ties split over both directions -
+// a first hop along a wrapping axis of even side whose offset is half the ring goes + for a destination whose other
+// coordinate is even, - for odd (the fabric's rule sends all of a source's ties one way). Without the switch: fabric.
+// The combine's ports, the MoE head's planner (the rows' and credits' ports) and the port headers (CMB_TIE_SPLIT) all
+// follow it.
+bool combine_tie_split();
+FirstHops combine_first_hops(const FirstHops& fabric, const MeshTopology& topo);
 // The link of every row from chip src to accumulator acc of chip home.
 inline uint32_t link_of(uint32_t acc, uint32_t src, uint32_t home, uint32_t L) { return (acc + src + home) % L; }
 

@@ -5,6 +5,7 @@
 #include "mesh_routing.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <tuple>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -92,6 +93,38 @@ std::vector<uint32_t> FirstHops::packed_row(uint32_t src) const {
     for (uint32_t d = 0; d < N; ++d) {
         out[d / kFirstHopsPerWord] |= uint32_t(dirs.at(static_cast<size_t>(src) * N + d) & 3u)
                                       << (2 * (d % kFirstHopsPerWord));
+    }
+    return out;
+}
+
+bool combine_tie_split() {
+    const char* e = std::getenv("MOE_CMB_TIE_SPLIT");
+    return e != nullptr && e[0] == '1';
+}
+
+FirstHops combine_first_hops(const FirstHops& fabric, const MeshTopology& topo) {
+    if (!combine_tie_split()) {
+        return fabric;
+    }
+    FirstHops out = fabric;
+    const uint32_t N = topo.num_chips();
+    for (uint32_t s = 0; s < N; ++s) {
+        const ChipCoord src = topo.coord(s);
+        for (uint32_t t = 0; t < N; ++t) {
+            if (t == s) {
+                continue;
+            }
+            const ChipCoord dst = topo.coord(t);
+            const Dir d = fabric.at(s, t);
+            if (is_x(d)) {
+                if (topo.wrap_x && topo.C % 2 == 0 && (dst.c + topo.C - src.c) % topo.C == topo.C / 2) {
+                    out.dirs[static_cast<size_t>(s) * N + t] =
+                        static_cast<uint8_t>(dst.r % 2 == 0 ? Dir::XPlus : Dir::XMinus);
+                }
+            } else if (topo.wrap_y && topo.R % 2 == 0 && (dst.r + topo.R - src.r) % topo.R == topo.R / 2) {
+                out.dirs[static_cast<size_t>(s) * N + t] = static_cast<uint8_t>(dst.c % 2 == 0 ? Dir::YPlus : Dir::YMinus);
+            }
+        }
     }
     return out;
 }

@@ -43,8 +43,19 @@
 #include "combine_zero_gate.hpp"
 #include "combine_pool.hpp"
 #include "combine_formats.hpp"
+#ifndef ZZ_GB  // (MEASUREMENT ONLY: the hand-off's grant batch)
+#define ZZ_GB_OR8 8
+#else
+#define ZZ_GB_OR8 ZZ_GB
+#endif
 #include "combine_options.hpp"
 #include "../combine_names.hpp"
+#ifdef ZZ_TIMING  // (MEASUREMENT ONLY: wait counters as profiler data)
+#include "api/debug/kernel_profiler.hpp"
+#define ZZT(...) __VA_ARGS__
+#else
+#define ZZT(...)
+#endif
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/combine_plan_words.hpp"
 using namespace tt::tt_fabric;
 
@@ -161,6 +172,17 @@ void kernel_main() {
     for (uint32_t i = 0; i < N; ++i) {
         chip_id[i] = static_cast<uint16_t>(moe_block_args::arg(a++));
     }
+#if defined(CMB_TIE_SPLIT) && CMB_TIE_SPLIT
+    // (MEASUREMENT: the combine's ring ties split per destination - mesh_routing combine_first_hops) per destination:
+    // the block index of my neighbour its first hop goes to where that is not the fabric's own (0xFF: the fabric's)
+    uint8_t tie_via[N];
+    for (uint32_t i = 0; i < N; i += 4) {
+        const uint32_t w = moe_block_args::arg(a++);
+        for (uint32_t j = 0; j < 4 && i + j < N; ++j) {
+            tie_via[i + j] = static_cast<uint8_t>(w >> (8 * j));
+        }
+    }
+#endif
     // a home chip's accumulator o's core: with per_chip_accumulator_table its table entry home * A + o (x | y << 8,
     // copied here from DRAM), else the same cores on every chip (runtime args)
     volatile tt_l1_ptr uint16_t* accumulator_table = nullptr;
@@ -227,7 +249,11 @@ void kernel_main() {
         const auto hcg = TensorAccessor(hc_args, hc_addr, HBLK + 64);
         volatile tt_l1_ptr uint32_t* kw =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC) + combine_formats::kMiscHeaderCacheKey;
+#if defined(CMB_TIE_SPLIT) && CMB_TIE_SPLIT
+        const uint32_t key = 0x48C00000u ^ (me << 8) ^ (lnk << 16) ^ N ^ 0x00800000u;  // (patched headers)
+#else
         const uint32_t key = 0x48C00000u ^ (me << 8) ^ (lnk << 16) ^ N;
+#endif
         noc_async_read(hcg.get_noc_addr(hc_page, HBLK), reinterpret_cast<uint32_t>(kw), 64);
         noc_async_read_barrier();
         invalidate_l1_cache();
@@ -249,6 +275,28 @@ void kernel_main() {
                     }
                 }
             }
+#if defined(CMB_TIE_SPLIT) && CMB_TIE_SPLIT
+            {  // (a flipped tie: the action at my position - the Y map at my row, or the X map at my column when the
+               // neighbour is in my row - copied from the route to that neighbour; every later hop is no tie: the
+               // destination's own map, the shortest way)
+                tt_l1_ptr routing_l1_info_t* rt = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+                const uint32_t Y = rt->mesh_y_size, X = rt->mesh_x_size;
+                const uint32_t my_y = chip_id[me] / X, my_x = chip_id[me] % X;
+                auto* tmp = hdr_at(me, 0);  // (scratch: no header to myself)
+                for (uint32_t i = 0; i < N; ++i) {
+                    if (i == me || tie_via[i] == 0xFF) {
+                        continue;
+                    }
+                    const uint32_t nb = chip_id[tie_via[i]];
+                    (void)fabric_set_unicast_route(tmp, nb, mesh);
+                    const uint32_t at = nb / X != my_y ? my_y : Y + my_x;
+                    const uint8_t act = tmp->route_buffer[at];
+                    for (uint32_t r = 0; r < NH; ++r) {
+                        hdr_at(i, r)->route_buffer[at] = act;
+                    }
+                }
+            }
+#endif
             noc_async_write(area + HDRS, hcg.get_noc_addr(hc_page), HBLK);
             kw[0] = key;
             noc_async_write(reinterpret_cast<uint32_t>(kw), hcg.get_noc_addr(hc_page, HBLK), 64);
@@ -260,6 +308,11 @@ void kernel_main() {
         rec::wait_released(bar_addr, call);
     }
     conn.open();
+#if defined(CMB_DCACHE) && CMB_DCACHE
+    // (MEASUREMENT: the RISC's L1 data cache on for the busy loop - write-through; the loop invalidates every pass and
+    // in every spin on a NoC / router written word; off again before returning, for the firmware)
+    set_l1_data_cache<true>();
+#endif
     // With the accumulators on the ports: the port reader's L1 hand-off and the accumulator writer's output rows run
     // here
     uint32_t hW = 0, hdid = 0, hQ = 0, o_addr = 0, n_tok = 0, acc_me = 0;
@@ -290,10 +343,15 @@ void kernel_main() {
         }
         const uint32_t want = hpushed + hQ < n_inj ? hpushed + hQ : n_inj;
         uint32_t g = hgranted;
-        while (g < want && cb_pages_reservable_at_back(cb_inj, g - hpushed + 1)) {
+#ifdef ZZ_RINGCAP  // (MEASUREMENT ONLY: ZZ_RINGCAP = cap x 100 + the ring's slots - the ring used as if cap slots)
+        constexpr uint32_t zz_spare = ZZ_RINGCAP % 100 > ZZ_RINGCAP / 100 ? ZZ_RINGCAP % 100 - ZZ_RINGCAP / 100 : 0;
+#else
+        constexpr uint32_t zz_spare = 0;
+#endif
+        while (g < want && cb_pages_reservable_at_back(cb_inj, g - hpushed + 1 + zz_spare)) {
             ++g;
         }
-        if (g > hgranted && (g - hgranted >= 8 || g == want)) {
+        if (g > hgranted && (g - hgranted >= ZZ_GB_OR8 || g == want)) {
             for (uint32_t w = 0; w < hW; ++w) {
                 noc_semaphore_inc(get_noc_addr(hwx[w], hwy[w], hwords + 4 * hdid), g - hgranted);
             }
@@ -370,6 +428,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* gidh = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + grant_ids_offset);
     volatile tt_l1_ptr uint32_t* grec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + grant_snapshots_offset);
     uint32_t inj_done = 0, sent = 0, unflushed = 0;
+    ZZT(uint32_t zz_fab = 0, zz_flush = 0, zz_busy = 0, zz_blocked = 0, zz_norow = 0, zz_tail = 0;)
+    ZZT(uint32_t zz_first = 0, zz_last = 0; bool zz_blockedrow = false;)
+    ZZT(uint32_t zz_sw = 0, zz_lasthome = 0xFFFF;)  // (destination switches between consecutive rows sent)
     // skip-ahead: rows of the injection ring go out in any order (a row waits only for its own ring's room or grant,
     // not for the rows ahead of it); bit j: the row j pages past the ring's front is sent. The ring frees its front
     // pages once they are sent and flushed (their slots are written again by the hand-off)
@@ -543,15 +604,20 @@ void kernel_main() {
         constexpr uint32_t pb = row_bytes + 32;
         auto* h = hdr_at(home, sent % NH);
         h->to_noc_unicast_write(NocUnicastCommandHeader{dn}, pb);
+        ZZT(const uint32_t zt = get_timestamp_32b();)
         conn.wait_for_empty_write_slot();
+        ZZT(zz_fab += get_timestamp_32b() - zt;)
         conn.send_current_slot_non_blocking(src, pb, reinterpret_cast<uint32_t>(h));
         ++sent;
         ++unflushed;
         used[ci] = u + 1;
+        ZZT(if (home != zz_lasthome) { ++zz_sw; zz_lasthome = home; })
         return true;
     };
 
+    ZZT(const uint32_t zz_t0 = get_timestamp_32b();)
     while (inj_done < n_inj || returned - ret0 < n_ret || acc_on_ports_more() || lay_pend) {
+        ZZT(const uint32_t zz_it = get_timestamp_32b(); const uint32_t zz_inj0 = inj_done;)
         bool did = false;
         invalidate_l1_cache();
         hand_off();
@@ -580,16 +646,36 @@ void kernel_main() {
                 sentm |= 1u << j;
                 ++inj_done;
                 did = true;
+                ZZT(zz_last = get_timestamp_32b() - zz_t0; if (inj_done == 1) { zz_first = zz_last; })
             }
+            ZZT(else { zz_blockedrow = true; })
         }
         if (unflushed >= NH || (!did && unflushed)) {
+            ZZT(const uint32_t zf = get_timestamp_32b();)
             flush();
+            ZZT(zz_flush += get_timestamp_32b() - zf;)
             did = true;
         }
         if (!did && pending) {
             give_back(true);
         }
+#ifdef ZZ_TIMING
+        {
+            const uint32_t zz_d = get_timestamp_32b() - zz_it;
+            if (inj_done != zz_inj0) {
+                zz_busy += zz_d;
+            } else if (zz_blockedrow) {
+                zz_blocked += zz_d;  // (rows here, none sendable: their rings' room / layout)
+            } else if (inj_done < n_inj) {
+                zz_norow += zz_d;  // (no row from the experts yet)
+            } else {
+                zz_tail += zz_d;  // (all rows out: credits / layouts)
+            }
+            zz_blockedrow = false;
+        }
+#endif
     }
+    ZZT(const uint32_t zz_loop = get_timestamp_32b() - zz_t0;)
     flush();
     misc[combine_formats::kMiscReturned] = returned;
     if constexpr (accumulators_on_ports) {
@@ -622,4 +708,21 @@ void kernel_main() {
     }
     conn.close();
     noc_async_atomic_barrier();
+#ifdef ZZ_TIMING
+    DeviceTimestampedData("ZZ-PROWS", n_inj);
+    DeviceTimestampedData("ZZ-PSW", zz_sw);
+    DeviceTimestampedData("ZZ-PLOOP", zz_loop);
+    DeviceTimestampedData("ZZ-PEND", get_timestamp_32b() - zz_t0);
+    DeviceTimestampedData("ZZ-PFIRST", zz_first);
+    DeviceTimestampedData("ZZ-PLAST", zz_last);
+    DeviceTimestampedData("ZZ-PBUSY", zz_busy);
+    DeviceTimestampedData("ZZ-PFAB", zz_fab);
+    DeviceTimestampedData("ZZ-PFLUSH", zz_flush);
+    DeviceTimestampedData("ZZ-PBLOCK", zz_blocked);
+    DeviceTimestampedData("ZZ-PNOROW", zz_norow);
+    DeviceTimestampedData("ZZ-PTAIL", zz_tail);
+#endif
+#if defined(CMB_DCACHE) && CMB_DCACHE
+    set_l1_data_cache<false>();
+#endif
 }

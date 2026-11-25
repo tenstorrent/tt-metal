@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string>
 #include <set>
 #include <tracy/Tracy.hpp>
 #include "flat_routed_expert_program_factory.hpp"
@@ -91,6 +93,29 @@ Options with_added(Options options, std::initializer_list<std::pair<const std::s
 
 // A kernel into the program descriptor: its handle is its index in the descriptor's kernels (the Program built from
 // the descriptor creates the kernels in that order).
+
+// MEASUREMENT ONLY (never commit): MOE_ZZ_DEFINES="A=1;B" -> kernel defines (probes)
+[[maybe_unused]] static void zz_env_defines(tt::tt_metal::KernelDescriptor& k) {
+    const char* e = std::getenv("MOE_ZZ_DEFINES");
+    if (e == nullptr) {
+        return;
+    }
+    const std::string s(e);
+    for (size_t i = 0; i < s.size();) {
+        size_t j = s.find(';', i);
+        if (j == std::string::npos) {
+            j = s.size();
+        }
+        const std::string kv = s.substr(i, j - i);
+        i = j + 1;
+        if (kv.empty()) {
+            continue;
+        }
+        const size_t q = kv.find('=');
+        k.defines.emplace_back(kv.substr(0, q), q == std::string::npos ? std::string("1") : kv.substr(q + 1));
+    }
+}
+
 tt::tt_metal::KernelHandle add_kernel(
     tt::tt_metal::ProgramDescriptor& program, tt::tt_metal::KernelDescriptor kernel_descriptor) {
     program.kernels.push_back(std::move(kernel_descriptor));
@@ -177,14 +202,22 @@ FlatProgramHandles add_flat_routed_expert_program(
     constexpr uint32_t X_FWD_DEPTH = 3;
     log_info(
         tt::LogOp,
-        "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} NCRISC forwarder NOC0 depth {})",
+        "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} {} forwarder depth {})",
         x_pieces,
+        std::getenv("FLAT_X_NOC1") != nullptr && std::getenv("FLAT_X_NOC1")[0] != '0' ? "BRISC NOC1 (mirrored)"
+                                                                                       : "NCRISC NOC0",
         X_FWD_DEPTH);
     struct XLink {
         uint32_t pred = 0, succ0 = 0;
     };
     std::vector<XLink> xlink(ngu);
     std::vector<uint32_t> x_head(NR, 0);  // each rectangle's snake head (gate/up index)
+    // MEASUREMENT ONLY (never commit), FLAT_X_NOC1=1: the snakes forward on NOC1 (north / west first): mirrored - from the
+    // relay's row up a column (wrapping inside the rectangle), one column west, from the rectangle's east edge
+    const bool x_noc1 = [] {
+        const char* e = std::getenv("FLAT_X_NOC1");
+        return e != nullptr && (e[0] == '1' || e[0] == '2');
+    }();
     for (uint32_t k = 0; k < NR; ++k) {
         const auto [x0, x1, y0, y1] = p.gate_up_rectangles[k];
         std::map<std::pair<uint32_t, uint32_t>, uint32_t> at;
@@ -200,8 +233,8 @@ FlatProgramHandles add_flat_routed_expert_program(
         uint32_t row = yr;
         for (uint32_t i = 0; i < W; ++i) {
             for (uint32_t r = 0; r < H; ++r) {
-                const uint32_t y = y0 + (row - y0 + r) % H;
-                seq.push_back(at.at({x0 + i, y}));
+                const uint32_t y = x_noc1 ? y0 + (row - y0 + H - r) % H : y0 + (row - y0 + r) % H;
+                seq.push_back(at.at({x_noc1 ? x1 - i : x0 + i, y}));
                 if (r + 1 == H) {
                     row = y;  // the next column starts on this row
                 }
@@ -368,6 +401,7 @@ FlatProgramHandles add_flat_routed_expert_program(
         // runtime_args_to_dram overwrites these when it converts the kernel.
         fill_args_table_named_args(kernel_descriptor);
         kernel_descriptor.opt_level = KernelBuildOptLevel::O2;  // (DataMovementConfig's default)
+        zz_env_defines(kernel_descriptor);  // (MEASUREMENT ONLY: probes)
         kernel_descriptor.config =
             DataMovementConfigDescriptor{.processor = proc, .noc = noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
         return add_kernel(program, std::move(kernel_descriptor));
@@ -444,12 +478,15 @@ FlatProgramHandles add_flat_routed_expert_program(
         // one kernel per primary, its credits to the helpers on its own semaphore (5 / 6 there)
         std::vector<KernelHandle> k_x_injectors;
         k_x_injectors.reserve(NR);
+        // (MEASUREMENT ONLY, FLAT_X_NOC1=2: the primaries east of their rectangles inject on their BRISC, NOC1 - one
+        // hop west into the snake head)
+        const bool inj_noc1 = std::getenv("FLAT_X_NOC1") != nullptr && std::getenv("FLAT_X_NOC1")[0] == '2';
         for (uint32_t q = 0; q < NR; ++q) {
             k_x_injectors.push_back(
                 dm("x_injector_writer.cpp",
                    {p.relay_cores[q]},
-                   DataMovementProcessor::RISCV_1,
-                   NOC::NOC_0,
+                   inj_noc1 ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1,
+                   inj_noc1 ? NOC::NOC_1 : NOC::NOC_0,
                    with(options, {{"x_credit_sem", 5 + q}})));
         }
         // one kernel per helper k: its arrivals are semaphore {4, 7}[k] on both primaries, its credits come back on 5
@@ -523,14 +560,20 @@ FlatProgramHandles add_flat_routed_expert_program(
             "flat_routed_expert: x pieces {} of a {} B x block must be 16 B aligned",
             x_pieces,
             x_bytes);
-        const KernelHandle kr = dm(
-            "gate_up_core_reader.cpp", p.gate_up_cores, DataMovementProcessor::RISCV_0, NOC::NOC_1, gu_reader_options);
+        // (MEASUREMENT ONLY, FLAT_X_NOC1: the receiver (BRISC, NOC1) forwards x along the mirrored snake; the NCRISC
+        // keeps the weight reads and the upstream free reports on NOC0)
+        const KernelHandle kr =
+            dm("gate_up_core_reader.cpp",
+               p.gate_up_cores,
+               DataMovementProcessor::RISCV_0,
+               NOC::NOC_1,
+               with_added(gu_reader_options, {{"x_forward_depth", X_FWD_DEPTH}, {"x_fwd_brisc", x_noc1 ? 1u : 0u}}));
         const KernelHandle k_x_forwarder =
             dm("gate_up_x_forwarder.cpp",
                p.gate_up_cores,
                DataMovementProcessor::RISCV_1,
                NOC::NOC_0,
-               with_added(options, {{"x_forward_depth", X_FWD_DEPTH}}));
+               with_added(options, {{"x_forward_depth", X_FWD_DEPTH}, {"x_fwd_brisc", x_noc1 ? 1u : 0u}}));
         TT_FATAL(
             !p.half_width_gate_up || cfg.activation <= 3,
             "flat_routed_expert: half-width gate / up tiles take SiLU / SwiGLU-OAI / SiTU / clamped SiLU GLU only");
@@ -551,7 +594,11 @@ FlatProgramHandles add_flat_routed_expert_program(
                 const uint32_t cg_ = r * p.column_groups_per_weight_slot + j;  // (the core's column group)
                 Args a;
                 // the grant counter's semaphore id, column group, chain heads, GATH, h_all, head xy
-                a.lit(GRANT).lit(cg_).lit(head_xy.size()).lit(GATH).a(FlatAddr::Arena, p.down_h_offset).cat(dyn);
+                a.lit(GRANT).lit(cg_).lit(head_xy.size()).lit(GATH).a(FlatAddr::Arena, p.down_h_offset);
+                if (x_noc1) {  // (FLAT_X_NOC1: the x ring and the successor, RT 5 / 6)
+                    a.a(FlatAddr::Arena, p.x_ring_offset).lit(xlink[ci].succ0);
+                }
+                a.cat(dyn);
                 // the gate/up weight reads (gate_up_weight_read.hpp, on this core's NCRISC): weights, bank, this core's
                 // first block (block j of its slot's region, which is the whole of bank r's), chunk bytes, landing ring
                 // (the arena's start)

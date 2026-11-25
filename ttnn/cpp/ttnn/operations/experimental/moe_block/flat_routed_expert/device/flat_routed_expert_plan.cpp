@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <initializer_list>
 #include <iterator>
@@ -453,6 +454,48 @@ FlatRoutedExpertPlan make_plan(
         taken.insert({a.x, a.y});
         taken.insert({b.x, b.y});
     }
+    // MEASUREMENT ONLY (never commit): FLAT_RELAY_HN=1 - each helper one row north of its primary (its NOC0 writes
+    // into its own primary one hop south, not around the column); FLAT_X_NOC1=2 - also the relays in the column east
+    // of their rectangle (the NOC1 snake's head is on the east edge: the primary's NOC1 injection one hop west)
+    if (const char* xn = std::getenv("FLAT_X_NOC1"), *hn = std::getenv("FLAT_RELAY_HN");
+        (xn != nullptr && xn[0] == '2') || (hn != nullptr && hn[0] == '1')) {
+        const bool east_relays = xn != nullptr && xn[0] == '2';
+        const uint32_t nr = p.gate_up_rectangles.size();
+        TT_FATAL(p.relay_cores.size() == 2 * nr, "FLAT relay override: {} relays for {} rectangles", p.relay_cores.size(), nr);
+        for (const auto& c : p.relay_cores) {
+            taken.erase({c.x, c.y});
+        }
+        for (uint32_t k = 0; k < nr; ++k) {
+            const auto [x0, x1, y0, y1] = p.gate_up_rectangles[k];
+            const uint32_t x = east_relays ? x1 + 1 : p.relay_cores[k].x;
+            const uint32_t py = p.relay_cores[k].y;
+            TT_FATAL(x < grid.x && py >= row0 + 1 && py <= row1, "FLAT relay override: no room at column {} row {}", x, py);
+            TT_FATAL(
+                !taken.contains({x, py}) && !taken.contains({x, py - 1}),
+                "FLAT relay override: ({}, {}) / ({}, {}) taken",
+                x,
+                py,
+                x,
+                py - 1);
+            p.relay_cores[k] = Core(x, py);
+            p.relay_cores[nr + k] = Core(x, py - 1);
+            taken.insert({x, py});
+            taken.insert({x, py - 1});
+        }
+        log_info(
+            tt::LogOp,
+            "flat_routed_expert: MEASUREMENT relays {} helpers north: primaries ({}, {}) ({}, {}), helpers ({}, {}) ({}, "
+            "{})",
+            east_relays ? "east of the rectangles," : "west,",
+            p.relay_cores[0].x,
+            p.relay_cores[0].y,
+            p.relay_cores[1].x,
+            p.relay_cores[1].y,
+            p.relay_cores[2].x,
+            p.relay_cores[2].y,
+            p.relay_cores[3].x,
+            p.relay_cores[3].y);
+    }
     for (uint32_t y = row0; y <= row1; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             if (!taken.contains({x, y})) {
@@ -484,6 +527,40 @@ FlatRoutedExpertPlan make_plan(
         }
         return c;
     };
+    // A/B ONLY (never commit): FLAT_DOWN_PICK_NEAREST=1 restores 2d632ec6b61's down-core pick - the down cores chosen
+    // together with their DRAM banks, nearest NOC0 hops first - in place of the raster pick below.
+    if (const char* e = std::getenv("FLAT_DOWN_PICK_NEAREST"); e != nullptr && e[0] == '1' && !p.down_cores.empty()) {
+        const uint32_t n = std::min<uint32_t>(32u, p.down_cores.size());
+        const uint32_t per = (p.hidden_tiles + n - 1) / n;
+        const uint32_t want = std::min<uint32_t>(
+            std::min<uint32_t>(p.down_cores.size(), (p.hidden_tiles + per - 1) / per), p.hidden_tiles);
+        const auto capb = even_caps(want * nbanks);
+        std::vector<uint32_t> load(nbanks, 0), got(p.down_cores.size(), 0);
+        std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> pairs;
+        for (uint32_t b = 0; b < nbanks; ++b) {
+            for (uint32_t c = 0; c < p.down_cores.size(); ++c) {
+                pairs.emplace_back(bank_hops(b, p.down_cores[c]), b, c);
+            }
+        }
+        std::sort(pairs.begin(), pairs.end());
+        uint32_t chosen = 0;
+        for (const auto& [h, b, c] : pairs) {
+            if (load[b] == capb[b] || (got[c] == 0 && chosen == want)) {
+                continue;
+            }
+            chosen += got[c] == 0;
+            const uint32_t take = std::min(nbanks - got[c], capb[b] - load[b]);
+            got[c] += take;
+            load[b] += take;
+        }
+        std::vector<Core> first, rest;
+        for (uint32_t c = 0; c < p.down_cores.size(); ++c) {
+            (got[c] > 0 ? first : rest).push_back(p.down_cores[c]);
+        }
+        first.insert(first.end(), rest.begin(), rest.end());
+        p.down_cores = std::move(first);
+        log_info(tt::LogOp, "flat_routed_expert A/B: FLAT_DOWN_PICK_NEAREST=1 (down cores picked by DRAM bank distance)");
+    }
     // The down cores stay the free cores in raster order, the bank anchors and their east neighbours last (above); each
     // then reads from the bank(s) nearest it (the bank patterns below). Picking the down cores by their distance to the
     // banks instead would take exactly those anchor-side cores and leave the combine's ports - on the cores the flat
@@ -867,7 +944,13 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& c) {
     // (the plan ignores the program-only fields: activation, y formats, fidelity, the combine overlap)
     using Key = std::
-        tuple<int, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, std::vector<uint32_t>>;
+        tuple<int, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, std::vector<uint32_t>, uint32_t>;
+    // (MEASUREMENT ONLY: the relay placement switches - FLAT_X_NOC1=2, FLAT_RELAY_HN=1 - plan apart)
+    const auto env_relays = [] {
+        const char* xn = std::getenv("FLAT_X_NOC1");
+        const char* hn = std::getenv("FLAT_RELAY_HN");
+        return uint32_t(xn != nullptr && xn[0] == '2') | (uint32_t(hn != nullptr && hn[0] == '1') << 1);
+    }();
     static std::mutex mu;
     static std::map<Key, std::shared_ptr<const FlatRoutedExpertPlan>> cache;
     const Key key{
@@ -880,7 +963,8 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
         c.max_tokens,
         c.weights_bf8,
         c.pin,
-        c.layout.key()};
+        c.layout.key(),
+        env_relays};
     std::lock_guard<std::mutex> lock(mu);
     auto it = cache.find(key);
     if (it == cache.end()) {

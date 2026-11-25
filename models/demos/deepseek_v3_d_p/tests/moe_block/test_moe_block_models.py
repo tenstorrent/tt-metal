@@ -119,6 +119,7 @@ M3_PRODUCTION = [
 CASES = [
     BlockCase("glm53", "8x4", 5120),
     BlockCase("glm53", "8x4", 10240),
+    BlockCase("glm53", "8x4", 10240, chunks=((0, 0, 5120), (1, 5120, 10240))),  # (measurement only: GLM 8x4 packed 2 x 5120)
     BlockCase("glm53", "4x4-y", 5120),
     BlockCase("glm53", "4x4-y", 10240),  # (local baselines: the SP-ring 10240 point, K3 past the old head L1 limit)
     BlockCase("kimi_k3", "8x4", 10240),
@@ -126,6 +127,11 @@ CASES = [
     BlockCase("kimi_k3", "4x4-y", 7680),
     BlockCase("kimi_k3", "4x4-y", 10240),
     BlockCase("glm53", "4x4-xy", 7680),
+    BlockCase("glm53", "4x4-xy", 10240),  # (measurement only, not committed)
+    BlockCase("glm53", "xy4-sp1", 2560),  # (measurement only, from #66944)
+    BlockCase("glm53", "xy4-sp1", 5120, chunks=((0, 0, 2560), (1, 2560, 5120))),  # (measurement only)
+    BlockCase("glm53", "xy4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 5120), (2, 5120, 7680), (3, 7680, 10240))),  # (measurement only: 4x4 RR, 4 x 2560 packed)
+    BlockCase("kimi_k3_1", "xy4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 5120), (2, 5120, 7680), (3, 7680, 10240))),  # (measurement only: 4x4 RR, 4 x 2560 packed)
     BlockCase("kimi_k3", "8x4", 5120),
     BlockCase("kimi_k3", "4x4-y", 2560),
     BlockCase("kimi_k3", "8x4", 5120, weights="weka", layer=1),
@@ -156,6 +162,7 @@ CASES = [
     # Kimi-K3.1's production stage (its runner's 4x4 manifests: SP=4 on mesh axis 1, one 2,560-token chunk a forward) on
     # K3.1's own config: K3's MoE, the mesh opened with K3.1's L1_SMALL_SIZE
     BlockCase("kimi_k3_1", "4x4-sp1", 2560),
+    BlockCase("kimi_k3_1", "4x4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 5120), (2, 5120, 7680), (3, 7680, 10240))),  # (measurement only: kimi_k3_1_packed.json)
 ]
 
 
@@ -781,3 +788,171 @@ def test_moe_block_chunk_switch(model, mesh, mesh_device, device_params):
     finally:
         gc.collect()
         _release_blocks(mesh_device)
+
+
+# ------------------------------------------------------------ MEASUREMENT ONLY (never commit): combine knob sweep / profile
+def _sweep_configs():
+    """SWEEP: ';'-separated "name:KEY=VAL,KEY=VAL" (KEY an env var read when the block is built - MOE_CMB_CREDIT_BATCH,
+    MOE_CMB_DEPTH, MOE_CMB_A - or LANDING, the combine's landing); "name:" the planner's choices."""
+    out = []
+    for item in [x for x in os.environ.get("SWEEP", "base:").split(";") if x.strip()]:
+        name, _, rest = item.strip().partition(":")
+        out.append((name, dict(p.split("=", 1) for p in rest.split(",") if p.strip())))
+    return out
+
+
+@PARAMS
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(7200)
+def test_combine_knob_sweep(case, mesh_device, device_params):
+    """Every SWEEP configuration's traced block times in one process (random weights made once), SWEEP_REPS rounds in
+    a rotated order; a KNOB line each, a KNOBSUM summary (median over rounds) at the end. Measures only."""
+    import collections
+    import gc
+    import statistics
+
+    m = MODELS[case.model]
+    R, C = tuple(mesh_device.shape)
+    sd = m.weights(R * C)
+    configs = _sweep_configs()
+    reps = int(os.environ.get("SWEEP_REPS", "2"))
+    res = collections.defaultdict(list)
+    ref = None  # (the first configuration's output)
+    for rnd in range(reps):
+        for i in range(len(configs)):
+            name, kv = configs[(i + rnd) % len(configs)]
+            env = {k: v for k, v in kv.items() if k != "LANDING"}
+            saved = {k: os.environ.get(k) for k in env}
+            os.environ.update(env)
+            mesh_device.disable_and_clear_program_cache()
+            mesh_device.enable_program_cache()
+            run = None
+            try:
+                run = _setup(case, mesh_device, landing=kv.get("LANDING"), sd=sd)
+                block = run.ffn._block(case.chunk, run.F) if case.chunks else run.ffn._block(case.chunk)
+                try:  # (the combine's L1 plan as the block planned it)
+                    kw = block.expert_kw
+                    d = ttnn._ttnn.operations.experimental.moe_block.routed_experts_combine_l1_plan(
+                        block.resources, max_tokens_per_expert=kw["max_tokens_per_expert"], layout=kw["layout"],
+                        combine=block.combine, dispatch_group=block.plan.l1.dispatch_group,
+                    )  # fmt: skip
+                    keys = ("accumulator_count", "accumulators_on_ports", "landing_slots_per_source",
+                            "injection_ring_slots", "local_ring_slots", "landing_slots_per_accumulator", "pool_slots")
+                    logger.info(f"KNOBPLAN {case.id} {name}: " + ", ".join(f"{k} {d[k]}" for k in keys if k in d)
+                                + f" | head {block.head_fit.planned[0].layout.row_chunks} chunks, predicted "
+                                f"{block.head_fit.planned[0].predicted_us:.0f} us")
+                except Exception as e:  # noqa: BLE001
+                    logger.info(f"KNOBPLAN {case.id} {name}: n/a ({str(e)[:160]})")
+                ttnn.deallocate(run())
+                out = []
+                t = _traced_times(run, mesh_device, out)
+                y = _to_host(out[0], mesh_device, case.chunk, m.cfg.EMB_SIZE, case)
+                ttnn.deallocate(out[0])
+                if ref is None:
+                    ref, same = y, "ref"
+                else:  # (the combine's snap: the sums do not depend on the landing order - any routing, same bits)
+                    d = (y - ref).abs().max().item()
+                    same = "bit-identical" if d == 0 else f"DIFFERS max |d| {d:.3g}"
+                # (per forward: an op runs once a split - sum its programs a replay, never the per-program median)
+                def per_fwd(v):
+                    k = max(1, len(v) // PERF_RUNS)
+                    return statistics.median(sum(v[i * k:(i + 1) * k]) for i in range(len(v) // k)) / 1e3
+                us = {op: per_fwd(t[op]) for op in BLOCK_OPS if t[op]}
+                us["splits"] = max(1, len(t["routed_experts_combine"]) // PERF_RUNS)
+                res[name].append(us["routed_experts_combine"])
+                logger.info(
+                    f"KNOB {case.id} {name} round {rnd}: "
+                    + " | ".join(f"{op} {v:.1f}" for op, v in us.items())
+                    + f" us | A {block.accumulators} | output {same} | {block.plan.note[:120]} | {kv}"
+                )
+            except RuntimeError as e:
+                logger.warning(f"KNOB {case.id} {name} round {rnd}: not measured: {str(e).splitlines()[0][:240]}")
+            finally:
+                del run
+                gc.collect()
+                _release_blocks(mesh_device)
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+    for name, _ in configs:
+        v = res.get(name, [])
+        logger.info(f"KNOBSUM {case.id} {name:12} {statistics.median(v) if v else float('nan'):8.1f}  {[round(x, 1) for x in v]}")
+
+
+@PARAMS
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(1800)
+def test_combine_profile(case, mesh_device, device_params):
+    """With TT_METAL_DEVICE_PROFILER=1: a warm call, then PROF_CALLS eager calls, the device profiler read after each
+    (TT_METAL_PROFILER_DIR: where its CSV goes); logs the flat plan's core roles in virtual coordinates (PROFROLE) for
+    the offline breakdown (when each chip's experts end vs the combine's last core). Measures only."""
+    run = _setup(case, mesh_device)
+    block = run.ffn._block(case.chunk, run.F) if case.chunks else run.ffn._block(case.chunk)
+    ttnn.deallocate(run())
+    ttnn.synchronize_device(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
+    for _ in range(int(os.environ.get("PROF_CALLS", "3"))):
+        ttnn.deallocate(run())
+        ttnn.synchronize_device(mesh_device)
+        ttnn.ReadDeviceProfiler(mesh_device)
+    flat = run.ffn._routed_layout(block)
+    dev0 = mesh_device.get_device(mesh_device.get_device_ids()[0]) if hasattr(mesh_device, "get_device") else None
+    for role in ("gate_up_cores", "down_cores", "relay_cores", "coordinator_cores"):
+        cores = []
+        for c in flat.get(role, []):
+            x, y = (c[0], c[1]) if isinstance(c, (list, tuple)) else (c.x, c.y)
+            v = None
+            for d in (mesh_device, dev0):
+                try:
+                    vc = d.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+                    v = (vc.x, vc.y)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+            cores.append(f"{x},{y}" + (f"={v[0]},{v[1]}" if v else ""))
+        logger.info(f"PROFROLE {case.id} {role}: {' '.join(cores)}")
+    logger.info(f"PROFROLE {case.id} accumulators {block.accumulators} | {block.plan.note[:200]}")
+
+
+@PARAMS
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(1800)
+def test_dump_geometry(case, mesh_device, device_params):
+    """MEASUREMENT ONLY (never commit): the block's production core geometry for the combine lab (GEOM_OUT, JSON) - the
+    flat plan's gate/up, down and relay cores, the combine plan's port cores (block chip r, c, direction, link, x, y) and
+    accumulator cores, its A / D / injection ring, the SP axis (block coordinates are transposed with SP on axis 1)."""
+    import json
+
+    run = _setup(case, mesh_device)
+    block = run.ffn._block(case.chunk, run.F) if case.chunks else run.ffn._block(case.chunk)
+    flat = run.ffn._routed_layout(block)
+    kw = block.expert_kw
+    d = ttnn._ttnn.operations.experimental.moe_block.routed_experts_combine_l1_plan(
+        block.resources, max_tokens_per_expert=kw["max_tokens_per_expert"], layout=kw["layout"],
+        combine=block.combine, dispatch_group=block.plan.l1.dispatch_group,
+    )  # fmt: skip
+    xy = lambda c: [int(c[0]), int(c[1])] if isinstance(c, (list, tuple)) else [int(c.x), int(c.y)]  # noqa: E731
+    out = dict(
+        case=case.id,
+        sp_axis=case.sp_axis,
+        mesh_shape=list(mesh_device.shape),
+        splits=int(block.splits) if hasattr(block, "splits") else 1,
+        gate_up_cores=[xy(c) for c in flat["gate_up_cores"]],
+        down_cores=[xy(c) for c in flat["down_cores"]],
+        relay_cores=[xy(c) for c in flat["relay_cores"]],
+        port_cores=[list(map(int, t)) for t in d["port_cores"]],
+        accumulator_cores=[list(map(int, t)) for t in d["accumulator_cores"]],
+        A=int(d["accumulator_count"]),
+        D=int(d["landing_slots_per_source"]),
+        injection_ring_slots=int(d["injection_ring_slots"]),
+        accumulators_on_ports=bool(d["accumulators_on_ports"]),
+    )
+    with open(os.environ["GEOM_OUT"], "w") as f:
+        json.dump(out, f)
+    logger.info(
+        f"GEOM {case.id}: A {out['A']} D {out['D']} ring {out['injection_ring_slots']} on ports "
+        f"{out['accumulators_on_ports']}, {len(out['port_cores'])} port cores, {len(out['down_cores'])} down cores, "
+        f"splits {out['splits']} -> {os.environ['GEOM_OUT']}"
+    )
