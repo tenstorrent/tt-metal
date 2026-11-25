@@ -3522,7 +3522,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 note_queued_ahead_build(kernel->name() + "/" + std::to_string(kernel_hash));
                 if (!first_ahead_build_of(kernel_hash)) {
-                  continue;
+                    continue;
                 }
                 queue_ahead_build([kernel,
                                    kernel_hash = kernel_hash,

@@ -238,9 +238,8 @@ bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn);
 // after the builds queued before it. build_fn returns how many kernels it built. Nothing waits for it, and a failure
 // is dropped: the program that needs the kernel builds it again and reports the failure itself.
 void queue_ahead_build(std::function<size_t()> build_fn);
-// True the first time it is asked about a kernel hash since the build cache was
-// last cleared. Each test builds its programs anew, so a dry pass meets the
-// same kernel many times; it is queued once.
+// True the first time it is asked about a kernel hash since the build cache was last cleared. Each test builds its
+// programs anew, so a dry pass meets the same kernel many times; it is queued once.
 bool first_ahead_build_of(size_t kernel_hash);
 // Wait for the queued builds; with drop_queued, the ones that have not started are dropped instead of run.
 // Returns how many kernels queued builds have built in this process.

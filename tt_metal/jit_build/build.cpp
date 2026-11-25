@@ -1337,8 +1337,7 @@ std::mutex ahead_builds_mutex;
 std::vector<std::shared_future<void>> ahead_builds;
 std::atomic<size_t> ahead_built{0};
 std::atomic<bool> drop_ahead_builds{false};
-// Kernels whose build has been queued in this process (under
-// ahead_builds_mutex); forgotten with the build cache.
+// Kernels whose build has been queued in this process (under ahead_builds_mutex); forgotten with the build cache.
 std::unordered_set<size_t> ahead_build_hashes;
 // Experiment: while held, queued builds are kept here and not started (both under ahead_builds_mutex).
 bool ahead_builds_held = false;
@@ -1365,8 +1364,8 @@ void hold_ahead_builds(bool hold) {
 }
 
 bool first_ahead_build_of(size_t kernel_hash) {
-  const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
-  return ahead_build_hashes.insert(kernel_hash).second;
+    const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
+    return ahead_build_hashes.insert(kernel_hash).second;
 }
 
 void queue_ahead_build(std::function<size_t()> build_fn) {
@@ -1446,8 +1445,8 @@ bool ahead_builds_pending() {
 void jit_build_cache_clear() {
     JitBuildCache::inst().clear();
     {
-      const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
-      ahead_build_hashes.clear();
+        const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
+        ahead_build_hashes.clear();
     }
     jit_build::clear_file_hash_cache();
 }
