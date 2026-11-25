@@ -22,6 +22,7 @@
 // Every helper keeps its default INPUT_AND_OUTPUT data-format reconfig; the one boot is the matmul
 // contract compute_kernel_hw_startup<SrcOrder::Reverse>.
 
+#pragma GCC optimize("no-ipa-cp-clone")
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -81,6 +82,9 @@ constexpr uint32_t OUT_CB_PAGES = get_compile_time_arg_val(7);  // cb_output_til
 // and cb_output_rm). Sharded RM untilizes each normalized chunk into the output shard.
 constexpr bool SHARDED = get_compile_time_arg_val(8) != 0;
 constexpr bool UNTILIZE_OUT = SHARDED && IS_RM;
+// One binary per role (the unit root combines and finalizes). Compile-time so the block loop is not unswitched on
+// it (two copies of the whole per-block body would not fit the kernel-config ring under the watcher build).
+constexpr bool IS_ROOT = get_compile_time_arg_val(9) != 0;
 constexpr uint32_t T = CHUNK_HT * W;
 
 // b' lives in cb_chan_work when beta is present (5e writes it back in place), else in cb_chan_shift.
@@ -250,7 +254,6 @@ void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(arg++);
     const uint32_t rows_core = get_arg_val<uint32_t>(arg++);
     const uint32_t resident_chunks = get_arg_val<uint32_t>(arg++);
-    const uint32_t is_root = get_arg_val<uint32_t>(arg++);
     const uint32_t inv_n_bits = get_arg_val<uint32_t>(arg++);
     const uint32_t eps_bits = get_arg_val<uint32_t>(arg++);
 
@@ -319,7 +322,7 @@ void kernel_main() {
         }
 
         // ---------------- combine_group_stats (root) ----------------
-        if (is_root) {
+        if constexpr (IS_ROOT) {
             // Sum the cpi sender rows: ones [1 x R] x gathered [R x 2] -> [S1, S2], every row = the total.
             matmul_block<
                 false,

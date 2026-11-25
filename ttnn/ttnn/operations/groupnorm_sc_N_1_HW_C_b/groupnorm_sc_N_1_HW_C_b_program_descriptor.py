@@ -468,18 +468,34 @@ def _plan_sharded(input_tensor, num_groups, *, has_gamma, has_beta, tuning):
     cpi = HW // sh
     R = _ceil_div(cpi, 32)
 
-    chunk_target = CHUNK_TILES_TARGET if tuning.get("chunk_tiles_target") is None else int(tuning["chunk_tiles_target"])
-    # A chunk is a whole number of the shard's tile rows (no ragged tail: the shard-backed FIFOs wrap exactly).
-    h = _largest_divisor_at_most(rows_core, max(1, max(1, chunk_target) // W))
-    T = h * W
-    B = rows_core // h
-
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
     # The output shard is allocated after this plan, below the live L1 buffers the budget is measured against.
     out_shard_bytes = _align_up(sh * sw * 2, 64)
     l1_budget = l1_cb_budget(device) - out_shard_bytes
-    fp_kw = dict(W=W, T=T, R=R, is_rm=is_rm, has_gamma=has_gamma, has_beta=has_beta, map_period=sw, sharded=True)
+
+    # Chunk = the per-core block of one compute pass: a whole number of the shard's tile rows (no ragged tail:
+    # the shard-backed FIFOs wrap exactly). The shard is the per-core block, so the default is the coarsest
+    # divisor of rows_core whose fully resident footprint fits (the whole shard whenever it fits);
+    # chunk_tiles_target caps it when set. RM falls back to partial residency (K < B) only when no fully
+    # resident chunk size fits.
+    cap = rows_core if tuning.get("chunk_tiles_target") is None else max(1, int(tuning["chunk_tiles_target"]) // W)
+    divisors = [d for d in range(min(cap, rows_core), 0, -1) if rows_core % d == 0]
+
+    def fp_kw_for(h):
+        return dict(W=W, T=h * W, R=R, is_rm=is_rm, has_gamma=has_gamma, has_beta=has_beta, map_period=sw, sharded=True)
+
+    h = next(
+        (d for d in divisors if footprint_bytes(K_alloc=rows_core // d, stream=False, **fp_kw_for(d)) <= l1_budget),
+        None,
+    )
+    if h is None:
+        if not is_rm:
+            refuse(f"no chunk of the {rows_core}-tile-row shard fits the L1 left beside the shards ({l1_budget} B)")
+        h = _largest_divisor_at_most(rows_core, max(1, CHUNK_TILES_TARGET // W))
+    T = h * W
+    B = rows_core // h
+    fp_kw = fp_kw_for(h)
     if is_rm:
         f_fixed = footprint_bytes(K_alloc=0, stream=True, **fp_kw)
         K_max = (l1_budget - f_fixed) // (BF16_TILE_BYTES * T)
@@ -695,7 +711,12 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
 
     exp_sbw = _largest_divisor_at_most(W, 4)  # expand matmul out_subblock_w (<= DEST_AUTO_LIMIT fp32 half-sync)
     out_cb_pages = group_b_bytes(T) // BF16_TILE_BYTES  # cb_output_tiles capacity (drain barrier)
-    compute_ct = [W, h, int(is_rm), hg, hb, R, exp_sbw, out_cb_pages, int(sharded)]
+
+    # Compute is built once per role too (IS_ROOT is compile-time, CT 9): a runtime role flag lets O3 unswitch the
+    # block loop on it, emitting the whole per-block body twice; the root binary must fit the kernel-config ring
+    # (also under the watcher / assert build).
+    def compute_ct(is_root):
+        return [W, h, int(is_rm), hg, hb, R, exp_sbw, out_cb_pages, int(sharded), int(is_root)]
 
     # The writer is built once per role (IS_ROOT is compile-time): each binary carries only its own mcast pipe
     # (sender on unit roots, receiver elsewhere) and only the root's gather-wait / zero-fill code.
@@ -708,7 +729,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     eps_bits = _f32_bits(eps)
 
     reader_rt = ttnn.RuntimeArgs()
-    compute_rt = ttnn.RuntimeArgs()
+    compute_rt = {1: ttnn.RuntimeArgs(), 0: ttnn.RuntimeArgs()}
     writer_rt = {1: ttnn.RuntimeArgs(), 0: ttnn.RuntimeArgs()}
     writer_cores = {1: [], 0: []}
     for wk in plan.work:
@@ -729,7 +750,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             root_virt.x,
             root_virt.y,
         ]
-        compute_rt[x][y] = [wk.num_blocks, wk.rows_core, K_core, wk.is_root, inv_n_bits, eps_bits]
+        compute_rt[wk.is_root][x][y] = [wk.num_blocks, wk.rows_core, K_core, inv_n_bits, eps_bits]
         writer_cores[wk.is_root].append(wk.core)
         writer_rt[wk.is_root][x][y] = [
             output_tensor.buffer_address(),
@@ -772,13 +793,17 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     for idx in (CB_SUM_ACC, CB_SUMSQ_ACC, CB_GROUP_SUMS, CB_SUM_SEED, CB_GROUP_SHIFT):
         unpack_modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_config.unpack_to_dest_mode = unpack_modes
-    compute_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_b_compute.cpp"),
-        core_ranges=cores,
-        compile_time_args=compute_ct,
-        runtime_args=compute_rt,
-        config=compute_config,
-    )
+    compute_kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_b_compute.cpp"),
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in writer_cores[role]]),
+            compile_time_args=compute_ct(role),
+            runtime_args=compute_rt[role],
+            config=compute_config,
+        )
+        for role in (1, 0)
+        if writer_cores[role]
+    ]
 
     gather_sem = ttnn.SemaphoreDescriptor(id=GATHER_SEMAPHORE_ID, core_ranges=cores, initial_value=0)
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[gather_sem], cbs=cbs)
@@ -795,5 +820,5 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         ttnn.McastCoreOrder.ColumnMajor if sharded else ttnn.McastCoreOrder.RowMajor,
     )
     mcast.attach(descriptor, "mcast", writer_kernels, MCAST_FIRST_SEMAPHORE_ID)
-    descriptor.kernels = [reader_kernel, *writer_kernels, compute_kernel]
+    descriptor.kernels = [reader_kernel, *writer_kernels, *compute_kernels]
     return descriptor

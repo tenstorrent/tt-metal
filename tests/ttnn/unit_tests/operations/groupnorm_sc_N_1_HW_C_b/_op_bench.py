@@ -11,11 +11,24 @@ The cases are the DRAM-interleaved PERF FOCUS loose cases (feature_spec._PERF_CA
 of mid-size shapes. No correctness check here (the golden suite owns that).
 """
 
+import os
+
 import pytest
 import torch
 import ttnn
 
-from ttnn.operations.groupnorm_sc_N_1_HW_C_b import groupnorm_sc_N_1_HW_C_b
+from ttnn.operations.groupnorm_sc_N_1_HW_C_b import TUNING_OVERRIDES, groupnorm_sc_N_1_HW_C_b
+
+
+@pytest.fixture(autouse=True)
+def _tuning_from_env():
+    """A/B knob: GN_BENCH_CHUNK=<tiles> overrides chunk_tiles_target for the whole bench run."""
+    saved = dict(TUNING_OVERRIDES)
+    if os.environ.get("GN_BENCH_CHUNK"):
+        TUNING_OVERRIDES["chunk_tiles_target"] = int(os.environ["GN_BENCH_CHUNK"])
+    yield
+    TUNING_OVERRIDES.update(saved)
+
 
 CASES = [
     # name, shape, G, layout, eps
@@ -34,6 +47,22 @@ CASES = [
     ("mid_16384x320_rm", (1, 1, 16384, 320), 32, ttnn.ROW_MAJOR_LAYOUT, 1e-5),
 ]
 
+# L1 BLOCK_SHARDED, out of place (Refinement 1). The TILE rows are the three SDXL attention / VAE-mid
+# perf cases; the RM rows are the U-Net resnet shapes run out of place (their model form is in place).
+SHARDED_CASES = [
+    # name, shape, G, grid, layout, eps
+    ("unet_tile_1024x1280", (1, 1, 1024, 1280), 32, (8, 8), ttnn.TILE_LAYOUT, 1e-6),
+    ("unet_tile_4096x640_4x8", (1, 1, 4096, 640), 32, (4, 8), ttnn.TILE_LAYOUT, 1e-6),
+    ("vae_tile_16384x512", (1, 1, 16384, 512), 32, (8, 8), ttnn.TILE_LAYOUT, 1e-6),
+    ("unet_rm_oop_1024x1280", (1, 1, 1024, 1280), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_rm_oop_16384x320", (1, 1, 16384, 320), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_rm_oop_4096x320", (1, 1, 4096, 320), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_rm_oop_4096x640", (1, 1, 4096, 640), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_rm_oop_1024x640", (1, 1, 1024, 640), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("refiner_rm_oop_256x1536", (1, 1, 256, 1536), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("refiner_rm_oop_16384x384", (1, 1, 16384, 384), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+]
+
 
 @pytest.mark.parametrize("name, shape, G, layout, eps", CASES, ids=[c[0] for c in CASES])
 def test_bench(device, name, shape, G, layout, eps):
@@ -45,6 +74,34 @@ def test_bench(device, name, shape, G, layout, eps):
         layout=layout,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    g = ttnn.from_torch(
+        torch.randn((1, 1, 1, C), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    b = ttnn.from_torch(
+        torch.randn((1, 1, 1, C), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    out = groupnorm_sc_N_1_HW_C_b(x, G, gamma=g, beta=b, eps=eps)
+    ttnn.synchronize_device(device)
+    out.deallocate()
+    x.deallocate()
+
+
+@pytest.mark.parametrize("name, shape, G, grid, layout, eps", SHARDED_CASES, ids=[c[0] for c in SHARDED_CASES])
+def test_bench_sharded(device, name, shape, G, grid, layout, eps):
+    from eval.golden_tests.groupnorm_sc_N_1_HW_C_b.helpers import block_shard_memory_config
+
+    torch.manual_seed(0)
+    C = shape[-1]
+    mem = block_shard_memory_config(shape, grid, layout=layout, dtype=ttnn.bfloat16, device=device)
+    x = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem
     )
     g = ttnn.from_torch(
         torch.randn((1, 1, 1, C), dtype=torch.bfloat16),
