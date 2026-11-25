@@ -78,7 +78,7 @@ def _stimuli(case, fmt):
     mean_t[:, 0] = data.mean(dim=1)
     inv_t[:, 0] = 1.0 / data.std(dim=1)
     if "-sp-" in case:
-        # A bf16 NaN data value reaches dest as -Inf through the srcA path (also on main), so BF16 gets no data NaN.
+        # A bf16 NaN data value reaches dest as -Inf through the srcA path, so BF16 stimuli carry no data NaN.
         nan = float("nan") if fmt == DataFormat.Float32 else 2.5
         data[0, :6] = torch.tensor([float("inf"), float("-inf"), nan, 0.0, -0.0, 1e30])
         data[17, 20] = -1e30
@@ -221,3 +221,14 @@ FUNC_CASES = (
 @parametrize(case=FUNC_CASES)
 def test_sfpu_normalize_bcast_col(case):
     run_norm_col(case)
+
+
+# loop_factor 2: back-to-back normalize calls; the second runs in dest section 1 (SyncHalf) and is the one packed.
+LOOP2_CASES = [f"{v}-F32-{l}-sp-rt0" for v in VARS for l in ("A_in", "B_below")] + [
+    f"{v}-BF16-D_seqadd-rand-rt0" for v in VARS
+]
+
+
+@parametrize(case=LOOP2_CASES)
+def test_sfpu_normalize_bcast_col_loop2(case):
+    run_norm_col(case, loop_factor=2)

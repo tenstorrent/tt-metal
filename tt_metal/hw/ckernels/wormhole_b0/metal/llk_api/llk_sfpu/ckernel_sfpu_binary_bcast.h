@@ -462,9 +462,9 @@ inline void _calculate_sfpu_binary_bcast_col_band_(
 // inv_std: LREG_NORM_INV_STD / LREG_NORM_INV_STD_TMP, both read LREG_MASK), so
 // their mask + rotate-add chains are interleaved A/B/A/B: every dependent
 // pair is separated by exactly one instruction of the other chain, which
-// covers the 2-cycle SFPU latency without a single SFPNOP. The per-lane
-// arithmetic (mask AND, three rotate-adds, subtract, multiply) and its
-// order are unchanged, so results are bit-identical to the serial form.
+// covers the 2-cycle SFPU latency without a single SFPNOP. The two chains
+// are independent and each keeps the per-lane ops and order of a single-chain
+// broadcast, so interleaving does not change results.
 //
 // Dest addressing is RWC-relative so that the per-band body is a sequence of
 // immediates: DEST_TARGET_REG_CFG_MATH_Offset is pointed at the data tile for
