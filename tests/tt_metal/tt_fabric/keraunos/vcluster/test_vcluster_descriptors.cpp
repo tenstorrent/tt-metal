@@ -297,7 +297,7 @@ TEST(VclusterDescriptors, PackageFacts) {
 // The manifests of manifests/ pass the checks with the package's facts.
 TEST(VclusterDescriptors, ManifestsPassChecks) {
     const fs::path manifests = fs::path(__FILE__).parent_path() / "manifests";
-    for (const auto* name : {"line3_eth.yaml", "line3_am.yaml", "line3_noc.yaml"}) {
+    for (const auto* name : {"line3_eth.yaml", "line3_am.yaml", "line3_noc.yaml", "pair2_eth.yaml"}) {
         SCOPED_TRACE(name);
         EXPECT_TRUE(check_manifest(load_manifest(manifests / name), package_facts(package_soc_desc())).empty());
     }

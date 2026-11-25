@@ -17,8 +17,16 @@
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "impl/program/program_impl.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "test_host_kernel_common.hpp"
+#include "impl/kernels/kernel.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
+#include <algorithm>
+#include <chrono>
+#include <thread>
+#include <tuple>
 #include <unordered_map>
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -59,6 +67,15 @@ struct WorkerMemMap {
     uint32_t target_address;
     uint32_t notification_mailbox_address;
     uint32_t test_results_size_bytes;
+    // The addresses above are the kernel's view: the L1 offset plus this. The host reads and writes the offset.
+    uint32_t kernel_view_offset = 0;
+};
+
+// Where a fabric data-movement test runs a worker kernel. See BaseFabricFixture::get_fabric_test_worker().
+struct FabricTestWorker {
+    tt::tt_metal::CoreCoord logical;
+    CoreType core_type;                   // WORKER or ETH: for CreateSemaphore and L1 reads
+    tt::tt_metal::CoreCoord noc_core;     // the coordinate other cores address it at
 };
 
 class BaseFabricFixture : public ::testing::Test {
@@ -157,15 +174,193 @@ public:
         pending_async_workloads_.erase(device.get());
     }
 
-    // Utility function reused across tests to get address params
+    // Whether `device` has no Tensix cores, so fabric test workers run on its idle Ethernet cores (Keraunos CCEs):
+    // the Keraunos test chips in tests/tt_metal/tt_fabric/keraunos/.
+    static bool workers_on_ethernet_cores(const std::shared_ptr<tt_metal::distributed::MeshDevice>& device) {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        return cluster.get_soc_desc(device->get_device_ids()[0]).get_cores(CoreType::TENSIX, tt::CoordSystem::NOC0).empty();
+    }
+
+    // Where a worker runs beside the fabric router on Ethernet channel `router_chan` of Keraunos chip `chip`: CCE1 of
+    // the router's HSIO tile, an idle Ethernet core of its own, so worker and router share a tile and no traffic
+    // between them crosses D2D. Fatal when the chip's SoC descriptor does not list that core or it is not idle.
+    static FabricTestWorker get_worker_beside_router(ChipId chip, chan_id_t router_chan) {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& soc = cluster.get_soc_desc(chip);
+        const uint32_t hsio = soc.get_keraunos_core_for_channel(router_chan).hsio;
+        for (const auto& core : soc.get_arch_descriptor().get_keraunos().cores) {
+            if (core.hsio != hsio || core.eth_cce != 1) {
+                continue;
+            }
+            const tt_metal::CoreCoord logical =
+                soc.get_logical_ethernet_core_from_physical({core.coord.x, core.coord.y});
+            TT_FATAL(
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip).contains(
+                    logical),
+                "Chip {} CCE1 of HSIO tile {} ({}) is not an idle Ethernet core",
+                chip,
+                hsio,
+                logical.str());
+            return {
+                logical,
+                CoreType::ETH,
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH)};
+        }
+        TT_FATAL(
+            false,
+            "Chip {} SoC descriptor lists no CCE1 on HSIO tile {}, where the worker of the router on channel {} runs",
+            chip,
+            hsio,
+            static_cast<uint32_t>(router_chan));
+    }
+
+    // Where a fabric data-movement test runs a worker kernel on `device`: the Tensix core at `tensix_logical`, or, on a
+    // chip whose workers run on Ethernet cores, beside its fabric router on the lowest channel
+    // (get_worker_beside_router). Fatal when that chip has no fabric router.
+    static FabricTestWorker get_fabric_test_worker(
+        const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, tt_metal::CoreCoord tensix_logical) {
+        if (!workers_on_ethernet_cores(device)) {
+            return {tensix_logical, CoreType::WORKER, device->worker_core_from_logical_core(tensix_logical)};
+        }
+        const ChipId chip = device->get_device_ids()[0];
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto routers =
+            control_plane.get_active_fabric_eth_channels(control_plane.get_fabric_node_id_from_physical_chip_id(chip));
+        TT_FATAL(!routers.empty(), "Chip {} has no fabric router for a fabric test worker to run beside", chip);
+        return get_worker_beside_router(chip, routers.begin()->first);
+    }
+
+    // A data-movement kernel on `worker`: DataMovementConfig on RISCV_0 for a Tensix core, EthernetConfig on DM0 of
+    // an idle Ethernet core, built with KERAUNOS_CCE_NOC so its NOC calls go through cce_noc.h.
+    static tt_metal::KernelHandle create_fabric_test_worker_kernel(
+        tt_metal::Program& program,
+        const std::string& file_name,
+        const FabricTestWorker& worker,
+        const std::vector<uint32_t>& compile_args,
+        const std::map<std::string, std::string>& defines = {}) {
+        if (worker.core_type == CoreType::ETH) {
+            std::map<std::string, std::string> eth_defines = defines;
+            eth_defines.emplace("KERAUNOS_CCE_NOC", "1");
+            return tt_metal::CreateKernel(
+                program,
+                file_name,
+                worker.logical,
+                tt_metal::EthernetConfig{
+                    .eth_mode = tt_metal::Eth::IDLE,
+                    .noc = tt_metal::NOC::NOC_0,
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .compile_args = compile_args,
+                    .defines = eth_defines});
+        }
+        return tt_metal::CreateKernel(
+            program,
+            file_name,
+            worker.logical,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = compile_args,
+                .defines = defines});
+    }
+
+    // A fabric router: where the host reads its EDM status, in virtual coordinates so the read still works once the
+    // device is closed.
+    struct Router {
+        ChipId chip;
+        tt_metal::CoreCoord logical;
+        tt_metal::CoreCoord virtual_core;
+        uint32_t edm_status_address;
+    };
+
+    static bool is_mock() {
+        return tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    }
+
+    // Every fabric router of every open device, or with `masters_only` each device's master router. Fatal when the
+    // fabric config has no READY_FOR_TRAFFIC handshake, whose address is the EDM status word.
+    static std::vector<Router> get_routers(bool masters_only) {
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+        const auto ready = builder_ctx.get_fabric_router_ready_address_and_signal();
+        TT_FATAL(ready.has_value(), "The fabric config has no READY_FOR_TRAFFIC handshake");
+        std::vector<Router> routers;
+        for (const auto& [chip, mesh] : devices_map_) {
+            std::vector<chan_id_t> chans;
+            if (masters_only) {
+                chans.push_back(builder_ctx.get_fabric_master_router_chan(chip));
+            } else {
+                const auto node = control_plane.get_fabric_node_id_from_physical_chip_id(chip);
+                for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
+                    chans.push_back(chan);
+                }
+            }
+            for (const chan_id_t chan : chans) {
+                const tt_metal::CoreCoord logical =
+                    cluster.get_soc_desc(chip).get_eth_core_for_channel(chan, tt::CoordSystem::LOGICAL);
+                routers.push_back(
+                    {chip,
+                     logical,
+                     cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH),
+                     ready->first});
+            }
+        }
+        return routers;
+    }
+
+    // Reads through the cluster, so it works while the device is open or closed. Fatal on a short read.
+    static uint32_t read_edm_status(const Router& router) {
+        std::vector<uint32_t> value;
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            value, sizeof(uint32_t), tt_cxy_pair(router.chip, router.virtual_core), router.edm_status_address);
+        TT_FATAL(value.size() == 1, "EDM status read on chip {} returned {} words", router.chip, value.size());
+        return value[0];
+    }
+
+    // Polls `router`'s EDM status once a second until it is TERMINATED or `timeout` has passed, and returns the last
+    // status read. Blocks for up to `timeout` plus one poll.
+    static uint32_t wait_for_router_terminated(const Router& router, std::chrono::seconds timeout) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        uint32_t status = read_edm_status(router);
+        while (status != tt::tt_fabric::EDMStatus::TERMINATED && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            status = read_edm_status(router);
+        }
+        log_info(
+            tt::LogTest, "Chip {} router {} EDM status {:#x} after close", router.chip, router.logical.str(), status);
+        return status;
+    }
+
+    // Utility function reused across tests to get address params. On a chip whose workers run on Ethernet cores the
+    // map starts at the idle Ethernet core's unreserved L1, and the kernel's view is CCE1's uncached alias
+    // (MEM_IERISC_UNCACHED_BASE above CCE1's SRAM, which starts one SRAM size up in its own view): the worker's
+    // stores must reach SRAM, where the iDMA and the host read them.
     static WorkerMemMap generate_worker_mem_map(
         const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
         constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
         constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
         constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
+        constexpr uint32_t KERAUNOS_CCE_UNCACHED_ALIAS = 0x800000;
 
-        uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-        uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
+        uint32_t base_addr = 0;
+        uint32_t kernel_view_offset = 0;
+        if (workers_on_ethernet_cores(device)) {
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            base_addr = hal.get_dev_addr(
+                tt_metal::HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+            const uint32_t size =
+                hal.get_dev_size(tt_metal::HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+            TT_FATAL(
+                PACKET_HEADER_RESERVED_BYTES + DATA_SPACE_RESERVED_BYTES + 2 * TEST_RESULTS_SIZE_BYTES <= size,
+                "Idle Ethernet unreserved L1 ({} B) cannot hold the fabric test worker map",
+                size);
+            kernel_view_offset =
+                KERAUNOS_CCE_UNCACHED_ALIAS +
+                hal.get_dev_size(tt_metal::HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::BASE);
+        } else {
+            base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        }
+        uint32_t source_l1_buffer_address = base_addr + kernel_view_offset + PACKET_HEADER_RESERVED_BYTES;
         uint32_t test_results_address = source_l1_buffer_address + DATA_SPACE_RESERVED_BYTES;
         uint32_t target_address = source_l1_buffer_address;
         uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
@@ -178,7 +373,8 @@ public:
             test_results_address,
             target_address,
             notification_mailbox_address,
-            TEST_RESULTS_SIZE_BYTES};
+            TEST_RESULTS_SIZE_BYTES,
+            kernel_view_offset};
     }
 };
 
