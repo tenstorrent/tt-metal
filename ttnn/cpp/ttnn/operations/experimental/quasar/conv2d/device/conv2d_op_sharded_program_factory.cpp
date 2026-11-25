@@ -1161,9 +1161,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         (tt::round_up(act_block_w_logical_scalars, tt::constants::TILE_WIDTH) - act_block_w_logical_scalars) *
         a.element_size();
     const uint32_t act_block_w_extra_align_scalars = act_block_w_extra_align_bytes / a.element_size();
-    // When using block float format, we must handle cases where the data doesn't align to 16-scalar boundaries.
-    const bool needs_act_block_zero_out =
-        act_block_w_extra_align_scalars % 16 != 0 && tt::tt_metal::is_block_float(output.dtype());
+    // The reader fills only the logical part of each act row, so zero the CB once up front whenever the row is
+    // padded to the tile width. Stale L1 in the pad meets zero weights in the matmul, but 0 * NaN is NaN.
+    const bool needs_act_block_zero_out = act_block_w_extra_align_scalars != 0;
 
     const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 

@@ -13,12 +13,11 @@ struct McastRect {
     uint32_t noc_x_start, noc_y_start, noc_x_end, noc_y_end;
 };
 
-// Zero out all tiles for a given circular buffer.
+// Zero out the whole dataflow buffer. Sized from the DFB itself: the legacy CB interface does not describe a
+// DFB on Quasar, so sizing from it zeroed nothing there.
 template <uint32_t cb_id, typename Cb>
 FORCE_INLINE void zero_out_tiles(Noc noc, Cb& cb) {
-    constexpr uint32_t tile_size = get_tile_size(cb_id);
-    const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
-    noc.async_write_zeros(cb, tile_size * num_tiles);
+    noc.async_write_zeros(cb, cb.get_total_size_bytes());
     noc.write_zeros_l1_barrier();
 }
 
