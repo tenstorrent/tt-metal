@@ -834,6 +834,8 @@ inline void _topk_canonicalize_negzero_value_tiles_() {
 // ph1's leading one (involution, all lanes enabled), and ArgMin is expressed by operand order
 // instead of the SFPSWAP reversal in SFPU_CONTROL_REG: with index tracking off both leave
 // VD = max / VC = min on every bit pattern (ties included), so the output is bit-identical.
+// Requires index tracking off (ENABLE_DEST_INDEX = 0, set by _init_topk_fused_): with it on,
+// SWAP(L0..L3) would also permute L4-L7, which hold group d+1 here.
 
 TT_ALWAYS_INLINE void topk_fused_load32() {
     constexpr InstrModLoadStore M = InstrModLoadStore::INT32;
