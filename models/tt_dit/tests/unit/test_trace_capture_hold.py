@@ -6,8 +6,11 @@
 
 A trace rewrites its intermediates' addresses on every replay. With the hold, the DRAM a capture
 frees stays reserved until the trace is released, so a later job's buffers cannot land on it. This
-checks the Python side with a fake ttnn: the hold is set only around begin_trace_capture, and the
-audio decoders ask for it. Run directly; no device or quality acceptance.
+checks the Python side with a fake ttnn: the hold is set only around begin_trace_capture, and only
+H3's audio decoder asks for it. LTX's mel decoder, vocoders and BWE keep it off (task #6623): the hold
+reserves the capture's intermediates without reuse, and the LTX 6 s 1080p cold warm-up then ran out
+of DRAM on cs04 in the Gemma warm-up after the audio capture pass. Run directly; no device or quality
+acceptance.
 """
 
 import ast
@@ -20,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TRACING = ROOT / "utils/tracing.py"
 AUDIO = [ROOT / "models/audio_vae" / f for f in ("vocoder_ltx.py", "mel_decoder_ltx.py", "bwe_ltx.py")]
+H3_DECODER = ROOT / "models/audio_vae/minimax_h3/decoder_minimax_h3_audio.py"
 
 
 class FakeTensor:
@@ -66,14 +70,18 @@ def fake_ttnn(log, *, with_hold=True):
 
 
 def load_tracing(ttnn_mod):
-    saved = {k: sys.modules.get(k) for k in ("ttnn", "loguru", "models.tt_dit.utils", "models.tt_dit.utils.tensor")}
+    names = ("ttnn", "loguru", "models.tt_dit.utils", "models.tt_dit.utils.tensor", "models.tt_dit.utils.trace_store")
+    saved = {k: sys.modules.get(k) for k in names}
     loguru = types.ModuleType("loguru")
     loguru.logger = types.SimpleNamespace(debug=lambda *a, **k: None, info=lambda *a, **k: None,
                                           warning=lambda *a, **k: None)
     utils = types.ModuleType("models.tt_dit.utils")
     utils.tensor = types.ModuleType("models.tt_dit.utils.tensor")
+    utils.trace_store = types.ModuleType("models.tt_dit.utils.trace_store")
+    utils.trace_store.enabled = lambda: False
     sys.modules.update({"ttnn": ttnn_mod, "loguru": loguru, "models.tt_dit.utils": utils,
-                        "models.tt_dit.utils.tensor": utils.tensor})
+                        "models.tt_dit.utils.tensor": utils.tensor,
+                        "models.tt_dit.utils.trace_store": utils.trace_store})
     try:
         spec = importlib.util.spec_from_file_location("tracing_under_test", TRACING)
         mod = importlib.util.module_from_spec(spec)
@@ -111,7 +119,37 @@ class TraceCaptureHoldTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.capture(hold=True, with_hold=False)
 
-    def test_audio_decoders_hold(self):
+    def traced_capture(self, hold_attr):
+        log = []
+        tracing = load_tracing(fake_ttnn(log))
+
+        class Module:
+            def __init__(self):
+                self.mesh_device = FakeDevice()
+                if hold_attr is not None:
+                    self.hold_capture_frees = hold_attr
+
+            @tracing.traced_function(
+                device=lambda self: self.mesh_device,
+                prep_run=False,
+                clone_prep_inputs=False,
+                hold_capture_frees=lambda self: getattr(self, "hold_capture_frees", False),
+            )
+            def forward(self, n):
+                return None
+
+        Module().forward(3, traced=True)
+        return [e for e in log if e[0] in ("hold", "begin")]
+
+    def test_callable_hold_is_per_instance(self):
+        self.assertEqual(self.traced_capture(None), [("begin", 0, False)])
+        self.assertEqual(self.traced_capture(False), [("begin", 0, False)])
+        self.assertEqual(
+            self.traced_capture(True), [("hold", 0, True), ("begin", 0, True), ("hold", 0, False)]
+        )
+
+    def test_audio_decoders_hold_per_instance(self):
+        # The shared audio modules resolve the hold on the instance; none hard-codes it on.
         for path in AUDIO:
             calls = [
                 n for n in ast.walk(ast.parse(path.read_text()))
@@ -121,8 +159,14 @@ class TraceCaptureHoldTest(unittest.TestCase):
             for c in calls:
                 kw = {k.arg: k.value for k in c.keywords}
                 self.assertIn("hold_capture_frees", kw, path.name)
-                self.assertIs(kw["hold_capture_frees"].value, True, path.name)
+                self.assertIsInstance(kw["hold_capture_frees"], ast.Lambda, path.name)
+                self.assertIn("getattr(self, 'hold_capture_frees', False)", ast.unparse(kw["hold_capture_frees"]))
+            self.assertNotIn(".hold_capture_frees = True", path.read_text(), path.name)
 
+    def test_only_h3_opts_in(self):
+        self.assertIn("self.decoder.hold_capture_frees = True", H3_DECODER.read_text())
+        ltx_adapter = (ROOT / "models/audio_vae/audio_decoder_ltx.py").read_text()
+        self.assertNotIn("hold_capture_frees", ltx_adapter)
 
 if __name__ == "__main__":
     unittest.main()

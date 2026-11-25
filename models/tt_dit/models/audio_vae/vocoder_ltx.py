@@ -540,9 +540,14 @@ class Vocoder(Module):
 
         return ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
 
-    # hold_capture_frees: a later job's buffers must not land on this trace's intermediates (task #6000).
+    # hold_capture_frees: per instance (task #6623). H3 opts in so a later job's buffers cannot land
+    # on this trace's intermediates (task #6000); LTX keeps it off, since the hold reserves the
+    # capture's intermediates without reuse and its cold warm-up then runs out of DRAM on cs04.
     @traced_function(
-        device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False, hold_capture_frees=True
+        device=lambda self: self.mesh_device,
+        prep_run=False,
+        clone_prep_inputs=False,
+        hold_capture_frees=lambda self: getattr(self, "hold_capture_frees", False),
     )
     def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
         """Pure-device graph: conv_pre → partition → ups/AMP stack → act_post → conv_post →
