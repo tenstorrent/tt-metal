@@ -20,6 +20,7 @@ Description:
     `host_assigned_id`, sorted ascending. A device this process opened but
     that has no live ops shows `(idle)`; a device on this host that this
     process never opened shows `(unused)`; cross-host chips show `(remote)`.
+    An unhealthy device shows `(unhealthy)`.
 
     A leading `[!] ` on an op line marks that op as a *straggler* - its
     `host_assigned_id` is strictly less than the highest live id in the
@@ -114,6 +115,9 @@ def _format_cell(
     metal_id = mapped_device.localChipId
     device_id = metal_id_mapping.get_device_id(metal_id)
     if device_id is None:
+        # An unhealthy chip has no unique id to map by; chip numbers match only without renumbering
+        if not metal_id_mapping.mismatch_exists() and metal_id in cd.get_unhealthy_devices():
+            return f"(Metal Device {metal_id})\n(unhealthy)"
         return f"(Metal Device {metal_id})\n(no exalens map)"
 
     prefix = _ubb_prefix(cd, device_id)

@@ -401,7 +401,7 @@ def test_eltwise_binary_sfpu_int_quasar(
 
 
 # ===========================================================================
-# Family 2 — float ops (add, sub, mul, div, atan2, copy_dest). Ported from test_sfpu_binary_float_quasar.py.
+# Family 2 — float ops (add, sub, rsub, mul, div, atan2, copy_dest). Ported from test_sfpu_binary_float_quasar.py.
 # add/sub route the SFPU calculate_sfpu_binary ADD/SUB path (tenstorrent/tt-metal#49883).
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
@@ -441,7 +441,7 @@ def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
             flat[src0_idx * MAX_TILE_ELEMENTS + lane] = dividend
             flat[src1_idx * MAX_TILE_ELEMENTS + lane] = divisor
         return flat.reshape(scaled.shape)
-    # SfpuElwadd / SfpuElwsub / SfpuElwmul / SfpuCopyDest — symmetric ±250 range.
+    # SfpuElwadd / SfpuElwsub / SfpuElwrsub / SfpuElwmul / SfpuCopyDest — symmetric ±250 range.
     scaled = ((src_A.to(torch.float32) - 0.5) * 500.0).to(torch_format)
     return scaled.flatten().reshape(scaled.shape)
 
@@ -483,6 +483,7 @@ _FLOAT_VARIANTS = _get_valid_float_formats_dest_acc()
 _FLOAT_MATHOPS = [
     MathOperation.SfpuElwadd,
     MathOperation.SfpuElwsub,
+    MathOperation.SfpuElwrsub,
     MathOperation.SfpuElwmul,
     MathOperation.SfpuElwdiv,
     MathOperation.SfpuAtan2,
@@ -535,7 +536,7 @@ def test_eltwise_binary_sfpu_float_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU float ops (add, sub, mul, div, atan2, copy_dest)."""
+    """Binary SFPU float ops (add, sub, rsub, mul, div, atan2, copy_dest)."""
     format_variant = resolve_quasar_sfpu_variant(
         MathOperation.SfpuElwadd, formats, dest_acc
     )
@@ -794,6 +795,7 @@ def test_eltwise_binary_sfpu_bcast_quasar(
 _BF16_ADD_SUB_OPS = [
     ("ADD", MathOperation.SfpuElwadd),
     ("SUB", MathOperation.SfpuElwsub),
+    ("RSUB", MathOperation.SfpuElwrsub),
 ]
 
 BF16_RNE_SWEEP = dict(
@@ -815,7 +817,7 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU ADD/SUB with NearestEven rounding on bfloat16 inputs.
+    """Binary SFPU ADD/SUB/RSUB with NearestEven rounding on bfloat16 inputs.
 
     RNE narrowing only applies when DEST holds bf16 (fp32 dest accumulation
     disabled), so this test is scoped to Float16_b with DestAccumulation.No.
@@ -832,6 +834,8 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
         binary_op,
         prepare_stimuli=_prepare_float_stimuli,
         dst_rounding_mode=DstRoundingMode.NearestEven,
+        # Bit-exact: the golden rounds to nearest-even, and a tolerance would also pass truncation.
+        max_ulp=0,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
@@ -880,6 +884,131 @@ def test_eltwise_binary_sfpu_add_top_row_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+    )
+
+
+# ===========================================================================
+# Float fmod(a, b): a - trunc(a / b) * b on the magnitudes, the sign of a applied once.
+# ===========================================================================
+# The kernel estimates trunc(a / b) through a reciprocal and then corrects a remainder that
+# landed outside [0, |b|): one step down, up to two steps up. Every stimulus below is exact in
+# fp32 and in bfloat16, so the reference is the exact fmod and the bound is one output step.
+_FMOD_LANES_PER_CASE = MAX_TILE_ELEMENTS // 8
+# Divisors of the large-quotient lanes: not powers of two, so their reciprocal is inexact.
+_FMOD_LARGE_QUOTIENT_DIVISORS = (3.0, 1.5)
+# Relative to |a|, on the general lanes only.
+_FMOD_GENERAL_RTOL = 2.0**-22
+
+
+def _fmod_operands(data_format):
+    """(a, b) for one tile: eight equal cases, every sign pairing in each."""
+    torch_format = format_dict[data_format]
+    gen = torch.Generator().manual_seed(65383)
+    n = _FMOD_LANES_PER_CASE
+    lane = torch.arange(n)
+    sign_a = torch.where(lane % 2 == 0, 1.0, -1.0)
+    sign_b = torch.where((lane // 2) % 2 == 0, 1.0, -1.0)
+
+    def cast(values):
+        return values.to(torch.float32).to(torch_format).to(torch.float32)
+
+    # Divisors with a short mantissa, so k * b below is exact in either format.
+    divisor = torch.tensor([0.5, 0.75, 1.5, 2.0, 3.0, 5.0, 6.0, 7.0])[lane % 8]
+    multiple = (lane % 13 + 1).to(torch.float32)
+
+    # 1. General: |a| in [0.1, 100], |b| in [0.5, 8].
+    a1 = cast(torch.rand(n, generator=gen) * 99.9 + 0.1)
+    b1 = cast(torch.rand(n, generator=gen) * 7.5 + 0.5)
+    # 2. Exact multiples: the remainder is zero.
+    a2, b2 = multiple * divisor, divisor
+    # 3 / 4. One representable step below / above an exact multiple.
+    below = torch.nextafter(cast(multiple * divisor), torch.tensor(0.0))
+    above = torch.nextafter(cast(multiple * divisor), torch.tensor(float("inf")))
+    if data_format != DataFormat.Float32:
+        # bfloat16 keeps 8 significant bits: step by one unit of the 8th.
+        exact = cast(multiple * divisor)
+        step = 2.0 ** (torch.floor(torch.log2(exact)) - 7)
+        below, above = exact - step / 2, exact + step
+        below = torch.where(cast(below) == exact, exact - step, below)
+    a3, b3 = cast(below), divisor
+    a4, b4 = cast(above), divisor
+    # 5. Quotients above 2**22, where the estimate of trunc(a / b) is one too high, and above
+    # 2**24, where it is two too high and the second step up is what lands the remainder.
+    b5 = torch.tensor(_FMOD_LARGE_QUOTIENT_DIVISORS)[lane % 2]
+    band = torch.where((lane // 4) % 2 == 0, 22.0, 24.0)
+    low = b5 * 2.0**band * 1.01
+    high = b5 * 2.0 ** (band + 1) * 0.99
+    a5 = cast(torch.floor(low + torch.rand(n, generator=gen) * (high - low)))
+    # 6. Zero dividends, +0 and -0 (sign_a carries the sign).
+    a6, b6 = torch.zeros(n), divisor
+    # 7. a == b up to sign.
+    a7 = cast(torch.rand(n, generator=gen) * 20 + 0.5)
+    b7 = a7.clone()
+    # 8. |a| < |b|: the result is a.
+    b8 = cast(torch.rand(n, generator=gen) * 7.5 + 0.5)
+    a8 = cast(b8 * (torch.rand(n, generator=gen) * 0.9 + 0.05))
+
+    a = torch.cat([sign_a * v for v in (a1, a2, a3, a4, a5, a6, a7, a8)])
+    b = torch.cat([sign_b * v for v in (b1, b2, b3, b4, b5, b6, b7, b8)])
+    return a.to(torch_format), b.to(torch_format)
+
+
+def _prepare_fmod_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
+    a, b = _fmod_operands(formats.input_format)
+    src_A, tile_cnt = _stage_binary_operands(
+        a, b, (src0_idx, src1_idx, 0), format_dict[formats.input_format]
+    )
+    return src_A, tile_cnt, torch.zeros_like(src_A)
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=[variant.formats for variant in _FLOAT_VARIANTS],
+    dest_acc=_dest_acc_for_float_formats,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+)
+def test_eltwise_binary_sfpu_fmod_quasar(formats, dest_acc, tile_indices):
+    """Binary SFPU float fmod: both operand signs, exact and near multiples, quotients above 2**22."""
+    mathop = MathOperation.SfpuBinaryFmod
+    format_variant = resolve_quasar_sfpu_variant(
+        MathOperation.SfpuElwadd, formats, dest_acc
+    )
+    assert (
+        format_variant is not None
+    ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
+    a, b = (v.to(torch.float64) for v in _fmod_operands(formats.input_format))
+    reference = torch.fmod(a, b)
+
+    def _check_fmod(res_tensor):
+        result = res_tensor.to(torch.float64)
+        # The remainder is below |b| and carries the sign of a, a zero remainder included.
+        assert bool((result.abs() < b.abs()).all()), "fmod result is not below |b|"
+        assert bool(
+            (torch.signbit(result) == torch.signbit(a)).all()
+        ), "fmod result does not carry the sign of a"
+        # General lanes: the product trunc(a / b) * b rounds, so allow that in steps of a.
+        general = slice(0, _FMOD_LANES_PER_CASE)
+        error = (result - reference).abs()
+        assert bool(
+            (error[general] <= _FMOD_GENERAL_RTOL * a[general].abs()).all()
+        ), f"fmod general lanes off by up to {error[general].max().item():.3e}"
+        # Every other case is exact in both formats, large quotients included.
+        crafted = slice(_FMOD_LANES_PER_CASE, None)
+        worst = int(error[crafted].argmax()) + _FMOD_LANES_PER_CASE
+        assert error[worst] == 0, (
+            f"fmod({a[worst].item()}, {b[worst].item()}) = {result[worst].item()}, "
+            f"expected {reference[worst].item()}"
+        )
+
+    _run_sfpu_binary_llk_golden(
+        formats,
+        dest_acc,
+        tile_indices,
+        mathop,
+        mathop.cpp_enum_value,
+        prepare_stimuli=_prepare_fmod_stimuli,
+        post_check=_check_fmod,
+        format_variant=format_variant,
     )
 
 
@@ -1180,6 +1309,11 @@ _PROCESSED_ELEMS = MAX_TILE_ELEMENTS
 _QUANT_INT8_MIN = -127
 _QUANT_INT8_MAX = 127
 
+# Pinned lanes per tile (two per face) that discriminate the SFPCAST SM<->2's-comp mod1 values.
+_QUANT_PINNED_LANES = 8
+# A*scale+zp target that STOCH_RND rounds to sign-magnitude -0 (0x80000000).
+_QUANT_NEG_ZERO_PROD = -0.25
+
 
 _QUANT_OPS = ["QUANT", "REQUANT", "DEQUANT"]
 
@@ -1215,9 +1349,18 @@ def _run_quant(
     # Zero-point: a small fp32 offset.
     zero_point = 3.0
 
+    # Pinned lanes: SFPCAST Mod1 2 and Mod1 3 differ from each other only at 0x80000000.
+    # Even entries of `pinned` give A*scale+zp = _QUANT_NEG_ZERO_PROD; odd entries hold INT32_MIN (int, 2's-comp only).
+    pinned = torch.arange(0, n, n // _QUANT_PINNED_LANES)
+    neg_zero_lanes, int32_min_lanes = pinned[0::2], pinned[1::2]
+    neg_zero_a = (_QUANT_NEG_ZERO_PROD - zero_point) / scale[neg_zero_lanes]
+
     if a_is_int:
         # int32 operand A in a modest range so int*scale stays well within int8.
         a_vals = torch.randint(-2000, 2000, (n,), dtype=torch.int32)
+        a_vals[neg_zero_lanes] = torch.round(neg_zero_a).to(torch.int32)
+        if not sign_magnitude:
+            a_vals[int32_min_lanes] = torch.iinfo(torch.int32).min
         a_float = a_vals.to(torch.float32)
         # The SIGN_MAGNITUDE_FORMAT path skips the 2's-comp->SM input cast, so operand
         # A must already be SMAG32; the default path expects raw 2's-complement.
@@ -1225,6 +1368,7 @@ def _run_quant(
     else:
         # fp32 operand A.
         a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0  # +/-2000
+        a_float[neg_zero_lanes] = neg_zero_a
         a_vals = a_float
         a_staged = fp32_bits_as_int32(a_float)
 
@@ -1243,18 +1387,15 @@ def _run_quant(
         prod = a_float * scale + zero_point
         rounded = torch.round(prod)  # round-half-to-even matches SFP STOCH_RND NearEven
         clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
-        # STOCH_RND emits a sign-magnitude int8 result. A negative value whose
-        # magnitude rounds to 0 becomes sign-magnitude negative-zero (0x80000000).
-        neg_zero = (clamped == 0) & (prod < 0)
         if sign_magnitude:
             # SM path stores the STOCH_RND SMAG32 result as-is (no SM32_TO_2SC cast):
-            # negatives keep bit31|magnitude and negative-zero stays 0x80000000.
+            # negatives keep bit31|magnitude and a negative value rounding to 0 stays -0 (0x80000000).
+            neg_zero = (clamped == 0) & (prod < 0)
             golden_active = int32_to_smag32(clamped)
             golden_active[neg_zero] = torch.tensor(-(2**31), dtype=torch.int32)
         else:
-            # 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to -1 (not +0).
+            # 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to 0.
             golden_active = clamped
-            golden_active[neg_zero] = -1
         out_dtype = torch.int32
 
     golden_tensor = torch.zeros(MAX_TILE_ELEMENTS, dtype=out_dtype)
@@ -1358,6 +1499,182 @@ def test_eltwise_binary_sfpu_quant_quasar(
     (SMAG32) datapaths."""
     _run_quant(
         binary_op,
+        tile_indices,
+        sign_magnitude,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
+
+
+# ===========================================================================
+# Family 5 — mul_int32_sm_shift23: out = sign * ((|a| * |b|) >> 23), the requant
+# rescale with b a Q0.23 scale. Exact whenever |out| < 2^23. Each random regime
+# stays inside that and reaches one more partial product:
+#   "narrow": |a|, |b| < 2^23          high23(a_lo * b_lo) only
+#   "wide_a": |a| < 2^31, |b| < 2^15   adds low23(a_hi * b_lo)
+#   "wide_b": |a| < 2^15, |b| < 2^31   adds low23(a_lo * b_hi)
+# ===========================================================================
+_SM_SHIFT23_REGIMES = {
+    "narrow": (0, 2**23, 0, 2**23),
+    "wide_a": (2**23, 2**31, 0, 2**15),
+    "wide_b": (0, 2**15, 2**23, 2**31),
+}
+
+# Planted in the first lanes of every regime: zero results with mixed signs must be
+# +0, then the edges of the contract.
+_SM_SHIFT23_EDGES = [
+    (0, -5),
+    (-5, 0),
+    (-1, 1),
+    (-(2**12), 2**10),
+    (2**23 - 1, -(2**23 - 1)),
+    (-(2**31 - 1), 2**15 - 1),
+    (2**15 - 1, -(2**31 - 1)),
+]
+_SMAG32_NEGATIVE_ZERO = -(2**31)  # bit pattern 0x80000000
+
+SM_SHIFT23_SWEEP = dict(
+    regime=list(_SM_SHIFT23_REGIMES),
+    sign_magnitude=[False, True],
+)
+
+
+def _sm_shift23_operands(regime, n, sign_magnitude):
+    """Signed operands for one regime and the exact golden, staged in the Dest encoding."""
+    a_min, a_max, b_min, b_max = _SM_SHIFT23_REGIMES[regime]
+    sgn_a = torch.randint(0, 2, (n,), dtype=torch.int64) * 2 - 1
+    sgn_b = torch.randint(0, 2, (n,), dtype=torch.int64) * 2 - 1
+    a = sgn_a * torch.randint(a_min, a_max, (n,), dtype=torch.int64)
+    b = sgn_b * torch.randint(b_min, b_max, (n,), dtype=torch.int64)
+    edges = torch.tensor(_SM_SHIFT23_EDGES, dtype=torch.int64)
+    a[: len(edges)] = edges[:, 0]
+    b[: len(edges)] = edges[:, 1]
+
+    magnitude = (a.abs() * b.abs()) >> 23
+    golden = torch.where((a < 0) != (b < 0), -magnitude, magnitude).to(torch.int32)
+    a, b = a.to(torch.int32), b.to(torch.int32)
+    if not sign_magnitude:
+        return a, b, golden
+
+    a, b, golden = int32_to_smag32(a), int32_to_smag32(b), int32_to_smag32(golden)
+    # -0 only exists in sign-magnitude; times anything it is +0.
+    a[len(edges)] = _SMAG32_NEGATIVE_ZERO
+    golden[len(edges)] = 0
+    return a, b, golden
+
+
+def _run_mul_int_sm_shift23(
+    regime,
+    tile_indices,
+    sign_magnitude=False,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    src0_idx, src1_idx, dst_idx = tile_indices
+    dest_acc = DestAccumulation.Yes  # Int32 operands and result are 32-bit
+    num_faces = MAX_NUM_FACES
+    binary_op = "MUL_SM_SHIFT23"
+
+    a_staged, b_staged, golden_active = _sm_shift23_operands(
+        regime, MAX_TILE_ELEMENTS, sign_magnitude
+    )
+
+    buffer_A, tile_cnt = _stage_binary_operands(
+        a_staged, b_staged, tile_indices, torch.int32
+    )
+
+    golden_tensor = torch.zeros(MAX_TILE_ELEMENTS, dtype=torch.int32)
+    golden_tensor[:_PROCESSED_ELEMS] = golden_active[:_PROCESSED_ELEMS]
+
+    formats = InputOutputFormat(
+        input_format=DataFormat.Int32, output_format=DataFormat.Int32
+    )
+
+    test_config_kwargs = {
+        "test_name": _CPP_SOURCE,
+        "formats": formats,
+        "templates": [
+            SFPU_BINARY_OP(binary_op),
+            APPROX_MODE(),
+            DATA_COPY_TYPE(DataCopyType.A2D),
+            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
+            DEST_SYNC(),
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
+            SFPU_DST_ROUNDING_MODE(),
+            TYPECAST_FORMATS(),
+            BROADCAST_TYPE(BroadcastType.None_),
+        ],
+        "runtimes": [
+            TILE_COUNT(tile_cnt),
+            NUM_FACES(num_faces),
+            TEST_FACE_DIMS(),
+            DEST_INDEX(0),
+            SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
+            LOOP_FACTOR(loop_factor),
+            ZERO_POINT(0),
+        ],
+        "variant_stimuli": StimuliConfig(
+            buffer_A,
+            DataFormat.Int32,
+            buffer_A[:MAX_TILE_ELEMENTS],  # dummy buffer_B (unused by kernel)
+            DataFormat.Int32,
+            DataFormat.Int32,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=1,
+            num_faces=num_faces,
+            twos_complement=True,  # raw 32-bit identity staging
+        ),
+        "unpack_to_dest": True,
+        "dest_acc": dest_acc,
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
+
+    res_from_L1 = configuration.run().result
+    assert len(res_from_L1) == len(golden_tensor)
+    res_tensor = torch.tensor(res_from_L1, dtype=torch.int32)
+    assert passed_test(
+        golden_tensor[:_PROCESSED_ELEMS],
+        res_tensor[:_PROCESSED_ELEMS],
+        DataFormat.Int32,
+    ), (
+        f"{binary_op} regime={regime} (sign_magnitude={sign_magnitude}) mismatch "
+        f"(tile_indices={tile_indices})"
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    **SM_SHIFT23_SWEEP,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+)
+def test_eltwise_binary_sfpu_mul_int_sm_shift23_quasar(
+    regime,
+    sign_magnitude,
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Fixed-point multiply sign * ((|a| * |b|) >> 23), Int32, in both Dest encodings.
+    Each regime reaches one more partial product; zero results must come back +0."""
+    _run_mul_int_sm_shift23(
+        regime,
         tile_indices,
         sign_magnitude,
         run_types=run_types,

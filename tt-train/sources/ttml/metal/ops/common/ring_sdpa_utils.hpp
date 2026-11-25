@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
@@ -57,6 +58,16 @@ inline std::pair<bool, AttentionMaskType> get_device_execution_info(
     } else {
         return {false, AttentionMaskType::None};  // Later: skip
     }
+}
+
+// The mask the device at `mesh_coordinate` uses at this ring step, or nullopt when it sits the step out. The ring SDPA
+// program factories build one program per device from it, and an empty one for a device that sits the step out.
+template <typename RingAttrs>
+inline std::optional<AttentionMaskType> mask_for_device_at_step(
+    const RingAttrs& attrs, const ttnn::MeshCoordinate& mesh_coordinate) {
+    const auto [should_execute, mask_type] = get_device_execution_info(
+        mesh_coordinate[attrs.ring_axis], attrs.step, attrs.ring_size, attrs.mask_type, attrs.ring_direction);
+    return should_execute ? std::optional<AttentionMaskType>(mask_type) : std::nullopt;
 }
 
 // Common attribute validation for the ring SDPA device operations. The ring factories
