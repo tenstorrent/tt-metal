@@ -86,6 +86,31 @@ def test_page_by_page_regions_equal_one_region(device):
     np.testing.assert_array_equal(host, whole[bb : 4 * bb])
 
 
+def test_rejected_batch_enqueues_nothing(device, expect_error):
+    dtype = ttnn.bfloat8_b
+    src = _paged_cache(device, dtype, seed=5)
+    page, bb = TILE_BYTES[dtype], _block_bytes(dtype)
+    whole = _all_bytes(src, dtype)
+
+    # A valid first region followed by a bad one: the call fails and the first region is not read either.
+    stale = np.zeros(bb, dtype=np.uint8)
+    with expect_error(RuntimeError, "whole number of"):
+        ttnn.copy_device_to_host_regions(src, [(0, 0, bb, stale.ctypes.data), (0, page // 2, page, stale.ctypes.data)])
+    with expect_error(RuntimeError, "outside the"):
+        ttnn.copy_device_to_host_regions(
+            src, [(0, 0, bb, stale.ctypes.data), (0, NUM_BLOCKS * bb, bb, stale.ctypes.data)]
+        )
+    with expect_error(RuntimeError, "out of range"):
+        ttnn.copy_device_to_host_regions(src, np.array([(2**32, 0, bb, stale.ctypes.data)], dtype=np.uint64))
+
+    # The queue still works, and nothing from the rejected calls lands in their host memory.
+    host = np.zeros(bb, dtype=np.uint8)
+    ttnn.copy_device_to_host_regions(src, [(0, 3 * bb, bb, host.ctypes.data)])
+    ttnn.synchronize_device(device)
+    np.testing.assert_array_equal(host, whole[3 * bb : 4 * bb])
+    assert not stale.any()
+
+
 def _device_bytes(tensor, mesh_device):
     # Each device's buffer bytes through the ordinary tensor.cpu() read, in row-major mesh order (the shard index).
     shards = tensor.cpu().host_buffer()

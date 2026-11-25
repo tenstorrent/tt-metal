@@ -37,6 +37,10 @@ void enqueue_write_tensor(
     MeshTensor& device_tensor,
     const std::optional<BufferRegion>& region = std::nullopt);
 
+namespace experimental {
+
+// Experimental: the shard region transfers below are subject to change without notice.
+
 // One byte range of one shard of a mesh tensor's buffer and the host memory it is copied to / from.
 // ``shard`` is the shard's linear index in the mesh (row-major over the mesh shape); ``offset`` and ``size`` are bytes
 // of that shard's buffer (for an interleaved buffer, a range of whole pages is one contiguous range); ``host`` points
@@ -49,9 +53,10 @@ struct ShardRegionTransfer {
 };
 
 // Reads / writes many byte ranges of the shards of a mesh tensor in one command-queue call, ordered after every
-// command already enqueued on ``queue``. Unlike the single-device APIs above, these work on any mesh. The caller keeps
-// the host memory valid (and, for writes, unchanged) until the transfer has completed (``blocking``, or a later
-// finish / event on the queue).
+// command already enqueued on ``queue``. Unlike the single-device APIs above, these work on any mesh. Every transfer is
+// checked (shard index, page alignment, bounds) before any is enqueued, so a rejected batch enqueues nothing. The
+// caller keeps the host memory valid (and, for writes, unchanged) until the transfer has completed (``blocking``, or a
+// later finish / event on the queue).
 void enqueue_read_shard_regions(
     distributed::MeshCommandQueue& queue,
     const MeshTensor& device_tensor,
@@ -63,5 +68,7 @@ void enqueue_write_shard_regions(
     MeshTensor& device_tensor,
     const std::vector<ShardRegionTransfer>& transfers,
     bool blocking = true);
+
+}  // namespace experimental
 
 }  // namespace tt::tt_metal
