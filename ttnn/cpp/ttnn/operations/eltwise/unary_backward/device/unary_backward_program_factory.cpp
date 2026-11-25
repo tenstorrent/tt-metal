@@ -454,8 +454,8 @@ ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_pro
     // ---- Compute kernel ----
     //
     // A gradient chains several SFPU steps in DEST, so a float32 operand has to stay float32
-    // all the way through: accumulate in fp32 if any operand or the output is fp32, and only
-    // then ask the unpacker for fp32 DEST values, per operand that actually is fp32.
+    // all the way through. DEST accumulates in fp32 when any operand or the output is fp32, or
+    // when the op's kernel spec forces it.
     const bool fp32_dest_acc_en = spec.force_fp32_dest_acc || (grad_output_dfb_data_format == DataFormat::Float32) ||
                                   (input_dfb_data_format == DataFormat::Float32) ||
                                   (output_dfb_data_format == DataFormat::Float32);
@@ -464,9 +464,9 @@ ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_pro
         .fpu_math_fidelity = spec.math_fidelity,
         .enable_32_bit_dest = fp32_dest_acc_en,
     };
-    // Ask the unpacker for float32 DEST values only where they can actually be held: when DEST
-    // is accumulating in float32. Requesting it otherwise would widen values into a DEST that
-    // cannot represent them.
+    // When DEST accumulates in fp32, the unpacker writes both operands straight into DEST as fp32,
+    // whatever their own format. Otherwise neither operand is unpacked this way: DEST could not hold
+    // the widened values.
     if (fp32_dest_acc_en) {
         compute_hw_config.unpack_modes = {
             {GRAD_OUTPUT_DFB, UnpackMode::UnpackToDest},

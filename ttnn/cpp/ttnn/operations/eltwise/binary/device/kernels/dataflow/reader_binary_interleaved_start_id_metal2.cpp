@@ -9,10 +9,9 @@
 // The binding names below (dfb::in0, dfb::in1, tensor::src0, tensor::src1) and the named argument set
 // are this fork's interface: every later consumer inherits them, so they are taken from the kernel's own
 // vocabulary rather than any one op's locals, and are not renamed once a consumer exists.
-
-// This code is temporarily copied from ttnn/operations/datamovement/binary/device/ to demonstrate
-// the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_2 below.
-// When broadcating is properly supported we expect this code to be deleted or refactored substantially.
+//
+// TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
+// list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

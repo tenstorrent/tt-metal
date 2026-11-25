@@ -16,8 +16,9 @@ namespace ttnn::operations::unary_backward {
 // The shared program factory reads this and nothing else, so adding an op is one table row
 // plus one compute kernel -- no new device operation, program factory or validation.
 struct UnaryBackwardKernelSpec {
-    // Repo-relative path to the compute kernel. It receives grad_output on c_0, input on c_1
-    // and writes the input gradient to c_2, with per_core_tile_cnt in runtime arg 0.
+    // Repo-relative path to the compute kernel. It binds grad_output as dfb::grad_out, input as
+    // dfb::input and the input gradient as dfb::grad_in, and reads the named runtime arg
+    // per_core_tile_cnt.
     std::string_view compute_kernel_path;
 
     // Kernels that keep intermediates in DEST need HiFi4 to be worth fusing; a gradient whose
