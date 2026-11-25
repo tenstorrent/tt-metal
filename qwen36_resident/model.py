@@ -147,6 +147,9 @@ K_PATCH = int(os.environ.get("RESIDENT_KV_K_PATCH", "1"))
 # O-1c (default off until validated): row-group builds send the hub their partials as bfp8 batch x 32 tiles (half the
 # all-reduce's fabric bytes; streamer_common.hpp kHubBfp8, mlp_hub.cpp slot_bytes)
 HUB_BFP8 = os.environ.get("RESIDENT_HUB_BFP8", "0") == "1"  # (A/B: 0 leaves the write-back's k row truncated)
+# O-2 (default off until validated): row-group builds overlap a layer's attention users (attn_common.hpp kAttnPipe)
+ATTN_PIPE = os.environ.get("RESIDENT_ATTN_PIPE", "0") == "1"
+SEM_m1, SEM_PART1 = 14, 15  # (O-2: the odd iterations' row-max / partial semaphores, attention cores only)
 KV_ROW = (HD // TILE) * TILE_BYTES[K_DT]  # one position tile of a K cache page (bf8; bfp4 with K_BFP4)
 # Strata S0 step 1 (RESIDENT_KV_V_BFP4, default off): the V caches / pool in bfp4 tiles, K stays bf8 (V tolerates 4-bit
 # mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
@@ -211,19 +214,88 @@ def cb_bytes_on(cbs, cores):
     return max(per_core.values(), default=0)
 
 
-def cb_extent(cbs):
-    """the static CB region the CB descriptors take on their busiest core: bytes above the L1 allocator's base (CBs
-    without a backing tensor, each rounded up to 64 B, an upper bound of the allocator's alignment)"""
+def cb_layout(cbs, align=64):
+    """tt-metal's placement of the CBs without a backing tensor (program.cpp, ProgramImpl::allocate_circular_buffers),
+    replayed: one allocator per distinct core range; a CB's address is the highest end among the allocators of exactly
+    its own ranges, and an allocator of another range intersecting them is marked only when that address is not below
+    its end. CBs on overlapping but unequal ranges (a split CB index, chunk_grid vs work_grid) can so land on top of
+    each other — e.g. a CB on two disjoint subsets of a grid, the bigger one first, then one on the whole grid.
+    Returns {core: [(lo, hi, indices)]} (bytes above the allocator's base; align: the DRAM alignment, 64 B here)."""
     per_core = {}
+    for cb, rs, a in cb_places(cbs, align):
+        idx = tuple(f.buffer_index for f in cb.format_descriptors)
+        for r in rs:
+            for x in range(r[0], r[2] + 1):
+                for y in range(r[1], r[3] + 1):
+                    per_core.setdefault((x, y), []).append((a, a + cb.total_size, idx))
+    return per_core
+
+
+def cb_places(cbs, align=64):
+    """cb_layout's placement: [(descriptor, its ranges as (x0, y0, x1, y1), address)] for the CBs without a tensor"""
+
+    def key(r):
+        return (r.start.x, r.start.y, r.end.x, r.end.y)
+
+    def meets(a, b):
+        return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
+
+    ends = {}
+    for cb in cbs:  # (allocators are made as CBs are added, every one before the placement)
+        for r in cb.core_ranges.ranges():
+            ends.setdefault(key(r), 0)
+    out = []
     for cb in cbs:
         if cb.has_buffer():
             continue
-        size = -(-cb.total_size // 64) * 64
-        for r in cb.core_ranges.ranges():
-            for x in range(r.start.x, r.end.x + 1):
-                for y in range(r.start.y, r.end.y + 1):
-                    per_core[(x, y)] = per_core.get((x, y), 0) + size
-    return max(per_core.values(), default=0)
+        rs = [key(r) for r in cb.core_ranges.ranges()]
+        a = max(ends[r] for r in rs)
+        a = -(-a // align) * align
+        for r in rs:
+            for k in ends:
+                if meets(k, r):
+                    if k != r and a < ends[k]:
+                        continue
+                    assert a >= ends[k], f"CB placement: tt-metal throws (address {a} below range {k}'s end)"
+                    ends[k] = a + cb.total_size
+        out.append((cb, rs, a))
+    return out
+
+
+def dbg_define(name):
+    """a kernel define set from the environment variable of the same name (debug switches)"""
+    return [(name, "1")] if os.environ.get(name) == "1" else []
+
+
+def meets_grid(r, grid):
+    """whether core range r intersects any range of the CoreRangeSet grid"""
+    return any(
+        not (r.end.x < g.start.x or g.end.x < r.start.x or r.end.y < g.start.y or g.end.y < r.start.y)
+        for g in grid.ranges()
+    )
+
+
+def cb_extent(cbs):
+    """the static CB region the CB descriptors take on their busiest core: bytes above the L1 allocator's base, as
+    tt-metal places them (cb_layout). Raises when two of a core's CBs overlap: tt-metal does not check that, and the
+    kernels then silently overwrite each other's data."""
+    top = 0
+    layout = cb_layout(cbs)
+    if os.environ.get("RESIDENT_CB_DUMP"):  # (debug: every core's CBs as placed, JSON)
+        import json
+
+        with open(os.environ["RESIDENT_CB_DUMP"], "w") as f:
+            json.dump({f"{x},{y}": sorted(v) for (x, y), v in layout.items()}, f)
+    for core, spans in layout.items():
+        spans = sorted(spans)
+        for (lo0, hi0, i0), (lo1, hi1, i1) in zip(spans, spans[1:]):
+            if lo1 < hi0:
+                raise RuntimeError(
+                    f"CB layout: on core {core} CB {i0} [{lo0}, {hi0}) overlaps CB {i1} [{lo1}, {hi1}) (tt-metal "
+                    "places a CB by the allocators of exactly its own core ranges; reorder or unify the descriptors)"
+                )
+        top = max(top, spans[-1][1])
+    return top
 
 
 class TraceL1Guard:
@@ -695,6 +767,7 @@ class ResidentModel:
         self.groups = groups
         # (row groups: two attention tail cores, attn_common.hpp kTails; the chunk workers are the others)
         self.attn_tails = ATTN_TAILS if rows and groups > 1 and not verify else 1
+        self.attn_pipe = ATTN_PIPE and rows and groups > 1 and not verify and self.attn_tails == 1
         assert self.attn_tails in (1, 2)
         # with row groups the rows' positions live past the token state's x0 / rope (active_rows.hpp tok_pos_off);
         # one group keeps them in the head's words 1 .. batch
@@ -1015,8 +1088,10 @@ class ResidentModel:
 
         # ---- attention: q / M buffers, norm weights, KV caches (position tile t -> bank t % banks)
         Dt, heads_a = d.Dt, d.h
-        q_t = l1(torch.zeros(WORKERS * TILE, Dt * TILE), work_grid, [TILE, Dt * TILE], tile=full, key="q")
-        M_t = l1(torch.zeros((WORKERS + 1) * TILE, TILE), attn_grid, [TILE, TILE], tile=full, key="M")
+        # (O-2: q and M take two slots, user i in slot i & 1)
+        nq = 2 if self.attn_pipe else 1
+        q_t = l1(torch.zeros(WORKERS * TILE * nq, Dt * TILE), work_grid, [TILE * nq, Dt * TILE], tile=full, key="q")
+        M_t = l1(torch.zeros((WORKERS + 1) * TILE * nq, TILE), attn_grid, [TILE * nq, TILE], tile=full, key="M")
         # attention of a verify of R > 2 rows: passes of P rows (P * heads <= 32, P dividing R; attn_common.hpp)
         self.attn_group = (
             max(p for p in range(1, R + 1) if R % p == 0 and p * d.h <= TILE) if R > 2 and ATTN_PACKED else 1
@@ -1026,6 +1101,8 @@ class ResidentModel:
         slot_words = 512 if packed and self.attn_group * d.h > 16 else 128  # a worker's row-max slot (bf16)
         # (l1_union: the shared scratch sized for the other geometry too; the kernels index their own slot_words)
         sw_alloc = max(slot_words, int(self._l1_union.get("slot_words", 0)))
+        # (O-2: two sets of slots, the odd iterations in the second)
+        sw_alloc *= nq
         m_slots_t = alias_into_logits(leader, WORKERS * sw_alloc * 2) or l1(
             torch.zeros(1, WORKERS * sw_alloc),
             lead_grid,
@@ -1506,13 +1583,20 @@ class ResidentModel:
             if self.rows:
                 cbs.append(cb(29, head_grid, 1, ttnn.uint32, 64))  # active_rows.hpp: the core's active users
             # attention workers (chunk workers and the tail core)
+            # (cb_s: a chunk worker's block of kv_block tiles; the tail core's of its one tail tile (packed: two;
+            # attn_compute_common.hpp kSBlk, the compute binaries built per role), O-2 holding the pending user's behind
+            # the current one)
+            attn_cbs0 = len(cbs)
+            cbs += [
+                cb(5, chunk_grid, kv_block, *f32),
+                cb(5, tail_grid, (2 if self.attn_pipe else 1) * (2 if packed else 1), *f32),
+            ]
             cbs += [
                 T(0, q_t),
                 T(3, M_t),
                 T(4, one_t),
                 cb(1, work_grid, 2 * kv_block * Dt, K_DT, TILE_BYTES[K_DT]),  # (S0-8: K's format)
                 cb(2, work_grid, 2 * kv_block * Dt, V_DT, TILE_BYTES[V_DT]),  # (S0: V's format)
-                cb(5, work_grid, kv_block, *f32),
                 cb(6, work_grid, kv_block),
                 cb(9, chunk_grid, 2 * Dt, *f32),
                 cb(15, chunk_grid, 2, *f32),
@@ -1529,7 +1613,8 @@ class ResidentModel:
                     if groups == 1 or self.vrows
                     # (row groups: the leader's slots hold two iterations, attn_common.hpp kLeadPipelined)
                     else [
-                        cb(23, work_grid, slots_per_node * (Dt + 1)),
+                        # (O-2: every node's slots hold two iterations)
+                        cb(23, work_grid, (2 if self.attn_pipe else 1) * slots_per_node * (Dt + 1)),
                         cb(23, lead_grid, 2 * slots_per_node * (Dt + 1)),
                     ]
                 ),
@@ -1581,7 +1666,11 @@ class ResidentModel:
                         cb(20, tail_grid, 2 * Dt, V_DT, TILE_BYTES[V_DT]),
                     ]
                     if self.vrows
-                    else [cb(19, tail_grid, (2 if packed else 1) * Dt), cb(20, tail_grid, (2 if packed else 1) * Dt)]
+                    # (O-2: the next user's tail tiles behind the pending ones)
+                    else [
+                        cb(19, tail_grid, (2 if packed or self.attn_pipe else 1) * Dt),
+                        cb(20, tail_grid, (2 if packed or self.attn_pipe else 1) * Dt),
+                    ]
                 ),
                 cb(21, tail_grid, Dt),
                 cb(22, tail_grid, 2 * attn_users * groups if packed else LR),
@@ -1594,6 +1683,36 @@ class ResidentModel:
             if self.kv_paged:
                 # page lists of the workers' tiles, then a page-table window (attn_paged.hpp cb_pages)
                 cbs.append(cb(30, work_grid, 1, ttnn.uint32, -(-(4 * LR * self.kv_max_n + 2048 + 64) // 64) * 64))
+
+            # the attention CBs' placement order. tt-metal places a CB at the highest end among the allocators of exactly
+            # its own core ranges (cb_layout), so each core of a CB carries what lies below it on its other cores as dead
+            # space — interleaved, the tail carried the chunk workers' state CBs and the leader's (and an earlier split
+            # cb_s lay under cb_p). The leader starts high (the logits' CB below the block), so the tail is filled up to
+            # there before the CBs it shares with the leader. Groups: on the chunk workers, tail and leader; on the
+            # leader and tail (prep_grid); on the workers (work_grid); each core set's own. The order is the candidate
+            # (the tail filled by the biggest work_grid or tail-only CBs, 0 .. all of them) with the lowest CB top.
+            def placement(d):
+                on = [any(meets_grid(r, g) for r in d.core_ranges.ranges()) for g in (chunk_grid, tail_grid, lead_grid)]
+                return {(1, 1, 1): 0, (0, 1, 1): 1, (1, 1, 0): 2, (0, 1, 0): 3}.get(tuple(int(x) for x in on), 4)
+
+            block = cbs[attn_cbs0:]
+            grp = [[d for d in block if placement(d) == r] for r in range(5)]
+
+            ids = {id(d) for d in block}
+
+            def top(order):  # (the attention cores' CB top: their CBs are the block's, above the leader's logits)
+                return max(
+                    (a + d.total_size for d, _, a in cb_places(cbs[:attn_cbs0] + order) if id(d) in ids), default=0
+                )
+
+            cands = []
+            for fill_g in (2, 3):
+                fill = sorted(grp[fill_g], key=lambda d: -d.total_size)
+                for k in range(len(fill) + 1):
+                    taken = {id(d) for d in fill[:k]}
+                    rest = [[d for d in grp[r] if id(d) not in taken] for r in range(5)]
+                    cands.append(fill[:k] + rest[0] + rest[1] + rest[2] + rest[3] + rest[4])
+            cbs[attn_cbs0:] = min(cands, key=top)
             if groups > 1 and RING_AUTO:
                 # row groups: the ring takes the streamers' L1 left between their other CBs and the lowest L1 buffer
                 # (every L1 buffer takes the same offset on every core), less a margin; never more than the one-group
@@ -1615,6 +1734,10 @@ class ResidentModel:
                 for i in range(SEM_GROUP)
             ]
             sems.append(ttnn.SemaphoreDescriptor(id=SEM_GROUP, core_ranges=head_grid, initial_value=0))
+            if self.attn_pipe:  # (O-2: the odd iterations' row-max / partial counts)
+                sems += [
+                    ttnn.SemaphoreDescriptor(id=i, core_ranges=attn_grid, initial_value=0) for i in (SEM_m1, SEM_PART1)
+                ]
             if groups > 1:
                 sems.append(
                     ttnn.SemaphoreDescriptor(
@@ -1638,15 +1761,18 @@ class ResidentModel:
                 ("kv_v_tile", TILE_BYTES[V_DT]),  # (attn_common.hpp kVTile: the V cache's tile, S0)
                 ("kv_k_tile", TILE_BYTES[K_DT]),  # (attn_common.hpp kKvTile: the K cache's tile, S0-8)
                 ("hub_bfp8", int(HUB_BFP8 and self.groups > 1)),  # (O-1c: bfp8 hub partials)
+                ("attn_pipe", int(self.attn_pipe)),  # (attn_common.hpp kAttnPipe, O-2)
+                ("sem_m1", SEM_m1),
+                ("sem_part1", SEM_PART1),
                 ("kv_k_rot", int(K_BFP4)),  # (attn_common.hpp kKRot: q / k rotated by HAD after RoPE, S0-8)
                 ("kv_k_rtn", int(K_BFP4 and K_RTN)),  # (kKRtn: the tail writer rounds the decode-written K rows)
                 ("kv_k_patch", int(K_PATCH)),  # (kKPatch: ... re-encoding the packed row at the write-back)
             ]
 
-            def kernel(src, core_ranges, ct, rt, config, named=()):
+            def kernel(src, core_ranges, ct, rt, config, named=(), defines=()):
                 # (verify rows: the streamer's data-movement kernels built for size, see streamer_common.hpp — the
                 # streamer core's kernels sit at the kernel config buffer's limit)
-                defines = [("RESIDENT_DM_OS", "1")] if self.vrows and src in DM_OS_KERNELS else []
+                defines = list(defines) + ([("RESIDENT_DM_OS", "1")] if self.vrows and src in DM_OS_KERNELS else [])
                 return ttnn.KernelDescriptor(
                     kernel_source=KDIR + src,
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -1980,8 +2106,24 @@ class ResidentModel:
                     kernels += [
                         kernel("attn_worker_reader.cpp", work_grid, attn_ct, ar, dm(NCRISC, NOC1), kv_named),
                         kernel("attn_worker_writer.cpp", work_grid, attn_ct, aw, dm(BRISC, NOC0), kv_named),
-                        kernel("attn_worker_compute.cpp", chunk_grid, attn_ct, ac, work_compute),
-                        kernel("attn_worker_compute.cpp", tail_grid, attn_ct, ac, attn_compute),
+                        # (each binary with its own role's code only: ATTN_CHUNK_CORE / ATTN_TAIL_CORE)
+                        # (O-2 bisect switches: RESIDENT_DBG_CHUNK_SEQ / _TAIL_SEQ run that role's users unoverlapped)
+                        kernel(
+                            "attn_worker_compute.cpp",
+                            chunk_grid,
+                            attn_ct,
+                            ac,
+                            work_compute,
+                            defines=[("ATTN_CHUNK_CORE", "1")] + dbg_define("RESIDENT_DBG_CHUNK_SEQ"),
+                        ),
+                        kernel(
+                            "attn_worker_compute.cpp",
+                            tail_grid,
+                            attn_ct,
+                            ac,
+                            attn_compute,
+                            defines=[("ATTN_TAIL_CORE", "1")] + dbg_define("RESIDENT_DBG_TAIL_SEQ"),
+                        ),
                         kernel("attn_leader_reader.cpp", lead_grid, attn_ct, lr, dm(NCRISC, NOC1)),
                         kernel("attn_leader_writer.cpp", lead_grid, attn_ct, lw, dm(BRISC, NOC0)),
                         kernel("attn_leader_compute.cpp", lead_grid, attn_ct, lc, attn_compute),

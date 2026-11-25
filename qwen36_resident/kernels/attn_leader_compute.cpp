@@ -103,7 +103,7 @@ void kernel_main() {
     for (uint32_t l = 0; l < layers && n_act > 0; l++) {
         // the next user's q and gate are prepared before this user's output, while the workers run this user
         cb_wait_front(cb_qw, Dt);
-        auto prep = [&](uint32_t k) {
+        auto prep = [&](uint32_t k) __attribute__((noinline)) {
             const uint32_t u = act.row[k];
             if constexpr (kLeadBatched) {
                 // the pass of active users k .. k + kQPerPass - 1 at once (the writer takes each user's rows)
@@ -124,10 +124,14 @@ void kernel_main() {
                 cb_pop_front(cb_qw, Dt);
             }
         };
-        prep(0);
+        // (O-2: q two users ahead, as the writer sends it)
+        constexpr uint32_t ahead = kAttnPipe ? 2 : 1;
+        for (uint32_t k = 0; k < ahead && k < n_act; k++) {
+            prep(k);
+        }
         for (uint32_t k = 0; k < n_act; k++) {
-            if (k + 1 < n_act) {
-                prep(k + 1);
+            if (k + ahead < n_act) {
+                prep(k + ahead);
             }
             sum_partials<false>(children);
             normalize_gate();

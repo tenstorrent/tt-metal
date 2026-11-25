@@ -45,6 +45,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* q_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_q));
     volatile tt_l1_ptr uint32_t* M_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_M));
     volatile tt_l1_ptr uint32_t* m_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_m));
+    // (O-2: the odd iterations' row maxes count here, into the second set of m slots)
+    volatile tt_l1_ptr uint32_t* m_sem1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_m1));
     const uint32_t heads_sem = get_semaphore(sem_heads);
     const uint32_t mc_dests = (x1 - x0 + 1) * (y1 - y0 + 1);
     auto& stage_iface = get_local_cb_interface(cb_stage);
@@ -181,7 +183,7 @@ void kernel_main() {
             z[w] = 0;
         }
     }
-    auto send_q = [&](uint32_t i) {
+    auto send_q = [&](uint32_t i) __attribute__((noinline)) {
         cb_wait_front(cb_q_mc, Dt);
         uint32_t src = get_read_ptr(cb_q_mc);
         const uint32_t ka = i % n_act;
@@ -198,7 +200,9 @@ void kernel_main() {
             noc_async_read_barrier();
             src = qstage;
         }
-        noc_async_write_multicast(src, mc_q, Dt * kTile, mc_dests);
+        // (O-2: user i's q into the workers' slot i & 1)
+        const uint64_t q_dst = kAttnPipe ? get_noc_multicast_addr(x0, y0, x1, y1, q_addr + (i & 1) * Dt * kTile) : mc_q;
+        noc_async_write_multicast(src, q_dst, Dt * kTile, mc_dests);
         noc_async_write_barrier();
         *q_sem = i + 1;
         noc_semaphore_set_multicast(get_semaphore(sem_q), mc_q_sem, mc_dests);
@@ -234,8 +238,17 @@ void kernel_main() {
         mark_it(i, 0);
         if (k == 0) {
             send_q(i);
+            if (kAttnPipe && n_act > 1) {
+                send_q(i + 1);  // (O-2: the workers take the layer's second user while M of its first is on its way)
+            }
         }
-        noc_semaphore_wait_min(m_sem, active * (i + 1));
+        // (O-2: odd iterations count in m_sem1 and sit in the second set of slots)
+        if (kAttnPipe) {
+            noc_semaphore_wait_min((i & 1) ? m_sem1 : m_sem, active * parity_count(i));
+        } else {
+            noc_semaphore_wait_min(m_sem, active * (i + 1));
+        }
+        const uint32_t m_slots_i = m_slots + (kAttnPipe ? (i & 1) * workers * kMSlot : 0);
         mark_it(i, 1);
         invalidate_l1_cache();  // the slots are written by other cores
         {
@@ -248,12 +261,12 @@ void kernel_main() {
             volatile tt_l1_ptr uint16_t* out = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(M_addr);
             for (uint32_t h = 0; h < qrows; h++) {
                 const uint32_t at = h < 16 ? h * 16 : 256 + (h - 16) * 16;
-                uint16_t best = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots + w0 * kMSlot)[at];
+                uint16_t best = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots_i + w0 * kMSlot)[at];
                 for (uint32_t w = w0 + 1; w < active; w++) {
                     if (!((sm >> w) & 1)) {
                         continue;
                     }
-                    const uint16_t v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots + w * kMSlot)[at];
+                    const uint16_t v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots_i + w * kMSlot)[at];
                     if (key(v) > key(best)) {
                         best = v;
                     }
@@ -261,12 +274,19 @@ void kernel_main() {
                 out[h < 16 ? h * 16 : 512 + (h - 16) * 16] = best;
             }
         }
-        noc_async_write_multicast(M_addr, mc_M, top_faces ? heads * kFaceRow : kTile, mc_dests);
+        // (O-2: M(i) into the workers' slot i & 1)
+        const uint64_t M_dst = kAttnPipe ? get_noc_multicast_addr(x0, y0, x1, y1, M_addr + (i & 1) * kTile) : mc_M;
+        noc_async_write_multicast(M_addr, M_dst, top_faces ? heads * kFaceRow : kTile, mc_dests);
         noc_async_write_barrier();
         *M_sem = i + 1;
         noc_semaphore_set_multicast(get_semaphore(sem_M), mc_M_sem, mc_dests);
         mark_it(i, 2);
-        if (k + 1 < n_act) {
+        if constexpr (kAttnPipe) {
+            // (q(i + 2) into slot i & 1: every worker sent m(i), so it is done with q(i))
+            if (k + 2 < n_act) {
+                send_q(i + 2);
+            }
+        } else if (k + 1 < n_act) {
             send_q(i + 1);
         }
         // the previous user's output (its reduction ran while this user scored), and the layer's last user's own

@@ -76,6 +76,8 @@ void kernel_main() {
         .bank_base_address = get_arg_val<uint32_t>(5), .page_size = kTile, .data_format = DataFormat::Float16_b};
     volatile tt_l1_ptr uint32_t* rows_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_rows));
     volatile tt_l1_ptr uint32_t* part_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_part));
+    // (O-2: the group heads' odd iterations count here)
+    volatile tt_l1_ptr uint32_t* part_sem1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_part1));
     volatile tt_l1_ptr uint32_t* ts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ts_addr);
     volatile uint32_t* clk = reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     auto mark = [&](uint32_t l, uint32_t i) {
@@ -221,7 +223,7 @@ void kernel_main() {
             cb_pop_front(cb_gs_pass, Dt);
         }
     };
-    auto place_user = [&](uint32_t ka) {
+    auto place_user = [&](uint32_t ka) __attribute__((noinline)) {
         if constexpr (kLeadBatched) {
             if (ka % kQPerPass == 0) {
                 place_pass(ka);
@@ -248,17 +250,25 @@ void kernel_main() {
             noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));
             mark(l, 1);
             place_user(0);
+            if (kAttnPipe && n_act > 1) {
+                place_user(1);  // (O-2: q two users ahead)
+            }
             mark(l, 2);
         }
         // the next user's rows go in before this user's partials arrive, so compute prepares its q meanwhile
-        if (k + 1 < n_act) {
-            place_user(k + 1);
+        constexpr uint32_t ahead = kAttnPipe ? 2 : 1;
+        if (k + ahead < n_act) {
+            place_user(k + ahead);
         }
         if constexpr (kGatePass) {
             extract_gs(k);
         }
 
-        noc_semaphore_wait_min(part_sem, children * (i + 1));
+        if constexpr (kAttnPipe) {
+            noc_semaphore_wait_min((i & 1) ? part_sem1 : part_sem, children * parity_count(i));
+        } else {
+            noc_semaphore_wait_min(part_sem, children * (i + 1));
+        }
         if (k + 1 == n_act) {
             mark(l, 3);
         }

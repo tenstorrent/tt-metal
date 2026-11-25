@@ -28,11 +28,19 @@ namespace resident_attn {
 // the SFPU exp over a pass's rows: the top faces, or the whole tile when the rows reach the bottom faces
 constexpr auto kExpMode = top_faces ? VectorMode::R : VectorMode::RC;
 
+// pages of a scores block in cb_s / cb_p: chunk_max on a chunk worker; the tail core (its own binary, ATTN_TAIL_CORE)
+// scores one tail tile (packed: up to two), so its cb_s holds blocks of that size (model.py: O-2 holds two)
+#ifdef ATTN_TAIL_CORE
+constexpr uint32_t kSBlk = packed ? 2 : 1;
+#else
+constexpr uint32_t kSBlk = chunk_max;
+#endif
+
 // s[j] for j < n_tiles; with mask, tile mask_tile of cb_mask is added to the last tile (tail columns
 // past the position; packed: tile mask_tile + j to every tile, the tail tiles under per-row masks)
 FORCE_INLINE void scores(
     uint32_t q_cb, uint32_t k_cb, uint32_t k_base, uint32_t n_tiles, bool mask, uint32_t mask_tile = 0) {
-    cb_reserve_back(cb_s, chunk_max);
+    cb_reserve_back(cb_s, kSBlk);
     reconfig_data_format(k_cb, q_cb);
     pack_reconfig_data_format(cb_s);
     matmul_init(q_cb, k_cb, 1 /* transpose k */);
@@ -51,18 +59,19 @@ FORCE_INLINE void scores(
         pack_tile<true>(0, cb_s, j);
         tile_regs_release();
     }
-    cb_push_back(cb_s, chunk_max);
+    cb_push_back(cb_s, kSBlk);
 }
 
-FORCE_INLINE void row_max(uint32_t n_tiles) {
-    cb_wait_front(cb_s, chunk_max);
+// (s_base: the block of cb_s to take — O-2's tail scores user i + 1 while user i's block still waits for M(i))
+FORCE_INLINE void row_max(uint32_t n_tiles, uint32_t s_base = 0) {
+    cb_wait_front(cb_s, s_base + kSBlk);
     cb_reserve_back(cb_m, 1);
     reconfig_data_format(cb_s, cb_one);
     pack_reconfig_data_format(cb_m);
     reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_s, cb_one, cb_m);
     tile_regs_acquire();
     for (uint32_t j = 0; j < n_tiles; j++) {
-        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_s, cb_one, j, 0, 0);
+        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_s, cb_one, s_base + j, 0, 0);
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -75,7 +84,7 @@ FORCE_INLINE void row_max(uint32_t n_tiles) {
 // p = exp(s - M), o = p v, l = rowsum(p); consumes cb_s and cb_p
 FORCE_INLINE void probs_and_partial(uint32_t v_cb, uint32_t v_base, uint32_t n_tiles) {
     cb_wait_front(cb_M, 1);
-    cb_reserve_back(cb_p, chunk_max);
+    cb_reserve_back(cb_p, kSBlk);
     reconfig_data_format(cb_s, cb_M);
     pack_reconfig_data_format(cb_p);
     sub_bcast_cols_init(cb_s, cb_M);
@@ -89,11 +98,11 @@ FORCE_INLINE void probs_and_partial(uint32_t v_cb, uint32_t v_base, uint32_t n_t
         pack_tile<true>(0, cb_p, j);
         tile_regs_release();
     }
-    cb_push_back(cb_p, chunk_max);
-    cb_pop_front(cb_s, chunk_max);
+    cb_push_back(cb_p, kSBlk);
+    cb_pop_front(cb_s, kSBlk);
     cb_pop_front(cb_M, 1);
 
-    cb_wait_front(cb_p, chunk_max);
+    cb_wait_front(cb_p, kSBlk);
     cb_reserve_back(cb_o, kPart);
     reconfig_data_format(v_cb, cb_p);
     pack_reconfig_data_format(cb_o);
@@ -120,7 +129,7 @@ FORCE_INLINE void probs_and_partial(uint32_t v_cb, uint32_t v_base, uint32_t n_t
     tile_regs_release();
     reduce_uninit();
     cb_push_back(cb_o, kPart);
-    cb_pop_front(cb_p, chunk_max);
+    cb_pop_front(cb_p, kSBlk);
 }
 
 // cb_osum = own partial (cb_o; the leader has none) + the first `children` partials of cb_parts, those with their bit

@@ -56,6 +56,8 @@ void kernel_main() {
     const uint32_t part_dst = *addr_sem + slot * kPart * kTile;
     const uint64_t m_sem = get_noc_addr(lx, ly, get_semaphore(sem_m));
     const uint64_t part_sem = get_noc_addr(px, py, get_semaphore(sem_part));
+    const uint64_t m_sem1 = get_noc_addr(lx, ly, get_semaphore(sem_m1));        // (O-2: odd iterations)
+    const uint64_t part_sem1 = get_noc_addr(px, py, get_semaphore(sem_part1));  // (O-2: odd iterations)
     const uint32_t out_cb = children > 0 ? cb_osum : cb_o;
     volatile tt_l1_ptr uint32_t* q_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_q));
     volatile tt_l1_ptr uint32_t* M_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_M));
@@ -119,9 +121,14 @@ void kernel_main() {
     auto n_tail_of = [&](uint32_t v) -> uint32_t {  // (user v's rows v kVR ..)
         return packed && role == 2 && tile_of(v * kVR + kVR - 1) != tile_of(v * kVR) ? 2 : 1;
     };
-    for (uint32_t i = 0; i < layers * n_act; i++) {
+    // per iteration: the row max (and the S0-8 hop), then the partial and the tail's write-back; O-2 sends the next
+    // user's row max before this user's partial (the compute takes them in that order)
+    auto head = [&](uint32_t i) {
         const uint32_t l = i / n_act, u = act.row[i % n_act];
         const bool has_chunk = chunk_of_user[u];
+        (void)l;
+        // (O-2: odd iterations into the leader's second set of m slots, counted by its sem_m1)
+        const uint64_t m_dst_i = m_dst + (kAttnPipe ? (i & 1) * workers * kMSlot : 0);
         if constexpr (kKRtn) {
             // (S0-8: the passes whose compute produced new k rows — packed: a user's first pass; batched: the layer's
             // first pass, every active user's row; otherwise every pass, row 0 — copied into cb_knew, which compute
@@ -153,34 +160,40 @@ void kernel_main() {
         // the row max: face 0's rows, then (more than 16 rows) face 2's at 512 in the slot
         if (has_chunk) {
             cb_wait_front(cb_m, 1);
-            noc_async_write(get_read_ptr(cb_m), m_dst, kMRows0);
+            noc_async_write(get_read_ptr(cb_m), m_dst_i, kMRows0);
             if constexpr (kMRows2 > 0) {
-                noc_async_write(get_read_ptr(cb_m) + 2 * kFace, m_dst + 512, kMRows2);
+                noc_async_write(get_read_ptr(cb_m) + 2 * kFace, m_dst_i + 512, kMRows2);
             }
         } else {
             noc_semaphore_wait_min(q_sem, i + 1);
-            noc_async_write(neg_inf, m_dst, kMRows0);
+            noc_async_write(neg_inf, m_dst_i, kMRows0);
             if constexpr (kMRows2 > 0) {
-                noc_async_write(neg_inf, m_dst + 512, kMRows2);
+                noc_async_write(neg_inf, m_dst_i + 512, kMRows2);
             }
         }
         noc_async_write_barrier();
-        noc_semaphore_inc(m_sem, 1);
+        noc_semaphore_inc(kAttnPipe && (i & 1) ? m_sem1 : m_sem, 1);
         if (has_chunk) {
             cb_pop_front(cb_m, 1);
         }
+    };
+    auto rest = [&](uint32_t i) {
+        const uint32_t l = i / n_act, u = act.row[i % n_act];
+        const bool has_chunk = chunk_of_user[u];
         if (!has_chunk) {
             noc_semaphore_wait_min(M_sem, i + 1);
         }
         cb_wait_front(out_cb, kPart);
         const uint32_t src = get_read_ptr(out_cb);
-        // (kLeadPipelined: a group head writes iteration i's partial into half i & 1 of the leader's slots)
-        const uint32_t dst0 = part_dst + (kLeadPipelined && px == lx && py == ly ? (i & 1) * fanin * kPart * kTile : 0);
+        // (kLeadPipelined: a group head writes iteration i's partial into half i & 1 of the leader's slots; O-2: every
+        // node into half i & 1 of its parent's, counted by the parent's sem_part / sem_part1)
+        const bool halves = kAttnPipe || (kLeadPipelined && px == lx && py == ly);
+        const uint32_t dst0 = part_dst + (halves ? (i & 1) * fanin * kPart * kTile : 0);
         for (uint32_t d = 0; d < kPart; d++) {
             noc_async_write(src + d * kTile, get_noc_addr(px, py, dst0 + d * kTile), kPartBytes);
         }
         noc_async_write_barrier();
-        noc_semaphore_inc(part_sem, 1);
+        noc_semaphore_inc(kAttnPipe && (i & 1) ? part_sem1 : part_sem, 1);
         cb_pop_front(out_cb, kPart);
         if (ts_addr) {
             ts[l * 4 + 3] = *clk;
@@ -275,6 +288,24 @@ void kernel_main() {
             if (role >= 2 && (kTailBatched ? i % n_act == n_act - 1 : true)) {
                 cb_pop_front(cb_knr, Dt);
             }
+        }
+    };
+    if constexpr (kAttnPipe) {
+        // (one call site per stage: head(k) then rest(k - 1); the stages are large)
+        for (uint32_t l = 0; l < layers && n_act > 0; l++) {
+            for (uint32_t k = 0; k <= n_act; k++) {
+                if (k < n_act) {
+                    head(l * n_act + k);
+                }
+                if (k > 0) {
+                    rest(l * n_act + k - 1);
+                }
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < layers * n_act; i++) {
+            head(i);
+            rest(i);
         }
     }
     noc_async_atomic_barrier();

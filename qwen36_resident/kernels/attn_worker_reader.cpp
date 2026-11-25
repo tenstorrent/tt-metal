@@ -82,6 +82,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* q_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_q));
     volatile tt_l1_ptr uint32_t* M_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_M));
     volatile tt_l1_ptr uint32_t* part_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_part));
+    volatile tt_l1_ptr uint32_t* part_sem1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_part1));
     volatile tt_l1_ptr uint32_t* rows_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_rows));
     volatile tt_l1_ptr uint32_t* ts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ts_addr);
     volatile uint32_t* clk = reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
@@ -303,7 +304,36 @@ void kernel_main() {
         waits_tail = !packed && role == 1 && cross < batch && holds(chs[cross], tps[0]);
     }
     const uint32_t n_act = act.n;
-    for (uint32_t i = 0; i < layers * n_act; i++) {
+    // stage 1 of iteration i: its tail / KV reads and q (role 1: its KV blocks after q); stage 2: M and the children's
+    // partials. O-2 runs stage 1 of the layer's next user before stage 2 of this one (the compute's order)
+    auto stage1 = [&](uint32_t i, bool rest) {
+        if (rest) {
+            // (role 1: the user's remaining KV blocks — under O-2 after the previous user's M, as the compute may
+            // finish that user before starting this one)
+            if (role == 1) {
+                const uint32_t l = i / n_act, u = act.row[i % n_act];
+                const Chunk& ch = chs[u];
+                const uint32_t k_addr = k_cache + u * user_stride + (l % copies) * copy_stride;
+                const uint32_t v_addr = v_cache + u * user_stride + (l % copies) * copy_stride;
+                volatile tt_l1_ptr uint32_t* pages = kv_paged ? page_list(u) : nullptr;
+                const uint32_t copy_page = (l % copies) * kv_copy_pages;
+                const uint32_t early = ch.n < 2 * chunk_max ? ch.n : 2 * chunk_max;
+                for (uint32_t b0 = early; b0 < ch.n; b0 += chunk_max) {
+                    const uint32_t nb = ch.n - b0 < chunk_max ? ch.n - b0 : chunk_max;
+                    cb_reserve_back(cb_k, chunk_max * Dt);
+                    cb_reserve_back(cb_v, chunk_max * Dt);
+                    read_rows(ch, k_addr, b0, nb, get_write_ptr(cb_k), pages, copy_page, kKvRow);
+                    read_rows(ch, v_addr, b0, nb, get_write_ptr(cb_v), pages, copy_page, kVRow);
+                    noc_async_read_barrier();
+                    if (dual) {
+                        noc_async_read_barrier(other_noc);
+                    }
+                    cb_push_back(cb_k, chunk_max * Dt);
+                    cb_push_back(cb_v, chunk_max * Dt);
+                }
+            }
+            return;
+        }
         const uint32_t l = i / n_act, ka = i % n_act, u = act.row[ka];
         const Chunk& ch = chs[u];
         const uint32_t k_addr = k_cache + u * user_stride + (l % copies) * copy_stride;
@@ -440,15 +470,45 @@ void kernel_main() {
         noc_semaphore_wait_min(q_sem, i + 1);
         mark(l, 1);
         push_resident(cb_q, Dt);
-        if (role == 1) {
-            read_blocks(early, ch.n);
-        }
+    };
+    auto stage2 = [&](uint32_t i) {
+        const uint32_t l = i / n_act;
         noc_semaphore_wait_min(M_sem, i + 1);
         mark(l, 2);
         push_resident(cb_M, 1);
         if (children > 0) {
-            noc_semaphore_wait_min(part_sem, children * (i + 1));
+            if constexpr (kAttnPipe) {
+                noc_semaphore_wait_min((i & 1) ? part_sem1 : part_sem, children * parity_count(i));
+            } else {
+                noc_semaphore_wait_min(part_sem, children * (i + 1));
+            }
             push_resident(cb_parts, fanin * kPart);
+        }
+    };
+    if constexpr (kAttnPipe) {
+        // (stage1(k) up to q, stage2(k - 1), then k's remaining blocks: the compute may finish k - 1 before starting k;
+        // one call site per stage)
+        for (uint32_t l = 0; l < layers && n_act > 0; l++) {
+            for (uint32_t k = 0; k <= n_act; k++) {
+                for (uint32_t step = 0; step < 3; step++) {
+                    if (k < n_act && step != 1) {
+                        stage1(l * n_act + k, step == 2);
+                    }
+                    if (k > 0 && step == 1) {
+                        stage2(l * n_act + k - 1);
+                    }
+                }
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < layers * n_act; i++) {
+            for (uint32_t step = 0; step < 3; step++) {
+                if (step < 2) {
+                    stage1(i, step == 1);
+                } else {
+                    stage2(i);
+                }
+            }
         }
     }
 }

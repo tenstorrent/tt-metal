@@ -228,6 +228,20 @@ constexpr uint32_t cb_gs_pass = 42;
 // slots (cb_parts) hold two iterations, the group heads write iteration i's at half i & 1. M(k + 1) goes out only
 // after out(k - 1) is staged, i.e. after the leader compute consumed partials(k - 1) — the half k + 1 reuses.
 constexpr bool kLeadPipelined = kLeadBatched;
+// O-2 (named arg attn_pipe; row groups' batched single tail): a layer's users overlap. Between sending m(i) and
+// finishing user i with M(i), the chunk workers compute user i + 1 (scores, online softmax, PV) and the tail core its
+// placement, scores and row max, so m(i + 1) reaches the leader while M(i) is on its way. On the workers q and M take
+// two slots (user i in slot i & 1; the leader sends q two users ahead), the leader's m slots and every parent's partial
+// slots two sets by parity, each with its own semaphore (sem_m / sem_m1, sem_part / sem_part1, counting the
+// iterations of their parity). The chunk workers overlap only a user of one KV block (its state then queues behind
+// the previous user's in the same CBs; a longer user starts after the previous one finished). Never across layers: a
+// layer's first user waits for its rows, which need the previous layer's output.
+constexpr bool kAttnPipe = get_named_compile_time_arg_val("attn_pipe") != 0;
+static_assert(!kAttnPipe || (kTailBatched && kLeadPipelined && kTails == 1), "O-2: the batched single tail");
+constexpr uint32_t sem_m1 = get_named_compile_time_arg_val("sem_m1");
+constexpr uint32_t sem_part1 = get_named_compile_time_arg_val("sem_part1");
+// (O-2: iterations of i's parity up to and including i — the per-parity semaphores' target)
+FORCE_INLINE uint32_t parity_count(uint32_t i) { return i / 2 + 1; }
 constexpr uint32_t cb_knew = 18;    // normalized + rotated k row (row 0)
 constexpr uint32_t cb_tail8 = 31;   // tail core: tail k tiles as read from DRAM (Dt bf8 per tail tile)
 constexpr uint32_t cb_tail8v = 32;  // tail core: tail v tiles as read from DRAM (Dt per tail tile, V's format)
