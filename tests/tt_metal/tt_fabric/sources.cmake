@@ -62,6 +62,8 @@ if(TT_UMD_BUILD_GRENDEL_JTAG)
     list(
         APPEND
         UNIT_TESTS_FABRIC_SRC
+        keraunos/co_launched_line.cpp
+        keraunos/test_keraunos_co_launched_workers.cpp
         keraunos/test_keraunos_eth_semaphore.cpp
         keraunos/vcluster/manifest.cpp
         keraunos/vcluster/descriptors.cpp

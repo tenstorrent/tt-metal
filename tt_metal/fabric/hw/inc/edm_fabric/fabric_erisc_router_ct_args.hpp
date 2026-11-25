@@ -22,6 +22,9 @@
 
 // Convenience macro for named compile-time arg lookup
 #define NAMED_CT_ARG(name) get_named_compile_time_arg_val(name)
+#ifdef KERAUNOS_CCE
+#include "internal/tt-2xx/quasar/cce_tile_counter.h"
+#endif
 
 // CHANNEL CONSTANTS
 // ETH TXQ SELECTION
@@ -838,6 +841,24 @@ constexpr uint32_t local_handshake_master_eth_chan =
     wait_for_host_signal ? NAMED_CT_ARG("LOCAL_HANDSHAKE_MASTER_ETH_CHAN") : 0;
 constexpr uint32_t num_local_edms = wait_for_host_signal ? NAMED_CT_ARG("NUM_LOCAL_EDMS") : 0;
 constexpr uint32_t edm_channels_mask = wait_for_host_signal ? NAMED_CT_ARG("EDM_CHANNELS_MASK") : 0;
+#ifdef KERAUNOS_CCE
+// The master's tile counter that counts the subordinates' local handshakes, and, for a subordinate, the system address
+// of that counter's POSTED register.
+constexpr uint32_t local_handshake_tile_counter =
+    wait_for_host_signal ? NAMED_CT_ARG("LOCAL_HANDSHAKE_TILE_COUNTER") : 0;
+constexpr uint64_t local_handshake_master_counter_addr =
+    wait_for_host_signal ? (static_cast<uint64_t>(NAMED_CT_ARG("LOCAL_HANDSHAKE_MASTER_COUNTER_ADDR_HI")) << 32) |
+                               NAMED_CT_ARG("LOCAL_HANDSHAKE_MASTER_COUNTER_ADDR_LO")
+                         : 0;
+// What the master writes to each subordinate's local sync word once it has reset that counter; never num_local_edms.
+constexpr uint32_t local_handshake_counter_armed = 0xA4A4A4A4;
+#endif
+// Where the master reads how many subordinates have finished their Ethernet handshake.
+#ifdef KERAUNOS_CCE
+constexpr uint32_t local_handshake_count_addr = internal_::cce_tile_counter::posted_addr(local_handshake_tile_counter);
+#else
+constexpr uint32_t local_handshake_count_addr = edm_local_sync_ptr_addr;
+#endif
 
 template <size_t SLOT_SIZE_BYTES, size_t PACKET_HEADER_SIZE_BYTES>
 struct BufferSlot {
