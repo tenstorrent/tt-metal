@@ -85,6 +85,8 @@ from ttml.trainers.grpo_trainer.rollout_batch_source import (
 )
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
+from remote_rollout._loopback import LoopbackContext as _LoopbackContext
+
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
 
 
@@ -1170,21 +1172,6 @@ class _EchoSampler(RolloutSampler):
 
     def close(self):
         self.closed = True
-
-
-class _LoopbackContext:
-    """In-memory two-rank communicator for both ranks; a message to ``dest`` waits in ``queues[(dest, tag)]``."""
-
-    def __init__(self, queues):
-        self._queues = queues
-
-    def send(self, data, dest, tag):
-        self._queues[(dest, tag)].put(bytes(data))
-
-    def recv(self, nbytes, source, tag):
-        data = self._queues[(1 - source, tag)].get(timeout=30)
-        assert len(data) == nbytes
-        return data
 
 
 @pytest.fixture
