@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/vocabulary/core_coord.hpp>
+#include <algorithm>
+#include <limits>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -59,6 +62,51 @@ TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetFromCoordsDuplicateCoreThrows) {
     EXPECT_ANY_THROW(from_coords({{1, 1}, {1, 1}}));
     // Duplicates that are not adjacent in the input are still caught.
     EXPECT_ANY_THROW(from_coords({{2, 3}, {0, 0}, {4, 1}, {2, 3}}));
+}
+
+TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetFromCoordsMatchesMergeRanges) {
+    // The coordinate constructor must produce exactly the ranges, in the same order, that merge_ranges() produces
+    // from the same cores as single-core ranges.
+    std::mt19937 rng(0);
+    for (int trial = 0; trial < 500; trial++) {
+        const size_t width = 1 + (rng() % 12);
+        const size_t height = 1 + (rng() % 10);
+        const size_t x_offset = rng() % 40;
+        const size_t y_offset = rng() % 40;
+        const unsigned density = rng() % 101;
+        std::vector<CoreCoord> coords;
+        std::vector<tt::tt_metal::CoreRange> singles;
+        for (size_t y = 0; y < height; y++) {
+            for (size_t x = 0; x < width; x++) {
+                if (rng() % 100 < density) {
+                    coords.push_back({x + x_offset, y + y_offset});
+                }
+            }
+        }
+        const bool add_duplicate = !coords.empty() && rng() % 10 == 0;
+        if (add_duplicate) {
+            coords.push_back(coords[rng() % coords.size()]);
+        }
+        std::shuffle(coords.begin(), coords.end(), rng);
+        if (add_duplicate) {
+            EXPECT_ANY_THROW(from_coords(coords)) << "trial " << trial;
+            continue;
+        }
+        singles.reserve(coords.size());
+        for (const auto& core : coords) {
+            singles.emplace_back(core);
+        }
+        const auto expected = tt::tt_metal::CoreRangeSet(std::move(singles)).merge_ranges();
+        const auto actual = from_coords(coords);
+        ASSERT_EQ(actual.ranges(), expected.ranges()) << "trial " << trial;
+    }
+}
+
+TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetFromCoordsGridOverflowThrows) {
+    constexpr size_t max = std::numeric_limits<size_t>::max();
+    EXPECT_ANY_THROW(from_coords({{0, 0}, {max, 0}}));
+    EXPECT_ANY_THROW(from_coords({{0, 0}, {0, max}}));
+    EXPECT_ANY_THROW(from_coords({{0, 0}, {max / 2, max / 2}, {0, 0}}));
 }
 
 }  // namespace basic_tests::CoreRangeSet

@@ -165,24 +165,76 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
 CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreCoord> core_coords) {
-    // Single-core ranges overlap only where a core is listed twice: a sort finds that in O(n log n), where the
-    // pairwise check of the CoreRangeSet constructors (validate_no_overlap) is O(n^2) (a full grid's core list is ~100
-    // cores).
-    std::vector<CoreCoord> sorted_coords(core_coords.begin(), core_coords.end());
-    std::sort(sorted_coords.begin(), sorted_coords.end());
-    const auto duplicate = std::adjacent_find(sorted_coords.begin(), sorted_coords.end());
-    if (duplicate != sorted_coords.end()) {
-        TT_THROW(
-            "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
-            CoreRange(*duplicate).str(),
-            CoreRange(*duplicate).str());
+    // One pass over a bounding-box occupancy grid gives the same ranges, in the same order, as
+    // merge_ranges() over single-core ranges, without its std::set churn or the O(n^2) validate_no_overlap().
+    if (core_coords.empty()) {
+        return;
     }
-    CoreRangeSet unmerged_set;
-    unmerged_set.ranges_.reserve(sorted_coords.size());
-    for (const auto& core_coord : sorted_coords) {
-        unmerged_set.ranges_.push_back(CoreRange(core_coord));
+    size_t min_x = std::numeric_limits<size_t>::max(), max_x = 0, min_y = std::numeric_limits<size_t>::max(), max_y = 0;
+    for (const auto& core : core_coords) {
+        min_x = std::min(min_x, core.x);
+        max_x = std::max(max_x, core.x);
+        min_y = std::min(min_y, core.y);
+        max_y = std::max(max_y, core.y);
     }
-    *this = unmerged_set.merge_ranges();
+    TT_FATAL(
+        max_x - min_x < std::numeric_limits<size_t>::max() && max_y - min_y < std::numeric_limits<size_t>::max(),
+        "CoreRangeSet core coordinates span too large a grid");
+    const size_t width = max_x - min_x + 1;
+    const size_t height = max_y - min_y + 1;
+    TT_FATAL(
+        width <= std::numeric_limits<size_t>::max() / height,
+        "CoreRangeSet core coordinates span too large a grid: {} x {}",
+        width,
+        height);
+
+    std::vector<uint8_t> grid(width * height, 0);
+    for (const auto& core : core_coords) {
+        auto& cell = grid[((core.y - min_y) * width) + (core.x - min_x)];
+        if (cell) {
+            TT_THROW(
+                "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
+                CoreRange(core).str(),
+                CoreRange(core).str());
+        }
+        cell = 1;
+    }
+
+    // Each row's runs extend the rectangle ending on the row above with the same x span (CoreRange::merge's
+    // vertical rule); any other run starts a new rectangle. `open` holds indices into ranges_ of the rectangles
+    // ending on the previous row, in increasing start x.
+    std::vector<size_t> open, next_open;
+    for (size_t y = 0; y < height; y++) {
+        const uint8_t* row = &grid[y * width];
+        next_open.clear();
+        size_t open_idx = 0;
+        size_t x = 0;
+        while (x < width) {
+            if (!row[x]) {
+                x++;
+                continue;
+            }
+            const size_t run_start = x;
+            while (x < width && row[x]) {
+                x++;
+            }
+            const CoreCoord start{min_x + run_start, min_y + y};
+            const CoreCoord end{min_x + x - 1, min_y + y};
+            while (open_idx < open.size() && ranges_[open[open_idx]].start_coord.x < start.x) {
+                open_idx++;
+            }
+            if (open_idx < open.size() && ranges_[open[open_idx]].start_coord.x == start.x &&
+                ranges_[open[open_idx]].end_coord.x == end.x) {
+                ranges_[open[open_idx]].end_coord.y = end.y;
+                next_open.push_back(open[open_idx]);
+            } else {
+                next_open.push_back(ranges_.size());
+                ranges_.emplace_back(start, end);
+            }
+        }
+        open.swap(next_open);
+    }
+    std::sort(ranges_.begin(), ranges_.end());
 }
 
 void swap(CoreRangeSet& first, CoreRangeSet& second) noexcept { std::swap(first.ranges_, second.ranges_); }
