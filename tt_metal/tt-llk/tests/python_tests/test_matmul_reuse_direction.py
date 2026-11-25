@@ -11,7 +11,7 @@ from helpers.device import LLKAssertException
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, parametrize, parametrize_smoke
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -27,6 +27,31 @@ from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 KT_DIM = 2
+
+# (init rt x ct, call rt x ct): the call narrows the block and keeps ct >= rt as it was at init
+NARROWED_BLOCKS = [
+    ((1, 4), (1, 1)),
+    ((1, 4), (1, 3)),
+    ((2, 4), (2, 2)),
+    ((2, 4), (2, 3)),
+    ((4, 1), (3, 1)),
+    ((4, 2), (3, 2)),
+    ((3, 2), (3, 1)),
+]
+# the row MOP's row length and DEST stride follow a narrowed call
+NARROWED_ROW_MOP_BLOCKS = [
+    ((1, 8), (1, 7)),
+    ((1, 8), (1, 5)),
+    ((2, 4), (2, 3)),
+    ((4, 2), (3, 2)),
+    ((8, 1), (5, 1)),
+    ((1, 4), (1, 1)),
+]
+
+
+def _alternate(blocks_list, blocks, fidelity):
+    """Smoke runs every block at one fidelity, LoFi and HiFi4 in turn; the nightly runs the other."""
+    return (blocks_list.index(blocks) % 2 == 0) == (fidelity == MathFidelity.LoFi)
 
 
 @dataclass
@@ -87,18 +112,10 @@ def _configuration(
 
 @skip_for_wormhole
 @skip_for_quasar
-@parametrize(
+@parametrize_smoke(
+    lambda formats, blocks, fidelity: _alternate(NARROWED_BLOCKS, blocks, fidelity),
     formats=input_output_formats([DataFormat.Float16_b]),
-    # (init rt x ct, call rt x ct): the call narrows the block and keeps ct >= rt as it was at init
-    blocks=[
-        ((1, 4), (1, 1)),
-        ((1, 4), (1, 3)),
-        ((2, 4), (2, 2)),
-        ((2, 4), (2, 3)),
-        ((4, 1), (3, 1)),
-        ((4, 2), (3, 2)),
-        ((3, 2), (3, 1)),
-    ],
+    blocks=NARROWED_BLOCKS,
     fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
 )
 def test_matmul_narrowed_block(formats, blocks, fidelity, row_mop=False):
@@ -126,17 +143,12 @@ def test_matmul_narrowed_block(formats, blocks, fidelity, row_mop=False):
 
 @skip_for_wormhole
 @skip_for_quasar
-@parametrize(
+@parametrize_smoke(
+    lambda formats, blocks, fidelity: _alternate(
+        NARROWED_ROW_MOP_BLOCKS, blocks, fidelity
+    ),
     formats=input_output_formats([DataFormat.Float16_b]),
-    # the row MOP's row length and DEST stride follow a narrowed call
-    blocks=[
-        ((1, 8), (1, 7)),
-        ((1, 8), (1, 5)),
-        ((2, 4), (2, 3)),
-        ((4, 2), (3, 2)),
-        ((8, 1), (5, 1)),
-        ((1, 4), (1, 1)),
-    ],
+    blocks=NARROWED_ROW_MOP_BLOCKS,
     fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
 )
 def test_matmul_narrowed_block_row_mop(formats, blocks, fidelity):
