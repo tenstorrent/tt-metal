@@ -53,7 +53,8 @@ DispatchSettings::DispatchSettings(
     bool are_cqs_dram_backed,
     uint32_t l1_size,
     uint32_t l1_alignment,
-    uint32_t prefetch_q_entry_size_bytes) {
+    uint32_t prefetch_q_entry_size_bytes,
+    uint32_t max_issue_queue_bytes) {
     TT_FATAL(
         prefetch_q_entry_size_bytes == 2 || prefetch_q_entry_size_bytes == 4,
         "prefetch_q_entry_size_bytes must be 2 or 4, got {}",
@@ -71,6 +72,23 @@ DispatchSettings::DispatchSettings(
         default: TT_THROW("init_defaults not implemented for core type {}", enchantum::to_string(core_type));
     }
     this->core_type_ = core_type;
+
+    // The issue queue must hold max_cmd * (entries + 1 + PREFETCH_MAX_OUTSTANDING_PCIE_READS) bytes (checked in
+    // SystemMemoryManager). When the host channel is small, e.g. the 256 MiB uncached sysmem UMD uses on
+    // DMA-non-coherent hosts, shrink the prefetch queue to fit instead of failing that check.
+    if (max_issue_queue_bytes != 0 && core_type != CoreType::ETH) {
+        constexpr uint32_t outstanding_pcie_reads = 4;  // PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS
+        const uint32_t max_cmds = max_issue_queue_bytes / this->prefetch_max_cmd_size_;
+        TT_FATAL(
+            max_cmds > outstanding_pcie_reads + 2,
+            "Host issue queue of {} B is too small for {} B prefetch commands",
+            max_issue_queue_bytes,
+            this->prefetch_max_cmd_size_);
+        const uint32_t max_entries = max_cmds - 1 - outstanding_pcie_reads;
+        if (max_entries < this->prefetch_q_entries_) {
+            this->prefetch_q_entries(max_entries);
+        }
+    }
     this->num_hw_cqs_ = num_hw_cqs;
 }
 

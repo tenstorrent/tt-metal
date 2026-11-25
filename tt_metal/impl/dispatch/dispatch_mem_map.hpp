@@ -41,7 +41,8 @@ public:
         const Hal& hal,
         bool is_galaxy_cluster,
         const CommandQueueDispatchLayout& cq_layout,
-        const tt::llrt::RunTimeOptions& rtoptions);
+        const tt::llrt::RunTimeOptions& rtoptions,
+        uint32_t max_issue_queue_bytes = 0);
 
     uint32_t prefetch_q_entries() const;
 

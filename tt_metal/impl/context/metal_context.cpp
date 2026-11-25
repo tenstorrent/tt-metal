@@ -241,8 +241,40 @@ void MetalContext::initialize(
             resolve_dispatch_core_type(MetalEnvAccessor(*env_).impl(), device_id, dispatch_core_config_);
     }
     const CommandQueueDispatchLayout& cq_dispatch_layout = dispatch_query_manager_->cq_dispatch_layout();
+    // On DMA-non-coherent hosts UMD backs sysmem with one uncached 256 MiB KMD buffer instead of 1 GiB hugepages,
+    // so bound the prefetch queue by the issue queue that channel can hold (3/4 of each CQ, less a margin for the
+    // aux pages SystemMemoryManager reserves).
+    uint32_t max_issue_queue_bytes = 0;
+    if (cluster.get_target_device_type() == tt::TargetDevice::Silicon && cluster.uses_uncached_sysmem() &&
+        !cluster.all_chip_ids().empty() && !rtoptions().get_dram_backed_cq()) {
+        // Sysmem may not be mapped yet at this point (channel size 0); non-coherent sysmem is always one
+        // MAX_DEV_CHANNEL_SIZE (256 MiB) KMD buffer, which is also the per-device channel cap.
+        const ChipId mmio_id = cluster.get_associated_mmio_device(*cluster.all_chip_ids().begin());
+        uint64_t channel_size = cluster.get_host_channel_size(mmio_id, 0);
+        if (channel_size == 0 || channel_size > DispatchSettings::MAX_DEV_CHANNEL_SIZE) {
+            channel_size = DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+        }
+        uint64_t per_cq = channel_size / num_hw_cqs;
+        if (is_galaxy_cluster) {
+            per_cq /= DispatchSettings::DEVICES_PER_UMD_CHANNEL;
+        }
+        constexpr uint64_t aux_margin = 4ull << 20;
+        max_issue_queue_bytes = per_cq > aux_margin ? static_cast<uint32_t>((per_cq - aux_margin) / 4 * 3) : 0;
+        log_info(
+            tt::LogMetal,
+            "Uncached sysmem (host DMA not cache-coherent): sizing the prefetch queue for a {} B host channel ({} B "
+            "issue queue)",
+            channel_size,
+            max_issue_queue_bytes);
+    }
     dispatch_mem_map_ = std::make_unique<DispatchMemMap>(
-        dispatch_core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
+        dispatch_core_type,
+        num_hw_cqs,
+        hal(),
+        is_galaxy_cluster,
+        cq_dispatch_layout,
+        rtoptions(),
+        max_issue_queue_bytes);
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());

@@ -420,6 +420,13 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
         "Device-read-only pinning was requested but is not available on this system; it needs an active IOMMU and "
         "KMD 2.9.0 or newer. Check MemoryPinningParameters::supports_read_only before requesting ReadOnly, or "
         "request ReadWrite.");
+    // Pinned buffers are cacheable host memory the device reads and writes directly. Where host DMA does not snoop
+    // CPU caches and UMD cannot maintain them (it then uses uncached sysmem), nothing keeps them coherent: refuse
+    // rather than hand out a buffer that silently returns stale data (e.g. H2D/D2H socket FIFOs).
+    TT_FATAL(
+        !mesh_device.impl().metal_env().get_cluster().uses_uncached_sysmem(),
+        "Pinned host memory is not supported on this host: device DMA is not cache-coherent and no host cache "
+        "maintenance is available (uncached sysmem). Check GetMemoryPinningParameters() before pinning.");
 
     // Extract all coordinates from the range set
     std::vector<distributed::MeshCoordinate> coordinates = coordinate_range_set.coords();
@@ -454,7 +461,8 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     auto& env = mesh_device.impl().metal_env();
     // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
     bool iommu_enabled = env.get_cluster().is_iommu_enabled();
-    if (!iommu_enabled) {
+    // Pinned host buffers are cacheable; on a non-coherent host they are only safe when UMD maintains them.
+    if (!iommu_enabled || env.get_cluster().uses_uncached_sysmem()) {
         return experimental::MemoryPinningParameters{0u, 0u, false, false};
     }
 

@@ -362,6 +362,10 @@ public:
     // Returns whether D2H sockets must use the hugepage fallback: the host can't pin device-visible memory (no 64-bit
     // PCIe addressing and no IOMMU).
     bool needs_d2h_hugepage_fallback() const;
+    // Host DMA is not cache-coherent and UMD backs sysmem with its uncached KMD buffer (cached at init time; see
+    // PCIDevice::uses_uncached_sysmem()). Paths that hand the device other cacheable host memory (pinned buffers,
+    // the D2H socket) must stay off then: nothing keeps that memory coherent.
+    bool uses_uncached_sysmem() const;
     // Returns whether device-read-only page pinning is available.
     bool is_read_only_page_pinning_supported() const;
 
@@ -461,6 +465,7 @@ private:
 
     // Cached system IOMMU status to avoid slow queries at MeshDevice construction
     bool iommu_enabled_ = false;
+    bool uncached_sysmem_ = false;
     // Cached device-read-only pinning support. Reading the KMD version parses sysfs, and this is queried once per
     // tensor shard on the transfer path, so it must not be recomputed per call.
     bool read_only_page_pinning_supported_ = false;
