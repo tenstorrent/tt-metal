@@ -164,7 +164,7 @@ jobs:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
           sku-config: ./.github/sku_config.yaml
-          event: ${{ github.event_name == 'merge_group' && 'merge_group' || '' }}
+          event: ${{ (github.event_name == 'merge_group' || github.event.inputs.prio == 'true') && 'merge_group' || '' }}  # trial: prio input
 
       # Durations do not scale between run types or to speed of light, so the
       # source is the run that measures the same way, not the same pipeline.
