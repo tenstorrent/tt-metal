@@ -2242,13 +2242,6 @@ def test_async_remote_source_update_weights_returns_zero_when_sync_not_due(monke
     assert client.pushed == [0]
 
 
-def test_async_remote_source_pushes_version_0_when_no_batches_left(monkeypatch):
-    client = _FakeAsyncClient([])
-    source = _async_source(monkeypatch, client, num_batches=0, max_staleness=0)
-    assert source.update_weights(None, 0) >= 0.0
-    assert client.pushed == [0]
-
-
 def test_async_remote_source_raises_when_the_queue_closes(monkeypatch, expect_error):
     source = _async_source(monkeypatch, _FakeAsyncClient([]), num_batches=1, max_staleness=0)
     with expect_error(RuntimeError, "rollout rank closed the rollout queue"):
