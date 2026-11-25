@@ -801,11 +801,8 @@ def test_topk_sfpu_adversarial(
 # Direct merge with sub-tile K (test_topk_merge_subtile)
 # =============================================================================
 #
-# One merge on a freshly unpacked tile pair (no local sort / rebuild), so the merge's run
-# walk -- including the run-to-run re-base taken when K < 32 -- is checked on its own.
-# Each row is a 64-datum sequence (tile 0 then tile 1, transposed into a DEST column); the
-# merge compare-exchanges positions p and p + dist of K-long runs, keeping the better datum
-# in the left run.
+# One merge on a freshly unpacked tile pair, so the merge's run walk (and its run-to-run
+# re-base when K < 32) is checked without a local sort or rebuild around it.
 
 _MERGE_TIE_VALUES = [-3.5, -1.0, 0.25, 1.0, 2.0, 7.5]
 

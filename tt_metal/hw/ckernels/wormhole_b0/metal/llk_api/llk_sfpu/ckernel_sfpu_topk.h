@@ -486,6 +486,10 @@ inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist) {
     }
 }
 
+// Instructions issued by bitonic_topk_load8 / bitonic_topk_store8 each.
+template <bool FUSED>
+constexpr int bitonic_topk_ldst8_count = FUSED ? 2 : 4;
+
 template <bool is_fp32_dest_acc_en, bool FUSED = false, bool RANK_STAMPED = false>
 inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1) {
     constexpr std::uint32_t dst_indices_offset = 128;  // 2 tile x 64 rows per tile
@@ -591,6 +595,9 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional() {
     // Restore values after the XOR scratch operation.
     TTI_SFPXOR(0, VC, VD, 0);
 }
+
+// Instructions issued by topk_cmp_swap_stable_directional.
+constexpr int topk_cmp_swap_stable_count = 6;
 
 // Runtime-polarity wrapper for stable compare sites shared by ascending and descending sorts.
 template <std::uint32_t VC, std::uint32_t VD, std::uint32_t MODE, TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
@@ -1288,19 +1295,14 @@ inline void _bitonic_topk_merge(const int m_iter, const int k) {
         _sfpu_load_config32_(p_sfpu::LREG13, rank_span >> 16, rank_span & 0xFFFF);  // right-run complement (2K-1)
     }
 
-    // One 8-datum group is a fixed instruction sequence per call: load8 / [rank stamp] /
-    // compare-exchange / store8 at immediates 0, ld_dist, 128, 128 + ld_dist, plus INCRWC
-    // Dst += 4. SFPLOAD/SFPSTORE address Imm10 + RWC.Dst, so walking RWC.Dst by the group
-    // stride reaches the same rows the per-group dst_offset used to be folded into every
-    // TT_ encoding on the RISC-V. Record the body once (Exec so the first group runs while
-    // recording) and issue one REPLAY per group; the RISC is left with the face skip inside a
-    // run (+16 rows, two INCRWC) and the run-to-run re-base (the same SETC16 + SETRWC pair the
-    // quadrant step uses). The 23-instruction rank-stamped body does not fit the SFPU replay
-    // slots, so it replays two windows (load8 + left-run stamp; rank advance + swap + store8)
-    // around an inline right-run stamp.
-    constexpr int merge_ldst = FUSED ? 2 : 4;
-    constexpr int merge_left_stamp = RANK_STAMPED ? 5 : 0;
-    constexpr int merge_cmp = RANK_STAMPED ? 2 : (STABLE_SORT ? 6 : 1);
+    // One recorded group body (load8 / [rank stamp] / compare-exchange / store8 / INCRWC Dst += 4)
+    // serves every group: SFPLOAD/SFPSTORE address Imm10 + RWC.Dst, so walking RWC.Dst by the
+    // group stride reaches each group's rows. The rank-stamped body does not fit the SFPU replay
+    // slots, so it replays two windows around an inline right-run stamp.
+    // Window lengths must match the instructions recorded below.
+    constexpr int merge_ldst = bitonic_topk_ldst8_count<FUSED>;
+    constexpr int merge_left_stamp = RANK_STAMPED ? 5 : 0;  // AND, OR, SETCC, XOR, ENCC
+    constexpr int merge_cmp = RANK_STAMPED ? 2 /* IADD + SWAP */ : (STABLE_SORT ? topk_cmp_swap_stable_count : 1);
     constexpr int merge_head = merge_ldst + merge_left_stamp;  // slots [0, merge_head)
     constexpr int merge_body = merge_head + merge_cmp + merge_ldst + 1;
     static_assert(
