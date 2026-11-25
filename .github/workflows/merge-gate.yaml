@@ -849,11 +849,13 @@ jobs:
           mkdir -p current baseline out
           python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit_sha", ""))' \
             "gate-baseline/${ARCH}/baseline_metadata.json" > out/stage2.base
+          # The positions both sides measured at: the one list, in run_llk_perf_placement.sh.
+          SHIFTS=$(git show HEAD:tt_metal/tt-llk/tests/run_llk_perf_placement.sh | sed -n 's/.*LLK_CODE_SHIFTS:-\([0-9 ]*\).*/\1/p')
           # A side that measured nothing leaves its rows "not re-measured", which the gate job counts as blocking.
           python3 tt_metal/tt-llk/perf/placement_check.py decide \
             --candidates nodes/stage1.regressions.csv --baseline baseline --current current \
             --threshold "$THRESHOLD" --min-cycles "$MIN_CYCLES" --module-threshold "$MODULE_THRESHOLDS" \
-            --over-cap nodes/nodes.over --arch "$ARCH" --report out/stage2.md || true
+            --over-cap nodes/nodes.over --positions "$SHIFTS" --arch "$ARCH" --report out/stage2.md || true
           cat out/stage2.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
