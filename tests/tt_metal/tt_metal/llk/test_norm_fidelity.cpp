@@ -12,10 +12,10 @@
 #include <random>
 #include <vector>
 #include <gtest/gtest.h>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "llk_device_fixture.hpp"
 
 namespace tt::tt_metal::unit_tests::compute::norm_fidelity {
@@ -57,7 +57,7 @@ std::vector<float> run(
     constexpr std::uint32_t input_tile_bytes = tile_elements * sizeof(bfloat16);
     const auto output_format = config.fp32_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const std::uint32_t output_tile_bytes = tile_elements * (config.fp32_dest ? sizeof(float) : sizeof(bfloat16));
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     auto& cq = mesh.mesh_command_queue();
     auto make_buffer = [&](std::uint32_t bytes) {
         return distributed::MeshBuffer::create(

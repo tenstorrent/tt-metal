@@ -4,8 +4,8 @@
 
 #include <tt-metalium/experimental/offline_kernel_compile.hpp>
 
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/workload/program.hpp>
 
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -96,8 +96,8 @@ void apply_cb_compile_configs(JitBuildOptions& build_options, const std::vector<
 
 // Generate sources and invoke the JIT build for one (kernel, build_env) pair against a *local*
 // BuildEnvManager, mirroring the runtime bodies of DataMovementKernel::generate_binaries and
-// ComputeKernel::generate_binaries (which are unusable here because they reach into the
-// process-wide BuildEnvManager::get_instance() and MetalContext singletons).
+// ComputeKernel::generate_binaries (which are unusable here because they look up the device's
+// MetalContext and its BuildEnvManager).
 //
 // TODO: the kernel-type if/else below does not extend to other Kernel subclasses
 // (Ethernet, DRAM, Quasar variants); this dispatch should live on Kernel itself.

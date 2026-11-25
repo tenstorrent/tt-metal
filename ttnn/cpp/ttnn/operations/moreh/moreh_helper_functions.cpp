@@ -9,11 +9,11 @@
 #include <numeric>
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 
-#include "tt-metalium/hal.hpp"
+#include "tt-metalium/discovery/hal.hpp"
 
 namespace ttnn::operations {
 
@@ -260,7 +260,7 @@ void check_tensor(
             enchantum::to_string(layout));
     }
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} {} need to be on device!", op_name, tensor_name);
-    TT_FATAL(tensor.buffer() != nullptr, "{} {} need to be allocated in buffers on device!", op_name, tensor_name);
+    TT_FATAL(tensor.is_allocated(), "{} {} need to be allocated in buffers on device!", op_name, tensor_name);
 
     if (check_dtype) {
         bool dtype_supported = false;

@@ -7,9 +7,8 @@
 #include <cstdint>
 #include <variant>
 
-#include <tt-metalium/core_coord.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 

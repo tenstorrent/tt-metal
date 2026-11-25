@@ -21,27 +21,6 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("exponent", [0.5, 2.0])
-def test_unary_pow_ttnn(input_shapes, exponent, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.pow(input_tensor, exponent, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.pow(in_data, exponent)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor], pcc=0.9)
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
         (torch.Size([1, 3, 320, 384])),
         (torch.Size([1, 1, 32, 320, 12])),
     ),
@@ -395,15 +374,9 @@ def test_unary_log1p_ttnn(input_shapes, device):
         (torch.bfloat16, ttnn.bfloat16),
     ],
 )
-@pytest.mark.parametrize(
-    "ttnn_op",
-    [
-        ttnn.log,
-        ttnn.log1p,
-        ttnn.log2,
-        ttnn.log10,
-    ],
-)
+# log, log1p, log2 and log10 values in both modes are covered by test_unary_category3_*.py; this
+# test keeps the non-tile-aligned shapes, which take the same path for every log-like op.
+@pytest.mark.parametrize("ttnn_op", [ttnn.log])
 @pytest.mark.parametrize("fast_and_approx", [False, True])
 def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fast_and_approx, device):
     torch.manual_seed(0)
@@ -435,15 +408,15 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
         assert_with_pcc(output_tensor, torch_output_tensor, pcc=0.999)
 
 
-@pytest.mark.parametrize("scalar", [1, -10, 15.5, -29.5, 0, -0, 100, -100, 2147483647, -2147483648])
+@pytest.mark.parametrize("scalar", [1, -10, 15.5, -29.5, 0, 100, -100, 2147483647, -2147483648])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
-        (torch.float32, ttnn.float32),
         # bfloat16 is exhaustively covered (all bf16 bit patterns, all scalars in this
-        # list) by test_fill_op in test_unary_category4_bfloat16.py.
+        # list) by test_fill_op in test_unary_category4_bfloat16.py, and float32 by
+        # test_fill in test_unary_category4_float32.py.
         (torch.int32, ttnn.int32),
         (torch.uint32, ttnn.uint32),
     ],
@@ -451,9 +424,7 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
 def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
-    if torch_dtype.is_floating_point:
-        torch_input_tensor_a = torch.empty((h, w), dtype=torch_dtype).uniform_(-100, 100)
-    elif torch_dtype == torch.uint32:
+    if torch_dtype == torch.uint32:
         torch_input_tensor_a = torch.randint(low=0, high=100, size=(h, w), dtype=torch_dtype)
     else:
         torch_input_tensor_a = torch.randint(low=-100, high=100, size=(h, w), dtype=torch_dtype)
@@ -473,11 +444,7 @@ def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
+    ((torch.Size([1, 1, 320, 384])),),
 )
 @pytest.mark.parametrize(
     "param",

@@ -4,17 +4,31 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "mask_padded_tile.hpp"
 
 #include <cstdint>
 
 void kernel_main() {
     constexpr auto dfb_max_scaler = dfb::max_scaler;
     constexpr auto dfb_sum_scaler = dfb::sum_scaler;
+    // Kernel-scope scaler DataflowBuffers, passed to the helpers by reference: on Quasar a helper-owned
+    // DataflowBuffer drains in its destructor and would wait here for compute's pop (#60848).
+    DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
+    DataflowBuffer dfb_sum_scaler_obj(dfb_sum_scaler);
+
+#ifdef MASK_PADDED_DATA
+    // The last dimension is not a multiple of the tile width: the compute adds this -inf tile to the last tile of
+    // every row so the padding columns stay out of the row max and sum.
+    constexpr std::uint32_t num_datum_padded = get_arg(args::num_datum_padded);
+    constexpr std::uint32_t tile_hw = get_arg(args::tile_hw);
+    DataflowBuffer dfb_mask_padded_obj(dfb::mask_padded);
+    push_mask_padded_tile<num_datum_padded, tile_hw>(dfb_mask_padded_obj);
+#endif
 
     constexpr std::uint32_t block_wt = get_arg(args::block_w);
 
@@ -32,7 +46,8 @@ void kernel_main() {
 
     constexpr auto dfb_fused_scale = dfb::fused_scale;
     const std::uint32_t pre_scale = get_arg(args::pre_scale);
-    generate_bcast_unary_scalar(CircularBuffer(dfb_fused_scale), pre_scale);
+    DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
+    generate_bcast_unary_scalar(dfb_fused_scale_obj, pre_scale);
 
     constexpr std::uint32_t block_ht = get_arg(args::block_ht);
     for (std::uint32_t h = 0; h < block_ht; h++) {
@@ -48,11 +63,11 @@ void kernel_main() {
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                     dfb_max_scaler,
                     ckernel::PoolType::MAX,
-                    ckernel::ReduceDim::REDUCE_ROW>();
+                    ckernel::ReduceDim::REDUCE_ROW>(dfb_max_scaler_obj);
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                     dfb_sum_scaler,
                     ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW>();
+                    ckernel::ReduceDim::REDUCE_ROW>(dfb_sum_scaler_obj);
             }
         }
         noc.async_read_barrier();

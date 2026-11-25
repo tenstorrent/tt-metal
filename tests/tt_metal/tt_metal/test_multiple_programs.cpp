@@ -11,11 +11,11 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
@@ -53,8 +53,9 @@ std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
     return defines;
 }
 
-std::tuple<Program, KernelHandle, KernelHandle> setup_program_one(const CoreCoord& core, uint32_t single_tile_size) {
-    Program program = CreateProgram();
+std::tuple<Program, KernelHandle, KernelHandle> setup_program_one(
+    distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t single_tile_size) {
+    Program program = CreateProgram(mesh_device);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -102,8 +103,9 @@ std::tuple<Program, KernelHandle, KernelHandle> setup_program_one(const CoreCoor
     return {std::move(program), binary_reader_kernel, unary_writer_kernel};
 }
 
-std::tuple<Program, KernelHandle, KernelHandle> setup_program_two(const CoreCoord& core, uint32_t single_tile_size) {
-    Program program = CreateProgram();
+std::tuple<Program, KernelHandle, KernelHandle> setup_program_two(
+    distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t single_tile_size) {
+    Program program = CreateProgram(mesh_device);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -190,8 +192,8 @@ TEST_F(UnitMeshFixture, MultiplePrograms) {
     auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
     auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
 
-    auto [program1, reader1_kernel_id, writer1_kernel_id] = setup_program_one(core, single_tile_size);
-    auto [program2, reader2_kernel_id, writer2_kernel_id] = setup_program_two(core, single_tile_size);
+    auto [program1, reader1_kernel_id, writer1_kernel_id] = setup_program_one(this->device(), core, single_tile_size);
+    auto [program2, reader2_kernel_id, writer2_kernel_id] = setup_program_two(this->device(), core, single_tile_size);
 
     // Execute Program One
     SHAPE shape = {1, 1, 32, 32};

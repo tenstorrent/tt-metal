@@ -9,16 +9,16 @@
 
 #include <impl/context/metal_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/system_mesh.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/device.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/distributed/dummy_mesh_command_queue.hpp"
 
@@ -241,7 +241,7 @@ TEST_F(BigMeshDualRankTest2x4, SubmeshCreationSingleSubmesh) {
     EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
 
     // Make sure the inactive rank returns a DummyMeshCommandQueue
-    if (submesh->get_view().get_devices().empty()) {
+    if (submesh->get_device_ids().empty()) {
         auto& cq = submesh->mesh_command_queue();
         EXPECT_TRUE(dynamic_cast<DummyMeshCommandQueue*>(&cq) != nullptr);
     }

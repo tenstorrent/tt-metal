@@ -8,9 +8,9 @@
 #include "ttnn/operations/ccl/broadcast/device/broadcast_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 
 #include <optional>
 #include <variant>
@@ -22,11 +22,13 @@ struct BroadcastDeviceOperation {
     using operation_attributes_t = BroadcastParams;
     using tensor_args_t = BroadcastInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<BroadcastProgramFactory>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
 };
 
 Tensor broadcast(

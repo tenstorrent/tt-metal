@@ -9,8 +9,8 @@
 // eltwise_binary_sfpu_no_bcast_dfb.cpp with the RHS handling changed for a single, reused scalar tile:
 // the RHS PREPROCESS + wait_front(1) move OUT of process_sfpu_scalar_tiles (the scalar tile is produced
 // once, by the writer), the per-tile RHS copy_tile always reads tile index 0, and the RHS DFB is popped
-// once after all chunks. The LHS stream, the lhs/rhs/post activation machinery, and the ARCH_QUASAR
-// copy_tile_to_dst_init_short gasket are identical to the no-broadcast kernel.
+// once after all chunks. The LHS stream, the lhs/rhs/post activation machinery, and the reconfig_data_format_srca +
+// copy_init operand switch are identical to the no-broadcast kernel.
 //
 // DFB operand naming mirrors the CB CBIndex mapping:
 //   dfb::pre_lhs  (= CBIndex::c_0)   dfb::pre_rhs (= c_1)   dfb::out (= c_2)
@@ -29,6 +29,7 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/atan2.h"
 #include "api/compute/binary_remainder.h"
 // SFPU op headers NOT yet ported to Quasar: they unconditionally pull in WH/BH-only ckernel impls or
 // symbols (InstrModLoadStore, DataFormat::UInt32, ckernel_sfpu_div_int32_floor.h, ...) absent from the
@@ -45,7 +46,6 @@
 #include "api/compute/gcd.h"
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
-#include "api/compute/atan2.h"
 #include "api/compute/isclose.h"
 #endif
 
@@ -77,13 +77,18 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     tile_regs_acquire();
     // Startup and preprocessing preserve the physical-LHS SrcA format.
     copy_init(dfb_post_lhs_id);
+    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_lhs_id, i, i * 2);
     }
+    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
     reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
     copy_init(dfb_post_rhs_id);
     for (uint32_t i = 0; i < n; ++i) {
+        // One loan per tile: the binary op below works on Dest from MATH, so it cannot run under the loan.
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(dfb_post_rhs_id, 0, i * 2 + 1);  // Always use scalar at index 0
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif

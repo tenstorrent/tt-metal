@@ -8,6 +8,8 @@
 //      Need to make sure no other file includes these lists since it also include global parameter definitions
 // 2) instantiate global variables
 
+#include "defines_generated.h"
+
 #include "ckernel.h"
 #include "internal/firmware_common.h"
 #include "api/compile_time_args.h"
@@ -21,6 +23,7 @@
 #endif
 #include "internal/debug/stack_usage.h"
 #include "api/kernel_thread_globals.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_finish.h"
 
 // Global vars
 uint32_t unp_cfg_context = 0;
@@ -87,6 +90,7 @@ uint32_t _start() {
     // Wait until first thread in the group has set its slot to GO.
     while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
            SHARED_GLOBALS_READY_GO) {
+        invalidate_l1_cache();
     }
 
     // DM use indices 0-7; compute engines 0-3 use indices 8-11 (one slot per engine, 4 TRISCs share).
@@ -122,6 +126,11 @@ uint32_t _start() {
     WAYPOINT("K");
     run_kernel();
     WAYPOINT("KD");
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+    // Drain every DFB this Neo is bound to (dataflow_buffer_finish.h). It runs here, linked into the
+    // kernel, rather than in trisc.cc: TRISC firmware has no room for it.
+    dfb_trisc_kernel_exit();
+#endif
     EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
     return measure_stack_usage();

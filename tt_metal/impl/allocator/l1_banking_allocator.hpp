@@ -4,14 +4,12 @@
 
 #pragma once
 
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "dispatch/dispatch_core_manager.hpp"
-#include "llrt/core_descriptor.hpp"
 #include <cstdint>
 
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/allocator/allocator.hpp"
-#include "impl/context/context_types.hpp"
 #include "impl/context/metal_env_impl.hpp"
 
 namespace tt::tt_metal {

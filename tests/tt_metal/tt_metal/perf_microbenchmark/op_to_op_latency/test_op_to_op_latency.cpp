@@ -83,19 +83,20 @@
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include "impl/context/metal_context.hpp"
@@ -632,7 +633,7 @@ BuiltProgram build_program(
     const std::shared_ptr<distributed::MeshBuffer>& output_buffer,
     uint32_t total_num_tiles,
     uint32_t single_tile_size_bytes) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     const auto full_grid = mesh_device->compute_with_storage_grid_size();
     uint32_t want = full_grid.x * full_grid.y;
@@ -915,8 +916,7 @@ BuiltProgram build_program(
         start_tile_id,
         total_num_tiles);
 
-    BuiltProgram built;
-    built.program = std::move(program);
+    BuiltProgram built{std::move(program)};
     built.reader_kernel = reader_kernel;
     built.writer_kernel = writer_kernel;
     built.compute_kernel = compute_kernel;

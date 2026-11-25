@@ -29,11 +29,11 @@
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>  // experimental::canonical_cluster_id_for_node_id
-#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include <protobuf/factory_system_descriptor.pb.h>   // tt::scaleout_tools::fsd::proto (from scaleout_tools)
 #include <protobuf/physical_system_descriptor.pb.h>  // tt::fabric::proto (compiled into this lib)
 #include "board/board.hpp"                           // tt::scaleout_tools::get_board_type_from_string
+#include "factory_system_descriptor/utils.hpp"       // tt::scaleout_tools::fsd_local_chip_ids
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
@@ -230,6 +230,16 @@ std::vector<uint32_t> select_host_filter(
     return member_host_ids;
 }
 
+// Empty when a board type has no board definition.
+std::map<::tt::scaleout_tools::FsdAsicKey, ::tt::ChipId> generated_descriptor_chip_ids(
+    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd) {
+    try {
+        return ::tt::scaleout_tools::fsd_local_chip_ids(fsd);
+    } catch (const std::runtime_error&) {
+        return {};
+    }
+}
+
 }  // namespace
 
 void validate_host_filter(
@@ -276,9 +286,60 @@ void validate_host_filter(
     return filtered;
 }
 
+::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor filter_factory_descriptor_to_allocation(
+    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
+    const std::set<::tt::tt_metal::experimental::PhysicalNodeId>& allocation,
+    FilterReport* report) {
+    if (report != nullptr) {
+        report->dropped_asic_count = 0;
+    }
+    if (allocation.empty() || !fsd.has_eth_connections()) {
+        return fsd;
+    }
+
+    const int num_hosts = fsd.hosts_size();
+    auto node_of = [&](const auto& endpoint) {
+        if (endpoint.host_id() >= static_cast<uint32_t>(num_hosts)) {
+            throw std::runtime_error(
+                fmt::format("FSD references host_id {} but only {} hosts are defined", endpoint.host_id(), num_hosts));
+        }
+        return ::tt::tt_metal::experimental::make_physical_node_id(
+            fsd.hosts(static_cast<int>(endpoint.host_id())).hostname(),
+            ::tt::tt_metal::TrayID{endpoint.tray_id()},
+            ::tt::tt_metal::ASICLocation{endpoint.asic_location()});
+    };
+
+    ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor result = fsd;
+    result.mutable_eth_connections()->clear_connection();
+    std::set<::tt::tt_metal::experimental::PhysicalNodeId> before;
+    std::set<::tt::tt_metal::experimental::PhysicalNodeId> after;
+    for (const auto& conn : fsd.eth_connections().connection()) {
+        const auto a = node_of(conn.endpoint_a());
+        const auto b = node_of(conn.endpoint_b());
+        before.insert(a);
+        before.insert(b);
+        if (!allocation.contains(a) || !allocation.contains(b)) {
+            continue;
+        }
+        *result.mutable_eth_connections()->add_connection() = conn;
+        after.insert(a);
+        after.insert(b);
+    }
+    if (report != nullptr) {
+        report->dropped_connection_count += static_cast<std::size_t>(
+            fsd.eth_connections().connection_size() - result.eth_connections().connection_size());
+        report->dropped_asic_count = before.size() - after.size();
+    }
+    return result;
+}
+
 ::tt::tt_metal::PhysicalSystemDescriptor build_physical_descriptor_from_file(
-    const std::string& fsd_path, const std::vector<std::string>& host_filter, FilterReport* report) {
-    // parse FSD -> (optional host filter) -> PSD proto -> wrap in the C++ PhysicalSystemDescriptor (no protos leak).
+    const std::string& fsd_path,
+    const std::vector<std::string>& host_filter,
+    FilterReport* report,
+    const std::set<::tt::tt_metal::experimental::PhysicalNodeId>& allocation) {
+    // parse FSD -> (optional host filter) -> (optional allocation filter) -> PSD proto -> wrap in the C++
+    // PhysicalSystemDescriptor (no protos leak).
     auto fsd = load_factory_descriptor(fsd_path);
     if (!host_filter.empty()) {
         fsd = filter_factory_descriptor(fsd, host_filter, report);
@@ -287,7 +348,28 @@ void validate_host_filter(
         report->retained_host_count = static_cast<std::size_t>(fsd.hosts_size());
         report->dropped_connection_count = 0;
     }
-    return ::tt::tt_metal::PhysicalSystemDescriptor(build_physical_descriptor(fsd));
+    fsd = filter_factory_descriptor_to_allocation(fsd, allocation, report);
+    ::tt::tt_metal::PhysicalSystemDescriptor psd(build_physical_descriptor(fsd));
+    if (fsd.hosts_size() == 0) {
+        return psd;
+    }
+
+    std::map<std::string, uint32_t> host_ids;
+    for (int host_id = 0; host_id < fsd.hosts_size(); ++host_id) {
+        host_ids.emplace(fsd.hosts(host_id).hostname(), static_cast<uint32_t>(host_id));
+    }
+    const auto chip_ids = generated_descriptor_chip_ids(fsd);
+    for (auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        (void)asic_id;
+        const auto chip_id =
+            chip_ids.find({host_ids.at(descriptor.host_name), *descriptor.tray_id, *descriptor.asic_location});
+        if (chip_id != chip_ids.end()) {
+            descriptor.umd_unique_id = chip_id->second;
+        }
+    }
+    psd.set_discovery_data(fsd.hosts(0).hostname(), 0);
+    psd.set_is_bh_galaxy_rev_c(::tt::scaleout_tools::is_bh_galaxy_rev_c_node_type(fsd.hosts(0).node_type()));
+    return psd;
 }
 
 ::tt::fabric::proto::PhysicalSystemDescriptor build_physical_descriptor(

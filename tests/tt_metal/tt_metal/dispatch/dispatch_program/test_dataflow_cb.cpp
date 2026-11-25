@@ -8,12 +8,12 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -26,7 +26,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowCb) {
     if (this->device().arch() == ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar does not support CBs, skipping test";
     }
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     CoreCoord core = {0, 0};
 
@@ -114,7 +114,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowCb) {
 }
 
 TEST_F(UnitMeshAnyDispatchFixture, DataflowDfb) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     CoreCoord core = {0, 0};
 

@@ -11,11 +11,12 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "api/debug/waypoint.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_operands.h"
 #include "llk_sync.h"
+#include "llk_dest_borrow.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand_to_dest.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -25,23 +26,22 @@
  *************************************************************************/
 
 /**
- * @brief Allocate a BFD id from the unpack partition, program its table entry from the operand's
- * DFB info (shape, L1 base, formats), and record the id in the engine's current slot. The DFB id is
+ * @brief Program the engine's fixed BFD table entry from the operand's
+ * DFB info (shape, L1 base, formats). The DFB id is
  * used only to fetch buffer info — it never doubles as the BFD id.
  *
- * @tparam E: physical UNPACR engine that will consume the descriptor (Unp0 or Unp1)
+ * @tparam E: fixed BFD id of the UNPACR engine that will consume the descriptor (BFD_ID_UNP0 or BFD_ID_UNP1)
  * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
  * UNPACR_STRIDE tilize sequences.
  * @param operand_id: Input DFB used to look up the descriptor parameters
- * @return Allocated BFD id for the unpack init
  */
-template <ckernel::trisc::BfdResource E, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
-inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
+template <std::uint8_t E, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
+inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
     LLK_REINIT_GUARD_NOTE_PROGRAMMED(E, operand_id);
     // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
     // across multiple TCs this must program one descriptor per active tc_slot (same gap in
     // llk_pack_program_bfd). Tied to the DFB<->buffer-descriptor decouple work.
-    return ckernel::trisc::bfd_alloc_and_program<E, MODE>(
+    ckernel::trisc::program_bfd<E, MODE>(
         get_operand_tensor_shape(operand_id),
         get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
         static_cast<std::uint32_t>(unpack_src_format[operand_id]));
@@ -51,10 +51,10 @@ inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
  * @brief Programs source register format for both UNP_A and UNP_B
  *
  * Buffer descriptors are no longer programmed here: BFD ids are an LLK-internal resource
- * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_unpack_*_init
+ * fixed per engine (see ckernel_buf_desc.h) and each op's llk_unpack_*_init
  * programs its own table entry. DFB ids never double as BFD ids.
  *
- * Also the unpack thread's once-per-program DEST bank reset in the unpack-to-dest path (see below).
+ * Also resets the unpacker's Dest addressing. Each borrow provides the lender's section base.
  *
  * @param operandA: The input0 operand circular buffer
  * @param operandB: The input1 operand circular buffer
@@ -67,58 +67,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         static_cast<DataFormat>(unpack_dst_format[unpA_operand_id]),
         static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
 
-    // Unpack-to-dest: the unpack thread owns the DEST section base, and this is its once-per-program init. Every
-    // compute-API site that calls llk_unpack_hw_configure pairs it with llk_math_pack_sync_init, so unpack and
-    // math reset their bank parity together. The reset must NOT live in the per-op llk_unpack_A_init: op writers
-    // call copy_init inside their tile loop, and a per-op reset would pin unpack to bank 0 while pack keeps alternating in SyncHalf.
     if constexpr (UnpackToDestEn) {
         _llk_unpack_dest_init_();
-    }
-}
-
-/**
- * @brief Unpack thread of tile_regs_acquire: wait until a DEST bank is free for the unpack thread to write:
- * unpack-to-dest section begin.
- *
- * Unpack side of the DEST section handshake, the counterpart of @ref _llk_math_wait_for_dest_available_ and
- * @ref _llk_packer_wait_for_math_done_. Math is the middleman with two semaphores of max N (1 in SyncFull, 2 in
- * SyncHalf): UNPACK_MATH counts sections unpacked but not yet committed by math, MATH_PACK counts sections committed
- * but not yet released by pack. Waiting on both keeps unpack within N sections of pack.
- *
- * @note One call per section, paired with one @ref llk_unpack_dest_section_done. The section is the unit on all
- *       three threads: however many tiles the section holds, each thread posts or gets once.
- * @note In SyncHalf the per-semaphore wait still admits UNPACK_MATH = 1 and MATH_PACK = 1 at once, i.e. a third section
- *       into a two-bank DEST (tt-metal #58903). A DEST occupancy count that unpack posts and pack gets closes that.
- */
-inline void llk_unpack_wait_for_dest_available() {
-    if constexpr (UnpackToDestEn) {
-        _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
-    }
-}
-
-/**
- * @brief Unpack thread of tile_regs_commit: hand the current DEST section to math: unpack-to-dest section end.
- *
- * Posts UNPACK_MATH once UNPACK0 has drained, so the post cannot overtake the DEST writes math and pack will read, then
- * (SyncHalf) moves the unpack thread's section base to the other bank. Counterpart of @ref llk_math_dest_section_done
- * and @ref llk_pack_dest_section_done.
- *
- * @tparam EN_32BIT_DEST: Sizes the SyncHalf bank flip: bank-1 base at 256 rows when true, 512 when false (see
- *         @ref _update_dest_register_offset_). Must equal the value the pack thread passes to
- *         @ref _llk_sync_advance_dest_section_ for this op, or the two sides address different DEST halves (the two
- *         calls live in different TRISC TUs, so no static_assert can compare them). values = <true/false>
- * @note Math blocks in tile_regs_acquire until this post, so it sees nothing of the section before the unpack thread
- *       commits it. SrcA / SrcB unpacks issued in the same section are therefore consumed only after this call and
- *       must fit the src banks. A section that mixes unpack-to-dest copies with a src-path run is outside
- *       this contract and stalls both threads!
- */
-template <bool EN_32BIT_DEST>
-inline void llk_unpack_dest_section_done() {
-    if constexpr (UnpackToDestEn) {
-        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
-        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            _llk_sync_advance_dest_section_<to_underlying(TriscID::Unpack), EN_32BIT_DEST, p_stall::UNPACK0>();
-        }
     }
 }
 

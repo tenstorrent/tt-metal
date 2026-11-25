@@ -20,15 +20,14 @@ void kernel_main() {
     constexpr uint32_t cols = get_compile_time_arg_val(4);
 
     constexpr bool transpose = false;
-    constexpr bool split_acc = true;
-    constexpr bool dense_packing = false;
-    custom_mm_block_init<transpose, split_acc, dense_packing>(cb_in0, cb_w, cb_out);
+    constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
+    custom_mm_block_init<transpose, dest_layout>(cb_in0, cb_w, cb_out);
 
     cb_wait_front(cb_in0, kt);
     for (uint32_t c = 0; c < cols; ++c) {
         tile_regs_acquire();
         cb_wait_front(cb_w, kt);
-        custom_mm_block<true>(cb_in0, cb_w, 0, 0, 0, kt);
+        custom_mm_block<dest_layout>(cb_in0, cb_w, 0, 0, 0, kt);
         cb_pop_front(cb_w, kt);
         tile_regs_commit();
         cb_reserve_back(cb_out, 1);
@@ -38,5 +37,5 @@ void kernel_main() {
         cb_push_back(cb_out, 1);
     }
     cb_pop_front(cb_in0, kt);
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<dest_layout>(cb_out);
 }

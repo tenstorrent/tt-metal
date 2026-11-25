@@ -4,6 +4,7 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <iostream>
+#include <tt-metalium/discovery/cluster.hpp>
 
 int main() {
     const size_t tensor_width = 32;

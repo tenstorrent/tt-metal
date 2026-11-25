@@ -5,9 +5,9 @@
 #include <gtest/gtest.h>
 // Now include the actual ControlPlane header with friend declaration
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 
 #include <filesystem>
 #include <functional>

@@ -8,9 +8,9 @@
 #include <filesystem>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/quasar/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -18,7 +18,7 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace ttnn::prim::qsr {
 
@@ -65,7 +65,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     uint32_t page_size = a.logical_shape()[-1] * a.element_size();
     uint32_t size_of_valid_data_in_last_page_in_row = a.logical_shape()[-1] * a.element_size();
     if (a.is_sharded() && a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-        page_size = a.buffer()->page_size();
+        page_size = a.mesh_buffer().page_size();
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
         num_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);

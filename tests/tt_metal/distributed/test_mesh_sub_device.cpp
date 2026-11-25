@@ -5,9 +5,9 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstdint>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <array>
 #include <cstddef>
 #include <map>
@@ -18,26 +18,26 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/program/sub_device_setup_batch.hpp"
@@ -204,7 +204,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     auto all_cores = syncer_core.merge(datacopy_core);
     auto global_sem = GlobalSemaphore(*mesh_device_, all_cores, 0);
 
-    Program sync_and_incr_program = CreateProgram();
+    Program sync_and_incr_program = CreateProgram(*this->mesh_device_);
     auto sync_kernel = CreateKernel(
         sync_and_incr_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_increment.cpp",
@@ -213,7 +213,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     std::array<uint32_t, 3> sync_rt_args = {global_sem.address(), datacopy_core_phys.x, datacopy_core_phys.y};
     SetRuntimeArgs(sync_and_incr_program, sync_kernel, syncer_core, sync_rt_args);
 
-    Program datacopy_program = CreateProgram();
+    Program datacopy_program = CreateProgram(*this->mesh_device_);
     auto datacopy_kernel = CreateKernel(
         datacopy_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_datacopy.cpp",
@@ -338,7 +338,7 @@ TEST_F(MeshSubDeviceMultiCQTraceTestSuite, SubDeviceSwitchingWhileOtherCQReplays
         {SubDevice(std::array{cores_1}), SubDevice(std::array{cores_0})}, k_local_l1_size);
     mesh_device_->load_sub_device_manager(sub_device_manager_0);
 
-    Program delay_program = CreateProgram();
+    Program delay_program = CreateProgram(*this->mesh_device_);
     auto delay_kernel = CreateKernel(
         delay_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/delay.cpp",

@@ -11,11 +11,11 @@
 #include <memory>
 
 #include <tt_stl/small_vector.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
 
 #include "impl/context/metal_context.hpp"

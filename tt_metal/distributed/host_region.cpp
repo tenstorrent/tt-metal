@@ -14,12 +14,13 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -344,7 +345,7 @@ void HostRegion::provision(
         throw std::runtime_error("PinnedMemory::Create returned null (is vIOMMU enabled?)");
     }
     // That same coordinate's device, so the NOC address belongs to the chip just pinned.
-    const IDevice* const dev = mesh_device->get_device(coord);
+    const IDevice* const dev = internal::get_device(*mesh_device, coord);
     if (dev == nullptr) {
         throw std::runtime_error(fmt::format("provision: chip {} names no device in this mesh", chip));
     }

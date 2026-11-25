@@ -7,18 +7,18 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_config.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "impl/device/mock_device_util.hpp"
 
@@ -37,7 +37,7 @@ protected:
         mock_env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
             .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
         auto mesh_shape = mock_env_->get_system_mesh().shape();
-        mock_device_ = mock_env_->create_mesh_device(distributed::MeshDeviceConfig(mesh_shape));
+        mock_device_ = distributed::MeshDevice::open_mesh_device(*mock_env_, distributed::MeshDeviceConfig(mesh_shape));
         ASSERT_GT(mock_device_->num_devices(), 0u);
     }
 
@@ -48,10 +48,11 @@ protected:
 };
 
 TEST_F(MockAllocatorTest, CPU_MockDeviceCreationAndQueries) {
-    EXPECT_EQ(mock_env_->get_arch(), tt::ARCH::WORMHOLE_B0);
-    EXPECT_GT(mock_env_->get_l1_size(), 0u);
-    EXPECT_GT(mock_env_->get_dram_alignment(), 0u);
-    EXPECT_GT(mock_env_->get_l1_alignment(), 0u);
+    const auto props = mock_env_->get_device_properties();
+    EXPECT_EQ(props.arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_GT(props.node_local_mem_size(), 0u);
+    EXPECT_GT(props.dram_alignment(), 0u);
+    EXPECT_GT(props.node_local_mem_alignment(), 0u);
     EXPECT_EQ(mock_device_->num_devices(), 1u);
 }
 

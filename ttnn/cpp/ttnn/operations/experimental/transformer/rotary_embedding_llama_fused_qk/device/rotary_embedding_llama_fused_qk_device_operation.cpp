@@ -5,7 +5,7 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -24,7 +24,7 @@ void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
 
     auto validate_tensor = [ref_device](const Tensor& tensor, const std::string& name) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} tensor must be on device!", name);
-        TT_FATAL(tensor.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
+        TT_FATAL(tensor.is_allocated(), "{} tensor must be allocated in buffers on device!", name);
         TT_FATAL(tensor.device() == ref_device, "{} tensor must be on same device!", name);
         TT_FATAL(
             tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,

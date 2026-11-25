@@ -30,7 +30,6 @@ register to poison and this test would pass vacuously there; Quasar has its own
 implementation. Both are skipped rather than silently covered.
 """
 
-import struct
 
 import torch
 from conftest import skip_for_blackhole, skip_for_quasar
@@ -39,7 +38,6 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     VectorMode,
-    format_dict,
 )
 from helpers.sfpu_dispatch_constants import RELU_MIN_THRESHOLD
 from helpers.stimuli_config import StimuliConfig
@@ -49,8 +47,10 @@ from helpers.test_variant_parameters import (
     SFPU_UNARY_SCALAR,
     SFPU_UNARY_THRESHOLD,
     VECTOR_MODE,
+    fp32_bits,
     generate_input_dim,
 )
+from helpers.utils import result_tensor
 
 pytestmark = [skip_for_blackhole, skip_for_quasar]
 
@@ -62,11 +62,6 @@ ELEMENTS_PER_TILE = 1024
 # tile), and exactly representable in every format on this path so the expected-failure
 # value is not itself approximate.
 LREG2_POISON = 1024.0
-
-
-def _bits(value: float) -> int:
-    """Raw fp32 bit pattern, the encoding both SFPU_UNARY_* parameters expect."""
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _straddling_inputs() -> torch.Tensor:
@@ -99,8 +94,8 @@ def test_relu_min_ignores_stale_lreg2():
         templates=[
             generate_input_dim([32, 32], [32, 32]),
             APPROX_MODE(ApproximationMode.No),
-            SFPU_UNARY_SCALAR(_bits(LREG2_POISON)),
-            SFPU_UNARY_THRESHOLD(_bits(RELU_MIN_THRESHOLD)),
+            SFPU_UNARY_SCALAR(fp32_bits(LREG2_POISON)),
+            SFPU_UNARY_THRESHOLD(fp32_bits(RELU_MIN_THRESHOLD)),
             VECTOR_MODE(VectorMode.RC),
         ],
         runtimes=[],
@@ -119,9 +114,8 @@ def test_relu_min_ignores_stale_lreg2():
         compile_time_formats=True,
     )
 
-    res = torch.tensor(
-        configuration.run().result[:ELEMENTS_PER_TILE],
-        dtype=format_dict[formats.output_format],
+    res = result_tensor(
+        configuration.run().result[:ELEMENTS_PER_TILE], formats.output_format
     ).to(torch.float32)
 
     golden = torch.maximum(src_A, torch.tensor(RELU_MIN_THRESHOLD))

@@ -9,9 +9,9 @@
 #include <numeric>
 #include <vector>
 
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"

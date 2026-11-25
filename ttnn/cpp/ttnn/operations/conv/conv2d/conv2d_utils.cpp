@@ -9,27 +9,28 @@
 #include <tuple>
 
 #include "conv2d_utils.hpp"
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "conv2d/conv2d_op_program_factory_common.hpp"
-#include "tt-metalium/constants.hpp"
-#include <tt-metalium/hal.hpp>
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/data_movement/fold/fold.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::conv {
 using sliding_window::ParallelConfig;
@@ -271,6 +272,28 @@ ParallelConfig determine_output_parallel_config(
 
 void validate_stride(const std::array<uint32_t, 2>& stride) {
     TT_FATAL(stride[0] > 0 && stride[1] > 0, "stride must be greater than 0, got ({}, {})", stride[0], stride[1]);
+}
+
+void validate_conv_params(
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    uint32_t groups) {
+    validate_stride(stride);
+    TT_FATAL(
+        kernel_size[0] > 0 && kernel_size[1] > 0,
+        "kernel_size must be greater than 0, got ({}, {})",
+        kernel_size[0],
+        kernel_size[1]);
+    TT_FATAL(
+        in_channels > 0 && out_channels > 0,
+        "in_channels ({}) and out_channels ({}) must be greater than 0",
+        in_channels,
+        out_channels);
+    TT_FATAL(batch_size > 0, "batch_size must be greater than 0");
+    TT_FATAL(groups > 0, "groups must be greater than 0");
 }
 
 void validate_act_block_h_override(uint32_t act_block_h_override) {
@@ -883,7 +906,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 Tensor resharded_input_tensor = ttnn::create_device_tensor(
                     tt::tt_metal::TensorSpec(
                         input_tensor.logical_shape(),
-                        tt::tt_metal::TensorLayout(
+                        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
                             input_tensor.dtype(),
                             tt::tt_metal::PageConfig(input_tensor.layout()),
                             input_tensor_sharded_memory_config_to_layout,
@@ -931,7 +954,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 Tensor resharded_input_tensor = ttnn::create_device_tensor(
                     tt::tt_metal::TensorSpec(
                         input_tensor.logical_shape(),
-                        tt::tt_metal::TensorLayout(
+                        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
                             input_tensor.dtype(),
                             tt::tt_metal::PageConfig(input_tensor.layout()),
                             input_tensor_sharded_memory_config_to_layout,

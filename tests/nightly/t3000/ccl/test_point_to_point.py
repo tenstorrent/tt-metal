@@ -127,6 +127,13 @@ def test_point_to_point(mesh_device, shape_coords_layout, dtype):
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], torch_return_tensor[idx_start0:idx_end0, :, :, :])
 
 
+# Regression: large pages overran the fabric sender slot. float32, since bfloat16 never hit it.
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+def test_point_to_point_float32_page_over_max_payload(mesh_device):
+    test_point_to_point(mesh_device, ((1, 1, 32, 1280), ((0, 0), (0, 1)), ttnn.ROW_MAJOR_LAYOUT), torch.float32)
+
+
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 500000}], indirect=True
 )

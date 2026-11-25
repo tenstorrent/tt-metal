@@ -4,9 +4,19 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
+#include "internal/local_mem/address_access.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (the store drain below) is WH/BH only: Quasar's ckernel.h has no load_blocking,
+// and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar branch flushes
+// the written range with flush_l2_cache_range instead. Same guard as data_movement/common/kernels/common.hpp.
+#include "ckernel.h"
+#endif
 #include <algorithm>
+#include <cstdint>
 
 bool contains_element(uint32_t* arr, uint32_t size, uint32_t val) {
     return std::find(arr, arr + size, val) != arr + size;
@@ -14,27 +24,25 @@ bool contains_element(uint32_t* arr, uint32_t size, uint32_t val) {
 
 void kernel_main() {
     // Compile-time args
-    // arg 0: input (CB) page size in bytes — always the input shard row size
-    constexpr uint32_t in_page_size = get_compile_time_arg_val(0);
-    constexpr uint32_t index_size = get_compile_time_arg_val(1);
-    constexpr uint32_t elem_size = get_compile_time_arg_val(2);
-    constexpr bool is_last_dim = get_compile_time_arg_val(3) == 1;
-    constexpr auto dst_args = TensorAccessorArgs<4>();
+    // in_page_size: input (DFB) page size in bytes — always the input shard row size
+    constexpr uint32_t in_page_size = get_arg(args::in_page_size);
+    constexpr uint32_t index_size = get_arg(args::index_size);
+    constexpr uint32_t elem_size = get_arg(args::elem_size);
+    constexpr bool is_last_dim = get_arg(args::is_last_dim) == 1;
 
     // Run-time args
-    uint32_t output_buffer_address = get_arg_val<uint32_t>(0);
-    uint32_t start_row = get_arg_val<uint32_t>(1);
-    uint32_t end_row = get_arg_val<uint32_t>(2);
-    uint32_t num_rows_in_dim = get_arg_val<uint32_t>(3);
-    uint32_t dim_size = get_arg_val<uint32_t>(4);
-    uint32_t fill_value_ = get_arg_val<uint32_t>(5);
-    uint32_t in_col_shard_id = get_arg_val<uint32_t>(6);  // input col shard (last-dim bounds)
+    uint32_t start_row = get_arg(args::start_row);
+    uint32_t end_row = get_arg(args::end_row);
+    uint32_t num_rows_in_dim = get_arg(args::num_rows_in_dim);
+    uint32_t dim_size = get_arg(args::dim_size);
+    uint32_t fill_value_ = get_arg(args::fill_value);
+    uint32_t in_col_shard_id = get_arg(args::in_col_shard_id);  // input col shard (last-dim bounds)
     // Output write params (independent of input layout)
-    uint32_t out_col_shard_id = get_arg_val<uint32_t>(7);     // output col shard base index
-    uint32_t out_row_page_stride = get_arg_val<uint32_t>(8);  // output page stride per row
-    uint32_t out_col_byte_offset = get_arg_val<uint32_t>(9);  // byte offset within output page
-    uint32_t out_num_col_shards = get_arg_val<uint32_t>(10);  // output writes per input row
-    uint32_t out_write_size = get_arg_val<uint32_t>(11);      // bytes per output write
+    uint32_t out_col_shard_id = get_arg(args::out_col_shard_id);        // output col shard base index
+    uint32_t out_row_page_stride = get_arg(args::out_row_page_stride);  // output page stride per row
+    uint32_t out_col_byte_offset = get_arg(args::out_col_byte_offset);  // byte offset within output page
+    uint32_t out_num_col_shards = get_arg(args::out_num_col_shards);    // output writes per input row
+    uint32_t out_write_size = get_arg(args::out_write_size);            // bytes per output write
 
     // Derived
     static_assert(elem_size == 2 || elem_size == 4, "Unsupported elem_size");
@@ -52,26 +60,36 @@ void kernel_main() {
     IntType fill_value = static_cast<IntType>(fill_value_);
 
     Noc noc;
-    CircularBuffer cb_src(tt::CBIndex::c_0);
-    CircularBuffer cb_index(tt::CBIndex::c_1);
-    CircularBuffer cb_fill(tt::CBIndex::c_2);
+    DataflowBuffer dfb_src(dfb::src);
+    DataflowBuffer dfb_index(dfb::index);
+    Scratchpad<volatile IntType> fill_page(scratch::fill);
 
-    const auto s = TensorAccessor(dst_args, output_buffer_address);
+    const auto s = TensorAccessor(tensor::output);
 
     // Pre-fill a page in L1 with fill_value to avoid re-filling on every row.
-    cb_fill.reserve_back(onepage);
-    uint32_t fill_addr = cb_fill.get_write_ptr();
-    auto* fill_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(fill_addr);
     if constexpr (!is_last_dim) {
         for (uint32_t i = 0; i < row_size; ++i) {
-            fill_ptr[i] = fill_value;
+            fill_page[i] = fill_value;
         }
+        // The fill is baby-RISCV stores and the page is the NoC's source for every filled row below.
+        // A store can retire before its write-request lands in L1, and the RISCV core and the NoC are
+        // different L1 clients with no program-order guarantee between them
+        // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). Read back the last filled element so
+        // the fill is processed before the first NoC write is issued. Same construction as #50374.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // Quasar DM: the fill stores can sit in L1D/L2 while the NoC reads TL1. Flush the fill page (fences on
+        // both sides). Matches fill_rm_interleaved.cpp.
+        flush_l2_cache_range(
+            static_cast<uintptr_t>(local_mem::detail::AddressAccess::address(fill_page.local_mem())),
+            static_cast<size_t>(row_size * sizeof(IntType)));
+#else
+        (void)ckernel::load_blocking(&fill_page[row_size - 1]);
+#endif
     }
-    cb_fill.push_back(onepage);
 
     // Wait for index tensor to be available
-    cb_index.wait_front(onepage);
-    uint32_t index_addr = cb_index.get_read_ptr();
+    dfb_index.wait_front(onepage);
+    uint32_t index_addr = dfb_index.get_read_ptr();
     uint32_t* index_ptr = reinterpret_cast<uint32_t*>(index_addr);
 
     // Write output pages.
@@ -87,7 +105,7 @@ void kernel_main() {
         if (use_filled_page) {
             for (uint32_t kout = 0; kout < out_num_col_shards; ++kout) {
                 noc.async_write(
-                    cb_fill,
+                    fill_page,
                     s,
                     out_write_size,
                     {.offset_bytes = kout * out_write_size},
@@ -96,25 +114,40 @@ void kernel_main() {
             }
             noc.async_write_barrier();
         } else {
-            cb_src.wait_front(onepage);
-            uint32_t input_addr = cb_src.get_read_ptr();
+            dfb_src.wait_front(onepage);
+            uint32_t input_addr = dfb_src.get_read_ptr();
 
             // For last dim: fill only the columns this shard owns in the input page.
             // For INTERLEAVED/HEIGHT in → WIDTH/BLOCK out: col_start=0, row_size=full_N,
             // so all matching indices are filled before the page is split into output writes.
             if constexpr (is_last_dim) {
                 auto* input_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(input_addr);
+                volatile tt_l1_ptr IntType* last_written = nullptr;
                 for (uint32_t i = 0; i < index_size; ++i) {
                     uint32_t global_col = index_ptr[i];
                     if (global_col >= col_start && global_col < col_start + row_size) {
-                        input_ptr[global_col - col_start] = fill_value;
+                        last_written = input_ptr + (global_col - col_start);
+                        *last_written = fill_value;
                     }
+                }
+                // These are baby-RISCV stores into the page the NoC writes out immediately below; the
+                // store queue can still hold them when the NoC command is issued (MemoryOrdering.md).
+                // Read the last one back so all of them are processed first. Same construction as #50374.
+                if (last_written != nullptr) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+                    // Quasar DM: the read pointer may be the cached address; flush the input page so the NoC
+                    // sees the scattered elements (fences on both sides).
+                    flush_l2_cache_range(
+                        static_cast<uintptr_t>(input_addr), static_cast<size_t>(row_size * sizeof(IntType)));
+#else
+                    (void)ckernel::load_blocking(last_written);
+#endif
                 }
             }
 
             for (uint32_t kout = 0; kout < out_num_col_shards; ++kout) {
                 noc.async_write(
-                    cb_src,
+                    dfb_src,
                     s,
                     out_write_size,
                     {.offset_bytes = kout * out_write_size},
@@ -123,7 +156,10 @@ void kernel_main() {
             }
             noc.async_write_barrier();
 
-            cb_src.pop_front(onepage);
+            dfb_src.pop_front(onepage);
         }
     }
+
+    // Quasar's kernel-exit drain waits until every pushed entry has been popped.
+    dfb_index.pop_front(onepage);
 }

@@ -16,7 +16,6 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-#include <unistd.h>
 #include <climits>
 #include <cstdlib>
 #include <fstream>
@@ -27,9 +26,9 @@
 #include <filesystem>
 #include <vector>
 
-#include <umd/device/cluster.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-umd-workload/cluster.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"

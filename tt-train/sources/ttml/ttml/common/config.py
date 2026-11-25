@@ -292,15 +292,10 @@ def get_model_config(
     return model_config
 
 
-def get_multihost_config(
-    multihost_config_src: str,
-    configs_root: str = None,
-) -> MultiHostConfig:
-    """Load multihost configuration given its filename."""
-    if configs_root is None:
-        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/multihost_configs/"
-
-    multihost_config = load_config(multihost_config_src, configs_root)
-    multihost_config = MultiHostConfig(multihost_config)
-
-    return multihost_config
+def resolve_multihost_config(yaml_config: dict) -> MultiHostConfig:
+    """Multihost config of a full training config: the YAML that ``training_config.multihost_config`` points to,
+    or an empty (disabled) config if it is not set."""
+    tc = yaml_config.get("training_config", {})
+    if "multihost_config" in tc:
+        return MultiHostConfig(load_config(tc["multihost_config"]))
+    return MultiHostConfig({})

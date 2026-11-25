@@ -9,9 +9,9 @@
 #include <initializer_list>
 #include <optional>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "ttnn/tensor/tensor.hpp"  // ttnn::Tensor, tt::tt_metal::DataType
 
 namespace ttnn::prim {
@@ -132,6 +132,7 @@ int get_max_subblock(uint32_t n, uint32_t max_subblock_w);
 
 bool is_rectangle_grid(const std::vector<tt::tt_metal::CoreCoord>& core_coords);
 
+// Each output rectangle follows group order, from its low to its high corner.
 void split_and_form_rectangle_grids(
     std::vector<tt::tt_metal::CoreCoord>& group,
     std::vector<tt::tt_metal::CoreCoord>& mcast_group_first,

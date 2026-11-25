@@ -6,16 +6,16 @@
 #include <fmt/base.h>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "tt_metal/distributed/mesh_event_impl.hpp"
 #include <memory>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "allocator/allocator.hpp"
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device/device_manager.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
@@ -23,6 +23,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -56,7 +57,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
     uint32_t last_read_address = 0;
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     for (const DataMovementMode data_movement_mode : {DataMovementMode::READ, DataMovementMode::WRITE}) {
         auto start = std::chrono::system_clock::now();
@@ -242,7 +243,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
 TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const size_t num_buffers = 2;
     const uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));

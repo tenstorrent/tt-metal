@@ -5,10 +5,9 @@
 import time
 from typing import Optional
 
-from ttexalens.tt_exalens_lib import read_word_from_device
-
-from .device_io import (
+from ttexalens.tt_exalens_lib import (
     read_from_device,
+    read_word_from_device,
     write_to_device,
     write_words_to_device,
 )

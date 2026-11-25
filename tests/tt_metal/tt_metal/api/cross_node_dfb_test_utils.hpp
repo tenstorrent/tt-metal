@@ -13,16 +13,16 @@
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt_stl/assert.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
@@ -65,7 +65,8 @@ inline std::shared_ptr<Buffer> make_cross_node_data_buffer(
 }
 
 inline uint32_t data_pattern_for_write_primitive(uint32_t write_primitive) {
-    if (write_primitive == 1) {
+    // 1 (write_strided) and 6 (write_strided_and_push_back) scatter strided staging.
+    if (write_primitive == 1 || write_primitive == 6) {
         return static_cast<uint32_t>(SenderDataPattern::StridedPerReceiver);
     }
     if (write_primitive == 2 || write_primitive == 3) {

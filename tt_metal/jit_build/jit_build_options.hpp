@@ -4,17 +4,16 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <cstddef>
-#include <map>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "hlk_desc.hpp"
 #include <hostdevcommon/kernel_structs.h>
-#include <tt-metalium/face_geometry.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/data_formats/face_geometry.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 
 namespace tt::tt_metal {
 enum class MathFidelity : uint8_t;

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <tt-metalium/distributed.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 
 namespace tt::tt_metal::distributed {

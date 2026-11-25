@@ -7,8 +7,8 @@
 #include <vector>
 #include <map>
 
-#include <tt-metalium/device.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests::multihost_utils {

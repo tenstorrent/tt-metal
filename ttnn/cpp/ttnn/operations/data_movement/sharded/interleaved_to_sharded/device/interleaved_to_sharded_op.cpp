@@ -4,7 +4,7 @@
 
 #include "interleaved_to_sharded_op.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <ttnn/operation.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -19,8 +19,11 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return {false, "Operands to shard need to be on device!"};
     }
-    if (input_tensor.buffer() == nullptr) {
+    if (!input_tensor.is_allocated()) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
+    }
+    if (input_tensor.padded_shape()[-1] == 0) {
+        return {false, fmt::format("Input tensor width must be greater than 0, got shape {}", input_tensor.padded_shape())};
     }
 
     // Reject dtype/layout combinations that would hard-fail during tt::tt_metal::TensorSpec construction in compute_output_specs().
@@ -61,7 +64,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
         if (output_tensor.storage_type() != StorageType::DEVICE) {
             return {false, "Operands to shard need to be on device!"};
         }
-        if (output_tensor.buffer() == nullptr) {
+        if (!output_tensor.is_allocated()) {
             return {false, "Operands to shard need to be allocated in buffers on device!"};
         }
         if (output_tensor.device() != input_tensor.device()) {

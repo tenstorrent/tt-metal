@@ -30,6 +30,8 @@
 //                                             across clients              (default 0)
 //   TT_METAL_COMPILE_STRESS_CLIENT_ID       informational client tag      (default 0)
 //   TT_METAL_COMPILE_STRESS_OUTPUT          if set, path for JSON result
+//   TT_PERF_OUTPUT                          if set, path for the tests/perf
+//                                             contract result (compile_ms)
 //   TT_METAL_COMPILE_STRESS_T_ZERO_NS       harness-internal rendezvous;
 //                                             unix-epoch ns to sleep until
 //                                             after warmup                (default unset)
@@ -60,14 +62,15 @@
 #include <fmt/format.h>
 #include <tt_stl/span.hpp>
 
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/program/program_impl.hpp"
 #include "common/env_lib.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "perf/perf_contract.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -130,13 +133,14 @@ void sleep_until_unix_ns(uint64_t t_zero_ns) {
 }
 
 Program create_compute_program(
+    distributed::MeshDevice& mesh_device,
     CoreRange core_range,
     uint32_t single_tile_size,
     const std::string& kernel_path,
     uint32_t grid_x,
     uint32_t grid_y,
     ttsl::Span<const std::array<uint32_t, 2>> compile_args_slice) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     CircularBufferConfig cb_src =
         CircularBufferConfig(8 * single_tile_size, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
@@ -297,7 +301,7 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     // Warmup initialises JIT infrastructure and the remote-server connection.
     // UINT32_MAX as the id keeps this kernel's hash out of the production set.
     {
-        Program warmup = CreateProgram();
+        Program warmup = CreateProgram(*device);
         CircularBufferConfig cb0 =
             CircularBufferConfig(8 * single_tile_size, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
                 .set_page_size(tt::CBIndex::c_0, single_tile_size);
@@ -318,7 +322,8 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
         uint32_t id_end = std::min(id_begin + cores_per_program, target_num_kernels);
         auto slice =
             ttsl::Span<const std::array<uint32_t, 2>>(compile_args_per_kernel.data() + id_begin, id_end - id_begin);
-        programs.push_back(create_compute_program(all_cores, single_tile_size, kernel_path, grid_x, grid_y, slice));
+        programs.push_back(
+            create_compute_program(*device, all_cores, single_tile_size, kernel_path, grid_x, grid_y, slice));
     }
 
     // T_ZERO rendezvous: harness sets a wall-clock target so all clients enter
@@ -383,6 +388,14 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
         };
         write_result_json(output_path, result);
         log_info(LogTest, "Wrote stress result JSON to {}", output_path);
+    }
+
+    const std::string perf_output_path = tt::parse_env<std::string>("TT_PERF_OUTPUT", "");
+    if (!perf_output_path.empty()) {
+        tt::perf::write_result(
+            perf_output_path,
+            {{"compile_ms", {"ms", tt::perf::Better::Lower, tt::perf::Aggregate::Min}}},
+            {{fmt::format("compile/num_kernels:{}", target_num_kernels), {{"compile_ms", total_elapsed_ms}}}});
     }
 
     ASSERT_EQ(static_cast<uint32_t>(programs.size()), num_programs);

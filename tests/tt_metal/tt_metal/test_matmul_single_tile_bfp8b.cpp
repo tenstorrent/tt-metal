@@ -8,10 +8,10 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
@@ -21,7 +21,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(UnitMeshFixture, MatmulSingleTileBfp8b) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     CoreCoord core = {0, 0};
 

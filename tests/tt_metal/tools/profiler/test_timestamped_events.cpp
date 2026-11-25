@@ -7,9 +7,10 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -24,7 +25,7 @@ void RunFillUpAllBuffers(
     // Mesh workload + device range span the mesh; program encapsulates kernels
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr int loop_size = 200;
     constexpr int enqueue_times = 2;

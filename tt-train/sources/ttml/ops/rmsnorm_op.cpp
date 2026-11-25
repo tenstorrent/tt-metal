@@ -13,7 +13,6 @@
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
-#include "core/compute_kernel_config.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -23,46 +22,76 @@
 
 namespace ttml::ops {
 
-autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::TensorPtr &gamma, float epsilon) {
-    auto a_shape = tensor->get_value().logical_shape();
-    if (a_shape.rank() != 4) {
+namespace {
+
+std::optional<ttnn::Tensor> get_value_or_nullopt(const autograd::TensorPtr &tensor) {
+    return tensor != nullptr ? std::make_optional(tensor->get_value()) : std::nullopt;
+}
+
+// `gate` is null for the plain RMSNorm.
+autograd::TensorPtr rmsnorm_impl(
+    const autograd::TensorPtr &input,
+    const autograd::TensorPtr &gamma,
+    const autograd::TensorPtr &gate,
+    float epsilon,
+    autograd::PreferredPrecision input_precision) {
+    if (input->get_shape().rank() != 4U) {
         throw std::runtime_error("rmsnorm only supports rank-4 input tensors.");
     }
 
-    auto ashape_arr = a_shape.to_array_4D();
-    [[maybe_unused]] auto [B, N, S, C] = ashape_arr;
-
-    // one gain parameter per channel
-    assert((gamma->get_value().logical_shape().to_array_4D() == std::array<uint32_t, 4>{1, 1, 1, C}));
-
-    auto rmsnorm_fw_result = ttml::metal::rmsnorm_fw(tensor->get_value(), gamma->get_value(), true, epsilon);
+    auto rmsnorm_fw_result = ttml::metal::rmsnorm_fw(
+        input->get_value(input_precision),
+        gamma->get_value(),
+        /* return_intermediates */ true,
+        epsilon,
+        get_value_or_nullopt(gate));
     if (rmsnorm_fw_result.size() != 2U) {
         throw std::runtime_error(fmt::format(
             "rmsnorm_fw returned an unexpected number of tensors. Expected 2, got {}", rmsnorm_fw_result.size()));
     }
 
-    auto rms_a = rmsnorm_fw_result[1].value();
+    auto rms = rmsnorm_fw_result[1].value();
     auto out = autograd::create_tensor(rmsnorm_fw_result[0].value());
 
-    autograd::GradFunction grad = [tensor, gamma, out, rms_a]() {
-        auto dL_dout = out->get_grad();
-
-        auto grads = ttml::metal::rmsnorm_bw(tensor->get_value(), gamma->get_value(), rms_a, dL_dout);
-
-        if (grads.size() != 2U) {
+    autograd::GradFunction grad = [input, gamma, gate, out, rms, input_precision]() {
+        auto grads = ttml::metal::rmsnorm_bw(
+            input->get_value(input_precision),
+            gamma->get_value(),
+            rms,
+            out->get_grad(),
+            /* compute_dgamma */ gamma->get_requires_grad(),
+            get_value_or_nullopt(gate));
+        if (grads.size() != 3U) {
             throw std::runtime_error("rmsnorm_bw returned unexpected number of gradients");
         }
-        if (grads[0].has_value()) {
-            tensor->add_grad(grads[0].value());
-        }
+
+        input->add_grad(grads[0].value());
         if (grads[1].has_value()) {
             gamma->add_grad(grads[1].value());
         }
+        if (gate != nullptr) {
+            gate->add_grad(grads[2].value());
+        }
     };
 
-    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, input, gamma, gate));
 
     return out;
+}
+
+}  // namespace
+
+autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::TensorPtr &gamma, float epsilon) {
+    return rmsnorm_impl(tensor, gamma, /* gate */ nullptr, epsilon, autograd::PreferredPrecision::HALF);
+}
+
+autograd::TensorPtr gated_rmsnorm(
+    const autograd::TensorPtr &input,
+    const autograd::TensorPtr &gate,
+    const autograd::TensorPtr &gamma,
+    float epsilon) {
+    // The kernels take an fp32 input directly and unpack it as tf32, so it is not cast to bf16 first.
+    return rmsnorm_impl(input, gamma, gate, epsilon, autograd::PreferredPrecision::NATIVE);
 }
 
 autograd::TensorPtr rmsnorm_composite(
@@ -214,12 +243,7 @@ autograd::TensorPtr rmsnorm_composite(
             none,
             none,
             none);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast); checked by add_grad
-        auto dL_dg = ttnn::sum(
-            dL_dg_components,
-            /* dim_arg */ ttsl::SmallVector<int>{0, 1, 2},
-            /* keep_dim */ true,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise());  // [B,1,S,C] -> [1,1,1,C]
+        auto dL_dg = ttnn_fixed::sum_over_leading_dims(dL_dg_components);  // [B,1,S,C] -> [1,1,1,C]
 
         gamma->add_grad(dL_dg);
     };

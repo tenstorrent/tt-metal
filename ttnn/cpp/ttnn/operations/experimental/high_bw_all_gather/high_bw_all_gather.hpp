@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -33,7 +33,11 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
     uint32_t gathered_slab_global = 0,
     const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt);
+    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt,
+    // Full-mesh mode (cluster_axis == nullopt) only: the mesh axis that is OUTERMOST in the gathered
+    // order. 0 = row-major (rank r*cols + c), 1 = column-major (rank c*rows + r). A caller whose shards
+    // are laid out SP-major passes its sp_axis.
+    uint32_t full_mesh_outer_axis = 0);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 

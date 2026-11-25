@@ -4,21 +4,22 @@
 
 #pragma once
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <cstdint>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "gtest/gtest.h"
 #include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/device.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
 
@@ -79,7 +80,6 @@ protected:
 
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
 class UnitMeshCQEventFixture : public UnitMeshCQFixture {};
@@ -181,7 +181,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     std::map<int, std::shared_ptr<distributed::MeshDevice>> reserved_devices_;
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
@@ -247,7 +246,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 
@@ -360,7 +358,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     size_t num_devices_{};
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);

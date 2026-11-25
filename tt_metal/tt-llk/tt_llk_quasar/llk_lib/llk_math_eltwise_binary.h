@@ -14,28 +14,6 @@ using namespace ckernel::trisc;
 using namespace ckernel::math;
 
 /**
- * @brief Get the padded destination footprint of one binary operand face.
- *
- * @param tensor_shape: Shape shared by both operands.
- * @return Rows occupied by one face, including the sparse eight-row minimum.
- */
-constexpr std::uint32_t _eltwise_binary_rows_per_face_(const ckernel::TensorShape& tensor_shape)
-{
-    return tensor_shape.face_r_dim * tiny_face_stride(tensor_shape);
-}
-
-/**
- * @brief Get the destination stride between binary output tiles.
- *
- * @param tensor_shape: Shape shared by both operands.
- * @return Destination rows occupied by all faces, including padding.
- */
-constexpr std::uint32_t _eltwise_binary_dest_rows_per_tile_(const ckernel::TensorShape& tensor_shape)
-{
-    return tensor_shape.total_num_faces() * _eltwise_binary_rows_per_face_(tensor_shape);
-}
-
-/**
  * @brief Build the encoded FPU instruction (ELWADD/ELWSUB/ELWMUL) for the given binary op type.
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
@@ -117,9 +95,8 @@ inline void eltwise_di_binary_func(
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_mop_config_(const MathFidelitySchedule fidelity, const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
-    const std::uint32_t rows_per_mop_run =
-        (reuse_dest != EltwiseBinaryReuseDestType::NONE) ? _eltwise_binary_rows_per_face_(tensor_shape) : _eltwise_binary_dest_rows_per_tile_(tensor_shape);
-    const bool high_fidelity = fidelity.phase_count > 1;
+    const std::uint32_t rows_per_mop_run = (reuse_dest != EltwiseBinaryReuseDestType::NONE) ? padded_face_rows(tensor_shape) : padded_tile_rows(tensor_shape);
+    const bool high_fidelity             = fidelity.phase_count > 1;
     // HiFi phases accumulate partial products, including with dest reuse; overwrite mode handles the first phase separately.
     const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : (high_fidelity ? 1u : 0u);
 
@@ -165,7 +142,7 @@ inline void _llk_math_eltwise_binary_mop_config_(const MathFidelitySchedule fide
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE>
 inline void _llk_math_eltwise_di_binary_mop_config_(const MathFidelitySchedule fidelity, const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
-    const std::uint32_t total_num_rows_per_tile = _eltwise_binary_dest_rows_per_tile_(tensor_shape);
+    const std::uint32_t total_num_rows_per_tile = padded_tile_rows(tensor_shape);
     const std::uint32_t REPLAY_BUF_LEN          = total_num_rows_per_tile >> rows_log2(ELTWISE_MATH_ROWS);
     LLK_ASSERT(REPLAY_BUF_LEN > 0, "Eltwise binary replay must consume at least one group of rows");
     const std::uint32_t MOP_INNER_LOOP = fidelity.phase_count;
@@ -299,7 +276,8 @@ inline void _llk_math_eltwise_di_binary_addrmod_(const MathFidelitySchedule fide
  * @note @ref _llk_math_eltwise_binary_ runs the configured op with matching template args.
  * @note Pass the source register formats: for ELWMUL, init lowers the fidelity to the highest one they can use and skips phases they
  *       cannot use. Run init again whenever either format changes.
- * @note Use full-height faces for destination reuse and for four-face tiles.
+ * @note Use full-height faces for four-face tiles, and for single-face tiles with destination reuse; destination reuse derives its
+ *       per-face dest-to-source moves from the tile shape.
  */
 template <
     EltwiseBinaryType ELTWISE_BINARY_TYPE,
@@ -313,11 +291,12 @@ inline void _llk_math_eltwise_binary_init_(
         MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi || ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL,
         "Math fidelity larger than LoFi only works with Eltwise MUL");
     const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
-    LLK_ASSERT(
-        reuse_dest == EltwiseBinaryReuseDestType::NONE || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary destination reuse requires 16-row faces");
     LLK_ASSERT(tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary four-face tiles require 16-row faces");
+    LLK_ASSERT(
+        reuse_dest == EltwiseBinaryReuseDestType::NONE || tensor_shape.total_num_faces() != 1 || tensor_shape.face_r_dim == MAX_FACE_R_DIM,
+        "Eltwise binary destination reuse requires 16-row faces for single-face tiles");
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_init_", tensor_shape);
-    _set_tile_shape_idx_gpr_(_eltwise_binary_dest_rows_per_tile_(tensor_shape));
+    _set_tile_shape_idx_gpr_(padded_tile_rows(tensor_shape));
 
     if constexpr (ENABLE_DIRECT_INDEXING)
     {
@@ -362,9 +341,10 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckerne
 
     if constexpr (reuse_dest != EltwiseBinaryReuseDestType::NONE)
     {
+        const std::uint32_t face_dest_rows = padded_face_rows(tensor_shape);
         for (std::uint32_t face_num = 0; face_num < tensor_shape.total_num_faces(); face_num++)
         {
-            eltwise_binary_reuse_dest_as_src<reuse_dest>();
+            eltwise_binary_reuse_dest_as_src<reuse_dest>(face_dest_rows);
             ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
         }
     }

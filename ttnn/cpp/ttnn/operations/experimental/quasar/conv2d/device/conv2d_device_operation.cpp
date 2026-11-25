@@ -11,13 +11,13 @@
 #include <cstdlib>
 #include <optional>
 #include <utility>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
-#include <tt-metalium/work_split.hpp>
-#include "tt-metalium/shape.hpp"
+#include <tt-metalium/utils/work_split.hpp>
+#include "tt-metalium/vocabulary/shape.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -26,6 +26,7 @@
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim::qsr {
 
@@ -107,7 +108,7 @@ tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
             tt::tt_metal::MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
         return tt::tt_metal::TensorSpec(
             tilized_shape,
-            tt::tt_metal::TensorLayout(
+            tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
                 args.dtype,
                 tt::tt_metal::PageConfig(Layout::TILE),
                 mem_config,
@@ -149,7 +150,7 @@ tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
             args.memory_config.memory_layout(), args.memory_config.buffer_type(), shard_spec);
         return tt::tt_metal::TensorSpec(
             output_shape,
-            tt::tt_metal::TensorLayout(
+            tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
                 args.dtype,
                 tt::tt_metal::PageConfig(output_layout),
                 mem_config,
@@ -161,7 +162,7 @@ tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
     }
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             args.dtype,
             tt::tt_metal::PageConfig(output_layout),
             args.memory_config,

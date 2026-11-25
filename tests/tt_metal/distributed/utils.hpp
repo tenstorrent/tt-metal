@@ -5,15 +5,15 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <memory>
 #include <unordered_set>
 #include <vector>
 #include <string>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/program.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshBuffer;
@@ -29,6 +29,7 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
     std::vector<std::shared_ptr<MeshBuffer>>& output_bufs);
 
 std::vector<std::shared_ptr<Program>> create_random_programs(
+    MeshDevice& mesh_device,
     uint32_t num_programs,
     CoreCoord worker_grid_size,
     uint32_t seed,
@@ -39,7 +40,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
 // If unique_per_program is true, each program gets a unique compile-time arg (program_id),
 // forcing recompilation. If false, all programs are identical (same binary can be reused).
 std::vector<std::unique_ptr<Program>> create_benchmark_programs(
-    uint32_t num_programs, CoreCoord worker_grid_size, bool unique_per_program = true);
+    MeshDevice& mesh_device, uint32_t num_programs, CoreCoord worker_grid_size, bool unique_per_program = true);
 
 // RAII guard for managing a single environment variable
 class ScopedEnvVar {

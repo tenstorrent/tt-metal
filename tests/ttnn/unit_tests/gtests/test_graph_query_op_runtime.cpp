@@ -9,10 +9,11 @@
 #include <tuple>
 
 #include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_query_op_runtime.hpp"
@@ -24,7 +25,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "common/tt_backend_api_types.hpp"
 
 namespace ttnn::operations::binary::test {

@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <utility>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "layernorm_types.hpp"
 

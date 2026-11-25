@@ -5,21 +5,22 @@
 #pragma once
 
 #include "command_queue_fixture.hpp"
-#include "env_lib.hpp"
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include "common/env_lib.hpp"
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <gtest/gtest.h>
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -95,7 +96,7 @@ protected:
         const bool simple_kernel = false,
         KernelProperties kernel_properties = KernelProperties()) {
         if (device_->arch() != ARCH::QUASAR) {
-            Program program = CreateProgram();
+            Program program = CreateProgram(*device_);
             this->create_kernel(program, kernel_core_type, simple_kernel, kernel_properties);
             return program;
         }
@@ -388,7 +389,7 @@ private:
                 .target_nodes = cores,
             }},
         };
-        Program program = MakeProgramFromSpec(*device_, spec);
+        Program program(*device_, spec);
 
         if (!unique_rt_args.empty() || !common_rt_args.empty()) {
             ProgramRunArgs run_args;
@@ -400,7 +401,7 @@ private:
             }
             kernel_run_args.advanced_options.common_runtime_varargs = common_rt_args;
             run_args.kernel_run_args.push_back(std::move(kernel_run_args));
-            SetProgramRunArgs(program, run_args);
+            program.set_program_run_args(run_args);
         }
         return program;
     }
@@ -513,7 +514,7 @@ private:
             TT_FATAL(core_type == CoreType::ETH, "Unsupported core type");
             std::set<CoreRange> core_ranges;
             const std::unordered_set<CoreCoord> active_eth_cores =
-                this->device_->get_devices()[0]->get_active_ethernet_cores(true);
+                this->device_->impl().get_devices()[0]->get_active_ethernet_cores(true);
             TT_FATAL(!active_eth_cores.empty(), "No active ethernet cores detected");
             for (CoreCoord eth_core : active_eth_cores) {
                 core_ranges.emplace(eth_core);

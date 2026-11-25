@@ -13,8 +13,8 @@
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 namespace ttnn {
 

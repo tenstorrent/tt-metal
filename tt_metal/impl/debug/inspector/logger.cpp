@@ -7,8 +7,9 @@
 #include "impl/debug/inspector/types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/mesh_device_view_impl.hpp"
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <iomanip>
 #include <chrono>
 
@@ -171,6 +172,7 @@ void Logger::log_mesh_socket_created(
         mesh_sockets_ostream << "- mesh_socket_created:\n";
         mesh_sockets_ostream << "    id: " << reinterpret_cast<uintptr_t>(config_buffer) << "\n";
         mesh_sockets_ostream << "    is_sender: " << (socket_data.is_sender ? "true" : "false") << "\n";
+        mesh_sockets_ostream << "    peer_is_host: " << (socket_data.peer_is_host ? "true" : "false") << "\n";
         mesh_sockets_ostream << "    config_buffer_address: " << socket_data.config_buffer_address << "\n";
         mesh_sockets_ostream << "    data_buffer_address: " << socket_data.data_buffer_address << "\n";
         mesh_sockets_ostream << "    fifo_size: " << socket_data.fifo_size << "\n";
@@ -181,7 +183,7 @@ void Logger::log_mesh_socket_created(
             mesh_sockets_ostream << "      - chip_id: " << core_data.chip_id << "\n";
             mesh_sockets_ostream << "        fabric_chip_id: " << core_data.core.fabric_chip_id << "\n";
             mesh_sockets_ostream << "        core: [" << core_data.core.core_x << ", " << core_data.core.core_y << "]\n";
-            mesh_sockets_ostream << "        peers:\n";
+            mesh_sockets_ostream << "        peers:" << (core_data.peers.empty() ? " []" : "") << "\n";
             for (const auto& peer : core_data.peers) {
                 mesh_sockets_ostream << "          - fabric_chip_id: " << peer.fabric_chip_id << "\n";
                 mesh_sockets_ostream << "            core: [" << peer.core_x << ", " << peer.core_y << "]\n";
@@ -343,7 +345,7 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
         if (mesh_device) {
             mesh_devices_ostream << "    devices: [";
             bool first = true;
-            for (const auto& device : mesh_device->get_view().get_devices()) {
+            for (const auto& device : mesh_device->get_view().impl().get_devices()) {
                 if (!first) {
                     mesh_devices_ostream << ", ";
                 }

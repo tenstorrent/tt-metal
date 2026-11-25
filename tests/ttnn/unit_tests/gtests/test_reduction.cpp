@@ -22,8 +22,8 @@
 #include <vector>
 
 #include <tt_stl/small_vector.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -905,7 +905,7 @@ TEST_F(ReductionSmoke, ProdLastDim) {
 
 TEST_F(ReductionSmoke, CumsumLastDim) {
     auto& device = *device_;
-    // rank - dim < 4 takes the reshape + permute-to-dim-0 path.
+    // bf16 along W: scans the tiles in place, without permuting W to dim 0.
     constexpr int h = 32, w = 64;
     const auto input = ttnn::ones(ttnn::Shape{1, 1, h, w}, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     const auto output = ttnn::cumsum(input, -1);

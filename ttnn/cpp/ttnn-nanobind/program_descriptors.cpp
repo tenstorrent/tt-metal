@@ -28,10 +28,10 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 NB_MAKE_OPAQUE(std::vector<tt::tt_metal::UnpackToDestMode>);
@@ -434,6 +434,15 @@ void py_module_types(nb::module_& mod) {
             "address_offset",
             &tt::tt_metal::CBDescriptor::address_offset,
             "Byte offset from buffer base address for CB placement (default 0)")
+        .def_prop_rw(
+            "globally_allocated_bound_later",
+            [](const tt::tt_metal::CBDescriptor& self) {
+                return self.experimental_options.globally_allocated_bound_later;
+            },
+            [](tt::tt_metal::CBDescriptor& self, bool value) {
+                self.experimental_options.globally_allocated_bound_later = value;
+            },
+            "EXPERIMENTAL: globally allocated CB whose buffer or tensor a later descriptor names (default False)")
         .def(
             "has_buffer",
             [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <string>
 #include <enchantum/enchantum.hpp>
+#include <tt_stl/cleanup.hpp>
 #include <tt_stl/fmt.hpp>
 #include <limits>
 #include <optional>
@@ -16,10 +17,10 @@
 #include "metal_env_impl.hpp"
 #include "metal_context.hpp"
 #include "device/device_manager.hpp"
-#include "distributed/mesh_device_impl.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
-#include "profiler_state_manager.hpp"
+#include "impl/drisc_service/seat_lock.hpp"
+#include "impl/profiler/profiler_state_manager.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
@@ -29,8 +30,8 @@
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/mesh_graph.hpp>
-#include <distributed_context.hpp>
-#include <system_mesh.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_context.hpp"
@@ -59,6 +60,12 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
     if (rtoptions_->is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_->get_custom_fabric_mesh_graph_desc_path();
     }
+
+    // Pick up the launcher's mesh binding (TT_MESH_ID / TT_MESH_HOST_RANK) from env/rtoptions
+    fabric_desc_.mesh_id = rtoptions_->get_fabric_mesh_id();
+    fabric_desc_.host_rank = rtoptions_->get_fabric_mesh_host_rank();
+    fabric_mesh_id_ = fabric_desc_.mesh_id;
+    fabric_host_rank_ = fabric_desc_.host_rank;
 
     // Initialize distributed context
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
@@ -103,7 +110,9 @@ bool MetalEnvImpl::check_use_count_zero() const {
 
 llrt::RunTimeOptions& MetalEnvImpl::get_rtoptions() { return *rtoptions_; }
 const Hal& MetalEnvImpl::get_hal() { return *hal_; }
+const Hal& MetalEnvImpl::get_hal() const { return *hal_; }
 Cluster& MetalEnvImpl::get_cluster() { return *cluster_; }
+const Cluster& MetalEnvImpl::get_cluster() const { return *cluster_; }
 const MetalEnvDescriptor& MetalEnvImpl::get_descriptor() const { return descriptor_; }
 
 namespace {
@@ -136,6 +145,25 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
         req,
         res);
     return res.dram_programmable_cores;
+}
+
+// Takes the seat lock of every DRAM core metal programs and resets, so no DRISC service can start on one while this
+// env exists. Returns the first seat another process holds, holding none; otherwise holds them all in `held`.
+std::optional<std::string> hold_dram_core_seats(
+    const Cluster& cluster, std::vector<internal::drisc_service::SeatLock>& held) {
+    for (const ChipId chip : cluster.all_chip_ids()) {
+        const uint64_t asic_id = cluster.get_unique_chip_ids().at(chip);
+        for (const CoreCoord& core : cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::NOC0)) {
+            auto lock = internal::drisc_service::SeatLock::try_acquire_exclusive(
+                {.asic_id = asic_id, .noc0_x = static_cast<uint32_t>(core.x), .noc0_y = static_cast<uint32_t>(core.y)});
+            if (!lock.has_value()) {
+                held.clear();
+                return fmt::format("chip {} DRAM core {} (ASIC {})", chip, core.str(), asic_id);
+            }
+            held.push_back(std::move(*lock));
+        }
+    }
+    return std::nullopt;
 }
 
 // The qsr.s1 emulator model only routes device NoC traffic through the boot-programmed
@@ -192,6 +220,24 @@ void MetalEnvImpl::initialize_base_objects() {
     // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
     // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
     const bool is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();
+    bool enable_dram_cores = should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_);
+    if (enable_dram_cores && platform_arch == tt::ARCH::BLACKHOLE &&
+        cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
+        if (const auto busy = hold_dram_core_seats(*this->cluster_, this->dram_core_seat_locks_)) {
+            TT_FATAL(
+                !this->rtoptions_->get_blackhole_dram_programmable_cores_override().has_value(),
+                "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1, but another process (a DRISC service client or "
+                "metal) holds the seat of {}, which metal would reset. Unset the variable to run with the DRAM "
+                "programmable cores off.",
+                *busy);
+            log_warning(
+                tt::LogMetal,
+                "Another process (a DRISC service client or metal) holds the seat of {}; disabling Blackhole DRAM "
+                "programmable cores for this process",
+                *busy);
+            enable_dram_cores = false;
+        }
+    }
     this->hal_ = std::make_unique<Hal>(
         platform_arch,
         is_base_routing_fw_enabled,
@@ -199,8 +245,13 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
-        this->rtoptions_->get_eth_ptp_trace());
+        enable_dram_cores,
+        this->rtoptions_->get_eth_ptp_trace(),
+        // just take the descriptor of the first device
+        this->cluster_->get_quasar_ip_variant());
+    if (platform_arch == tt::ARCH::QUASAR) {
+        log_info(tt::LogMetal, "Quasar IP variant: {}", this->cluster_->get_quasar_ip_variant());
+    }
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());
@@ -235,7 +286,7 @@ tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return f
 
 uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const { return num_fabric_active_routing_planes_; }
 
-void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
+void MetalEnvImpl::configure_fabric(const FabricSettings& fabric) {
     // The control plane is the first object built from the fabric configuration, so its existence marks the
     // configuration as committed.
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
@@ -270,6 +321,8 @@ void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
     fabric_udm_mode_ = fabric.fabric_udm_mode;
     fabric_manager_ = fabric.fabric_manager;
     fabric_router_config_ = fabric.router_config;
+    fabric_mesh_id_ = fabric.mesh_id;
+    fabric_host_rank_ = fabric.host_rank;
 }
 
 namespace {
@@ -343,6 +396,25 @@ bool MetalEnvImpl::set_fabric_config(
             enchantum::to_string(fabric_config));
     }
 
+    // On failure, restore the previous config; the next control plane access rebuilds from it.
+    auto rollback = ttsl::make_cleanup([this,
+                                        prev_fabric_config = fabric_config_,
+                                        prev_reliability_mode = fabric_reliability_mode_,
+                                        prev_tensix_config = fabric_tensix_config_,
+                                        prev_udm_mode = fabric_udm_mode_,
+                                        prev_manager = fabric_manager_,
+                                        prev_router_config = fabric_router_config_,
+                                        prev_routing_planes = num_fabric_active_routing_planes_]() {
+        fabric_config_ = prev_fabric_config;
+        fabric_reliability_mode_ = prev_reliability_mode;
+        fabric_tensix_config_ = prev_tensix_config;
+        fabric_udm_mode_ = prev_udm_mode;
+        fabric_manager_ = prev_manager;
+        fabric_router_config_ = prev_router_config;
+        num_fabric_active_routing_planes_ = prev_routing_planes;
+        control_plane_.reset();
+    });
+
     force_reinit_ = true;
 
     // Export channel trimming capture data before fabric config changes.
@@ -372,6 +444,7 @@ bool MetalEnvImpl::set_fabric_config(
                 "Got num_routing_planes while disabling fabric, ignoring it and disabling all active routing planes");
         }
 
+        std::move(rollback).cancel();
         this->teardown_fabric_config();
         return false;
     }
@@ -386,6 +459,7 @@ bool MetalEnvImpl::set_fabric_config(
             "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override",
             num_routing_planes.value(),
             this->num_fabric_active_routing_planes_);
+        std::move(rollback).cancel();
         return false;
     }
 
@@ -424,6 +498,9 @@ bool MetalEnvImpl::set_fabric_config(
         }
         system_mesh_.reset();
         this->initialize_control_plane_impl();
+    } else if (this->fabric_config_ == tt_fabric::FabricConfig::MGD_DEFAULT) {
+        // Resolve now so the routing setup below sees the concrete config.
+        this->get_control_plane();
     }
 
     // Active tt-fabric: refresh routing tables (control plane rebuild is not enough).
@@ -431,6 +508,7 @@ bool MetalEnvImpl::set_fabric_config(
         this->initialize_fabric_config();
     }
 
+    std::move(rollback).cancel();
     return true;
 }
 
@@ -462,10 +540,17 @@ void MetalEnvImpl::initialize_fabric_config() {
         return;
     }
 
-    this->get_cluster().configure_ethernet_cores_for_fabric_routers(
-        this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& cp = this->get_control_plane();
-    cp.configure_routing_tables_for_fabric_ethernet_channels();
+    if (cp.fabric_uses_flat_addressing()) {
+        // Horizon (QUASAR arch + HORIZON variant): no Ethernet fabric routers.
+        // Routing tables are built from crossbar flat addresses via get_flat_address().
+        cp.configure_routing_tables_for_fabric_flat_address();
+    } else {
+        // WH/BH/Quasar: Ethernet-based routing.
+        this->get_cluster().configure_ethernet_cores_for_fabric_routers(
+            this->fabric_config_, this->num_fabric_active_routing_planes_);
+        cp.configure_routing_tables_for_fabric_ethernet_channels();
+    }
 }
 
 void MetalEnvImpl::initialize_fabric_tensix_datamover_config(const tt_fabric::FabricTensixSessionInputs& inputs) {
@@ -560,12 +645,7 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             *distributed_context_,
             mesh_graph_desc_path.string(),
             logical_mesh_chip_id_to_physical_chip_id_mapping_,
-            this->fabric_config_,
-            this->fabric_reliability_mode_,
-            this->fabric_tensix_config_,
-            this->fabric_udm_mode_,
-            this->fabric_router_config_,
-            this->fabric_manager_);
+            this->control_plane_config());
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
             get_cluster(),
@@ -573,13 +653,9 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             get_hal(),
             *distributed_context_,
             mesh_graph_desc_path.string(),
-            this->fabric_config_,
-            this->fabric_reliability_mode_,
-            this->fabric_tensix_config_,
-            this->fabric_udm_mode_,
-            this->fabric_router_config_,
-            this->fabric_manager_);
+            this->control_plane_config());
     }
+    fabric_config_ = control_plane_->get_fabric_config();
 }
 
 void MetalEnvImpl::construct_control_plane() {
@@ -592,16 +668,21 @@ void MetalEnvImpl::construct_control_plane() {
     }
     log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
     control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-        get_cluster(),
-        *rtoptions_,
-        get_hal(),
-        *distributed_context_,
-        this->fabric_config_,
-        this->fabric_reliability_mode_,
-        this->fabric_tensix_config_,
-        this->fabric_udm_mode_,
-        this->fabric_router_config_,
-        this->fabric_manager_);
+        get_cluster(), *rtoptions_, get_hal(), *distributed_context_, this->control_plane_config());
+    fabric_config_ = control_plane_->get_fabric_config();
+}
+
+FabricSettings MetalEnvImpl::control_plane_config() const {
+    return FabricSettings{
+        .fabric_config = fabric_config_,
+        .reliability_mode = fabric_reliability_mode_,
+        .num_routing_planes = num_fabric_active_routing_planes_,
+        .fabric_tensix_config = fabric_tensix_config_,
+        .fabric_udm_mode = fabric_udm_mode_,
+        .fabric_manager = fabric_manager_,
+        .router_config = fabric_router_config_,
+        .mesh_id = fabric_mesh_id_,
+        .host_rank = fabric_host_rank_};
 }
 
 // ─── System mesh ──────────────────────────────────────────────────────────────
@@ -727,134 +808,38 @@ MetalEnv::~MetalEnv() {
 
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
 
-void MetalEnv::configure_fabric(const FabricConfigDescriptor& fabric) { impl_->configure_fabric(fabric); }
+void MetalEnv::configure_fabric(const FabricSettings& fabric) { impl_->configure_fabric(fabric); }
 
-const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
-    return impl_->get_fabric_config_descriptor();
-}
+const FabricSettings& MetalEnv::get_fabric_settings() const { return impl_->get_fabric_settings(); }
 
-tt::ARCH MetalEnv::get_arch() const { return impl_->get_cluster().arch(); }
-std::string MetalEnv::get_arch_name() const { return tt::get_string_lowercase(get_arch()); }
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
 uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }
-uint32_t MetalEnv::get_l1_size() const {
+
+MetalDeviceProperties MetalEnv::get_device_properties() const { return MetalDeviceProperties(*impl_); }
+
+tt::ARCH MetalDeviceProperties::arch() const { return impl_->get_cluster().arch(); }
+std::string MetalDeviceProperties::arch_name() const { return tt::get_string_lowercase(arch()); }
+uint32_t MetalDeviceProperties::node_local_mem_size() const {
     return impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
 }
-uint32_t MetalEnv::get_dram_alignment() const { return impl_->get_hal().get_alignment(HalMemType::DRAM); }
-uint32_t MetalEnv::get_l1_alignment() const { return impl_->get_hal().get_alignment(HalMemType::L1); }
-uint32_t MetalEnv::get_num_dataflow_buffers() const { return impl_->get_hal().get_num_dataflow_buffers(); }
-uint32_t MetalEnv::get_max_worker_l1_unreserved_size() const {
-    size_t l1_end = impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
-                    impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-    return l1_end - impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+uint32_t MetalDeviceProperties::dram_alignment() const { return impl_->get_hal().get_alignment(HalMemType::DRAM); }
+uint32_t MetalDeviceProperties::node_local_mem_alignment() const {
+    return impl_->get_hal().get_alignment(HalMemType::L1);
 }
-float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
-float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
-float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
+uint32_t MetalDeviceProperties::num_dataflow_buffers() const { return impl_->get_hal().get_num_dataflow_buffers(); }
+uint32_t MetalDeviceProperties::max_worker_node_local_mem_unreserved_size() const {
+    const Hal& hal = impl_->get_hal();
+    size_t node_local_mem_end = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+                                hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    return node_local_mem_end - hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+}
+float MetalDeviceProperties::sfpu_eps() const { return impl_->get_hal().get_eps(); }
+float MetalDeviceProperties::sfpu_nan() const { return impl_->get_hal().get_nan(); }
+float MetalDeviceProperties::sfpu_inf() const { return impl_->get_hal().get_inf(); }
 
 distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);
     return impl_->get_system_mesh();
-}
-
-namespace {
-
-// Destroys a context created here if it never reaches the mesh device that takes ownership of it.
-// Inert when the env owns the context. https://github.com/tenstorrent/tt-metal/issues/57286
-class TransitContextGuard {
-public:
-    TransitContextGuard(ContextId context_id, bool env_owns_context) {
-        if (!env_owns_context) {
-            context_id_ = context_id;
-        }
-    }
-    TransitContextGuard(const TransitContextGuard&) = delete;
-    TransitContextGuard& operator=(const TransitContextGuard&) = delete;
-    ~TransitContextGuard() {
-        if (context_id_.has_value()) {
-            MetalContext::destroy_instance(/*check_device_count=*/false, *context_id_);
-        }
-    }
-    bool holds_context() const { return context_id_.has_value(); }
-    void release() { context_id_.reset(); }
-
-private:
-    std::optional<ContextId> context_id_;
-};
-
-}  // namespace
-
-std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
-    const distributed::MeshDeviceConfig& config, const CreateMeshDeviceOptions& options) {
-    // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
-    // TODO: Remove this and directly pass in the MetalEnv reference
-    // If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
-    // (its lifetime is tied to the env). Otherwise create one here and let the mesh device tear it down on
-    // close, preserving the legacy create_mesh_device-only behavior.
-    const bool env_owns_context = impl_->has_registered_context();
-    ContextId context_id =
-        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
-    TransitContextGuard context_guard(context_id, env_owns_context);
-    auto mesh_device = distributed::MeshDeviceImpl::create(
-        context_id,
-        config,
-        options.l1_small_size,
-        options.trace_region_size,
-        options.num_command_queues,
-        options.dispatch_core_config,
-        /*l1_bank_remap=*/{},
-        options.worker_l1_size);
-    if (context_guard.holds_context()) {
-        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
-        context_guard.release();
-    }
-    return mesh_device;
-}
-
-std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh(
-    ChipId device_id, const CreateMeshDeviceOptions& options) {
-    const bool env_owns_context = impl_->has_registered_context();
-    ContextId context_id =
-        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
-    TransitContextGuard context_guard(context_id, env_owns_context);
-    auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
-        context_id,
-        device_id,
-        options.l1_small_size,
-        options.trace_region_size,
-        options.num_command_queues,
-        options.dispatch_core_config,
-        /*l1_bank_remap=*/{},
-        options.worker_l1_size);
-    if (context_guard.holds_context()) {
-        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
-        context_guard.release();
-    }
-    return mesh_device;
-}
-
-std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
-    ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options) {
-    const bool env_owns_context = impl_->has_registered_context();
-    ContextId context_id =
-        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
-    TransitContextGuard context_guard(context_id, env_owns_context);
-    auto result = distributed::MeshDeviceImpl::create_unit_meshes(
-        context_id,
-        std::vector<ChipId>(device_ids.begin(), device_ids.end()),
-        options.l1_small_size,
-        options.trace_region_size,
-        options.num_command_queues,
-        options.dispatch_core_config,
-        /*l1_bank_remap=*/{},
-        options.worker_l1_size);
-    if (context_guard.holds_context() && !result.empty()) {
-        const auto& parent = result.begin()->second->get_parent_mesh();
-        TT_FATAL(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
-        parent->impl().set_destroy_metal_context_instance_on_close(true);
-        context_guard.release();
-    }
-    return result;
 }
 
 }  // namespace tt::tt_metal

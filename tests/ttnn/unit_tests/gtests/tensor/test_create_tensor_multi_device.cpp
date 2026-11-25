@@ -8,7 +8,7 @@
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/operations/creation/creation.hpp"
@@ -48,7 +48,7 @@ TEST_F(MultiDeviceTensorCreationTest, Empty) {
 TEST_F(MultiDeviceTensorCreationTest, EmptyLike) {
     MeshDevice* mesh_device = this->mesh_device_.get();
 
-    ASSERT_FALSE(mesh_device->get_devices().empty());
+    ASSERT_FALSE(mesh_device->get_device_ids().empty());
 
     const Tensor tensor = ttnn::empty(
         ttnn::Shape({32, 32}),
@@ -96,7 +96,7 @@ TEST_F(MultiDeviceTensorCreationTest, Full) {
 TEST_F(MultiDeviceTensorCreationTest, FullLike) {
     MeshDevice* mesh_device = this->mesh_device_.get();
 
-    ASSERT_FALSE(mesh_device->get_devices().empty());
+    ASSERT_FALSE(mesh_device->get_device_ids().empty());
 
     Tensor tensor = ttnn::empty(
         ttnn::Shape({32, 32}),
@@ -129,7 +129,7 @@ TEST_F(MultiDeviceTensorCreationTest, FullLike) {
 TEST_F(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
     MeshDevice* mesh_device = this->mesh_device_.get();
 
-    ASSERT_FALSE(mesh_device->get_devices().empty());
+    ASSERT_FALSE(mesh_device->get_device_ids().empty());
 
     Tensor tensor = ttnn::empty(
         ttnn::Shape({32, 32}),

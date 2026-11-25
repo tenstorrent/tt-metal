@@ -10,6 +10,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -19,10 +20,11 @@ from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    TILE_COUNT,
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, MAX_FACE_ELEMENTS, MAX_TILE_ELEMENTS
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def generate_specific_stimuli(input_dimensions, r_dim, data_format):
@@ -87,6 +89,11 @@ def test_pack_untilize(
     input_dimensions,
     r_dim,
     dest_sync,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
@@ -118,38 +125,46 @@ def test_pack_untilize(
     )
     # print_stimuli_and_golden(src_A, golden_tensor, input_dimensions, r_dim)
 
-    configuration = TestConfig(
-        "sources/dense_pack_untilize_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(
-                input_dimensions,
-                input_dimensions,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/dense_pack_untilize_test.cpp",
+            formats=formats,
+            templates=[
+                generate_input_dim(
+                    input_dimensions,
+                    input_dimensions,
+                ),
+                DEST_SYNC(dest_sync),
+            ],
+            runtimes=[
+                NUM_FACES(4),
+                IN_TILE_DIMS(r_dim, 32, 32, 32),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+                TILE_COUNT(tile_cnt_A),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+                sfpu=False,
             ),
-            DEST_SYNC(dest_sync),
-        ],
-        runtimes=[
-            NUM_FACES(4),
-            IN_TILE_DIMS(r_dim, 32, 32, 32),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            sfpu=False,
+            dest_acc=dest_acc,
+            unpack_to_dest=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
     # Since input and output shapes are identical we always specify r_dim of 16 for stimulus
     # because stimulus must have 4 faces and 16 is only valid r_dim for 4 faces
     # In output for smaller actual r_dims lower portion is unused and therefore truncated
@@ -166,12 +181,56 @@ def test_pack_untilize(
         ]
     ).tolist()
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+@skip_for_wormhole
+def test_dense_pack_untilize_remap_state_restore():
+    formats = input_output_formats([DataFormat.Float16_b])[0]
+    input_dimensions = [32, 32]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=StimuliSpec.uniform(low=0.0, high=1.0),
+        spec_B=StimuliSpec.uniform(low=0.0, high=1.0),
+    )
+
+    outcome = TestConfig(
+        test_name="sources/dense_pack_untilize_remap_restore_test.cpp",
+        formats=formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            DEST_SYNC(DestSync.Half),
+        ],
+        runtimes=[
+            NUM_FACES(4),
+            IN_TILE_DIMS(16, 32, 32, 32),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            sfpu=False,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    ).run()
+
+    result = result_tensor(
+        outcome.result[:MAX_TILE_ELEMENTS], formats.output_format, src_A
+    )
+    assert passed_test(
+        src_A, result, formats.output_format
+    ), "plain datacopy after dense untilize did not preserve linear Dest addressing"

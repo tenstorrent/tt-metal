@@ -5,9 +5,9 @@
 #include "slice_write.hpp"
 #include "device/slice_write_device_operation.hpp"
 #include <tt_stl/assert.hpp>
-#include "tt-metalium/constants.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -56,6 +56,7 @@ ttnn::Tensor slice_write(
     bool empty = false;
     for (size_t i = 0; i < ends.size(); ++i) {
         TT_FATAL(ends[i] >= begins[i], "End {} must be greater than or equal to start {}", ends[i], begins[i]);
+        TT_FATAL(step[i] > 0, "Step must be greater than 0, got {} in dim {}", step[i], i);
         uint32_t offset = step[i] - begins[i] - 1;
         uint32_t dim_size = (ends[i] + offset) / step[i];
         empty |= dim_size == 0;

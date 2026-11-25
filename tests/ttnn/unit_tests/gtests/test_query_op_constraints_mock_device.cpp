@@ -12,15 +12,15 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/mesh_config.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "device/mock_device_util.hpp"
 
@@ -51,7 +51,7 @@ protected:
         mock_env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
             .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
         auto mesh_shape = mock_env_->get_system_mesh().shape();
-        mock_device_ = mock_env_->create_mesh_device(distributed::MeshDeviceConfig(mesh_shape));
+        mock_device_ = distributed::MeshDevice::open_mesh_device(*mock_env_, distributed::MeshDeviceConfig(mesh_shape));
         ASSERT_GT(mock_device_->num_devices(), 0u);
 
         // Constraint queries run ops in NORMAL mode, which enqueues a MeshWorkload. With the program
@@ -866,14 +866,14 @@ protected:
 
     void SetUp() override {
         silicon_env_ = std::make_unique<MetalEnv>();
-        real_device_ =
-            silicon_env_->create_mesh_device(distributed::MeshDeviceConfig(silicon_env_->get_system_mesh().shape()));
+        real_device_ = distributed::MeshDevice::open_mesh_device(
+            *silicon_env_, distributed::MeshDeviceConfig(silicon_env_->get_system_mesh().shape()));
         ASSERT_GT(real_device_->num_devices(), 0u);
 
         mock_env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
             .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
-        mock_device_ =
-            mock_env_->create_mesh_device(distributed::MeshDeviceConfig(mock_env_->get_system_mesh().shape()));
+        mock_device_ = distributed::MeshDevice::open_mesh_device(
+            *mock_env_, distributed::MeshDeviceConfig(mock_env_->get_system_mesh().shape()));
         ASSERT_EQ(mock_device_->num_devices(), 1u);
     }
 

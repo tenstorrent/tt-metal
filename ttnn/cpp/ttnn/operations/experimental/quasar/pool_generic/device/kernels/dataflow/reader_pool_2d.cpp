@@ -42,8 +42,11 @@ template <
     bool zero_pages,
     uint32_t in_cb_sz,
     uint32_t bf16_init_value,
-    uint32_t MAX_TILES_PER_REDUCTION>
-ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
+    uint32_t MAX_TILES_PER_REDUCTION,
+    typename InDFB,
+    typename ClearDFB>
+ALWI void read_kernel_with_top_left_index(
+    InDFB& in_cb, ClearDFB& clear_cb, uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
@@ -52,8 +55,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
 
-    DataflowBuffer in_cb(in_cb_id);
-    DataflowBuffer clear_cb(clear_value_cb_id);
     Noc noc;
     UnicastEndpoint self_ep;
 
@@ -88,13 +89,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 constexpr uint32_t tail_elems = (num_tilized_rows - total_elems_to_reduce) * row_stride_elems;
                 fill_with_val(
                     in_cb.get_write_ptr() + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
-#ifdef ARCH_QUASAR
-                // Quasar sim coherency: write back the CPU-store tail fill so compute's TL1 read of in_cb's
-                // pad rows sees the init value (not stale L1). Same reason as the window-copy write-back.
-                flush_l2_cache_range(
-                    static_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
-                    static_cast<size_t>(tail_elems) * 2);
-#endif
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -102,34 +96,12 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
-#ifdef ARCH_QUASAR
-                // Quasar sim: a local self-loopback NOC read (self_ep, src_coord==dst_coord) into in_cb drops
-                // data / reads stale SRAM. The window gather is a same-core L1->L1 copy, so do it with a direct
-                // RISC copy for reliable data. read_offset and the in_cb write ptr are L1-aligned (>=16B) and
-                // read_bytes is L1-aligned, so a uint32 word copy is safe. (NOTE: the 64c-after-32c failure is
-                // NOT this path -- CPU and NOC reads BOTH see the same wrong TL1 data at base, so the input
-                // tensor's L1 data is genuinely stale after 32c, a host-upload/L1-alloc issue, not the gather.)
-                {
-                    volatile tt_l1_ptr uint32_t* rp_src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_offset);
-                    volatile tt_l1_ptr uint32_t* rp_dst =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb.get_write_ptr() + write_offset);
-                    const uint32_t rp_nwords = (read_bytes * w_multiple) >> 2;
-                    for (uint32_t rp_i = 0; rp_i < rp_nwords; ++rp_i) {
-                        rp_dst[rp_i] = rp_src[rp_i];
-                    }
-                    // Write back the CPU-store copy to TL1 so the compute unpack (which reads in_cb from TL1)
-                    // sees it. Without this, compute reduces stale/zero in_cb.
-                    flush_l2_cache_range(
-                        reinterpret_cast<uintptr_t>(rp_dst), static_cast<size_t>(read_bytes * w_multiple));
-                }
-#else
                 noc.async_read(
                     self_ep,
                     in_cb,
                     read_bytes * w_multiple,
                     experimental::local_addr(read_offset),
                     {.offset_bytes = write_offset});
-#endif
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
                 if constexpr (tilize_reconfig) {
@@ -280,6 +252,7 @@ void kernel_main() {
          interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
+    DataflowBuffer in_cb(in_cb_id);
     DataflowBuffer clear_value_cb(clear_value_cb_id);
     DataflowBuffer in_scalar_cb(in_scalar_cb_id);
     DataflowBuffer in_shard_cb(in_shard_cb_id);
@@ -304,25 +277,15 @@ void kernel_main() {
     // cursor; no push — compute's census binding never waits)
     if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-#ifdef ARCH_QUASAR
-        // CPU-store fill; clear_out_tiles later NoC-reads this tile from SRAM — write it back
-        // (same as the scalar init below).
-        flush_l2_cache_range(
-            static_cast<uintptr_t>(clear_value_cb.get_write_ptr()), static_cast<size_t>(TILE_HEIGHT * TILE_WIDTH) * 2);
-#endif
         // for average pool the boundary fill in the large-kernel loop covers it, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
             // Clear the WHOLE in_cb ring with the pool identity (-inf for max, 0 for avg — a zero
             // fill is only valid for non-negative inputs). A thread's ring entries are strided, so
-            // every thread recovers the ring base and idempotently fills it all. Direct CPU fill +
-            // flush: clear_out_tiles' NoC self-loopback read is unreliable on the Quasar sim.
-            DataflowBuffer icb_clear(in_cb_id);
-            const uint32_t icb_base = icb_clear.get_write_ptr() - get_my_thread_id() * icb_clear.get_entry_size();
-            const uint32_t clear_bytes = icb_clear.get_entry_size() * multi_buffering_factor * get_num_threads();
+            // every thread recovers the ring base and idempotently fills it all. Direct CPU fill:
+            // clear_out_tiles' NoC self-loopback read is unreliable on the Quasar sim.
+            const uint32_t icb_base = in_cb.get_write_ptr() - get_my_thread_id() * in_cb.get_entry_size();
+            const uint32_t clear_bytes = in_cb.get_entry_size() * multi_buffering_factor * get_num_threads();
             fill_with_val(icb_base, clear_bytes / 2, bf16_init_value);
-#ifdef ARCH_QUASAR
-            flush_l2_cache_range(static_cast<uintptr_t>(icb_base), static_cast<size_t>(clear_bytes));
-#endif
         }
     }
 
@@ -332,11 +295,6 @@ void kernel_main() {
         // values for the remaining faces will be reused from the first one. This is safe here because there’s no
         // difference between the first and second face.
         fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
-#ifdef ARCH_QUASAR
-        // Quasar sim coherency: the reduce scalar is a CPU-store fill through the DM L1/L2 cache, but the
-        // compute reduce reads it directly from TL1; write back so compute doesn't multiply by a STALE scalar.
-        flush_l2_cache_range(static_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
-#endif
         in_scalar_cb.push_back(1);
     }
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
@@ -449,7 +407,7 @@ void kernel_main() {
                 zero_pages,
                 in_cb_sz,
                 bf16_init_value,
-                max_tiles_per_reduction>(ind, in_l1_read_base_addr);
+                max_tiles_per_reduction>(in_cb, clear_value_cb, ind, in_l1_read_base_addr);
 #if ENABLE_DEBUG_PRINT == 1
             // [DIAG] Peek THIS reader's just-filled input CB (reader is producer; on DM get_read_ptr still
             // points at the base page it filled, before compute pops). Tilized face0 row0 = first 16
@@ -457,9 +415,7 @@ void kernel_main() {
             // reader1's in_cb_1 reads 0 while reader0's in_cb_0 reads 1..16, the split reader1 input feed
             // is the bug (not the pack). Only the first stick is reliable (rd_ptr stays at base after).
             if (stick_idx == my_lane) {
-                DataflowBuffer in_cb_peek(in_cb_id);
-                volatile tt_l1_ptr uint16_t* ip =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_cb_peek.get_read_ptr());
+                volatile tt_l1_ptr uint16_t* ip = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_cb.get_read_ptr());
                 // face0 = tilized rows 0..15, each row = 16 channels; ip[r*16+0] = row r channel 0.
                 // Window rows (the 9 sticks) should read the input value (channel 0 -> 1); cleared/tail
                 // rows read the pool identity (-inf). Shows whether reader1 fills its window rows at all.
@@ -489,21 +445,9 @@ void kernel_main() {
                 // NoC self-loopback async_read: on HW both are correct, but the sim's per-stick self-loopback
                 // read under multi-core load silently drops/duplicates sticks (the zero-write + adjacent-dup
                 // artifacts). A straight L1 copy is race-free and HW-faithful.
-                //
-                // COHERENCY: the compute packer wrote this stick's reduced row directly to Tensix L1 (TL1),
-                // bypassing this DM core's private L1 D$ / shared L2. The scratch CB is single-buffered, so
-                // its L1 line address is constant across sticks: after the first read caches it, every later
-                // read hits the STALE cached copy (all sticks would read stick 0's result). On HW the reader
-                // must invalidate any address another agent wrote before reading it (invalidate_l1_cache() is
-                // a no-op on Quasar DM). Invalidate the scratch row's L2+L1D lines so the load re-fetches the
-                // freshly packed data from TL1. The prior NoC-read path avoided this because the NoC engine
-                // reads TL1 directly (non-snooping), never through the DM cache. Arch-split: Quasar (tt-2xx)
-                // has invalidate_l2_cache_range; WH/BH have no L2, so invalidate_l1_cache() (equivalent effect).
-#ifdef ARCH_QUASAR
-                invalidate_l2_cache_range(scratch_row0_addr, out_row_bytes);
-#else
+                // The packer wrote this row behind the reader's back: drop any cached copy before reading it
+                // (BH L1 cache; on Quasar DM get_read_ptr() is already the uncached alias).
                 invalidate_l1_cache();
-#endif
                 const uint32_t out_dst_addr = out_shard_cb.get_write_ptr() - my_lane * out_shard_cb.get_entry_size() +
                                               global_stick * out_row_bytes;
                 volatile tt_l1_ptr uint32_t* src_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_row0_addr);
@@ -511,14 +455,6 @@ void kernel_main() {
                 for (uint32_t w = 0; w < out_row_bytes >> 2; ++w) {
                     dst_w[w] = src_w[w];
                 }
-                // Write-back the copied output row to TL1 so the host device->host read-back (and any NoC
-                // consumer) sees it, not this DM core's cached copy. Without this the output stick keeps its
-                // pre-kernel stale L1 -> the got.max=2.0 leak. Write-side analog of the scratch invalidate
-                // above and the in_cb write-back in read_kernel_with_top_left_index. (Quasar tt-2xx L2; WH/BH
-                // have no L2 so the write is already visible to the NoC engine.)
-#ifdef ARCH_QUASAR
-                flush_l2_cache_range(reinterpret_cast<uintptr_t>(dst_w), static_cast<size_t>(out_row_bytes));
-#endif
                 // limited to the first few global sticks to avoid flooding/crashing the dprint server.
                 // Distinct sensible values per stick => compute/reduce/pack is fine and the bug is in the
                 // out-copy/assembly; constant/garbage (e.g. 2.0) => compute-side or a fixed/stale read.

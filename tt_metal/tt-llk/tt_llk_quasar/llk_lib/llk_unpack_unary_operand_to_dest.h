@@ -8,89 +8,108 @@
 
 #include "ckernel_trisc_common.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::trisc;
 
 /**
- * @brief Reset the unpack thread's DEST bank tracking to bank 0 at the start of a program.
+ * @brief DEST rows one tile of tensor_shape spans: the per-tile stride math and pack use for the shape.
  *
- * Unpack owns the DEST section base in the unpack-to-dest path: it is the DEST producer (UNP_DEST), so it programs the
- * per-TRISC section base itself rather than letting the math middleman set it on its behalf. TriscID::Unpack selects the
- * same SEC slot the UNP_DEST client reads, regardless of which TRISC this code is compiled for. This establishes the
- * bank-0 base; the section handshake's @ref _llk_sync_advance_dest_section_ flips it per section in SyncHalf
- * (per-section sequence at @ref _llk_unpack_unary_operand_to_dest_init_).
+ * A 4-face tile spans 64 rows. A tiny tile is laid out one face per 8-row slot at least, so 1x32..8x32 span 16 rows,
+ * 16x32 32, as DstTileShape sizes them (get_dest_tile_size_log2); 16x16 spans 16 and 32x16 32.
  *
- * @note Call once per program before the first @ref _llk_unpack_unary_operand_to_dest_init_, never from a per-op init: op writers may
- *       re-run the per-op init inside their tile loop, and a reset there would pin unpack to bank 0 while pack keeps
- *       alternating banks. Pair with @ref _llk_math_pack_sync_init_ (T1) and @ref _llk_pack_dest_init_ (T2). The one
- *       exception is the unpack_to_dest compatibility arm of @ref _llk_unpack_unary_operand_init_, which keeps the per-init
- *       reset its unported callers rely on.
+ * @param tensor_shape: Tile shape
  */
-inline void _llk_unpack_dest_init_()
+constexpr std::uint32_t _llk_unpack_to_dest_tile_rows_(const TensorShape& tensor_shape)
 {
-    _reset_dest_register_offset_();
-    _set_dest_section_base_<to_underlying(TriscID::Unpack)>(_get_dest_buffer_base_());
+    return tensor_shape.total_num_faces() * tensor_shape.face_r_dim * tiny_face_stride(tensor_shape);
+}
+
+/**
+ * @brief UNP_DEST tile counter value for DEST tile dst_tile_idx of the current bank.
+ *
+ * In units of the buffer descriptor's tile: a 4-face tile is one descriptor tile of 64 rows, a tiny tile is described
+ * one face per descriptor tile of face_r_dim rows, so the index is scaled the way the pack side scales its source index
+ * (@ref _llk_pack_). The DEST bank is part of the index: the SEC base registers do not move UNPACR_DEST.
+ *
+ * @param tensor_shape: Tile shape
+ * @param dst_tile_idx: DEST tile index, relative to the current section base
+ */
+inline std::uint32_t _llk_unpack_to_dest_dst_tile_counter_(const TensorShape& tensor_shape, const std::uint32_t dst_tile_idx)
+{
+    if (tensor_shape.total_num_faces() == NUM_FACES)
+    {
+        return _llk_unpack_dest_bank_tile_offset_() + dst_tile_idx;
+    }
+    const std::uint32_t tiles_per_tile = tensor_shape.total_num_faces() * tiny_face_stride(tensor_shape);
+    return (_get_dest_buffer_base_() >> rows_log2(tensor_shape.face_r_dim)) + dst_tile_idx * tiles_per_tile;
+}
+
+/**
+ * @brief UNP_A source tile counter value for L1 tile l1_tile_idx: a tiny tile is one descriptor tile per face.
+ *
+ * @param tensor_shape: Tile shape
+ * @param l1_tile_idx: Index into the L1 buffer of the tile
+ */
+constexpr std::uint32_t _llk_unpack_to_dest_src_tile_counter_(const TensorShape& tensor_shape, const std::uint32_t l1_tile_idx)
+{
+    return tensor_shape.total_num_faces() == NUM_FACES ? l1_tile_idx : l1_tile_idx * tensor_shape.total_num_faces();
 }
 
 /**
  * @brief MOP configuration for unpacking one tile of a single operand directly into the math DEST register (UNP_DEST).
  *
- * One UNPACR_DEST per run. Both the L1 and DEST tile counters auto-increment (Src/Dst_Tile_Idx_Inc = 1), so back-to-back
- * runs land consecutive tiles at consecutive DEST positions. No dvalid is set: the UNPACK_MATH / MATH_PACK section
- * handshake takes its place (per-section sequence at @ref _llk_unpack_unary_operand_to_dest_init_).
+ * One UNPACR_DEST per descriptor tile: one per run for a 4-face tile, one per face for a tiny tile. Both the L1 and
+ * DEST tile counters auto-increment, the DEST one by tiny_face_stride so faces shorter than 8 rows take 8-row slots,
+ * the layout the pack side reads (@ref _llk_pack_mop_config_); back-to-back runs land consecutive tiles at consecutive
+ * DEST positions. The caller handles synchronization. This MOP does not set dvalid.
  *
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is stored in the buffer descriptor table;
- *        allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ *        the fixed per-engine BFD id (ckernel_buf_desc.h)
+ * @param tensor_shape: Tile shape the descriptor was programmed with
  */
-inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t buf_desc_id)
+inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
 {
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
-    constexpr std::uint32_t MOP_INNER_LOOP = 1;
+    const std::uint32_t MOP_INNER_LOOP     = tensor_shape.total_num_faces() == NUM_FACES ? 1 : tensor_shape.total_num_faces();
 
-    const std::uint32_t unpack_tile_instrn = TT_OP_UNPACR_DEST_TILE_INC(1 /*Dst_Tile_Idx_Inc*/, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
+    const std::uint32_t unpack_tile_instrn =
+        TT_OP_UNPACR_DEST_TILE_INC(tiny_face_stride(tensor_shape) /*Dst_Tile_Idx_Inc*/, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
     temp.program_bank0_sw_cntl(instrn_buffer);
 }
 
 /**
- * @brief Initializes the unpacker to unpack a single operand directly into the math DEST register, synchronized with
- *        math and pack through the UNPACK_MATH / MATH_PACK semaphores.
+ * @brief Initializes the unpacker to unpack a single operand directly into a borrowed DEST section.
  *
- * Unpack-to-dest counterpart of @ref _llk_unpack_unary_operand_init_ (llk_unpack_unary_operand.h). The two families are
- * independent: this one owns its MOP (@ref _llk_unpack_unary_operand_to_dest_mop_config_) and its DEST handshake is the
- * semaphore protocol of the section calls rather than dest-dvalid. The unpack_to_dest = true arm of the unary operand
- * family is a compatibility path for callers not yet ported (the tt-llk test infra and fuser): it keeps that family's
- * init-sized MOP and brackets one @ref _llk_unpack_unary_operand_to_dest_tile_ run with the section handshake itself;
- * new callers use this family directly.
+ * Like @ref _llk_unpack_unary_operand_init_, but writes to DEST instead of SrcA or SrcB. This path has its own MOP,
+ * configured by @ref _llk_unpack_unary_operand_to_dest_mop_config_. Use either the borrowing handshake or the Dest
+ * dvalid handshake to synchronize access to DEST, as described below.
  *
- * Per-op init: programs the transpose config and the MOP only. It does not touch the DEST bank tracking, so it is
- * safe to call inside a tile loop; the once-per-program bank reset lives in @ref _llk_unpack_dest_init_.
+ * This init programs only the transpose config and the MOP. It leaves the DEST bank tracking unchanged, so it can
+ * run inside a tile loop. Call @ref _llk_unpack_dest_init_ once per program to reset the bank tracking.
  *
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is stored in the buffer descriptor table;
- *        allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
- * @note Transpose is forced off for both unpacker engines: UNP_DEST does not support it. Tiny tiles are not supported.
- * @note Math thread (T1) contract: math runs no datacopy MOP here (skip @ref _llk_math_eltwise_unary_datacopy_init_); it
- *       only forwards UNPACK_MATH into MATH_PACK. Seed both semaphores on T1 before the first call:
- *       @ref _llk_math_pack_sync_init_ covers MATH_PACK only, so also call @ref _llk_sync_init_ (semaphore::UNPACK_MATH,
- *       N, 0) with the same N (1 for SyncFull, 2 for SyncHalf). Per section, T1 waits on UNPACK_MATH (@ref _llk_sync_wait_),
- *       does its work, posts MATH_PACK (@ref _llk_sync_post_) and only then gets UNPACK_MATH (@ref _llk_sync_get_), so the
- *       section stays counted in one of the two semaphores from unpack write to pack release. T1 never flips the
- *       section base (unpack owns it, see @ref _llk_unpack_dest_init_).
- * @note @ref _llk_unpack_dest_init_ must have run once on this thread before the first call. Per section on this
- *       thread: @ref _llk_sync_wait_ STALL_ON_MAX on MATH_PACK and UNPACK_MATH (a DEST bank is free), any number of
- *       @ref _llk_unpack_unary_operand_to_dest_tile_ / @ref _llk_unpack_unary_operand_to_dest_block_, then, behind an
- *       UNPACK0 drain, @ref _llk_sync_post_ UNPACK_MATH; SyncHalf: flip the section base
- *       (@ref _llk_sync_advance_dest_section_). The unpack_to_dest arm of @ref _llk_unpack_unary_operand_ runs this
- *       sequence inline; tt-metal runs it in tile_regs_acquire / tile_regs_commit (llk_unpack_wait_for_dest_available /
- *       llk_unpack_dest_section_done, quasar llk_unpack_common_api.h).
+ *        the fixed per-engine BFD id (ckernel_buf_desc.h)
+ * @param tensor_shape: Tile shape the descriptor was programmed with (Continuous L1 access); defaults to 32x32. Tiny
+ *        tiles land at the DEST layout the pack side reads (@ref _llk_unpack_to_dest_tile_rows_); pass the same shape
+ *        to the tile / block calls.
+ * @note Transpose is forced off for both unpacker engines: UNP_DEST does not support it.
+ * @note With semaphores, MATH or PACK lends its section through _llk_tile_regs_borrow_<FROM, UNPACK>.
+ *       Both threads must call borrow before the tile or block operations and _llk_tile_regs_return_ afterward.
+ *       The lender provides the exact base, so unpack does not switch banks on its own. The lender keeps ownership
+ *       through MATH_PACK and advances its bank through the normal commit or release call after the loan ends.
+ * @note Standalone tests can use the Dest dvalid handshake instead. Call @ref _llk_unpack_dest_init_ once and keep
+ *       the software bank offset at zero. Do not call @ref _llk_unpack_dest_section_advance_, since Dest dvalid
+ *       switches the bank in hardware. Finish each section with @ref _llk_unpack_dest_dvalid_section_done_.
  */
-inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc_id)
+inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
-    _llk_unpack_unary_operand_to_dest_mop_config_(buf_desc_id);
+    _llk_unpack_unary_operand_to_dest_mop_config_(buf_desc_id, tensor_shape);
 }
 
 /**
@@ -102,14 +121,17 @@ inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc
  *
  * @param l1_tile_idx: Index into the L1 buffer of the tile
  * @param dst_tile_idx: DEST tile index, relative to the current section base. Must be below the section's tile capacity
- *        for the sync mode and DEST width, see @ref get_dest_max_tiles. The pack thread reads the tile back from the same index.
+ *        for the sync mode, DEST width and tile shape (@ref get_dest_max_tiles, @ref _llk_unpack_to_dest_tile_rows_).
+ *        The pack thread reads the tile back from the same index.
+ * @param tensor_shape: Tile shape passed to @ref _llk_unpack_unary_operand_to_dest_init_; defaults to 32x32
  * @note Call @ref _llk_unpack_unary_operand_to_dest_init_ before this function.
  */
-inline void _llk_unpack_unary_operand_to_dest_tile_(const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx)
+inline void _llk_unpack_unary_operand_to_dest_tile_(
+    const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx, const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
-    // UNP_DEST is driven off the UNP_A bank's counters.
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
-    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, dst_tile_idx);
+    // UNP_DEST is driven off the UNP_A bank's counters, in descriptor tiles (see the counter helpers above).
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, _llk_unpack_to_dest_src_tile_counter_(tensor_shape, l1_tile_idx));
+    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, _llk_unpack_to_dest_dst_tile_counter_(tensor_shape, dst_tile_idx));
     ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 }
 
@@ -125,20 +147,27 @@ inline void _llk_unpack_unary_operand_to_dest_tile_(const std::uint32_t l1_tile_
  * @param dst_tile_idx: DEST tile index of the first tile, relative to the current section base. The pack thread reads
  *        the tiles back from the same indices.
  * @param num_tiles: Tiles in the block. dst_tile_idx + num_tiles must not exceed the section's tile capacity for the
- *        sync mode and DEST width, see @ref get_dest_max_tiles.
+ *        sync mode, DEST width and tile shape (@ref get_dest_max_tiles, @ref _llk_unpack_to_dest_tile_rows_).
  * @param l1_tile_stride: L1 tiles between consecutive tiles of the block: 1 for a contiguous block, the DFB stride when
  *        the buffer interleaves the entries of several threads (tt-metal #56194).
+ * @param tensor_shape: Tile shape passed to @ref _llk_unpack_unary_operand_to_dest_init_; defaults to 32x32
  * @note Call @ref _llk_unpack_unary_operand_to_dest_init_ before this function.
  */
 inline void _llk_unpack_unary_operand_to_dest_block_(
-    const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx, const std::uint32_t num_tiles, const std::uint32_t l1_tile_stride = 1)
+    const std::uint32_t l1_tile_idx,
+    const std::uint32_t dst_tile_idx,
+    const std::uint32_t num_tiles,
+    const std::uint32_t l1_tile_stride = 1,
+    const TensorShape& tensor_shape    = DEFAULT_TENSOR_SHAPE)
 {
-    // UNP_DEST is driven off the UNP_A bank's counters. The DEST counter auto-increments per tile; the L1 counter is set
-    // per tile, since consecutive tiles of a strided buffer are l1_tile_stride entries apart.
-    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, dst_tile_idx);
+    // UNP_DEST is driven off the UNP_A bank's counters, in descriptor tiles (see the counter helpers above). The DEST
+    // counter auto-increments one tile per run; the L1 counter is set per tile, since consecutive tiles of a strided
+    // buffer are l1_tile_stride entries apart.
+    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, _llk_unpack_to_dest_dst_tile_counter_(tensor_shape, dst_tile_idx));
     for (std::uint32_t i = 0; i < num_tiles; i++)
     {
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx + i * l1_tile_stride);
+        TT_SET_SRC_TILE_FACE_ROW_IDX(
+            p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, _llk_unpack_to_dest_src_tile_counter_(tensor_shape, l1_tile_idx + i * l1_tile_stride));
         ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     }
 }

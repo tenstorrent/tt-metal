@@ -6,7 +6,12 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from ..format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_MAGNITUDE, DataFormat
+from ..format_config import (
+    FOUR_BIT_INTEGER_RANGE,
+    MX_FORMAT_MAX_NORMAL,
+    MX_FORMAT_MIN_MAGNITUDE,
+    DataFormat,
+)
 from ..llk_params import format_dict
 from ..tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -49,6 +54,8 @@ def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
     integer paths use sign-magnitude encoding, and the INT_MIN bit pattern cannot
     be represented correctly in that scheme.
     """
+    if stimuli_format in FOUR_BIT_INTEGER_RANGE:
+        return FOUR_BIT_INTEGER_RANGE[stimuli_format]
     if stimuli_format not in _INTEGER_FORMAT_DTYPE:
         raise ValueError(f"Unsupported integer format: {stimuli_format}")
 
@@ -846,3 +853,19 @@ def apply_log_uniform_magnitudes(
     values = signs * magnitudes
     values = torch.clamp(values, -max_magnitude, max_magnitude)
     return values.to(format_dict[cast_to_format])
+
+
+def signed_cancelling_operands(
+    src_A: torch.Tensor, src_B: torch.Tensor, seed: int = 0
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Flip the sign of a random half of each operand's lanes, then set a random half of
+    *src_B*'s lanes to ``-src_A``, so ``src_A + src_B`` covers same-sign, partly cancelling
+    and exactly cancelling lanes. Negation keeps every value exactly representable."""
+    generator = torch.Generator().manual_seed(seed)
+
+    def random_half(tensor: torch.Tensor) -> torch.Tensor:
+        return torch.rand(tensor.shape, generator=generator) < 0.5
+
+    src_A = torch.where(random_half(src_A), -src_A, src_A)
+    src_B = torch.where(random_half(src_B), -src_B, src_B)
+    return src_A, torch.where(random_half(src_B), -src_A, src_B)

@@ -6,8 +6,8 @@
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdint>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -20,15 +20,16 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -111,7 +112,7 @@ int main(int argc, char** argv) {
         }
 
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-        device_is_mmio = device->get_devices()[0]->is_mmio_capable();
+        device_is_mmio = device->impl().get_devices()[0]->is_mmio_capable();
 
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             log_info(LogTest, "Skip! This test needs to be run with fast dispatch enabled");

@@ -5,7 +5,7 @@
 #pragma once
 
 // Lightweight header for op profiler template shims.
-// Does NOT include nlohmann/json.hpp, tt-metalium/tt_metal.hpp, or ttnn/operation.hpp.
+// Does NOT include nlohmann/json.hpp, tt-metalium/execution/slow_dispatch.hpp, or ttnn/operation.hpp.
 // Heavy JSON assembly lives in op_profiler_json.cpp.
 
 #include <algorithm>
@@ -24,8 +24,8 @@
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyC.h>
 
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/type_name.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -385,7 +385,7 @@ inline std::string op_meta_data_serialized_json(
     // --- Cache hit: fast path, no JSON needed ---
     auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
     runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
-    return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
+    return fmt::format("{}{}, {}`", cached_ops.at(device_id).at(program_hash), program_cache_hit, operation_id);
 }
 
 // ---------------------------------------------------------------------------

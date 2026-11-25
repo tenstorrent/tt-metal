@@ -59,7 +59,7 @@ The host-side setup for this custom SFPI example follows the standard pattern: m
 
     // Submit work via the mesh command queue: uploads/downloads and program execution
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     // A MeshWorkload is a collection of programs that will be executed on the mesh
     distributed::MeshWorkload workload;

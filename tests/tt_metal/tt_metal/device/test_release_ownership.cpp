@@ -12,17 +12,17 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <umd/device/firmware/firmware_info_provider.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/firmware/firmware_info_provider.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
+#include <tt-umd/types/arch.hpp>
 
 using namespace tt::tt_metal;
 
@@ -122,7 +122,12 @@ TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
 namespace {
 
 constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
-constexpr uint32_t kTestTdpLimitWatts = 200;
+
+// Firmware caps a limit request at the board's max_tdp_limit, which only Galaxy populates;
+// elsewhere the cap collapses onto the board default, so the limit can only be lowered. 75 W is
+// below the default of every Blackhole board and above the 50 W floor firmware accepts, so it is
+// the one value the whole fleet takes.
+constexpr uint32_t kTestTdpLimitWatts = 75;
 
 // Mirrors TDP_LIMIT_MIN_FIRMWARE_VERSION in UMD's firmware_utils.cpp, which is file-local there.
 const umd::FirmwareBundleVersion kMinTdpLimitFirmware(19, 11, 0);

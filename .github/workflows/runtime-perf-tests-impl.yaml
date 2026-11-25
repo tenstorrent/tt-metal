@@ -35,7 +35,7 @@ jobs:
       TESTS_YAML_PATH: ${{ inputs.tests-yaml-path }}
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -44,9 +44,23 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
+      - name: Checkout CI actions from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          sparse-checkout-cone-mode: true
+
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        uses: ./ci-main/.github/actions/prepare-test-matrix
         with:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "${{ inputs.enabled-skus }}"
@@ -65,6 +79,7 @@ jobs:
       env:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
+        PERF_ENVIRONMENT: ${{ matrix.test-group.sku }}
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
@@ -80,7 +95,7 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -99,6 +114,9 @@ jobs:
             mkdir -p generated/test_reports
             echo "${{ matrix.test-group.cmd }}"
             ${{ matrix.test-group.cmd }}
+      - name: Check that no perf golden was modified
+        if: ${{ !cancelled() }}
+        run: git -c safe.directory=/work diff --exit-code -- ':(glob)**/goldens/**'
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -108,10 +126,9 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            docker-job/pgm_bench.json
-            docker-job/buffer_bench.json
-          prefix: "perf_benchmarks_json_"
+          # `python -m tests.perf update --from-run <id>` downloads these by prefix.
+          path: /work/generated/perf/
+          prefix: "perf_results_"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         # Diagnostic only: a GitHub artifact API reset (ECONNRESET) must not fail the test.

@@ -5,8 +5,8 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/data_formats/bfloat4.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -16,23 +16,23 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "print_tile_helpers.hpp"
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test checking that DEVICE_PRINT prints multiple tiles correctly.
@@ -58,7 +58,7 @@ void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
+    Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
@@ -108,10 +108,11 @@ void RunTest(
     }
 
     distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord, true);
+    const ChipId device_id = mesh_device->get_device_ids()[0];
+    DevicePrintSeparateFilesFixture::remove_output_files(device_id);
     fixture->RunProgram(mesh_device, workload);
 
-    auto filename = tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() +
-                    "generated/dprint/device-0_worker-core-0-0_BRISC.txt";
+    auto filename = DevicePrintSeparateFilesFixture::output_file_name(device_id, "BRISC");
     auto expected_output = expected_output_write + expected_output_read;
 
     EXPECT_TRUE(FilesMatchesString(filename, expected_output));
@@ -122,7 +123,16 @@ struct TestParams {
 };
 
 class DevicePrintTilesMultipleFixture : public DevicePrintSeparateFilesFixture,
-                                        public ::testing::WithParamInterface<TestParams> {};
+                                        public ::testing::WithParamInterface<TestParams> {
+protected:
+    void SetUp() override {
+        DevicePrintSeparateFilesFixture::SetUp();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Quasar: this test builds its kernels with CreateKernel(), which Quasar rejects; it needs "
+                            "porting to ProgramSpec";
+        }
+    }
+};
 
 INSTANTIATE_TEST_SUITE_P(
     DevicePrintTilesMultipleTests,

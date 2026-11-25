@@ -6,21 +6,21 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <string>
 #include <unordered_set>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tt_metal.hpp"
+#include "tt-metalium/execution/slow_dispatch.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/coordinates/coordinate_manager.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/coordinates/coordinate_manager.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 

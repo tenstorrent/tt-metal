@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 import ttnn
+from models.demos.common.prefill.runners.kv_bank_alignment import bank_aligned_seq_len_quantum, check_kv_bank_aligned
 from models.demos.common.prefill.runners.migration import validate_stage_layout_contiguous
 from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 from models.demos.minimax_m3.tt.runners.kv_chunk_table import _chunk_size_bytes, build_and_serialize_kv_chunk_table
@@ -332,3 +333,41 @@ def test_dedup_index_k_rows_limited_to_msa_layers(dedup_table, tmp_path):
                     assert _ids(filtered.get_device_group(got.device_group_index).fabric_node_ids) == _ids(
                         dedup_table.get_device_group(want.device_group_index).fabric_node_ids
                     ), f"config {cfg_id} slot {slot} layer {layer} pos {pos} changed device group"
+
+
+ALIGNED_SEQ_LEN = bank_aligned_seq_len_quantum(SP * COLS, NUM_BANKS)
+
+
+def _slot_start_banks(table):
+    return {
+        (cfg_id, slot, layer): table.lookup(layer, 0, slot, cfg_id).noc_addr >> 32
+        for cfg_id in range(table.num_configs())
+        for slot in range(NUM_USERS)
+        for layer in range(sum(STAGE_COUNTS))
+    }
+
+
+@pytest.mark.parametrize("index_k_tp_axis", [None, 1])
+def test_bank_aligned_seq_len_starts_every_slot_on_bank_0(tmp_path, index_k_tp_axis):
+    check_kv_bank_aligned(ALIGNED_SEQ_LEN, ALIGNED_SEQ_LEN // (SP * COLS), NUM_BANKS)
+    table = ttnn.experimental.disaggregation.import_from_protobuf_file(
+        _build(
+            tmp_path,
+            _stage_layouts(),
+            seq_len=ALIGNED_SEQ_LEN,
+            chunk_size=DEDUP_CHUNK_SIZE,
+            index_k_tp_axis=index_k_tp_axis,
+        )
+    )
+    off_bank_0 = {key: bank for key, bank in _slot_start_banks(table).items() if bank != 0}
+    assert not off_bank_0, f"(config, slot, layer) -> first-chunk bank: {off_bank_0}"
+
+
+def test_unaligned_seq_len_moves_slot_starts_off_bank_0(tmp_path, expect_error):
+    seq_len = ALIGNED_SEQ_LEN + DEDUP_CHUNK_SIZE
+    with expect_error(ValueError, "multiple of"):
+        check_kv_bank_aligned(seq_len, seq_len // SP, NUM_BANKS)
+    table = ttnn.experimental.disaggregation.import_from_protobuf_file(
+        _build(tmp_path, _stage_layouts(), seq_len=seq_len, chunk_size=DEDUP_CHUNK_SIZE)
+    )
+    assert any(_slot_start_banks(table).values())

@@ -5,15 +5,14 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "api/compute/reg_api.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "llk_assert.h"
 #include "sanitizer/api.h"
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
 #include "llk_math_unary_datacopy_api.h"
-#ifndef ARCH_QUASAR
 #include "llk_math_transpose_dest_api.h"
-#endif
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
@@ -74,14 +73,25 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
 #else
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    LLK_ASSERT(
-        !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
-    UNPACK((llk_unpack_A_init<
-            BroadcastType::NONE,
-            false /*acc_to_dest*/,
-            EltwiseBinaryReuseDestType::NONE,
-            false /*unpack_to_dest*/>(true /*transpose_of_faces*/, true /*within_face_16x16_transpose*/, icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
+    if (enable_unpack_to_dest) {
+        // UNP_DEST cannot transpose. transpose_tile returns the unpack loan before math transposes the tile in place.
+        LLK_ASSERT(UnpackToDestEn, "32-bit transpose on Quasar requires unpack-to-dest to be enabled");
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<
+              ckernel::DataCopyType::A2D,
+              is_fp32_dest_acc_en,
+              BroadcastType::NONE,
+              UnpackToDestEn>(icb)));
+        MATH((llk_math_transpose_dest_init<true /*transpose_of_faces*/, is_fp32_dest_acc_en>(icb)));
+    } else {
+        UNPACK((llk_unpack_A_init<
+                BroadcastType::NONE,
+                false /*acc_to_dest*/,
+                EltwiseBinaryReuseDestType::NONE,
+                false /*unpack_to_dest*/>(true /*transpose_of_faces*/, true /*within_face_16x16_transpose*/, icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
+    }
 #endif
 
 #endif
@@ -128,10 +138,24 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 #else
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    LLK_ASSERT(
-        !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false /*acc_to_dest*/>(icb, itile)));
-    MATH((llk_math_eltwise_unary_datacopy(idst, icb)));
+    if (enable_unpack_to_dest) {
+        // MOVD2B needs the dummy SrcB valid flag and must wait for the unpacker to finish writing to Dest.
+        LLK_ASSERT(UnpackToDestEn, "32-bit transpose on Quasar requires unpack-to-dest to be enabled");
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
+        UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            icb, itile, idst)));
+        UNPACK((llk_unpack_set_srcb_dummy_valid()));
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
+        MATH((llk_math_eltwise_unary_datacopy<
+              ckernel::DataCopyType::A2D,
+              is_fp32_dest_acc_en,
+              BroadcastType::NONE,
+              UnpackToDestEn>(idst, icb)));
+        MATH((llk_math_transpose_dest(idst)));
+    } else {
+        UNPACK((llk_unpack_A<BroadcastType::NONE, false /*acc_to_dest*/>(icb, itile)));
+        MATH((llk_math_eltwise_unary_datacopy(idst, icb)));
+    }
 #endif
 #endif
 }

@@ -16,7 +16,8 @@ tt::tt_metal::CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_
     ranges.reserve(core_range_set->ranges()->size());
     for (const auto* range : *core_range_set->ranges()) {
         ranges.emplace_back(
-            tt::tt_metal::CoreCoord{range->start()->x(), range->start()->y()}, tt::tt_metal::CoreCoord{range->end()->x(), range->end()->y()});
+            tt::tt_metal::CoreCoord{range->start()->x(), range->start()->y()},
+            tt::tt_metal::CoreCoord{range->end()->x(), range->end()->y()});
     }
     return tt::tt_metal::CoreRangeSet{std::move(ranges)};
 }
@@ -45,6 +46,14 @@ tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
         case flatbuffer::DataType::UInt16: return tt::tt_metal::DataType::UINT16;
         case flatbuffer::DataType::Int32: return tt::tt_metal::DataType::INT32;
         case flatbuffer::DataType::Int8: return tt::tt_metal::DataType::INT8;
+        case flatbuffer::DataType::MxFp8E4M3: return tt::tt_metal::DataType::MXFP8_E4M3;
+        case flatbuffer::DataType::MxFp8E5M2: return tt::tt_metal::DataType::MXFP8_E5M2;
+        case flatbuffer::DataType::MxFp6E2M3: return tt::tt_metal::DataType::MXFP6_E2M3;
+        case flatbuffer::DataType::MxFp6E3M2: return tt::tt_metal::DataType::MXFP6_E3M2;
+        case flatbuffer::DataType::MxFp4: return tt::tt_metal::DataType::MXFP4;
+        case flatbuffer::DataType::MxInt8: return tt::tt_metal::DataType::MXINT8;
+        case flatbuffer::DataType::MxInt4: return tt::tt_metal::DataType::MXINT4;
+        case flatbuffer::DataType::MxInt2: return tt::tt_metal::DataType::MXINT2;
         case flatbuffer::DataType::Invalid: return tt::tt_metal::DataType::INVALID;
     }
     TT_THROW("Unsupported DataType from flatbuffer.");
@@ -62,6 +71,14 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
         case tt::tt_metal::DataType::INT8: return flatbuffer::DataType::Int8;
         case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 cannot be serialized to flatbuffer");
+        case tt::tt_metal::DataType::MXFP8_E4M3: return flatbuffer::DataType::MxFp8E4M3;
+        case tt::tt_metal::DataType::MXFP8_E5M2: return flatbuffer::DataType::MxFp8E5M2;
+        case tt::tt_metal::DataType::MXFP6_E2M3: return flatbuffer::DataType::MxFp6E2M3;
+        case tt::tt_metal::DataType::MXFP6_E3M2: return flatbuffer::DataType::MxFp6E3M2;
+        case tt::tt_metal::DataType::MXFP4: return flatbuffer::DataType::MxFp4;
+        case tt::tt_metal::DataType::MXINT8: return flatbuffer::DataType::MxInt8;
+        case tt::tt_metal::DataType::MXINT4: return flatbuffer::DataType::MxInt4;
+        case tt::tt_metal::DataType::MXINT2: return flatbuffer::DataType::MxInt2;
         case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
     }
     TT_THROW("Unsupported DataType to flatbuffer.");
@@ -200,9 +217,17 @@ tt::tt_metal::TensorLayout from_flatbuffer(const flatbuffer::TensorLayout* layou
             case flatbuffer::PageConfig::tile: {
                 const auto* tile_page_config = layout->page_config_as_tile();
                 const auto* flat_tile = tile_page_config->tile();
-                tt::tt_metal::Tile tile(
-                    std::array{flat_tile->tile_shape_h(), flat_tile->tile_shape_w()}, flat_tile->transpose_tile());
-                return tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, tile);
+                const std::array tile_shape{flat_tile->tile_shape_h(), flat_tile->tile_shape_w()};
+                if (flat_tile->face_shape_h() == 0 && flat_tile->face_shape_w() == 0) {
+                    return tt::tt_metal::PageConfig(
+                        tt::tt_metal::Layout::TILE, tt::tt_metal::Tile(tile_shape, flat_tile->transpose_tile()));
+                }
+                return tt::tt_metal::PageConfig(
+                    tt::tt_metal::Layout::TILE,
+                    tt::tt_metal::Tile(
+                        tile_shape,
+                        std::array{flat_tile->face_shape_h(), flat_tile->face_shape_w()},
+                        flat_tile->transpose_tile()));
             }
             default: TT_THROW("Unsupported PageConfig type from flatbuffer.");
         }
@@ -223,8 +248,13 @@ flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
     auto page_config = layout.get_page_config();
     if (page_config.get_layout() == tt::tt_metal::Layout::TILE) {
         auto tile = page_config.get_tile();
-        auto flat_tile =
-            flatbuffer::CreateTile(builder, tile.get_height(), tile.get_width(), tile.get_transpose_of_faces());
+        auto flat_tile = flatbuffer::CreateTile(
+            builder,
+            tile.get_height(),
+            tile.get_width(),
+            tile.get_transpose_of_faces(),
+            tile.get_face_shape()[0],
+            tile.get_face_shape()[1]);
         return flatbuffer::CreateTensorLayout(
             builder,
             to_flatbuffer(layout.get_data_type()),
