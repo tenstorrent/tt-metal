@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <mutex>
+#include <map>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -86,6 +87,9 @@ public:
 
 private:
     std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;
+    // Build environments a device has moved away from while kernel builds queued by a dry run still read them, by
+    // device and build key (see add_build_env). A node keeps its address, so those builds' references stay valid.
+    std::map<std::pair<ChipId, uint64_t>, std::unordered_map<ChipId, DeviceBuildEnv>::node_type> set_aside_build_envs_;
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.
     // TODO: processor_type_count can be looked up in the hal, do we need this in here?

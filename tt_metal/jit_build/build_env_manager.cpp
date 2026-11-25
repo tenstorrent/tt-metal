@@ -168,15 +168,24 @@ void BuildEnvManager::add_build_env(
     auto device_kernel_defines = initialize_device_kernel_defines(dev_config);
     // Kernel builds queued by a dry run (experimental/dry_run.hpp) read this device's build environment after the
     // device has closed. While any are outstanding, an open that would rebuild the same environment keeps it, and an
-    // open that changes it waits for them first.
-    if (auto existing = device_id_to_build_env_.find(device_id);
-        existing != device_id_to_build_env_.end() && ahead_builds_pending()) {
+    // open that changes it sets the old one aside, where the queued builds go on reading it, and takes back the one
+    // set aside for its own build key, if there is one.
+    if (!ahead_builds_pending()) {
+        set_aside_build_envs_.clear();
+    } else if (auto existing = device_id_to_build_env_.find(device_id); existing != device_id_to_build_env_.end()) {
         JitBuildEnv probe;
         probe.init(build_key, dev_config, rtoptions, device_kernel_defines);
         if (probe.get_build_key() == existing->second.build_key()) {
             return;
         }
-        wait_for_ahead_builds();
+        const uint64_t old_key = existing->second.build_key();
+        set_aside_build_envs_.emplace(std::pair{device_id, old_key}, device_id_to_build_env_.extract(existing));
+        if (auto back = set_aside_build_envs_.find({device_id, probe.get_build_key()});
+            back != set_aside_build_envs_.end()) {
+            device_id_to_build_env_.insert(std::move(back->second));
+            set_aside_build_envs_.erase(back);
+            return;
+        }
     }
     auto& dev_build_env = device_id_to_build_env_[device_id];
     dev_build_env.build_env.init(build_key, dev_config, rtoptions, device_kernel_defines);
