@@ -86,10 +86,13 @@ def _references(assets: Path, case: dict) -> list[MiniMaxH3Reference]:
 @pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_pdd_bench_samples(mesh_device, reset_seeds):
-    export = Path(os.environ.get("MINIMAX_H3_PDD_EXPORT", ""))
-    assets = Path(os.environ.get("H3BENCH_ASSETS", ""))
-    if not export.is_dir() or not assets.is_dir():
+    export_env = os.environ.get("MINIMAX_H3_PDD_EXPORT")
+    assets_env = os.environ.get("H3BENCH_ASSETS")
+    if not export_env or not assets_env:
         pytest.skip("set MINIMAX_H3_PDD_EXPORT and H3BENCH_ASSETS")
+    export, assets = Path(export_env), Path(assets_env)
+    if not export.is_dir() or not assets.is_dir():
+        pytest.fail(f"not a directory: export={export} assets={assets}")
     attention = os.environ.get("PDD_ATTENTION", "vsa")
     selected = [name for name in os.environ.get("H3BENCH_CASES", ",".join(CASES)).split(",") if name]
 
