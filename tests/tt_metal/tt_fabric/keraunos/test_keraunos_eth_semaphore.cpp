@@ -407,7 +407,8 @@ TEST(KeraunosTileCounter, CrossTileAdds) {
             EthernetConfig{
                 .eth_mode = eth_mode_of(hart.core.type),
                 .noc = hart.processor == DataMovementProcessor::RISCV_1 ? NOC::NOC_1 : NOC::NOC_0,
-                .processor = hart.processor});
+                .processor = hart.processor,
+                .defines = {{"KERAUNOS_CCE_NOC", "1"}}});
         const std::vector<uint32_t> args = {
             static_cast<uint32_t>(hart.role),
             hart.role == Role::AddBySystemAddress ? static_cast<uint32_t>(posted) : kCounter,
