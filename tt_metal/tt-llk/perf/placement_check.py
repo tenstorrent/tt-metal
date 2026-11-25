@@ -425,18 +425,24 @@ def gate(results_by_leg, legs, stage1, gate_base, leg_bases):
 def write_blocking(stage1, results, notes, out):
     """The stage-1 rows the gate blocks on, as a stage-1 CSV, for the Slack post. With a note, stage 2 cleared
     nothing reliably, so every row stays."""
-    keep = {_row_key(r) for r in results if r["outcome"] in BLOCKING}
+    # Confirmed regressions first, so the Slack post lists them and reproduces one of them.
+    rank = {
+        _row_key(r): BLOCKING.index(r["outcome"])
+        for r in results
+        if r["outcome"] in BLOCKING
+    }
     with open(stage1, newline="") as fh:
         reader = csv.DictReader(fh)
         rows = list(reader)
+    kept = [
+        (rank.get(_row_key(c), len(BLOCKING)), i, row)
+        for i, (row, c) in enumerate(zip(rows, read_candidates(stage1)))
+        if notes or _row_key(c) in rank
+    ]
     with open(out, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=reader.fieldnames)
         writer.writeheader()
-        writer.writerows(
-            row
-            for row, c in zip(rows, read_candidates(stage1))
-            if notes or _row_key(c) in keep
-        )
+        writer.writerows(row for _, _, row in sorted(kept, key=lambda k: k[:2]))
 
 
 def main(argv=None):
