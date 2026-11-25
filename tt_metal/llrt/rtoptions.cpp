@@ -57,11 +57,13 @@ enum class EnvVarID {
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_EMU_SERVER,                      // Chippy emu_axi endpoint (host:port)
     TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package
+    TT_METAL_EMU_CLUSTER_DESC,                // Test cluster descriptor for the emulated package
     TT_METAL_GRENDEL_JTAG_SERVER,             // OpenOCD TCL endpoint (host:port)
     TT_METAL_GRENDEL_JTAG_SOC_DESC,           // SoC descriptor for the attached package
     TT_METAL_GRENDEL_JTAG_TRANSPORT,          // jtag2axi_v1 or jtag2axi_v2
     TT_METAL_GRENDEL_JTAG_CHIPLET,            // 0-based TAP/chiplet index
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
+    TT_METAL_QUASAR_MOCK_JIT,                 // Build firmware and JIT kernels on a Quasar Mock device
     TT_METAL_CLUSTER_ID,                      // Cluster id to stamp on the discovered cluster descriptor
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
@@ -552,6 +554,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         case EnvVarID::TT_METAL_EMU_SOC_DESC: this->emu_soc_desc_path = std::string(value); break;
 
+        case EnvVarID::TT_METAL_EMU_CLUSTER_DESC: this->emu_cluster_desc_path = value; break;
+
         case EnvVarID::TT_METAL_GRENDEL_JTAG_SERVER:
             this->grendel_jtag_server = std::string(value);
             this->runtime_target_device_ = tt::TargetDevice::GrendelJtag;
@@ -610,6 +614,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Disabled
         // Usage: export TT_METAL_EMULE_MODE=1
         case EnvVarID::TT_METAL_EMULE_MODE: this->runtime_target_device_ = tt::TargetDevice::Emule; break;
+
+        // TT_METAL_QUASAR_MOCK_JIT
+        // 1: a Quasar Mock device builds its firmware and JIT-compiles program kernels.
+        // Default: 0 (Quasar Mock skips both).
+        case EnvVarID::TT_METAL_QUASAR_MOCK_JIT: this->quasar_mock_jit = is_env_enabled(value); break;
 
         // TT_METAL_VISIBLE_DEVICES
         // Comma-separated list of device IDs to make visible to the runtime.
@@ -2146,6 +2155,11 @@ void RunTimeOptions::InitializeFromEnvVars() {
     }
     if (this->runtime_target_device_ == tt::TargetDevice::EmuAxi && this->emu_soc_desc_path.empty()) {
         TT_THROW("TT_METAL_EMU_SERVER requires TT_METAL_EMU_SOC_DESC to be set");
+    }
+    if (this->runtime_target_device_ != tt::TargetDevice::EmuAxi && !this->emu_cluster_desc_path.empty()) {
+        TT_THROW(
+            "TT_METAL_EMU_CLUSTER_DESC requires TT_METAL_EMU_SERVER; a Mock run takes its cluster descriptor from "
+            "TT_METAL_MOCK_CLUSTER_DESC_PATH");
     }
     if (this->runtime_target_device_ == tt::TargetDevice::GrendelJtag && this->grendel_jtag_soc_desc_path.empty()) {
         TT_THROW("TT_METAL_GRENDEL_JTAG_SERVER requires TT_METAL_GRENDEL_JTAG_SOC_DESC to be set");

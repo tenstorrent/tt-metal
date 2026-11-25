@@ -48,6 +48,22 @@ struct ChannelContext {
     return contexts;
 }
 
+// Reads the fabric telemetry of one Ethernet core. `eth_core` is the coordinate UMD takes as given: TRANSLATED, or
+// one of UMD's own descriptor of the chip. Throws if the device read fails.
+tt::tt_fabric::FabricTelemetrySnapshot read_core_fabric_telemetry(
+    tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::ChipId chip_id, tt::umd::CoreCoord eth_core) {
+    const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    const auto telemetry_size = factory.size_of<fabric_telemetry::FabricTelemetry>();
+    const auto telemetry_addr = hal.get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY);
+
+    std::vector<std::byte> buffer(telemetry_size);
+    cluster.read_from_device(buffer.data(), chip_id, eth_core, telemetry_addr, telemetry_size);
+
+    const auto view = factory.create_view<fabric_telemetry::FabricTelemetry>(buffer.data());
+    return fabric_telemetry_converter::unpack_snapshot_from_hal(view);
+}
+
 }  // namespace
 
 // Reads fabric telemetry for a specific chip and channel without MetalContext dependency.
@@ -69,19 +85,9 @@ struct ChannelContext {
 // Returns: FabricTelemetrySnapshot containing static and dynamic telemetry data
 tt::tt_fabric::FabricTelemetrySnapshot read_fabric_telemetry(
     tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::ChipId chip_id, tt::tt_fabric::chan_id_t channel) {
-    const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    const auto telemetry_size = factory.size_of<fabric_telemetry::FabricTelemetry>();
-    const auto telemetry_addr = hal.get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY);
-
-    const auto& soc_desc = cluster.get_soc_descriptor(chip_id);
-    tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
-
-    std::vector<std::byte> buffer(telemetry_size);
-    cluster.read_from_device(buffer.data(), chip_id, eth_core, telemetry_addr, telemetry_size);
-
-    const auto view = factory.create_view<fabric_telemetry::FabricTelemetry>(buffer.data());
-    return fabric_telemetry_converter::unpack_snapshot_from_hal(view);
+    const tt::umd::CoreCoord eth_core =
+        cluster.get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
+    return read_core_fabric_telemetry(cluster, hal, chip_id, eth_core);
 }
 
 std::vector<FabricTelemetrySample> read_fabric_telemetry(
@@ -108,7 +114,11 @@ std::vector<FabricTelemetrySample> read_fabric_telemetry(
         sample.fabric_node_id = fabric_node_id;
         sample.channel_id = channel.channel_id;
         auto& umd_cluster = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-        sample.snapshot = read_fabric_telemetry(umd_cluster, hal, physical_chip_id, channel.channel_id);
+        // The channel is one of Metal's descriptor of the chip, which UMD's may number otherwise.
+        const tt::umd::CoreCoord eth_core =
+            cluster.get_soc_desc(physical_chip_id)
+                .get_eth_core_for_channel(channel.channel_id, tt::CoordSystem::TRANSLATED);
+        sample.snapshot = read_core_fabric_telemetry(umd_cluster, hal, physical_chip_id, eth_core);
     }
 
     return samples;
