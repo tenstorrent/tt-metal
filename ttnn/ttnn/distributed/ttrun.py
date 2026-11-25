@@ -1135,7 +1135,7 @@ def run_launcher(
         rc, origin, cause = int(code), f"rank {r} on {host}", "rank failure"
         if job.forced_why:
             outcome, others = "forced", "the other ranks did not all exit in time and were killed"
-        elif job.stop_reason != "rank":
+        elif m["then"] == "the job goes on":
             outcome, others = "failed", "the other ranks went on (--on-peer-exit notify)"
         else:
             outcome, others = "failed", "the other ranks were sent SIGTERM and exited"
@@ -3280,11 +3280,17 @@ def peer_failure_mca_args(mpi_args: Optional[List[str]], rank_wrapper: Optional[
     """--mca mpi_ft_enable 1 when ranks run in the wrapper (unless set): a peer's lost socket is then an
     error the survivor sees, not an abort before the stop reaches it."""
     args = mpi_args or []
-    if rank_wrapper is None:
+    if rank_wrapper is None or any(
+        a in ("--mca", "-mca") and i + 2 < len(args) and args[i + 1] == "pml" and args[i + 2] != "ob1"
+        for i, a in enumerate(args)
+    ):
+        if ON_PEER_EXIT == "notify":
+            _log_once(
+                logger.warning,
+                f"{TT_RUN_PREFIX} --on-peer-exit notify needs tt-run-rank and the ob1 pml: without them a failed rank "
+                "ends the whole job",
+            )
         return []
-    for i, a in enumerate(args):
-        if a in ("--mca", "-mca") and i + 2 < len(args) and args[i + 1] == "pml" and args[i + 2] != "ob1":
-            return []
     out = [] if has_mca_param(args, "mpi_ft_enable") else ["--mca", "mpi_ft_enable", "1"]
     if ON_PEER_EXIT == "notify" and not has_mca_param(args, "mpi_ft_detector"):
         # A failed rank's exit is held by its wrapper, so MPI learns of the death only from ULFM's heartbeat.

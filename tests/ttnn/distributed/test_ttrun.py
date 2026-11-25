@@ -2466,6 +2466,25 @@ class TestJobOwnership:
         assert took < 1.5, f"reported only at the exit ({took:.1f} s)"
         assert p.returncode == 3
 
+    @pytest.mark.parametrize(
+        "said,line,code",
+        [
+            ("failed 3 boom", r"\[rank \S+\] boom \(on ", 3),  # the word's code wins over the exit's 0
+            ("failed 4", r"\[rank \S+\] failed \(on ", 4),  # no reason: the line stays whole
+        ],
+        ids=["code_wins", "no_reason"],
+    )
+    def test_rank_wrapper_word_rules(self, said, line, code):
+        import subprocess
+
+        wrapper = find_built_tt_run_rank()
+        if wrapper is None:
+            pytest.skip("tt-run-rank is not built")
+        program = f'echo "{said}" >&"$TT_RUN_RANK_FD"; echo "failed 9 second" >&"$TT_RUN_RANK_FD"; exit 0'
+        p = subprocess.run([wrapper, "--", "bash", "-c", program], capture_output=True, text=True, timeout=30)
+        assert re.search(line + r"\S+, pid \d+\); stopping the job \(exit " + str(code) + r"\)", p.stderr), p.stderr
+        assert p.stderr.count("stopping the job") == 1 and p.returncode == code, p.stderr
+
     def test_rank_wrapper_forces_a_rank_past_its_stop_grace(self, tmp_path):
         import signal
         import subprocess
@@ -2476,7 +2495,7 @@ class TestJobOwnership:
             pytest.skip("tt-run-rank is not built")
         ready = tmp_path / "ready"
         p = subprocess.Popen(
-            [wrapper, "--stop-grace", "1", "--", "bash", "-c", f'trap "" TERM; touch {ready}; sleep 30'],
+            [wrapper, "--stop-grace", "1", "--", "bash", "-c", f'trap "" TERM; touch {ready}; exec sleep 30'],
             stderr=subprocess.PIPE,
             text=True,
         )

@@ -54,7 +54,8 @@ When a rank fails, its wrapper prints one line, which tt-run reads:
 [rank 1] was killed by signal 9 (SIGKILL) (on host1, pid 41212); stopping the job (exit 137)
 ```
 
-Then every other rank gets SIGTERM, closes and exits; the job returns 137.
+Then every other rank gets SIGTERM, closes and exits (with whatever code it exits on SIGTERM, 143 by default); the job
+returns 137.
 
 - **A failure** is a rank that dies (a signal: 128 + the signal), exits non-zero without a stop having reached it, or
   writes `failed <code> <reason>` to `TT_RUN_RANK_FD` (reported at once, before the rank has closed).
@@ -62,12 +63,13 @@ Then every other rank gets SIGTERM, closes and exits; the job returns 137.
   The other ranks of a failed job exit 143.
 - **The exit code** of the job is the failing rank's. A clean run returns 0.
 - **No rank is killed mid-close**: the wrappers of the failed and the stopped ranks hold their exits until every rank
-  has ended, so the launcher's own kill finds nothing left to kill.
-- **A rank that never closes** is killed by its wrapper `--stop-grace` seconds after the stop (exit 137, with a line
-  saying the devices may need `tt-smi -r`).
+  has ended (up to the stop grace + 10 s), so the launcher's own kill finds nothing left to kill. This needs the PMIx
+  tool connection; without it the launcher ends the job its own way.
+- **A rank that never closes** is killed by its wrapper `--stop-grace` seconds after
+  the stop or after it reported its own failure (exit 137, with a line saying the devices may need `tt-smi -r`).
 - **A core dump** of a crashing rank is cut short after 10 s, at once when the job is already stopping.
-- **A rank never outlives its daemon**: if the daemon that started it dies, the rank gets SIGTERM, then SIGKILL 10 s
-  later.
+- **A rank never outlives its daemon**: if the daemon that started it dies, the rank gets SIGTERM, then SIGKILL the
+  stop grace later.
 - **Ctrl-C at mpirun** is still prterun's kill (SIGTERM, then SIGKILL 250 ms later). Only tt-run makes it graceful.
 - **One more process per rank**: the rank is the wrapper's child. Tools that find a rank by its parent pid see the
   wrapper first.
@@ -76,15 +78,15 @@ Then every other rank gets SIGTERM, closes and exits; the job returns 137.
 
 ```
 tt-run-rank [--stop-grace <s>] [--on-peer-exit stop|notify] -- <program> [args...]
-tt-run-rank --guard <prterun pid> [<signal tool>] [--stop-grace <s>]
+tt-run-rank --guard <launcher pid> [<signal tool>] [--stop-grace <s>]
 tt-run-rank --uri <prterun PMIx server URI> --signal <N>
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--stop-grace <s>` | 120 | How long the rank has to exit after a stop reached it before the wrapper kills it (137). tt-run passes one 2 s below its own `TT_RUN_STOP_GRACE_S`, so the wrapper forces first. |
+| `--stop-grace <s>` | 120 | How long the rank has to exit after a stop reached it before the wrapper kills it (137). tt-run passes `max(grace - 2, grace / 2)` of its own `TT_RUN_STOP_GRACE_S`, so the wrapper forces first. |
 | `--on-peer-exit stop` | yes | When another rank fails, write `exit <rank> <code> <signal> <reason>` to `TT_RUN_RANK_EVENTS_FD`, then send this rank SIGTERM: the job stops. |
-| `--on-peer-exit notify` | | The same line, then SIGUSR1 and no SIGTERM: the job goes on and the rank decides. MPI calls on the dead rank fail only with ULFM's heartbeat detector on (the `mpi_ft_detector` options above; tt-run adds them). A collective that included the dead rank returns an error, not data: recover with `MPIX_Comm_revoke` / `MPIX_Comm_shrink`. The failure line ends "the job goes on (exit N)" and the job still returns N. |
+| `--on-peer-exit notify` | | The same line, then SIGUSR1 and no SIGTERM: the job goes on and the rank decides. A program with no SIGUSR1 handler (it would die of it) gets the SIGTERM instead. MPI calls on the dead rank fail only with ULFM's heartbeat detector on (the `mpi_ft_detector` options above; tt-run adds them). A collective that included the dead rank returns an error, not data: recover with `MPIX_Comm_revoke` / `MPIX_Comm_shrink`. The failure line ends "the job goes on (exit N)" and the job still returns N. |
 | `--guard` | | Started by tt-run next to the launcher: stops the job gracefully if tt-run itself is killed. |
 | `--uri ... --signal N` | | Send signal N to every rank of a running prterun job through PRRTE job control (tt-run's stop). Exit 0 on success, 1 on a PMIx error, 2 on bad arguments, 3 without PMIx. |
 
@@ -92,7 +94,6 @@ tt-run-rank --uri <prterun PMIx server URI> --signal <N>
 |---|---|---|
 | `TT_RUN_RANK_FD` | the wrapper, for the rank | Write `failed <code> <reason>` here to report a failure before the rank closes. |
 | `TT_RUN_RANK_EVENTS_FD` | the wrapper, for the rank | Read `exit <rank> <code> <signal> <reason>` lines here when another rank failed. |
-| `TT_RUN_RANK_VERBOSE=1` | you | The wrapper says when it connects to and leaves the PMIx server. |
 
 The wrapper talks to its PMIx server as a tool (one connection per rank). Without PMIx in the build, or when it cannot
 connect, it still forwards signals and names a failed rank, but the launcher ends the job its own way.

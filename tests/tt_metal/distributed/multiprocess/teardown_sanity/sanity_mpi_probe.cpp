@@ -20,10 +20,8 @@
 //                         | revoke_shrink | abort | exit_nofinalize
 //   PROBE_SECOND_BARRIER  1 -> survivors try a second collective after an error
 //   PROBE_PIDDIR          directory to write rank_<r>.pid into (external per-rank signals)
-//   PROBE_STOP_DELAY_MS   all_hang, job: how long a rank takes to close after the stop (PROBE_STOP_DELAY_MS_<r>: one
-//   rank) PROBE_ENDING          job: the victim's sigkill | segfault | exit1 | exit3 | raise (a "failed" word, then
-//   exit 1)
-//                         | hang (never joins the barrier)
+//   PROBE_STOP_DELAY_MS   all_hang, job: ms a rank takes to close after the stop (PROBE_STOP_DELAY_MS_<r>: one rank)
+//   PROBE_ENDING          job: what the victim does: sigkill, segfault, exit1, exit3, raise, hang
 //   PROBE_IGNORE_STOP     job: the rank that never closes
 #include <mpi.h>
 #if __has_include(<mpi-ext.h>)

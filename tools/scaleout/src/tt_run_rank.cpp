@@ -12,12 +12,13 @@
 // or ends non-zero without a stop having reached it: the wrapper prints "[rank R] <reason> (on HOST, pid P); stopping
 // the job (exit CODE)", which tt-run reads, and tells every other wrapper (a PMIx event). Each writes
 // "exit <rank> <code> <signal> <reason>" to its program's TT_RUN_RANK_EVENTS_FD, then sends it SIGTERM (stop) or
-// SIGUSR1 (notify: the job goes on). A wrapper whose program failed or was stopped holds its own exit until every rank
-// has exited, so the launcher never kills a rank that is still closing; the failed rank's wrapper leaves first, so the
-// launcher returns its code. A program still running --stop-grace seconds (120) after a stop reached it is killed
-// (137). If the daemon that started this wrapper dies, the program is sent SIGTERM, then SIGKILL 10 s later.
+// SIGUSR1 (notify: the job goes on; a program with no SIGUSR1 handler gets the stop instead). A wrapper whose program
+// failed or was stopped holds its own exit until every rank has exited (up to the grace + 10 s when stopping), so the
+// launcher kills no rank still closing; the failed rank's wrapper leaves first, so the launcher returns its code. A
+// program still running --stop-grace seconds (120) after a stop reached it is killed (137). If the daemon that started
+// this wrapper dies, the program is sent SIGTERM, then SIGKILL the stop grace later.
 //
-//   tt-run-rank --guard <prterun pid> [<signal tool>] [--stop-grace <s>]
+//   tt-run-rank --guard <launcher pid> [<signal tool>] [--stop-grace <s>]
 //
 // The guard tt-run starts next to the launcher, so the job still stops gracefully when tt-run itself is killed
 // (SIGKILL, an abort, a crash): tt-run cannot act then, and the launcher outlives it in a session of its own. tt-run
@@ -56,6 +57,7 @@
 
 #include <fcntl.h>
 #include <glob.h>
+#include <pthread.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -70,31 +72,36 @@ constexpr int kDumpBoundTicks = 100;  // 10 s: how long a crash may write its co
 constexpr int kForwarded[] = {SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2, SIGALRM, SIGTSTP, SIGCONT, SIGWINCH};
 volatile sig_atomic_t g_child = -1;       // the program while it runs; -1 once reaped (its pid may be reused)
 volatile sig_atomic_t g_stop_signal = 0;  // a stop (SIGTERM, SIGINT, SIGHUP) delivered to the program
-volatile sig_atomic_t g_reported = 0;     // this wrapper reported its program's failure and stopped the job
+volatile sig_atomic_t g_reported = 0;     // this wrapper reported its program's failure
+volatile sig_atomic_t g_own_stop = 0;     // the job-wide SIGTERM this wrapper sent, still to come back to it
 
 void forward(int signal_number) {
-    const int saved_errno = errno;  // the main loop reads errno right after waitpid
-    const bool stop = signal_number == SIGTERM || signal_number == SIGINT || signal_number == SIGHUP;
-    // A SIGTERM after a stop was delivered is the same stop again (job control's, after the event's): not passed on.
-    if (!(signal_number == SIGTERM && (g_stop_signal != 0 || g_reported != 0))) {
-        if (stop) {
+    const int saved_errno = errno;                    // the main loop reads errno right after waitpid
+    const pid_t child = static_cast<pid_t>(g_child);  // read once: the main loop may reap the program meanwhile
+    if (signal_number == SIGTERM && g_own_stop != 0) {
+        g_own_stop = 0;  // this wrapper's own stop of the job, back at it: its program is already failing
+    } else if (signal_number != SIGTERM || g_stop_signal == 0) {  // a second SIGTERM is the same stop again
+        if (signal_number == SIGTERM || signal_number == SIGINT || signal_number == SIGHUP) {
             g_stop_signal = signal_number;
         }
-        if (g_child > 0) {
-            ::kill(static_cast<pid_t>(g_child), signal_number);
+        if (child > 0) {
+            ::kill(child, signal_number);
         }
     }
     errno = saved_errno;
 }
 
-// This rank's number: MPI's, else tt-run's own (TT_RUN_RANK, set for a rank tt-run starts without mpirun).
+// This rank's number: MPI's, else tt-run's own (TT_RUN_RANK, a rank tt-run starts without mpirun), else PMIx's.
 const char* rank_name() {
-    for (const char* var : {"OMPI_COMM_WORLD_RANK", "TT_RUN_RANK"}) {
-        if (const char* v = std::getenv(var); v != nullptr && *v != '\0') {
-            return v;
+    static const std::string name = [] {
+        for (const char* var : {"OMPI_COMM_WORLD_RANK", "TT_RUN_RANK", "PMIX_RANK"}) {
+            if (const char* v = std::getenv(var); v != nullptr && *v != '\0') {
+                return std::string(v);
+            }
         }
-    }
-    return "?";
+        return std::string("?");
+    }();
+    return name.c_str();
 }
 
 // A signal's name without "SIG" (sigabbrev_np needs glibc 2.32).
@@ -313,7 +320,7 @@ int signal_job(int argc, char** argv) {
 
 int guard(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: %s --guard <prterun pid> [<signal tool>] [--stop-grace <s>]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s --guard <launcher pid> [<signal tool>] [--stop-grace <s>]\n", argv[0]);
         return 2;
     }
     const pid_t launcher = static_cast<pid_t>(std::atoi(argv[2]));
@@ -415,6 +422,9 @@ struct Job {
     double grace = 120.0;  // --stop-grace
     int events_fd = -1;    // the write end of the program's TT_RUN_RANK_EVENTS_FD
     bool tool = false;     // connected to the PMIx server as a tool
+    bool origin = false;   // this rank failed first-hand (not a report of a failed peer)
+    int reported = 0;      // the code its stop line gave
+    pid_t daemon = -1;     // the launcher's daemon that started this rank
     std::mutex mu;
     std::vector<char> ended;  // the ranks whose program has ended
 };
@@ -427,6 +437,23 @@ std::string host_name() {
 }
 
 #ifdef TT_RUN_RANK_HAS_PMIX
+// Whether the process has a handler for the signal (/proc/<pid>/status SigCgt).
+bool catches(pid_t pid, int sig) {
+    char path[64];
+    std::snprintf(path, sizeof path, "/proc/%d/status", static_cast<int>(pid));
+    FILE* f = std::fopen(path, "r");
+    unsigned long long caught = 0;
+    for (char line[256]; f != nullptr && std::fgets(line, sizeof line, f) != nullptr;) {
+        if (std::sscanf(line, "SigCgt: %llx", &caught) == 1) {
+            break;
+        }
+    }
+    if (f != nullptr) {
+        std::fclose(f);
+    }
+    return ((caught >> (sig - 1)) & 1ULL) != 0;
+}
+
 // What a wrapper says of its program: "failed <rank> <code> <signal> <reason>" (stop or notify the others) or
 // "ended <rank> <code>" (count it).
 void on_peer(const std::string& what) {
@@ -442,7 +469,8 @@ void on_peer(const std::string& what) {
         }
         return;
     }
-    if (rank == g_job.me || g_child <= 0) {
+    const pid_t child = static_cast<pid_t>(g_child);  // read once: the main loop may reap the program meanwhile
+    if (rank == g_job.me || child <= 0) {
         return;
     }
     const std::string line = "exit " + std::to_string(rank) + " " + std::to_string(code) + " " + std::to_string(sig) +
@@ -450,11 +478,11 @@ void on_peer(const std::string& what) {
     if (g_job.events_fd >= 0) {
         (void)!::write(g_job.events_fd, line.data(), line.size());
     }
-    if (g_job.notify) {
-        ::kill(static_cast<pid_t>(g_child), SIGUSR1);
-    } else if (g_stop_signal == 0) {
+    if (g_job.notify && catches(child, SIGUSR1)) {
+        ::kill(child, SIGUSR1);
+    } else if (g_stop_signal == 0) {  // stop mode, or a program that would die of SIGUSR1: the stop
         g_stop_signal = SIGTERM;
-        ::kill(static_cast<pid_t>(g_child), SIGTERM);
+        ::kill(child, SIGTERM);
     }
 }
 
@@ -504,10 +532,19 @@ void connect_tool(pid_t daemon) {
         std::fclose(f);
     }
     g_job.nspace = ns;
+    const std::string rank_env = std::getenv("PMIX_RANK") != nullptr ? std::getenv("PMIX_RANK") : "";
     ::unsetenv("PMIX_NAMESPACE");  // a tool, not a second client for the rank
     ::unsetenv("PMIX_RANK");
-    char tool_ns[PMIX_MAX_NSLEN + 1];
-    std::snprintf(tool_ns, sizeof tool_ns, "tt-run-rank.%d", static_cast<int>(::getpid()));
+    char tool_ns[PMIX_MAX_NSLEN + 1];  // unique across hosts (pids repeat across containers)
+    std::snprintf(tool_ns, sizeof tool_ns, "tt-run-rank.%s.%s", g_job.nspace.c_str(), rank_name());
+    // The PMIx threads started here inherit this mask: the forwarded signals reach the main thread only.
+    sigset_t forwarded{};
+    sigset_t previous{};
+    ::sigemptyset(&forwarded);
+    for (const int s : kForwarded) {
+        ::sigaddset(&forwarded, s);
+    }
+    ::pthread_sigmask(SIG_BLOCK, &forwarded, &previous);
     pmix_rank_t zero = 0;
     pmix_info_t init[3];
     PMIX_INFO_LOAD(&init[0], PMIX_TOOL_NSPACE, tool_ns, PMIX_STRING);
@@ -522,8 +559,14 @@ void connect_tool(pid_t daemon) {
     if (rc == PMIX_SUCCESS) {
         rc = PMIx_Register_event_handler(&code, 1, nullptr, 0, peer_event, nullptr, nullptr);
         rc = rc < 0 ? rc : PMIX_SUCCESS;  // the blocking form returns the handler's reference
+        if (rc != PMIX_SUCCESS) {
+            PMIx_tool_finalize();
+        }
     }
+    ::pthread_sigmask(SIG_SETMASK, &previous, nullptr);
     if (rc != PMIX_SUCCESS) {
+        ::setenv("PMIX_NAMESPACE", g_job.nspace.c_str(), 1);  // back to a client, for stop_job
+        ::setenv("PMIX_RANK", rank_env.c_str(), 1);
         std::fprintf(
             stderr,
             "[tt-run-rank] rank %s: cannot connect to the PMIx server (%s): the other ranks are not told when it "
@@ -533,9 +576,6 @@ void connect_tool(pid_t daemon) {
         return;
     }
     g_job.tool = true;
-    if (const char* v = std::getenv("TT_RUN_RANK_VERBOSE"); v != nullptr && *v != '\0' && *v != '0') {
-        std::fprintf(stderr, "[tt-run-rank] rank %s: connected to the PMIx server as a tool\n", rank_name());
-    }
 #else
     (void)daemon;
     if (std::strcmp(rank_name(), "0") == 0) {
@@ -563,13 +603,14 @@ void tell(const std::string& what) {
 #endif
 }
 
-// SIGTERM to every rank through PRRTE job control: the backstop to the event (a wrapper that missed it), or the stop
-// itself when this wrapper has no tool connection (then as a client, once its program is gone).
+// SIGTERM to every rank through PRRTE job control: the backstop to the event (a wrapper that missed it), or, without a
+// tool connection, the stop itself, sent as the rank's PMIx client once its program is gone.
 void stop_job() {
 #ifdef TT_RUN_RANK_HAS_PMIX
     const bool client = !g_job.tool;
     pmix_proc_t me;
-    if (client && (g_child > 0 || PMIx_Init(&me, nullptr, 0) != PMIX_SUCCESS)) {
+    if (client &&
+        (g_child > 0 || std::getenv("PMIX_NAMESPACE") == nullptr || PMIx_Init(&me, nullptr, 0) != PMIX_SUCCESS)) {
         return;  // the launcher ends the job
     }
     pmix_proc_t all;
@@ -577,9 +618,11 @@ void stop_job() {
     int32_t signum = SIGTERM;
     pmix_info_t directive;
     PMIX_INFO_LOAD(&directive, PMIX_JOB_CTRL_SIGNAL, &signum, PMIX_INT32);
+    g_own_stop = 1;
     const pmix_status_t rc = PMIx_Job_control(&all, 1, &directive, 1, nullptr, nullptr);
     PMIX_INFO_DESTRUCT(&directive);
     if (rc != PMIX_SUCCESS) {
+        g_own_stop = 0;
         std::fprintf(stderr, "[tt-run-rank] rank %s: PMIx_Job_control: %s\n", rank_name(), PMIx_Error_string(rc));
     }
     if (client) {
@@ -591,10 +634,12 @@ void stop_job() {
 // This rank's program failed: say so (tt-run reads the line), tell the other wrappers, and stop the job unless notify.
 void report(const std::string& how, int code, int sig, pid_t pid) {
     g_reported = 1;
+    g_job.reported = code;
+    g_job.origin = how.find("MPI_ERR_PROC_FAILED") == std::string::npos;  // a dead peer's symptom is not the origin
     std::fprintf(
         stderr,
-        "[rank %d] %s (on %s, pid %d); %s (exit %d)\n",
-        g_job.me,
+        "[rank %s] %s (on %s, pid %d); %s (exit %d)\n",
+        rank_name(),
         how.c_str(),
         host_name().c_str(),
         static_cast<int>(pid),
@@ -611,19 +656,23 @@ void report(const std::string& how, int code, int sig, pid_t pid) {
 }
 
 // A program that failed or was stopped: hold this wrapper's exit until every rank's program has ended, so the launcher
-// kills none still closing. The first failed rank leaves first, so the launcher reports its code.
-void hold(bool origin) {
-    const double bound = g_job.grace + 10.0;
-    for (double waited = 0.0; g_job.tool && waited < bound; waited += 0.1) {
+// (which ends the whole job at the first non-zero exit) kills none still running. Bounded by the grace when stopping;
+// under notify the others run on, so it waits for them. The failed rank leaves first, so the launcher reports its code.
+void hold() {
+    const double bound = g_job.notify ? 1e18 : g_job.grace + 10.0;
+    for (double waited = 0.0; g_job.tool && waited < bound && ::getppid() == g_job.daemon; waited += 0.1) {
         {
             std::lock_guard<std::mutex> lock(g_job.mu);
+            if (g_job.me >= 0 && g_job.me < static_cast<int>(g_job.ended.size())) {
+                g_job.ended[g_job.me] = 1;
+            }
             if (std::find(g_job.ended.begin(), g_job.ended.end(), 0) == g_job.ended.end()) {
                 break;
             }
         }
         ::usleep(100000);
     }
-    if (!origin) {
+    if (!g_job.origin) {
         ::usleep(300000);
     }
 }
@@ -637,8 +686,10 @@ void read_words(int fd, std::string& said, pid_t child) {
     for (size_t nl = 0; (nl = said.find('\n')) != std::string::npos; said.erase(0, nl + 1)) {
         int code = 0;
         int used = 0;
-        if (g_reported == 0 && std::sscanf(said.c_str(), "failed %d %n", &code, &used) == 1 && used > 0) {
-            report(said.substr(static_cast<size_t>(used), nl - static_cast<size_t>(used)), code, 0, child);
+        const std::string line = said.substr(0, nl);
+        if (g_reported == 0 && std::sscanf(line.c_str(), "failed %d %n", &code, &used) == 1) {
+            const std::string why = line.substr(static_cast<size_t>(used));
+            report(why.empty() ? "failed" : why, code, 0, child);
         }
     }
 }
@@ -647,9 +698,6 @@ void disconnect() {
 #ifdef TT_RUN_RANK_HAS_PMIX
     if (g_job.tool) {
         PMIx_tool_finalize();
-        if (const char* v = std::getenv("TT_RUN_RANK_VERBOSE"); v != nullptr && *v != '\0' && *v != '0') {
-            std::fprintf(stderr, "[tt-run-rank] rank %d: left the PMIx server\n", g_job.me);
-        }
     }
 #endif
 }
@@ -667,13 +715,12 @@ int main(int argc, char** argv) {
     for (; first + 1 < argc && std::strncmp(argv[first], "--", 2) == 0 && argv[first][2] != '\0'; first += 2) {
         if (std::strcmp(argv[first], "--stop-grace") == 0 && std::atof(argv[first + 1]) > 0) {
             g_job.grace = std::atof(argv[first + 1]);
-        } else if (std::strcmp(argv[first], "--on-peer-exit") == 0 && std::strcmp(argv[first + 1], "stop") != 0) {
+        } else if (
+            std::strcmp(argv[first], "--on-peer-exit") == 0 &&
+            (std::strcmp(argv[first + 1], "stop") == 0 || std::strcmp(argv[first + 1], "notify") == 0)) {
             g_job.notify = std::strcmp(argv[first + 1], "notify") == 0;
-            if (!g_job.notify) {
-                first = argc;  // a bad mode: usage
-            }
-        } else if (std::strcmp(argv[first], "--on-peer-exit") != 0) {
-            first = argc;
+        } else {
+            first = argc;  // an unknown option or value: usage
         }
     }
     if (first < argc && std::strcmp(argv[first], "--") == 0) {
@@ -761,15 +808,17 @@ int main(int argc, char** argv) {
         ::fcntl(events_pipe[1], F_SETFL, O_NONBLOCK);  // a program that never reads them never blocks this wrapper
     }
     g_job.events_fd = events_pipe[1];
-    g_job.me = std::atoi(rank_name());
+    g_job.me = std::strcmp(rank_name(), "?") == 0 ? -1 : std::atoi(rank_name());
+    g_job.daemon = daemon;
     if (const char* n = std::getenv("OMPI_COMM_WORLD_SIZE"); n != nullptr && std::atoi(n) > 0) {
         g_job.ended.assign(static_cast<size_t>(std::atoi(n)), 0);
     }
     connect_tool(daemon);
 
     // Wait for the program, reading what it writes on TT_RUN_RANK_FD as it writes it. A crash still writing its core
-    // dump is ended after 10 s, at once when the job is stopping (teardown plan P8). A program still running the stop
-    // grace after a stop reached it is killed. A program whose daemon is gone is stopped.
+    // dump is ended after 10 s, at once when the job is stopping. A program still running the stop grace after a stop
+    // reached it (or after it reported its own failure) is killed. A program whose daemon is
+    // gone is stopped.
     int status = 0;
     bool dump_ended = false;
     bool forced = false;
@@ -779,12 +828,17 @@ int main(int argc, char** argv) {
     double stop_ticks = -1;   // 100 ms ticks since a stop reached the program
     std::string said;
     for (;;) {
-        const pid_t done = ::waitpid(child, &status, WNOHANG);
-        if (done == child) {
+        // Seen ended first, then reaped: no signal is sent to its pid once another process may have it.
+        siginfo_t info{};
+        const int waited = ::waitid(P_PID, child, &info, WEXITED | WNOHANG | WNOWAIT);
+        if (waited == 0 && info.si_pid == child) {
+            g_child = -1;
+            ::waitpid(child, &status, 0);
             break;
         }
-        if (done < 0 && errno != EINTR) {
+        if (waited < 0 && errno != EINTR) {
             wait_errno = errno;
+            g_child = -1;
             break;
         }
         read_words(status_pipe[0], said, child);
@@ -798,7 +852,7 @@ int main(int argc, char** argv) {
             forward(SIGTERM);
         } else if (orphaned_ticks >= 0) {
             ++orphaned_ticks;
-            if (orphaned_ticks == 100) {  // still there 10 s later
+            if (orphaned_ticks >= g_job.grace * 10) {  // still there the stop grace later
                 ::kill(child, SIGKILL);
             }
         }
@@ -814,7 +868,7 @@ int main(int argc, char** argv) {
             ::kill(child, SIGKILL);
             dump_ended = true;
         }
-        if (g_stop_signal != 0) {
+        if (g_stop_signal != 0 || (g_reported != 0 && !g_job.notify)) {
             ++stop_ticks;
         }
         if (!forced && stop_ticks >= g_job.grace * 10) {
@@ -830,12 +884,14 @@ int main(int argc, char** argv) {
         ::usleep(100000);
     }
     read_words(status_pipe[0], said, child);  // a word written just before the exit
-    g_child = -1;                             // reaped: its pid may belong to another process from now on
     const bool signalled = wait_errno == 0 && WIFSIGNALED(status);
     const int sig = signalled ? WTERMSIG(status) : 0;
     int code = signalled ? 128 + sig : WEXITSTATUS(status);
     if (wait_errno != 0) {
         code = 1;  // the program's status is unknown: a failure
+    }
+    if (g_reported != 0 && g_job.reported != 0) {
+        code = g_job.reported;  // the code its stop line gave, which tt-run returns too
     }
     ::signal(SIGTERM, SIG_IGN);  // the job's stop comes back to this wrapper too
 
@@ -858,7 +914,7 @@ int main(int argc, char** argv) {
     }
     tell("ended " + std::to_string(g_job.me) + " " + std::to_string(code));
     if ((stopped || g_reported != 0) && orphaned_ticks < 0) {
-        hold(g_reported != 0);
+        hold();
     }
     disconnect();
     return code;
