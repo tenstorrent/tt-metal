@@ -47,22 +47,48 @@ private:
     Struct options {};
 };
 
+namespace detail
+{
+
+template <typename>
+using DestReg = decltype(sfpi::dst_reg[0]);
+
+/// @brief Matches a [](Dest[output_index], Dest[input_index]...) functor signature.
+template <typename Functor, typename... Index>
+constexpr bool is_direct_store_v = std::is_invocable_v<Functor&, DestReg<void>&, DestReg<Index>...>;
+
+/// @brief Matches a [](Dest[input_index]...) functor signature for deferred stores.
+template <typename Functor, typename... Index>
+constexpr bool is_deferred_store_v = !is_direct_store_v<Functor, Index...> && std::is_invocable_v<Functor&, DestReg<Index>...>;
+
+} // namespace detail
+
 /**
- * @brief Dest[output_index] = functor(Dest[input_index]...), element by element, over the region Shape selects.
+ * @brief functor(Dest[output_index], Dest[input_index]...), element by element, over the region Shape selects.
+ *
+ * @warning Store to Dest[output_index] should come last, it advances the Dest counter.
  *
  * @tparam Shape: Region of each Dest tile to walk
  * @tparam Agnostic: Whether the call may compute on lanes outside the region. See @ref PaddingAgnostic.
  * @tparam Options: Loop unrolling, built with @ref EltwiseOptions
- * @tparam Functor: Computation on a single vector
- * @tparam Index: Dest tile index type of each input, one per functor argument
- * @note A complete SFPU call: needs nothing around it other than the op's own init.
+ * @tparam Functor: Calculation on a set of Dest vectors
+ * @tparam Index: Dest tile index type of each input.
  */
-template <TensorShape Shape, PaddingAgnostic Agnostic, EltwiseOptions::Struct Options = EltwiseOptions().create(), typename Functor, typename... Index>
+template <
+    TensorShape Shape,
+    PaddingAgnostic Agnostic,
+    EltwiseOptions::Struct Options = EltwiseOptions().create(),
+    typename Functor,
+    typename... Index,
+    std::enable_if_t<detail::is_direct_store_v<Functor, Index...>, int> = 0>
 [[gnu::always_inline]] inline void eltwise(const std::uint32_t output_index, Functor&& functor, const Index... input_index)
 {
     static_assert(((std::is_integral_v<Index> && !std::is_same_v<Index, bool>) && ...), "Input index must be a Dest tile index");
+    static_assert(
+        std::is_void_v<std::invoke_result_t<Functor&, detail::DestReg<void>&, detail::DestReg<Index>...>>,
+        "Functor that takes the output Dest vector must return void");
     static_assert(is_shape_walkable(Shape), "Shape must be a Tile");
-    static_assert(Agnostic == PaddingAgnostic::Yes || is_walk_agnostic(Shape), "a padding-sensitive call cannot touch padding");
+    static_assert(Agnostic == PaddingAgnostic::Yes || is_walk_agnostic(Shape), "Padding-sensitive call mustn't touch padding");
 
     constexpr std::size_t faces   = face_count(Shape);
     constexpr std::size_t vectors = vector_count(Shape) / faces;
@@ -86,7 +112,7 @@ template <TensorShape Shape, PaddingAgnostic Agnostic, EltwiseOptions::Struct Op
                 {
                     // ADDR_MOD_2 under the SFPU addr mod base is ADDR_MOD_6: the store advances Dest by one vector.
                     auto output = sfpi::dst_reg[0].mode(ADDR_MOD_2);
-                    output      = functor(sfpi::dst_reg[input_offset(input_index)]...);
+                    functor(output, sfpi::dst_reg[input_offset(input_index)]...);
                 });
 
             // The vector loop left Dest `vectors` past the face start; step over the rest of it and any skipped face.
@@ -94,21 +120,50 @@ template <TensorShape Shape, PaddingAgnostic Agnostic, EltwiseOptions::Struct Op
         });
 }
 
-/// Dest[output] = functor(Dest[input]). Pass the same index twice to operate in place.
+/**
+ * @brief Dest[output_index] = functor(Dest[input_index]...), element by element, over the region Shape selects.
+ *
+ * @tparam Shape: Region of each Dest tile to walk
+ * @tparam Agnostic: Whether the call may compute on lanes outside the region. See @ref PaddingAgnostic.
+ * @tparam Options: Loop unrolling, built with @ref EltwiseOptions
+ * @tparam Functor: Calculation on a set of Dest vectors
+ * @tparam Index: Dest tile index type of each input.
+ */
+template <
+    TensorShape Shape,
+    PaddingAgnostic Agnostic,
+    EltwiseOptions::Struct Options = EltwiseOptions().create(),
+    typename Functor,
+    typename... Index,
+    std::enable_if_t<detail::is_deferred_store_v<Functor, Index...>, int> = 0>
+[[gnu::always_inline]] inline void eltwise(const std::uint32_t output_index, Functor&& functor, const Index... input_index)
+{
+    static_assert(
+        std::is_assignable_v<const detail::DestReg<void>&, std::invoke_result_t<Functor&, detail::DestReg<Index>...>>,
+        "the Functor's result must be storable to Dest (a vFloat, vInt, vUInt, ...)");
+
+    // The explicit void return keeps the overload checks on this lambda from instantiating its body.
+    eltwise<Shape, Agnostic, Options>(
+        output_index,
+        [&](const detail::DestReg<void>& output, auto&&... input) -> void { output = functor(std::forward<decltype(input)>(input)...); },
+        input_index...);
+}
+
+/// Dest[output] = functor(Dest[input]), or functor(Dest[output], Dest[input]) storing itself. Pass the same index twice to operate in place.
 template <TensorShape Shape, PaddingAgnostic Agnostic, EltwiseOptions::Struct Options = EltwiseOptions().create(), typename Functor>
 [[gnu::always_inline]] inline void eltwise_unary(const std::uint32_t output, const std::uint32_t input, Functor&& functor)
 {
     eltwise<Shape, Agnostic, Options>(output, std::forward<Functor>(functor), input);
 }
 
-/// Dest[output] = functor(Dest[left], Dest[right]). Any operand may alias another.
+/// Dest[output] = functor(Dest[left], Dest[right]), or functor(Dest[output], ...) storing itself. Any operand may alias another.
 template <TensorShape Shape, PaddingAgnostic Agnostic, EltwiseOptions::Struct Options = EltwiseOptions().create(), typename Functor>
 [[gnu::always_inline]] inline void eltwise_binary(const std::uint32_t output, const std::uint32_t left, const std::uint32_t right, Functor&& functor)
 {
     eltwise<Shape, Agnostic, Options>(output, std::forward<Functor>(functor), left, right);
 }
 
-/// Dest[output] = functor(Dest[first], Dest[second], Dest[third]). Any operand may alias another.
+/// Dest[output] = functor(Dest[first], Dest[second], Dest[third]), or functor(Dest[output], ...) storing itself. Any operand may alias another.
 template <TensorShape Shape, PaddingAgnostic Agnostic, EltwiseOptions::Struct Options = EltwiseOptions().create(), typename Functor>
 [[gnu::always_inline]] inline void eltwise_ternary(
     const std::uint32_t output, const std::uint32_t first, const std::uint32_t second, const std::uint32_t third, Functor&& functor)
