@@ -2,14 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import pytest
 import torch
 import ttnn
 from tt_py_test_utils_common.utility_functions import (
     comp_allclose_and_pcc,
-    is_blackhole,
     torch_random,
 )
 
@@ -606,15 +603,6 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     )
 
 
-skip_routed_topk_on_sim = pytest.mark.skipif(
-    is_blackhole() and bool(os.environ.get("TT_METAL_SIMULATOR")),
-    reason=(
-        "Large indices topk on BH needs SFPCONFIG instr_mod1=8, unmodeled by ttsim "
-        "(https://github.com/tenstorrent/ttsim-private/issues/798)"
-    ),
-)
-
-
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("largest", [True])
@@ -631,8 +619,8 @@ skip_routed_topk_on_sim = pytest.mark.skipif(
     "dim2, k, dtype",
     [
         (8192, 50, ttnn.bfloat16),
-        pytest.param(50257, 50, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
-        pytest.param(8192, 1024, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
+        (50257, 50, ttnn.bfloat16),
+        (8192, 1024, ttnn.bfloat16),
         (8192, 1024, ttnn.bfloat8_b),
     ],
 )
