@@ -3,9 +3,22 @@
 Branch `fplavec/gpt_oss_emulator`: `origin/main` (`c947577e109`) plus the demo changes in commit `aad28cb0683`
 (`DEMO_NO_PROGRAM_CACHE`, `DEMO_MAX_TOKENS`, `DEMO_TIMEOUT_S`, `DEMO_SKIP_COMPILE_PREFILL` in `demo/text_demo.py`, and
 the prefill sparsity mask in L1). No local plugins are needed. Run from the tt-metal root after `./build_metal.sh` and
-`./create_venv.sh`. `HF_MODEL` must point at a gpt-oss-20b checkpoint in a folder named exactly `gpt-oss-20b` (here a
-symlink to `/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16`). `TT_CACHE_PATH` keeps the ttnn weight cache out of the model
-folder. `TT_METAL_WATCHER` and `TT_METAL_LLK_ASSERTS` must not be set.
+`./create_venv.sh`. `TT_METAL_WATCHER` and `TT_METAL_LLK_ASSERTS` must not be set.
+
+`HF_MODEL` must point at the gpt-oss-20b model weights, in a folder named exactly `gpt-oss-20b` or `gpt-oss-120b`: the demo
+checks the folder name and stops with `AssertionError: Unrecognized model name <name>` otherwise
+(`tt/model_config.py`, `ModelArgs.__init__`). The shared copy of the model weights is in
+`/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16`, whose name fails that check. So
+`/localdev/fplavec/temp/gpt_oss_models/gpt-oss-20b`, used below, is only a symlink to that folder, made to give it an
+accepted name without copying the weights:
+
+```bash
+mkdir -p /localdev/fplavec/temp/gpt_oss_models
+ln -s /proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16 /localdev/fplavec/temp/gpt_oss_models/gpt-oss-20b
+```
+
+`/localdev` is local to each reservation host, so the symlink has to be made again on a new host. `TT_CACHE_PATH` keeps
+the ttnn weight cache out of the model folder, which is shared.
 
 ## ttsim
 
