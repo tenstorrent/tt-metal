@@ -14,8 +14,8 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/sender_core_type.hpp>
 #include <tt_stl/strong_type.hpp>
 

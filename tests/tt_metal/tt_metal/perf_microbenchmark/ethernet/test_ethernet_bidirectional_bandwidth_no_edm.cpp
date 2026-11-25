@@ -5,10 +5,12 @@
 
 #include <fmt/base.h>
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -23,16 +25,16 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "df/float32.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "distributed/mesh_device_impl.hpp"

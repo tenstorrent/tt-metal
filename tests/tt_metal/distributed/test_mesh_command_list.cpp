@@ -18,20 +18,20 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
 #include <tt-metalium/experimental/command_list.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <internal/mesh_device.hpp>
 
 #include "tests/tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"

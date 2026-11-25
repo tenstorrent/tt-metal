@@ -6,13 +6,13 @@
 
 #include <optional>
 
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/tensor/spec/layout/alignment.hpp>
-#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/alignment.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
 
 namespace tt::tt_metal {
 

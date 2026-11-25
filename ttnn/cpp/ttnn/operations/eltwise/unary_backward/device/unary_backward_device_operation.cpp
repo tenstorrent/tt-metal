@@ -4,8 +4,8 @@
 
 #include "unary_backward_device_operation.hpp"
 
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 
 #include "ttnn/tensor/tensor_ops.hpp"

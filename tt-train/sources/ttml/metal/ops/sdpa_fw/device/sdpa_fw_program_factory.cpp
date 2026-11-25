@@ -8,9 +8,9 @@
 #include <bit>
 #include <cmath>
 #include <optional>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
 #include "sdpa_fw_device_operation.hpp"

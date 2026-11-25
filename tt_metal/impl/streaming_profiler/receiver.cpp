@@ -5,7 +5,7 @@
 #include "impl/streaming_profiler/receiver.hpp"
 
 #include "distributed/mesh_device_impl.hpp"
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include <algorithm>
 #include <array>

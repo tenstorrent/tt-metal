@@ -6,7 +6,7 @@
 
 #include <tuple>
 #include <variant>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "high_bw_all_gather_device_operation_types.hpp"

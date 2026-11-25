@@ -29,8 +29,8 @@
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/mesh_graph.hpp>
-#include <distributed_context.hpp>
-#include <system_mesh.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_context.hpp"

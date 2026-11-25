@@ -8,10 +8,10 @@
 #include <optional>
 
 #include <tt_stl/span.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 
 namespace tt::tt_metal::experimental {
 

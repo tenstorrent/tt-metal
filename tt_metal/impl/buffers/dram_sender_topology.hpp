@@ -18,9 +18,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device_types.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 
 #include "impl/context/context_types.hpp"
 
