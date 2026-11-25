@@ -1022,13 +1022,6 @@ mismatches 0.
 | story | 5 | 2 | 0.21 | 1 | 0.6466 | 0.0030 | 0.0052 | 0.0000011 | 4096 | 0 |
 | story | 6 | 2 | 1.49 | 1 | 0.2216 | 0.0092 | 0.0060 | 0.0000004 | 4096 | 0 |
 
-With `QWEN38_MTP_DEVICE_ACCEPT=1` an `--mtp --sampling` server decides its passes on the device under the same law
-(`mtp_accept`, one program on one core between the verify head and its tail: row `j` accepts draft `d_{j+1}` iff
-`fl32(u_j S_j) < w_j(d_{j+1})` over the table weights, a tie rejects, the first rejection and the bonus row draw with a
-second uniform, no division); the response's `mtp_acceptance_arithmetic` names `device-theta` or `host-fp32` (the
-host-decided pass, the host sampler's fp32 law) and the fingerprint carries `-device-accept`: one seed reproduces one
-stream per arithmetic; the law gate runs per arithmetic (2026-09-26).
-
 ## Image prompts: a tolerance class against the CPU reference (2026-09-29)
 
 An image prompt's device stream is compared with the CPU stream of `Qwen4ExpForConditionalGeneration` (transformers

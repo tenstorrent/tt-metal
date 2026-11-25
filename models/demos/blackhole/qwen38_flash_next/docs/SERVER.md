@@ -292,20 +292,12 @@ tokens per pass against a pass 3.1..3.7 ms longer) -- and loses on chat (-12 %) 
 accepts fewer tokens per pass; the two chains share the model's state, so a request may pick either at any point of a
 conversation.  DRAM: the second chain adds its verify window, draft state and traces (about 27 MB per bank at 32k; the
 MTP components, the alignment history, the decode step's MTP inputs and the prefill extensions are shared), admitted per
-chain at open.  The switch does not combine with `QWEN38_MTP_DEVICE_ACCEPT=1` (the device acceptance's
-constants are one k's; the open refuses the pair).
+chain at open.
 `--mtp-gdn-anchor layer0` (a server flag) re-anchors the layer-0 GDN state from the 1-row recurrence.
 Since 2026-09-25 the `--mtp` admission reads the mesh allocator's free bytes per DRAM bank after the resident weights
 are built (less the build's own remaining state and traces) and refuses only when the MTP pair, state and growth
 estimate for k and the verify forms do not fit there; the 2026-09-04 free-after-captures table is the no-device fallback and is logged, not enforced,
 before the mesh opens.
-`QWEN38_MTP_DEVICE_ACCEPT=1` (default off; needs the split verify) captures a third form beside the two verify forms:
-the head, the device's point-mass acceptance (`fused.mtp_accept`, the device sampler's arithmetic) and the tail in one
-trace, for the sampled requests its admission takes (`qwen38.sampling.mtp_acceptance_arithmetic` names the law
-realisation, `device-theta` or `host-fp32`); `/health.mtp.device_accept` is the switch, `device_accept_passes` and
-`device_accept_guard_deviations` its counters, and `QWEN38_MTP_DEVICE_ACCEPT_DUMP=<dir>` (dev) writes one JSON per
-request with every device-decided pass's rows, tokens, statistics and uniforms for the
-development-side law gate that re-derives each decision on the host.
 `QWEN38_MTP_PLE_EARLY` (on by default with `--mtp` since 2026-09-26; `=0` restores the one-queue open and the whole-row
 lookup after the pass row) opens the mesh with a second command queue on which the fused and the device-decided pass
 loops read the verify row's `(a, t', d_1)` lanes as soon as the verify is done, while the draft runs, and look the next

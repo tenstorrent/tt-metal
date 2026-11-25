@@ -49,12 +49,7 @@ bound (``sampling_step.drafting_admission``) drafts too, through the split form,
 the host deciding every pass by exact speculative sampling
 (``ttnn/speculative_sampling.py``) on the rows' candidate distributions, while a
 greedy request keeps the fused verify (the pinned greedy stream: the traces a
-``QWEN38_MTP_SAMPLED=0`` server runs; ``mtp_enter`` routes by ``decide``).  With
-``QWEN38_MTP_DEVICE_ACCEPT=1`` beside it (default off) a third form is captured,
-the head, the device's point-mass acceptance (``fused.mtp_accept``) and the tail
-in one trace, for the sampled requests the device acceptance admits
-(``mtp_enter``'s ``before_verify_sampled``, the pass's uniforms; the acceptance
-is ``tools/qwen38_mtp_device_accept.py``'s).
+``QWEN38_MTP_SAMPLED=0`` server runs; ``mtp_enter`` routes by ``decide``).
 
 ``Qwen38ChatSession`` speaks to the device only through a chain object with the
 per-step primitives; ``Qwen38TracedChain`` is the hardware one, the no-device
@@ -126,9 +121,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     fabric_config,
     is_slab_rows,
 )
-from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import ZERO_EMBEDDING_TOKEN
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_rows_scan as gdn_rows_scan_module
-from models.demos.blackhole.qwen38_flash_next.ttnn.fused import mtp_accept as mtp_accept_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.model import GENERIC_HEAD_LAYERS, Qwen38TTNNGenericTraceKey
 from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import SAMPLING_CANDIDATE_ROW_SHAPE, Qwen38CandidateRow
 
@@ -174,21 +167,13 @@ MTP_GDN_ANCHORS = ("off", "layer0")
 MTP_GDN_ANCHOR_LAYERS = {"off": (), "layer0": (0,)}
 MTP_BOOTSTRAP_DRAFT_TOKEN = 0
 MTP_EXPECTED_CACHE_LOADS = resident_decode.EXPECTED_CACHE_LOADS + 1
-# The verify forms a chain captures per switch pair (mtp_sampled, mtp_device_accept) (Qwen38TracedChain.open): the
-# fused verify alone; the fused verify and the split head + tail beside it (QWEN38_MTP_SAMPLED); with the device
-# acceptance (QWEN38_MTP_DEVICE_ACCEPT, default off) also the device-decided sampled form, the head, the accept program
-# and the tail in one trace.  The admission's traces term counts them; the server's pre-mesh refusal and the open's
-# gate both read this one table, so the two records cannot drift.
+# The verify forms a chain captures per ``mtp_sampled`` (Qwen38TracedChain.open): the fused verify alone; the fused
+# verify and the split head + tail beside it (QWEN38_MTP_SAMPLED).  The admission's traces term counts them; the
+# server's pre-mesh refusal and the open's gate both read this one table, so the two records cannot drift.
 MTP_VERIFY_FORMS_BY_SWITCH = {
-    (False, False): ("fused",),
-    (True, False): ("fused", "split"),
-    (True, True): ("fused", "split", "sampled"),
+    False: ("fused",),
+    True: ("fused", "split"),
 }
-# The device-decided form's warm: k + 1 uniforms (multiples of 2**-24, exact in fp32), distinct per row, under the
-# sampling extension's warm policy; the eager pass's statistics row must equal the host reference bitwise.
-MTP_WARM_ACCEPT_UNIFORMS = tuple(
-    n * 2**-24 for n in (1_000_003, 5_000_011, 9_000_017, 13_000_019, 16_000_023, 7_000_027)
-)
 
 
 def build_ttsampler(mesh: Any, tt_ccl: Any) -> Any:
@@ -199,17 +184,12 @@ def build_ttsampler(mesh: Any, tt_ccl: Any) -> Any:
     return Qwen38TTSampler(mesh, tt_ccl)
 
 
-def mtp_verify_forms(mtp_sampled: bool, mtp_device_accept: bool = False) -> tuple[str, ...]:
-    """The verify forms an MTP chain captures with the switches (``MTP_VERIFY_FORMS_BY_SWITCH``); the device
-    acceptance needs the split verify."""
+def mtp_verify_forms(mtp_sampled: bool) -> tuple[str, ...]:
+    """The verify forms an MTP chain captures with the switch (``MTP_VERIFY_FORMS_BY_SWITCH``)."""
 
-    if type(mtp_sampled) is not bool or type(mtp_device_accept) is not bool:
-        raise ValueError(
-            f"mtp_sampled and mtp_device_accept must be a bool each, got {mtp_sampled!r}, {mtp_device_accept!r}"
-        )
-    if mtp_device_accept and not mtp_sampled:
-        raise ValueError("the device acceptance needs the split verify (mtp_sampled)")
-    return MTP_VERIFY_FORMS_BY_SWITCH[(mtp_sampled, mtp_device_accept)]
+    if type(mtp_sampled) is not bool:
+        raise ValueError(f"mtp_sampled must be a bool, got {mtp_sampled!r}")
+    return MTP_VERIFY_FORMS_BY_SWITCH[mtp_sampled]
 
 
 # The MTP chain's DRAM growth per bank beyond the resident build, by the part the open measures it in.  `components`
@@ -1140,11 +1120,6 @@ class Qwen38ChatSession:
         # beside the ids (``vision_spans_compatible``).
         self.committed_vision: tuple[tuple[int, int, str], ...] = ()
         self.requests_served = 0
-        # The device acceptance's diagnostics (QWEN38_MTP_DEVICE_ACCEPT_DUMP, dev): with a dump directory every
-        # device-decided pass records the rows it decided on and complete() writes one JSON per request for
-        # the acceptance's gate tool (dev), which re-derives every pass on the host.
-        self.device_accept_dump: Path | None = None
-        self.device_accept_records: list[dict[str, Any]] = []
         self.last_tokens_per_second: float | None = None
         self.poisoned = False
         self._mtp_run: Qwen38MTPPassRun | None = None  # the pass loop's last pass until complete() settles it
@@ -1426,14 +1401,6 @@ class Qwen38ChatSession:
 
         prompt_tokens = len(self.committed)
         decide = None if sampling is None else partial(sampling_step.accept_pass, self, sampling, prompt_tokens)
-        # The device acceptance (the sampling extension's, admitted per request): its hook writes each pass's uniforms
-        # and the pass loop runs the device-decided form; a refused request keeps the host-decided split form.
-        before_verify_sampled = None
-        if sampling is not None and getattr(self.mtp, "device_accept", False):
-            _refusal, before_verify_sampled = self.chain.sampling.device_acceptance_for(sampling)
-            if before_verify_sampled is not None:
-                decide = None
-        record_rows = self.device_accept_dump is not None
 
         def next_pending() -> int:
             # The model's next token after the last TAIL: read from the row (greedy), or sampled from the candidate row.
@@ -1554,7 +1521,6 @@ class Qwen38ChatSession:
             elif not self.chain.mtp_pass_fits(position):
                 yield from finish_on_one_row_loop()
                 return
-            uniforms_before = 0 if sampling is None else len(sampling.uniforms)
             seglog = mtp_v2.seglog()
             if seglog is not None and entered:
                 seglog.step_starting()
@@ -1563,34 +1529,12 @@ class Qwen38ChatSession:
                     record = self.chain.mtp_step()
             else:
                 # The eager seed, then the bootstrap pass; a sampled request's decision rides on the chain (a greedy
-                # request keeps the call form every chain knows; the device acceptance's hook the device form).
-                if before_verify_sampled is not None:
-                    record = self.chain.mtp_enter(
-                        pending,
-                        self.ple_context,
-                        before_verify_sampled=before_verify_sampled,
-                        record_candidate_rows=record_rows,
-                    )
-                elif decide is None:
+                # request keeps the call form every chain knows).
+                if decide is None:
                     record = self.chain.mtp_enter(pending, self.ple_context)
                 else:
                     record = self.chain.mtp_enter(pending, self.ple_context, decide=decide)
                 entered = True
-            if getattr(record, "arithmetic", None) == mtp_v2.DEVICE_ACCEPT_ARITHMETIC:
-                # The device-decided pass's ledger (the extension's statistics reader) and, with the dump on, its
-                # record (the pass's own uniforms beside the request's ledger: the gate's slicing has both).
-                sampling.mtp.record_device(record.statistics, self.mtp.drafts)
-                if record.candidate_rows is not None:
-                    self.device_accept_records.append(
-                        {
-                            "index": len(self.device_accept_records),
-                            "candidate_rows": [float(value) for value in record.candidate_rows.reshape(-1).tolist()],
-                            "tokens": [int(token) for token in record.tokens],
-                            "statistics": [float(value) for value in record.statistics],
-                            "uniforms": [float(value) for value in sampling.uniforms[uniforms_before:]],
-                            "committed_tokens": len(self.committed),  # the pass's history: the stream cut here
-                        }
-                    )
             accepted = record.accepted
             emitted = [int(token) for token in record.argmaxes[: accepted + 1]]
             for token_id in emitted:
@@ -1686,29 +1630,6 @@ class Qwen38ChatSession:
             self.chain.write_token_row(run.emitted[rows - 1])  # the model's next token, unconsumed, as after _generate
 
     # -- one request -------------------------------------------------------------------------
-
-    def _write_device_accept_dump(self, sampling: sampling_step.Qwen38SamplingRequest) -> Path:
-        """One JSON per request for the device acceptance's gate tool (dev): k, the request's sampling parameters,
-        its uniform ledger and the device-decided passes' records (``index`` in the order the passes ran,
-        ``candidate_rows`` the rows the device decided on as (k + 1) * 256 floats, ``tokens`` the pass's verify tokens
-        ``[t, d_1 .. d_k]``, ``statistics`` the 16 lanes, ``uniforms`` the k + 1 draws that pass consumed, and
-        ``committed_tokens`` the length of the committed stream at the pass, its rows' history)."""
-
-        parameters = sampling.parameters
-        run = {
-            "drafts": self.mtp.drafts,
-            "parameters": {
-                "temperature": parameters.temperature,
-                "top_k": parameters.top_k,
-                "top_p": parameters.top_p,
-                "min_p": parameters.min_p,
-            },
-            "uniforms": [float(value) for value in sampling.uniforms],
-            "records": list(self.device_accept_records),
-        }
-        path = self.device_accept_dump / f"device-accept-{self.requests_served:05d}.json"
-        path.write_text(json.dumps(run) + "\n", encoding="utf-8")
-        return path
 
     def reset(self) -> None:
         """Position 0 and position-zero state at the captured addresses; the committed sequence is dropped, and so
@@ -1902,12 +1823,7 @@ class Qwen38ChatSession:
         # The device sampler's per-request writes (the policy, the greedy flag, the first draw) precede every
         # prompt step: the last prompt TAIL chooses the first token under this request's policy.
         device_loop = False
-        if (
-            getattr(self.sampling, "sampler", None) is not None
-            or getattr(self.sampling, "device_accept", None) is not None
-        ):
-            # The device sampler's writes, or the device acceptance's request start (its policy row, its uniform
-            # stream restarted: an --mtp server samples on the host, so the sampler alone would never reach it).
+        if getattr(self.sampling, "sampler", None) is not None:
             self.sampling.begin_request(sampling)
             device_loop = sampling is not None and bool(sampling.uniforms)
         if sampling is not None:
@@ -1920,7 +1836,6 @@ class Qwen38ChatSession:
         restored_schedule = snapshot_before.schedule if reuse == "snapshot" and snapshot_before is not None else None
         try:
             self.row_token = None
-            self.device_accept_records = []
             if reuse == "snapshot":
                 self._restore_prompt_snapshot()
             elif reuse == "reset":
@@ -2062,8 +1977,6 @@ class Qwen38ChatSession:
         self.requests_served += 1
         self.last_tokens_per_second = tokens_per_second
         prefill_tokens = len(token_ids) - common
-        if self.device_accept_dump is not None and self.device_accept_records and sampling is not None:
-            self._write_device_accept_dump(sampling)
         completion = Qwen38ChatCompletion(
             token_ids=generated,
             finish_reason=finish,
@@ -2495,14 +2408,8 @@ class Qwen38ChainMTP:
     split_traces: mtp_v2.Qwen38TTNNMTPTraces | None = None  # verify_head, verify_tail, their draft; commit = traces'
     split_verify_output: mtp_v2.Qwen38TTNNVerifyOutput | None = None  # the tail's readback row (the split draft's)
     head_output: mtp_v2.Qwen38TTNNVerifyHeadOutput | None = None
-    # The device-decided sampled form (QWEN38_MTP_DEVICE_ACCEPT=1 beside the split verify, default off): the head, the
-    # accept program and the tail in one trace with a draft of its own; the pass loop of a sampled request the device
-    # acceptance admits (the tool side's decision) runs it, the others keep the host-decided split form.
-    device_accept: bool = False
-    sampled_traces: mtp_v2.Qwen38TTNNMTPTraces | None = None  # verify_sampled, its draft; commit = traces'
-    sampled_verify_output: mtp_v2.Qwen38TTNNVerifyOutput | None = None
     # The early rows read (QWEN38_MTP_PLE_EARLY, the server's default with --mtp since 2026-09-26; the mesh opened with
-    # two command queues): the fused and the device-decided pass loops read the verify lanes on the second queue and
+    # two command queues): the fused pass loop reads the verify lanes on the second queue and
     # look the next pass's PLE rows 0-1 up under the draft (mtp_v2.Qwen38TTNNEarlyRowsReader); the host-decided split
     # keeps its order.  False here = the one-queue form (a caller that did not ask; QWEN38_MTP_PLE_EARLY=0).
     ple_early: bool = False
@@ -2514,8 +2421,6 @@ class Qwen38ChainMTP:
     sampled_accepted_drafts: int = 0
     sampled_draws: int = 0
     sampled_fallbacks: int = 0
-    device_accept_passes: int = 0  # sampled passes the device decided (counted in the sampled_* counters too)
-    device_accept_guard_deviations: int = 0  # rows of those passes whose kept minimum did not clear the shard floor
 
     @property
     def alignment(self) -> mtp_v2.Qwen38TTNNVerifyAlignment:
@@ -2525,7 +2430,7 @@ class Qwen38ChainMTP:
         """Every captured trace once (the commit is shared by the forms), the fused form's first."""
 
         ids: list[int] = []
-        for traces in (self.traces, self.split_traces, self.sampled_traces):
+        for traces in (self.traces, self.split_traces):
             if traces is not None:
                 ids.extend(trace_id for trace_id in traces.ids() if trace_id not in ids)
         return ids
@@ -2540,15 +2445,6 @@ class Qwen38ChainMTP:
             self.sampled_accepted_drafts += pass_record.accepted
             self.sampled_draws += int(statistics["draws"])
             self.sampled_fallbacks += int(statistics["fallbacks"])
-        if getattr(pass_record, "arithmetic", None) == mtp_v2.DEVICE_ACCEPT_ARITHMETIC:
-            # The device-decided sampled pass: a sampled pass whose draws are the uniforms the program consumed
-            # (u_0 .. u_a* and v: a* + 2, or k + 1 with every draft accepted); the device never falls back, the rows
-            # whose guard failed are counted instead.
-            self.sampled_passes += 1
-            self.sampled_accepted_drafts += pass_record.accepted
-            self.sampled_draws += min(pass_record.accepted + 2, self.drafts + 1)
-            self.device_accept_passes += 1
-            self.device_accept_guard_deviations += int(pass_record.guard_deviations or 0)
         return pass_record
 
     # The counters: cumulative on the chain (``/health.mtp``); a request snapshots them (``counters()``) before it
@@ -2561,8 +2457,6 @@ class Qwen38ChainMTP:
         "sampled_accepted_drafts",
         "sampled_draws",
         "sampled_fallbacks",
-        "device_accept_passes",
-        "device_accept_guard_deviations",
     )
 
     def counters(self) -> dict[str, int]:
@@ -2599,9 +2493,6 @@ class Qwen38ChainMTP:
                 ),
                 sampled_draws=counts["sampled_draws"],
                 sampled_fallbacks=counts["sampled_fallbacks"],
-                device_accept=self.device_accept,
-                device_accept_passes=counts["device_accept_passes"],
-                device_accept_guard_deviations=counts["device_accept_guard_deviations"],
             )
         return summary
 
@@ -3158,18 +3049,13 @@ class Qwen38TracedChain:
         ple_context: tuple[int, int] | None,
         *,
         decide: Callable[..., Any] | None = None,
-        before_verify_sampled: Callable[[list[int]], Any] | None = None,
-        record_candidate_rows: bool = False,
         bootstrap_tokens: Sequence[int] | None = None,
     ) -> mtp_v2.Qwen38TTNNMTPPassRecord:
         """Eager switch into verify mode at the device position (the host's committed count), then the bootstrap
         pass whose row 0 is ``first_token`` (placeholder drafts).  Returns the pass record.  The pass loop's form:
-        neither hook (a greedy request) runs the fused verify traces, the device's verdict inside the body (no head
+        no ``decide`` (a greedy request) runs the fused verify traces, the device's verdict inside the body (no head
         readback, no host decision: the pinned greedy stream); ``decide`` (a sampled request's acceptance) runs the
-        split traces, the host deciding between the head and the tail (``mtp_sampled`` chains only);
-        ``before_verify_sampled`` (a sampled request the device acceptance admits: the callable writes the pass's
-        uniforms to the accept program's constants) runs the device-decided traces (``mtp_device_accept`` chains
-        only), ``record_candidate_rows`` putting the rows the device decided on into every pass record.
+        split traces, the host deciding between the head and the tail (``mtp_sampled`` chains only).
         ``bootstrap_tokens`` (``[first_token, d_1 .. d_k]``) replace the placeholder drafts: the teacher-forced
         verify gate's reference tokens."""
 
@@ -3181,23 +3067,13 @@ class Qwen38TracedChain:
             raise Qwen38ChatChainError(f"bootstrap tokens must be [first_token, {mtp.drafts} drafts]")
         if mtp.chain is not None:
             raise Qwen38ChatChainError("the MTP pass loop is already active")
-        if decide is not None and before_verify_sampled is not None:
-            raise Qwen38ChatChainError("a pass loop decides on the host or on the device, not both")
         if decide is not None and (not mtp.sampled or mtp.split_traces is None):
             raise Qwen38ChatChainError(
                 "a host decision needs the split verify (the chain was opened without mtp_sampled)"
             )
-        if before_verify_sampled is not None and mtp.sampled_traces is None:
-            raise Qwen38ChatChainError(
-                "the device acceptance needs its captured form (the chain was opened without mtp_device_accept)"
-            )
         position = self.state.position.read()
         mtp_v2.enter_verify_mode(model, self.state, mtp.verify, position=position, ple_context=ple_context)
-        if before_verify_sampled is not None:
-            # The device-decided form: no head output, no host decision; the hook writes each pass's uniforms.
-            traces, verify_output = mtp.sampled_traces, mtp.sampled_verify_output
-            head_output, decision = None, mtp_v2.decide_greedy
-        elif decide is None:
+        if decide is None:
             # The fused form: no head output; decide_greedy is the chain's default, never called on this form.
             traces, verify_output, head_output, decision = mtp.traces, mtp.verify_output, None, mtp_v2.decide_greedy
         else:
@@ -3205,7 +3081,7 @@ class Qwen38TracedChain:
             head_output, decision = mtp.head_output, decide
         early_reader = None
         if mtp.ple_early and decide is None:
-            # The fused and the device-decided forms: the verify lanes read on the second queue under the draft.
+            # The fused form: the verify lanes read on the second queue under the draft.
             # The host-decided split keeps today's order (its head readback blocks the host before the tail).
             early_reader = mtp_v2.Qwen38TTNNEarlyRowsReader(self.mesh, verify_output.readback, cq_id=1, main_cq_id=0)
         mtp.chain = mtp_v2.Qwen38TTNNMTPChain(
@@ -3219,8 +3095,6 @@ class Qwen38TracedChain:
             enqueue=self._enqueue,
             head_output=head_output,
             decide=decision,
-            before_verify_sampled=before_verify_sampled,
-            record_candidate_rows=record_candidate_rows,
             early_reader=early_reader,
         )
         if bootstrap_tokens is None:
@@ -3291,7 +3165,6 @@ class Qwen38TracedChain:
         device_sampler: bool = False,
         slab_rows: int | None = None,
         mtp_sampled: bool = False,
-        mtp_device_accept: bool = False,
         mtp_moe_rows: int | None = None,
         mtp_alternates: Sequence[int] = (),
         mtp_ple_early: bool = False,
@@ -3324,13 +3197,9 @@ class Qwen38TracedChain:
         against the eager rows gather, the tail; every op of the fused body runs in the head or the tail on tensors
         of the same specs, so the fused capture needs no round of its own) and captures the verify head and tail,
         with a draft of their own, after the fused verify, commit and draft (the commit is shared): greedy requests
-        run the fused traces, sampled requests the split ones (``mtp_enter``).  ``mtp_device_accept`` (needs
-        ``mtp_sampled``; the sampling extension's ``device_accept.constants``, the sampler tail's built with rows k + 1
-        from ``QWEN38_MTP_DEVICE_ACCEPT``) warms and captures the device-decided sampled form beside them (the head,
-        the accept program and the tail in one trace, with a draft of its own): the warm round runs that very
-        sequence under the extension's warm policy and checks the program's statistics row against the host reference.
-        ``mtp_ple_early`` (``QWEN38_MTP_PLE_EARLY``; the mesh opened with two command queues) makes the fused and the
-        device-decided pass loops read the verify lanes on the second queue and look the next pass's PLE rows 0-1 up
+        run the fused traces, sampled requests the split ones (``mtp_enter``).
+        ``mtp_ple_early`` (``QWEN38_MTP_PLE_EARLY``; the mesh opened with two command queues) makes the fused
+        pass loop read the verify lanes on the second queue and look the next pass's PLE rows 0-1 up
         under the draft (``mtp_enter`` builds the reader; the host-decided split keeps its order).
         ``greedy_tail_set`` (needs ``device_sampler``, no ``mtp``) captures a second HEAD / TAIL set per residue whose
         TAIL stops after the greedy resolve (no candidate row, no sampler), beside the sampler set: ``execute_head`` and
@@ -3373,10 +3242,6 @@ class Qwen38TracedChain:
             raise ValueError(f"mtp_sampled must be a bool, got {mtp_sampled!r}")
         if mtp_sampled and (mtp is None or not sampling):
             raise ValueError("mtp_sampled needs mtp and sampling: the split verify's candidates epilogue")
-        if type(mtp_device_accept) is not bool:
-            raise ValueError(f"mtp_device_accept must be a bool, got {mtp_device_accept!r}")
-        if mtp_device_accept and not mtp_sampled:
-            raise ValueError("mtp_device_accept needs mtp_sampled: the device decides the split verify's pass")
         if type(mtp_ple_early) is not bool:
             raise ValueError(f"mtp_ple_early must be a bool, got {mtp_ple_early!r}")
         if mtp_ple_early and mtp is None:
@@ -3440,7 +3305,7 @@ class Qwen38TracedChain:
             # growth estimate for this k and the verify forms; the measured growth of the MTP build, its states and
             # its traces is checked against that estimate.  The verify forms the open captures (one table, the switch)
             # are counted in the estimate and named in the record.
-            forms = mtp_verify_forms(mtp_sampled, mtp_device_accept)
+            forms = mtp_verify_forms(mtp_sampled)
             mtp_admission = mtp_capacity_admission(
                 model.allocated_context,
                 drafts=mtp,
@@ -3500,7 +3365,6 @@ class Qwen38TracedChain:
                 lm_head,
                 mesh,
                 device_sampler=device_sampler,
-                device_accept=sampling_step.device_acceptance_for_chain(mesh, lm_head.mesh_contract, drafts=mtp),
             )
         if mtp is not None:
             allocated_before_mtp_states = dram_allocated_per_bank()
@@ -3529,7 +3393,6 @@ class Qwen38TracedChain:
                 admission=mtp_admission,
                 dram_bytes_per_bank=mtp_dram_bytes_per_bank,
                 sampled=mtp_sampled,
-                device_accept=mtp_device_accept,
                 ple_early=mtp_ple_early,
             )
             if long_chunk_state is not None:
@@ -3540,30 +3403,15 @@ class Qwen38TracedChain:
                 )
             synchronize()
             mtp_dram_bytes_per_bank["states"] = dram_allocated_per_bank() - allocated_before_mtp_states
-        # The device acceptance is the sampling extension's (built from QWEN38_MTP_DEVICE_ACCEPT at its construction,
-        # tools/qwen38_mtp_device_accept.py): its constants are the accept program's (the sampler tail's, rows = k + 1);
-        # the switch the caller resolved and the extension's build must agree, one switch name.
-        device_acceptance = None if sampling_extension is None else getattr(sampling_extension, "device_accept", None)
-        if (device_acceptance is not None) != mtp_device_accept:
-            raise Qwen38ChatChainError(
-                f"mtp_device_accept={mtp_device_accept} but the sampling extension "
-                f"{'built' if device_acceptance is not None else 'did not build'} its device acceptance "
-                "(QWEN38_MTP_DEVICE_ACCEPT decides both)"
-            )
-        accept_constants = None if device_acceptance is None else device_acceptance.constants
         # The other drafting chains (mtp_alternates: QWEN38_MTP_DRAFTS_PER_REQUEST): admitted per k without the
         # shared components, their states beside the default chain's BEFORE any capture (every trace bakes its
         # addresses), the MTP layer's generic state, the step inputs and the chunk extensions the default chain's
         # (one committed history, one decode tail; the sharing checked by identity), their own verify window, draft
-        # and traces.  The device acceptance's constants are one k's (rows = k + 1), so its form admits no alternate.
+        # and traces.
         mtp_chains: dict[int, Qwen38ChainMTP] = {}
         if mtp_alternates:
             if chain_mtp is None:
                 raise Qwen38ChatChainError("mtp_alternates need the default drafting chain (mtp)")
-            if mtp_device_accept:
-                raise Qwen38ChatChainError(
-                    "mtp_alternates and the device acceptance do not combine: its accept constants are one k's"
-                )
             alternates = tuple(mtp_alternates)
             if (
                 len(set(alternates)) != len(alternates)
@@ -3774,9 +3622,7 @@ class Qwen38TracedChain:
             # body (the prologue, the embed, the 48 layers, the final mixer, the rows resolve and the accept in the
             # head; the alignment, the readback concat, the accept-tile copy and the position adds in the tail) runs
             # there on tensors of the same dtype, layout and memory config (the split's host-written scalars and
-            # lanes are allocated as the fused body's), so the fused capture's programs are all compiled here.  With
-            # the device acceptance every residue runs a second round, the device-decided form's: the capture's eager
-            # sequence (the head, the accept program, the tail), so the accept program compiles before its capture.
+            # lanes are allocated as the fused body's), so the fused capture's programs are all compiled here.
             marker("before-chat-mtp-warm-pass")
             warm_fed = resident_decode.SINGLE_TRACE_WARM_POSITIONS  # positions the warm pass consumed so far
 
@@ -3786,9 +3632,7 @@ class Qwen38TracedChain:
                 rounds, the default first, so no capture meets a program its warm never compiled."""
 
                 nonlocal warm_fed, resolved, ple_context
-                warm_forms = (
-                    ("fused",) if not target.sampled else ("split", "sampled") if target.device_accept else ("split",)
-                )
+                warm_forms = ("fused",) if not target.sampled else ("split",)
                 rounds = [(residue, warm_form) for residue in range(RESIDUE_CLASSES) for warm_form in warm_forms]
                 dr2_positions = []
                 if (
@@ -3817,32 +3661,6 @@ class Qwen38TracedChain:
                     head = None
                     if warm_form == "fused":
                         output = mtp_v2.forward_verify(model, target.verify, state, catch_up=False)
-                    elif warm_form == "sampled":
-                        # The device-decided form, the capture's eager sequence under the extension's warm policy and
-                        # k + 1 distinct uniforms; the program's statistics row must equal the host reference on the rows
-                        # the head landed, bitwise (the fusion gate's check, here in the warm).
-                        accept_constants.write_policy(sampling_step.WARM_POLICY)
-                        warm_uniforms = list(MTP_WARM_ACCEPT_UNIFORMS[: target.drafts + 1])
-                        accept_constants.write_uniforms(warm_uniforms)
-                        output = mtp_v2.forward_verify_sampled(
-                            model, target.verify, state, accept_constants, catch_up=False
-                        )
-                        synchronize()
-                        reference = mtp_accept_module.accept_reference(
-                            mtp_v2.read_candidate_rows(target.verify),
-                            warm_tokens_pass[1:],
-                            sampling_step.WARM_POLICY,
-                            warm_uniforms,
-                            sentinel=ZERO_EMBEDDING_TOKEN,
-                        )
-                        statistics = mtp_v2.read_accept_statistics(target.verify)
-                        expected = reference.statistics_row()
-                        actual = torch.tensor(statistics.row, dtype=torch.float32)
-                        if not torch.equal(actual.view(torch.int32), expected.view(torch.int32)):
-                            raise Qwen38ChatChainError(
-                                f"MTP warm round {residue} device acceptance statistics {list(statistics.row)} vs the "
-                                f"host reference {expected.tolist()}"
-                            )
                     else:
                         # The split form: the head, its row, the greedy decision checked against the device lanes, the rows
                         # candidates against torch.topk of the eager rows gather (the fallback's program), the tail.
@@ -4212,8 +4030,8 @@ class Qwen38TracedChain:
             exactly); the draft body reads the verify output's readback address, so the verify capture comes first.
             With the split verify the head, the tail and a second draft follow (each verify body allocates its readback
             row inside its own capture, so the tail lands a row of its own and the split form needs a draft captured on
-            that row; the commit reads neither row and is shared), and with the device acceptance its one trace and
-            draft.  Capture records without executing: the device state is unchanged.  ``dram_baseline`` is the
+            that row; the commit reads neither row and is shared).
+            Capture records without executing: the device state is unchanged.  ``dram_baseline`` is the
             allocation the chain's traces grow from (the last prefill capture's for the default chain, the previous
             chain's for an alternate); the allocation after them is returned.  The same sequence of calls for every
             chain (QWEN38_MTP_DRAFTS_PER_REQUEST: the alternates after the default, in draft-count order)."""
@@ -4272,25 +4090,6 @@ class Qwen38TracedChain:
                     acknowledge_corruptible(tensor)
                 synchronize()
             dram_after_split = dram_allocated_per_bank()
-            if target.device_accept:
-                # The device-decided sampled form: one trace (the head, the accept program, the tail), the draft on its
-                # row; the statistics row it writes and the accept constants were marked with the split's buffers.
-                capture_started_ns = clock_ns()
-                verify_sampled, sampled_verify_output = mtp_v2.capture_verify_sampled(
-                    model, target.verify, state, accept_constants, catch_up=False, guard=guard, cq_id=0
-                )
-                target.capture_ms["verify_sampled"] = (clock_ns() - capture_started_ns) / 1e6
-                capture_started_ns = clock_ns()
-                sampled_draft = mtp_v2.capture_draft(
-                    model, target.verify, target.draft, state, sampled_verify_output, guard=guard, cq_id=0
-                )
-                target.capture_ms["sampled_draft"] = (clock_ns() - capture_started_ns) / 1e6
-                target.sampled_traces = mtp_v2.Qwen38TTNNMTPTraces(
-                    verify_first=None, draft=sampled_draft, commit=commit, verify_sampled=verify_sampled
-                )
-                target.sampled_verify_output = sampled_verify_output
-                acknowledge_corruptible(sampled_verify_output.readback)
-                synchronize()
             dram_after_target = dram_allocated_per_bank()
             target.trace_dram_bytes_per_bank = {
                 "decode_traces": dram_after_decode - dram_before_captures,
@@ -4301,15 +4100,9 @@ class Qwen38TracedChain:
             }
             if target.sampled:
                 target.trace_dram_bytes_per_bank["mtp_split_traces"] = dram_after_split - dram_after_fused
-            if target.device_accept:
-                target.trace_dram_bytes_per_bank["mtp_sampled_traces"] = dram_after_target - dram_after_split
             target.dram_bytes_per_bank["traces"] = target.trace_dram_bytes_per_bank["mtp_traces"]
             target.admission["measured_after_captures"] = dram_free_view()  # the allocator with the MTP chain in
-            captured_forms = (
-                ["fused"]
-                + (["split"] if target.split_traces is not None else [])
-                + (["sampled"] if target.sampled_traces is not None else [])
-            )
+            captured_forms = ["fused"] + (["split"] if target.split_traces is not None else [])
             if captured_forms != target.admission["verify_forms_captured"]:
                 raise Qwen38ChatChainError(
                     f"captured verify forms {captured_forms} vs the admission's {target.admission['verify_forms_captured']}"
@@ -4387,8 +4180,7 @@ class Qwen38TracedChain:
         for chain_mtp in self.drafting_chains():
             chain_mtp.traces = None
             chain_mtp.split_traces = None
-            chain_mtp.sampled_traces = None
-            for name in ("verify_output", "split_verify_output", "sampled_verify_output", "head_output"):
+            for name in ("verify_output", "split_verify_output", "head_output"):
                 output = getattr(chain_mtp, name)
                 if output is not None:
                     output.release_tensors()
@@ -4469,7 +4261,6 @@ def construct_chain(
     device_sampler: bool = False,
     slab_rows: int | None = None,
     mtp_sampled: bool = False,
-    mtp_device_accept: bool = False,
     mtp_moe_rows: int | None = None,
     mtp_alternates: Sequence[int] = (),
     mtp_ple_early: bool = False,
@@ -4497,7 +4288,6 @@ def construct_chain(
         device_sampler=device_sampler,
         slab_rows=slab_rows,
         mtp_sampled=mtp_sampled,
-        mtp_device_accept=mtp_device_accept,
         mtp_moe_rows=mtp_moe_rows,
         mtp_alternates=mtp_alternates,
         mtp_ple_early=mtp_ple_early,

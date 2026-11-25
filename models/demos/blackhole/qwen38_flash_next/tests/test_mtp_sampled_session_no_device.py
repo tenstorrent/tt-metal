@@ -536,36 +536,6 @@ def test_chain_mtp_summary_carries_the_split_counters() -> None:
     assert since["sampled_fallbacks"] == 1 and since["tokens_per_pass"] == since["sampled_tokens_per_pass"] == 2.0
     assert set(snapshot) == set(session_module.Qwen38ChainMTP.COUNTERS) and snapshot["passes"] == 1
     assert mtp.captured_trace_ids() == []
-    # A device-decided pass (the third form): a sampled pass whose draws are the uniforms the program consumed, the
-    # device never falling back; its guard deviations counted on their own.
-    device = mtp_v2.Qwen38TTNNMTPPassRecord(
-        2, 0, (1, 7, 8, 9, 1), 1, (), (), 0, 0, False, {}, None, tuple(range(16)), "device-theta", 2, None
-    )
-    before = mtp.counters()
-    mtp.record(device)
-    added = {name: value - before[name] for name, value in mtp.counters().items()}
-    assert added == {
-        "passes": 1,
-        "accepted_drafts": 1,
-        "accept_checks": 0,
-        "sampled_passes": 1,
-        "sampled_accepted_drafts": 1,
-        "sampled_draws": 3,  # a* + 2 = u_0, u_1 and v
-        "sampled_fallbacks": 0,
-        "device_accept_passes": 1,
-        "device_accept_guard_deviations": 2,
-    }
-    every = mtp_v2.Qwen38TTNNMTPPassRecord(
-        3, 0, (1, 7, 8, 9, 1), 4, (), (), 0, 0, False, {}, None, tuple(range(16)), "device-theta", 0, None
-    )
-    mtp.record(every)
-    assert mtp.sampled_draws - before["sampled_draws"] == 3 + 5  # every draft accepted: k + 1 draws
-    summary = mtp.summary(since=before)
-    assert (summary["device_accept"], summary["device_accept_passes"], summary["device_accept_guard_deviations"]) == (
-        False,
-        2,
-        2,
-    )
 
 
 def test_chain_mtp_captured_trace_ids_cover_both_forms_and_the_shared_commit_once() -> None:
@@ -581,10 +551,6 @@ def test_chain_mtp_captured_trace_ids_cover_both_forms_and_the_shared_commit_onc
     # every id of this list exactly once).
     assert mtp.captured_trace_ids() == [1, 3, 2, 4, 5, 6]
     assert len(set(mtp.captured_trace_ids())) == 6
-    # The device acceptance beside them: the third form's trace and its draft, the commit still once.
-    mtp.device_accept = True
-    mtp.sampled_traces = mtp_v2.Qwen38TTNNMTPTraces(verify_first=None, draft=8, commit=3, verify_sampled=7)
-    assert mtp.captured_trace_ids() == [1, 3, 2, 4, 5, 6, 7, 8]
 
 
 def test_traced_chain_mtp_enter_routes_greedy_to_the_fused_traces_and_sampled_to_the_split_ones(
@@ -611,8 +577,6 @@ def test_traced_chain_mtp_enter_routes_greedy_to_the_fused_traces_and_sampled_to
             enqueue,
             head_output,
             decide,
-            before_verify_sampled=None,
-            record_candidate_rows=False,
             early_reader=None,
         ):
             built.append(
@@ -627,16 +591,12 @@ def test_traced_chain_mtp_enter_routes_greedy_to_the_fused_traces_and_sampled_to
                     enqueue=enqueue,
                     head_output=head_output,
                     decide=decide,
-                    before_verify_sampled=before_verify_sampled,
-                    record_candidate_rows=record_candidate_rows,
                     early_reader=early_reader,
                 )
             )
 
         def bootstrap(self, tokens):
-            return SimpleNamespace(
-                accepted=0, decision=None, tokens=tuple(tokens), arithmetic=None, guard_deviations=None
-            )
+            return SimpleNamespace(accepted=0, decision=None, tokens=tuple(tokens))
 
     monkeypatch.setattr(mtp_v2, "Qwen38TTNNMTPChain", RecordingChain)
     monkeypatch.setattr(mtp_v2, "enter_verify_mode", lambda *args, **kwargs: entered.append(kwargs))
@@ -706,9 +666,6 @@ MTP_RESPONSE_KEYS = {
     "sampled_tokens_per_pass",
     "sampled_draws",
     "sampled_fallbacks",
-    "device_accept",
-    "device_accept_passes",
-    "device_accept_guard_deviations",
 }
 
 

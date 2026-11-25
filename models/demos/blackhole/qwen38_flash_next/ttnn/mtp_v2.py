@@ -81,7 +81,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import (
     Qwen38TTNNSamplingCandidateConstants,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.final_mixer import Qwen38TTNNFinalMixer
-from models.demos.blackhole.qwen38_flash_next.ttnn.fused import mtp_accept as mtp_accept_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.gdn import Qwen38TTNNGDN, Qwen38TTNNGDNRowsState
 from models.demos.blackhole.qwen38_flash_next.ttnn.layer import (
     BACKBONE_LAYERS,
@@ -520,10 +519,7 @@ class Qwen38TTNNVerifySplit:
     ``[1,1,1,1]`` = ``a*``, ``next_token`` FP32 ROW_MAJOR ``[1,1,1,1]`` = ``x*``, ``alignment_tokens`` FP32 ROW_MAJOR
     ``[1,1,1,32]`` = ``[d_1 .. d_a*, x*, ZERO_EMBEDDING_TOKEN ...]``.  Device-written by the head:
     ``candidates_readback`` FP32 ROW_MAJOR ``[1,1,rows,256]``, the persistent copy of the rows' candidate rows
-    (``candidates_constants`` are the sampling chain's: the shard start scalar the ids are rebased by).  Device-written
-    by the accept program of the device-decided form (:func:`forward_verify_sampled`): ``statistics`` FP32 ROW_MAJOR
-    ``[1,1,1,16]``, ``fused.mtp_accept``'s lanes (the rows' draft weights and kept totals, the guard mask, the
-    resample flag, a*, x*, theta, the drawing row's kept count), read once per pass for the ledger."""
+    (``candidates_constants`` are the sampling chain's: the shard start scalar the ids are rebased by)."""
 
     candidates_constants: Qwen38TTNNSamplingCandidateConstants
     candidates_readback: Any
@@ -531,7 +527,6 @@ class Qwen38TTNNVerifySplit:
     accept_index: Any
     next_token: Any
     alignment_tokens: Any
-    statistics: Any
 
     @classmethod
     def allocate(
@@ -573,9 +568,6 @@ class Qwen38TTNNVerifySplit:
                     ttnn.ROW_MAJOR_LAYOUT,
                     "host alignment tokens",
                 ),
-                statistics=upload(
-                    torch.zeros(mtp_accept_module.STATS_SHAPE), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, "accept statistics"
-                ),
             )
         except BaseException:
             _deallocate(*uploaded)
@@ -585,7 +577,7 @@ class Qwen38TTNNVerifySplit:
         return (self.accept_tile, self.accept_index, self.next_token, self.alignment_tokens)
 
     def device_written(self) -> tuple[Any, ...]:
-        return (self.candidates_readback, self.statistics)
+        return (self.candidates_readback,)
 
     def deallocate(self) -> None:
         _deallocate(*self.device_written(), *self.host_written())
@@ -864,7 +856,6 @@ def _validate_verify_state(
             ("host accept index", split.accept_index, (1, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             ("host next token", split.next_token, (1, 1, 1, 1), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
             ("host alignment tokens", split.alignment_tokens, TOKEN_ROW_SHAPE, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-            ("accept statistics", split.statistics, mtp_accept_module.STATS_SHAPE, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
         ):
             if _shape(tensor) != shape or tensor.dtype != dtype or tensor.layout != layout:
                 raise RuntimeError(
@@ -2210,148 +2201,6 @@ def write_verify_decision(
         )
 
 
-# --------------------------------------------------------------------------- the device-decided sampled form
-
-DEVICE_ACCEPT_ARITHMETIC = "device-theta"  # the accept program's law: the sampler tail's table weights, fp32 products
-
-
-@dataclass(frozen=True)
-class Qwen38TTNNAcceptStatistics:
-    """The accept program's statistics row parsed (``fused.mtp_accept``'s lanes): ``weights[j]`` = w_j(d_{j+1}) and
-    ``totals[j]`` = S_j per evaluated row (the rows up to the first rejection), ``guard_mask`` (bit j: row j's kept
-    minimum did not clear the shard floor), ``resampled`` (a draft was rejected and x* drawn from its row), the
-    device's ``accepted`` a* and ``token`` x*, ``theta`` (the draw's fp32 product) and ``kept`` (the drawing row's
-    kept lanes).  ``row`` is the 16 lanes as read: the pass record's ``statistics``."""
-
-    row: tuple[float, ...]
-    weights: tuple[int, ...]
-    totals: tuple[int, ...]
-    guard_mask: int
-    resampled: bool
-    accepted: int
-    token: int
-    theta: float
-    kept: int
-
-    @property
-    def guard_deviations(self) -> int:
-        return bin(self.guard_mask).count("1")
-
-
-def parse_accept_statistics(values: torch.Tensor) -> Qwen38TTNNAcceptStatistics:
-    """The 16-lane row (as ``AcceptReference.statistics_row`` lays it out) parsed; -1 in a total marks an unevaluated
-    row."""
-
-    ma = mtp_accept_module
-    lanes = values.reshape(-1).to(torch.float32)
-    if lanes.numel() != ma.STATS_LANES:
-        raise RuntimeError(f"accept statistics row has {lanes.numel()} lanes, expected {ma.STATS_LANES}")
-    row = tuple(float(value) for value in lanes.tolist())
-    evaluated = [j for j in range(ma.STAT_TOTAL - ma.STAT_WEIGHT) if row[ma.STAT_TOTAL + j] >= 0]
-    return Qwen38TTNNAcceptStatistics(
-        row=row,
-        weights=tuple(int(row[ma.STAT_WEIGHT + j]) for j in evaluated),
-        totals=tuple(int(row[ma.STAT_TOTAL + j]) for j in evaluated),
-        guard_mask=int(row[ma.STAT_GUARD]),
-        resampled=bool(row[ma.STAT_RESAMPLED]),
-        accepted=int(row[ma.STAT_ACCEPTED]),
-        token=int(row[ma.STAT_TOKEN]),
-        theta=row[ma.STAT_THETA],
-        kept=int(row[ma.STAT_KEPT]),
-    )
-
-
-def read_accept_statistics(verify: Qwen38TTNNVerifyState) -> Qwen38TTNNAcceptStatistics:
-    """Host readback (outside any trace, after a device-decided pass and the draft that followed it) of the accept
-    program's statistics row from coordinate 0."""
-
-    if verify.split is None:
-        raise ValueError("the verify state has no split buffers")
-    return parse_accept_statistics(ttnn.to_torch(ttnn.get_device_tensors(verify.split.statistics)[0]))
-
-
-def read_candidate_rows(verify: Qwen38TTNNVerifyState) -> torch.Tensor:
-    """Host readback (outside any trace) of the rows' candidate rows the head landed, fp32 ``[rows, 256]`` from
-    coordinate 0: what the device decided on (a ledger's record, or the warm's reference input)."""
-
-    if verify.split is None:
-        raise ValueError("the verify state has no split buffers")
-    values = ttnn.to_torch(ttnn.get_device_tensors(verify.split.candidates_readback)[0])
-    return values.reshape(verify.rows, CANDIDATE_LANES_PER_ROW).to(torch.float32).clone()
-
-
-def forward_verify_sampled(
-    model: Qwen38TTNNTextModel,
-    verify: Qwen38TTNNVerifyState,
-    state: Qwen38TTNNTextModelGenericState,
-    constants: Any,
-    *,
-    catch_up: bool,
-    observer: Callable[[str], Any] | None = None,
-) -> Qwen38TTNNVerifyOutput:
-    """The device-decided sampled pass, one body: :func:`forward_verify_head`, then ``fused.mtp_accept`` deciding the
-    pass on the device (the rows' candidates the head landed in ``split.candidates_readback``, the drafts in
-    ``verify.draft_lanes``, the request's policy and the pass's uniforms ``[u_0 .. u_{k-1}, v]`` in ``constants``, the
-    sampler tail's built with ``rows = k + 1``) into the split's four decision buffers exactly as
-    :func:`write_verify_decision` writes them, plus ``split.statistics``; then :func:`forward_verify_tail` on the
-    head's roots.  No host stop: the head and tail bodies are untouched, the head's retained tensors are released at
-    the end.  Same contract as :func:`forward_verify` (fixed op sequence, no host tensor, a failure poisons the model
-    owner).  :func:`capture_verify_sampled` traces it whole, so the eager warm must run this very function (a program
-    the warm did not compile cannot be loaded inside a capture)."""
-
-    if verify.split is None:
-        raise ValueError("the device-decided sampled pass needs the verify state's split buffers")
-    for name in ("policy_row", "uniforms", "weight_table"):
-        if not hasattr(constants, name):
-            raise TypeError(f"constants need the sampler tail's {name} (Qwen38TTNNSamplerTailConstants, rows = k + 1)")
-    split = verify.split
-    head = forward_verify_head(model, verify, state, catch_up=catch_up, observer=observer)
-    try:
-        statistics = mtp_accept_module.mtp_accept(
-            split.candidates_readback,
-            verify.draft_lanes,
-            constants,
-            accept_tile=split.accept_tile,
-            accept_index=split.accept_index,
-            next_token=split.next_token,
-            alignment_tokens=split.alignment_tokens,
-            statistics=split.statistics,
-        )
-        if _tensor_key(statistics) != _tensor_key(split.statistics):
-            raise RuntimeError("the accept statistics did not land in the split's statistics row")
-        if observer is not None:
-            observer("verify_sampled:accept")
-    except BaseException as error:
-        head.release_tensors()
-        model._mark_poisoned("forward_verify_sampled", BACKBONE_LAYERS, error)
-    output = forward_verify_tail(model, verify, state, head, catch_up=catch_up, observer=observer)
-    head.release_tensors()
-    return output
-
-
-def capture_verify_sampled(
-    model: Qwen38TTNNTextModel,
-    verify: Qwen38TTNNVerifyState,
-    state: Qwen38TTNNTextModelGenericState,
-    constants: Any,
-    *,
-    catch_up: bool,
-    guard: Callable[[str], AbstractContextManager[Any]],
-    cq_id: int = 0,
-) -> tuple[int, Qwen38TTNNVerifyOutput]:
-    """Capture the device-decided sampled pass as one trace; the draft body is captured after its output (the row it
-    lands), the policy and the uniforms the program reads are host-written before every replay."""
-
-    with corruptible_allocation_scope(model.mesh_device):
-
-        def _body():
-            with guard(f"verify sampled capture catch_up={catch_up}"):
-                return forward_verify_sampled(model, verify, state, constants, catch_up=catch_up)
-
-        trace_id, output = _capture_trace(model.mesh_device, cq_id, _body)
-    return trace_id, output
-
-
 # --------------------------------------------------------------------------- the commit body (split form)
 
 
@@ -3022,9 +2871,7 @@ class Qwen38TTNNMTPTraces:
     ``draft -> commit -> verify_first`` so the commit replay overlaps the host's PLE lookup.  ``draft_history`` is
     the draft body's history derivation captured on its own (``forward_draft_history``; the draft trace then ran
     ``derive_history=False``): the two-command-queue form's fence point.  ``verify_head`` / ``verify_tail`` (the
-    split verify, the host deciding between them) or ``verify_sampled`` (the device-decided sampled form: the head,
-    the accept program and the tail in one trace, :func:`capture_verify_sampled`) replace ``verify_first``; both need
-    the commit form.  One object holds one verify form (``form``); a chain that captures several holds one object per
+    split verify, the host deciding between them) replace ``verify_first``; both need the commit form.  One object holds one verify form (``form``); a chain that captures several holds one object per
     form, sharing the commit."""
 
     verify_first: int | None
@@ -3034,7 +2881,6 @@ class Qwen38TTNNMTPTraces:
     draft_history: int | None = None
     verify_head: int | None = None
     verify_tail: int | None = None
-    verify_sampled: int | None = None
 
     def __post_init__(self) -> None:
         if (self.verify_catch_up is None) == (self.commit is None):
@@ -3046,29 +2892,21 @@ class Qwen38TTNNMTPTraces:
             for name, captured in (
                 ("fused", self.verify_first is not None),
                 ("split", self.verify_head is not None),
-                ("sampled", self.verify_sampled is not None),
             )
             if captured
         ]
         if len(forms) != 1:
-            raise ValueError(
-                "exactly one verify form: the fused verify_first, the split verify_head / verify_tail, or the "
-                "device-decided verify_sampled"
-            )
+            raise ValueError("exactly one verify form: the fused verify_first or the split verify_head / verify_tail")
         if forms[0] != "fused" and self.commit is None:
-            raise ValueError("the split verify and the device-decided form run the commit form")
+            raise ValueError("the split verify runs the commit form")
 
     @property
     def split(self) -> bool:
         return self.verify_head is not None
 
     @property
-    def device_sampled(self) -> bool:
-        return self.verify_sampled is not None
-
-    @property
     def form(self) -> str:
-        return "split" if self.split else "sampled" if self.device_sampled else "fused"
+        return "split" if self.split else "fused"
 
     def ids(self) -> list[int]:
         """Every captured trace id, for release and the pre-replay allocation check."""
@@ -3079,7 +2917,6 @@ class Qwen38TTNNMTPTraces:
                 self.verify_first,
                 self.verify_head,
                 self.verify_tail,
-                self.verify_sampled,
                 self.verify_catch_up,
                 self.commit,
                 self.draft_history,
@@ -3202,14 +3039,6 @@ class Qwen38TTNNMTPPassRecord:
     finished: bool
     segments_ns: dict[str, int]
     decision: Qwen38TTNNVerifyDecision | None = None  # the split verify's host verdict (its statistics)
-    # The device-decided sampled form (``traces.verify_sampled``): the accept program's 16 statistics lanes, its
-    # arithmetic (``DEVICE_ACCEPT_ARITHMETIC``), the guard deviations (rows whose kept minimum did not clear the shard
-    # floor) and, when the chain records them, the candidate rows the device decided on (fp32 ``[rows, 256]``); None on
-    # the other forms.
-    statistics: tuple[float, ...] | None = None
-    arithmetic: str | None = None
-    guard_deviations: int | None = None
-    candidate_rows: Any | None = None
 
 
 class Qwen38TTNNMTPChain:
@@ -3239,14 +3068,7 @@ class Qwen38TTNNMTPChain:
     greedy :func:`decide_greedy` by default; a sampled request's acceptance otherwise), the four decision writes
     (:func:`write_verify_decision`), the tail replay, then the draft and the pass row as in the fused form.
 
-    With the device-decided sampled form (``traces.verify_sampled``) the pass is: ``before_verify_sampled(tokens)``
-    (the caller's hook, the pass's uniforms written to the accept program's constants), one launch (the head, the
-    accept program, the tail), the draft and the pass row as in the fused form, then one read of the split's
-    statistics row (:func:`read_accept_statistics`; the pass row's ``(a, t')`` must be the program's) and, with
-    ``record_candidate_rows``, one read of the rows the device decided on.  No head readback, no host decision, no
-    decision writes: the other two forms' behaviour is untouched.
-
-    With ``early_reader`` (:class:`Qwen38TTNNEarlyRowsReader`; the fused and the device-decided forms) the verify
+    With ``early_reader`` (:class:`Qwen38TTNNEarlyRowsReader`; the fused form) the verify
     lanes ``(a, t', d_1)`` are read on the second queue right after the draft launch, the next pass's PLE rows 0-1
     are looked up while the draft runs, and the next ``step`` looks up only rows 2..k before the one upload: the
     same rows from the same contexts, row for row.  The host-decided split form keeps today's order: its head
@@ -3270,8 +3092,6 @@ class Qwen38TTNNMTPChain:
         commit_queue: Qwen38TTNNCommitQueue | None = None,
         head_output: Qwen38TTNNVerifyHeadOutput | None = None,
         decide: Callable[[Sequence[int], Qwen38TTNNVerifyHeadReadback], Qwen38TTNNVerifyDecision] = decide_greedy,
-        before_verify_sampled: Callable[[list[int]], Any] | None = None,
-        record_candidate_rows: bool = False,
         early_reader: Qwen38TTNNEarlyRowsReader | None = None,
     ) -> None:
         _validate_draft_state(model, verify, draft)
@@ -3289,22 +3109,15 @@ class Qwen38TTNNMTPChain:
             raise ValueError("the split verify needs its head output and the verify state's split buffers")
         if not callable(decide):
             raise TypeError("decide must be a callable")
-        if traces.device_sampled and verify.split is None:
-            raise ValueError("the device-decided sampled form needs the verify state's split buffers (its statistics)")
-        if before_verify_sampled is not None and (not callable(before_verify_sampled) or not traces.device_sampled):
-            raise ValueError("before_verify_sampled is the device-decided sampled form's hook, a callable")
-        if type(record_candidate_rows) is not bool or (record_candidate_rows and not traces.device_sampled):
-            raise ValueError("record_candidate_rows is the device-decided sampled form's option")
         if early_reader is not None:
             if not isinstance(early_reader, Qwen38TTNNEarlyRowsReader):
                 raise TypeError("early_reader must be a Qwen38TTNNEarlyRowsReader")
             if traces.split:
                 # The host-decided split form keeps today's order: its head readback already blocks the host before
                 # the tail, so (a, t') are known before the draft anyway and d_1 only lands with the tail.
-                raise ValueError("the early rows reader serves the fused and the device-decided forms, not the split")
+                raise ValueError("the early rows reader serves the fused form, not the split")
         self.early_reader = early_reader
         self._early_rows: Qwen38TTNNPLEEarlyRows | None = None
-        self.before_verify_sampled, self.record_candidate_rows = before_verify_sampled, record_candidate_rows
         self.model, self.verify, self.draft, self.traces = model, verify, draft, traces
         self.verify_output, self.replay, self.clock_ns = verify_output, replay, clock_ns
         self.enqueue, self.observer, self.commit_queue = enqueue, observer, commit_queue
@@ -3337,15 +3150,7 @@ class Qwen38TTNNMTPChain:
         launch, form = (self.replay, "replay") if self.enqueue is None else (self.enqueue, "enqueue")
         decision = None
         early_reader = self.early_reader
-        if self.traces.device_sampled:
-            # The device decides: the hook writes the pass's uniforms, one launch runs the head, the accept program
-            # and the tail; no host stop, no decision writes (the program wrote the split's buffers).
-            if self.before_verify_sampled is not None:
-                self._timed(segments, "uniforms", lambda: self.before_verify_sampled(list(tokens)))
-            self._timed(segments, f"verify_sampled_{form}", lambda: launch(self.traces.verify_sampled))
-            if early_reader is not None:
-                early_reader.verify_launched()  # the main queue's event the second queue's read waits for
-        elif not self.traces.split:
+        if not self.traces.split:
             verify_trace = (
                 self.traces.verify_catch_up if self.records and self.traces.commit is None else self.traces.verify_first
             )
@@ -3396,16 +3201,6 @@ class Qwen38TTNNMTPChain:
                 f"pass row ({readback.accepted}, {readback.next_token}) is not the host decision "
                 f"({decision.accepted}, {decision.next_token})"
             )
-        statistics = candidate_rows = None
-        if self.traces.device_sampled:
-            statistics = self._timed(segments, "statistics", lambda: read_accept_statistics(self.verify))
-            if (readback.accepted, readback.next_token) != (statistics.accepted, statistics.token):
-                raise RuntimeError(
-                    f"pass row ({readback.accepted}, {readback.next_token}) is not the device decision "
-                    f"({statistics.accepted}, {statistics.token})"
-                )
-            if self.record_candidate_rows:
-                candidate_rows = self._timed(segments, "candidate_rows", lambda: read_candidate_rows(self.verify))
         t_commit_host = time.monotonic_ns()
         commit_verify_host(self.verify, readback.accepted)
         t_record = time.monotonic_ns()
@@ -3428,10 +3223,6 @@ class Qwen38TTNNMTPChain:
             finished=self.finished,
             segments_ns=segments,
             decision=decision,
-            statistics=None if statistics is None else statistics.row,
-            arithmetic=None if statistics is None else DEVICE_ACCEPT_ARITHMETIC,
-            guard_deviations=None if statistics is None else statistics.guard_deviations,
-            candidate_rows=candidate_rows,
         )
         self.records.append(record)
         self.position += readback.accepted + 1
@@ -4082,11 +3873,9 @@ __all__ = [
     "capture_draft_history",
     "capture_verify",
     "capture_verify_head",
-    "capture_verify_sampled",
     "capture_verify_tail",
     "commit_verify_host",
     "decide_greedy",
-    "DEVICE_ACCEPT_ARITHMETIC",
     "DEFAULT_DRAFTS",
     "enter_verify_mode",
     "forward_commit",
@@ -4096,7 +3885,6 @@ __all__ = [
     "forward_mtp_step_row",
     "forward_verify",
     "forward_verify_head",
-    "forward_verify_sampled",
     "forward_verify_tail",
     "head_readback_width",
     "HEAD_READBACK_FIXED_LANES",
@@ -4108,8 +3896,6 @@ __all__ = [
     "Qwen38TTNNCommitQueue",
     "Qwen38TTNNDraftState",
     "Qwen38TTNNEarlyRowsReader",
-    "parse_accept_statistics",
-    "Qwen38TTNNAcceptStatistics",
     "Qwen38TTNNMTPChain",
     "Qwen38TTNNMTPChunkExtension",
     "Qwen38TTNNMTPPassRecord",
@@ -4126,8 +3912,6 @@ __all__ = [
     "Qwen38TTNNVerifySplit",
     "Qwen38TTNNVerifyState",
     "PASS_ROW_WIDTH",
-    "read_accept_statistics",
-    "read_candidate_rows",
     "read_pass_row",
     "read_verify_head",
     "read_verify_output",

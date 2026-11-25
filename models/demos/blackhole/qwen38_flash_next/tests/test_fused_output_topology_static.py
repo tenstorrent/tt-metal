@@ -54,10 +54,6 @@ UNDECLARED: dict[tuple[str, str], str] = {
     ("ple", '"normalize"'): "the PLE module stamps from the residual's topology after the launch",
     ("ple", '"gate"'): "the PLE module stamps from the residual's topology after the launch",
     (
-        "mtp_accept",
-        '"accept"',
-    ): "the decision buffers and the statistics row are read by the split verify's tail on the same die",
-    (
         "ple",
         '"conv_inject" if inject else "conv"',
     ): "the PLE module stamps from the residual's topology after the launch",

@@ -71,12 +71,6 @@ from ttnn.tools.trace_allocation_tracker import acknowledge_corruptible
 
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import THINK_END_ID
-from models.demos.blackhole.qwen38_flash_next.tools.qwen38_mtp_device_accept import ARITHMETIC_HOST
-from models.demos.blackhole.qwen38_flash_next.tools.qwen38_mtp_device_accept import SWITCH as DEVICE_ACCEPT_SWITCH
-from models.demos.blackhole.qwen38_flash_next.tools.qwen38_mtp_device_accept import Qwen38DeviceAcceptance
-from models.demos.blackhole.qwen38_flash_next.tools.qwen38_mtp_device_accept import (
-    for_chain as device_acceptance_for_chain,
-)
 from models.demos.blackhole.qwen38_flash_next.tools.resident_decode import (
     SINGLE_TRACE_RESIDUE_CLASS_TRACES as RESIDUE_CLASSES,
 )
@@ -282,12 +276,8 @@ class Qwen38SamplingChainExtension:
         mesh: Any,
         *,
         device_sampler: bool = False,
-        device_accept: Qwen38DeviceAcceptance | None = None,
     ) -> None:
         self.lm_head = lm_head
-        # QWEN38_MTP_DEVICE_ACCEPT: the MTP pass loop's on-device acceptance (its constants, admission and per-pass
-        # uniforms live in tools/qwen38_mtp_device_accept.py); None keeps the host-decided pass.
-        self.device_accept = device_accept
         self.mesh = mesh
         self.constants = Qwen38TTNNSamplingCandidateConstants.build(mesh, lm_head.mesh_contract)
         # The sampler: the one-program fused kernel when the registry serves it (its constants carry the presence
@@ -391,9 +381,6 @@ class Qwen38SamplingChainExtension:
     def mark_corruptible(self) -> None:
         """Before the miss guard closes: the readback row is rewritten by every replay, like the token row; the
         sampler's host-written scalars and table between replays."""
-        if getattr(self, "device_accept", None) is not None:
-            self.device_accept.mark_corruptible()
-
         acknowledge_corruptible(self.constants.readback_row)
         if self.sampler is not None:
             self.sampler.mark_corruptible()
@@ -507,16 +494,11 @@ class Qwen38SamplingChainExtension:
         self.trace_rows.clear()
         self.trace_logits.clear()
         self.greedy_trace_logits.clear()
-        if getattr(self, "device_accept", None) is not None:
-            self.device_accept.release()
 
     def begin_request(self, request: "Qwen38SamplingRequest | None") -> None:
         """Request start, before the prompt's steps: the device policy (the greedy flag for a greedy or host-loop
         request) and, on the device path, the first draw; eager writes ordered before the request's first TAIL."""
 
-        device_accept = getattr(self, "device_accept", None)  # an extension built without one decides on the host
-        if device_accept is not None and request is not None and device_accept.admission(request) is None:
-            device_accept.begin_request(request)
         if self.sampler is None:
             return
         policy = None if request is None else self.device_policy_of(request)
@@ -529,20 +511,6 @@ class Qwen38SamplingChainExtension:
         request.uniforms.clear()
         request.stream = UniformStream(request.parameters.seed)
         self.sampler.write_uniform(request.next_uniform())
-
-    def device_acceptance_for(
-        self, request: "Qwen38SamplingRequest | None"
-    ) -> tuple[str | None, Callable[[Sequence[int]], None] | None]:
-        """The pass loop's device acceptance for this request: ``(None, the before-verify hook)`` when the
-        device decides its passes, else ``(the refusal, None)`` and the host decides them."""
-
-        device_accept = getattr(self, "device_accept", None)
-        if device_accept is None:
-            return f"refused: {DEVICE_ACCEPT_SWITCH} off", None
-        why = device_accept.admission(request)
-        if why is not None:
-            return why, None
-        return None, device_accept.before_verify(request)
 
     def device_policy_of(self, request: "Qwen38SamplingRequest") -> Qwen38DeviceSamplerPolicy | None:
         """The request's device policy on this chain's sampler (the presence penalty only where the sampler keeps
@@ -654,6 +622,7 @@ class Qwen38SamplingStepClocks:
 
 
 ACCEPTANCE_HISTOGRAM_BINS = 10
+ARITHMETIC_HOST = "host-fp32"  # the pass decisions' law realisation of the host-decided acceptance
 
 
 @dataclass
@@ -667,22 +636,7 @@ class Qwen38SampledDraftingStats:
     draws: int = 0
     fallbacks: int = 0
     resampled: int = 0
-    guard_deviations: int = 0  # device-decided rows whose kept minimum did not clear the shard floor
     acceptance_probabilities: list[float] = field(default_factory=list)
-
-    def record_device(self, statistics: Sequence[float], drafts: int) -> None:
-        """One device-decided pass from its 16 statistics lanes (``fused/mtp_accept``): ``a*`` drafts accepted,
-        ``k + 1`` uniforms consumed, the resample flag, the guard bits, ``p_j = w_j / S_j`` of the evaluated rows."""
-
-        from models.demos.blackhole.qwen38_flash_next.tools import qwen38_mtp_device_accept as da
-        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import mtp_accept as ma
-
-        self.passes += 1
-        self.accepted_drafts += int(statistics[ma.STAT_ACCEPTED])
-        self.draws += drafts + 1
-        self.resampled += int(float(statistics[ma.STAT_RESAMPLED]) != 0)
-        self.guard_deviations += da.guard_deviations(statistics)
-        self.acceptance_probabilities.extend(da.acceptance_probabilities(statistics, drafts))
 
     def record(self, acceptance: Qwen38SpeculativeAcceptance, fallbacks: int) -> None:
         self.passes += 1
@@ -706,7 +660,6 @@ class Qwen38SampledDraftingStats:
             "draws": self.draws,
             "fallbacks": self.fallbacks,
             "resampled": self.resampled,
-            "guard_deviations": self.guard_deviations,
             "rows_drawn": len(probabilities),
             "acceptance_probability_mean": (
                 None if not probabilities else round(sum(probabilities) / len(probabilities), 4)
@@ -739,7 +692,7 @@ class Qwen38SamplingRequest:
     verified_steps: int = 0
     mtp_drafting: str | None = None
     mtp: Qwen38SampledDraftingStats = field(default_factory=Qwen38SampledDraftingStats)
-    mtp_arithmetic: str | None = None  # the pass decisions' law realisation: host-fp32 or device-theta
+    mtp_arithmetic: str | None = None  # the pass decisions' law realisation: host-fp32
     prompt_tokens: int = 0  # the device loop's history starts after these (set at its entry)
 
     def __post_init__(self) -> None:
@@ -1335,9 +1288,6 @@ def run_discriminator(
 
 
 __all__ = [
-    "DEVICE_ACCEPT_SWITCH",  # re-exported for the chain open (the import-pruning hook keeps __all__ names)
-    "Qwen38DeviceAcceptance",  # re-exported for the chain open (the import-pruning hook keeps __all__ names)
-    "device_acceptance_for_chain",  # re-exported for the chain open (the import-pruning hook keeps __all__ names)
     "ACCEPTANCE_HISTOGRAM_BINS",
     "DISCRIMINATOR_PERIOD_TARGET_MS",
     "DISCRIMINATOR_ROW_TOKENS",

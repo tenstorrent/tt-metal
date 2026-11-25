@@ -226,12 +226,7 @@ def test_open_allocates_the_alternates_before_the_snapshot_captures_every_chain_
     assert "components_shared=True" in opened and "chunk_extension=chain_mtp.chunk_extension" in opened
     assert "step_inputs=chain_mtp.step_inputs" in opened  # the decode tail trace bakes the default chain's step inputs
     assert "long_chunk_extension=chain_mtp.long_chunk_extension" in opened  # the 128-row twin is shared too
-    assert "mtp_alternates and the device acceptance do not combine" in opened  # one k's accept constants
     assert "long_chunks=False, # the 128-row twin is the default chain's (shared)" in opened  # counted once
-    assert "does not combine with `QWEN38_MTP_DEVICE_ACCEPT=1`" in (ROOT / "docs" / "SERVER.md").read_text(
-        encoding="utf-8"
-    )
-    assert "MTP_WARM_ACCEPT_UNIFORMS[: target.drafts + 1]" in _segment(SESSION_SOURCE, functions["warm_mtp_chain"])
     warm = _segment(SESSION_SOURCE, functions["warm_mtp_chain"])
     assert (
         "[MTP_BOOTSTRAP_DRAFT_TOKEN] * target.drafts" in warm

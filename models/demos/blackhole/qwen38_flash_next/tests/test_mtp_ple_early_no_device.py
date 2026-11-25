@@ -144,12 +144,10 @@ def test_pass_loop_reads_the_lanes_after_the_draft_and_writes_rows_2_k_under_the
     source = MTP_V2_SOURCE.read_text(encoding="utf-8")
     methods = _chain_methods(source)
     finish = _segment(methods["_finish_pass"], source)
-    device_branch = finish[finish.index("if self.traces.device_sampled:") : finish.index("elif not self.traces.split:")]
-    fused_branch = finish[finish.index("elif not self.traces.split:") : finish.index("else:")]
+    fused_branch = finish[finish.index("if not self.traces.split:") : finish.index("else:")]
     split_branch = finish[
         finish.index("launch(self.traces.verify_head)") : finish.index("if self.traces.draft_history")
     ]
-    assert "launch(self.traces.verify_sampled)" in device_branch and "early_reader.verify_launched()" in device_branch
     assert "launch(verify_trace)" in fused_branch and "early_reader.verify_launched()" in fused_branch
     assert "verify_launched" not in split_branch  # the host-decided split keeps today's order
     _in_order(
