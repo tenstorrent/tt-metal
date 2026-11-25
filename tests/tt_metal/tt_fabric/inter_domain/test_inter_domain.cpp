@@ -441,9 +441,13 @@ void run(bool all_at_once) {
             }
             std::map<std::pair<FabricNodeId, FabricNodeId>, uint64_t> predicted;
             uint32_t longest = 0;
+            auto node_at = [&](uint64_t asic) {
+                const auto& rx = mine_all.rx.at(asic);
+                return FabricNodeId(MeshId{rx.mesh}, rx.chip);
+            };
             for (const auto& [from, via, to] : expected.sent) {
-                const auto a = dm.domain_chip.at(control_plane.get_fabric_node_id_from_asic_id(via));
-                const auto b = dm.domain_chip.at(control_plane.get_fabric_node_id_from_asic_id(to));
+                const auto a = dm.domain_chip.at(node_at(via));
+                const auto b = dm.domain_chip.at(node_at(to));
                 int y = a / cols, x = a % cols;
                 const int dy = b / cols, dx = b % cols;
                 longest = std::max<uint32_t>(longest, std::abs(y - dy) + std::abs(x - dx));
