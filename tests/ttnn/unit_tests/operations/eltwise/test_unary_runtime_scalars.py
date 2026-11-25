@@ -33,7 +33,6 @@ FLOAT_OPS = [
     ("rpow", lambda x, v: ttnn.rpow(x, v), lambda t, v: torch.pow(v, t), True),
     ("rdiv", lambda x, v: ttnn.rdiv(x, v), lambda t, v: v / t, True),
     ("clamp", lambda x, v: ttnn.clamp(x, min=-v, max=v), lambda t, v: torch.clamp(t, -v, v), False),
-    ("elu", lambda x, v: ttnn.elu(x, alpha=v), lambda t, v: F.elu(t, alpha=v), False),
     ("celu", lambda x, v: ttnn.celu(x, alpha=v), lambda t, v: F.celu(t, alpha=v), False),
     ("leaky_relu", lambda x, v: ttnn.leaky_relu(x, negative_slope=v / 10), lambda t, v: F.leaky_relu(t, v / 10), False),
     ("heaviside", lambda x, v: ttnn.heaviside(x, v), lambda t, v: torch.heaviside(t, torch.tensor(v)), False),
@@ -43,7 +42,6 @@ FLOAT_OPS = [
     ("remainder", lambda x, v: ttnn.remainder(x, v), lambda t, v: torch.remainder(t, v), False),
     ("threshold", lambda x, v: ttnn.threshold(x, v, -v), lambda t, v: F.threshold(t, v, -v), False),
     ("softplus", lambda x, v: ttnn.softplus(x, beta=v), lambda t, v: F.softplus(t, beta=v), False),
-    ("hardshrink", lambda x, v: ttnn.hardshrink(x, lambd=v / 10), lambda t, v: F.hardshrink(t, v / 10), False),
     ("softshrink", lambda x, v: ttnn.softshrink(x, lambd=v / 10), lambda t, v: F.softshrink(t, v / 10), False),
 ]
 
@@ -75,6 +73,29 @@ def test_new_scalar_value_reuses_program(device, isolate_program_cache, name, tt
 
     ttnn.synchronize_device(device)
     assert device.num_program_cache_entries() == entries
+
+
+# ELU and HARDSHRINK keep their scalar compiled in: their generated BF16 kernels pick a fast path by comparing the
+# scalar at compile time, so they get one program per value. 1.0 and 0.5 are the values those fast paths target.
+COMPILED_SCALAR_OPS = [
+    ("elu", lambda x, v: ttnn.elu(x, alpha=v), lambda t, v: F.elu(t, alpha=v), [1.0, 0.5, 1.25]),
+    ("hardshrink", lambda x, v: ttnn.hardshrink(x, lambd=v), lambda t, v: F.hardshrink(t, v), [0.5, 0.125, 0.25]),
+]
+
+
+@pytest.mark.parametrize(
+    "name, ttnn_op, torch_op, values", COMPILED_SCALAR_OPS, ids=[op[0] for op in COMPILED_SCALAR_OPS]
+)
+def test_compiled_scalar_ops_use_each_value(device, isolate_program_cache, name, ttnn_op, torch_op, values):
+    torch.manual_seed(0)
+    torch_x = (torch.randn(1, 1, 64, 96) * 3).to(torch.bfloat16)
+    tt_x = ttnn.from_torch(torch_x, layout=ttnn.TILE_LAYOUT, device=device)
+    for value in values + values[:1]:
+        result = ttnn.to_torch(ttnn_op(tt_x, value))
+        assert_with_pcc(torch_op(torch_x.float(), value), result.float(), 0.999)
+    ttnn.synchronize_device(device)
+    # One program per distinct value; repeating the first value hits the cache.
+    assert device.num_program_cache_entries() >= len(values)
 
 
 def test_fill_value_reuses_program(device, isolate_program_cache):

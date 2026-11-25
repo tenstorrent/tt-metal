@@ -1480,12 +1480,34 @@ uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, 
 
 std::optional<RuntimeScalarDefines> get_runtime_scalar_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
-    // SOFTCAP validates its beta on a cache miss only, so its value has to stay in the program key. ROUND and
-    // POLYGAMMA keep their parameters compiled in: the compiler folds them (a constant 0 drops ROUND's scaling
-    // multiplies, which otherwise turn -0.0 into +0.0), and the runtime form rounds differently.
+    // Explicit opt-in: only these ops take their scalars as runtime args, and each is covered by
+    // test_unary_runtime_scalars.py. Everything else keeps its scalars compiled in. That includes SOFTCAP (beta is
+    // validated on a cache miss only), ROUND and POLYGAMMA (the compiler folds their constants), and ELU and
+    // HARDSHRINK, whose generated BF16 kernels select their fast path by comparing the scalar at compile time.
+    static constexpr std::array kRuntimeScalarOps = {
+        UnaryOpType::POWER,
+        UnaryOpType::RPOW,
+        UnaryOpType::RDIV,
+        UnaryOpType::CLAMP_TSS,
+        UnaryOpType::CELU,
+        UnaryOpType::LEAKY_RELU,
+        UnaryOpType::HEAVISIDE,
+        UnaryOpType::MAXIMUM,
+        UnaryOpType::MINIMUM,
+        UnaryOpType::FMOD,
+        UnaryOpType::REMAINDER,
+        UnaryOpType::THRESHOLD,
+        UnaryOpType::SOFTPLUS,
+        UnaryOpType::SOFTSHRINK,
+        UnaryOpType::FILL,
+        UnaryOpType::BITWISE_AND,
+        UnaryOpType::BITWISE_OR,
+        UnaryOpType::LEFT_SHIFT,
+    };
     const auto type = op_chain.empty() ? UnaryOpType::IDENTITY : op_chain[0].type();
-    if (op_chain.size() != 1 || op_chain[0].empty() || type == UnaryOpType::SOFTCAP || type == UnaryOpType::ROUND ||
-        type == UnaryOpType::POLYGAMMA || uses_dedicated_compute_kernel(type, input_dtype)) {
+    if (op_chain.size() != 1 || op_chain[0].empty() ||
+        std::find(kRuntimeScalarOps.begin(), kRuntimeScalarOps.end(), type) == kRuntimeScalarOps.end() ||
+        uses_dedicated_compute_kernel(type, input_dtype)) {
         return std::nullopt;
     }
     RuntimeScalarDefines out{.defines = get_block_defines(op_chain, "0", "0", input_dtype)};
