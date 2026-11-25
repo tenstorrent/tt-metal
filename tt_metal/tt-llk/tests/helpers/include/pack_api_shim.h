@@ -449,7 +449,7 @@ inline void pack_reconfig_data_format(const std::uint32_t new_output)
 
 #if PACK_API_SHIM_PR
 // The compute API's pack_reconfig_data_format(cb) with a constant cb (llk_pack_reconfig_data_format_ct): the immediate reconfigure.
-template <bool is_fp32_dest_acc_en, std::uint32_t new_output, bool gate, bool inl = false>
+template <bool is_fp32_dest_acc_en, std::uint32_t new_output, bool gate, bool inl = false, bool wait = !gate>
 __attribute__((always_inline)) inline void pack_reconfig_data_format_gate()
 {
     constexpr ckernel::packer::llk_pack_reconfig_imm_t imm =
@@ -467,7 +467,7 @@ __attribute__((always_inline)) inline void pack_reconfig_data_format_gate()
     else
     {
         LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
-        if constexpr (!gate)
+        if constexpr (wait)
         {
             TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::UNPACK0);
         }
@@ -502,6 +502,10 @@ __attribute__((always_inline)) inline void pack_reconfig_data_format()
             {
                 pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, true>();
             }
+        }
+        else if constexpr (ckernel::IS_BFP_FORMAT(pack_dst_format[new_output]))
+        {
+            pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, false, false, false>();
         }
         else
         {

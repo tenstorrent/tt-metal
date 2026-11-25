@@ -423,7 +423,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam new_output          New output circular buffer / operand index to configure for.
  */
-template <bool is_fp32_dest_acc_en, std::uint32_t new_output, bool gate, bool inl = false>
+template <bool is_fp32_dest_acc_en, std::uint32_t new_output, bool gate, bool inl = false, bool wait = !gate>
 __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct_gate() {
     constexpr ckernel::packer::llk_pack_reconfig_imm_t imm =
         ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
@@ -450,7 +450,7 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct_gate
             StateVal<Operand<Exu::Pack>::PartialFace>(false),
             StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
         LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
-        if constexpr (!gate) {
+        if constexpr (wait) {
             TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::UNPACK0);
         }
         ckernel::packer::reconfig_packer_data_format_imm_and_state<
@@ -488,6 +488,9 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
             } else {
                 llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, true>();
             }
+        } else if constexpr (ckernel::IS_BFP_FORMAT(pack_dst_format[new_output])) {
+            // A block-float output's immediates do not wait for the unpacker: the wait cost a 3-tile block 2.4 cy.
+            llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, false, false, false>();
         } else {
             llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, false>();
         }
