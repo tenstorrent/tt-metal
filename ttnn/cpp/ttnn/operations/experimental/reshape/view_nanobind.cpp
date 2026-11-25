@@ -10,6 +10,7 @@
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "view.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/types.hpp"
@@ -54,6 +55,27 @@ void bind_view(nb::module_& mod) {
                 &ttnn::experimental::view),
             nb::arg("input_tensor"),
             nb::arg("shape")));
+
+    // Zero-copy alias of the first `rows` entries of dim 0 of a TILE, interleaved
+    // device tensor. Dim 0 is outermost, so its prefix is the prefix of the page
+    // sequence and the interleaved page->bank mapping is unchanged. Used to run
+    // in-place recurrent-state updates on a decode-batch bucket (first B slots)
+    // of a slot-major state tensor without copying it.
+    mod.def(
+        "batch_prefix_view",
+        [](const ttnn::Tensor& tensor, uint32_t rows) {
+            TT_FATAL(tensor.layout() == ttnn::TILE_LAYOUT, "batch_prefix_view requires TILE layout");
+            TT_FATAL(!tensor.memory_config().is_sharded(), "batch_prefix_view requires an interleaved tensor");
+            const auto& logical = tensor.logical_shape();
+            const auto& padded = tensor.padded_shape();
+            TT_FATAL(logical.rank() == 4, "batch_prefix_view requires a rank-4 tensor");
+            TT_FATAL(rows >= 1 && rows <= logical[0], "batch_prefix_view rows {} outside [1, {}]", rows, logical[0]);
+            ttnn::Shape new_logical({rows, logical[1], logical[2], logical[3]});
+            ttnn::Shape new_padded({rows, padded[1], padded[2], padded[3]});
+            return tt::tt_metal::view(tensor, new_logical, new_padded);
+        },
+        nb::arg("input_tensor"),
+        nb::arg("rows"));
 }
 
 }  // namespace ttnn::operations::experimental::reshape::detail
