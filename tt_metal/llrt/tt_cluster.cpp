@@ -1009,12 +1009,12 @@ bool Cluster::requires_snoop_for_dm_coherence() const {
 
 void Cluster::write_core_with_snoop_if_required(
     const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    if (sz_in_bytes == 0) {
+        return;  // nothing to write
+    }
     if (!this->requires_snoop_for_dm_coherence()) {
         this->write_core(mem_ptr, sz_in_bytes, core, addr);
         return;
-    }
-    if (sz_in_bytes == 0) {
-        return;  // nothing to write
     }
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
