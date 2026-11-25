@@ -1,43 +1,39 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 
-"""GDDR retention and read-disturb sweep over every DRAM address the allocator does not need.
+"""GDDR retention and read-disturb test: every DRAM address the allocator leaves free is written once, read later.
 
-Not part of any health-check tier or of the deployment runner yet. Run it by hand from the repo root, on every chip
-unless RETENTION_CHIPS names some (RETENTION_CHIPS=0,5):
+The health check runs test_gddr_retention in its daily, weekly and full tiers (PYTESTS["gddr_retention"] in
+diag/device_tests.py), and tests/tt_metal/tt_metal/deployment/test_runner.sh runs it every iteration. By hand, on every
+chip unless RETENTION_CHIPS lists some (RETENTION_CHIPS=0,5):
 
     pytest tools/scaleout/exabox/health_check_test_suite/gddr/test_gddr_retention.py
 
-test_gddr_retention: each bank is written once with a hashed pattern and never rewritten, then read back and compared
-in passes that start RETENTION_GAPS_S apart (default 5, 2 and 1 s: the first read 5 s after the write started, the
-next 2 s after that, the last 1 s after that). The write and every read sweep each bank in the same order, so each
-address waits about the gap between two of its accesses. RETENTION_SECONDS keeps reading at the last gap until that
-long after the write, for triage. RETENTION_REPS=n reads each chunk n times back to back in every pass, to stress read
-disturb, and counts and logs every failing read. A cell that loses its data, whether it decays or a nearby read
-disturbs it, miscompares; the JSON report names the chip, bank, bank-local byte address, expected and read values,
-which bits flipped, the read that first saw it and how its page's miss was classified.
+test_gddr_retention writes each bank once with a hashed pattern, then reads and compares all of it in passes that start
+RETENTION_GAPS_S apart (default 5,2,1: reads 5, 7 and 8 s after the write). Every sweep visits a bank in the same
+order, so each address waits the gap. Each failing word is reported in the JSON with its chip, bank, address, expected
+and read values, flipped bits, first failing read and its page's classification. RETENTION_SECONDS keeps reading at the
+last gap until that long after the write; RETENTION_REPS=n reads each chunk n times a pass and counts every failing
+read.
 
-test_gddr_retention_detects_changes: the negative test. While the data waits between its write and its reads, a third
-program changes it, and the sweep has to report exactly the changed words with the right values, flipped bits, first
-read and number of reads. Before the first read it flips bits of single words at the first and last tested word, at a
-slice boundary and at a Galaxy chip's known GDDR fault address, puts a 64 B line back to the previous pattern's data
-(which must be classified stale), overwrites a line with another address's data (which must be classified an alias of
-the address bit that differs) and copies the data just above the swept range into a line, which must be classified an
-alias too; before the second read it flips one more word.
+test_gddr_retention_detects_changes is the negative test. Between the write and the reads a third program flips bits
+of single words (the first and last tested word, a slice boundary, the DIIM-751 address, and one more between the two
+reads), puts a line back to the previous pattern's data, overwrites a line with another address's data and copies the
+first line above the swept range into a line. Exactly those words must be reported, with their values and first read,
+and the three lines classified as stale and as aliases of the differing address bit.
 
-Coverage: every bank-local address from the 64 B DRAM barrier word up to the lowest kernel-binary allocation. The
-reserved bottom (profiler and device-print areas) is covered too, so the profiler, device print, watcher and the
-DRAM-backed command queue must be off. Program binaries are placed before the coverage buffer is sized, and runtime-arg
-changes reuse the cached programs, so nothing else is allocated in DRAM while the sweep runs.
+Coverage is [0x40, lowest kernel binary) of every bank, 99.9999% on Blackhole. That includes the reserved bottom, so the
+profiler, device print, watcher and DRAM-backed command queue must be off. Every program is launched once before the
+coverage buffer is sized, so its binaries are placed; later launches change only runtime args, which reuses the cached
+programs, so nothing else lands in DRAM during the sweep.
 
-Work split: every Tensix core works on one bank, the bank whose optimal worker core is nearest, with at most
-ceil(cores / 8) cores a bank; both data-movement RISCs of a core take a contiguous slice of that bank.
+Each Tensix core works on the bank whose optimal worker core is nearest, at most ceil(cores / 8) cores a bank; its two
+data-movement RISCs take a contiguous slice each.
 
-The data pattern (one hash per 64 B line with a per-word XOR, unique per bank, address and seed) and the miss
-classification (stale: the previous pattern's data; alias of address bit k: the data of the address with bit k
-flipped; other) come from Nikola Milicevic's DRAM sweep stress test. One pattern is written by default.
-RETENTION_PATTERNS=2 adds its exact complement (seed 2m + 1 inverts seed 2m), so every bit holds both a 1 and a 0, and
-a miss in the second pattern can be classified as stale.
+The pattern (one hash per 64 B line, XORed per word, unique per bank, address and seed) and the miss classification
+(stale: the previous pattern's data; alias of address bit k: the data at the address with bit k flipped; other) come
+from Nikola Milicevic's DRAM sweep stress test. RETENTION_PATTERNS=2 adds the complement (seed 2m + 1 inverts seed 2m),
+so every cell holds both a 1 and a 0 and a miss can be classified stale.
 """
 
 import json
@@ -956,7 +952,7 @@ def negative_plan(run, seed, prev_seed):
             expected, read = pattern_word(addr, bank, seed), pattern_word(addr ^ (1 << ALIAS_TEST_BIT), bank, seed)
             if read != expected:
                 expect[(bank, addr)] = (expected, read, 0, reads, f"alias_bit{ALIAS_TEST_BIT}")
-        # hi with one of its bits from 11 up cleared, so the source hi is a whole line outside the sweep.
+        # The line 2^k below hi, for a bit k >= 11 set in hi: its bit-k alias is hi, the first line above the sweep.
         copy_bit = next(
             bit for bit in range(11, 32) if hi >> bit & 1 and (hi - (1 << bit) - lo) // PAGE_BYTES not in used_pages
         )

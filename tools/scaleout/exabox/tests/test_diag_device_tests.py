@@ -20,9 +20,10 @@ from unittest import mock
 
 TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
+REPO_ROOT = TESTS_DIR.parents[3]
 sys.path.insert(0, str(SUITE_DIR))
 
-from diag.device_tests import DEPLOYMENT_BIN_CANDIDATES, TESTS, run_tests  # noqa: E402
+from diag.device_tests import DEPLOYMENT_BIN_CANDIDATES, PYTESTS, TESTS, run_tests  # noqa: E402
 from diag.model import FAIL, PASS, Phase  # noqa: E402
 
 # gtest's output for a test that calls GTEST_SKIP(), including the summary that
@@ -71,6 +72,39 @@ class TestGtestGrading(unittest.TestCase):
             check = self.run_fake(["eth_link_up"])["eth_link_up"]
         self.assertEqual(check.status, FAIL)
         self.assertIn("passed=0 failed=0 skipped=1", check.details)
+
+
+# A pytest that reports the variable a PYTESTS entry sets, then passes.
+FAKE_PYTEST = """\
+#!/bin/sh
+echo "RETENTION_OUT_DIR=$RETENTION_OUT_DIR"
+echo "============================== 1 passed in 0.01s =============================="
+"""
+
+
+class TestPytestEntries(unittest.TestCase):
+    def test_env_reaches_the_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tt_metal = Path(tmp)
+            pytest_bin = tt_metal / "python_env" / "bin" / "pytest"
+            pytest_bin.parent.mkdir(parents=True)
+            pytest_bin.write_text(FAKE_PYTEST)
+            pytest_bin.chmod(0o755)
+            logs_dir = tt_metal / "logs"
+            spec = {"target": "fake.py::test_fake", "args": [], "env": {"RETENTION_OUT_DIR": "{logs_dir}"}}
+            phase = Phase(name="tests")
+            with mock.patch.dict(PYTESTS, {"fake": spec}):
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    run_tests(tt_metal, ["fake"], phase, dry_run=False, logs_dir=logs_dir)
+            check = phase.checks[0]
+            self.assertEqual(check.status, PASS, check.details)
+            self.assertEqual(check.data["env_overrides"], {"RETENTION_OUT_DIR": str(logs_dir)})
+            self.assertIn(f"RETENTION_OUT_DIR={logs_dir}", (logs_dir / "fake.log").read_text())
+
+    def test_targets_exist(self):
+        for name, spec in PYTESTS.items():
+            with self.subTest(name):
+                self.assertTrue((REPO_ROOT / spec["target"].split("::")[0]).is_file(), spec["target"])
 
 
 if __name__ == "__main__":

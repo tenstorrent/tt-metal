@@ -82,8 +82,8 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | Tier | Resets | Tests | Triage | ETH status | QSFP tests | sys-triage | Duration | Use when |
 |---|---|---|---|---|---|---|---|---|
 | `flash` | none | — | — | 2 reads, 30 s apart | — | — | snapshot + 2 triage reads + 30 s | Quick ETH link health, the unit read as found |
-| `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
-| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | — | yes, if installed | — | ~18 min + triage + ~7 min | Every test, less often |
+| `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1) + gddr_retention | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
+| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_retention + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | — | yes, if installed | — | ~18 min + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly` | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
@@ -158,6 +158,29 @@ zero-collected runs are recorded as FAIL, same trap as the zero-match gtest
 filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
 on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
 or fabric mesh mapping fails.
+
+`daily`, `weekly` and `full` also run `gddr_retention`
+([`gddr/test_gddr_retention.py`](gddr/test_gddr_retention.py)). It writes every
+DRAM address the allocator leaves free once (99.9999% of each 4080 MiB bank: all
+but the 64 B barrier word and the test's kernel binaries), then reads all of it
+back and compares it 5, 7 and 8 s later. `gddr_fast` and `gddr_full` read each
+chunk straight back and cover 32 MiB per bank, so they never test retention. A
+planted alias of address bit 26 checks the checker on every chip first. Each
+failing word goes to `gddr_retention_<host>_<time>.json` in the logs directory
+with its chip, bank, address, expected and read values, flipped bits, first
+failing read and classification (stale, alias of an address bit, other). It
+took 12.9 s on a 4-chip Blackhole p300c system, chips in parallel (2026-11-25).
+`RETENTION_GAPS_S` sets the schedule (default `5,2,1`), `RETENTION_SECONDS=<s>`
+keeps reading at the last gap for triage, and `RETENTION_PATTERNS=2` adds the
+complement pattern so every cell holds both a 1 and a 0. The test overwrites the
+reserved bottom of DRAM, so it refuses to run with the device profiler, device
+print, watcher or DRAM-backed command queue enabled. By hand, with its negative
+test (`test_gddr_retention_detects_changes`), on every chip unless
+`RETENTION_CHIPS` lists some:
+
+```bash
+python_env/bin/pytest tools/scaleout/exabox/health_check_test_suite/gddr/test_gddr_retention.py
+```
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
 pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
