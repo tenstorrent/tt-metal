@@ -24,6 +24,7 @@ void kernel_main() {
     constexpr uint32_t num_rows = get_named_compile_time_arg_val("num_rows");
     constexpr uint32_t row_groups = get_named_compile_time_arg_val("row_groups");
     constexpr uint32_t group_rows = num_rows / row_groups;
+    constexpr bool independent = get_named_compile_time_arg_val("independent_rows") == 1;
     constexpr bool dense = get_named_compile_time_arg_val("dense_selected") == 1;
     constexpr uint32_t out_row_bytes = get_named_compile_time_arg_val("out_row_bytes");
     constexpr uint32_t ring_capacity = get_named_compile_time_arg_val("ring_capacity");
@@ -61,15 +62,25 @@ void kernel_main() {
 
     const auto lengths_reader = TensorAccessor(lengths_args, lengths_addr);
     const uint32_t lengths_l1 = get_write_ptr(cb_lengths_scratch);
-    noc_async_read(lengths_reader.get_noc_addr(0), lengths_l1, (4 + num_rows) * sizeof(uint32_t));
+    noc_async_read(
+        lengths_reader.get_noc_addr(0),
+        lengths_l1,
+        flash_mqa_decode_rows::lengths_words(num_rows, independent) * sizeof(uint32_t));
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* lengths_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lengths_l1);
-    uint32_t n[num_rows];
-    for (uint32_t j = 0; j < num_rows; ++j) {
-        n[j] = lengths_ptr[4 + j];
-    }
+    const flash_mqa_decode_rows::RowLengths lens_in =
+        flash_mqa_decode_rows::parse_lengths(lengths_ptr, num_rows, independent, row_group);
     const flash_mqa_decode_rows::Plan plan = flash_mqa_decode_rows::make_plan(
-        num_rows, ring_capacity, k_chunk_size, selected_capacity, dense, lengths_ptr[0], n, row_group, row_groups);
+        num_rows,
+        ring_capacity,
+        k_chunk_size,
+        selected_capacity,
+        dense,
+        lens_in.p,
+        lens_in.n,
+        row_group,
+        row_groups,
+        independent);
 
     bool any_active = false;
     for (uint32_t j = row_group; j < num_rows; j += row_groups) {

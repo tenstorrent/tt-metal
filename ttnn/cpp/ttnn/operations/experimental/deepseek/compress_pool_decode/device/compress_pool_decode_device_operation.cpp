@@ -308,6 +308,20 @@ void CompressPoolDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(args.groups >= 1 && args.groups <= rows, "compress_pool_decode: bad group count {}", args.groups);
     } else {
         TT_FATAL(!args.start_odd, "compress_pool_decode: start_odd is for blocks of several rows");
+        TT_FATAL(!args.independent, "compress_pool_decode: independent_rows is for blocks of several rows");
+    }
+    if (args.independent) {
+        TT_FATAL(
+            args.groups == rows && !args.start_odd,
+            "compress_pool_decode: independent rows are one group each (no start_odd)");
+        TT_FATAL(
+            !t.win_kv.has_value() || (t.prev_slot.has_value() && t.prev_slot->logical_shape().volume() >= rows),
+            "compress_pool_decode: independent rows pool with their own window rows: pass prev_slot [{}]",
+            rows);
+        TT_FATAL(
+            !t.page_row.has_value() || t.page_row->logical_shape().volume() >= rows,
+            "compress_pool_decode: independent rows read one page-table row each: page_row must be [{}]",
+            rows);
     }
     const uint32_t interleave = args.kv_gate_interleave;
     if (rows > 1) {
@@ -483,7 +497,8 @@ std::vector<ttnn::Tensor> compress_pool_decode(
     const std::optional<ttnn::Tensor>& dense_entry,
     const std::optional<ttnn::Tensor>& key_row,
     uint32_t kv_gate_interleave,
-    bool start_odd) {
+    bool start_odd,
+    bool independent_rows) {
     using OperationType =
         ttnn::operations::experimental::deepseek::compress_pool_decode::CompressPoolDecodeDeviceOperation;
     const uint32_t head_dim = kv.logical_shape()[-1] / (kv_gate_interleave ? 2u : 1u);
@@ -500,7 +515,9 @@ std::vector<ttnn::Tensor> compress_pool_decode(
     // A (rows x 32)-tiled kv [1, 1, rows, W] is a block of rows consecutive positions.
     const uint32_t rows = kv.layout() == tt::tt_metal::Layout::TILE ? kv.logical_shape()[-2] : 1u;
     uint32_t groups = 1;
-    if (rows > 1) {
+    if (rows > 1 && independent_rows) {
+        groups = rows;
+    } else if (rows > 1) {
         groups = 0;
         for (uint32_t j = 0; j < rows; ++j) {
             groups += (!has_window || (static_cast<uint32_t>(start_odd) + j + 1) % 2 == 0) ? 1u : 0u;
@@ -535,6 +552,7 @@ std::vector<ttnn::Tensor> compress_pool_decode(
         .rows = rows,
         .groups = groups,
         .start_odd = start_odd,
+        .independent = rows > 1 && independent_rows,
         .cs_face1_bytes = cs_face1_bytes,
     };
     auto tensor_args = OperationType::tensor_args_t{

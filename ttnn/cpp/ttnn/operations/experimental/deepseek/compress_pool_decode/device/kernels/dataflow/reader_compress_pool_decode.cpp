@@ -99,6 +99,11 @@ inline void read_index_weights(bool is_key_core, uint32_t key_idx, const WkAcc& 
 // c = first + 2 g (first = 0 when p is odd): kv gets row c and k0 the row before it, row c - 1 or, for c = 0,
 // the window's row at prev_slot (the slot of p - 1); then the R rows go into the window at their slots, in
 // order, as R one-row steps leave it. cos / sin row g of the cos / sin tiles is group g's.
+//
+// Independent rows (a B=4 batch step: row j one token of its own session): every row is a group (G = R). At ratio
+// 2 group g pairs row g with the window's row at prev_slot[g] (its session's slot of p_j - 1), all read before any
+// write; then row j goes into the window at win_slot[j]. A row that closes no group is pooled all the same: the
+// writer skips its cache writes (entry -1).
 template <
     uint32_t has_window,
     uint32_t has_prev_slot,
@@ -125,6 +130,7 @@ template <
     uint32_t start_odd,
     uint32_t cb_block_id,
     uint32_t cs_face1_bytes,
+    uint32_t independent,
     typename WinAcc,
     typename SlotAcc,
     typename PrevAcc,
@@ -247,6 +253,45 @@ inline void read_block(
         const uint32_t k0_l1 = k0_cb.get_write_ptr();
         const uint32_t tile_l1 = win_kv_tile_cb.get_write_ptr();
 
+        if constexpr (independent != 0) {
+            static_assert(G == R && has_prev_slot != 0, "independent rows pair each row with its own prev_slot");
+            volatile tt_l1_ptr uint32_t* prevs =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1 + pos_slot_bytes);
+            // Every row's previous window row, before any row is written (a tile is read once per run of rows in it).
+            uint32_t tile_row = 0xFFFFFFFFu;
+            for (uint32_t g = 0; g < G; ++g) {
+                copy_l1_words(kv_l1 + g * row_tile_bytes, rows_l1 + g * row_tile_bytes, row_tile_bytes);
+                const uint32_t prev = prevs[g];
+                if (prev / tile_rows != tile_row) {
+                    tile_row = prev / tile_rows;
+                    noc_async_read(win_kv_acc.get_noc_addr(tile_row * head_tiles + t), tile_l1, cache_tile_bytes);
+                    noc_async_read_barrier();
+                }
+                extract_tile_row(k0_l1 + g * row_tile_bytes, tile_l1, prev % tile_rows);
+            }
+            kv_cb.push_back(G);
+            k0_cb.push_back(G);
+            // Then each row into its slot; the tile in L1 is written back only once a row patched it.
+            bool dirty = false;
+            for (uint32_t j = 0; j < R; ++j) {
+                const uint32_t slot = slots[j];
+                if (slot / tile_rows != tile_row) {
+                    if (dirty) {
+                        noc_async_write(tile_l1, win_kv_acc.get_noc_addr(tile_row * head_tiles + t), cache_tile_bytes);
+                        noc_async_write_barrier();
+                    }
+                    tile_row = slot / tile_rows;
+                    noc_async_read(win_kv_acc.get_noc_addr(tile_row * head_tiles + t), tile_l1, cache_tile_bytes);
+                    noc_async_read_barrier();
+                }
+                patch_tile_row(tile_l1, rows_l1 + j * row_tile_bytes, slot % tile_rows);
+                dirty = true;
+            }
+            noc_async_write(tile_l1, win_kv_acc.get_noc_addr(tile_row * head_tiles + t), cache_tile_bytes);
+            noc_async_write_barrier();
+            return;
+        }
+
         // The window's row at prev_slot is read before any of the block's rows overwrite it.
         uint32_t tile_row = prev_slot_idx / tile_rows;
         uint64_t tile_noc = win_kv_acc.get_noc_addr(tile_row * head_tiles + t);
@@ -317,8 +362,9 @@ void kernel_main() {
     constexpr uint32_t start_odd = get_compile_time_arg_val(28);
     constexpr uint32_t cb_block_id = get_compile_time_arg_val(29);
     constexpr uint32_t cs_face1_bytes = get_compile_time_arg_val(30);
+    constexpr uint32_t independent = get_compile_time_arg_val(31);
 
-    constexpr auto kv_args = TensorAccessorArgs<31>();
+    constexpr auto kv_args = TensorAccessorArgs<32>();
     constexpr auto win_kv_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
     constexpr auto win_slot_args = TensorAccessorArgs<win_kv_args.next_compile_time_args_offset()>();
     constexpr auto prev_slot_args = TensorAccessorArgs<win_slot_args.next_compile_time_args_offset()>();
@@ -418,7 +464,8 @@ void kernel_main() {
             groups,
             start_odd,
             cb_block_id,
-            cs_face1_bytes>(
+            cs_face1_bytes,
+            independent>(
             t,
             kv_sharded != 0 ? get_noc_addr(kv_noc_x, kv_noc_y, kv_addr + kv_offset_bytes)
                             : TensorAccessor(kv_args, kv_addr).get_noc_addr(kv_offset_bytes),

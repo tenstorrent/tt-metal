@@ -27,7 +27,8 @@ Tensor flash_mqa_decode(
     const std::optional<Tensor>& new_kv,
     uint32_t num_rows,
     bool dense_selected,
-    uint32_t row_groups) {
+    uint32_t row_groups,
+    bool independent_rows) {
     return ttnn::prim::flash_mqa_decode(
         q,
         kv,
@@ -47,7 +48,8 @@ Tensor flash_mqa_decode(
         new_kv,
         num_rows,
         dense_selected,
-        row_groups);
+        row_groups,
+        independent_rows);
 }
 
 }  // namespace ttnn::experimental::deepseek

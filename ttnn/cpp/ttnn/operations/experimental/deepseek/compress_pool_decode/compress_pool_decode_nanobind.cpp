@@ -78,6 +78,10 @@ void bind_compress_pool_decode(::nanobind::module_& mod) {
                 ratio 1 every row does (G = R).
             cos / sin: TILE ``[1, 1, >=G, rope_dim]``, row g for closed group g; entry / dense_entry: int32 ``[G]``;
                 key_row: ``[1, 1, G, Dk]``. Outputs are ``[1, 1, G, Dh]``.
+            independent_rows (bool): the R rows are tokens of independent sessions (a B=4 batch step): every row
+                is a group (G = R); at ratio 2 row g pools with the window row ``prev_slot[g]`` (int32 ``[R]``,
+                required), then goes into ``win_slot[g]``. ``entry[g]`` -1 skips row g's comp_kv / index-key writes
+                (a row that closes no group); ``page_row`` is int32 ``[R]``, row g's page-table row.
         )doc",
         &ttnn::experimental::deepseek::compress_pool_decode,
         nb::arg("kv"),
@@ -102,7 +106,8 @@ void bind_compress_pool_decode(::nanobind::module_& mod) {
         nb::arg("dense_entry") = std::nullopt,
         nb::arg("key_row") = std::nullopt,
         nb::arg("kv_gate_interleave") = 0,
-        nb::arg("start_odd") = false);
+        nb::arg("start_odd") = false,
+        nb::arg("independent_rows") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

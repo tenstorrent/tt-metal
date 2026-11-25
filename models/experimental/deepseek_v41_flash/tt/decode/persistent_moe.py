@@ -492,6 +492,7 @@ def launch_instances_server(
     log=None,
     prefill: bool = False,
     image_bias: bool = False,
+    blocks: bool | None = None,
 ) -> "PersistentMoE":
     """Launch one persistent MoE for ``num_instances`` independent model instances: layers ``0 .. num_layers - 1``
     (plus, with ``dspark``, the drafter's stages as layers :data:`DSPARK_LAYER_BASE` + s) at TP12 on the 3x4 MoE
@@ -511,14 +512,19 @@ def launch_instances_server(
     on the requester rows too, so it is built here, before the models. The prefill MoE's routed op needs ~1.1 MB of a
     MoE core's L1, so the router columns stay in DRAM (as a DSpark server's do anyway).
 
-    ``image_bias`` adds the target layers' image twins (:class:`PersistentMoE`), for instances that take images."""
+    ``image_bias`` adds the target layers' image twins (:class:`PersistentMoE`), for instances that take images.
+
+    ``blocks`` (default: ``dspark``) launches for 4-row blocks with one-row requests on the same launch, as ``dspark``
+    does, without the drafter's layers: for B=4 batch steps (``DeepSeekV41Model(batch_block=True)``)."""
     if tuple(full_device.shape) != GALAXY_MESH:
         raise ValueError(f"the instances' layout needs the {GALAXY_MESH} mesh, got {tuple(full_device.shape)}")
     if not 1 <= num_instances <= len(INSTANCE_ROWS):
         raise ValueError(
             f"{len(INSTANCE_ROWS)} mesh rows hold at most {len(INSTANCE_ROWS)} instances, not {num_instances}"
         )
-    if dspark and not MIXED_ROWS:
+    if blocks is None:
+        blocks = dspark
+    if blocks and not MIXED_ROWS:
         raise ValueError(
             "independent instances mix one-row and block requests on one launch: DEEPSEEK_V41_MOE_MIXED_ROWS=1"
         )
@@ -542,7 +548,7 @@ def launch_instances_server(
             moes,
             single_senders=single_senders(rows),
             rows=1,
-            block_rows=4 if dspark else 0,
+            block_rows=4 if blocks else 0,
             image_bias=image_bias,
         )
     finally:

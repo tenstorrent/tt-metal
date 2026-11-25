@@ -124,6 +124,8 @@ void kernel_main() {
     // One row per core: the reader keeps every chunk of this core in cb_k_shared (see the reader).
     constexpr bool share_reads = get_named_compile_time_arg_val("share_reads") == 1;
     constexpr uint32_t group_rows = num_rows / row_groups;
+    // Independent rows: the reader hands over this row's own p (see flash_mqa_decode_rows_common.hpp).
+    constexpr bool independent = get_named_compile_time_arg_val("independent_rows") == 1;
     constexpr bool dense = get_named_compile_time_arg_val("dense_selected") == 1;
     constexpr uint32_t ring_capacity = get_named_compile_time_arg_val("ring_capacity");
     constexpr uint32_t selected_capacity = get_named_compile_time_arg_val("selected_capacity");
@@ -167,7 +169,7 @@ void kernel_main() {
     }
     cb_pop_front(cb_lengths, 1);
     const flash_mqa_decode_rows::Plan plan = flash_mqa_decode_rows::make_plan(
-        num_rows, ring_capacity, k_chunk_size, selected_capacity, dense, p, n, row_group, row_groups);
+        num_rows, ring_capacity, k_chunk_size, selected_capacity, dense, p, n, row_group, row_groups, independent);
     uint32_t max_len = 0;
     for (uint32_t j = row_group; j < num_rows; j += row_groups) {
         const uint32_t len = flash_mqa_decode_rows::row_len(plan, j);
