@@ -11,6 +11,8 @@
 // DRAM and then signals the compute kernel through a shared semaphore.
 // X4_t2_<pattern>: two compute threads with the in DFB consumed STRIDED (compute stride_tiles 2), BLOCKED (blocks of
 // 2 in and out) or ALL (one reader, each thread copies every tile); Float16_b, SyncHalf, 16-bit Dest.
+// _relu / _l1acc: S2 with the pack features: ReLU (negatives -> 0) and L1 accumulation (each section packed twice,
+// out = 2 x in).
 
 #include "quasar_2_0_test_common.hpp"
 
@@ -23,11 +25,12 @@ struct CopyCase {
     std::uint32_t s;  // sync case S1..S8; S12-S14 early returns
     bool full_sync;
     bool fp32;
-    bool fp32_in = false;  // Float32 L1 in and out (fp32 Dest only)
-    bool lta = false;      // operands via LocalTensorAccessor instead of DFBs
-    bool sem = false;      // lta, with in written by a DM kernel that signals compute through a semaphore
+    bool fp32_in = false;      // Float32 L1 in and out (fp32 Dest only)
+    bool lta = false;          // operands via LocalTensorAccessor instead of DFBs
+    bool sem = false;          // lta, with in written by a DM kernel that signals compute through a semaphore
     std::uint8_t threads = 1;  // compute threads; > 1 runs an X4 DFB-pattern case (S is unused)
     DFBAccessPattern pattern = DFBAccessPattern::STRIDED;
+    std::uint32_t pack = 0;  // kernel mode for a pack feature: 20 = ReLU, 21 = L1 accumulation
 };
 
 std::string copy_case_name(const ::testing::TestParamInfo<CopyCase>& info) {
@@ -42,9 +45,11 @@ std::string copy_case_name(const ::testing::TestParamInfo<CopyCase>& info) {
            (c.fp32_in ? "_fp32in"
             : c.fp32  ? "_fp32"
                       : "_fp16b") +
-           (c.sem   ? "_sem"
-            : c.lta ? "_lta"
-                    : "");
+           (c.sem          ? "_sem"
+            : c.lta        ? "_lta"
+            : c.pack == 20 ? "_relu"
+            : c.pack == 21 ? "_l1acc"
+                           : "");
 }
 
 std::vector<CopyCase> copy_cases() {
@@ -68,6 +73,9 @@ std::vector<CopyCase> copy_cases() {
     cases.push_back({2, false, false, false, true, true});
     for (DFBAccessPattern pattern : {DFBAccessPattern::STRIDED, DFBAccessPattern::BLOCKED, DFBAccessPattern::ALL}) {
         cases.push_back({.s = 0, .full_sync = false, .fp32 = false, .threads = 2, .pattern = pattern});
+    }
+    for (std::uint32_t pack : {20u, 21u}) {
+        cases.push_back({.s = 2, .full_sync = false, .fp32 = false, .pack = pack});
     }
     return cases;
 }
@@ -115,6 +123,9 @@ TEST_P(Quasar2_0Datacopy, Run) {
             mode = 12;
             break;       // an early return, then a checked run
         default: break;  // S1, S8 (S1 twice)
+    }
+    if (c.pack != 0) {
+        mode = c.pack;
     }
     if (c.threads > 1) {
         // BLOCKED: block = threads = tiles per op, so each STRIDED DM op is one tile.
@@ -167,6 +178,13 @@ TEST_P(Quasar2_0Datacopy, Run) {
                             io.inputs[p].begin() + k * TILE_ELEMS,
                             io.inputs[p].begin() + (k + 1) * TILE_ELEMS);
                     }
+                }
+            }
+            for (std::uint16_t& v : want) {
+                if (c.pack == 20 && (v & 0x8000)) {
+                    v = 0;  // ReLU
+                } else if (c.pack == 21) {
+                    v = float_to_bf16(2.0f * bf16_to_float(v));  // exact: a doubling
                 }
             }
             EXPECT_TRUE(tiles_equal(outs[p], want)) << "run " << run << " output " << p;
