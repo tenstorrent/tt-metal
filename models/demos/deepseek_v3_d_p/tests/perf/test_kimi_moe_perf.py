@@ -59,7 +59,7 @@ CASES = [MoEPerfCase("kimi_k3", "8x4", 5120), MoEPerfCase("kimi_k3_1", "4x4-sp1"
 # fastest run, traced the mean of the runs. A case without targets only reports.
 TARGETS_MS = {
     "kimi_k3-8x4-5120": (2.21, 2.12),
-    "kimi_k3_1-4x4-sp1-2560": (3.40, 3.31),
+    "kimi_k3_1-4x4-sp1-2560": (3.27, 3.17),
 }
 
 
