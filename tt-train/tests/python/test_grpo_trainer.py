@@ -618,6 +618,11 @@ def test_grpo_config_rejects_negative_max_staleness(expect_error):
         GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_backend="ttml_in_process_sync", max_staleness=-1)
 
 
+def test_grpo_config_max_staleness_defaults_to_weight_sync_every():
+    cfg = _remote_grpo_config(rollout_backend="ttt_remote_async", weight_sync_every=2, num_iterations=1)
+    assert cfg.max_staleness == 2
+
+
 def test_get_grpo_config_reads_rollout_backend():
     cfg = get_grpo_config(
         {"training_config": {"grpo_config": {**_GRPO_CONFIG_FIELDS, "rollout_backend": "ttml_in_process_sync"}}}

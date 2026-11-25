@@ -248,8 +248,8 @@ class GRPOConfig:
     # remote_rollout_config yaml section.
     remote_rollout: Optional[RemoteRolloutConfig] = None
     # ttt_remote_async: drop a batch generated with weights more than max_staleness optimizer steps older than
-    # the policy.
-    max_staleness: int = 0
+    # the policy. None means weight_sync_every.
+    max_staleness: Optional[int] = None
 
     def __post_init__(self) -> None:
         # num_generations is the GRPO group size: each prompt must produce at least
@@ -327,6 +327,8 @@ class GRPOConfig:
                 f"grpo_config: 'weight_sync_every' does not apply to rollout_backend={self.rollout_backend!r}, "
                 f"which shares the trainer's model (got {self.weight_sync_every})."
             )
+        if self.max_staleness is None:
+            self.max_staleness = self.weight_sync_every
         if self.max_staleness < 0:
             raise ValueError(f"grpo_config: 'max_staleness' must be >= 0 (got {self.max_staleness}).")
         if self.rollout_backend == "ttt_remote_async":
