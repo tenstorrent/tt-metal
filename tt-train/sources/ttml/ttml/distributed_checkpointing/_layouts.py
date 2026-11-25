@@ -1,0 +1,318 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Canonical layout: what makes a checkpoint loadable onto a different parallelism.
+
+Two things about a ttml tensor depend on the parallel configuration it was built for. The vocab dimension is padded
+to a multiple of ``32 * tp``, so the global shape of the LM head changes with the TP size. A fused projection
+(``[Q; K; V]`` or ``[gate; up]``) is built per TP shard, so its global row order ``[Q_0; K_0; V_0; Q_1; ...]`` changes
+with the TP size too. The *canonical* array of a key is the array a single-device, TP=1 instance of the same model
+holds, minus tile padding; the checkpoint records, per key, the transform from the saved device layout to it.
+
+Every transform maps an axis-aligned box of one coordinate system to a short list of axis-aligned pieces of the
+other, each piece being a translation of the matching sub-box, splitting only at known boundaries. No transform ever
+needs a whole tensor, so resharding never materialises one.
+
+The transforms are derived from declarations the fusing layer makes (``fused_segments`` on a column-parallel weight,
+``logical_extent`` on a padded vocab weight); see ``declared_transform``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import IntEnum
+from typing import ClassVar, Sequence, Union
+
+from ._boxes import Box
+from ._errors import LayoutError
+
+# (box in the coordinate system the call started from, box in the one it maps to); both have the same sizes.
+Piece = tuple[Box, Box]
+
+
+class Side(IntEnum):
+    """A coordinate system of a ``Segments`` triple, valued as the index of its start in the triple."""
+
+    DEVICE = 0
+    CANONICAL = 1
+
+
+_LENGTH = 2  # index of the length in a (device_start, canonical_start, length) triple
+
+
+@dataclass(frozen=True)
+class Identity:
+    """Canonical layout equals device layout: every linear weight, norm, embedding without padding."""
+
+    kind: ClassVar[str] = "identity"
+
+    def to_canonical(self, box: Box) -> list[Piece]:
+        return [(box, box)]
+
+    def from_canonical(self, box: Box) -> list[Piece]:
+        return [(box, box)]
+
+    def canonical_shape(self, global_shape: Sequence[int]) -> tuple[int, ...]:
+        return tuple(global_shape)
+
+    def padding_boxes(self, global_shape: Sequence[int]) -> list[Box]:
+        return []
+
+    def to_json(self) -> dict:
+        return {"kind": "identity"}
+
+
+@dataclass(frozen=True)
+class Pad:
+    """Device rows ``[0, logical)`` along ``dim`` are canonical; rows ``[logical, padded)`` are padding.
+
+    This is padding the model adds to a tensor's logical shape: a tail of rows at the end of one dim, sized by the
+    parallel configuration. Today the only such tensors are vocab weights (the token embedding and the LM head), whose
+    vocab dim is padded to a multiple of ``32 * tp`` so that every tensor-parallel shard is a whole number of tiles; the
+    padded extent changes with the TP size and the logical one does not. A layer declares it with ``logical_extent``
+    (see ``declared_transform``). It is not tile padding, which lives inside device tiles, is not part of the logical
+    shape and never reaches a checkpoint; nor is it padding inside each shard, since every padding row comes after the
+    logical ones and so sits in the last shards.
+
+    Padding rows are written to the checkpoint, so a same-layout load (identical transform and global shape) restores
+    them bit for bit. On any other load the destination's padding rows are zeros, even when its padded extent equals
+    the saved one: the planner copies device rows directly only when the whole layout is unchanged.
+    """
+
+    kind: ClassVar[str] = "pad"
+    dim: int
+    logical: int
+    padded: int
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.logical <= self.padded:
+            raise LayoutError(f"pad: logical extent {self.logical} must be within [0, padded={self.padded}]")
+
+    def to_canonical(self, box: Box) -> list[Piece]:
+        lo = box.offsets[self.dim]
+        hi = min(lo + box.sizes[self.dim], self.logical)
+        if hi <= lo:
+            return []
+        piece = box.with_dim(self.dim, lo, hi - lo)
+        return [(piece, piece)]
+
+    def from_canonical(self, box: Box) -> list[Piece]:
+        if box.offsets[self.dim] + box.sizes[self.dim] > self.logical:
+            raise LayoutError(
+                f"pad: canonical box {box} reaches past the logical extent {self.logical} on dim {self.dim}"
+            )
+        return [(box, box)]
+
+    def canonical_shape(self, global_shape: Sequence[int]) -> tuple[int, ...]:
+        shape = list(global_shape)
+        if shape[self.dim] != self.padded:
+            raise LayoutError(
+                f"pad: global extent {shape[self.dim]} on dim {self.dim} is not the declared padded {self.padded}"
+            )
+        shape[self.dim] = self.logical
+        return tuple(shape)
+
+    def padding_boxes(self, global_shape: Sequence[int]) -> list[Box]:
+        if self.padded == self.logical:
+            return []
+        return [Box.whole(global_shape).with_dim(self.dim, self.logical, self.padded - self.logical)]
+
+    def to_json(self) -> dict:
+        return {"kind": "pad", "dim": self.dim, "logical": self.logical, "padded": self.padded}
+
+
+@dataclass(frozen=True)
+class Segments:
+    """A piecewise-contiguous map along ``dim``: device range ``[d, d+n)`` is canonical range ``[c, c+n)``.
+
+    ``map`` holds ``(device_start, canonical_start, length)`` triples that tile the extent on both sides. Fused
+    projections use it: see ``fused_segments``.
+    """
+
+    kind: ClassVar[str] = "segments"
+    dim: int
+    map: tuple[tuple[int, int, int], ...]
+
+    def __post_init__(self) -> None:
+        triples = tuple((int(d), int(c), int(n)) for d, c, n in self.map)
+        object.__setattr__(self, "map", triples)
+        if not triples:
+            raise LayoutError("segments: empty map")
+        for side in Side:
+            cursor = 0
+            for seg in sorted(triples, key=lambda s: s[side]):
+                if seg[side] != cursor or seg[_LENGTH] <= 0:
+                    raise LayoutError(f"segments: map does not tile the {side.name.lower()} extent: {triples}")
+                cursor += seg[_LENGTH]
+
+    @property
+    def extent(self) -> int:
+        return sum(n for _, _, n in self.map)
+
+    def _split(self, box: Box, src: Side, dst: Side) -> list[Piece]:
+        lo = box.offsets[self.dim]
+        hi = lo + box.sizes[self.dim]
+        if hi > self.extent:
+            raise LayoutError(f"segments: box {box} reaches past the extent {self.extent} on dim {self.dim}")
+        pieces: list[Piece] = []
+        for seg in sorted(self.map, key=lambda s: s[src]):
+            a, b = max(lo, seg[src]), min(hi, seg[src] + seg[_LENGTH])
+            if b > a:
+                pieces.append(
+                    (box.with_dim(self.dim, a, b - a), box.with_dim(self.dim, seg[dst] + (a - seg[src]), b - a))
+                )
+        return pieces
+
+    def to_canonical(self, box: Box) -> list[Piece]:
+        return self._split(box, Side.DEVICE, Side.CANONICAL)
+
+    def from_canonical(self, box: Box) -> list[Piece]:
+        return self._split(box, Side.CANONICAL, Side.DEVICE)
+
+    def canonical_shape(self, global_shape: Sequence[int]) -> tuple[int, ...]:
+        if global_shape[self.dim] != self.extent:
+            raise LayoutError(
+                f"segments: global extent {global_shape[self.dim]} on dim {self.dim} is not the map's {self.extent}"
+            )
+        return tuple(global_shape)
+
+    def padding_boxes(self, global_shape: Sequence[int]) -> list[Box]:
+        return []
+
+    def to_json(self) -> dict:
+        return {"kind": "segments", "dim": self.dim, "map": [list(t) for t in self.map]}
+
+
+Transform = Union[Identity, Pad, Segments]
+
+
+def transform_from_json(value: dict) -> Transform:
+    kind = value.get("kind")
+    if kind == "identity":
+        return Identity()
+    if kind == "pad":
+        return Pad(int(value["dim"]), int(value["logical"]), int(value["padded"]))
+    if kind == "segments":
+        return Segments(int(value["dim"]), tuple(tuple(int(x) for x in t) for t in value["map"]))
+    raise LayoutError(f"unknown transform kind {kind!r}")
+
+
+# The keys a Parameter's ``checkpoint_layout`` may declare; see ``declared_transform``.
+DECLARATIONS = ("fused", "logical_extent")
+
+
+def check_fused_segments(sizes: Sequence[int], extent: int, shards: int) -> tuple[int, ...]:
+    """``sizes`` as ints, checked as the segments of a fused dim of ``extent`` rows split across ``shards`` TP shards:
+    positive, summing to ``extent``, and each divisible by ``shards``, since every shard holds an equal piece of every
+    segment. The one check of a fused declaration, run where the fusing layer is built and again when a checkpoint is
+    planned."""
+    sizes = tuple(int(s) for s in sizes)
+    if not sizes or shards < 1 or any(s <= 0 for s in sizes):
+        raise LayoutError(f"fused_segments: bad sizes {sizes} or shard count {shards}")
+    if sum(sizes) != extent:
+        raise LayoutError(f"fused_segments {sizes} sum to {sum(sizes)} but the fused dim has {extent} rows")
+    for s in sizes:
+        if s % shards:
+            raise LayoutError(
+                f"fused_segments: segment size {s} is not divisible by the {shards} shards; every shard holds an equal "
+                f"piece of every segment"
+            )
+    return sizes
+
+
+def fused_segments(dim: int, sizes: Sequence[int], shards: int) -> Transform:
+    """The transform of a fused weight whose canonical segments of global ``sizes`` are each split evenly across
+    ``shards`` TP shards, shard ``j`` holding piece ``j`` of every segment in segment order.
+
+    With ``sizes = (Q, K, V)`` and two shards the device rows are ``[Q_0; K_0; V_0; Q_1; K_1; V_1]`` and the
+    canonical rows ``[Q; K; V]``. One shard is the identity.
+    """
+    sizes = check_fused_segments(sizes, sum(int(s) for s in sizes), shards)
+    if shards == 1:
+        return Identity()
+    total = sum(sizes)
+    per_shard = total // shards
+    canonical_starts = [sum(sizes[:g]) for g in range(len(sizes))]
+    triples: list[tuple[int, int, int]] = []
+    for j in range(shards):
+        device_cursor = j * per_shard
+        for g, size in enumerate(sizes):
+            length = size // shards
+            triples.append((device_cursor, canonical_starts[g] + j * length, length))
+            device_cursor += length
+    return Segments(dim, tuple(triples))
+
+
+def padded_extent(dim: int, logical: int, padded: int) -> Transform:
+    """``Pad`` when the extent is padded, the identity when it is not."""
+    if padded == logical:
+        return Identity()
+    return Pad(dim, logical, padded)
+
+
+def declared_transform(
+    global_shape: Sequence[int],
+    label,
+    fused: tuple[int, Sequence[int]] | None = None,
+    logical_extent: tuple[int, int] | None = None,
+    key: str = "",
+) -> Transform:
+    """The transform for a tensor from its declarations and its sharding.
+
+    ``fused`` is ``(dim, segment sizes)`` from a fusing layer; ``logical_extent`` is ``(dim, logical rows)`` from a
+    padded vocab weight; a negative dim counts from the end, as in numpy. ``label`` is the live tensor's topology label
+    (``_topology.Label``), whose shards of the fused dim give the interleave. The declarations are checked against
+    ``global_shape`` and the label: a mismatch is a ``LayoutError`` naming ``key``, never a silent identity.
+
+    Two combinations are refused rather than given a transform:
+
+    - A fused dim sharded by more than one mesh axis. The interleave comes from the tensor-parallel shards alone; a
+      second axis (FSDP) splitting the same rows would make the label's shard count describe a layout the weight does
+      not have, and a load onto another TP size would scramble the segments. ``fully_shard`` cannot build such a
+      label: it picks another dim by default, and with an explicit ``shard_dim`` on the fused rows ttnn's mesh mapper
+      refuses two placements sharding one dim. The check guards labels built by hand.
+    - Fusion and padding together. No layer declares both, so no transform composes the two. On the same dim one
+      could not be composed anyway: under TP every shard would hold its own padding inside its segments, which
+      neither ``Pad`` (a tail of padding rows) nor ``Segments`` describes. A layer that needs both needs a new
+      transform, and this refusal is the place to change.
+    """
+    where = f"{key}: " if key else ""
+    ndim = len(global_shape)
+
+    def resolve(dim: int, what: str) -> int:
+        # Labels hold non-negative dims, so a declared -2 must become 2 before it is compared with them.
+        if not -ndim <= int(dim) < ndim:
+            raise LayoutError(f"{where}{what} declares dim {int(dim)}, out of range for a rank-{ndim} tensor")
+        return int(dim) % ndim
+
+    if fused is not None:
+        fused = (resolve(fused[0], "fused_segments"), fused[1])
+    if logical_extent is not None:
+        logical_extent = (resolve(logical_extent[0], "logical_extent"), logical_extent[1])
+    if fused is not None and logical_extent is not None:
+        raise LayoutError(
+            f"{where}fused_segments (dim {fused[0]}) and logical_extent (dim {logical_extent[0]}) both declared; no "
+            f"transform describes a weight that is both fused and padded"
+        )
+    if logical_extent is not None:
+        dim, logical = logical_extent
+        try:
+            return padded_extent(dim, logical, int(global_shape[dim]))
+        except LayoutError as err:
+            raise LayoutError(f"{where}{err}") from None
+    if fused is not None:
+        dim, sizes = fused
+        axes = label.shard_axes(dim)
+        if len(axes) > 1:
+            raise LayoutError(
+                f"{where}fused_segments on dim {dim}, which {len(axes)} mesh axes shard (distribution axes "
+                f"{list(axes)}); the fused row order is defined only when the tensor-parallel axis alone shards it. "
+                f"Shard this weight with FSDP along another dim (fully_shard's default picks one)"
+            )
+        try:
+            sizes = check_fused_segments(sizes, int(global_shape[dim]), label.shard_count(dim))
+            return fused_segments(dim, sizes, label.shard_count(dim))
+        except LayoutError as err:
+            raise LayoutError(f"{where}{err}") from None
+    return Identity()
