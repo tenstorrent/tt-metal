@@ -64,6 +64,10 @@ class GlobalConfig:
         return self.uses_unpack_to_dest_sync and not self.skip_sync
 
     @property
+    def sfpu_on_trisc3(self) -> bool:
+        return self.architecture == ChipArchitecture.QUASAR
+
+    @property
     def skip_math_init(self) -> bool:
         return self.perf_run_type in (
             PerfRunType.UNPACK_ISOLATE,

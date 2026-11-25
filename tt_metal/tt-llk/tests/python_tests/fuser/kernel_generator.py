@@ -13,8 +13,10 @@ from typing import Dict, List
 from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
 
+from .base_sfpu import Sfpu
 from .fuser_config import FuserConfig
 from .pipeline_plan import PlannedBlock
+from .sfpu_node import SfpuNode
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
@@ -87,9 +89,14 @@ class MathKernelGenerator:
     def generate(self, plans: List[List[PlannedBlock]]) -> str:
         # Collect all unique headers from all operations
         all_headers = set()
+        sfpu_on_trisc3 = self.config.global_config.sfpu_on_trisc3
         for op in self.config.pipeline:
             for unit in op.get_math_units():
+                if sfpu_on_trisc3 and isinstance(unit, Sfpu):
+                    continue
                 all_headers.update(unit.get_headers())
+        if sfpu_on_trisc3:
+            all_headers.add("llk_math_common.h")
 
         if self.config.global_config.skip_math_init:
             all_headers.discard("sfpu_operations_quasar.h")
@@ -105,20 +112,21 @@ class SfpuKernelGenerator:
     def __init__(self, config: FuserConfig):
         self.config = config
 
-    def generate(self) -> str:
+    def generate(self, plans: List[List[PlannedBlock]]) -> str:
         if self.config.global_config.architecture != ChipArchitecture.QUASAR:
             return ""
 
-        return (
-            f"\n"
-            f"#ifdef LLK_TRISC_ISOLATE_SFPU\n"
-            f"\n"
-            f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
-            f"{{\n"
-            f"}}\n"
-            f"\n"
-            f"#endif\n"
+        all_headers = {"llk_sfpu_common.h"}
+        if self.config.global_config.sfpu_on_trisc3:
+            for op in self.config.pipeline:
+                for _, node in op._get_sfpu_nodes():
+                    all_headers.update(node.get_headers())
+
+        sfpu_calls = "".join(
+            op.sfpu(self.config.global_config, blocks)
+            for op, blocks in zip(self.config.pipeline, plans)
         )
+        return render_kernel("ISOLATE_SFPU", all_headers, sfpu_calls)
 
 
 class PackKernelGenerator:
@@ -130,6 +138,10 @@ class PackKernelGenerator:
         all_headers = set()
         for op in self.config.pipeline:
             for pack_node in op.pack_nodes:
+                if self.config.global_config.sfpu_on_trisc3 and isinstance(
+                    pack_node, SfpuNode
+                ):
+                    continue
                 all_headers.update(pack_node.get_headers())
 
         if self.config.global_config.skip_math_init:
@@ -156,7 +168,7 @@ class FusedKernelGenerator:
             "unpack": self.unpack_gen.generate(plans),
             "math": self.math_gen.generate(plans),
             "pack": self.pack_gen.generate(plans),
-            "sfpu": self.sfpu_gen.generate(),
+            "sfpu": self.sfpu_gen.generate(plans),
         }
 
     def write_kernel(self, test_name: str):
