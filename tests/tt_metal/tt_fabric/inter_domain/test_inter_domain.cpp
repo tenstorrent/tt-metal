@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <climits>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -16,7 +15,6 @@
 #include <sstream>
 #include <string>
 #include <thread>
-#include <type_traits>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/execution/distributed.hpp>
@@ -37,7 +35,6 @@
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::inter_domain_test {
 namespace {
@@ -49,9 +46,6 @@ namespace fs = std::filesystem;
 constexpr uint32_t kNumPackets = 16;
 constexpr uint32_t kPacketSize = 1024;
 constexpr uint32_t kBytes = kNumPackets * kPacketSize;
-using RouteEntry = std::remove_extent_t<decltype(HybridMeshPacketHeader::route_buffer)>;
-constexpr size_t kEntriesPerArg = sizeof(uint32_t) / sizeof(RouteEntry);
-constexpr size_t kEntryBits = sizeof(RouteEntry) * CHAR_BIT;
 constexpr uint32_t kHeaderOffset = 0;
 constexpr uint32_t kSrcOffset = 4096;
 constexpr uint32_t kDstOffset = kSrcOffset + kBytes;
@@ -296,7 +290,8 @@ void run(bool all_at_once) {
             uint64_t from;
             uint64_t via;
             std::vector<uint64_t> to;
-            std::vector<RouteEntry> route;
+            std::optional<FabricNodeId> behind;  // over VC0 to this exit chip first
+            uint32_t out_cable = 0;
             std::function<void(Program&, const CoreCoord&, std::vector<uint32_t>&)> connect;
         };
         std::vector<Send> sends;
@@ -311,31 +306,24 @@ void run(bool all_at_once) {
                 all.push_back(to);
             }
             if (all_at_once) {
-                sends.push_back(Send{exit_chip, peer_chip, all, {}, over_cable});
+                sends.push_back(Send{exit_chip, peer_chip, all, std::nullopt, 0, over_cable});
                 continue;
             }
             for (uint64_t to : all) {
-                sends.push_back(Send{exit_chip, peer_chip, {to}, {}, over_cable});
+                sends.push_back(Send{exit_chip, peer_chip, {to}, std::nullopt, 0, over_cable});
             }
             const auto exit = node_of.at(exit_chip);
             for (const auto& [asic, dev] : device_of) {
                 const auto from = node_of.at(asic);
-                const auto out = control_plane.get_forwarding_direction(from, exit);
-                if (asic == exit_chip || !out || control_plane.get_chip_neighbors(from, *out).empty()) {
+                if (asic == exit_chip || from.mesh_id != exit.mesh_id) {
                     continue;
                 }
-                const auto shape = mesh_graph.get_mesh_shape(exit.mesh_id);
-                const auto at = mesh_graph.chip_to_coordinate(exit.mesh_id, exit.chip_id);
-                const auto ingress = get_opposite_direction(*out);
-                std::vector<RouteEntry> route(shape[0] + shape[1], 0);
-                const bool x_axis = ingress == RoutingDirection::E || ingress == RoutingDirection::W;
-                route[x_axis ? shape[0] + at[1] : at[0]] =
-                    1u << control_plane.routing_direction_to_eth_direction(port.direction);
                 sends.push_back(Send{
                     asic,
                     peer_chip,
                     {peer_chip},
-                    route,
+                    exit,
+                    1u << control_plane.routing_direction_to_eth_direction(port.direction),
                     [&mesh, from, exit, plane = port.plane](
                         Program& program, const CoreCoord& core, std::vector<uint32_t>& args) {
                         append_fabric_connection_rt_args(*mesh, from, exit, plane, program, core, args);
@@ -371,14 +359,10 @@ void run(bool all_at_once) {
                 base + kHeaderOffset,
                 kNumPackets,
                 kPacketSize,
-                static_cast<uint32_t>(send.route.size())};
-            for (size_t b = 0; b < send.route.size(); b += kEntriesPerArg) {
-                uint32_t word = 0;
-                for (size_t e = 0; e < kEntriesPerArg && b + e < send.route.size(); ++e) {
-                    word |= uint32_t{send.route[b + e]} << (kEntryBits * e);
-                }
-                args.push_back(word);
-            }
+                send.behind.has_value(),
+                send.behind ? send.behind->chip_id : 0,
+                send.behind ? *send.behind->mesh_id : 0,
+                send.out_cable};
             args.push_back(static_cast<uint32_t>(send.to.size()));
             for (uint64_t to : send.to) {
                 const auto& rx = peer.rx.at(to);
@@ -389,6 +373,14 @@ void run(bool all_at_once) {
             send.connect(program, core, args);
             SetRuntimeArgs(program, kernel, core, args);
             if (!all_at_once) {
+                log_info(
+                    tt::LogTest,
+                    "domain {}: send {} -> {} via {}{}",
+                    *domain,
+                    send.from,
+                    send.to.front(),
+                    send.via,
+                    send.behind ? " behind" : "");
                 distributed::MeshWorkload workload;
                 workload.add_program(distributed::MeshCoordinateRange(coord_of.at(send.from)), std::move(single));
                 distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, true);
