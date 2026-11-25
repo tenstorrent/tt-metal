@@ -45,9 +45,12 @@ from helpers.sfpu_dispatch_constants import (
     DROPOUT_PROBABILITY_MAX,
     DROPOUT_SCALE,
     DROPOUT_SEED,
+    HARDSHRINK_LAMBDA,
     INT_MAXMIN_SCALAR,
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
+    THRESHOLD_T,
+    THRESHOLD_V,
     UNARY_MAX_MIN_VALUE,
 )
 from helpers.sfpu_domains import for_op, op_edge_points, sfpu_unary_ops
@@ -2183,6 +2186,184 @@ def test_cumsum_tilized_dest_quasar(formats, dest_acc):
     assert torch.allclose(
         result, expected, rtol=0, atol=1e-3
     ), f"cumsum mismatch:\ngot\n{result}\nexpected\n{expected}"
+
+
+# hardshrink and threshold, exact: values on either side of the bound, and rows in which no lane,
+# or every lane, is overwritten (both kernels step Dest from the second row's store).
+_SFPI_ROW_ELEMS = 2 * FACE_C_DIM  # one sfpi row is two 16-lane Dest rows
+_BODY_ELEMS = 2 * _SFPI_ROW_ELEMS
+_BODIES_PER_FACE = MAX_FACE_R_DIM * FACE_C_DIM // _BODY_ELEMS
+
+
+@dataclass(frozen=True)
+class OverwriteOp:
+    """An op that overwrites the lanes on one side of a bound: where they lie and what is stored."""
+
+    bound: float
+    overwritten: tuple  # (low, high) of values the kernel overwrites
+    kept: tuple  # (low, high) of values it leaves alone
+    expected: object  # float32 tensor -> float32 tensor
+
+
+OVERWRITE_OPS = {
+    MathOperation.Hardshrink: OverwriteOp(
+        bound=HARDSHRINK_LAMBDA,
+        overwritten=(-HARDSHRINK_LAMBDA, HARDSHRINK_LAMBDA),
+        kept=(1.0, 4.0),
+        expected=lambda x: torch.where(
+            x.abs() > HARDSHRINK_LAMBDA, x, torch.zeros_like(x)
+        ),
+    ),
+    MathOperation.Threshold: OverwriteOp(
+        bound=THRESHOLD_T,
+        overwritten=(-4.0, THRESHOLD_T),
+        kept=(6.0, 20.0),
+        expected=lambda x: torch.where(
+            x > THRESHOLD_T, x, torch.full_like(x, THRESHOLD_V)
+        ),
+    ),
+}
+
+
+def _bound_neighbours(bound: float, dtype: torch.dtype) -> torch.Tensor:
+    """+/-bound, the representable values next to each in *dtype*, both zeros and both infinities."""
+    is_fp32 = dtype == torch.float32
+    int_dtype = torch.int32 if is_fp32 else torch.int16
+    at_bound = torch.tensor([bound, -bound], dtype=dtype).view(int_dtype)
+    steps = torch.tensor([-1, 0, 1], dtype=int_dtype)
+    near = (at_bound.unsqueeze(1) + steps).flatten().view(dtype)
+    return torch.cat(
+        [near, torch.tensor([0.0, -0.0, math.inf, -math.inf], dtype=dtype)]
+    )
+
+
+def prepare_overwrite_inputs(
+    mathop: MathOperation, input_format: DataFormat, tile_count: int
+) -> torch.Tensor:
+    """Four two-row bodies per face (see ``bodies``), rotated by one body per face."""
+    op = OVERWRITE_OPS[mathop]
+    dtype = format_dict[input_format]
+
+    def uniform(low, high, count):
+        return low + (high - low) * torch.rand(count)
+
+    def mixed(count):
+        picks_kept = torch.rand(count) < 0.5
+        return torch.where(
+            picks_kept, uniform(*op.kept, count), uniform(*op.overwritten, count)
+        )
+
+    edges = _bound_neighbours(op.bound, dtype)
+    faces = []
+    for face in range(tile_count * MAX_NUM_FACES):
+        bodies = [
+            # Both rows mixed.
+            mixed(_BODY_ELEMS),
+            # A mixed row, then one in which no lane is overwritten.
+            torch.cat([mixed(_SFPI_ROW_ELEMS), uniform(*op.kept, _SFPI_ROW_ELEMS)]),
+            # A row in which no lane is overwritten, then one in which every lane is.
+            torch.cat(
+                [
+                    uniform(*op.kept, _SFPI_ROW_ELEMS),
+                    uniform(*op.overwritten, _SFPI_ROW_ELEMS),
+                ]
+            ),
+            # Mixed, with the bound's neighbours planted in both rows below.
+            mixed(_BODY_ELEMS),
+        ]
+        bodies = [body.to(dtype) for body in bodies]
+        bodies[3][3 : 3 + edges.numel()] = edges
+        bodies[3][_SFPI_ROW_ELEMS + 5 : _SFPI_ROW_ELEMS + 5 + edges.numel()] = edges
+        shift = face % _BODIES_PER_FACE
+        faces.extend(bodies[shift:] + bodies[:shift])
+    return torch.cat(faces)
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=list(OVERWRITE_OPS),
+    format_variant=lambda mathop: [
+        variant
+        for variant in generate_quasar_sfpu_format_variants(
+            mathop, SFPU_UNARY_FORMATS, full_format_route_sweep=True
+        )
+        if variant.uses_fpu or variant.unpack_dst == variant.formats.input_format
+    ],
+    input_dimensions=runtime(list(TENSOR_DIMS)),
+)
+def test_eltwise_unary_sfpu_overwrite_quasar(mathop, format_variant, input_dimensions):
+    """hardshrink and threshold, exact, on one and four tiles; see prepare_overwrite_inputs."""
+    formats = format_variant.formats
+    tile_count = (
+        input_dimensions[0]
+        * input_dimensions[1]
+        // (DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM)
+    )
+    src_A = prepare_overwrite_inputs(mathop, formats.input_format, tile_count)
+    src_B = torch.zeros_like(src_A)
+    unpack_to_dest = format_variant.unpack_to_dest
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=mathop),
+                APPROX_MODE(ApproximationMode.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(DestSync.Half),
+                TYPECAST_FORMATS(),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_count),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_count,
+                tile_count_B=tile_count,
+                tile_count_res=tile_count,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": unpack_to_dest,
+            "dest_acc": format_variant.dest_acc,
+        },
+    )
+    format_variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+    out_dtype = format_dict[formats.output_format]
+    result = result_tensor(res_from_L1, formats.output_format).to(torch.float32)
+    expected = (
+        OVERWRITE_OPS[mathop]
+        .expected(src_A.to(torch.float32))
+        .to(out_dtype)
+        .to(torch.float32)
+    )
+
+    wrong = (
+        (result.view(torch.int32) != expected.view(torch.int32))
+        .nonzero()
+        .flatten()
+        .tolist()
+    )
+    assert not wrong, (
+        f"{mathop.name} differs in {len(wrong)} of {expected.numel()} words; first at flat index "
+        f"{wrong[0]}: input {src_A[wrong[0]].item()}, got {result[wrong[0]].item()}, "
+        f"expected {expected[wrong[0]].item()}"
+    )
 
 
 # tiled_prod, raw result words against a model of the chain. The fuser cases cover finite inputs

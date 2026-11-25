@@ -19,14 +19,14 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/experimental/mesh_workload_runtime_args.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"

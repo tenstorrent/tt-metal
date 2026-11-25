@@ -13,16 +13,16 @@
 #include "mx_host_packing.hpp"
 #include "tensor_impl.hpp"
 
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/data_formats/bfloat4.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "pinned_upload.hpp"
 #include <tt_stl/concepts.hpp>

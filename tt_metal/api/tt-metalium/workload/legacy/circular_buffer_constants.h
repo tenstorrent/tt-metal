@@ -7,7 +7,8 @@
 // Host-only header. Device (kernel/firmware) code must use api/circular_buffer_constants.h from
 // tt_metal/hw/inc instead: the two sides are compiled by different compilers and must not share this file.
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#error "tt-metalium/circular_buffer_constants.h is host-only; include \"api/circular_buffer_constants.h\" in device code"
+#error \
+    "tt-metalium/workload/legacy/circular_buffer_constants.h is host-only; include \"api/circular_buffer_constants.h\" in device code"
 #endif
 
 #include <cstdint>
@@ -24,7 +25,7 @@
 //
 // For NEW CODE:
 //   DO NOT USE NUM_CIRCULAR_BUFFERS to get the actual device limit
-//   USE: tt::tt_metal::hal::get_num_dataflow_buffers() instead (See tt_metal/api/tt-metalium/hal.hpp)
+//   USE: tt::tt_metal::hal::get_num_dataflow_buffers() instead (See tt_metal/api/tt-metalium/discovery/hal.hpp)
 //
 // TODO: This is TEMPORARY code structure - eventually will be replaced by Dataflow Buffers (DFBs)
 

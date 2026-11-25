@@ -13,9 +13,9 @@
 #include <vector>
 
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
 

@@ -8,10 +8,10 @@
 #include <memory>
 #include <optional>
 #include <set>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 
 #include <functional>
 #include <utility>

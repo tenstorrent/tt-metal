@@ -9,10 +9,10 @@
 #include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
 
 #include <optional>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <span>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 

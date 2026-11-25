@@ -9,10 +9,10 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "program/program_impl.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 
@@ -298,6 +298,7 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
+    void check_circular_buffers_bound();
     void compile(MeshDevice* mesh_device);
     // Compile/finalize the workload and commit its kernel binaries to DRAM without executing it.
     // The returned owner must remain alive while commands referencing the binary addresses may execute.

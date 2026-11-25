@@ -7,12 +7,12 @@
 #include <enchantum/enchantum.hpp>
 #include <cstdlib>
 #include <sys/types.h>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "allocator/allocator.hpp"
 #include "dispatch/system_memory_manager.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -28,22 +28,22 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
 #include "dispatch_test_utils.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "multi_command_queue_fixture.hpp"
-#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-umd/types/arch.hpp>
 

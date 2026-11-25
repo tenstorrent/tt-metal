@@ -9,7 +9,7 @@
 #include <cstdint>
 
 #include <hostdevcommon/fabric_common.h>
-#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace tt {

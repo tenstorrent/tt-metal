@@ -5,8 +5,8 @@
 #include "create_qkv_heads_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "create_qkv_heads_program_factory.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;

@@ -8,8 +8,8 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/maybe_remote.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/maybe_remote.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_fabric {

@@ -32,7 +32,7 @@
 #include "dispatch/topology.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
-#include <device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_impl.hpp"
 
 using namespace tt::tt_metal;

@@ -15,8 +15,8 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt-metalium/workload/specification/kernel_hardware_types.hpp>  // IWYU pragma: export
 
 namespace tt::tt_metal {

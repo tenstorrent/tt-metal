@@ -162,21 +162,17 @@ class SparseMoEEP(MoE):
             output = ttml.ops.distributed.all_reduce(output, noop_backward=True, cluster_axis=self.cluster_axis)
             output = self._memory_snapshot(output, "AFTER_ALL_REDUCE")
 
-        # Shared experts: not EP-sharded by default — they replicate work and
-        # don't need an all_reduce. If a downstream change makes them EP/TP,
-        # plug in the appropriate collective.
+        # Shared experts: their weights are sharded on the EP axis when it exists, and
+        # DeepSeekMLP all-reduces its own output then, so shared_out is replicated like output.
         if self.shared_experts is not None:
             x_shared = self._memory_snapshot(x, "BEFORE_SHARED")
             shared_out = self.shared_experts(x_shared)
             shared_out = self._memory_snapshot(shared_out, "AFTER_SHARED")
             pre_add_output = output
             output = ttml.ops.binary.add(pre_add_output, shared_out)
-            # binary.add's backward is just d_a = d_b = d_out (no read of inputs);
-            # the all_reduce above has noop_backward (identity), so its forward
-            # output is never read in bwd either; shared_out's parent linear (w2)
-            # also doesn't read shared_out itself for its weight grad (it reads w2's
-            # input, which is saved separately). All three sources confirm these
-            # two tensor values are not needed downstream — release them now.
+            # Backward reads neither value, so free both now: binary.add's backward doesn't read its inputs,
+            # and both come from all_reduces with noop_backward=True, the one above and, when the shared MLP
+            # is sharded, DeepSeekMLP's own. A local shared MLP ends in w2, whose backward reads its input.
             pre_add_output.get_value().deallocate(force=True)
             shared_out.get_value().deallocate(force=True)
 

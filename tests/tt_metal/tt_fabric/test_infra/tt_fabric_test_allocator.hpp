@@ -12,13 +12,13 @@
 #include <map>
 #include <set>
 #include <fmt/format.h>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "tt_fabric_test_common.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_memory_map.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 

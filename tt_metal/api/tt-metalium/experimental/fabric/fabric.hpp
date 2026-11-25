@@ -6,10 +6,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 // UMD: re-exports CoreType (used in append_fabric_connection/FabricHandle default params).
 #include <tt-umd/types/core_coordinates.hpp>
