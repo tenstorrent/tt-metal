@@ -1,0 +1,491 @@
+name: "ttnn model trace manifest PR"
+
+# Opens the manifest pull request of a "ttnn run model trace" run (OSPO-1379).
+#
+# The trace is started by hand, often from a feature branch. Its job
+# homogenize-and-load no longer pushes or opens a pull request: when the
+# loader changed model_tracer/trace_selection_registry.yaml, it uploads the
+# artifact manifest-pr-request (trace_selection_registry.yaml and
+# request.json). This workflow runs when that run has completed. A
+# workflow_run run always uses this file from main, never the branch code of
+# the trace.
+#
+# Two jobs:
+# - validate: no environment, no id-token, actions read only. Reads the
+#   artifact of the trace run as data and uploads a checked artifact of this
+#   run (manifest-pr-checked). No package is installed: JSON with Python's
+#   standard library, YAML with Ruby's Psych safe_load (both are on the
+#   runner image).
+# - open-pr: only when validate found a checked request. Environment
+#   model-trace-pr, id-token write. Pushes the registry to a new branch off
+#   main with the job's own token and opens the pull request with a
+#   short-lived token from OSPO (pull requests write on this repository only;
+#   role model-trace-pr, this file only). A pull request opened by that token
+#   starts the usual pull request CI, which one opened by the job's own token
+#   would not. A person reviews and merges it.
+#
+# Untrusted input: whoever can push a branch can change the trace code, so the
+# artifact and the trace run's own fields (branch, title, conclusion) are
+# untrusted. Nothing of them reaches a shell command line, a file path, a git
+# or gh argument, or a loader that can run code. The branch name comes from
+# the trace run id that GitHub gives this event. Values go to steps only
+# through env.
+#
+# To change the access, open an OSPO ticket.
+
+on:
+  workflow_run:
+    workflows: ["ttnn run model trace"]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: ttnn-model-trace-manifest-pr-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Check the manifest request
+    # A hand-started run of the trace file of this repository. The conclusion
+    # comes from branch code and protects nothing: the artifact, which exists
+    # only after a good load, is the signal. So failed and cancelled runs too.
+    if: >-
+      github.repository == 'tenstorrent/tt-metal' &&
+      contains(fromJSON('["success","failure","cancelled"]'), github.event.workflow_run.conclusion) &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.path == '.github/workflows/ttnn-run-model-trace.yaml' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read # find and download the artifact of the trace run
+    outputs:
+      ready: ${{ steps.validate.outputs.ready }}
+    steps:
+      - name: Check the trigger
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          TRACE_RUN_ID: ${{ github.event.workflow_run.id }}
+          TRACE_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != workflow_run ] || [ "$REF" != refs/heads/main ]; then
+            echo "::error::this workflow runs only for workflow_run on main"
+            exit 1
+          fi
+          if ! [[ "$TRACE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
+            echo "::error::unexpected trace run id"
+            exit 1
+          fi
+          if ! [[ "$TRACE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::unexpected trace commit"
+            exit 1
+          fi
+
+      - name: Find the request artifact
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRACE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          json=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${TRACE_RUN_ID}/artifacts?name=manifest-pr-request&per_page=10")
+          count=$(jq '[.artifacts[] | select(.name == "manifest-pr-request" and .expired == false)] | length' <<<"$json")
+          if [ "$count" = 0 ]; then
+            echo "::notice::The trace run has no manifest-pr-request artifact (load-to-db off, no registry change, or the load failed); no PR."
+            echo "found=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$count" != 1 ]; then
+            echo "::error::The trace run has ${count} artifacts named manifest-pr-request; expected one."
+            exit 1
+          fi
+          # The two files hold at most 1 MiB + 256 KiB uncompressed; the zip is smaller.
+          size=$(jq '[.artifacts[] | select(.name == "manifest-pr-request" and .expired == false)][0].size_in_bytes' <<<"$json")
+          if ! [[ "$size" =~ ^[0-9]{1,9}$ ]] || [ "$size" -gt 1572864 ]; then
+            echo "::error::The manifest-pr-request artifact is larger than 1.5 MiB; not used."
+            exit 1
+          fi
+          echo "found=true" >>"$GITHUB_OUTPUT"
+
+      # Outside the workspace.
+      - name: Download the request artifact
+        if: steps.find.outputs.found == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: manifest-pr-request
+          path: ${{ runner.temp }}/manifest-pr-request
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      # All checks of the untrusted artifact. Writes the registry bytes as
+      # received, the pull request JSON body and the commit message to OUT_DIR.
+      - name: Validate the request (data only)
+        id: validate
+        if: steps.find.outputs.found == 'true'
+        env:
+          REQ_DIR: ${{ runner.temp }}/manifest-pr-request
+          OUT_DIR: ${{ runner.temp }}/manifest-pr-checked
+          TRACE_RUN_ID: ${{ github.event.workflow_run.id }}
+          TRACE_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          def fail(msg):
+              print(f"::error::request artifact refused: {msg}")
+              sys.exit(1)
+
+          def safe_yaml(text):
+              # Ruby's Psych safe_load: plain data only (no object tags, no
+              # dates or symbols, no aliases); the result comes back as JSON.
+              prog = ('require "yaml"; require "json"; '
+                      'print JSON.generate(YAML.safe_load(STDIN.read, permitted_classes: [], permitted_symbols: [], aliases: false))')
+              r = subprocess.run(["ruby", "-e", prog], input=text.encode("utf-8"), capture_output=True, timeout=60)
+              if r.returncode != 0:
+                  fail("trace_selection_registry.yaml is not plain YAML (safe load refused it)")
+              return json.loads(r.stdout)
+
+          req_dir = os.environ["REQ_DIR"]
+          out_dir = os.environ["OUT_DIR"]
+          run_id = os.environ["TRACE_RUN_ID"]
+          head_sha = os.environ["TRACE_HEAD_SHA"]
+          run_url = os.environ["RUN_URL"]
+          if not re.fullmatch(r"[1-9][0-9]{0,19}", run_id) or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+              fail("unexpected run id or commit")
+
+          # Exactly two regular files with fixed names; no folder, no link, nothing else.
+          limits = {"trace_selection_registry.yaml": 1048576, "request.json": 262144}
+          entries = sorted(os.scandir(req_dir), key=lambda e: e.name)
+          if sorted(e.name for e in entries) != sorted(limits):
+              fail("the artifact must hold exactly trace_selection_registry.yaml and request.json")
+          raw = {}
+          for e in entries:
+              if e.is_symlink() or not e.is_file(follow_symlinks=False):
+                  fail(f"{e.name} is not a regular file")
+              if e.stat(follow_symlinks=False).st_size > limits[e.name]:
+                  fail(f"{e.name} is larger than {limits[e.name]} bytes")
+              with open(e.path, "rb") as f:
+                  raw[e.name] = f.read(limits[e.name] + 1)
+              if len(raw[e.name]) > limits[e.name] or b"\0" in raw[e.name]:
+                  fail(f"{e.name} is too large or holds a NUL byte")
+          try:
+              text = {k: v.decode("utf-8") for k, v in raw.items()}
+          except UnicodeDecodeError:
+              fail("a file is not UTF-8")
+
+          # request.json: JSON only; every value used below is checked.
+          try:
+              req = json.loads(text["request.json"])
+          except ValueError:
+              fail("request.json is not JSON")
+          if not isinstance(req, dict) or req.get("version") != 1:
+              fail("request.json is not version 1")
+
+          def as_text(v):
+              if isinstance(v, bool) or v is None:
+                  return ""
+              if isinstance(v, int):
+                  return str(v)
+              return v if isinstance(v, str) else ""
+
+          def pick(v, pattern, default="-"):
+              s = as_text(v)
+              return s if re.fullmatch(pattern, s) else default
+
+          def count(v):
+              return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 10000000 else None
+
+          trace_run_id = as_text(req.get("trace_run_id"))
+          if not re.fullmatch(r"[1-9][0-9]{0,9}", trace_run_id):
+              fail("trace_run_id is not a positive number")
+          trace_uid = as_text(req.get("trace_uid"))
+          if not re.fullmatch(r"[0-9A-Za-z-]{1,64}", trace_uid):
+              fail("trace_uid has unexpected characters")
+          model_count = count(req.get("model_count"))
+          config_count = count(req.get("config_count"))
+          if model_count is None or config_count is None:
+              fail("model_count or config_count is not a number")
+          hw = req.get("hardware") if isinstance(req.get("hardware"), dict) else {}
+          # No dot: a dotted value could become a link in the pull request body.
+          word = r"[A-Za-z0-9 _-]{1,40}"
+          digits = r"[0-9]{1,4}"
+          board = pick(hw.get("board_type"), word, "?")
+          series = pick(hw.get("device_series"), word, "?")
+          cards = pick(hw.get("card_count"), digits, "?")
+          hw_text = f"{board} / {series} (x{cards})"
+          machine = "unknown" if hw_text == "? / ? (x?)" else hw_text
+
+          legs = req.get("legs")
+          if not isinstance(legs, list):
+              fail("legs is not a list")
+          max_rows = 64
+          leg_rows = []
+          for rec in legs[:max_rows]:
+              if not isinstance(rec, dict):
+                  fail("a leg is not an object")
+              icon = "✅" if rec.get("outcome") == "success" else "❌"
+              slug = pick(rec.get("slug"), r"[A-Za-z0-9._-]{1,100}", "(not shown)")
+              test_path = pick(rec.get("test_path"), r"[A-Za-z0-9_./:\[\]=,+ -]{1,300}", "(not shown)")
+              hf = pick(rec.get("hf_model"), r"[A-Za-z0-9._/-]{0,100}", "(not shown)")
+              uo = count(rec.get("unique_operations"))
+              tc = count(rec.get("total_configurations"))
+              leg_rows.append(
+                  f"| {icon} | `{slug}` | `{test_path}` | `{hf}` | {uo or '-'} | {tc or '-'} |"
+              )
+          if len(legs) > max_rows:
+              leg_rows.append(f"| … | ({len(legs) - max_rows} more legs not shown) | | | | |")
+
+          # The registry: plain YAML only, the shape of the file on main, and an
+          # entry for this trace_run_id.
+          reg = safe_yaml(text["trace_selection_registry.yaml"])
+          if not isinstance(reg, dict) or sorted(reg) != ["registry", "targets"]:
+              fail("trace_selection_registry.yaml must have exactly the keys targets and registry")
+          if not isinstance(reg["registry"], list) or not any(
+              isinstance(x, dict) and x.get("trace_id") == int(trace_run_id) for x in reg["registry"]
+          ):
+              fail("trace_selection_registry.yaml has no registry entry for this trace_run_id")
+
+          branch = f"trace/auto-manifest-{run_id}"
+          lines = [
+              "## New Trace Entry (homogenized batch)",
+              "",
+              "| Field | Value |",
+              "|---|---|",
+              f"| trace_run_id | `{trace_run_id}` |",
+              f"| Trace UID | `{trace_uid}` |",
+              f"| Hardware | `{hw_text}` |",
+              f"| Models in batch | {model_count} |",
+              f"| Total configurations | {config_count} |",
+              f"| tt-metal SHA | `{head_sha}` |",
+              f"| Workflow run | {run_url} |",
+              "",
+              "### Per-leg outcomes",
+              "",
+              "| Status | Slug | test_path | HF_MODEL | Unique ops | Total configs |",
+              "|---|---|---|---|---|---|",
+          ]
+          lines.extend(leg_rows or ["| — | (no leg sidecars found) | | | | |"])
+          lines.extend([
+              "",
+              "## Promotion checklist",
+              "- [ ] Review trace stats above and in the workflow job summary",
+              "- [ ] Change registry status from `draft` to `active`",
+              "- [ ] Add the batch's `model_name`s to the appropriate `targets` group",
+              "",
+              "Opened by `ttnn-model-trace-manifest-pr.yaml` for the workflow run above, "
+              "with a short-lived token from OSPO. Anyone with write can push to this branch "
+              "after it opens: review the final diff before merge.",
+          ])
+          pr = {
+              "title": f"Add trace: {model_count} models on {machine} (trace_run_id={trace_run_id})",
+              "head": branch,
+              "base": "main",
+              "body": "\n".join(lines) + "\n",
+          }
+
+          os.makedirs(out_dir, mode=0o700, exist_ok=False)
+          with open(os.path.join(out_dir, "registry.yaml"), "wb") as f:
+              f.write(raw["trace_selection_registry.yaml"])
+          with open(os.path.join(out_dir, "pr.json"), "w") as f:
+              json.dump(pr, f)
+          with open(os.path.join(out_dir, "commit-msg.txt"), "w") as f:
+              f.write(f"Add draft trace entry for {model_count} model(s) (trace_run_id={trace_run_id})\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("ready=true\n")
+          print(f"Request accepted: trace_run_id={trace_run_id}, {model_count} model(s), {len(legs)} leg(s)")
+          PY
+
+      - name: Upload the checked request
+        if: steps.validate.outputs.ready == 'true'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: manifest-pr-checked
+          path: ${{ runner.temp }}/manifest-pr-checked/
+          if-no-files-found: error
+          retention-days: 1
+
+  open-pr:
+    name: Open manifest PR
+    needs: validate
+    if: needs.validate.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The OSPO token role is bound to main AND this environment (deployment
+    # branch rule: main only) AND this file. A run without a checked request
+    # never reaches this job, so it makes no deployment.
+    environment: model-trace-pr
+    permissions:
+      actions: read # the checked artifact of this run
+      contents: write # push the manifest branch with the job's own token
+      id-token: write # sign-in for the short-lived OSPO token
+    env:
+      REGISTRY_PATH: model_tracer/trace_selection_registry.yaml
+      TRACE_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Download the checked request
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: manifest-pr-checked
+          path: ${{ runner.temp }}/manifest-pr-checked
+
+      # Again, in bash: fixed names, regular files, sizes, the branch from the
+      # event run id, a JSON body with exactly the four keys.
+      - name: Check the checked request
+        id: recheck
+        env:
+          IN_DIR: ${{ runner.temp }}/manifest-pr-checked
+        run: |
+          set -euo pipefail
+          if ! [[ "$TRACE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
+            echo "::error::unexpected trace run id"
+            exit 1
+          fi
+          branch="trace/auto-manifest-${TRACE_RUN_ID}"
+          shopt -s dotglob nullglob
+          names=""
+          for p in "$IN_DIR"/*; do names="${names}${p##*/};"; done
+          if [ "$names" != "commit-msg.txt;pr.json;registry.yaml;" ]; then
+            echo "::error::the checked request does not hold exactly commit-msg.txt, pr.json and registry.yaml"
+            exit 1
+          fi
+          for f in registry.yaml:1048576 pr.json:600000 commit-msg.txt:200; do
+            if [ -L "$IN_DIR/${f%%:*}" ] || [ ! -f "$IN_DIR/${f%%:*}" ]; then
+              echo "::error::${f%%:*} is not a regular file"
+              exit 1
+            fi
+            n=$(( $(wc -c <"$IN_DIR/${f%%:*}") ))
+            if [ "$n" -gt "${f##*:}" ]; then
+              echo "::error::${f%%:*} is too large"
+              exit 1
+            fi
+          done
+          if ! jq -e --arg b "$branch" '(keys == ["base", "body", "head", "title"]) and .head == $b and .base == "main" and (.title | type == "string") and (.body | type == "string")' "$IN_DIR/pr.json" >/dev/null; then
+            echo "::error::pr.json is not the expected pull request body"
+            exit 1
+          fi
+          if ! grep -Eqx 'Add draft trace entry for [0-9]{1,8} model\(s\) \(trace_run_id=[1-9][0-9]{0,9}\)' "$IN_DIR/commit-msg.txt" || [ "$(( $(wc -l <"$IN_DIR/commit-msg.txt") ))" != 1 ]; then
+            echo "::error::commit-msg.txt is not the expected commit message"
+            exit 1
+          fi
+          echo "branch=$branch" >>"$GITHUB_OUTPUT"
+
+      # Code of main only (never the branch of the trace run). The job token is
+      # not stored in .git/config: the push below passes it in env only.
+      - name: Checkout main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 10
+        with:
+          ref: refs/heads/main
+          fetch-depth: 1
+          sparse-checkout: model_tracer
+          persist-credentials: false
+
+      # The job's own token pushes (contents write); a new branch only, no force.
+      - name: Push the manifest branch
+        id: push
+        env:
+          IN_DIR: ${{ runner.temp }}/manifest-pr-checked
+          BRANCH: ${{ steps.recheck.outputs.branch }}
+          PUSH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$BRANCH" =~ ^trace/auto-manifest-[1-9][0-9]{0,19}$ ]]; then
+            echo "::error::unexpected branch name"
+            exit 1
+          fi
+          # The token goes to git through the environment (GIT_CONFIG_*), never
+          # on a command line and never into .git/config. Its base64 form is
+          # masked too, so that no later trace line can show it.
+          AUTH_B64=$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$AUTH_B64"
+          gitauth() {
+            GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+              GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_B64}" git "$@"
+          }
+          if cmp -s "$IN_DIR/registry.yaml" "$REGISTRY_PATH"; then
+            echo "::notice::Registry on main already matches loader output; skipping PR."
+            exit 0
+          fi
+          git switch -q -c "$BRANCH"
+          cp "$IN_DIR/registry.yaml" "$REGISTRY_PATH"
+          git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" \
+            commit -q -F "$IN_DIR/commit-msg.txt" -- "$REGISTRY_PATH"
+          if gitauth ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null; then
+            # A branch of an earlier attempt is used only when it holds exactly this change on main.
+            gitauth fetch -q --depth=1 origin "refs/heads/$BRANCH"
+            if [ "$(git rev-parse 'FETCH_HEAD^{tree}')" != "$(git rev-parse 'HEAD^{tree}')" ]; then
+              echo "::error::Branch $BRANCH exists with other content; not used. Delete it, then re-run this workflow."
+              exit 1
+            fi
+            echo "::notice::Branch $BRANCH exists with exactly this change (earlier attempt); reused."
+          else
+            gitauth push -q origin "HEAD:refs/heads/$BRANCH"
+          fi
+          echo "pushed=true" >>"$GITHUB_OUTPUT"
+
+      - name: Get short-lived GitHub token
+        id: vault
+        if: steps.push.outputs.pushed == 'true'
+        uses: tenstorrent/.github/actions/vault-secrets@8909e7247ace56b203bb0db68cc9dc8fd095c6bc # vault-secrets-v1.1.0
+        with:
+          role: model-trace-pr
+          github-token: manifest-pr
+
+      # The next step needs only api.github.com, so the runner leaves the
+      # private network first.
+      - name: Leave the tailnet
+        if: always() && steps.vault.outcome != 'skipped'
+        run: |
+          if command -v tailscale >/dev/null 2>&1; then
+            sudo tailscale logout || { echo "::warning::tailscale logout failed; taking the interface down"; sudo tailscale down || true; }
+          fi
+
+      # REST call (pull requests write is enough). The token comes only through env.
+      - name: Open the manifest pull request
+        if: steps.push.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.vault.outputs.token }}
+          IN_DIR: ${{ runner.temp }}/manifest-pr-checked
+          BRANCH: ${{ steps.recheck.outputs.branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::no short-lived token"
+            exit 1
+          fi
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=all&head=${GITHUB_REPOSITORY_OWNER}:${BRANCH}&per_page=5" --jq 'length')
+          if [ "$existing" != 0 ]; then
+            echo "::notice::A pull request from $BRANCH exists already; no second one."
+            exit 0
+          fi
+          url=$(gh api --method POST "repos/${GITHUB_REPOSITORY}/pulls" --input "$IN_DIR/pr.json" --jq '.html_url')
+          echo "::notice::Manifest PR created: $url"
+
+      # Runs also when a step above failed, so the token does not stay valid
+      # until it expires. The token goes to curl on stdin, not on the command line.
+      - name: Revoke the short-lived token
+        if: always() && steps.vault.outcome == 'success'
+        env:
+          APP_TOKEN: ${{ steps.vault.outputs.token }}
+        run: |
+          if [ -z "${APP_TOKEN:-}" ]; then
+            echo "no token to revoke"
+            exit 0
+          fi
+          code=$(printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\n' "$APP_TOKEN" |
+            curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -K - -X DELETE \
+              https://api.github.com/installation/token 2>/dev/null) || code=000
+          case "$code" in
+            204) echo "token: revoked" ;;
+            401) echo "token: already invalid" ;;
+            *) echo "token: revoke not confirmed (HTTP ${code}); it expires on its own" ;;
+          esac
