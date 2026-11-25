@@ -215,9 +215,16 @@ void kernel_main() {
     };
     // XCONS: the blocks consumed by compute and (FLAT_X_NOC1) forwarded
     auto x_freed = [&](uint32_t cons) { return x_fwd && sxy && fwd / xp < cons ? fwd / xp : cons; };
-    grant(w_slots);  // every landing slot starts free
-    uint32_t granted = w_slots, pushed = 0;
+    // (MEASUREMENT gate_up_w_start n: until the first sub-block's x has arrived, at most n landing slots granted - the
+    // weight reads off the NoC while x ramps up; then the whole ring)
+    constexpr uint32_t w_start = get_named_compile_time_arg_val("gate_up_w_start");
+    constexpr uint32_t w_first = w_start && w_start < w_slots ? w_start : w_slots;
     uint32_t x_pub = 0, x_cons = 0;
+    constexpr uint32_t w_cap_all = get_named_compile_time_arg_val("gate_up_w_cap");
+    constexpr uint32_t w_steady = w_cap_all && w_cap_all < w_slots ? w_cap_all : w_slots;
+    auto w_cap = [&]() { return w_start == 0 || x_pub >= nk_gu ? w_steady : w_first; };
+    grant(w_first);  // every landing slot starts free
+    uint32_t granted = w_first, pushed = 0;
     uint32_t h_sent = 0, h_pending = 0;
 
     const uint32_t x_total = num_v * nk_gu;
@@ -227,7 +234,9 @@ void kernel_main() {
         if (w_brisc && !g_done) {
             g_done = gr.step();
         }
-        while (granted < total_w && cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1) * slot)) {
+        // (granted and not yet freed <= the cap: the ring's free space from the write pointer leaves w_slots - cap)
+        while (granted < total_w &&
+               cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1 + w_slots - w_cap()) * slot)) {
             grant(1);
             ++granted;
         }

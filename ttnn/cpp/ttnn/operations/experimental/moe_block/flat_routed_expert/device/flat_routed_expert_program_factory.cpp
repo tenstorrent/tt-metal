@@ -199,14 +199,22 @@ FlatProgramHandles add_flat_routed_expert_program(
     // (gate_up_x_forwarder.cpp) on NOC0 with 3 or 6 pieces in flight (below), the receiver (gate_up_core_reader.cpp,
     // BRISC) on NOC1.
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
-    const uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
+    uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
+    if (const char* e = std::getenv("FLAT_X_PIECES"); e != nullptr && aligned(std::atoi(e))) {  // (MEASUREMENT ONLY)
+        x_pieces = std::atoi(e);
+    }
     // The forwarder keeps X_FWD_DEPTH pieces in flight while it forwards an expert of at least X_FWD_DEEP_ROW_TILES row
     // tiles, X_FWD_SHALLOW below. Against 3 everywhere (P150): GLM-5.3 4x4 10240 uniform -5.1% / zipf -2.7%, 8x4 10240
     // -3.1%, DSV4.1-Flash 8x4 5120 hot -12.1% / 10240 -6.3%, K3 8x4 5120 hot -2.8%; no case +0.3% or more. 6 everywhere
     // slowed the short experts (GLM-5.3-Flash +2.2%, M3 +1.9%; and GLM-5.3 8x4 5120 - 5 row tiles an expert - in the
     // MoE block on a Galaxy, b26a0166954); a threshold of 5 row tiles, too (M3 +1.8%); 8 missed DSV4.1-Flash 10240.
     // 8 pieces in flight: worse everywhere (the weight reads' transaction ids start at 8).
-    constexpr uint32_t X_FWD_DEPTH = 6, X_FWD_SHALLOW = 3, X_FWD_DEEP_ROW_TILES = 6;
+    // (MEASUREMENT ONLY overrides: FLAT_X_FWD_DEPTH / FLAT_X_FWD_SHALLOW)
+    const uint32_t X_FWD_DEPTH =
+        std::getenv("FLAT_X_FWD_DEPTH") ? uint32_t(std::atoi(std::getenv("FLAT_X_FWD_DEPTH"))) : 6u;
+    const uint32_t X_FWD_SHALLOW =
+        std::getenv("FLAT_X_FWD_SHALLOW") ? uint32_t(std::atoi(std::getenv("FLAT_X_FWD_SHALLOW"))) : 3u;
+    constexpr uint32_t X_FWD_DEEP_ROW_TILES = 6;
     log_info(
         tt::LogOp,
         "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} {} forwarder depth {})",
@@ -344,6 +352,15 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["gate_up_w_brisc"] =
         std::getenv("FLAT_GU_W_NOC1") != nullptr && std::getenv("FLAT_GU_W_NOC1")[0] == '1';  // (MEASUREMENT ONLY)
     options["x_mcast"] = x_mcast_bits;
+    options["gate_up_w_cap"] = std::getenv("FLAT_W_CAP") ? uint32_t(std::atoi(std::getenv("FLAT_W_CAP"))) : 0u;
+    // Until a gate/up core has its first sub-block's x, it grants its weight reads 8 landing slots, not the ring's two
+    // loads: the 64 cores' ring fill (2 experts' gate/up weights at once) slows the x snake's start, and the snake's
+    // tail sets every core's pace (the h buffers). Loads of 24+ blocks only - shorter ones need the prefetch (GLM-5.3-
+    // Flash, 16: +1.8% at 8, +3.7% at 4). Against no cap (P150): GLM-5.3 4x4 10240 -1.3% / zipf -0.6%, 8x4 5120 -1.0
+    // .. -1.6%, 8x4 10240 -1.6% / -1.4%, K2.7 -1.1%. (FLAT_W_START=n: MEASUREMENT override, 0 off)
+    options["gate_up_w_start"] = std::getenv("FLAT_W_START") ? uint32_t(std::atoi(std::getenv("FLAT_W_START")))
+                                 : p.gate_up_k_blocks >= 24  ? 8u
+                                                             : 0u;
     // x (the primaries' writes into the snake heads, the snake's forwarding) on unicast VC 3, its own: h is on 0, the
     // weight read requests and the default writes on 1, row-major y on 2 (the combine sets none). Against VC 1 (P150):
     // GLM-5.3 4x4 10240 1155.6 -> 1108.1 us (-4.1%), 8x4 10240 -4.0%, 8x4 5120 hot -2.2%, DSV4.1-Flash 10240 -1.4%; the

@@ -358,6 +358,12 @@ FlatRoutedExpertPlan make_plan(
         }
         TT_FATAL(shaped, "flat_routed_expert: no rectangle pair of {} gate/up cores in {} rows", want, nrows);
     }
+    // (MEASUREMENT ONLY, FLAT_EVEN_RECTS=1: two 4 x 8 rectangles - west columns 2..5, east E + 1.. E + 4 - instead of
+    // 4 x 10 + 3 x 8; the east relays in the anchor column E)
+    const bool even_rects = !auto_shape && exp_env("FLAT_EVEN_RECTS") == 1;
+    if (even_rects) {
+        p.gate_up_rectangles = {{2, 5, row0, row0 + 7}, {7, 10, row0, row0 + 7}};
+    }
     std::tie(p.gate_up_dst_tiles, p.gate_up_row_passes) =
         gu_dst((p.gate_up_weight_tiles_per_row + 1) / 2, p.hidden_tiles, p.x_ring_blocks, p.units_per_core != 0);
     const uint32_t mt_cap = std::min(p.gate_up_dst_tiles / p.gate_up_weight_tiles_per_row, MT_MAX);
@@ -467,7 +473,7 @@ FlatRoutedExpertPlan make_plan(
         TT_FATAL(best < (1 << 30), "flat_routed_expert: no free relay core near column {}", x);
         return bc;
     };
-    const uint32_t rx_w = 1, rx_e = east + 1;
+    const uint32_t rx_w = 1, rx_e = even_rects ? east : east + 1;
     p.relay_cores = {first_free(rx_w, {4, 5, 3, 6, 2, 7}), first_free(rx_e, {3, 4, 2, 5, 1, 6})};
     for (const auto& c : p.relay_cores) {
         taken.insert({c.x, c.y});
