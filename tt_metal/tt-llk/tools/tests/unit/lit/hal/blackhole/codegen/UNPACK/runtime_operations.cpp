@@ -26,14 +26,14 @@ namespace unpack = hal::unpack;
 //--- codegen.cpp
 #include "common.h"
 
-// A constant descriptor passed to the runtime overload still folds to an
-// immediate instruction.
-extern "C" __attribute__((noinline, used)) void run_constant_descriptor()
+// Constant options passed to the runtime overloads still fold to immediate instructions.
+extern "C" __attribute__((noinline, used)) void run_constant_options()
 {
-    unpack::run(unpack::DataTransfer {.engine = unpack::Engine::Unpacker1, .handoff = unpack::SourceHandoff::Keep});
+    unpack::Unpacker1.transfer({.handoff = unpack::SrcHandoff::Keep});
+    unpack::Unpacker0.clear({.value = unpack::ClearValue::NegativeInfinity, .handoff = unpack::SrcHandoff::Keep});
 }
 
-extern "C" __attribute__((noinline, used)) void reference_run_constant_descriptor()
+extern "C" __attribute__((noinline, used)) void reference_run_constant_options()
 {
     TTI_UNPACR(
         1 /*Unpack_block_selection*/,
@@ -49,14 +49,24 @@ extern "C" __attribute__((noinline, used)) void reference_run_constant_descripto
         0 /*RowSearch*/,
         0 /*SearchCacheFlush*/,
         1 /*Last*/);
+    TTI_UNPACR_NOP(
+        0 /*Unpacker_Select*/,
+        0 /*Stream_Id*/,
+        0 /*Msg_Clr_Cnt*/,
+        0 /*Set_Dvalid*/,
+        0 /*Clr_to1_fmt_Ctrl*/,
+        1 /*Stall_Clr_Cntrl*/,
+        0 /*Bank_Clr_Ctrl*/,
+        1 /*Src_ClrVal_Ctrl*/,
+        1 /*Unpack_Pop*/);
 }
 
-// Runtime descriptors are encoded in a register and pushed through the
+// Runtime unpackers and options are encoded in a register and pushed through the
 // instruction buffer.
 
 extern "C" __attribute__((noinline, used)) void run_runtime_engine(const unpack::Engine engine)
 {
-    unpack::run(unpack::DataTransfer {.engine = engine, .handoff = unpack::SourceHandoff::FlipAndSetDataValid});
+    unpack::Unpacker {engine}.transfer({.handoff = unpack::SrcHandoff::FlipAndSetDataValid});
 }
 
 extern "C" __attribute__((noinline, used)) void reference_run_runtime_engine(const unpack::Engine engine)
@@ -79,7 +89,7 @@ extern "C" __attribute__((noinline, used)) void reference_run_runtime_engine(con
 
 extern "C" __attribute__((noinline, used)) void run_runtime_context_counter_increment(const unpack::Engine engine)
 {
-    unpack::run(unpack::ContextCounterIncrement {engine});
+    unpack::Unpacker {engine}.increment_context_counter();
 }
 
 extern "C" __attribute__((noinline, used)) void reference_run_runtime_context_counter_increment(const unpack::Engine engine)
@@ -103,7 +113,7 @@ extern "C" __attribute__((noinline, used)) void reference_run_runtime_context_co
 // The flush scope is the multi-context-mode field.
 extern "C" __attribute__((noinline, used)) void run_runtime_row_start_cache_flush(const unpack::CacheScope scope)
 {
-    unpack::run(unpack::RowStartCacheFlush {unpack::Engine::Unpacker1, scope});
+    unpack::Unpacker1.flush_row_start_cache(scope);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_run_runtime_row_start_cache_flush(const unpack::CacheScope scope)
@@ -124,6 +134,65 @@ extern "C" __attribute__((noinline, used)) void reference_run_runtime_row_start_
         0 /*Last*/);
 }
 
+extern "C" __attribute__((noinline, used)) void run_runtime_clear(const unpack::Engine engine)
+{
+    unpack::Unpacker {engine}.clear({.handoff = unpack::SrcHandoff::FlipAndSetDataValid});
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_runtime_clear(const unpack::Engine engine)
+{
+    TT_UNPACR_NOP(
+        static_cast<std::uint32_t>(engine),
+        0 /*Stream_Id*/,
+        0 /*Msg_Clr_Cnt*/,
+        1 /*Set_Dvalid*/,
+        0 /*Clr_to1_fmt_Ctrl*/,
+        1 /*Stall_Clr_Cntrl*/,
+        0 /*Bank_Clr_Ctrl*/,
+        0 /*Src_ClrVal_Ctrl*/,
+        1 /*Unpack_Pop*/);
+}
+
+// The clear value is the Src_ClrVal_Ctrl field.
+extern "C" __attribute__((noinline, used)) void run_runtime_clear_value(const unpack::ClearValue value)
+{
+    unpack::Unpacker0.clear({.value = value, .handoff = unpack::SrcHandoff::Keep});
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_runtime_clear_value(const unpack::ClearValue value)
+{
+    TT_UNPACR_NOP(
+        0 /*Unpacker_Select*/,
+        0 /*Stream_Id*/,
+        0 /*Msg_Clr_Cnt*/,
+        0 /*Set_Dvalid*/,
+        0 /*Clr_to1_fmt_Ctrl*/,
+        1 /*Stall_Clr_Cntrl*/,
+        0 /*Bank_Clr_Ctrl*/,
+        static_cast<std::uint32_t>(value),
+        1 /*Unpack_Pop*/);
+}
+
+// The wait is the Stall_Clr_Cntrl field.
+extern "C" __attribute__((noinline, used)) void run_runtime_both_banks_clear(const unpack::ClearWait wait)
+{
+    unpack::experimental::clear_both_banks(unpack::Unpacker1, {.wait = wait});
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_runtime_both_banks_clear(const unpack::ClearWait wait)
+{
+    TT_UNPACR_NOP(
+        1 /*Unpacker_Select*/,
+        0 /*Stream_Id*/,
+        0 /*Msg_Clr_Cnt*/,
+        0 /*Set_Dvalid*/,
+        0 /*Clr_to1_fmt_Ctrl*/,
+        static_cast<std::uint32_t>(wait),
+        1 /*Bank_Clr_Ctrl*/,
+        0 /*Src_ClrVal_Ctrl*/,
+        1 /*Unpack_Pop*/);
+}
+
 //--- asserts.cpp
 #include "common.h"
 
@@ -132,7 +201,7 @@ extern "C" __attribute__((noinline, used)) void reference_run_runtime_row_start_
 
 extern "C" void check_runtime_engine(const unpack::Engine engine)
 {
-    unpack::run(unpack::DataTransfer {.engine = engine, .handoff = unpack::SourceHandoff::FlipAndSetDataValid});
+    unpack::Unpacker {engine}.transfer({.handoff = unpack::SrcHandoff::FlipAndSetDataValid});
 }
 
 // ASSERT-LABEL: <check_runtime_engine>:
@@ -142,7 +211,7 @@ extern "C" void check_runtime_engine(const unpack::Engine engine)
 
 extern "C" void reject_invalid_engine()
 {
-    unpack::run(unpack::DataTransfer {.engine = static_cast<unpack::Engine>(2), .handoff = unpack::SourceHandoff::FlipAndSetDataValid});
+    unpack::Unpacker {static_cast<unpack::Engine>(2)}.transfer({.handoff = unpack::SrcHandoff::FlipAndSetDataValid});
 }
 
 // ASSERT-LABEL: <reject_invalid_engine>:
@@ -152,7 +221,7 @@ extern "C" void reject_invalid_engine()
 
 extern "C" void check_runtime_context_counter_increment(const unpack::Engine engine)
 {
-    unpack::run(unpack::ContextCounterIncrement {engine});
+    unpack::Unpacker {engine}.increment_context_counter();
 }
 
 // ASSERT-LABEL: <check_runtime_context_counter_increment>:
@@ -162,7 +231,7 @@ extern "C" void check_runtime_context_counter_increment(const unpack::Engine eng
 
 extern "C" void reject_invalid_context_counter_engine()
 {
-    unpack::run(unpack::ContextCounterIncrement {static_cast<unpack::Engine>(2)});
+    unpack::Unpacker {static_cast<unpack::Engine>(2)}.increment_context_counter();
 }
 
 // ASSERT-LABEL: <reject_invalid_context_counter_engine>:
@@ -173,7 +242,7 @@ extern "C" void reject_invalid_context_counter_engine()
 // A bool-backed scope has no invalid runtime value, so it adds no assert.
 extern "C" void accept_runtime_row_start_cache_flush(const unpack::CacheScope scope)
 {
-    unpack::run(unpack::RowStartCacheFlush {unpack::Engine::Unpacker1, scope});
+    unpack::Unpacker1.flush_row_start_cache(scope);
 }
 
 // ASSERT-LABEL: <accept_runtime_row_start_cache_flush>:
@@ -182,10 +251,70 @@ extern "C" void accept_runtime_row_start_cache_flush(const unpack::CacheScope sc
 
 extern "C" void accept_runtime_engine_boundaries()
 {
-    unpack::run(unpack::DataTransfer {.engine = unpack::Engine::Unpacker1, .handoff = unpack::SourceHandoff::FlipAndSetDataValid});
-    unpack::run(unpack::ContextCounterIncrement {unpack::Engine::Unpacker1});
+    unpack::Unpacker1.transfer({.handoff = unpack::SrcHandoff::FlipAndSetDataValid});
+    unpack::Unpacker1.increment_context_counter();
+    unpack::Unpacker1.clear({.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep});
 }
 
 // ASSERT-LABEL: <accept_runtime_engine_boundaries>:
+// ASSERT-NOT: ebreak
+// ASSERT: ret
+
+// Unpacker-specific rules are checked where the unpacker is only known at run time.
+extern "C" void check_runtime_negative_infinity_clear(const unpack::Engine engine)
+{
+    unpack::Unpacker {engine}.clear({.value = unpack::ClearValue::NegativeInfinity, .handoff = unpack::SrcHandoff::Keep});
+}
+
+// ASSERT-LABEL: <check_runtime_negative_infinity_clear>:
+// ASSERT: ebreak
+
+// Issued with a known unpacker but outside a constant expression, the rule becomes an assert.
+extern "C" void reject_srcb_negative_infinity_clear()
+{
+    unpack::Unpacker1.clear<unpack::Clear {.value = unpack::ClearValue::NegativeInfinity, .handoff = unpack::SrcHandoff::Keep}>();
+}
+
+// ASSERT-LABEL: <reject_srcb_negative_infinity_clear>:
+// ASSERT-NOT: {{[[:space:]]tt}}
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_unpacker1_explicit_context()
+{
+    unpack::Unpacker1.transfer<unpack::Transfer {.context = unpack::Context::explicit_context(2), .handoff = unpack::SrcHandoff::Keep}>();
+}
+
+// ASSERT-LABEL: <reject_unpacker1_explicit_context>:
+// ASSERT-NOT: {{[[:space:]]tt}}
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void check_runtime_clear_value(const unpack::ClearValue value)
+{
+    unpack::Unpacker0.clear({.value = value, .handoff = unpack::SrcHandoff::Keep});
+}
+
+// ASSERT-LABEL: <check_runtime_clear_value>:
+// ASSERT: li [[LIMIT:a[0-7]]],2{{$}}
+// ASSERT-NEXT: bltu [[LIMIT]],a0,
+// ASSERT: ebreak
+
+extern "C" void check_runtime_clear_handoff(const unpack::ClearWait wait)
+{
+    unpack::Unpacker0.clear({.handoff = unpack::SrcHandoff::FlipAndSetDataValid, .wait = wait});
+}
+
+// ASSERT-LABEL: <check_runtime_clear_handoff>:
+// ASSERT: ebreak
+
+extern "C" void accept_clear_boundaries()
+{
+    unpack::Unpacker0.clear({.value = unpack::ClearValue::NegativeInfinity, .handoff = unpack::SrcHandoff::FlipAndSetDataValid});
+    unpack::Unpacker0.clear({.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep, .wait = unpack::ClearWait::MatrixBank});
+    unpack::experimental::clear_both_banks(unpack::Unpacker1, {.value = unpack::ClearValue::One, .wait = unpack::ClearWait::MatrixBank});
+}
+
+// ASSERT-LABEL: <accept_clear_boundaries>:
 // ASSERT-NOT: ebreak
 // ASSERT: ret
