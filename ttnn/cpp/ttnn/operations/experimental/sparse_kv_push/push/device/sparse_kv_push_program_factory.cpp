@@ -29,7 +29,6 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr tt::tt_metal::KernelHandle kReaderKernel = 0;
 constexpr tt::tt_metal::KernelHandle kWriterKernel = 1;
 
-constexpr uint8_t kMuxBuffersPerChannel = 2;
 constexpr uint32_t kUserIdCbBytes = 64;
 
 // The reader takes the part as the kernels' own PushPart, value for value.
@@ -52,9 +51,7 @@ CoreRangeSet to_range_set(const std::vector<CoreCoord>& cores) {
 struct CoreLayout {
     uint32_t links = 0;
     std::vector<CoreCoord> senders;
-    std::vector<CoreCoord> muxes;
     CoreRangeSet sender_range;
-    CoreRangeSet mux_range;
 
     uint32_t channels() const { return links * kDirections; }
     uint32_t num_senders() const { return static_cast<uint32_t>(senders.size()); }
@@ -66,34 +63,13 @@ CoreLayout core_layout(const CoreRangeSet& grid, uint32_t links) {
     const uint32_t senders = links * kDirections * kSendersPerChannel;
     TT_FATAL(
         cores.size() >= cores_needed(links),
-        "the sparse KV push needs {} sender + {} mux cores, the grid has {}",
+        "the sparse KV push needs {} sender cores, the grid has {}",
         senders,
-        links * kDirections,
         cores.size());
     CoreLayout layout{.links = links};
     layout.senders.assign(cores.begin(), cores.begin() + senders);
-    layout.muxes.assign(cores.begin() + senders, cores.begin() + cores_needed(links));
     layout.sender_range = to_range_set(layout.senders);
-    layout.mux_range = to_range_set(layout.muxes);
     return layout;
-}
-
-// The mux's L1 map lives in program-local L1 on the mux cores, allocated with the program, so it cannot overlap live L1
-// buffers there. Its addresses are offsets into the map until the writers read its base from the mux.
-tt::tt_fabric::FabricMuxConfig mux_config(
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
-    tt::tt_metal::ProgramDescriptor& desc,
-    const CoreLayout& layout) {
-    tt::tt_fabric::FabricMuxConfig mux(
-        *mesh_device,
-        /*num_full_size_channels=*/kSendersPerChannel,
-        /*num_header_only_channels=*/0,
-        /*num_buffers_full_size_channel=*/kMuxBuffersPerChannel,
-        /*num_buffers_header_only_channel=*/0,
-        /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
-        /*base_l1_address=*/0);
-    mux.place_in_program_local_l1(desc, layout.mux_range);
-    return mux;
 }
 
 // Both kernels look up every destination's first hop, indexed by row-major rank.
@@ -154,17 +130,11 @@ std::vector<uint32_t> reader_compile_args(
 }
 
 std::vector<uint32_t> writer_compile_args(
-    const SparseKvPushInputs& tensor_args,
-    uint32_t num_devices,
-    const PacketShape& shape,
-    const CoreLayout& layout,
-    const tt::tt_fabric::FabricMuxConfig& mux) {
+    const SparseKvPushInputs& tensor_args, uint32_t num_devices, const PacketShape& shape, const CoreLayout& layout) {
     const uint32_t page_bytes = tensor_args.output_tensor.buffer()->aligned_page_size();
     std::vector<uint32_t> ct = {
         page_bytes, num_devices, layout.num_senders(), shape.pages_per_packet * page_bytes, layout.links};
     tt::tt_metal::TensorAccessorArgs(tensor_args.output_tensor.buffer()).append_to(ct);
-    ttnn::ccl::fabric_mux_connection_ct_args(
-        kSendersPerChannel, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux, ct);
     return ct;
 }
 
@@ -186,7 +156,8 @@ std::vector<uint32_t> writer_runtime_args(
     const CoreLayout& layout,
     uint32_t sender,
     uint32_t my_rank,
-    const tt::tt_fabric::FabricMuxConfig& mux,
+    const tt::tt_fabric::FabricNodeId& my_node,
+    const tt::tt_fabric::FabricNodeId& neighbor_node,
     tt::tt_metal::ProgramDescriptor& desc) {
     const uint32_t channel = sender / kSendersPerChannel, sub = sender % kSendersPerChannel;
     const auto sync_core = mesh_device->worker_core_from_logical_core(layout.senders[0]);
@@ -203,17 +174,9 @@ std::vector<uint32_t> writer_runtime_args(
         rt.push_back(static_cast<uint32_t>(phys.x));
         rt.push_back(static_cast<uint32_t>(phys.y));
     }
-    ttnn::ccl::fabric_mux_connection_rt_args(
-        /*mux_connection_valid=*/true,
-        /*is_termination_master=*/sub == 0,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        mesh_device->worker_core_from_logical_core(layout.muxes[channel]),
-        /*worker_id=*/sub,
-        layout.senders[sender],
-        mux,
-        desc,
-        mesh_device->worker_core_from_logical_core(layout.senders[channel * kSendersPerChannel]),
-        rt);
+    // The sender's own connection to its channel's router: link channel / kDirections towards the neighbour.
+    tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+        *mesh_device, my_node, neighbor_node, channel / kDirections, desc, layout.senders[sender], rt);
     return rt;
 }
 
@@ -254,7 +217,6 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     const uint32_t my_owner = params.sp_axis == 0 ? my_rank : coord[1] * mesh_view.shape()[0] + coord[0];
     const auto neighbors = torus_neighbors(mesh_view, coord);
     const auto layout = core_layout(params.core_grid, params.num_links);
-    const auto mux = mux_config(mesh_device, desc, layout);
     const auto defines = kernel_defines(mesh_device);
     const uint32_t page_bytes = tensor_args.input_tensor.buffer()->aligned_page_size();
     const auto shape = packet_shape(mesh_device, page_bytes);
@@ -305,11 +267,17 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     reader_common.push_back(params.batch_index);
     reader.emplace_common_runtime_args(reader_common);
 
+    // The rest of a requester's rows lands in the buffer its prefix push already filled, which no reader uses until
+    // this step's attention: nothing can still be reading it, so the rest push skips the start fence.
+    auto writer_defines = defines;
+    if (params.part == SparseKvPushPart::kRest) {
+        writer_defines.emplace_back("SKIP_START_FENCE", "1");
+    }
     auto writer = data_movement_kernel(
         kdir + "sparse_push_writer.cpp",
         layout.sender_range,
-        writer_compile_args(tensor_args, num_devices, shape, layout, mux),
-        defines,
+        writer_compile_args(tensor_args, num_devices, shape, layout),
+        writer_defines,
         tt::tt_metal::WriterConfigDescriptor{});
     tt::tt_metal::KernelDescriptor::RTArgList writer_common;
     writer_common.push_back(tensor_args.output_tensor.buffer());
@@ -317,39 +285,26 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     writer_common.push_back(static_cast<uint32_t>(params.done_semaphore->address()));   // smuggled-rta-ok: same
     writer.emplace_common_runtime_args(writer_common);
 
-    auto mux_kernel = data_movement_kernel(
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        layout.mux_range,
-        mux.get_fabric_mux_compile_time_args(),
-        {},
-        tt::tt_metal::DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-    mux_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;
-
-    for (uint32_t c = 0; c < layout.channels(); ++c) {
-        tt::tt_metal::KernelDescriptor::RTArgList rt;
-        rt.append(mux.get_fabric_mux_run_time_args(
-            *mesh_device,
-            mesh_device->get_fabric_node_id(coord),
-            mesh_device->get_fabric_node_id(neighbors[c % kDirections]),
-            c / kDirections,
-            desc,
-            layout.muxes[c]));
-        mux_kernel.emplace_runtime_args(layout.muxes[c], rt);
-    }
     for (uint32_t w = 0; w < layout.num_senders(); ++w) {
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt;
         reader_rt.append(reader_runtime_args(layout, w, my_rank, my_owner));
         reader.emplace_runtime_args(layout.senders[w], reader_rt);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
-        writer_rt.append(writer_runtime_args(mesh_device, layout, w, my_rank, mux, desc));
+        const uint32_t channel = w / kSendersPerChannel;
+        writer_rt.append(writer_runtime_args(
+            mesh_device,
+            layout,
+            w,
+            my_rank,
+            mesh_device->get_fabric_node_id(coord),
+            mesh_device->get_fabric_node_id(neighbors[channel % kDirections]),
+            desc));
         writer.emplace_runtime_args(layout.senders[w], writer_rt);
     }
 
     // In the order of kReaderKernel and kWriterKernel, which override_runtime_arguments patches.
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));
-    desc.kernels.push_back(std::move(mux_kernel));
     return desc;
 }
 
