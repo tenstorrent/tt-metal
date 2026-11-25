@@ -388,7 +388,7 @@ def run_end(tt_smi_path: str | None, phase: Phase, out: Path, dry_run: bool, del
     noc = getattr(events.args, "noc_wall_s", 0)  # the NOC data check after the DRAM one: noc.txt beside rows.jsonl
     argv = ("fabric_open.py", "--rows", "{out}/rows.jsonl", "--beat", "{out}/beat", "--label", "open", "--dbi-wall-s")
     argv += (f"{dbi:g}", *(("--noc-wall-s", f"{noc:g}") if noc else ()))
-    budget = 60 + int(dbi) + (int(noc) + 5 if noc else 0)
+    budget = 60 + max(0, int(dbi)) + (int(noc) + 5 if noc else 0)
     step = Step("fabric", "fabric open and close after the reset", argv, budget)
     opened = run_step(step, out, dry_run, test="end")
     phase.add(opened)

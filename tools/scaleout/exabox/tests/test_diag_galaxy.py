@@ -200,6 +200,7 @@ class TestResets(unittest.TestCase):
         for dbi, want in (
             (None, ("10", "--noc-wall-s", "10", 60 + 10 + 15)),
             (0.0, ("0", "--noc-wall-s", "10", 75)),
+            (-5.0, ("-5", "--noc-wall-s", "10", 75)),
             (25.0, ("25", "--noc-wall-s", "10", 60 + 25 + 15)),
         ):
             phase, steps = resets.Phase(name="post_test_reset"), []
