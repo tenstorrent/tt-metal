@@ -16,6 +16,16 @@
 # activation over a 2 x 1 grid ([[0, 0, 1, 0]]): HEIGHT_SHARDED [1, 1, 128, 64] with 64-row
 # shards, and BLOCK_SHARDED [1, 1, 128, 128] with 128 x 64 shards. The output keeps the input's
 # memory config. The golden is the identity.
+#
+# A sharded move only launches its copy kernel when the output lands at a different address than
+# the input (ttnn/cpp/ttnn/operations/experimental/quasar/move/move.cpp, move_sharded): it frees the
+# input, allocates the output, and returns at once when the allocator hands back the same address.
+# On an unfragmented L1, where the input is the only buffer, that is always the case, so the move
+# would pass without running the kernel. The test therefore allocates a scratch buffer with the input's
+# spec BEFORE the input, so the input sits above it, and frees the scratch right before the move. The
+# free hole below the input fits the output, which lands there, and the test asserts that the
+# output address differs from the input address.
+# (Same technique as tests/tt_eager/python_api_testing/unit_testing/misc/test_move_sharded.py.)
 # ---------------------------------------------------------------------------
 """Small (2-node) variants of ``ttnn.move``: sharded L1 moves on a 2 x 1 grid."""
 
@@ -58,4 +68,30 @@ CASES = [
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
 def test_move_small_grid(ttnn_mesh_device, reset_seeds, case):
-    G.run_case(_OP, case, ttnn_mesh_device)
+    state = {}
+
+    def allocate_scratch():
+        # Same shape, dtype, layout and shard spec as the input, so the hole it leaves fits the output.
+        state["scratch"], _ = G.build_tensor(case["args"][0], ttnn_mesh_device, case, case["op"], "scratch")
+
+    def free_scratch_and_note_input(args, kwargs):
+        state["scratch"].deallocate()
+        state["input_address"] = args[0].buffer_address()
+
+    try:
+        out = G.run_case(
+            _OP,
+            case,
+            ttnn_mesh_device,
+            before_inputs=allocate_scratch,
+            before_op=free_scratch_and_note_input,
+        )
+    finally:
+        scratch = state.get("scratch")
+        if scratch is not None and scratch.is_allocated():
+            scratch.deallocate()
+
+    assert out.buffer_address() != state["input_address"], (
+        f"ttnn.move returned the input's address {state['input_address']:#x}: the allocator had no lower "
+        "free block, so the copy kernel was not exercised"
+    )
