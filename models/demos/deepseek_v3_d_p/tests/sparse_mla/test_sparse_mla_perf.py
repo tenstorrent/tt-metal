@@ -62,9 +62,10 @@ MODES = ("untraced", "traced")
 # measured). Then re-centred on CI runs after that change: each value is the mean over runs of that run's measurement
 # (fastest untraced sample, traced replay). Galaxy 8x4 K3.1 warm and GLM-5.3: 2-3 runs; Galaxy 4x4 K3.1 warm and
 # LoudBox K3.1: 1 run; deltas under 1% left as is. Galaxy 8x4 GLM-5.3: re-measured with the stage cases on a CI host
-# (1 run). Galaxy 4x4 subtorus: the GLM rows are the means of three runs on three 14 kW Galaxies (the GLM chunked perf
-# leg's runners), except the shared layer's long untraced row, the median (one of the three hosts read 11% slower);
-# the K3.1 row has no CI leg (measured on a subtorus-cabled Galaxy, 3 runs, unscaled). LoudBox GLM-5.3 (both cases):
+# (1 run). Galaxy 4x4 subtorus: GLM-5.3 re-measured with the stage cases on a 14 kW CI host (1 run, the GLM chunked
+# perf leg); its no-indexer rows are the means of three runs on three 14 kW Galaxies, except the long traced row,
+# re-measured with the stage cases (1 run); the K3.1 row has no CI leg (measured on a subtorus-cabled Galaxy, 3 runs,
+# unscaled). LoudBox GLM-5.3 (both cases):
 # first measured on CI LoudBoxes (6 processes on 3 hosts, 10 readings per value with in-process repeats): the mean of
 # the readings, every reading within the band; one warm untraced reading (+18%, a third repeat in one process, traced
 # replay normal) left out.
@@ -81,8 +82,8 @@ _TARGETS_MS = {
     },
     "Galaxy 4x4 subtorus": {
         "kimi_k3_1": (2.97, 2.80, 6.62, 6.37),
-        "glm_5_3": (2.58, 2.32, 6.18, 5.85),
-        "glm_5_3-no_indexer": (2.00, 1.86, 2.08, 1.95),
+        "glm_5_3": (2.92, 2.64, 6.60, 6.26),
+        "glm_5_3-no_indexer": (2.00, 1.86, 2.08, 1.89),
     },
     "LoudBox": {
         "kimi_k3_1": (2.65, 2.51, 3.87, 3.71),
