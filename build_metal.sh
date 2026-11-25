@@ -1,4 +1,8 @@
 #!/bin/bash
+# Exabox login node: do not build here; submit to a build node (see scripts/exabox/README.md).
+if [[ "$(hostname -f 2>/dev/null)" =~ ^slurm-login-0[1-3]\. ]] && [ -z "${XRUN_BYPASS:-}" ] && [ -x "$(dirname "$0")/scripts/exabox/xrun" ]; then
+    exec "$(dirname "$0")/scripts/exabox/xrun" build "$@"
+fi
 
 set -eo pipefail
 
