@@ -9,13 +9,15 @@ import torch
 
 from models.experimental.pyannote.reference.diarization import embedding_masks
 from models.experimental.pyannote.reference.segmentation import (
+    NUM_SPEAKERS,
     SAMPLE_RATE,
+    WINDOW_SAMPLES,
     load_segmentation,
     to_multilabel,
     windows,
 )
 from models.experimental.pyannote.reference.wespeaker import compute_fbank, load_wespeaker
-from models.experimental.pyannote.tt.wespeaker import TtWeSpeakerResNet34
+from models.experimental.pyannote.tt.wespeaker import TRUNK_BATCH, TtWeSpeakerResNet34
 
 import ttnn
 
@@ -24,6 +26,13 @@ class TtDiarizer:
     def __init__(self, device):
         self.segmentation = load_segmentation()
         self.embedding = TtWeSpeakerResNet34(device, load_wespeaker())
+
+    def warmup(self):
+        """Compile every trunk batch size a request can produce (11-13 s each on N150 when cold)."""
+        for windows_in_call in range(1, TRUNK_BATCH + 1):
+            chunks = torch.zeros(windows_in_call, WINDOW_SAMPLES)
+            masks = torch.ones(windows_in_call, NUM_SPEAKERS, 589)
+            ttnn.to_torch(self.embedding(compute_fbank(chunks), masks))
 
     def __call__(self, waveform: torch.Tensor, starts_before: int | None = None) -> dict[str, np.ndarray]:
         """waveform [samples] at 16 kHz -> per 10 s window: `segmentation` [windows, frames, 3] binary,
