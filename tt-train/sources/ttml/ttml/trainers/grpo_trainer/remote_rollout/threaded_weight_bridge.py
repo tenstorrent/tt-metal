@@ -150,6 +150,10 @@ class ThreadedWeightBridge:
             self._thread.join()
         if self._submeshes is not None:
             _lock_trace_capture(False)
+        elif self._pads is not None:
+            for pad in self._pads.values():
+                ttnn.deallocate(pad)
+            self._pads = None
 
     def send_weights(self, weights: Dict[str, ttnn.Tensor], version: int) -> None:
         for k in sorted(weights):

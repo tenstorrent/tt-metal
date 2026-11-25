@@ -1981,15 +1981,13 @@ def _finishes(fn, timeout_s=10.0):
     return not thread.is_alive()
 
 
-@pytest.fixture(params=[1, 3], ids=["capacity1", "capacity3"])
-def async_rollout_over_blocking_sends(request, monkeypatch):
-    """The real AsyncRolloutClient and AsyncRolloutServer over blocking sends; the server serves in a thread.
-
-    Returns (client, sampler, server thread) once both local rollout queues are full of version-0 batches.
-    """
+def _patch_host_ttnn(monkeypatch):
+    """ttnn calls of the ThreadedWeightBridge on _HostPads; returns the pads that ttnn.deallocate got."""
+    deallocated = []
     monkeypatch.setattr(ttnn, "begin_trace_capture", threaded_weight_bridge._begin_trace_capture)
     monkeypatch.setattr(ttnn, "end_trace_capture", threaded_weight_bridge._end_trace_capture)
     monkeypatch.setattr(ttnn, "allocate_tensor_on_device", lambda shape, *a, **k: _HostPad(shape))
+    monkeypatch.setattr(ttnn, "deallocate", deallocated.append)
     monkeypatch.setattr(ttnn, "copy", lambda src, dst: setattr(dst, "value", src.value.clone()))
     monkeypatch.setattr(ttnn, "record_event", lambda mesh, cq_id: None)
     monkeypatch.setattr(ttnn, "wait_for_event", lambda cq_id, event: None)
@@ -2000,6 +1998,29 @@ def async_rollout_over_blocking_sends(request, monkeypatch):
     monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **k: tensor)
     monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, pad, cq_id: setattr(pad, "value", host))
     monkeypatch.setattr(threaded_weight_bridge, "_validate_source_tensor", lambda key, tensor: None)
+    return deallocated
+
+
+def test_threaded_weight_bridge_sender_close_deallocates_the_pads(monkeypatch):
+    deallocated = _patch_host_ttnn(monkeypatch)
+    monkeypatch.setattr(threaded_weight_bridge, "exit_on_error", contextlib.nullcontext)
+    queues = collections.defaultdict(queue.Queue)
+    monkeypatch.setattr(threaded_weight_bridge, "duplicate_distributed_context", lambda: _LoopbackContext(queues))
+    sender = threaded_weight_bridge.ThreadedWeightBridge.sender(peer_rank=TTT_RANK, mesh_device="mesh")
+    sender.connect()
+    sender.send_weights({"a": _HostPad([1]), "b": _HostPad([2])}, version=0)
+    pads = list(sender._pads.values())
+    assert _finishes(sender.close)
+    assert deallocated == pads and sender._pads is None
+
+
+@pytest.fixture(params=[1, 3], ids=["capacity1", "capacity3"])
+def async_rollout_over_blocking_sends(request, monkeypatch):
+    """The real AsyncRolloutClient and AsyncRolloutServer over blocking sends; the server serves in a thread.
+
+    Returns (client, sampler, server thread) once both local rollout queues are full of version-0 batches.
+    """
+    _patch_host_ttnn(monkeypatch)
     thread_errors = []
 
     @contextlib.contextmanager
