@@ -1581,8 +1581,8 @@ def _scored_batch(version):
 def test_rollout_queue_loopback(monkeypatch, thread_errors):
     queues = collections.defaultdict(queue.Queue)
     monkeypatch.setattr(rollout_queue, "duplicate_distributed_context", lambda: _LoopbackContext(queues))
-    producer = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=2)
-    consumer = RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=2)
+    producer = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=2, num_generations=2)
+    consumer = RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=2, num_generations=2)
     producer.connect()
     consumer.connect()
 
@@ -1598,6 +1598,7 @@ def test_rollout_queue_loopback(monkeypatch, thread_errors):
     assert _finishes(lambda: received.extend(consumer.pop() for _ in range(len(sent) + 1)))
     assert received.pop() is None
     assert _finishes(consumer.close)
+    assert json.loads(rollout_queue._encode(sent[0], 2))["prompts"] == [[1]]
 
     for got, want in zip(received, sent):
         assert got.rollout.weight_version == want.rollout.weight_version
@@ -2073,8 +2074,8 @@ def async_rollout_over_blocking_sends(request, monkeypatch, thread_errors):
     monkeypatch.setattr(async_rollout.atexit, "unregister", lambda fn: None)
 
     sampler = _CountingSampler()
-    producer = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=request.param)
-    consumer = RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=request.param)
+    producer = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=request.param, num_generations=1)
+    consumer = RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=request.param, num_generations=1)
     server = _async_rollout_server(
         threaded_weight_bridge.ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, submeshes=["submesh"]),
         producer,

@@ -1239,7 +1239,11 @@ class GRPOTrainer:
             case "ttt_remote_async":
                 return AsyncRolloutClient(
                     bridge=ThreadedWeightBridge.sender(peer_rank=TTT_RANK, mesh_device=mesh_device),
-                    queue=RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=cfg.remote_rollout.rollout_queue_capacity),
+                    queue=RolloutQueue.consumer(
+                        peer_rank=TTT_RANK,
+                        capacity=cfg.remote_rollout.rollout_queue_capacity,
+                        num_generations=cfg.num_generations,
+                    ),
                 )
         raise ValueError(f"unsupported rollout_backend {cfg.rollout_backend!r}")
 
@@ -1290,7 +1294,9 @@ class GRPOTrainer:
                 return AsyncRolloutServer(
                     bridge=ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, submeshes=self.rollout_sampler.submeshes),
                     queue=RolloutQueue.producer(
-                        peer_rank=TTML_RANK, capacity=cfg.remote_rollout.rollout_queue_capacity
+                        peer_rank=TTML_RANK,
+                        capacity=cfg.remote_rollout.rollout_queue_capacity,
+                        num_generations=cfg.num_generations,
                     ),
                     rollout_batch_source=InProcessRolloutBatchSource(
                         sampler=self.rollout_sampler,

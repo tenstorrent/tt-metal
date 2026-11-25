@@ -11,6 +11,7 @@ import threading
 from typing import Any, Optional
 
 import numpy as np
+from ttml.common.utils import repeat_interleave
 
 from ..distributed import exit_on_error
 from ..grpo_trainer import RolloutBatch
@@ -30,10 +31,11 @@ class RolloutQueue:
     so a full consumer blocks the producer's push.
     """
 
-    def __init__(self, *, peer_rank: int, capacity: int, producer: bool) -> None:
+    def __init__(self, *, peer_rank: int, capacity: int, num_generations: int, producer: bool) -> None:
         if capacity < 1:
             raise ValueError(f"RolloutQueue: capacity must be >= 1, got {capacity}")
         self._peer_rank = int(peer_rank)
+        self._num_generations = int(num_generations)
         self._producer = producer
         self._local: queue.Queue = queue.Queue(maxsize=capacity)
         self._ctx: Any = None
@@ -42,12 +44,12 @@ class RolloutQueue:
         self._closed = False
 
     @classmethod
-    def producer(cls, *, peer_rank: int, capacity: int) -> "RolloutQueue":
-        return cls(peer_rank=peer_rank, capacity=capacity, producer=True)
+    def producer(cls, *, peer_rank: int, capacity: int, num_generations: int) -> "RolloutQueue":
+        return cls(peer_rank=peer_rank, capacity=capacity, num_generations=num_generations, producer=True)
 
     @classmethod
-    def consumer(cls, *, peer_rank: int, capacity: int) -> "RolloutQueue":
-        return cls(peer_rank=peer_rank, capacity=capacity, producer=False)
+    def consumer(cls, *, peer_rank: int, capacity: int, num_generations: int) -> "RolloutQueue":
+        return cls(peer_rank=peer_rank, capacity=capacity, num_generations=num_generations, producer=False)
 
     def connect(self) -> None:
         self._ctx = duplicate_distributed_context()
@@ -87,23 +89,23 @@ class RolloutQueue:
     def _producer_loop(self) -> None:
         with exit_on_error():
             while (scored := self._local.get()) is not _STOP:
-                send_frame(self._ctx.send, _encode(scored), self._peer_rank, _TAG_LEN, _TAG_BODY)
+                send_frame(self._ctx.send, _encode(scored, self._num_generations), self._peer_rank, _TAG_LEN, _TAG_BODY)
             send_frame(self._ctx.send, b"", self._peer_rank, _TAG_LEN, _TAG_BODY)
 
     def _consumer_loop(self) -> None:
         with exit_on_error():
             while (body := recv_frame(self._ctx.recv, self._peer_rank, _TAG_LEN, _TAG_BODY)) is not None:
-                self._local.put(_decode(body))
+                self._local.put(_decode(body, self._num_generations))
             self._local.put(None)
 
 
-def _encode(scored: ScoredRolloutBatch) -> bytes:
+def _encode(scored: ScoredRolloutBatch, num_generations: int) -> bytes:
     r = scored.rollout
     return json.dumps(
         {
             **encode_rollout(r),
             "logprobs_width": r.logprobs.shape[1],
-            "prompts": r.prompts,
+            "prompts": r.prompts[::num_generations],
             "rewards": scored.rewards.tolist(),
             "reward_components": {k: v.tolist() for k, v in scored.reward_components.items()},
             "generation_time_s": scored.generation_time_s,
@@ -112,12 +114,12 @@ def _encode(scored: ScoredRolloutBatch) -> bytes:
     ).encode("utf-8")
 
 
-def _decode(body: bytes) -> ScoredRolloutBatch:
+def _decode(body: bytes, num_generations: int) -> ScoredRolloutBatch:
     d = json.loads(body)
     return ScoredRolloutBatch(
         rollout=RolloutBatch(
             weight_version=d["weight_version"],
-            prompts=d["prompts"],
+            prompts=repeat_interleave(d["prompts"], num_generations),
             completions=d["completions"],
             logprobs=pad_logprobs(d["completions"], d["logprobs"], d["logprobs_width"]),
         ),
