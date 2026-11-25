@@ -148,6 +148,6 @@ INSTANTIATE_TEST_SUITE_P(
     MockArch,
     MockAllocatorTest,
     ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE, tt::ARCH::QUASAR),
-    [](const ::testing::TestParamInfo<tt::ARCH>& info) { return tt::arch_to_str(info.param); });
+    ::testing::PrintToStringParamName());
 
 }  // namespace tt::tt_metal

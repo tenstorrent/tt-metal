@@ -269,7 +269,7 @@ INSTANTIATE_TEST_SUITE_P(
     MockArch,
     MockDeviceSocketFixture,
     ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::QUASAR),
-    [](const ::testing::TestParamInfo<tt::ARCH>& info) { return tt::arch_to_str(info.param); });
+    ::testing::PrintToStringParamName());
 
 class MockDeviceProfilerFixture : public ::testing::TestWithParam<tt::ARCH> {
 protected:
@@ -339,6 +339,6 @@ INSTANTIATE_TEST_SUITE_P(
     MockArch,
     MockDeviceProfilerFixture,
     ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::QUASAR),
-    [](const ::testing::TestParamInfo<tt::ARCH>& info) { return tt::arch_to_str(info.param); });
+    ::testing::PrintToStringParamName());
 
 }  // namespace tt::tt_metal

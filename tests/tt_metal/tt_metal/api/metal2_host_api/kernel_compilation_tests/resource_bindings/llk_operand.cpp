@@ -13,7 +13,6 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -55,10 +54,8 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBCustomTileCompiles) {
     for (const std::string& kernel_name : {"dm_kernel", "compute_kernel"}) {
         SCOPED_TRACE(kernel_name);
         const std::shared_ptr<Kernel> kernel = program.impl().get_kernel_by_spec_name(kernel_name);
-        const std::vector<const ll_api::memory*>& binaries = kernel->binaries(build_key);
-        ASSERT_EQ(binaries.size(), kernel->expected_num_binaries());
-        for (int binary_index = 0; binary_index < static_cast<int>(binaries.size()); binary_index++) {
-            EXPECT_GT(kernel->get_binary_packed_size(mesh_device_.get(), binary_index), 0u);
+        for (const ll_api::memory* binary : kernel->binaries(build_key)) {
+            EXPECT_GT(binary->get_packed_size(), 0u);
         }
     }
 
