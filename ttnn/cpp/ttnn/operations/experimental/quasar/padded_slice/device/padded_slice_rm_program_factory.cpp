@@ -16,16 +16,16 @@
 #include "optional"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <vector>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 

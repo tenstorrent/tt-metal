@@ -19,7 +19,7 @@
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 #include "serialization/serializable.hpp"
-#include "tt-metalium/distributed_context.hpp"
+#include "tt-metalium/mesh/multihost/distributed_context.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/creation/creation.hpp"

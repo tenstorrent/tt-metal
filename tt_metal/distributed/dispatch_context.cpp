@@ -5,12 +5,12 @@
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -20,7 +20,7 @@
 
 #include "mesh_device_impl.hpp"
 #include "mesh_device_view_impl.hpp"
-#include "mesh_command_queue.hpp"
+#include "tt-metalium/execution/mesh_command_queue.hpp"
 #include "fd_mesh_command_queue.hpp"
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"

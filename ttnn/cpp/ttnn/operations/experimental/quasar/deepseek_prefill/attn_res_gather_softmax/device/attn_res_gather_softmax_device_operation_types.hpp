@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/global_semaphore.hpp"

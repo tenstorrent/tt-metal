@@ -11,11 +11,11 @@
 #include <unordered_map>
 #include <vector>
 #include <tt-metalium/experimental/udm/types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 

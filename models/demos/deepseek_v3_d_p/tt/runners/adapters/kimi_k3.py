@@ -434,6 +434,11 @@ class KimiK3Adapter(MLAPrefillAdapter):
             max_seq_len=params.max_seq_len,
             mesh_shape=params.mesh_shape,
             chunk_size=params.chunk_size,
+            # As MLAPrefillAdapter.build_runtime: without it the runtime packs nothing, while the runner sizes its
+            # sockets and staging for the whole forward.
+            forward_tokens_budget=(
+                params.forward_chunks * params.chunk_size if self.packed_forward_chunks(params) > 1 else None
+            ),
             num_users=params.num_users,
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,

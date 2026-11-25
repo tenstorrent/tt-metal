@@ -89,8 +89,9 @@ class TtPrefillBlock(LightweightModule):
         *,
         model_cfg: type | None = None,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        kv_only: bool = False,
     ) -> bool:
-        """Check if block cache is complete (norms + MLA + FFN/MoE).
+        """Check if block cache is complete (norms + MLA + FFN/MoE; attn_norm + MLA KV branch when ``kv_only``).
 
         ``model_cfg`` is optional but MUST be passed for a LatentMoE model (Kimi-K3): without it this
         cannot know to look for the latent-projection cache files, and would report a cache that is
@@ -112,8 +113,11 @@ class TtPrefillBlock(LightweightModule):
             # loaded a `torch.empty` placeholder as the weights. Reading the flag off `model_cfg` keeps
             # every non-gated model's existing cache valid, since only Kimi-K3 sets USE_OUTPUT_GATE.
             has_output_gate=bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)),
+            kv_only=kv_only,
         ):
             return False
+        if kv_only:  # a kv_only block loads no FFN norm and no FFN/MoE
+            return True
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.ffn_norm"):
             return False
 
@@ -289,6 +293,7 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         next_kv_only: bool = False,
+        indexer_key_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
         tp_shard_kv: Optional[bool] = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
@@ -399,6 +404,7 @@ class TtPrefillBlock(LightweightModule):
             layer_num=layer_num,
             kv_only=kv_only,
             next_kv_only=next_kv_only,
+            indexer_key_only=indexer_key_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
@@ -1104,6 +1110,11 @@ class TtPrefillBlock(LightweightModule):
 
         `metadata` is forwarded so the traced path can build the padding config on-device (see
         TtMoe.forward); it is unused on the eager/scalar path."""
+        if self.moe_block and packed:  # (a packed forward: the forward's chunks or metadata words, MoEBlockPacking)
+            assert packed_padding_config is not None and hasattr(
+                packed_padding_config, "ffn_kwargs"
+            ), f"MoE block: a packed forward takes its MoEBlockPacking, got {type(packed_padding_config).__name__}"
+            return self.ffn(ffn_norm_out, forward_chunks=self.forward_chunks, **packed_padding_config.ffn_kwargs())
         if self.moe_block:  # ([1, 1, S/SP, H/TP] in and out; padding tokens skipped as TtMoe's)
             return self.ffn(
                 ffn_norm_out,
