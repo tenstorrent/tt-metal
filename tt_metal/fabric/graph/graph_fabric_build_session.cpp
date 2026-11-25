@@ -96,26 +96,23 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     auto ports = with_live_planes(mgd_ports, control_plane);
     std::vector<ChannelPort> domain_ports;
     if (inter_domain) {
-        // the perimeter's directions first, as the domain's grid left them free
+        auto taken = mgd_ports;
+        if (fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards) {
+            domain_ports = ports_from_domain_links(
+                fabric_context.get_inter_domain_mesh().vc2_links, mgd_ports, control_plane.get_mesh_graph());
+            for (const auto& p : domain_ports) {
+                ports.push_back(p.port);
+                taken.push_back(p.port);
+            }
+        }
         perimeter_ = perimeter_ports(
             unused_links(
                 control_plane,
                 fabric_context.get_cluster(),
                 rtoptions.has_factory_system_descriptor_path() ? rtoptions.get_factory_system_descriptor_path() : ""),
-            mgd_ports,
+            taken,
             control_plane.get_mesh_graph(),
             topology);
-        if (fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards) {
-            auto taken = mgd_ports;
-            for (const auto& p : perimeter_) {
-                taken.push_back(Port{.node = p.node, .direction = p.direction, .plane = p.plane, .peer = p.node});
-            }
-            domain_ports = ports_from_domain_links(
-                fabric_context.get_inter_domain_mesh().vc2_links, taken, control_plane.get_mesh_graph());
-            for (const auto& p : domain_ports) {
-                ports.push_back(p.port);
-            }
-        }
         const auto down =
             std::count_if(perimeter_.begin(), perimeter_.end(), [](const auto& p) { return !p.link_trained; });
         log_info(
@@ -125,16 +122,10 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
             down,
             domain_ports.size());
         for (const auto& p : perimeter_) {
-            log_info(
-                tt::LogFabric,
-                "fabric graph: perimeter asic {} chan {} {} {} router {} to asic {} chan {}",
-                *control_plane.get_asic_id_from_fabric_node_id(p.node),
-                p.eth_chan,
-                p.node,
-                *p.direction,
-                p.link_trained && *p.direction != RoutingDirection::Z,
-                p.peer_asic,
-                p.peer_chan);
+            if (*p.direction == RoutingDirection::Z) {
+                log_warning(
+                    tt::LogFabric, "fabric graph: no inter-domain router on Z yet: {} chan {}", p.node, p.eth_chan);
+            }
         }
         const auto open_ports = ports_from_perimeter(perimeter_);
         ports.insert(ports.end(), open_ports.begin(), open_ports.end());
