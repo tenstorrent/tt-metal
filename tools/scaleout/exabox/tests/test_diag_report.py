@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -401,7 +402,7 @@ def test_link_failures_get_their_own_verdicts(tmp_path):
     """A hang in the warm rerun is still a LINK HANG; only a data mismatch is 'wrong data'."""
     end = lambda b, t, c: {"bdf": b, "tray": t, "channel": c}  # noqa: E731
     ends = [{"a": end("0000:c1:00.0", 3, 16), "b": end("0000:c2:00.0", 3, 0)}]
-    whys = ["warm rerun hung", "rc 1", "a chip has no tt-kmd node: not opened", "data mismatch"]
+    whys = ["warm rerun hung", "rc 1", "no tt-kmd node on c1:00.0: not opened", "data mismatch"]
     lines = []
     for w in whys:
         data = {"failed": [{"why": w, "ends": ends}]}
@@ -414,3 +415,18 @@ def test_link_failures_get_their_own_verdicts(tmp_path):
     for g, what in zip(got, ["Ethernet link hung", "test error (rc 1)", "not opened", "wrong data"]):
         assert what in g, g
     assert "wrong data" not in "".join(got[:3]), got
+
+
+def test_not_opened_link_names_the_missing_chip_not_the_cable(tmp_path):
+    """A link whose chip has no tt-kmd node was never tested: the repair is that chip's PCIe path, not a cable."""
+    for i, why in enumerate(
+        ["no tt-kmd node on c1:00.0: not opened", "warm rerun no tt-kmd node on c1:00.0: not opened"]
+    ):
+        _, out = faults(tmp_path, f"n{i}", [f"LINK FAIL 0000:c1:00.0 (tray 3) e16 <-> 0000:c2:00.0 (tray 3) e0: {why}"])
+        text = "\n".join(out)
+        assert "no tt-kmd node on tray 3 ASIC 1 / c1:00.0" in text, text
+        assert "Family PCIe" in text, text
+        assert "Repair recommendation: the PCIe path (slot, retimer) of c1:00.0, then the tray 3 board" in text, text
+        assert not re.search(
+            r"reseat|cable", "\n".join(l for l in out if l.startswith(("Repair", "  Fault", "    tray")))
+        ), text

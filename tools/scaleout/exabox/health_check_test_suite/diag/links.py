@@ -168,8 +168,9 @@ def _round(d: Path, r: list, disc: dict, seconds: int, sys_root: str) -> list[di
             ba, bb, ends = disc["bdfs"][a], disc["bdfs"][b], link_ends(disc, a, b, ch)
             lab, idx = _label(disc, a, b), umd_index([ba, bb], sys_root)
             if idx is None:
+                gone = " and ".join(_short(b) for b in (ba, bb) if umd_index([b], sys_root) is None)
                 failed.append(
-                    {"pair": lab, "channels": ch, "why": "a chip has no tt-kmd node: not opened", "ends": ends}
+                    {"pair": lab, "channels": ch, "why": f"no tt-kmd node on {gone}: not opened", "ends": ends}
                 )
                 continue
             jobs.append((lab, ch, ends, _start_pair(d, lab, idx, seconds)))
@@ -217,13 +218,9 @@ def _label(disc: dict, a: int, b: int) -> str:
 
 def _rerun_cold(d: Path, rounds: list, disc: dict, seconds: int, sys_root: str, failed: list) -> None:
     """A pair that passed with under BW_WARM warm launches runs once more, with its round's other such pairs (its first
-    run's files kept as <pair>.cold.*); a failure of that run joins *failed* (its why says the warm rerun). A round the
-    time cap cut off (its pairs never ran) is not rerun: its pairs are reported by the pair check, not this one."""
+    run's files kept as <pair>.cold.*); a failure of that run joins *failed* (its why says the warm rerun)."""
     bad = {f["pair"] for f in failed}
     for r in rounds:
-        ran = [(a, b, ch) for a, b, ch in r if _label(disc, a, b) not in bad]
-        if not all((d / f"{_label(disc, a, b)}.log").exists() for a, b, _ in ran):
-            continue  # the cap cut this round off: no rows file, nothing measured to rerun
         cold = [
             (a, b, ch)
             for a, b, ch in r

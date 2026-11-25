@@ -450,6 +450,13 @@ def rule(l, kind, u, findings, stage, lines):
             + ("reseat or replace that QSFP-DD cable" if cab else f"this link has no cable: the board of tray {u}")
             + " if it goes down again later in a run",
         )
+    gone = re.search(r"^LINK FAIL .*: (?:warm rerun )?no tt-kmd node on (.*): not opened$", l)
+    if gone:  # the pair was not started: a chip is missing from tt-kmd, so the link itself was not judged
+        who = " and on ".join(
+            f"the chip of {x} (tray {t})" if (t := tray_asic(x)[0]) else f"the chip {x}"
+            for x in re.findall(BDF, gone.group(1))
+        )
+        return f"link not tested: no tt-kmd node on {who}: the chip is off the PCIe bus or its driver node is gone, so the link was not judged -> next: glx_reset and recount; if the chip is still missing, power cycle the box, then the PCIe path (slot, retimer) and the board of its tray"
     if kind == "link" or re.match(r"(ETH|LINK|PINPOINT LINK) FAIL|C[34] FAIL mesh placement", l):
         if warn:  # rc 143/137 is the pair job killed at its time limit, not a link fault
             rc = re.search(r"pair run failed, rc (\d+)", l)
@@ -1198,17 +1205,21 @@ def link(v, m):
     where, kind = link_where(x[0], list(x[1]), y[0], list(y[1]))
     w = re.search(r"(\d+) words wrong", m[6])
     bw = re.search(r"Ethernet bandwidth (\d+(?:\.\d+)?) Gbps", m[6])  # the links stage's bandwidth check
+    do = link_do(kind, x[0], y[0], x[1], y[1])
     if m[1] == "HANG":
         what = "Ethernet link hung (no progress)"
     elif bw:
         what = f"Ethernet link below bandwidth ({bw.group(1)} Gbps per link each way)"
     elif w or "data mismatch" in m[6]:
         what = "wrong data over an Ethernet link" + (f" ({w.group(1)} words wrong)" if w else "")
-    elif "not opened" in m[6]:
-        what = "Ethernet link not opened (a chip has no tt-kmd node)"
+    elif "not opened" in m[6]:  # a chip missing from tt-kmd: its PCIe path is the fault, not the cable
+        gone = re.findall(BDF, m[6])
+        what = f"Ethernet link not opened (no tt-kmd node on {' and '.join(chip(b) for b in gone) or 'a chip'})"
+        v.lfam = "PCIe"
+        do = f"glx_reset and recount; if still missing, power cycle the box; then the PCIe path (slot, retimer) and {board(gone[0]) if gone else 'the tray boards'}"
     else:
         what = f"Ethernet link test error ({m[6]})"
-    v.fault(("link", x, y), what, where, link_do(kind, x[0], y[0], x[1], y[1]))
+    v.fault(("link", x, y), what, where, do)
 
 
 @reads(rf"^LINK FAIL one chip ({BDF}) \(tray [1-4]\) tt-smi (\d+): (.*)$")
@@ -1429,6 +1440,7 @@ RULES = [
         None,
     ),
     (r"which fails all its C5 pairs: that chip", "the tray {t} board carrying {c} (all its links fail)"),
+    (r"^link not tested: no tt-kmd node", "the PCIe path (slot, retimer) of {c}, then the tray {t} board"),
     (
         r"^in-box link down or bad.*retimer speed not readable",
         "check the retimer speed setting (expected {x}) of link {p}, then the tray-to-tray connection, then the tray boards",
