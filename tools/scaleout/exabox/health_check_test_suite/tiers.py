@@ -7,19 +7,21 @@ add, move or drop a step in one.
 
 The phases always run in the same order, fixed in diag_runner.run_diag():
 
-    snapshot -> resets -> tests -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage
+    snapshot -> resets -> tests -> retest -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage
 
 The order is load-bearing (the triage probes, the ETH status read, the QSFP
 collector and sys-triage all open every chip, so they must not overlap the tests,
 and must come after a discrete reset; see the comments on each field below), so a tier does not
 reorder phases. It only picks what each one does. A phase a tier leaves empty is
-still in the report, as a SKIP that names the tier — except post_test_resets,
-whose phase is left out of the report when there is nothing to run.
+still in the report, as a SKIP that names the tier — except retest and
+post_test_resets, whose phases are left out of the report when there is nothing
+to run.
 
 Where the steps a tier can name are defined:
 
-    resets, post_test_resets  tt-smi flags: "-r" or "-glx_reset"
-    tests                     TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py
+    resets, post_test_resets,
+    retest_reset              tt-smi flags: "-r" or "-glx_reset"
+    tests, retest             TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py
     triage                    TRIAGE_TOOLS in diag/triage.py
 
 A name that isn't defined there fails at import, so a typo stops
@@ -49,6 +51,15 @@ class Tier:
 
     # Device tests, in order: names from TESTS / PYTESTS.
     tests: tuple[str, ...] = ()
+
+    # Tests from `tests` run a second time, after a retest_reset and a fresh
+    # snapshot, revalidated: test -> reset -> test. The GDDR ACT alias the
+    # gddr_act_* tests look for shows on some boots of a faulty die and not on
+    # others, so one run screens one boot. Runs only when every one of them
+    # passed the first time; a unit that already failed needs no second boot.
+    # Skipped by --skip-reset and --skip-tests (diag/retest.py).
+    retest: tuple[str, ...] = ()
+    retest_reset: str = "-r"
 
     # Reset run between the tests and the triage phase. Two reasons it sits
     # there: the triage probes open every chip read-write, so they must not
@@ -86,7 +97,8 @@ class Tier:
 
 _WEEKLY = Tier(
     resets=("-r", "-glx_reset", "-glx_reset"),
-    tests=("gddr_full", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
+    tests=("gddr_full", "gddr_act_c3", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
+    retest=("gddr_act_c3",),
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
     qsfp_tests=True,
@@ -112,9 +124,14 @@ TIERS: dict[str, Tier] = {
     ),
     # daily, with every test and the full GDDR pattern set.
     "weekly": _WEEKLY,
-    # weekly plus the sys-triage bundle: everything, for a unit with an issue,
-    # so the run's logs can go straight on its DIIM ticket.
-    "full": replace(_WEEKLY, sys_triage=True),
+    # weekly plus gddr_act_all and the sys-triage bundle: everything, for a unit
+    # with an issue, so the run's logs can go straight on its DIIM ticket.
+    "full": replace(
+        _WEEKLY,
+        tests=(*_WEEKLY.tests, "gddr_act_all"),
+        retest=(*_WEEKLY.retest, "gddr_act_all"),
+        sys_triage=True,
+    ),
     # Data collection before a BMC reboot. No resets and no tests: a reset
     # would wipe the state the triage, QSFP and sys-triage phases are there to
     # record, and a stress test on a unit already headed for a power cycle only
@@ -152,6 +169,9 @@ def _validate() -> None:
             f"{name}: unknown post-test reset flag {f!r}" for f in tier.post_test_resets if f not in RESET_FLAGS
         ]
         problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
+        problems += [f"{name}: retest {t!r} is not in its tests" for t in tier.retest if t not in tier.tests]
+        if tier.retest_reset not in RESET_FLAGS:
+            problems.append(f"{name}: unknown retest reset flag {tier.retest_reset!r}")
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
         if tier.eth_summary and not tier.eth_status:
             problems.append(f"{name}: eth_summary needs eth_status")

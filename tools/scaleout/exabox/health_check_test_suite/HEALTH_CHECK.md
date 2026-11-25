@@ -83,8 +83,8 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 |---|---|---|---|---|---|---|---|---|
 | `flash` | none | — | — | 2 reads, 30 s apart | — | — | snapshot + 2 triage reads + 30 s | Quick ETH link health, the unit read as found |
 | `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
-| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | — | yes, if installed | — | ~18 min + triage + ~7 min | Every test, less often |
-| `full` | as `weekly` | as `weekly` | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
+| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_act_c3 (pytest, ~5.5 min) + didt_matmul_galaxy (pytest, ~9 min); if gddr_act_c3 passed, `tt-smi -r`, a snapshot and gddr_act_c3 again (~6.5 min) | host_side + device_side | — | yes, if installed | — | ~30 min + triage + ~7 min | Every test, less often |
+| `full` | as `weekly` | as `weekly` + gddr_act_all (pytest, ~25.5 min), which the retest after the reset runs again too | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + ~51 min + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
 
@@ -158,6 +158,32 @@ zero-collected runs are recorded as FAIL, same trap as the zero-match gtest
 filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
 on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
 or fabric mesh mapping fails.
+
+`weekly` and `full` also run `gddr_act_c3`, a pytest-based GDDR read stress
+test: an SDPA-like read stream against DRAM controller 3 (row 0x200, GDDR bank
+3) on every chip, with a matmul load on the compute cores, for 300 s. Every read is checked against its expected data, and a wrong read
+is classified by the address bit it aliases. It targets a lane-3 64 MB alias
+(address bit 26) that the DramDeployment patterns do not reach. On an affected
+die the alias shows on some boots and not others, so a clean run clears that
+boot only. A self-test plants the alias on every chip first, so a decode
+regression fails the check rather than passing it.
+
+That is why the ACT tests run twice: when they pass, the `retest` phase resets
+the unit with `tt-smi -r`, takes and validates a snapshot as the pre-test reset
+loop does, and runs them again on the new boot (`gddr_act_c3_after_reset`,
+`gddr_act_all_after_reset`). A first run that fails skips the retest, since the
+unit has already failed. The retest snapshot is the last `snapshot_after_*`
+phase, so the run's final state is judged on it. `--skip-reset` and
+`--skip-tests` skip the retest; `retest` / `retest_reset` in `tiers.py` say
+which tests and which reset.
+
+`full` adds `gddr_act_all`, for an alias outside controller 3: the 300 s sdpa
+form on all 8 controllers at once, then alone on controllers 3, 1, 7 and 0 (the
+ones faults have been seen on), 300 s each. The all-controller pass covers the
+other four, but each controller gets only an eighth of the stream there, which
+missed weak boots that controller 3 alone caught, so the common ones also get
+the whole stream. The first hit fails the test without running the rest, so a
+bad unit fails in minutes.
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
 pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
@@ -864,6 +890,7 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── snapshot_checks.py  # phase 1: the checks over a snapshot
 │   ├── resets.py           # phase 2: pre-test reset loop; phase 4: post-test reset
 │   ├── device_tests.py     # phase 3: deployment gtests (TESTS) and pytests (PYTESTS)
+│   ├── retest.py           # phase 3b: test -> reset -> snapshot -> test for Tier.retest
 │   ├── external.py         # ingesting checks written by external tools
 │   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)
 │   ├── eth_status.py       # phase 6: ETH status read: PCIe gate, two tt-triage reads, and the

@@ -89,6 +89,22 @@ PYTESTS = {
             "1200",
         ],
     },
+    # gddr_act_c3: SDPA-mimic GDDR read stream on DRAM controller 3 with the matmul
+    # load on, 300 s on every chip (~5.5 min with bring-up). Catches the lane-3
+    # 64 MB address alias (bit 26) that the DramDeployment patterns miss. The alias
+    # shows on some boots and not others, so a clean run clears one boot; tiers
+    # rerun it after a reset (Tier.retest). Its 900 s timeout is a marker on the test.
+    "gddr_act_c3": {
+        "target": "tests/tt_metal/tt_metal/deployment/dram/test_dram_act_patterns.py::test_dram_act_c3_screen",
+        "args": ["-s"],
+    },
+    # gddr_act_all: gddr_act_c3's stream on all 8 DRAM controllers at once, then alone on controllers 3, 1, 7
+    # and 0, 300 s each (~25.5 min with bring-up), for an alias on a controller other than 3. The first hit
+    # fails the test without running the rest. Its 3600 s timeout is a marker on the test.
+    "gddr_act_all": {
+        "target": "tests/tt_metal/tt_metal/deployment/dram/test_dram_act_patterns.py::test_dram_act_all_ctrls_screen",
+        "args": ["-s"],
+    },
 }
 
 
@@ -239,8 +255,11 @@ def run_pytest_test(
     )
 
 
-def run_tests(tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool, logs_dir: Path) -> None:
-    """Run the named TESTS / PYTESTS entries, in order."""
+def run_tests(
+    tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool, logs_dir: Path, suffix: str = ""
+) -> None:
+    """Run the named TESTS / PYTESTS entries, in order. ``suffix`` goes on each
+    check and log name, so a rerun does not overwrite the first run's."""
     binary = next(
         (tt_metal / c for c in DEPLOYMENT_BIN_CANDIDATES if (tt_metal / c).is_file()),
         None,
@@ -266,13 +285,14 @@ def run_tests(tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool,
 
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    for name in names:
-        if name in PYTESTS:
-            run_pytest_test(name, PYTESTS[name], tt_metal, env, phase, dry_run, logs_dir)
+    for test in names:
+        name = f"{test}{suffix}"
+        if test in PYTESTS:
+            run_pytest_test(name, PYTESTS[test], tt_metal, env, phase, dry_run, logs_dir)
             continue
         if binary is None:
             continue
-        spec = TESTS[name]
+        spec = TESTS[test]
         filt = spec["filter"]
         test_env = {**env, **spec.get("env", {})}
         env_overrides = {k: test_env[k] for k in GTEST_ENV_KEYS if k in test_env}
