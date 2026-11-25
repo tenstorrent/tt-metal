@@ -274,9 +274,9 @@ vllm serve models/demos/inkling2_mini/vllm --tokenizer $INKLING_CKPT --served-mo
 `"optimizations": "performance"` in the same tt config picks fast mode; `$INKLING_MODE`, `$INKLING_CACHE` and
 `$INKLING_CACHE_DIR` work as in the demo.
 
-- The prompt is fed by the traced decode step token by token (the chunked prefill needs the other cache): time
-  to the first token is about the prompt length divided by the decode speed. A request that continues the
-  conversation on the card feeds only its new tokens; vLLM's own prefix cache and chunked prefill are off.
+- Without the chunked prefill (below) the prompt is fed by the traced decode step token by token: time to the
+  first token is about the prompt length divided by the decode speed. A request that continues the conversation
+  on the card feeds only its new tokens; vLLM's own prefix cache and chunked prefill are off.
 - Requests with penalties, logprobs, `min_p`, `logit_bias` or structured output are sampled by vLLM's host
   sampler (the plugin routes them there).
 - Greedy output equals the demo's tokens (golden prompt 0, 64 tokens).
@@ -286,7 +286,8 @@ other class, give the traces more room and add the speculative config:
 
 ```
 export TT_MODEL_CLASS_OVERRIDES=Inkling2ForCausalLM=models.demos.inkling2_mini.tt.generator_vllm:Inkling2SpecForCausalLM
-vllm serve ... (as above, with "trace_region_size": 536870912) --no-async-scheduling \
+# (536870912 without the chunked prefill: serve.sh with PREFILL=0)
+vllm serve ... (as above, with "trace_region_size": 335544320) --no-async-scheduling \
     --speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 2}'
 ```
 
@@ -303,12 +304,13 @@ vllm serve ... (as above, with "trace_region_size": 536870912) --no-async-schedu
 
 Chunked prefill (`PREFILL=<tokens>` in `serve.sh`, i.e. `INKLING_VLLM_PREFILL`; on by default from 128 tokens,
 `PREFILL=0` or an empty `PREFILL=` turns it off): a new prompt of at least that many tokens runs through the
-chunked prefill instead of token by token. The reply after such a prompt comes from the prefill's numerics, not the
-token-by-token feed's. With speculative decode above a 131072 context (so in the default launch) `serve.sh` leaves
-it off until the prefill needs less DRAM, and says so at start; `SPEC=0`, or `CTX=131072` or less, turns it on. The process keeps the one
-PF-layout decode cache: the prefill's expert op reads its expert tensors in place (`gate_up_extra` /
+chunked prefill instead of token by token, and so does a prompt that continues the conversation on the card with
+at least that many new tokens (a long paste): the steps feed up to a multiple of 128, then the prefill goes on from
+there. The reply after such a prompt comes from the prefill's numerics, not the token-by-token feed's. The process
+keeps the one PF-layout decode cache and reads the decode's attention weights (no second copy:
+`tt/fused/pf_pages.py` copies a layer's projection tiles for the one matmul that uses them); the prefill's expert op reads its expert tensors in place (`gate_up_extra` /
 `down_extra`; a build without them rebuilds the plain tensors per layer with `tt/pf_tiles.py`, about 10 ms a
-layer). The prefill's logits are bit-equal to a TILE-cache process's.
+layer). The prefill's logits are bit-equal to a TILE-cache process's with the same passes.
 
 Measured through vLLM on one p100a, first token, streamed, greedy, warm (the first prompt of a new pass size
 compiles its kernels: 8.4 s for 8,424 tokens):
@@ -316,16 +318,29 @@ compiles its kernels: 8.4 s for 8,424 tokens):
 | launch | `--max-model-len` | tokens per pass | 8,424-token prompt | 33,000-token prompt | reply |
 |---|---:|---:|---:|---:|---:|
 | token by token (`PREFILL=0`) | any | | 126.5 s | about 500 s | 64 / 77 tok/s |
-| plain (`SPEC=0`) | 196608 | 4096 | 2.63 s | 16.6 s | 62.3 tok/s; 14.88 ms a step |
-| speculative | 131072 | 2048 | 3.8 to 4.0 s | 29.9 s (first time) | 74 to 81 tok/s |
-| speculative | 163840, 196608 | off: DRAM short | 127.8 s | | 72 to 75 tok/s |
+| plain (`SPEC=0`) | 196608 | 4096 | 2.7 s | 16.6 s | 62.1 to 62.7 tok/s |
+| speculative (the default launch) | 196608 | 1024 | 7.1 to 7.2 s | 28.9 s | 77.6 to 77.8 tok/s |
 
-- It costs DRAM: 1.05 GiB for the prefill's own tensors, 1 GiB kept free beside a pass, and 0.26 GiB per 1024
-  tokens of a pass. The server picks the pass size at start and says what it uses, or how much is short. With
-  speculative decode the verify steps take 0.54 GiB more, so the prefill is off from about 160K on.
-- Only a new sequence is prefilled (position 0). A prompt that continues the conversation on the card is fed token
-  by token from where it starts.
-- Decode keeps its speed: speculative decode runs with it (the prefill also writes the drafter's context of the
+A conversation that goes on (8,192-token prompt, 24-token replies, `--max-model-len 196608`), first token:
+
+| launch | + 4,096-token paste | then + 8,192-token paste | fed token by token |
+|---|---:|---:|---:|
+| speculative | 5.8 s | 7.9 s | about 64 s and 128 s |
+| plain, passes of 1024 (`INKLING_VLLM_PREFILL_PASS=1024`) | 5.7 s | 7.6 s | |
+
+- It costs DRAM: 0.41 GiB for the prefill's own tensors, 0.26 GiB per 1024 tokens of a pass and room beside it
+  (1 GiB beside 8192 tokens, less for a smaller pass), and with speculative decode the verify steps' 0.74 GiB
+  after it. The server picks the largest pass size that fits at start and says what it uses, or how much is
+  short: speculative decode at 196608 gets passes of 1024 (1.31 GiB free before the verify steps, 0.77 after),
+  plain 4096. `INKLING_VLLM_PREFILL_PASS=<tokens>` caps it: two launches with the same passes give the same
+  tokens, other pass sizes round otherwise (1024 against 4096 passes: the 8.4K reply parts at token 37).
+- The prefill's programs need a 48 KB kernel-config ring (`serve.sh` sets it): speculative greedy 77.2 to
+  77.3 tok/s against 77.5 to 77.7 with the 64 KB ring. `PREFILL=0` keeps the 64 KB ring.
+- A continued conversation in the speculative launch: the prefill does not write the drafter's context of the
+  new tokens (its drafter pass hung the card in one such case, not understood yet), so the reply after a paste
+  decodes slower (48 to 53 tok/s over 24 tokens against 78 after a new prompt). Its tokens equal the plain
+  launch's.
+- Decode keeps its speed: speculative decode runs with it (the prefill also writes the drafter's context of a new
   prompt), and the decode traces and the expert prefetch stay across a prefill (their L1 is freed and taken back
   at the same addresses): no slow steps after a prefill.
 - The reply after a prefill is the demo's prefill reply, not the token-by-token one: for that prompt they part at
