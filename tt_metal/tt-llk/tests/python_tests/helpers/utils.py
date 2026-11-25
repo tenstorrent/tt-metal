@@ -225,19 +225,23 @@ def print_faces(operand1, tile_shape=None):
 
 
 def run_shell_command(
-    command: str | Sequence[str],
+    command: Sequence[str],
     cwd: str | None = None,
     stdin_data: str | bytes = None,
     text=True,
 ):
-    """Run a command. A string uses ``shell=True`` (legacy). A sequence is
-    executed with ``shell=False`` so path arguments are not re-split.
+    """Run an argv sequence with ``shell=False``, so no argument is re-split.
+
+    A string is rejected: the build root comes from ``$RUNNER_TEMP``/``$TMPDIR``,
+    and a shell would split it on whitespace.
     """
-    use_shell = isinstance(command, str)
+    if isinstance(command, str):
+        raise TypeError(
+            f"run_shell_command takes an argv sequence, not a string: {command!r}"
+        )
     result = subprocess.run(
         command,
         cwd=cwd,
-        shell=use_shell,
         text=text,
         input=stdin_data,
         stdout=subprocess.DEVNULL,
@@ -245,11 +249,7 @@ def run_shell_command(
     )
 
     if result.returncode != 0:
-        pretty = (
-            command
-            if use_shell
-            else " ".join(shlex.quote(str(part)) for part in command)
-        )
+        pretty = " ".join(shlex.quote(str(part)) for part in command)
         raise RuntimeError(f"Command:\n{pretty}\n\nCommand's stderr:\n{result.stderr}")
     return result
 

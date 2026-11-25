@@ -39,6 +39,7 @@ import os
 import re
 import signal
 import sys
+import time
 import zlib
 from dataclasses import asdict
 from pathlib import Path
@@ -964,12 +965,19 @@ def _store_split_durations(session):
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     if reporter is None:
         return
-    for reports in reporter.stats.values():
-        for report in reports:
-            if isinstance(report, pytest.TestReport):
-                durations[report.nodeid] = (
-                    durations.get(report.nodeid, 0.0) + report.duration / workers
-                )
+    reports = [
+        r
+        for rs in reporter.stats.values()
+        for r in rs
+        if isinstance(r, pytest.TestReport)
+    ]
+    total = sum(r.duration for r in reports)
+    start = getattr(config, "_llk_split_start", None)
+    scale = (time.perf_counter() - start) / total if start and total else 1 / workers
+    for report in reports:
+        durations[report.nodeid] = (
+            durations.get(report.nodeid, 0.0) + report.duration * scale
+        )
     path.write_text(json.dumps(durations))
 
 
@@ -1284,6 +1292,7 @@ def pytest_runtest_setup(item):
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
+    session.config._llk_split_start = time.perf_counter()
     # Under xdist no test runs on the controller; start the host before xdist's (trylast)
     # pytest_sessionstart spawns the workers.
     if (
@@ -1321,7 +1330,8 @@ def _dump_perf_report(test_module: str, worker_id: str, report: PerfReport):
     """Write this worker's raw and post-processed CSVs of the module, over every chunk of it the worker ran."""
     # More than one schema means two unrelated tests/ops share this module (split them into separate files) or one
     # test emits inconsistent columns across its sweep.
-    # keyed by the output directory too: each code position (LLK_CODE_SHIFTS) writes its own report
+    # Keyed by the output directory too: each code position dumps into its own directory, and a
+    # shared key would carry position 0's rows into every other position's file.
     merged = _module_report(
         f"{TestConfig.PERF_DATA_DIR}/{test_module}.{worker_id}",
         report,

@@ -13,7 +13,7 @@
 
 #include "gtest/gtest.h"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "ttnn/config.hpp"
 #include "ttnn/device_operation_detail.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"

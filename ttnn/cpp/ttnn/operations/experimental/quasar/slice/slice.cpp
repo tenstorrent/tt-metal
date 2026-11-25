@@ -14,8 +14,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
 namespace ttnn::operations::experimental::quasar {

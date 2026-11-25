@@ -8,8 +8,8 @@
 #include <cstddef>
 #include <unordered_set>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 // Intentional header leakage for convenience
 

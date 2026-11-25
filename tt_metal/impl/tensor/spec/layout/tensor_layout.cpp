@@ -4,14 +4,14 @@
 
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
-#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>
 
 #include "page_config_impl.hpp"
 #include "tensor_layout_impl.hpp"

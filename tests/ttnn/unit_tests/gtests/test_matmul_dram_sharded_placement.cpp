@@ -16,9 +16,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"

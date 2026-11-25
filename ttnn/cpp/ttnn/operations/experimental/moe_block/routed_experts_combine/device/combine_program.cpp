@@ -11,14 +11,14 @@
 #include <limits>
 #include <set>
 
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/experimental/moe_block/common/moe_block_resources.hpp"

@@ -6,14 +6,14 @@
 // device.hpp is needed for IDevice::arch() in matches_quasar_native_slice. Do NOT rely on it arriving
 // transitively: this target is a unity build, so a missing include here compiles clean in build_Release
 // and only breaks with TT_UNITY_BUILDS=OFF.
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cmath>
