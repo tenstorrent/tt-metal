@@ -27,5 +27,6 @@ void kernel_main() {
 
     // SFPU thread only; nothing on UNPACK, MATH and PACK.
     using ExpOp = SfpuOp<op::Exp<>, SfpuReg::SrcS, srcs_format>;
-    ExpOp::tiles(in_addr_16B, l1_format, out_addr_16B, l1_format, num_tiles);  // unpack -> exp -> pack, per tile
+    ExpOp::init();
+    ExpOp::tiles(unpack_from(in_addr_16B, l1_format), pack_to(out_addr_16B, l1_format), num_tiles);
 }

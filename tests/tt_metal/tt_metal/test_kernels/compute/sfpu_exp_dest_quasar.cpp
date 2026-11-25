@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Example: exp on Dest through the SFPU op-type compute API. The unary loop of eltwise_sfpu_2_0.cpp with
-// exp_tile_init(); exp_tile(0); replaced by SfpuOp<op::Exp<>, SfpuReg::Dest, in_id>::tile(DstIndex{0}). There is
-// no init call.
+// exp_tile_init(); exp_tile(0); replaced by ExpOp::init(); ExpOp::tile(DstIndex{0});
 
 #include <cstdint>
 
@@ -27,6 +26,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(in_id, out_id);
     copy_init(in_id);
+    ExpOp::init();
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         for (uint32_t i = 0; i < per_core_block_size; ++i) {

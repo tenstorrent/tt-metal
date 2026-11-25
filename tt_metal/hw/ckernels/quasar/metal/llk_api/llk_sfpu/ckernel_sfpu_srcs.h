@@ -61,15 +61,15 @@ struct SrcsLayout {
 };
 
 /**
- * @brief CRTP base of a SrcS op with ARITY inputs: init() and run(). Op supplies Layout, calculate() and
- *        optionally init_op() and hw_clears_valids.
+ * @brief CRTP base of a SrcS op with ARITY inputs: init() and run(), or init() in two steps as configure() and
+ *        set_l1(). Op supplies Layout, calculate() and optionally init_op() and hw_clears_valids.
  *
  * The pipeline differs per number of inputs (see llk_sfpu_srcs_api.h): one input is unpacked by the auto-loop,
  * two inputs by a per-slice MOP.
  *
  * @tparam Op: The op type deriving from this base.
  * @tparam ARITY: Number of inputs, values = <1/2>
- * @note init() and run() are defined in llk_sfpu_srcs_api.h; include it to use them.
+ * @note The functions are defined in llk_sfpu_srcs_api.h; include it to use them.
  */
 template <typename Op, int ARITY>
 struct SfpuSrcsOpBase {
@@ -83,7 +83,15 @@ struct SfpuSrcsOpBase<Op, 1> {
 
     static void init_op() {}
 
+    static void configure();
+
     // Takes only the L1 formats; the SrcS register format comes from Op::Layout.
+    static void set_l1(
+        const std::uint32_t l1_in_addr_16B,
+        const DataFormat l1_in_format,
+        const std::uint32_t l1_out_addr_16B,
+        const DataFormat l1_out_format);
+
     static void init(
         const std::uint32_t l1_in_addr_16B,
         const DataFormat l1_in_format,
@@ -101,7 +109,16 @@ struct SfpuSrcsOpBase<Op, 2> {
 
     static void init_op() {}
 
+    static void configure();
+
     // Takes only the L1 formats; the SrcS register format comes from Op::Layout.
+    static void set_l1(
+        const std::uint32_t l1_in0_addr_16B,
+        const std::uint32_t l1_in1_addr_16B,
+        const DataFormat l1_in_format,
+        const std::uint32_t l1_out_addr_16B,
+        const DataFormat l1_out_format);
+
     static void init(
         const std::uint32_t l1_in0_addr_16B,
         const std::uint32_t l1_in1_addr_16B,
