@@ -40,11 +40,13 @@ import queue
 import signal
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
+import yaml
 
 import ttml
 import ttnn
@@ -631,6 +633,14 @@ def test_get_grpo_config_reads_rollout_backend():
         {"training_config": {"grpo_config": {**_GRPO_CONFIG_FIELDS, "rollout_backend": "ttml_in_process_sync"}}}
     )
     assert cfg.rollout_backend == "ttml_in_process_sync"
+
+
+_TRAINING_CONFIGS = Path(__file__).resolve().parents[2] / "configs" / "training_configs"
+
+
+@pytest.mark.parametrize("path", sorted(_TRAINING_CONFIGS.glob("grpo_*.yaml")), ids=lambda path: path.name)
+def test_get_grpo_config_reads_the_committed_grpo_configs(path):
+    assert get_grpo_config(yaml.safe_load(path.read_text())).rollout_backend in grpo_trainer_module.ROLLOUT_BACKENDS
 
 
 def test_layout_microbatch_rejects_short_prompt(expect_error):

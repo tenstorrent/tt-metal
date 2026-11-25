@@ -52,5 +52,3 @@ remote_rollout_config:
   mesh_shape: [1, 1]
   max_batch_size: 32
   max_seq_len: 1024
-  # Scored batches buffered on each rank.
-  rollout_queue_capacity: 2
