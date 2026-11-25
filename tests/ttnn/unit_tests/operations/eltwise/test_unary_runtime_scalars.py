@@ -98,6 +98,33 @@ def test_runtime_scalars_reuse_program(device, case, dtype):
     _check_runtime_scalars(device, dtype, CASES[case])
 
 
+def test_sharded_relu_max_packer_threshold_stays_in_cache_key(device):
+    """Sharded BF16 relu_max(x, 6) runs in the packer with the threshold compiled in; other values take the SFPU."""
+    sharded = ttnn.create_sharded_memory_config(
+        shape=(32, 256),
+        core_grid=ttnn.CoreGrid(y=1, x=8),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    torch.manual_seed(0)
+    torch_input = (torch.rand((256, 256), dtype=torch.float32) * 16 - 8).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded
+    )
+    device.enable_program_cache()
+    device.clear_program_cache()
+    outputs = []
+    entries = []
+    for threshold in (6.0, 4.0, 5.0, 6.0):
+        outputs.append(ttnn.relu_max(tt_input, threshold, memory_config=sharded))
+        entries.append(device.num_program_cache_entries())
+    assert entries[1] == entries[0] + 1, "relu_max(x, 4) reused the packer program built for relu_max(x, 6)"
+    assert entries[3] == entries[1], "relu_max(x, 5) or a repeated relu_max(x, 6) compiled a new program"
+    for threshold, tt_out in zip((6.0, 4.0, 5.0, 6.0), outputs):
+        expected = torch.clamp(torch_input, min=0.0, max=threshold)
+        assert torch.equal(ttnn.to_torch(tt_out), expected), f"threshold {threshold}"
+
+
 @pytest.mark.parametrize("ttnn_op", ["clamp", "fill"])
 def test_signed_zero_scalar_shares_program(device, ttnn_op):
     """+0.0 and -0.0 run on one program, each returning its own sign of zero."""
