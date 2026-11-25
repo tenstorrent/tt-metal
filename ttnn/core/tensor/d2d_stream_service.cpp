@@ -20,6 +20,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -309,7 +310,10 @@ ExchangedEndpoint exchange_service_cores(
     uint32_t num_socket_pages,
     uint32_t metadata_size_bytes,
     bool share_fabric_links,
-    bool relay) {
+    bool relay,
+    bool cable_mux,
+    bool instage_mux,
+    uint32_t relay_slices) {
     const auto num_segments = static_cast<uint32_t>(segments.size());
     const uint32_t peer_num_segments = swap_words(ctx, is_sender, peer_rank, {num_segments}).at(0);
     TT_FATAL(
@@ -319,7 +323,7 @@ ExchangedEndpoint exchange_service_cores(
         num_segments,
         peer_num_segments);
 
-    constexpr uint32_t kNumFixedFields = 5;
+    constexpr uint32_t kNumFixedFields = 8;
     constexpr uint32_t kWordsPerSegment = 6;
     const uint32_t num_fingerprint_words = kNumFixedFields + (kWordsPerSegment * num_segments);
     const uint32_t words_per_coord = 2 + num_segments;
@@ -330,6 +334,9 @@ ExchangedEndpoint exchange_service_cores(
     out.push_back(metadata_size_bytes);
     out.push_back(share_fabric_links ? 1u : 0u);
     out.push_back(relay ? 1u : 0u);
+    out.push_back(cable_mux ? 1u : 0u);
+    out.push_back(instage_mux ? 1u : 0u);
+    out.push_back(relay ? relay_slices : 1u);
     for (const auto& seg : segments) {
         out.push_back(seg.page_size);
         out.push_back(seg.num_pages);
@@ -354,10 +361,10 @@ ExchangedEndpoint exchange_service_cores(
     TT_FATAL(
         fingerprint(in) == fingerprint(out),
         "D2DStreamService: peer chunk-plan mismatch — local [socket_page_size, num_socket_pages, "
-        "metadata_size_bytes, share_fabric_links, relay, "
+        "metadata_size_bytes, share_fabric_links, relay, cable_mux, instage_mux, relay_slices, "
         "(page_size, num_pages, payload_size, dtype, layout, shape_hash) per tensor] = {} vs peer {}; "
         "sender and receiver must use the same global_spec, mapper, extra_tensors, fifo_size, metadata_size_bytes, "
-        "share_fabric_links, and relay (TT_METAL_FABRIC_DISABLE_INTERMESH_VC)",
+        "share_fabric_links, relay (TT_METAL_FABRIC_DISABLE_INTERMESH_VC), cable_mux, instage_mux, and relay_slices",
         fingerprint(out),
         fingerprint(in));
 
@@ -444,6 +451,18 @@ void apply_intermesh_vc_disabled(D2DStreamConfig& cfg, const distributed::MeshDe
 // Checks the receiver's stage-gate config. Runs before anything is allocated or
 // exchanged with the peer, so a bad config throws before the sender launches.
 void validate_stage_gate(const D2DStreamConfig& cfg) {
+    TT_FATAL(
+        cfg.max_sender_lanes >= 1, "D2DStreamService: max_sender_lanes must be >= 1, got {}", cfg.max_sender_lanes);
+    TT_FATAL(
+        !cfg.max_cable_lanes.has_value() || *cfg.max_cable_lanes >= 1,
+        "D2DStreamService: max_cable_lanes must be >= 1");
+    TT_FATAL(cfg.relay_slices >= 1, "D2DStreamService: relay_slices must be >= 1, got {}", cfg.relay_slices);
+    TT_FATAL(
+        (!cfg.cable_mux && !cfg.instage_mux) || cfg.relay,
+        "D2DStreamService: cable_mux / instage_mux require relay mode");
+    if (cfg.relay) {
+        TT_FATAL(cfg.share_fabric_links, "D2DStreamService: relay mode requires share_fabric_links == true");
+    }
     const auto gate = enabled_stage_gate(cfg);
     if (!gate) {
         return;
@@ -598,6 +617,10 @@ struct ServiceCoreReleaseGuard {
 // so their connection windows can overlap. Services in one lease group
 // (Config::fabric_link_group) may share a router: their caller serializes their
 // connections, so the router's worker channel only ever has one of them.
+enum class D2DMuxSlot : uint8_t { FullSize = 0, HeaderOnly = 1 };
+
+constexpr uint8_t kMuxChannelsPerType = 2;
+
 class FabricLinkRegistry {
 public:
     // Claims (node, eth_core) for `holder`, in lease group `group` (empty: none).
@@ -613,6 +636,9 @@ public:
         if (inserted) {
             return std::nullopt;
         }
+        if (it->second.is_mux) {
+            return it->second.describe();
+        }
         if (!group.empty() && it->second.group == group) {
             ++it->second.services;
             return std::nullopt;
@@ -620,17 +646,83 @@ public:
         return it->second.holder;
     }
 
+    // Claims one mux channel of `slot` type on (node, eth_core). On success sets `out_ch_idx`
+    // (0 .. kMuxChannelsPerType - 1) and returns nullopt; on failure returns a diagnostic holder string.
+    std::optional<std::string> try_claim_mux_slot(
+        const tt::tt_fabric::FabricNodeId& node,
+        CoreCoord eth_core,
+        D2DMuxSlot slot,
+        const std::string& holder,
+        uint8_t& out_ch_idx) {
+        std::lock_guard lock(mutex_);
+        auto it = claims_.find({node, eth_core});
+        if (it == claims_.end()) {
+            Claim c{};
+            c.is_mux = true;
+            c.services = 0;
+            out_ch_idx = 0;
+            if (slot == D2DMuxSlot::FullSize) {
+                c.full_holders[0] = holder;
+            } else {
+                c.header_holders[0] = holder;
+            }
+            claims_.emplace(std::make_pair(node, eth_core), std::move(c));
+            return std::nullopt;
+        }
+        if (!it->second.is_mux) {
+            return it->second.holder;
+        }
+        auto& arr = (slot == D2DMuxSlot::FullSize) ? it->second.full_holders : it->second.header_holders;
+        for (uint8_t i = 0; i < kMuxChannelsPerType; ++i) {
+            if (arr[i].empty()) {
+                arr[i] = holder;
+                out_ch_idx = i;
+                return std::nullopt;
+            }
+        }
+        return it->second.describe();
+    }
+
     // Whether try_claim would succeed now, without claiming.
     bool is_free(const tt::tt_fabric::FabricNodeId& node, CoreCoord eth_core, const std::string& group) {
         std::lock_guard lock(mutex_);
         auto it = claims_.find({node, eth_core});
-        return it == claims_.end() || (!group.empty() && it->second.group == group);
+        return it == claims_.end() || (!it->second.is_mux && !group.empty() && it->second.group == group);
     }
 
     void release(const tt::tt_fabric::FabricNodeId& node, CoreCoord eth_core) {
         std::lock_guard lock(mutex_);
         auto it = claims_.find({node, eth_core});
-        if (it != claims_.end() && --it->second.services == 0) {
+        if (it != claims_.end() && !it->second.is_mux && --it->second.services == 0) {
+            claims_.erase(it);
+        }
+    }
+
+    void release_mux_slot(
+        const tt::tt_fabric::FabricNodeId& node, CoreCoord eth_core, D2DMuxSlot slot, uint8_t ch_idx) {
+        std::lock_guard lock(mutex_);
+        auto it = claims_.find({node, eth_core});
+        if (it == claims_.end() || !it->second.is_mux || ch_idx >= kMuxChannelsPerType) {
+            return;
+        }
+        if (slot == D2DMuxSlot::FullSize) {
+            it->second.full_holders[ch_idx].clear();
+        } else {
+            it->second.header_holders[ch_idx].clear();
+        }
+        if (it->second.all_slots_empty() && !it->second.mux_alive) {
+            claims_.erase(it);
+        }
+    }
+
+    void set_mux_alive(const tt::tt_fabric::FabricNodeId& node, CoreCoord eth_core, bool alive) {
+        std::lock_guard lock(mutex_);
+        auto it = claims_.find({node, eth_core});
+        if (it == claims_.end() || !it->second.is_mux) {
+            return;
+        }
+        it->second.mux_alive = alive;
+        if (!alive && it->second.all_slots_empty()) {
             claims_.erase(it);
         }
     }
@@ -640,6 +732,31 @@ private:
         std::string holder;  // the first service to claim it, for messages
         std::string group;
         uint32_t services = 1;
+        bool is_mux = false;
+        bool mux_alive = false;
+        std::array<std::string, kMuxChannelsPerType> full_holders;
+        std::array<std::string, kMuxChannelsPerType> header_holders;
+
+        bool all_slots_empty() const {
+            for (uint8_t i = 0; i < kMuxChannelsPerType; ++i) {
+                if (!full_holders[i].empty() || !header_holders[i].empty()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        std::string describe() const {
+            if (!is_mux) {
+                return holder;
+            }
+            return fmt::format(
+                "d2d mux (full=[{}, {}], header=[{}, {}])",
+                full_holders[0].empty() ? "free" : full_holders[0],
+                full_holders[1].empty() ? "free" : full_holders[1],
+                header_holders[0].empty() ? "free" : header_holders[0],
+                header_holders[1].empty() ? "free" : header_holders[1]);
+        }
     };
     std::mutex mutex_;
     std::map<std::pair<tt::tt_fabric::FabricNodeId, CoreCoord>, Claim> claims_;
@@ -659,11 +776,13 @@ public:
     FabricLinkClaims() = default;
     FabricLinkClaims(const FabricLinkClaims&) = delete;
     FabricLinkClaims& operator=(const FabricLinkClaims&) = delete;
-    FabricLinkClaims(FabricLinkClaims&& other) noexcept : held_(std::exchange(other.held_, {})) {}
+    FabricLinkClaims(FabricLinkClaims&& other) noexcept :
+        held_(std::exchange(other.held_, {})), mux_held_(std::exchange(other.mux_held_, {})) {}
     FabricLinkClaims& operator=(FabricLinkClaims&& other) noexcept {
         if (this != &other) {
             release_all();
             held_ = std::exchange(other.held_, {});
+            mux_held_ = std::exchange(other.mux_held_, {});
         }
         return *this;
     }
@@ -681,16 +800,231 @@ public:
         return other;
     }
 
+    std::optional<std::string> try_claim_mux_slot(
+        const tt::tt_fabric::FabricNodeId& node,
+        CoreCoord eth_core,
+        D2DMuxSlot slot,
+        const std::string& holder,
+        uint8_t& out_ch_idx) {
+        auto other = fabric_link_registry().try_claim_mux_slot(node, eth_core, slot, holder, out_ch_idx);
+        if (!other) {
+            mux_held_.emplace_back(node, eth_core, slot, out_ch_idx);
+        }
+        return other;
+    }
+
 private:
     void release_all() {
         for (const auto& [node, eth_core] : held_) {
             fabric_link_registry().release(node, eth_core);
         }
         held_.clear();
+        for (const auto& [node, eth_core, slot, ch_idx] : mux_held_) {
+            fabric_link_registry().release_mux_slot(node, eth_core, slot, ch_idx);
+        }
+        mux_held_.clear();
     }
 
     std::vector<std::pair<tt::tt_fabric::FabricNodeId, CoreCoord>> held_;
+    std::vector<std::tuple<tt::tt_fabric::FabricNodeId, CoreCoord, D2DMuxSlot, uint8_t>> mux_held_;
 };
+
+// Matches tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE (device-side header).
+constexpr uint32_t kMuxGracefulTerminate = 1u;
+constexpr uint8_t kMuxBuffersPerChannel = 16;
+
+// Persistent FabricMux (d2d_fabric_mux.cpp) on a dispatch-column service core, holding
+// link 0 of one outgoing direction (cable or in-stage). Reference-counted by the services
+// sharing it; torn down once all client kernels have exited.
+struct D2DMuxInstance {
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    distributed::MeshCoordinate coord{0, 0};
+    tt::tt_fabric::FabricNodeId src_node{tt::tt_fabric::MeshId{0}, 0};
+    tt::tt_fabric::FabricNodeId dst_node{tt::tt_fabric::MeshId{0}, 0};
+    uint32_t link_index = 0;
+    CoreCoord eth_core{0, 0};
+    CoreCoord mux_logical_core{0, 0};
+    CoreCoord mux_virtual_core{0, 0};
+    DeviceAddr mux_l1_base = 0;
+    size_t full_buf_bytes = 0;
+    bool lease_upstream = false;
+    std::optional<tt::tt_fabric::FabricMuxConfig> config;
+    std::unique_ptr<distributed::MeshWorkload> workload;
+    bool core_claimed = false;
+    bool l1_allocated = false;
+    bool launched = false;
+
+    ~D2DMuxInstance() {
+        try {
+            auto* mesh = mesh_device.get();
+            if (mesh != nullptr && mesh->is_initialized()) {
+                auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
+                auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
+                if (launched && config.has_value()) {
+                    std::vector<uint32_t> term{kMuxGracefulTerminate};
+                    tt::tt_metal::detail::WriteToDeviceL1(
+                        device,
+                        mux_logical_core,
+                        static_cast<uint32_t>(config->get_termination_signal_address()),
+                        term);
+                    tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
+                    svc.wait_done(device, mux_logical_core);
+                }
+                workload.reset();
+                if (l1_allocated) {
+                    svc.deallocate_l1(device, mux_logical_core, mux_l1_base);
+                }
+                if (core_claimed) {
+                    svc.release(device, {mux_logical_core});
+                }
+            } else {
+                workload.reset();
+            }
+        } catch (const std::exception& e) {
+            log_warning(tt::LogOp, "D2DStreamService D2DMuxInstance: shutdown failed: {}", e.what());
+        } catch (...) {
+            log_warning(tt::LogOp, "D2DStreamService D2DMuxInstance: shutdown failed with unknown exception");
+        }
+        fabric_link_registry().set_mux_alive(src_node, eth_core, false);
+    }
+};
+
+struct MuxBinding {
+    const D2DMuxInstance* mux = nullptr;
+    tt::tt_fabric::FabricMuxChannelType ch_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    uint8_t ch_idx = 0;
+    DeviceAddr client_words_base = 0;
+};
+
+class D2DMuxRegistry {
+public:
+    std::shared_ptr<D2DMuxInstance> acquire(
+        const std::shared_ptr<distributed::MeshDevice>& mesh,
+        const distributed::MeshCoordinate& coord,
+        const tt::tt_fabric::FabricNodeId& src_node,
+        const tt::tt_fabric::FabricNodeId& dst_node,
+        uint32_t link_index,
+        CoreCoord eth_core,
+        const CommonPlan& common,
+        bool lease_upstream) {
+        std::lock_guard lock(mutex_);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
+        const Key key{device->id(), eth_core};
+        const size_t full_buf_bytes =
+            tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() + common.fabric_max_payload_size;
+
+        if (auto it = muxes_.find(key); it != muxes_.end()) {
+            if (auto existing = it->second.lock()) {
+                TT_FATAL(
+                    existing->lease_upstream == lease_upstream && existing->full_buf_bytes == full_buf_bytes,
+                    "D2DStreamService mux at coord {} (eth {}): incompatible lease_upstream/payload size on reuse",
+                    coord,
+                    eth_core);
+                return existing;
+            }
+        }
+
+        auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
+        const auto claimable = svc.get_claimable_cores(device);
+        TT_FATAL(
+            !claimable.empty(),
+            "D2DStreamService {} mux at coord {} (eth {}): no free dispatch-column service cores",
+            lease_upstream ? "in-stage" : "cable",
+            coord,
+            eth_core);
+        const CoreCoord mux_core = claimable.back();
+
+        auto inst = std::make_shared<D2DMuxInstance>();
+        inst->mesh_device = mesh;
+        inst->coord = coord;
+        inst->src_node = src_node;
+        inst->dst_node = dst_node;
+        inst->link_index = link_index;
+        inst->eth_core = eth_core;
+        inst->mux_logical_core = mux_core;
+        inst->mux_virtual_core = device->worker_core_from_logical_core(mux_core);
+        inst->full_buf_bytes = full_buf_bytes;
+        inst->lease_upstream = lease_upstream;
+
+        svc.claim(device, {mux_core});
+        inst->core_claimed = true;
+
+        const tt::tt_fabric::FabricMuxConfig sizing_cfg(
+            *mesh,
+            /*num_full_size_channels=*/kMuxChannelsPerType,
+            /*num_header_only_channels=*/kMuxChannelsPerType,
+            kMuxBuffersPerChannel,
+            kMuxBuffersPerChannel,
+            full_buf_bytes,
+            /*base_l1_address=*/0,
+            tt::CoreType::WORKER);
+        const size_t map_bytes =
+            tt::align(sizing_cfg.get_memory_map_end_address(), static_cast<size_t>(common.l1_alignment));
+
+        inst->mux_l1_base = svc.allocate_l1(device, mux_core, map_bytes);
+        inst->l1_allocated = true;
+
+        std::vector<uint32_t> zero(map_bytes / sizeof(uint32_t), 0u);
+        tt::tt_metal::detail::WriteToDeviceL1(device, mux_core, static_cast<uint32_t>(inst->mux_l1_base), zero);
+
+        inst->config.emplace(
+            *mesh,
+            /*num_full_size_channels=*/kMuxChannelsPerType,
+            /*num_header_only_channels=*/kMuxChannelsPerType,
+            kMuxBuffersPerChannel,
+            kMuxBuffersPerChannel,
+            full_buf_bytes,
+            static_cast<size_t>(inst->mux_l1_base),
+            tt::CoreType::WORKER);
+
+        auto program = CreateProgram();
+        auto mux_kernel = CreateKernel(
+            program,
+            "ttnn/core/tensor/kernels/d2d_fabric_mux.cpp",
+            mux_core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = inst->config->get_fabric_mux_compile_time_args_for_relay_mux(),
+                .named_compile_args = {{"lease_upstream_edm", lease_upstream ? 1u : 0u}},
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+        const auto mux_rt =
+            inst->config->get_fabric_mux_run_time_args(*mesh, src_node, dst_node, link_index, program, mux_core);
+        SetRuntimeArgs(program, mux_kernel, mux_core, mux_rt);
+
+        inst->workload = std::make_unique<distributed::MeshWorkload>();
+        inst->workload->add_program(distributed::MeshCoordinateRange(coord), std::move(program));
+
+        fabric_link_registry().set_mux_alive(src_node, eth_core, true);
+        EnqueueMeshWorkload(mesh->mesh_command_queue(), *inst->workload, /*blocking=*/false);
+        inst->launched = true;
+
+        log_info(
+            tt::LogMetal,
+            "D2DStreamService {} mux: launched on coord {} logical core {} (virtual {}) -> eth {} (link {}, {} -> {})",
+            lease_upstream ? "in-stage" : "cable",
+            coord,
+            mux_core,
+            inst->mux_virtual_core,
+            eth_core,
+            link_index,
+            src_node,
+            dst_node);
+
+        muxes_[key] = inst;
+        return inst;
+    }
+
+private:
+    using Key = std::pair<tt::ChipId, CoreCoord>;
+    std::mutex mutex_;
+    std::map<Key, std::weak_ptr<D2DMuxInstance>> muxes_;
+};
+
+D2DMuxRegistry& d2d_mux_registry() {
+    static ttsl::Indestructible<D2DMuxRegistry> registry;
+    return registry.get();
+}
 
 // A lease group lets services share routers because their caller takes turns between
 // them; in OWN mode a service holds its connection for life, so no turn ever ends.
@@ -734,7 +1068,8 @@ std::vector<uint32_t> claim_forwarding_links(
     D2DServiceRole service_role,
     const std::string& group,
     FabricLinkClaims& claims,
-    uint32_t keep_free = 0) {
+    uint32_t keep_free = 0,
+    bool allow_empty = false) {
     const char* role = role_name(service_role);
     const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh, src, dst);
     TT_FATAL(!links.empty(), "D2DStreamService: no fabric link from the {} at coord {} toward its peer", role, coord);
@@ -771,18 +1106,20 @@ std::vector<uint32_t> claim_forwarding_links(
         }
         claimed.push_back(link);
     }
-    TT_FATAL(
-        !claimed.empty(),
-        "D2DStreamService: the {} at coord {} has no free fabric router toward its peer: every forwarding "
-        "link from {} toward {} is held by another D2D service on {} ({}). A router's worker channel "
-        "serves one worker, so the two services cannot share one. Create a chip's D2D receivers before its "
-        "senders, so a sender's lanes are chosen around the receiver's link.",
-        role,
-        coord,
-        src,
-        dst,
-        src,
-        taken);
+    if (!allow_empty) {
+        TT_FATAL(
+            !claimed.empty(),
+            "D2DStreamService: the {} at coord {} has no free fabric router toward its peer: every forwarding "
+            "link from {} toward {} is held by another D2D service on {} ({}). A router's worker channel "
+            "serves one worker, so the two services cannot share one. Create a chip's D2D receivers before its "
+            "senders, so a sender's lanes are chosen around the receiver's link.",
+            role,
+            coord,
+            src,
+            dst,
+            src,
+            taken);
+    }
     const size_t wanted = std::min<size_t>(links.size(), max_links);
     if (claimed.size() < wanted) {
         log_warning(
@@ -913,7 +1250,15 @@ RelayPlan make_relay_plan(
 
     // 1. Find every direct link between the two meshes, as (exit coord, entry coord) pairs seen from this side's
     //    chips. Two links between the same two chips give one pair: one cable, whose links become its lanes.
-    std::set<std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate>> candidates;
+    //    Sort canonically by the undirected FabricNodeId pair {min(node_a, node_b), max(node_a, node_b)} so
+    //    opposite-direction streams (A -> B and B -> A) visit candidates in the exact same order and choose
+    //    the identical cable chip pairs even if a chip connects diagonally to multiple peer chips.
+    using CanonicalKey = std::tuple<
+        tt::tt_fabric::FabricNodeId,
+        tt::tt_fabric::FabricNodeId,
+        distributed::MeshCoordinate,
+        distributed::MeshCoordinate>;
+    std::set<CanonicalKey> candidates;
     for (const auto& c : coords) {
         const auto node = local_nodes.at(c);
         for (const auto dir :
@@ -929,7 +1274,13 @@ RelayPlan make_relay_plan(
                     std::find(it->second.begin(), it->second.end(), peer_node.chip_id) == it->second.end()) {
                     continue;
                 }
-                candidates.emplace(is_sender ? c : peer_coord, is_sender ? peer_coord : c);
+                const auto exit_coord = is_sender ? c : peer_coord;
+                const auto entry_coord = is_sender ? peer_coord : c;
+                const auto& s_node = sender_nodes.at(exit_coord);
+                const auto& r_node = receiver_nodes.at(entry_coord);
+                const auto lo_node = s_node < r_node ? s_node : r_node;
+                const auto hi_node = s_node < r_node ? r_node : s_node;
+                candidates.emplace(lo_node, hi_node, exit_coord, entry_coord);
             }
         }
     }
@@ -940,7 +1291,7 @@ RelayPlan make_relay_plan(
     RelayPlan plan;
     std::set<distributed::MeshCoordinate> exits;
     std::set<distributed::MeshCoordinate> entries;
-    for (const auto& [exit_coord, entry_coord] : candidates) {
+    for (const auto& [lo_node, hi_node, exit_coord, entry_coord] : candidates) {
         if (exits.contains(exit_coord) || entries.contains(entry_coord) ||
             (entries.contains(exit_coord) && exit_coord != entry_coord) ||
             (exits.contains(entry_coord) && exit_coord != entry_coord)) {
@@ -1013,7 +1364,7 @@ RelayPlan make_relay_plan(
 // This side's relay state: the plan, the staging tensors (one per segment in each of max_slots slots, the same
 // address on every chip) and, per cable, the relay words on this side's relay core.
 struct RelayCableWords {
-    DeviceAddr arrived_base = 0;  // [slot], word_stride apart
+    DeviceAddr arrived_base = 0;  // [2 * slot + lane], word_stride apart
     DeviceAddr acked_base = 0;    // exit: cable_acked[slot]; entry: recv_acked[slot]
     DeviceAddr md_base = 0;       // [slot], metadata_span apart (0 = no metadata)
     DeviceAddr go_slot_addr = 0;
@@ -1024,18 +1375,32 @@ struct RelayCableWords {
 };
 
 struct RelayLocal {
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
     RelayPlan plan;
     std::map<distributed::MeshCoordinate, tt::tt_fabric::FabricNodeId> sender_nodes;
     std::map<distributed::MeshCoordinate, tt::tt_fabric::FabricNodeId> receiver_nodes;
     std::vector<std::vector<Tensor>> staging;  // [slot][segment]
-    std::vector<RelayCableWords> words;  // [cable]
+    std::vector<RelayCableWords> words;        // [cable]
     uint32_t word_stride = 0;
     // Service-core L1 the relay words use; freed by the handle destructor.
     std::vector<std::pair<distributed::MeshCoordinate, DeviceAddr>> l1_allocs;
     // What build_relay_* needs from the config (it runs after finalize_*).
     CommonPlan common;
     uint32_t max_lanes = 0;
-    std::map<distributed::MeshCoordinate, std::vector<DeviceAddr>> receiver_tensor_addrs;  // sender side only, [segment]
+    uint32_t max_cable_lanes = 0;
+    bool cable_mux = false;
+    bool instage_mux = false;
+    uint32_t relay_slices = 1;
+    // Shared mux instances held by this service (cable + in-stage); cleared in handle dtor after wait_done.
+    std::vector<std::shared_ptr<D2DMuxInstance>> mux_refs;
+    std::vector<MuxBinding> cable_mux_bindings;  // [cable], exit lane 0 or entry cable credits
+    std::vector<std::map<tt::tt_fabric::RoutingDirection, MuxBinding>> credit_mux_bindings;   // [cable][dir]
+    std::vector<std::map<tt::tt_fabric::RoutingDirection, MuxBinding>> forward_mux_bindings;  // [cable][dir] (lane 0)
+    std::map<distributed::MeshCoordinate, MuxBinding> source_mux_bindings;                    // [coord] (lane 0)
+    std::map<distributed::MeshCoordinate, MuxBinding> ack_mux_bindings;                       // [coord]
+    std::map<distributed::MeshCoordinate, std::vector<DeviceAddr>>
+        receiver_tensor_addrs;  // sender side only, [segment]
 
     // Fabric links of every relay-mode connection on this side, claimed in FabricLinkRegistry
     // (claim_relay_links) so that no router serves two workers of one chip. A (node, link)
@@ -1053,7 +1418,8 @@ struct RelayLocal {
     // Receiver side, per cable: the entry relay's credit link back over the cable, and its
     // forward lanes per first-hop direction (destination node = the first target that way).
     std::vector<uint32_t> entry_cable_links;
-    std::vector<std::map<tt::tt_fabric::RoutingDirection, std::pair<tt::tt_fabric::FabricNodeId, std::vector<uint32_t>>>>
+    std::vector<
+        std::map<tt::tt_fabric::RoutingDirection, std::pair<tt::tt_fabric::FabricNodeId, std::vector<uint32_t>>>>
         forward_links;
     // Receiver side: lanes from its entry relay to each non-entry coord (its receiver waits for this many).
     std::map<distributed::MeshCoordinate, uint32_t> target_lanes;
@@ -1286,12 +1652,16 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
             }
         }
 
-        // 3. Drop the socket (frees its config buffer), then release the cores.
+        // 3. Drop the socket (frees its config buffer), release the cores, and drop
+        //    any shared cable mux references (the last holder drains and stops the mux).
         impl_->socket.reset();
         if (mesh != nullptr) {
             for (const auto& [coord, core] : impl_->service_cores) {
                 svc.release(tt::tt_metal::internal::get_device(*mesh, coord), {core});
             }
+        }
+        if (impl_->relay) {
+            impl_->relay->mux_refs.clear();
         }
     } catch (const std::exception& e) {
         log_warning(tt::LogOp, "D2DStreamServiceSender: shutdown failed: {}", e.what());
@@ -1318,6 +1688,17 @@ CoreCoord D2DStreamServiceSender::get_service_core(const tt::tt_metal::distribut
 }
 
 uint32_t D2DStreamServiceSender::get_num_lanes(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    if (impl_->relay) {
+        const auto& r = *impl_->relay;
+        auto slot_it = r.plan.slot_of.find(coord);
+        TT_FATAL(
+            slot_it != r.plan.slot_of.end(), "D2DStreamServiceSender::get_num_lanes: no sender at coord {}", coord);
+        const uint32_t cable_idx = slot_it->second.first;
+        if (coord == r.plan.cables[cable_idx].exit_coord) {
+            return static_cast<uint32_t>(r.cable_links.at(cable_idx).size());
+        }
+        return static_cast<uint32_t>(r.source_links.at(coord).size());
+    }
     auto it = impl_->lane_links.find(coord);
     TT_FATAL(it != impl_->lane_links.end(), "D2DStreamServiceSender::get_num_lanes: no sender at coord {}", coord);
     return static_cast<uint32_t>(it->second.size());
@@ -1455,13 +1836,16 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
             }
         }
 
-        // 3. Drop the socket (frees its config + data FIFO buffers), then
-        //    release the cores.
+        // 3. Drop the socket (frees its config + data FIFO buffers), release the
+        //    cores, and drop any shared cable mux references.
         impl_->socket.reset();
         if (mesh != nullptr) {
             for (const auto& [coord, core] : impl_->service_cores) {
                 svc.release(tt::tt_metal::internal::get_device(*mesh, coord), {core});
             }
+        }
+        if (impl_->relay) {
+            impl_->relay->mux_refs.clear();
         }
     } catch (const std::exception& e) {
         log_warning(tt::LogOp, "D2DStreamServiceReceiver: shutdown failed: {}", e.what());
@@ -1647,7 +2031,49 @@ uint32_t packed_slot_bytes(uint32_t max_payload, const std::vector<uint32_t>& pa
     return m;
 }
 
-// CT-arg layout must stay in sync with persistent_d2d_receiver.cpp.
+void append_mux_client_rt_args(const MuxBinding& binding, uint32_t word_stride, std::vector<uint32_t>& rt) {
+    const auto& mux = *binding.mux;
+    const auto& cfg = *mux.config;
+    const auto ch_type = binding.ch_type;
+    const uint8_t ch_idx = binding.ch_idx;
+    const DeviceAddr words = binding.client_words_base;
+    rt.insert(
+        rt.end(),
+        {
+            static_cast<uint32_t>(mux.mux_virtual_core.x),
+            static_cast<uint32_t>(mux.mux_virtual_core.y),
+            static_cast<uint32_t>(cfg.get_channel_credits_stream_id(ch_type, ch_idx)),
+            static_cast<uint32_t>(cfg.get_num_buffers(ch_type)),
+            static_cast<uint32_t>(cfg.get_buffer_size_bytes(ch_type)),
+            static_cast<uint32_t>(cfg.get_channel_base_address(ch_type, ch_idx)),
+            static_cast<uint32_t>(cfg.get_connection_info_address(ch_type, ch_idx)),
+            static_cast<uint32_t>(cfg.get_connection_handshake_address(ch_type, ch_idx)),
+            static_cast<uint32_t>(cfg.get_flow_control_address(ch_type, ch_idx)),
+            static_cast<uint32_t>(cfg.get_buffer_index_address(ch_type, ch_idx)),
+            static_cast<uint32_t>(cfg.get_status_address()),
+            static_cast<uint32_t>(words + (0 * word_stride)),
+            static_cast<uint32_t>(words + (1 * word_stride)),
+            static_cast<uint32_t>(words + (2 * word_stride)),
+            static_cast<uint32_t>(words + (3 * word_stride)),
+        });
+}
+
+void append_connection_rt_args(
+    const distributed::MeshDevice& mesh_device,
+    const tt::tt_fabric::FabricNodeId& src_node,
+    const tt::tt_fabric::FabricNodeId& dst_node,
+    uint32_t link_index,
+    const MuxBinding* mux_binding,
+    uint32_t word_stride,
+    Program& program,
+    const CoreCoord& core,
+    std::vector<uint32_t>& rt) {
+    if (mux_binding != nullptr) {
+        append_mux_client_rt_args(*mux_binding, word_stride, rt);
+    } else {
+        tt::tt_fabric::append_fabric_connection_rt_args(mesh_device, src_node, dst_node, link_index, program, core, rt);
+    }
+}
 Program build_receiver_program(
     const distributed::MeshDevice& mesh_device,
     const Buffer& output_buffer,
@@ -1667,7 +2093,9 @@ Program build_receiver_program(
     uint32_t stage_gate_addr,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const tt::tt_fabric::FabricNodeId& sender_node,
-    uint32_t link_index) {
+    uint32_t link_index,
+    const std::optional<MuxBinding>& mux_binding = std::nullopt,
+    uint32_t word_stride = 0) {
     auto program = CreateProgram();
 
     // One packet header is enough for the receiver (control-flow notify only);
@@ -1724,14 +2152,23 @@ Program build_receiver_program(
                     {"gate_open_value", static_cast<uint32_t>(d2d_stream::GateState::Open)},
                     {"gate_closed_value", static_cast<uint32_t>(d2d_stream::GateState::Closed)},
                     {"gate_close_on_transit_mode", static_cast<uint32_t>(d2d_stream::GateMode::CloseOnTransit)},
+                    {"use_mux", mux_binding.has_value() ? 1u : 0u},
                 },
         });
 
     // The receiver returns socket credits to the sender, so its fabric
     // connection runs receiver -> sender.
     std::vector<uint32_t> rt_args;
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        mesh_device, receiver_node, sender_node, link_index, program, service_core, rt_args);
+    append_connection_rt_args(
+        mesh_device,
+        receiver_node,
+        sender_node,
+        link_index,
+        mux_binding ? &(*mux_binding) : nullptr,
+        word_stride,
+        program,
+        service_core,
+        rt_args);
     SetRuntimeArgs(program, kernel, service_core, rt_args);
     return program;
 }
@@ -1779,7 +2216,11 @@ Program build_sender_program(
     uint32_t num_lanes,
     const tt::tt_fabric::FabricNodeId& sender_node,
     const tt::tt_fabric::FabricNodeId& receiver_node,
-    const std::vector<uint32_t>& link_indices) {
+    const std::vector<uint32_t>& link_indices,
+    const std::optional<MuxBinding>& lane0_mux_binding = std::nullopt,
+    uint32_t word_stride = 0,
+    uint32_t num_slices = 1,
+    bool relay_per_lane_arrived = false) {
     auto program = CreateProgram();
 
     const uint32_t total_pages = plan.num_socket_pages * plan.pages_per_chunk;
@@ -1864,6 +2305,8 @@ Program build_sender_program(
             TensorAccessorArgs(*extra_segments.front().input_buffer).append_to(ct_args);
         }
 
+        const bool use_mux_this_lane = (lane == 0) && lane0_mux_binding.has_value();
+        const uint32_t recv_inc_offset = (relay_per_lane_arrived && lane == 1) ? word_stride : 0u;
         auto kernel = CreateKernel(
             program,
             "ttnn/core/tensor/kernels/persistent_d2d_sender.cpp",
@@ -1875,7 +2318,10 @@ Program build_sender_program(
                 .named_compile_args =
                     {{"terminate_value", kTerminateValue},
                      {"num_extra_segments", static_cast<uint32_t>(extra_segments.size())},
-                     {"slot_bytes", slot_bytes}},
+                     {"slot_bytes", slot_bytes},
+                     {"use_mux", use_mux_this_lane ? 1u : 0u},
+                     {"num_slices", num_slices},
+                     {"recv_inc_offset", recv_inc_offset}},
             });
 
         // The sender writes bulk data downstream, so its fabric connection runs
@@ -1883,8 +2329,16 @@ Program build_sender_program(
         // first (the kernel's build_from_args consumes them), followed by the per-coord
         // receiver backing tensor base address (the direct fabric-write destination).
         std::vector<uint32_t> rt_args;
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            mesh_device, sender_node, receiver_node, link_indices[lane], program, service_core, rt_args);
+        append_connection_rt_args(
+            mesh_device,
+            sender_node,
+            receiver_node,
+            link_indices[lane],
+            use_mux_this_lane ? &(*lane0_mux_binding) : nullptr,
+            word_stride,
+            program,
+            service_core,
+            rt_args);
         rt_args.push_back(receiver_tensor_addr);
         for (const auto& seg : extra_segments) {
             rt_args.push_back(seg.receiver_addr);
@@ -1957,6 +2411,23 @@ std::unique_ptr<distributed::MeshWorkload> build_lease_workload(
 // finalize_receiver, which then assemble the handle Impl. They take the socket +
 // service cores by const ref (finalize_* moves them into the Impl afterwards).
 
+uint32_t effective_cable_lanes(const D2DStreamConfig& cfg) {
+    const uint32_t lanes = cfg.max_cable_lanes.value_or(cfg.max_sender_lanes);
+    TT_FATAL(lanes >= 1, "D2DStreamService: max_cable_lanes must be >= 1");
+    return std::min<uint32_t>(lanes, 2u);
+}
+
+DeviceAddr alloc_relay_l1_zeroed(RelayLocal& relay, const distributed::MeshCoordinate& coord, uint32_t bytes) {
+    auto* device = tt::tt_metal::internal::get_device(*relay.mesh_device, coord);
+    const CoreCoord core = relay.service_cores.at(coord);
+    auto& svc = tt::tt_metal::internal::service_core_manager(*relay.mesh_device);
+    const DeviceAddr addr = svc.allocate_l1(device, core, bytes);
+    std::vector<uint32_t> zero(bytes / sizeof(uint32_t), 0u);
+    tt::tt_metal::detail::WriteToDeviceL1(device, core, static_cast<uint32_t>(addr), zero);
+    relay.l1_allocs.emplace_back(coord, addr);
+    return addr;
+}
+
 // Relay mode, both sides: build the plan and allocate this side's relay state. Called by
 // build_*_side after the socket region is reserved, so the words cannot alias it.
 std::shared_ptr<RelayLocal> allocate_relay(
@@ -1976,6 +2447,8 @@ std::shared_ptr<RelayLocal> allocate_relay(
         "D2DStreamService relay: needs a 2D fabric (the relays route by chip id)");
 
     auto relay = std::make_shared<RelayLocal>();
+    relay->mesh_device = mesh;
+    relay->service_cores = service_cores;
     for (const auto& c : coords) {
         relay->sender_nodes.emplace(
             c,
@@ -1989,6 +2462,13 @@ std::shared_ptr<RelayLocal> allocate_relay(
     relay->plan = make_relay_plan(*mesh, coords, relay->sender_nodes, relay->receiver_nodes, is_sender);
     relay->common = common;
     relay->max_lanes = cfg.max_sender_lanes;
+    relay->max_cable_lanes = effective_cable_lanes(cfg);
+    relay->cable_mux = cfg.cable_mux;
+    relay->instage_mux = cfg.instage_mux;
+    const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
+    const uint32_t max_slices = std::min(256u, std::max(1u, total_pages / 2u));
+    TT_FATAL(cfg.relay_slices >= 1, "D2DStreamService: relay_slices must be >= 1, got {}", cfg.relay_slices);
+    relay->relay_slices = std::min(cfg.relay_slices, max_slices);
     relay->word_stride = common.l1_alignment;
 
     for (uint32_t k = 0; k < relay->plan.max_slots; ++k) {
@@ -1998,26 +2478,17 @@ std::shared_ptr<RelayLocal> allocate_relay(
         }
     }
 
-    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
     for (const auto& cable : relay->plan.cables) {
         const auto coord = is_sender ? cable.exit_coord : cable.entry_coord;
-        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
-        const CoreCoord core = service_cores.at(coord);
-        auto alloc = [&](uint32_t bytes) {
-            const DeviceAddr addr = svc.allocate_l1(device, core, bytes);
-            std::vector<uint32_t> zero(bytes / sizeof(uint32_t), 0u);
-            tt::tt_metal::detail::WriteToDeviceL1(device, core, static_cast<uint32_t>(addr), zero);
-            relay->l1_allocs.emplace_back(coord, addr);
-            return addr;
-        };
         const auto num_slots = static_cast<uint32_t>(cable.slots.size());
         RelayCableWords words;
-        words.arrived_base = alloc(num_slots * relay->word_stride);
-        words.acked_base = alloc(num_slots * relay->word_stride);
-        words.go_slot_addr = alloc(relay->word_stride);
-        words.go_count_addr = alloc(relay->word_stride);
-        words.done_count_addr = alloc(relay->word_stride);
-        words.md_base = common.metadata_enabled ? alloc(num_slots * common.metadata_span_bytes) : 0;
+        words.arrived_base = alloc_relay_l1_zeroed(*relay, coord, 2 * num_slots * relay->word_stride);
+        words.acked_base = alloc_relay_l1_zeroed(*relay, coord, num_slots * relay->word_stride);
+        words.go_slot_addr = alloc_relay_l1_zeroed(*relay, coord, relay->word_stride);
+        words.go_count_addr = alloc_relay_l1_zeroed(*relay, coord, relay->word_stride);
+        words.done_count_addr = alloc_relay_l1_zeroed(*relay, coord, relay->word_stride);
+        words.md_base =
+            common.metadata_enabled ? alloc_relay_l1_zeroed(*relay, coord, num_slots * common.metadata_span_bytes) : 0;
         relay->words.push_back(words);
     }
     return relay;
@@ -2070,6 +2541,9 @@ SenderSideResources build_sender_side(
     // forwarding links no other D2D service on the chip holds. Relay mode claims its
     // relay connections in claim_relay_links instead.
     TT_FATAL(cfg.max_sender_lanes >= 1, "D2DStreamService: max_sender_lanes must be >= 1");
+    TT_FATAL(
+        (!cfg.cable_mux && !cfg.instage_mux) || cfg.relay,
+        "D2DStreamService: cable_mux / instage_mux require relay mode");
     validate_fabric_link_group(cfg);
     LaneLinks lane_links_per_coord;
     const std::vector<distributed::MeshCoordinate> no_claim_coords;
@@ -2260,6 +2734,9 @@ ReceiverSideResources build_receiver_side(
     // Choose each coord's credit-return router first, before any allocation: one
     // forwarding link toward the sender that no other D2D service on the chip holds.
     // Relay mode claims its relay connections in claim_relay_links instead.
+    TT_FATAL(
+        (!cfg.cable_mux && !cfg.instage_mux) || cfg.relay,
+        "D2DStreamService: cable_mux / instage_mux require relay mode");
     validate_fabric_link_group(cfg);
     std::map<distributed::MeshCoordinate, uint32_t> ack_link_per_coord;
     const std::vector<distributed::MeshCoordinate> no_claim_coords;
@@ -2333,7 +2810,8 @@ ReceiverSideResources build_receiver_side(
     // Relay mode: allocate the relay state; build_relay_receiver builds the programs later.
     std::shared_ptr<RelayLocal> relay;
     if (cfg.relay) {
-        relay = allocate_relay(mesh, receiver_socket, service_cores, backings, coords, common, cfg, /*is_sender=*/false);
+        relay =
+            allocate_relay(mesh, receiver_socket, service_cores, backings, coords, common, cfg, /*is_sender=*/false);
         claim_relay_links(*mesh, *relay, cfg, /*is_sender=*/false, link_claims);
     }
     const std::vector<distributed::MeshCoordinate> no_coords;
@@ -2477,7 +2955,9 @@ bool relay_entry_two_lanes_fit(const distributed::MeshDevice& mesh, const RelayL
             dirs[lane].insert(*dir);
         }
     }
-    return 2 * (1 + dirs[0].size() + dirs[1].size()) <= kSemaphoresPerCore;
+    const size_t z_sems = relay.cable_mux ? 0u : 1u;
+    const size_t dir0_sems = relay.instage_mux ? 0u : dirs[0].size();
+    return 2 * (z_sems + dir0_sems + dirs[1].size()) <= kSemaphoresPerCore;
 }
 
 // Lanes from the entry relay to target `t` (claim_relay_links). The receiver at `t` waits for this many increments.
@@ -2490,16 +2970,125 @@ uint32_t relay_cable_lanes(const RelayLocal& relay, uint32_t p) {
     return static_cast<uint32_t>(relay.cable_links.at(p).size());
 }
 
-// Every connection a relay-mode service makes, claimed in FabricLinkRegistry like the
-// non-relay services' (claim_forwarding_links), so that two workers of one chip never share
-// a router: a router's worker channel serves one worker, and the other one waits forever
-// for a free slot. On a middle rank of a chain, the pairs at risk are the entry relay's
-// forward lanes and the exit relay's credit connections, and a plain receiver's credit link
-// and a plain sender's lanes. A chip's receiver-side service is created
-// before its sender-side one, so when a sender side follows (reserve_links_for_later_service),
-// receiver-side optional second lanes leave one link of their direction free for the sender
-// side's single-link connections; the sender side, created last, claims what is left. A connection that needs one link and finds none fails here,
-// before anything is built, naming the service that holds each router.
+MuxBinding claim_mux_binding(
+    const distributed::MeshDevice& mesh,
+    RelayLocal& relay,
+    const distributed::MeshCoordinate& coord,
+    const tt::tt_fabric::FabricNodeId& src_node,
+    const tt::tt_fabric::FabricNodeId& dst_node,
+    uint32_t mux_link,
+    D2DMuxSlot slot,
+    bool lease_upstream,
+    const std::string& holder,
+    FabricLinkClaims& claims) {
+    const CoreCoord mux_eth = tt::tt_fabric::get_forwarding_eth_core(mesh, src_node, dst_node, mux_link);
+    uint8_t ch_idx = 0;
+    if (auto other = claims.try_claim_mux_slot(src_node, mux_eth, slot, holder, ch_idx)) {
+        TT_FATAL(
+            false,
+            "D2DStreamService mux ({}): {} at coord {} cannot claim link {} (eth {}) on {}: already held by {}",
+            lease_upstream ? "in-stage" : "cable",
+            holder,
+            coord,
+            mux_link,
+            mux_eth,
+            src_node,
+            *other);
+    }
+    auto inst = d2d_mux_registry().acquire(
+        relay.mesh_device, coord, src_node, dst_node, mux_link, mux_eth, relay.common, lease_upstream);
+    const D2DMuxInstance* raw_mux = inst.get();
+    relay.mux_refs.push_back(std::move(inst));
+    const DeviceAddr words_base = alloc_relay_l1_zeroed(relay, coord, 4 * relay.word_stride);
+    const auto ch_type = (slot == D2DMuxSlot::FullSize) ? tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL
+                                                        : tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL;
+    return MuxBinding{.mux = raw_mux, .ch_type = ch_type, .ch_idx = ch_idx, .client_words_base = words_base};
+}
+
+// Claim a 1-link header-only/credit connection: either a HeaderOnly slot on link 0's mux
+// (`out_mux` populated) or 1 direct router claim.
+uint32_t claim_single_link_maybe_mux(
+    const distributed::MeshDevice& mesh,
+    RelayLocal& relay,
+    const distributed::MeshCoordinate& coord,
+    const tt::tt_fabric::FabricNodeId& src_node,
+    const tt::tt_fabric::FabricNodeId& dst_node,
+    bool use_mux,
+    bool lease_upstream,
+    D2DServiceRole direct_role,
+    const std::string& mux_holder,
+    const std::string& group,
+    FabricLinkClaims& claims,
+    MuxBinding* out_mux) {
+    if (!use_mux) {
+        return claim_forwarding_links(mesh, coord, src_node, dst_node, 1, direct_role, group, claims).front();
+    }
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh, src_node, dst_node);
+    TT_FATAL(!links.empty(), "D2DStreamService mux: no fabric link at coord {} ({} -> {})", coord, src_node, dst_node);
+    const uint32_t mux_link = links.front();
+    *out_mux = claim_mux_binding(
+        mesh, relay, coord, src_node, dst_node, mux_link, D2DMuxSlot::HeaderOnly, lease_upstream, mux_holder, claims);
+    return mux_link;
+}
+
+// Claim up to `want_lanes` full-size data lanes: when `use_mux` is true, lane 0 takes a FullSize
+// slot on link 0's mux (`out_mux` populated) and any second lane takes a free direct router if
+// available (degrading cleanly to 1 muxed lane when `require_all_lanes == false` and link 1 is
+// already held, e.g. on middle PP stages); otherwise claims up to `want_lanes` direct routers.
+std::vector<uint32_t> claim_lanes_maybe_mux(
+    const distributed::MeshDevice& mesh,
+    RelayLocal& relay,
+    const distributed::MeshCoordinate& coord,
+    const tt::tt_fabric::FabricNodeId& src_node,
+    const tt::tt_fabric::FabricNodeId& dst_node,
+    uint32_t want_lanes,
+    bool require_all_lanes,
+    bool use_mux,
+    bool lease_upstream,
+    D2DServiceRole direct_role,
+    const std::string& mux_holder,
+    const std::string& group,
+    uint32_t keep_free_when_direct,
+    FabricLinkClaims& claims,
+    MuxBinding* out_mux) {
+    if (!use_mux) {
+        return claim_forwarding_links(
+            mesh, coord, src_node, dst_node, want_lanes, direct_role, group, claims, keep_free_when_direct);
+    }
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh, src_node, dst_node);
+    TT_FATAL(!links.empty(), "D2DStreamService mux: no fabric link at coord {} ({} -> {})", coord, src_node, dst_node);
+    if (require_all_lanes) {
+        TT_FATAL(
+            links.size() >= want_lanes,
+            "D2DStreamService mux: coord {} ({} -> {}) needs {} links, found {}",
+            coord,
+            src_node,
+            dst_node,
+            want_lanes,
+            links.size());
+    }
+    const uint32_t capped = std::min<uint32_t>({want_lanes, static_cast<uint32_t>(links.size()), 2u});
+    const uint32_t mux_link = links.front();
+    *out_mux = claim_mux_binding(
+        mesh, relay, coord, src_node, dst_node, mux_link, D2DMuxSlot::FullSize, lease_upstream, mux_holder, claims);
+    std::vector<uint32_t> chosen = {mux_link};
+    if (capped > 1) {
+        const auto direct = claim_forwarding_links(
+            mesh,
+            coord,
+            src_node,
+            dst_node,
+            capped - 1,
+            direct_role,
+            group,
+            claims,
+            /*keep_free=*/0u,
+            /*allow_empty=*/!require_all_lanes);
+        chosen.insert(chosen.end(), direct.begin(), direct.end());
+    }
+    return chosen;
+}
+
 void claim_relay_links(
     const distributed::MeshDevice& mesh,
     RelayLocal& relay,
@@ -2512,8 +3101,12 @@ void claim_relay_links(
     if (is_sender) {
         relay.cable_links.assign(ncables, {});
         relay.credit_links.assign(ncables, {});
-        // Exit relays first: each needs one credit connection per direction toward its sources, then its cable
-        // lanes; plain senders' lanes (up to max_lanes) take what the exit chips do not need.
+        if (relay.cable_mux) {
+            relay.cable_mux_bindings.resize(ncables);
+        }
+        if (relay.instage_mux) {
+            relay.credit_mux_bindings.resize(ncables);
+        }
         for (uint32_t p = 0; p < ncables; ++p) {
             const auto& cable = plan.cables[p];
             const auto e = cable.exit_coord;
@@ -2529,57 +3122,100 @@ void claim_relay_links(
                 if (relay.credit_links[p].contains(*dir)) {
                     continue;
                 }
-                const auto link = claim_forwarding_links(
-                    mesh, e, exit_node, src_node, 1, D2DServiceRole::ExitRelayCredit, group, claims);
-                relay.credit_links[p].emplace(*dir, RelayLocal::NodeLink{src_node, link.front()});
+                MuxBinding mux_b;
+                const uint32_t link = claim_single_link_maybe_mux(
+                    mesh,
+                    relay,
+                    e,
+                    exit_node,
+                    src_node,
+                    relay.instage_mux,
+                    /*lease_upstream=*/true,
+                    D2DServiceRole::ExitRelayCredit,
+                    fmt::format("D2D exit relay (in-stage credit) at coord {} ({} -> {})", e, exit_node, src_node),
+                    group,
+                    claims,
+                    &mux_b);
+                if (relay.instage_mux) {
+                    relay.credit_mux_bindings[p].emplace(*dir, std::move(mux_b));
+                }
+                relay.credit_links[p].emplace(*dir, RelayLocal::NodeLink{src_node, link});
             }
-            relay.cable_links[p] = claim_forwarding_links(
+            relay.cable_links[p] = claim_lanes_maybe_mux(
                 mesh,
+                relay,
                 e,
                 exit_node,
                 entry_node,
-                std::min<uint32_t>(relay.max_lanes, 2u),
+                relay.max_cable_lanes,
+                /*require_all_lanes=*/relay.cable_mux,
+                relay.cable_mux,
+                /*lease_upstream=*/false,
                 D2DServiceRole::ExitRelayCable,
+                fmt::format("D2D exit relay (cable mux full) at coord {} ({} -> {})", e, exit_node, entry_node),
                 group,
-                claims);
+                /*keep_free_when_direct=*/0u,
+                claims,
+                relay.cable_mux ? &relay.cable_mux_bindings[p] : nullptr);
         }
         for (const auto& [c, pk] : plan.slot_of) {
             const auto& cable = plan.cables[pk.first];
             if (c == cable.exit_coord) {
                 continue;
             }
-            relay.source_links[c] = claim_forwarding_links(
+            const auto src_node = relay.sender_nodes.at(c);
+            const auto exit_node = relay.sender_nodes.at(cable.exit_coord);
+            MuxBinding mux_b;
+            relay.source_links[c] = claim_lanes_maybe_mux(
                 mesh,
+                relay,
                 c,
-                relay.sender_nodes.at(c),
-                relay.sender_nodes.at(cable.exit_coord),
+                src_node,
+                exit_node,
                 relay.max_lanes,
+                /*require_all_lanes=*/false,
+                relay.instage_mux,
+                /*lease_upstream=*/true,
                 D2DServiceRole::Sender,
+                fmt::format("D2D sender (in-stage mux lane 0) at coord {} ({} -> {})", c, src_node, exit_node),
                 group,
-                claims);
+                /*keep_free_when_direct=*/0u,
+                claims,
+                &mux_b);
+            if (relay.instage_mux) {
+                relay.source_mux_bindings.emplace(c, std::move(mux_b));
+            }
         }
         return;
     }
 
     relay.entry_cable_links.assign(ncables, 0);
     relay.forward_links.assign(ncables, {});
+    if (relay.cable_mux) {
+        relay.cable_mux_bindings.resize(ncables);
+    }
+    if (relay.instage_mux) {
+        relay.forward_mux_bindings.resize(ncables);
+    }
     for (uint32_t p = 0; p < ncables; ++p) {
         const auto& cable = plan.cables[p];
         const auto e = cable.entry_coord;
         const auto entry_node = relay.receiver_nodes.at(e);
-        relay.entry_cable_links[p] = claim_forwarding_links(
+        const auto exit_node = relay.sender_nodes.at(cable.exit_coord);
+        relay.entry_cable_links[p] = claim_single_link_maybe_mux(
             mesh,
+            relay,
             e,
             entry_node,
-            relay.sender_nodes.at(cable.exit_coord),
-            1,
+            exit_node,
+            relay.cable_mux,
+            /*lease_upstream=*/false,
             D2DServiceRole::EntryRelayCable,
+            fmt::format("D2D entry relay (cable mux credits) at coord {} ({} -> {})", e, entry_node, exit_node),
             group,
-            claims)
-                                         .front();
-        // Forward lanes per direction: the most any target that way can use (one each if two lanes would not fit
-        // the core's semaphores). When a later service on this chip needs a router
-        // (reserve_links_for_later_service), a second lane only while another link of that direction stays free.
+            claims,
+            relay.cable_mux ? &relay.cable_mux_bindings[p] : nullptr);
+
         const bool two_fit = relay_entry_two_lanes_fit(mesh, relay, p);
         std::map<tt::tt_fabric::RoutingDirection, std::pair<tt::tt_fabric::FabricNodeId, uint32_t>> want;
         for (const auto& t : cable.slots) {
@@ -2594,26 +3230,34 @@ void claim_relay_links(
             it->second.second = std::max(it->second.second, lanes);
         }
         for (const auto& [dir, w] : want) {
-            relay.forward_links[p].emplace(
-                dir,
-                std::make_pair(
-                    w.first,
-                    claim_forwarding_links(
-                        mesh,
-                        e,
-                        entry_node,
-                        w.first,
-                        w.second,
-                        D2DServiceRole::EntryRelayForward,
-                        group,
-                        claims,
-                        /*keep_free=*/cfg.reserve_links_for_later_service ? 1u : 0u)));
+            MuxBinding mux_b;
+            auto chosen = claim_lanes_maybe_mux(
+                mesh,
+                relay,
+                e,
+                entry_node,
+                w.first,
+                w.second,
+                /*require_all_lanes=*/false,
+                relay.instage_mux,
+                /*lease_upstream=*/true,
+                D2DServiceRole::EntryRelayForward,
+                fmt::format("D2D entry relay (in-stage forward lane 0) at coord {} ({} -> {})", e, entry_node, w.first),
+                group,
+                /*keep_free_when_direct=*/cfg.reserve_links_for_later_service ? 1u : 0u,
+                claims,
+                &mux_b);
+            if (relay.instage_mux) {
+                relay.forward_mux_bindings[p].emplace(dir, std::move(mux_b));
+            }
+            relay.forward_links[p].emplace(dir, std::make_pair(w.first, std::move(chosen)));
         }
         for (const auto& t : cable.slots) {
             if (t == e) {
                 continue;
             }
-            const auto dir = *tt::tt_fabric::pipeline_get_forwarding_direction(mesh, entry_node, relay.receiver_nodes.at(t));
+            const auto dir =
+                *tt::tt_fabric::pipeline_get_forwarding_direction(mesh, entry_node, relay.receiver_nodes.at(t));
             const uint32_t lanes = two_fit ? relay_target_link_lanes(mesh, relay, t, p) : 1u;
             relay.target_lanes[t] =
                 std::min<uint32_t>(lanes, static_cast<uint32_t>(relay.forward_links[p].at(dir).second.size()));
@@ -2624,16 +3268,25 @@ void claim_relay_links(
         if (c == cable.entry_coord) {
             continue;
         }
-        relay.ack_links[c] = claim_forwarding_links(
-                                 mesh,
-                                 c,
-                                 relay.receiver_nodes.at(c),
-                                 relay.receiver_nodes.at(cable.entry_coord),
-                                 1,
-                                 D2DServiceRole::Receiver,
-                                 group,
-                                 claims)
-                                 .front();
+        const auto t_node = relay.receiver_nodes.at(c);
+        const auto entry_node = relay.receiver_nodes.at(cable.entry_coord);
+        MuxBinding mux_b;
+        relay.ack_links[c] = claim_single_link_maybe_mux(
+            mesh,
+            relay,
+            c,
+            t_node,
+            entry_node,
+            relay.instage_mux,
+            /*lease_upstream=*/true,
+            D2DServiceRole::Receiver,
+            fmt::format("D2D receiver (in-stage ack) at coord {} ({} -> {})", c, t_node, entry_node),
+            group,
+            claims,
+            &mux_b);
+        if (relay.instage_mux) {
+            relay.ack_mux_bindings.emplace(c, std::move(mux_b));
+        }
     }
 }
 
@@ -2962,6 +3615,7 @@ Program build_exit_relay_program(
 
     // Credit connections: one per first-hop direction toward the remote sources.
     std::vector<std::pair<tt::tt_fabric::FabricNodeId, uint32_t>> credit_conns;  // (a node that way, link)
+    std::vector<tt::tt_fabric::RoutingDirection> credit_dirs;
     std::map<tt::tt_fabric::RoutingDirection, uint32_t> conn_of_dir;
     std::vector<uint32_t> credit_conn(num_slots, 0);
     for (uint32_t k = 0; k < num_slots; ++k) {
@@ -2975,6 +3629,7 @@ Program build_exit_relay_program(
         const auto [it, added] = conn_of_dir.emplace(*dir, static_cast<uint32_t>(credit_conns.size()));
         if (added) {
             credit_conns.push_back(relay.credit_links.at(p).at(*dir));  // claimed (claim_relay_links)
+            credit_dirs.push_back(*dir);
         }
         credit_conn[k] = it->second;
     }
@@ -2985,7 +3640,6 @@ Program build_exit_relay_program(
     create_relay_cbs(program, core, max_page_size, backing.dtype());
     const auto compile_args = relay_compile_args(common, backings, e);
     const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
-    const uint32_t half = (total_pages + 1) / 2;
     const uint32_t acked_addr = sender_bytes_acked_addr(socket_config_addr, common.l1_alignment);
 
     for (uint32_t lane = 0; lane < z_lanes; ++lane) {
@@ -2996,14 +3650,16 @@ Program build_exit_relay_program(
             {"link_grant_addr", own.link_grant_addr},
             {"is_master", master ? 1u : 0u},
             {"z_lanes", z_lanes},
+            {"z_mux", (relay.cable_mux && master) ? 1u : 0u},
+            {"credit_mux", (relay.instage_mux && master && !credit_conns.empty()) ? 1u : 0u},
             {"num_slots", num_slots},
             {"own_slot", own_slot},
             {"page_size", common.tensor_page_size},
             {"max_page_size", max_page_size},
             {"num_extra_segments", num_extra},
             {"max_payload", common.fabric_max_payload_size},
-            {"page_start", master ? 0u : half},
-            {"page_end", (master && z_lanes > 1) ? half : total_pages},
+            {"total_pages", total_pages},
+            {"num_slices", relay.relay_slices},
             {"ring_slots", kSenderReadRingSlots},
             {"scratch_cb", static_cast<uint32_t>(tt::CBIndex::c_0)},
             {"header_cb", static_cast<uint32_t>(kPacketHeaderCbIndex)},
@@ -3046,10 +3702,29 @@ Program build_exit_relay_program(
         // RT args: the cable connection on this lane's link, the credit connections
         // (master only), then the per-slot words, extra segments' (src, dst) pairs last.
         std::vector<uint32_t> rt;
-        tt::tt_fabric::append_fabric_connection_rt_args(*mesh, exit_node, entry_node, z_links[lane], program, core, rt);
+        append_connection_rt_args(
+            *mesh,
+            exit_node,
+            entry_node,
+            z_links[lane],
+            (relay.cable_mux && master) ? &relay.cable_mux_bindings.at(p) : nullptr,
+            relay.word_stride,
+            program,
+            core,
+            rt);
         if (master) {
-            for (const auto& [node, link] : credit_conns) {
-                tt::tt_fabric::append_fabric_connection_rt_args(*mesh, exit_node, node, link, program, core, rt);
+            for (size_t ci = 0; ci < credit_conns.size(); ++ci) {
+                const auto& [node, link] = credit_conns[ci];
+                append_connection_rt_args(
+                    *mesh,
+                    exit_node,
+                    node,
+                    link,
+                    relay.instage_mux ? &relay.credit_mux_bindings.at(p).at(credit_dirs[ci]) : nullptr,
+                    relay.word_stride,
+                    program,
+                    core,
+                    rt);
             }
         }
         for (uint32_t k = 0; k < num_slots; ++k) {
@@ -3117,6 +3792,7 @@ Program build_entry_relay_program(
 
     // Per lane: one connection per first-hop direction toward the targets that use that lane.
     std::vector<std::pair<tt::tt_fabric::FabricNodeId, uint32_t>> conns[2];
+    std::vector<tt::tt_fabric::RoutingDirection> conn_dirs[2];
     std::map<tt::tt_fabric::RoutingDirection, uint32_t> conn_of_dir[2];
     std::vector<uint32_t> lanes(num_slots, 1);
     std::vector<uint32_t> conn_idx[2] = {std::vector<uint32_t>(num_slots, 0), std::vector<uint32_t>(num_slots, 0)};
@@ -3141,13 +3817,16 @@ Program build_entry_relay_program(
             const auto [it, added] = conn_of_dir[lane].emplace(*dir, static_cast<uint32_t>(conns[lane].size()));
             if (added) {
                 conns[lane].emplace_back(dir_node, dir_links[lane]);
+                conn_dirs[lane].push_back(*dir);
             }
             conn_idx[lane][k] = it->second;
         }
     }
     const uint32_t num_lanes = conns[1].empty() ? 1 : 2;
+    const size_t z_sems = relay.cable_mux ? 0u : 1u;
+    const size_t dir0_sems = relay.instage_mux ? 0u : conns[0].size();
     TT_FATAL(
-        2 * (1 + conns[0].size() + conns[1].size()) <= kSemaphoresPerCore,
+        2 * (z_sems + dir0_sems + conns[1].size()) <= kSemaphoresPerCore,
         "D2DStreamService relay: the entry relay on coord {} needs more fabric connections than its core has "
         "semaphores for",
         e);
@@ -3162,12 +3841,15 @@ Program build_entry_relay_program(
 
     for (uint32_t lane = 0; lane < num_lanes; ++lane) {
         const bool master = lane == 0;
+        const bool use_dir_mux = relay.instage_mux && master && !conns[lane].empty();
         const std::unordered_map<std::string, uint32_t> named = {
             {"terminate_value", kTerminateValue},
             {"termination_addr", own.termination_addr},
             {"link_grant_addr", own.link_grant_addr},
             {"is_master", master ? 1u : 0u},
             {"z_lanes", z_lanes},
+            {"z_mux", (relay.cable_mux && master) ? 1u : 0u},
+            {"dir_mux", use_dir_mux ? 1u : 0u},
             {"num_slots", num_slots},
             {"own_slot", own_slot},
             {"page_size", common.tensor_page_size},
@@ -3175,7 +3857,7 @@ Program build_entry_relay_program(
             {"num_extra_segments", num_extra},
             {"max_payload", common.fabric_max_payload_size},
             {"total_pages", total_pages},
-            {"half_pages", (total_pages + 1) / 2},
+            {"num_slices", relay.relay_slices},
             {"ring_slots", kSenderReadRingSlots},
             {"scratch_cb", static_cast<uint32_t>(tt::CBIndex::c_0)},
             {"header_cb", static_cast<uint32_t>(kPacketHeaderCbIndex)},
@@ -3220,10 +3902,29 @@ Program build_entry_relay_program(
         // extra segment (the same for both lanes).
         std::vector<uint32_t> rt;
         if (master) {
-            tt::tt_fabric::append_fabric_connection_rt_args(*mesh, entry_node, exit_node, z_link, program, core, rt);
+            append_connection_rt_args(
+                *mesh,
+                entry_node,
+                exit_node,
+                z_link,
+                relay.cable_mux ? &relay.cable_mux_bindings.at(p) : nullptr,
+                relay.word_stride,
+                program,
+                core,
+                rt);
         }
-        for (const auto& [node, link] : conns[lane]) {
-            tt::tt_fabric::append_fabric_connection_rt_args(*mesh, entry_node, node, link, program, core, rt);
+        for (size_t di = 0; di < conns[lane].size(); ++di) {
+            const auto& [node, link] = conns[lane][di];
+            append_connection_rt_args(
+                *mesh,
+                entry_node,
+                node,
+                link,
+                use_dir_mux ? &relay.forward_mux_bindings.at(p).at(conn_dirs[lane][di]) : nullptr,
+                relay.word_stride,
+                program,
+                core,
+                rt);
         }
         for (uint32_t k = 0; k < num_slots; ++k) {
             if (k == own_slot) {
@@ -3430,12 +4131,16 @@ void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const 
             core,
             config_addr,
             common.l1_alignment,
-            static_cast<uint32_t>(words.arrived_base + k * relay.word_stride),
+            static_cast<uint32_t>(words.arrived_base + (2u * k) * relay.word_stride),
             common.metadata_enabled ? static_cast<uint32_t>(words.md_base + k * common.metadata_span_bytes) : 0u,
             exit_node,
             CMAKE_UNIQUE_NAMESPACE::relay_noc(mesh, impl.service_cores, cable.exit_coord));
         const std::vector<uint32_t>& lane_links = relay.source_links.at(c);  // claimed (claim_relay_links)
         const auto lanes = static_cast<uint32_t>(lane_links.size());
+        std::optional<CMAKE_UNIQUE_NAMESPACE::MuxBinding> src_mux = std::nullopt;
+        if (auto it = relay.source_mux_bindings.find(c); it != relay.source_mux_bindings.end()) {
+            src_mux = it->second;
+        }
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_sender_program(
@@ -3461,7 +4166,11 @@ void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const 
                 lanes,
                 src_node,
                 exit_node,
-                lane_links));
+                lane_links,
+                src_mux,
+                relay.word_stride,
+                relay.relay_slices,
+                /*relay_per_lane_arrived=*/true));
     }
     // 2. Exit chips: the exit relay, in place of their sender service.
     for (uint32_t p = 0; p < plan.cables.size(); ++p) {
@@ -3526,6 +4235,10 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
             static_cast<uint32_t>(relay.words[p].acked_base + k * relay.word_stride),
             entry_node,
             CMAKE_UNIQUE_NAMESPACE::relay_noc(mesh, impl.service_cores, cable.entry_coord));
+        std::optional<CMAKE_UNIQUE_NAMESPACE::MuxBinding> ack_mux = std::nullopt;
+        if (auto it = relay.ack_mux_bindings.find(c); it != relay.ack_mux_bindings.end()) {
+            ack_mux = it->second;
+        }
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_receiver_program(
@@ -3548,7 +4261,9 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
                 0u,
                 t_node,
                 entry_node,
-                relay.ack_links.at(c)));  // claimed (claim_relay_links)
+                relay.ack_links.at(c),
+                ack_mux,
+                relay.word_stride));  // claimed (claim_relay_links)
     }
     // 2. Entry chips: the entry relay, in place of their receiver service.
     for (uint32_t p = 0; p < plan.cables.size(); ++p) {
@@ -3721,7 +4436,10 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
         common.plan.num_socket_pages,
         common.metadata_size_bytes,
         cfg.share_fabric_links,
-        cfg.relay);
+        cfg.relay,
+        cfg.cable_mux,
+        cfg.instage_mux,
+        cfg.relay_slices);
     auto receiver_service_cores = std::move(peer.service_cores);
     auto receiver_tensor_addrs = std::move(peer.backing_addrs);
 
@@ -3825,7 +4543,10 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
         common.plan.num_socket_pages,
         common.metadata_size_bytes,
         cfg.share_fabric_links,
-        cfg.relay);
+        cfg.relay,
+        cfg.cable_mux,
+        cfg.instage_mux,
+        cfg.relay_slices);
     auto sender_service_cores = std::move(peer.service_cores);
 
     auto connections =

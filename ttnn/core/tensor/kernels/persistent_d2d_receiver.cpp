@@ -34,6 +34,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/circular_buffer.h"
+#include "d2d_relay_common.hpp"
 
 // CT-arg layout (must stay in sync with build_receiver_program in
 // ttnn/core/tensor/d2d_stream_service.cpp).
@@ -88,6 +89,7 @@ constexpr uint32_t stage_gate_mode_word = get_named_compile_time_arg_val("stage_
 constexpr uint32_t gate_open_value = get_named_compile_time_arg_val("gate_open_value");
 constexpr uint32_t gate_closed_value = get_named_compile_time_arg_val("gate_closed_value");
 constexpr uint32_t gate_close_on_transit_mode = get_named_compile_time_arg_val("gate_close_on_transit_mode");
+constexpr bool use_mux = get_named_compile_time_arg_val("use_mux") == 1;
 
 // Wait until the gate selected by the transfer's metadata is open, then close it if the
 // transfer's mode is CloseOnTransit. Returns false if terminated while waiting.
@@ -120,8 +122,9 @@ FORCE_INLINE bool pass_stage_gate(uint32_t metadata_addr) {
 
 void kernel_main() {
     size_t rt_args_idx = 0;
+    d2d_relay::MuxWaitState mux_wait{};
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        d2d_relay::build_connection<use_mux>(rt_args_idx, mux_wait);
 
     // The socket packet header lives in the fabric packet-header CB; it's used
     // only for the per-transfer overwrite-OK atomic-inc sent upstream to the sender.
@@ -140,9 +143,6 @@ void kernel_main() {
         receiver_socket.d2d.upstream_noc_y,
         receiver_socket.d2d.upstream_bytes_acked_addr);
 
-    // bytes_sent (this receiver's config word): each sender lane Flush-atomic-incs it
-    // once per transfer, so it advances by num_lanes per transfer — wait for exactly
-    // that. (Single-lane ⇒ kIncsPerTransfer == 1, the Step 1 behavior.)
     constexpr uint32_t kIncsPerTransfer = num_lanes;
     volatile tt_l1_ptr uint32_t* bytes_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.bytes_sent_addr);
@@ -155,12 +155,10 @@ void kernel_main() {
     // life. LEASE mode: hold nothing until granted a turn — opened per drain below.
     bool fabric_open = false;
     if constexpr (share_fabric_links == 0) {
-        fabric_connection.open();
+        d2d_relay::open_connection<use_mux>(fabric_connection, mux_wait);
         fabric_open = true;
     }
 
-    // Worker-sync state. Allocated unconditionally for readability; the
-    // `if constexpr` gates dead-code-eliminate it when worker_sync_enabled == 0.
     uint64_t worker_mcast_addr = 0;
     volatile tt_l1_ptr uint32_t* consumed_ptr = nullptr;
     uint32_t last_consumed = 0;
@@ -174,21 +172,12 @@ void kernel_main() {
         consumed_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_counter_addr);
     }
 
-    // 2.0 NoC interface + multicast endpoint for the metadata fan-out. The endpoint is
-    // stateless; the worker bbox + metadata_l1_addr are supplied per call below (same
-    // worker bbox as data_ready_sem, a different in-core L1 address).
     Noc noc;
     MulticastEndpoint metadata_mcast;
 
-    // Last observed value of the receiver's bytes_sent counter (the sender's
-    // data-landed signal); advances by kIncsPerTransfer each transfer.
     uint32_t last_seen_sent = 0;
     bool terminated = false;
     while (!terminated) {
-        // LEASE mode: wait for a grant before the transfer's overwrite-OK inc (which
-        // is sent over fabric, so it needs the link). Termination-aware. While not
-        // granted the kernel holds no connection — the links are the model graph's.
-        // Granted at the iteration boundary only, so the lease is honoured cleanly.
         if constexpr (share_fabric_links) {
             bool granted = false;
             while (!granted) {
@@ -204,8 +193,7 @@ void kernel_main() {
             if (terminated) {
                 break;
             }
-            // Acquire the credit-return connection for exactly this drain.
-            fabric_connection.open();
+            d2d_relay::open_connection<use_mux>(fabric_connection, mux_wait);
             fabric_open = true;
         }
 

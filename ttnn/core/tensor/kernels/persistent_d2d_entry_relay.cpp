@@ -22,6 +22,8 @@ constexpr uint32_t termination_addr = get_named_compile_time_arg_val("terminatio
 constexpr uint32_t link_grant_addr = get_named_compile_time_arg_val("link_grant_addr");
 constexpr uint32_t is_master = get_named_compile_time_arg_val("is_master");
 constexpr uint32_t z_lanes = get_named_compile_time_arg_val("z_lanes");  // arrived[k] incs per chunk
+constexpr bool z_mux = get_named_compile_time_arg_val("z_mux") == 1;
+constexpr bool dir_mux = get_named_compile_time_arg_val("dir_mux") == 1;
 constexpr uint32_t num_slots = get_named_compile_time_arg_val("num_slots");
 constexpr uint32_t own_slot = get_named_compile_time_arg_val("own_slot");  // num_slots = none
 constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
@@ -30,7 +32,7 @@ constexpr uint32_t max_page_size = get_named_compile_time_arg_val("max_page_size
 constexpr uint32_t num_extra_segments = get_named_compile_time_arg_val("num_extra_segments");
 constexpr uint32_t max_payload = get_named_compile_time_arg_val("max_payload");
 constexpr uint32_t total_pages = get_named_compile_time_arg_val("total_pages");
-constexpr uint32_t half_pages = get_named_compile_time_arg_val("half_pages");  // master [0, half) when 2 lanes
+constexpr uint32_t num_slices = get_named_compile_time_arg_val("num_slices");
 constexpr uint32_t ring_slots = get_named_compile_time_arg_val("ring_slots");
 constexpr uint32_t scratch_cb = get_named_compile_time_arg_val("scratch_cb");
 constexpr uint32_t header_cb = get_named_compile_time_arg_val("header_cb");
@@ -65,6 +67,7 @@ constexpr auto tensor_args = TensorAccessorArgs<0>();
 constexpr uint32_t extra_segments_ct_offset = tensor_args.next_compile_time_args_offset();
 
 static_assert(num_slots >= 1 && num_slots <= 32, "pending set is a 32-bit mask");
+static_assert(num_slices >= 1 && num_slices <= 256, "slice index packs above 8-bit slot id");
 static_assert(num_dir_conns <= 4, "at most one connection per in-mesh direction");
 
 constexpr uint32_t kRingDepth = d2d_relay::floor_pow2(ring_slots);
@@ -98,49 +101,66 @@ FORCE_INLINE Target target_at(size_t slot_args, uint32_t k) {
         b + kTargetArgs};
 }
 
-// Copy this lane's pages of each extra segment, then pages [start, end) of staging k into the
-// target's backing, then Flush-increment the target's bytes_sent in the same packet as the last
-// write: the receiver kernel counts one increment per lane.
-FORCE_INLINE void copy_to_target(
+// Copy this lane's pages of slice `s` of staging `k` into the target's backing (extra segments on
+// s == 0, metadata + bytes_sent Flush-increment on s + 1 == num_slices).
+FORCE_INLINE void copy_slice_to_target(
     const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
     const Target& t,
-    uint32_t start,
-    uint32_t end,
+    uint32_t s,
+    bool two_lanes,
     uint32_t cb_l1_addr,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_header,
     bool with_metadata,
-    uint32_t md_l1_addr) {
+    uint32_t md_l1_addr,
+    bool is_last_slice) {
     d2d_relay::set_route(data_header, t.chip, t.mesh);
-    d2d_relay::stream_extra_segments<num_extra_segments, extra_segments_ct_offset, max_payload, max_page_size, kRingDepth, kTridBase>(
-        noc, conn, cb_l1_addr, t.extra_arg, is_master, t.lanes > 1, data_header);
+    if (s == 0) {
+        d2d_relay::stream_extra_segments<
+            num_extra_segments,
+            extra_segments_ct_offset,
+            max_payload,
+            max_page_size,
+            kRingDepth,
+            kTridBase>(noc, conn, cb_l1_addr, t.extra_arg, is_master, two_lanes, data_header);
+    }
+    uint32_t p_start = 0;
+    uint32_t p_end = 0;
+    d2d_relay::slice_page_range<total_pages, num_slices>(s, is_master != 0, two_lanes, p_start, p_end);
     auto in_acc = TensorAccessor(tensor_args, t.src_addr);
     auto out_acc = TensorAccessor(tensor_args, t.dst_addr);
-    d2d_relay::stream_pages_then_inc<page_size, max_payload, max_page_size, kRingDepth, kTridBase>(
-        noc,
-        conn,
-        in_acc,
-        out_acc,
-        cb_l1_addr,
-        start,
-        end,
-        get_noc_addr(t.noc_x, t.noc_y, t.fifo_addr),
-        md_l1_addr,
-        with_metadata ? metadata_span : 0,
-        get_noc_addr(t.noc_x, t.noc_y, t.bytes_sent_addr),
-        data_header);
+    if (is_last_slice) {
+        d2d_relay::stream_pages_then_inc<page_size, max_payload, max_page_size, kRingDepth, kTridBase>(
+            noc,
+            conn,
+            in_acc,
+            out_acc,
+            cb_l1_addr,
+            p_start,
+            p_end,
+            get_noc_addr(t.noc_x, t.noc_y, t.fifo_addr),
+            md_l1_addr,
+            with_metadata ? metadata_span : 0u,
+            get_noc_addr(t.noc_x, t.noc_y, t.bytes_sent_addr),
+            data_header);
+    } else if (p_end > p_start) {
+        d2d_relay::stream_pages<page_size, max_payload, max_page_size, kRingDepth, kTridBase>(
+            noc, conn, in_acc, out_acc, cb_l1_addr, p_start, p_end, data_header);
+    }
 }
 
 void kernel_main() {
     size_t arg = 0;
     // Master: cable (Z) connection first, for the credits to the exit relay. Sub: none.
+    d2d_relay::MuxWaitState z_mux_wait{};
     tt::tt_fabric::WorkerToFabricEdmSender z_conn;
     if constexpr (is_master) {
-        z_conn = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
+        z_conn = d2d_relay::build_connection<z_mux>(arg, z_mux_wait);
     }
+    d2d_relay::MuxWaitState dir_mux_wait[num_dir_conns > 0 ? num_dir_conns : 1]{};
     tt::tt_fabric::WorkerToFabricEdmSender dir_conns[num_dir_conns > 0 ? num_dir_conns : 1];
     for (uint32_t c = 0; c < num_dir_conns; ++c) {
-        dir_conns[c] = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
+        dir_conns[c] = d2d_relay::build_connection<dir_mux>(arg, dir_mux_wait[c]);
     }
     const size_t slot_args = arg;
 
@@ -158,7 +178,7 @@ void kernel_main() {
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
     if constexpr (!is_master) {
-        // ---- Sub: copy pages [half, total) of whichever target the master names ----
+        // ---- Sub: copy pages [mid, se) of whichever (target, slice) the master names ----
         d2d_relay::run_sub_lane(
             go_slot_addr,
             go_count_addr,
@@ -176,10 +196,22 @@ void kernel_main() {
                     dir_conns[c].close();
                 }
             },
-            [&](uint32_t k) {
+            [&](uint32_t packed) {
+                const uint32_t k = d2d_relay::unpack_go_slot(packed);
+                const uint32_t s = d2d_relay::unpack_go_slice(packed);
                 const Target t = target_at(slot_args, k);
-                copy_to_target(
-                    noc, dir_conns[t.sub_conn], t, half_pages, total_pages, cb_l1_addr, data_header, false, 0);
+                const bool is_last_slice = (s + 1u == num_slices);
+                copy_slice_to_target(
+                    noc,
+                    dir_conns[t.sub_conn],
+                    t,
+                    s,
+                    /*two_lanes=*/true,
+                    cb_l1_addr,
+                    data_header,
+                    false,
+                    0,
+                    is_last_slice);
             });
         return;
     }
@@ -191,8 +223,9 @@ void kernel_main() {
         get_noc_multicast_addr(mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, data_ready_sem_addr);
     MulticastEndpoint md_mcast;
 
-    uint32_t last_arrived[num_slots] = {};
-    uint32_t sent[num_slots] = {};  // chunks delivered to each remote target
+    uint32_t last_arrived_l0[num_slots] = {};
+    uint32_t last_arrived_l1[num_slots] = {};
+    uint32_t sent[num_slots] = {};  // completed full-tensor windows delivered to each remote target
     uint32_t last_consumed = 0;
     d2d_relay::SubLane sub{go_slot_addr, go_count_addr, done_count_addr, termination_addr, terminate_value};
     bool has_sub = false;  // the host starts the sub only when some target has two lanes
@@ -218,13 +251,14 @@ void kernel_main() {
         if (has_sub) {
             sub.post(d2d_relay::kGoOpenConns);
         }
-        z_conn.open();
+        d2d_relay::open_connection<z_mux>(z_conn, z_mux_wait);
         for (uint32_t c = 0; c < num_dir_conns; ++c) {
-            dir_conns[c].open();
+            d2d_relay::open_connection<dir_mux>(dir_conns[c], dir_mux_wait[c]);
         }
 
         uint32_t pending = kAllSlots;
-        // Own target: false = waiting for data, true = handed to the workers, waiting for acks.
+        uint32_t slice_sent[num_slots] = {};
+        // Own target: false = waiting for all slices, true = handed to local workers, waiting for acks.
         bool own_handed = false;
         while (pending != 0 && !stop) {
             for (uint32_t k = 0; k < num_slots; ++k) {
@@ -235,17 +269,25 @@ void kernel_main() {
                     stop = true;
                     break;
                 }
-                volatile tt_l1_ptr uint32_t* arrived =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrived_base + k * word_stride);
+                volatile tt_l1_ptr uint32_t* arrived_l0 =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrived_base + (2u * k) * word_stride);
                 const uint64_t credit_addr =
                     get_noc_addr(exit_noc_x, exit_noc_y, exit_cable_acked_base + k * word_stride);
 
                 if (k == own_slot) {
                     if (!own_handed) {
-                        if (!d2d_relay::advanced(arrived[0], last_arrived[k], z_lanes)) {
+                        if (!d2d_relay::advanced(arrived_l0[0], last_arrived_l0[k], num_slices)) {
                             continue;
                         }
-                        last_arrived[k] += z_lanes;
+                        if constexpr (z_lanes > 1) {
+                            volatile tt_l1_ptr uint32_t* arrived_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                arrived_base + (2u * k + 1u) * word_stride);
+                            if (!d2d_relay::advanced(arrived_l1[0], last_arrived_l1[k], num_slices)) {
+                                continue;
+                            }
+                            last_arrived_l1[k] += num_slices;
+                        }
+                        last_arrived_l0[k] += num_slices;
                         if constexpr (metadata_enabled) {
                             noc.async_write_multicast(
                                 CoreLocalMem<uint32_t>(md_base + k * metadata_span),
@@ -258,9 +300,7 @@ void kernel_main() {
                                  .noc_x_end = mcast_x_end,
                                  .noc_y_end = mcast_y_end,
                                  .addr = worker_md_addr});
-                            // Same NoC and VC as the increment below, so a flush is enough to keep the
-                            // order: the metadata lands before data_ready.
-                            noc.async_writes_flushed();
+                            noc.async_write_barrier();
                         }
                         noc_semaphore_inc_multicast(data_ready_mcast, 1, num_workers);
                         own_handed = true;
@@ -275,36 +315,53 @@ void kernel_main() {
                     continue;
                 }
 
-                volatile tt_l1_ptr uint32_t* recv_acked =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_acked_base + k * word_stride);
-                if (recv_acked[0] != sent[k]) {
-                    continue;  // target still reading the previous chunk
+                const uint32_t s = slice_sent[k];
+                if (s == 0) {
+                    volatile tt_l1_ptr uint32_t* recv_acked =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_acked_base + k * word_stride);
+                    if (recv_acked[0] != sent[k]) {
+                        continue;  // target still reading the previous window's tensor
+                    }
                 }
-                if (!d2d_relay::advanced(arrived[0], last_arrived[k], z_lanes)) {
+                if (!d2d_relay::advanced(arrived_l0[0], last_arrived_l0[k], 1)) {
                     continue;
                 }
-                last_arrived[k] += z_lanes;
+                if constexpr (z_lanes > 1) {
+                    volatile tt_l1_ptr uint32_t* arrived_l1 =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrived_base + (2u * k + 1u) * word_stride);
+                    if (!d2d_relay::advanced(arrived_l1[0], last_arrived_l1[k], 1)) {
+                        continue;
+                    }
+                    last_arrived_l1[k] += 1;
+                }
+                last_arrived_l0[k] += 1;
 
                 const Target t = target_at(slot_args, k);
                 const bool two_lanes = t.lanes > 1;
+                const bool is_last_slice = (s + 1u == num_slices);
                 if (two_lanes) {
-                    sub.post(k);
+                    sub.post(d2d_relay::pack_go_slot_slice(k, s));
                 }
-                copy_to_target(
+                copy_slice_to_target(
                     noc,
                     dir_conns[t.master_conn],
                     t,
-                    0,
-                    two_lanes ? half_pages : total_pages,
+                    s,
+                    two_lanes,
                     cb_l1_addr,
                     data_header,
-                    metadata_enabled != 0,
-                    md_base + k * metadata_span);
+                    is_last_slice && (metadata_enabled != 0),
+                    md_base + k * metadata_span,
+                    is_last_slice);
                 if (two_lanes) {
-                    sub.wait();  // the sub has read its half of staging k
+                    sub.wait();  // the sub has read its half of slice s of staging k
+                }
+                slice_sent[k] = s + 1u;
+                if (!is_last_slice) {
+                    continue;
                 }
                 sent[k] += 1;
-                // Staging k has been read: the exit relay may send the next chunk.
+                // All slices of staging k have been forwarded: the exit relay may reuse slot k.
                 d2d_relay::fabric_atomic_inc(z_conn, credit_addr, false, credit_header);
                 pending &= ~(1u << k);
             }

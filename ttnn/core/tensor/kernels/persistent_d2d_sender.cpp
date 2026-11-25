@@ -96,10 +96,10 @@ constexpr uint32_t sender_metadata_l1_addr = get_compile_time_arg_val(20);
 constexpr uint32_t share_fabric_links = get_compile_time_arg_val(21);
 constexpr uint32_t link_grant_addr = get_compile_time_arg_val(22);
 // Lane block (indices 23..28).
-constexpr uint32_t is_master = get_compile_time_arg_val(23);        // 1 = lane 0 / master, 0 = sub
-constexpr uint32_t num_lanes = get_compile_time_arg_val(24);        // Flush-incs to bytes_sent per transfer
-constexpr uint32_t page_start = get_compile_time_arg_val(25);       // this lane's first tensor page
-constexpr uint32_t page_end = get_compile_time_arg_val(26);         // this lane's last tensor page + 1
+constexpr uint32_t is_master = get_compile_time_arg_val(23);  // 1 = lane 0 / master, 0 = sub
+constexpr uint32_t num_lanes = get_compile_time_arg_val(24);  // Flush-incs to bytes_sent per transfer
+[[maybe_unused]] constexpr uint32_t page_start = get_compile_time_arg_val(25);
+[[maybe_unused]] constexpr uint32_t page_end = get_compile_time_arg_val(26);
 constexpr uint32_t go_count_addr = get_compile_time_arg_val(27);    // shared L1: master -> sub
 constexpr uint32_t done_count_addr = get_compile_time_arg_val(28);  // shared L1: sub -> master
 // [29] num_read_slots: trid-ring depth (power of 2), = the scratch CB's slot capacity.
@@ -114,80 +114,19 @@ constexpr auto input_tensor_accessor_args = TensorAccessorArgs<30>();
 constexpr uint32_t num_extra_segments = get_named_compile_time_arg_val("num_extra_segments");
 // Bytes of one scratch ring slot: room for the largest group of pages packed into one packet.
 constexpr uint32_t slot_bytes = get_named_compile_time_arg_val("slot_bytes");
+constexpr bool use_mux = get_named_compile_time_arg_val("use_mux") == 1;
+constexpr uint32_t num_slices = get_named_compile_time_arg_val("num_slices");
+constexpr uint32_t recv_inc_offset = get_named_compile_time_arg_val("recv_inc_offset");
+constexpr uint32_t kTotalPages = num_socket_pages * pages_per_chunk;
 constexpr uint32_t extra_segments_ct_offset = input_tensor_accessor_args.next_compile_time_args_offset();
 constexpr uint32_t kExtraSegmentCtArgs = 4;
 
-// Emit `size` bytes from a contiguous L1 source to a single remote NoC address over
-// fabric, split into <= fabric_max_payload_size packets. Used for the optional metadata blob.
-FORCE_INLINE void fabric_write_bytes(
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
-    uint64_t dst_addr,
-    uint32_t l1_src_addr,
-    uint32_t size,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
-    uint32_t remaining = size;
-    while (remaining > 0) {
-        const uint32_t packet_size = remaining > fabric_max_payload_size ? fabric_max_payload_size : remaining;
-        data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, packet_size);
-        fabric_connection.wait_for_empty_write_slot();
-        fabric_connection.send_payload_without_header_non_blocking_from_address(l1_src_addr, packet_size);
-        fabric_connection.send_payload_flush_blocking_from_address(
-            (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
-        dst_addr += packet_size;
-        l1_src_addr += packet_size;
-        remaining -= packet_size;
-    }
-}
-
-// Read pipelining: stream pages through a trid ring over the scratch CB so DRAM reads
-// overlap the fabric writes. Ring depth = the scratch CB's slot capacity
-// (num_read_slots, host-sized), rounded DOWN to a power of 2 (the slot index is a bitmask) —
-// independent of pages_per_chunk, so a large tensor page (small pages_per_chunk) still
-// pipelines at full depth.
 constexpr uint32_t kRingDepth = d2d_relay::floor_pow2(num_read_slots);
-// Each lane (RISC) gets a DISJOINT trid range so the two RISCs on this core never
-// share a NoC transaction id — the trid-barrier counters are not assumed independent
-// across the two RISCs. Lane 0 -> [1, 1+depth), lane 1 -> [1+depth, 1+2*depth).
 constexpr uint32_t kLaneId = is_master ? 0u : 1u;
 constexpr uint32_t kTridBase = 1u + kLaneId * kRingDepth;
 static_assert(2u * kRingDepth <= 15u, "two lanes of trids must fit in the 0..15 transaction-id space");
 
-// Stream this lane's contiguous page range [page_start_, page_end_) DIRECTLY into the
-// receiver DRAM tensor over `conn`, pipelining the DRAM reads (in_acc) with the fabric
-// writes (out_acc) through the trid ring: each slot holds a packet's worth of pages, so up
-// to kRingDepth packets are read ahead of the one being written. in_acc/out_acc share
-// the per-shard spec (same accessor args, different base address).
-template <typename Acc>
-FORCE_INLINE void stream_pages(
-    const Noc& noc,
-    tt::tt_fabric::WorkerToFabricEdmSender& conn,
-    const Acc& in_acc,
-    const Acc& out_acc,
-    uint32_t cb_l1_addr,
-    uint32_t page_start_,
-    uint32_t page_end_,
-    uint32_t page_size,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
-    d2d_relay::stream_sized_pages<fabric_max_payload_size, slot_bytes, kRingDepth, kTridBase>(
-        noc, conn, in_acc, out_acc, cb_l1_addr, page_start_, page_end_, page_size, data_packet_header_addr);
-}
-
-// The primary segment's page size is a compile-time constant; inlining stream_pages with it
-// keeps the slot offsets constant-folded.
-template <uint32_t PageSize, typename Acc>
-FORCE_INLINE void stream_half(
-    const Noc& noc,
-    tt::tt_fabric::WorkerToFabricEdmSender& conn,
-    const Acc& in_acc,
-    const Acc& out_acc,
-    uint32_t cb_l1_addr,
-    uint32_t page_start_,
-    uint32_t page_end_,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
-    stream_pages(noc, conn, in_acc, out_acc, cb_l1_addr, page_start_, page_end_, PageSize, data_packet_header_addr);
-}
-
-// Stream this lane's range of each extra segment, in order. stream_pages leaves no read
+// Stream this lane's range of each extra segment, in order. stream_sized_pages leaves no read
 // in flight, so the segments reuse the scratch CB and trid ring back to back. The shared
 // accessor block lets this be a runtime loop: one copy of the body however many segments
 // there are. The accessor offset depends on NumExtra so that `if constexpr` defers it; with no
@@ -207,7 +146,7 @@ FORCE_INLINE void stream_extra_segments(
             const uint32_t seg_page_size = kernel_compile_time_args[ct_idx];
             const auto in_acc = TensorAccessor(seg_accessor_args, kernel_compile_time_args[ct_idx + 1], seg_page_size);
             const auto out_acc = TensorAccessor(seg_accessor_args, receiver_addrs[s], seg_page_size);
-            stream_pages(
+            d2d_relay::stream_sized_pages<fabric_max_payload_size, slot_bytes, kRingDepth, kTridBase>(
                 noc,
                 conn,
                 in_acc,
@@ -221,24 +160,46 @@ FORCE_INLINE void stream_extra_segments(
     }
 }
 
-// This lane's data-landed signal: Flush-atomic-inc the receiver's bytes_sent by 1.
-// The Flush drains this link's payload writes (DRAM pages + any metadata) before the
-// inc applies, so the inc implies this lane's writes have landed. Commutative across
-// lanes — bytes_sent reaches +num_lanes once every lane has signalled.
-FORCE_INLINE void flush_inc_data_landed(
+template <typename Acc>
+FORCE_INLINE void stream_all_slices(
+    const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr,
-    uint64_t recv_bytes_sent_noc_addr) {
-    socket_packet_header_addr->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{recv_bytes_sent_noc_addr, 1, /*flush=*/true});
-    conn.wait_for_empty_write_slot();
-    conn.send_payload_flush_blocking_from_address((uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    const Acc& in_acc,
+    const Acc& out_acc,
+    uint32_t cb_l1_addr,
+    const uint32_t* extra_receiver_addrs,
+    uint64_t md_dst_noc_addr,
+    uint64_t recv_bytes_sent_noc_addr,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
+    for (uint32_t s = 0; s < num_slices; ++s) {
+        if (s == 0) {
+            stream_extra_segments(noc, conn, cb_l1_addr, extra_receiver_addrs, data_packet_header_addr);
+        }
+        uint32_t p_start = 0;
+        uint32_t p_end = 0;
+        d2d_relay::slice_page_range<kTotalPages, num_slices>(s, is_master != 0, num_lanes > 1, p_start, p_end);
+        const bool send_md = is_master && metadata_enabled && (s + 1u == num_slices);
+        d2d_relay::stream_pages_then_inc<tensor_page_size, fabric_max_payload_size, slot_bytes, kRingDepth, kTridBase>(
+            noc,
+            conn,
+            in_acc,
+            out_acc,
+            cb_l1_addr,
+            p_start,
+            p_end,
+            md_dst_noc_addr,
+            sender_metadata_l1_addr,
+            send_md ? metadata_span_bytes : 0u,
+            recv_bytes_sent_noc_addr,
+            data_packet_header_addr);
+    }
 }
 
 void kernel_main() {
     size_t rt_args_idx = 0;
+    d2d_relay::MuxWaitState mux_wait{};
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        d2d_relay::build_connection<use_mux>(rt_args_idx, mux_wait);
 
     // Per-coord base address of the receiver's DRAM backing tensor (the direct
     // fabric-write destination). Appended after the fabric-connection args; per device.
@@ -248,21 +209,15 @@ void kernel_main() {
         extra_receiver_addrs[s] = get_arg_val<uint32_t>(rt_args_idx++);
     }
 
-    // This lane's two fabric headers (its own header CB): one for the bulk page
-    // writes, one for the data-landed atomic-inc. Routed once below (L1 writes only).
     CircularBuffer fabric_hdr_cb(fabric_packet_header_cb_index);
-    const uint32_t fabric_hdr_l1 = fabric_hdr_cb.get_write_ptr();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(fabric_hdr_l1);
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(fabric_hdr_l1 + sizeof(PACKET_HEADER_TYPE));
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(fabric_hdr_cb.get_write_ptr());
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, socket_page_size);
 
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
     fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
-    fabric_set_unicast_route(socket_packet_header_addr, downstream_enc);
     const uint32_t receiver_noc_x = downstream_enc.d2d.downstream_noc_x;
     const uint32_t receiver_noc_y = downstream_enc.d2d.downstream_noc_y;
 
@@ -277,7 +232,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
     const uint64_t recv_bytes_sent_noc_addr =
-        get_noc_addr(receiver_noc_x, receiver_noc_y, sender_socket.downstream_bytes_sent_addr);
+        get_noc_addr(receiver_noc_x, receiver_noc_y, sender_socket.downstream_bytes_sent_addr + recv_inc_offset);
+    const uint64_t md_dst_noc_addr = get_noc_addr(receiver_noc_x, receiver_noc_y, sender_socket.downstream_fifo_addr);
 
     // Lane-to-lane sync (shared service-core L1; single writer per word, so plain
     // volatile + invalidate_l1_cache is race-free): master bumps go_count, sub bumps
@@ -310,25 +266,17 @@ void kernel_main() {
 
         bool fabric_open = false;
         if constexpr (share_fabric_links == 0) {
-            fabric_connection.open();
+            d2d_relay::open_connection<use_mux>(fabric_connection, mux_wait);
             fabric_open = true;
         }
 
         uint32_t last_data_ready = 0;
-        // Monotonic count of transfers issued (wraps over the persistent lifetime, so
-        // all comparisons use wrap-safe unsigned diffs).
         uint32_t my_sent = 0;
         uint32_t go_local = 0;
         uint32_t last_done = 0;
-        // Max transfers outstanding (sent but not yet consumed). Single buffer in
-        // Step 1; Step 3 (double-buffer) raises this.
         constexpr uint32_t kBufferDepth = 1;
         bool terminated = false;
         while (!terminated) {
-            // 1. Idle wait. Proceed only when ALL hold (iteration boundary, no transfer
-            //    in flight): (a) LEASE grant, (b) workers produced (num_workers more
-            //    data_ready), (c) OVERWRITE GATE — fewer than kBufferDepth transfers
-            //    outstanding (sent - acked, wrap-safe). Or break on termination.
             bool ready = false;
             while (!ready) {
                 invalidate_l1_cache();
@@ -354,50 +302,28 @@ void kernel_main() {
                 break;
             }
 
-            // 2. LEASE: acquire the link for this transfer (route/headers persist in L1).
             if constexpr (share_fabric_links) {
-                fabric_connection.open();
+                d2d_relay::open_connection<use_mux>(fabric_connection, mux_wait);
                 fabric_open = true;
             }
 
-            // 3. Release the sub to stream its half concurrently (gates have passed).
             if constexpr (num_lanes > 1) {
                 go_local += 1;
                 go_count[0] = go_local;
             }
 
-            // 4. Stream the master's half directly into the receiver DRAM tensor.
-            stream_half<tensor_page_size>(
+            stream_all_slices(
                 noc,
                 fabric_connection,
                 input_tensor_accessor,
                 output_tensor_accessor,
                 cb_l1_addr,
-                page_start,
-                page_end,
+                extra_receiver_addrs,
+                md_dst_noc_addr,
+                recv_bytes_sent_noc_addr,
                 data_packet_header_addr);
-            stream_extra_segments(
-                noc, fabric_connection, cb_l1_addr, extra_receiver_addrs, data_packet_header_addr);
-
-            // 4b. Optional metadata: fabric-write the blob to the receiver's vestigial
-            //     socket-FIFO L1 base (covered by the master's Flush-inc below); the
-            //     receiver mcasts it to its worker grid after the data-landed signal.
-            //     Ships metadata_span_bytes — the staging buffer's size — so metadata
-            //     capacity is bounded by the FIFO, not by the flow-control socket page.
-            if constexpr (metadata_enabled) {
-                const uint64_t md_dst =
-                    get_noc_addr(receiver_noc_x, receiver_noc_y, sender_socket.downstream_fifo_addr);
-                fabric_write_bytes(
-                    fabric_connection, md_dst, sender_metadata_l1_addr, metadata_span_bytes, data_packet_header_addr);
-            }
-
-            // 5. Data-landed: the master's Flush-inc on bytes_sent (+1 of num_lanes).
-            flush_inc_data_landed(fabric_connection, socket_packet_header_addr, recv_bytes_sent_noc_addr);
             my_sent += 1;
 
-            // 6. Wait for the sub's half (done_count advanced). On clean teardown the
-            //    loop exits at the idle wait above, never here, so no termination check
-            //    is needed (the sub always completes a transfer it was told to start).
             if constexpr (num_lanes > 1) {
                 while ((done_count[0] - last_done) < 1u) {
                     invalidate_l1_cache();
@@ -405,14 +331,10 @@ void kernel_main() {
                 last_done = done_count[0];
             }
 
-            // 7. Release the sender worker grid so it can overwrite the SENDER backing.
             if constexpr (worker_sync_enabled) {
                 noc_semaphore_inc_multicast(consumed_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
             }
 
-            // 8. LEASE: this transfer is done — drop the link and hand it back
-            //    (link_grant = 0). Both lanes' links are closed by now (the sub closes
-            //    before done_count++), so the model graph may take the links.
             if constexpr (share_fabric_links) {
                 fabric_connection.close();
                 fabric_open = false;
@@ -435,8 +357,6 @@ void kernel_main() {
         uint32_t last_go = 0;
         bool terminated = false;
         while (!terminated) {
-            // Wait for the master's go (it has passed the per-transfer gates), or break
-            // on termination (the master stops bumping go_count at teardown).
             while (true) {
                 invalidate_l1_cache();
                 if (termination_semaphore[0] == terminate_value) {
@@ -457,19 +377,16 @@ void kernel_main() {
                 fabric_open = true;
             }
 
-            stream_half<tensor_page_size>(
+            stream_all_slices(
                 noc,
                 fabric_connection,
                 input_tensor_accessor,
                 output_tensor_accessor,
                 cb_l1_addr,
-                page_start,
-                page_end,
+                extra_receiver_addrs,
+                0,
+                recv_bytes_sent_noc_addr,
                 data_packet_header_addr);
-            stream_extra_segments(
-                noc, fabric_connection, cb_l1_addr, extra_receiver_addrs, data_packet_header_addr);
-
-            flush_inc_data_landed(fabric_connection, socket_packet_header_addr, recv_bytes_sent_noc_addr);
 
             if constexpr (share_fabric_links) {
                 fabric_connection.close();

@@ -21,6 +21,8 @@ constexpr uint32_t termination_addr = get_named_compile_time_arg_val("terminatio
 constexpr uint32_t link_grant_addr = get_named_compile_time_arg_val("link_grant_addr");
 constexpr uint32_t is_master = get_named_compile_time_arg_val("is_master");
 constexpr uint32_t z_lanes = get_named_compile_time_arg_val("z_lanes");
+constexpr bool z_mux = get_named_compile_time_arg_val("z_mux") == 1;
+constexpr bool credit_mux = get_named_compile_time_arg_val("credit_mux") == 1;
 constexpr uint32_t num_slots = get_named_compile_time_arg_val("num_slots");
 // own_slot == num_slots when this chip's coord does not take part.
 constexpr uint32_t own_slot = get_named_compile_time_arg_val("own_slot");
@@ -29,8 +31,8 @@ constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
 constexpr uint32_t max_page_size = get_named_compile_time_arg_val("max_page_size");
 constexpr uint32_t num_extra_segments = get_named_compile_time_arg_val("num_extra_segments");
 constexpr uint32_t max_payload = get_named_compile_time_arg_val("max_payload");
-constexpr uint32_t page_start = get_named_compile_time_arg_val("page_start");  // this lane's pages
-constexpr uint32_t page_end = get_named_compile_time_arg_val("page_end");
+constexpr uint32_t total_pages = get_named_compile_time_arg_val("total_pages");
+constexpr uint32_t num_slices = get_named_compile_time_arg_val("num_slices");
 constexpr uint32_t ring_slots = get_named_compile_time_arg_val("ring_slots");
 constexpr uint32_t scratch_cb = get_named_compile_time_arg_val("scratch_cb");
 constexpr uint32_t header_cb = get_named_compile_time_arg_val("header_cb");
@@ -38,7 +40,8 @@ constexpr uint32_t metadata_enabled = get_named_compile_time_arg_val("metadata_e
 constexpr uint32_t metadata_span = get_named_compile_time_arg_val("metadata_span");
 // This chip's own workers write their metadata here (the normal sender metadata buffer).
 constexpr uint32_t own_md_addr = get_named_compile_time_arg_val("own_md_addr");
-// Per-slot words on this core, word_stride apart; md slots are metadata_span apart.
+// Per-slot words on this core: arrived has 2 words per slot ((2 * k + lane) * word_stride);
+// cable_acked has 1 word per slot (k * word_stride); md slots are metadata_span apart.
 constexpr uint32_t arrived_base = get_named_compile_time_arg_val("arrived_base");
 constexpr uint32_t md_base = get_named_compile_time_arg_val("md_base");
 constexpr uint32_t cable_acked_base = get_named_compile_time_arg_val("cable_acked_base");
@@ -70,6 +73,7 @@ constexpr auto tensor_args = TensorAccessorArgs<0>();
 constexpr uint32_t extra_segments_ct_offset = tensor_args.next_compile_time_args_offset();
 
 static_assert(num_slots >= 1 && num_slots <= 32, "pending set is a 32-bit mask");
+static_assert(num_slices >= 1 && num_slices <= 256, "slice index packs above 8-bit slot id");
 static_assert(num_credit_conns <= 4, "at most one credit connection per in-mesh direction");
 
 constexpr uint32_t kRingDepth = d2d_relay::floor_pow2(ring_slots);
@@ -84,34 +88,47 @@ constexpr uint32_t kSubSlotArgs = 2;
 constexpr uint32_t kMasterSlotArgs = 9;
 constexpr uint32_t kLaneSlotArgs = (is_master ? kMasterSlotArgs : kSubSlotArgs) + (2 * num_extra_segments);
 
-// Copy this lane's pages of slot k (extra segments first), then md_size bytes of metadata (none when 0), and
-// Flush-increment the entry relay's arrived[k] in the same packet as the last write.
+// Copy this lane's pages of slice `s` of slot `k` (extra segments on s == 0, metadata on
+// s + 1 == num_slices), and Flush-increment the entry relay's per-lane arrived[2*k + lane].
 template <typename SlotArgs>
-FORCE_INLINE void copy_slot_half(
+FORCE_INLINE void copy_slot_slice(
     const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& z_conn,
     const SlotArgs& slot,
     uint32_t k,
+    uint32_t s,
     uint32_t cb_l1_addr,
     uint32_t md_l1_addr,
     uint32_t md_size,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_header) {
-    d2d_relay::stream_extra_segments<num_extra_segments, extra_segments_ct_offset, max_payload, max_page_size, kRingDepth, kTridBase>(
-        noc, z_conn, cb_l1_addr, slot.extra_arg, is_master, z_lanes > 1, data_header);
+    if (s == 0) {
+        d2d_relay::stream_extra_segments<
+            num_extra_segments,
+            extra_segments_ct_offset,
+            max_payload,
+            max_page_size,
+            kRingDepth,
+            kTridBase>(noc, z_conn, cb_l1_addr, slot.extra_arg, is_master, z_lanes > 1, data_header);
+    }
+    uint32_t p_start = 0;
+    uint32_t p_end = 0;
+    d2d_relay::slice_page_range<total_pages, num_slices>(s, is_master != 0, z_lanes > 1, p_start, p_end);
     auto in_acc = TensorAccessor(tensor_args, slot.src_addr);
     auto out_acc = TensorAccessor(tensor_args, slot.dst_addr);
+    constexpr uint32_t kLaneIdx = is_master ? 0u : 1u;
+    const uint32_t entry_arrived_addr = entry_arrived_base + ((2u * k + kLaneIdx) * word_stride);
     d2d_relay::stream_pages_then_inc<page_size, max_payload, max_page_size, kRingDepth, kTridBase>(
         noc,
         z_conn,
         in_acc,
         out_acc,
         cb_l1_addr,
-        page_start,
-        page_end,
+        p_start,
+        p_end,
         get_noc_addr(entry_noc_x, entry_noc_y, entry_md_base + k * metadata_span),
         md_l1_addr,
         md_size,
-        get_noc_addr(entry_noc_x, entry_noc_y, entry_arrived_base + k * word_stride),
+        get_noc_addr(entry_noc_x, entry_noc_y, entry_arrived_addr),
         data_header);
 }
 
@@ -124,13 +141,13 @@ struct Slot {
 void kernel_main() {
     size_t arg = 0;
     // Cable (Z) connection on this lane's link. Always the first connection in the args.
-    tt::tt_fabric::WorkerToFabricEdmSender z_conn =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
+    d2d_relay::MuxWaitState z_mux_wait{};
+    tt::tt_fabric::WorkerToFabricEdmSender z_conn = d2d_relay::build_connection<z_mux>(arg, z_mux_wait);
+    d2d_relay::MuxWaitState credit_mux_wait[num_credit_conns > 0 ? num_credit_conns : 1]{};
     tt::tt_fabric::WorkerToFabricEdmSender credit_conns[num_credit_conns > 0 ? num_credit_conns : 1];
     if constexpr (is_master) {
         for (uint32_t c = 0; c < num_credit_conns; ++c) {
-            credit_conns[c] =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
+            credit_conns[c] = d2d_relay::build_connection<credit_mux>(arg, credit_mux_wait[c]);
         }
     }
     const size_t slot_args = arg;
@@ -156,7 +173,7 @@ void kernel_main() {
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
     if constexpr (!is_master) {
-        // ---- Sub: copy the second half of whichever slot the master names ----
+        // ---- Sub: copy the second half of whichever (slot, slice) the master names ----
         // The cable link is held only inside the master's lease window (the lease gives it to others).
         d2d_relay::run_sub_lane(
             go_slot_addr,
@@ -169,7 +186,11 @@ void kernel_main() {
                 noc.async_write_barrier();
                 z_conn.close();
             },
-            [&](uint32_t k) { copy_slot_half(noc, z_conn, slot_at(k), k, cb_l1_addr, 0, 0, data_header); });
+            [&](uint32_t packed) {
+                const uint32_t k = d2d_relay::unpack_go_slot(packed);
+                const uint32_t s = d2d_relay::unpack_go_slice(packed);
+                copy_slot_slice(noc, z_conn, slot_at(k), k, s, cb_l1_addr, 0, 0, data_header);
+            });
         return;
     }
 
@@ -179,9 +200,10 @@ void kernel_main() {
     const uint64_t consumed_mcast =
         get_noc_multicast_addr(mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, consumed_sem_addr);
 
-    // Per-slot progress. last_arrived counts lane increments seen; cable_sent counts
-    // chunks sent to the entry relay (compared with cable_acked[k], which it increments).
-    uint32_t last_arrived[num_slots] = {};
+    // Per-slot progress across windows: last_arrived_l0/l1 count per-slice lane increments
+    // seen; cable_sent counts completed full-tensor windows sent to the entry relay.
+    uint32_t last_arrived_l0[num_slots] = {};
+    uint32_t last_arrived_l1[num_slots] = {};
     uint32_t cable_sent[num_slots] = {};
     uint32_t last_data_ready = 0;
     d2d_relay::SubLane sub{go_slot_addr, go_count_addr, done_count_addr, termination_addr, terminate_value};
@@ -205,13 +227,16 @@ void kernel_main() {
         if constexpr (z_lanes > 1) {
             sub.post(d2d_relay::kGoOpenConns);
         }
-        z_conn.open();
+        d2d_relay::open_connection<z_mux>(z_conn, z_mux_wait);
         for (uint32_t c = 0; c < num_credit_conns; ++c) {
-            credit_conns[c].open();
+            d2d_relay::open_connection<credit_mux>(credit_conns[c], credit_mux_wait[c]);
         }
 
-        // 2. Forward every source once, in whatever order they become ready.
+        // 2. Forward every source's `num_slices` slices in round-robin as they arrive so
+        //    the cable stays continuously fed while inner chips stream into staging DRAM.
         uint32_t pending = kAllSlots;
+        uint32_t slice_sent[num_slots] = {};
+        bool own_ready = false;
         while (pending != 0 && !stop) {
             for (uint32_t k = 0; k < num_slots; ++k) {
                 if ((pending & (1u << k)) == 0) {
@@ -221,47 +246,66 @@ void kernel_main() {
                     stop = true;
                     break;
                 }
+                const uint32_t s = slice_sent[k];
                 const size_t base = slot_args + k * kLaneSlotArgs;
                 const uint32_t src_lanes = get_arg_val<uint32_t>(base + 2);
-                volatile tt_l1_ptr uint32_t* arrived =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrived_base + k * word_stride);
-                volatile tt_l1_ptr uint32_t* cable_acked =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cable_acked_base + k * word_stride);
-                // Far-side slot still busy with the previous chunk.
-                if (cable_sent[k] != cable_acked[0]) {
-                    continue;
+                if (s == 0) {
+                    volatile tt_l1_ptr uint32_t* cable_acked =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cable_acked_base + k * word_stride);
+                    // Far-side slot still busy with the previous window's tensor.
+                    if (cable_sent[k] != cable_acked[0]) {
+                        continue;
+                    }
                 }
                 if (k == own_slot) {
-                    if (!d2d_relay::advanced(data_ready[0], last_data_ready, num_workers)) {
-                        continue;
+                    if (!own_ready) {
+                        if (!d2d_relay::advanced(data_ready[0], last_data_ready, num_workers)) {
+                            continue;
+                        }
+                        last_data_ready += num_workers;
+                        own_ready = true;
                     }
-                    last_data_ready += num_workers;
                 } else {
-                    if (!d2d_relay::advanced(arrived[0], last_arrived[k], src_lanes)) {
+                    volatile tt_l1_ptr uint32_t* arrived_l0 =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrived_base + (2u * k) * word_stride);
+                    if (!d2d_relay::advanced(arrived_l0[0], last_arrived_l0[k], 1)) {
                         continue;
                     }
-                    last_arrived[k] += src_lanes;
+                    if (src_lanes > 1) {
+                        volatile tt_l1_ptr uint32_t* arrived_l1 =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrived_base + (2u * k + 1u) * word_stride);
+                        if (!d2d_relay::advanced(arrived_l1[0], last_arrived_l1[k], 1)) {
+                            continue;
+                        }
+                        last_arrived_l1[k] += 1;
+                    }
+                    last_arrived_l0[k] += 1;
                 }
 
-                // Copy: the sub takes the second half on the second link.
+                const bool is_last_slice = (s + 1u == num_slices);
                 if constexpr (z_lanes > 1) {
-                    sub.post(k);
+                    sub.post(d2d_relay::pack_go_slot_slice(k, s));
                 }
-                copy_slot_half(
+                copy_slot_slice(
                     noc,
                     z_conn,
                     slot_at(k),
                     k,
+                    s,
                     cb_l1_addr,
                     k == own_slot ? own_md_addr : md_base + k * metadata_span,
-                    metadata_enabled ? metadata_span : 0,
+                    (is_last_slice && metadata_enabled) ? metadata_span : 0u,
                     data_header);
                 if constexpr (z_lanes > 1) {
-                    sub.wait();  // the sub has read its half of slot k
+                    sub.wait();  // the sub has read its half of slice s of slot k
                 }
-                cable_sent[k] += 1;
+                slice_sent[k] = s + 1u;
+                if (!is_last_slice) {
+                    continue;
+                }
 
-                // 3. Credit the source: its staging slot (or the own backing) may be reused.
+                cable_sent[k] += 1;
+                // 3. Final slice shipped: credit the source so its staging/backing may be reused.
                 if (k == own_slot) {
                     noc_semaphore_inc_multicast(consumed_mcast, 1, num_workers);
                 } else {

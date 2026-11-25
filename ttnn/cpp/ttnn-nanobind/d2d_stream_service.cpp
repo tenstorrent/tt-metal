@@ -70,7 +70,13 @@ D2DStreamConfig make_config(
     std::string fabric_link_group,
     std::optional<D2DStageGateConfig> stage_gate = std::nullopt,
     std::vector<ttnn::D2DStreamTensorConfig> extra_tensors = {},
-    bool relay = false) {
+    bool relay = false,
+    uint32_t max_sender_lanes = 2u,
+    std::optional<uint32_t> max_cable_lanes = std::nullopt,
+    bool cable_mux = false,
+    bool instage_mux = false,
+    uint32_t relay_slices = 16u,
+    bool reserve_links_for_later_service = true) {
     return D2DStreamConfig{
         .global_spec = global_spec,
         .mapper = std::move(mapper),
@@ -80,9 +86,15 @@ D2DStreamConfig make_config(
         .receiver_worker_cores = receiver_worker_cores,
         .metadata_size_bytes = metadata_size_bytes,
         .share_fabric_links = share_fabric_links,
+        .max_sender_lanes = max_sender_lanes,
+        .max_cable_lanes = max_cable_lanes,
+        .cable_mux = cable_mux,
+        .instage_mux = instage_mux,
+        .relay_slices = relay_slices,
         .fabric_link_group = std::move(fabric_link_group),
         .stage_gate = stage_gate,
         .relay = relay,
+        .reserve_links_for_later_service = reserve_links_for_later_service,
     };
 }
 
@@ -234,6 +246,11 @@ void py_module_types(nb::module_& mod) {
             nb::arg("coord"),
             "Logical CoreCoord of the sender service core on this coord's device.")
         .def(
+            "get_num_lanes",
+            &D2DStreamServiceSender::get_num_lanes,
+            nb::arg("coord"),
+            "Number of fabric lanes this coord's sender runs.")
+        .def(
             "get_data_ready_counter_addr",
             &D2DStreamServiceSender::get_data_ready_counter_addr,
             nb::arg("coord"),
@@ -373,7 +390,13 @@ void py_module_types(nb::module_& mod) {
                const std::string& fabric_link_group,
                const std::optional<D2DStageGateConfig>& stage_gate,
                const nb::list& extra_tensors,
-               bool relay) {
+               bool relay,
+               uint32_t max_sender_lanes,
+               const std::optional<uint32_t>& max_cable_lanes,
+               bool cable_mux,
+               bool instage_mux,
+               uint32_t relay_slices,
+               bool reserve_links_for_later_service) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -386,7 +409,13 @@ void py_module_types(nb::module_& mod) {
                     fabric_link_group,
                     stage_gate,
                     make_extra_tensors(*sender_mesh, extra_tensors),
-                    relay);
+                    relay,
+                    max_sender_lanes,
+                    max_cable_lanes,
+                    cable_mux,
+                    instage_mux,
+                    relay_slices,
+                    reserve_links_for_later_service);
                 return D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
             },
             nb::arg("sender_mesh"),
@@ -403,6 +432,12 @@ void py_module_types(nb::module_& mod) {
             nb::arg("stage_gate") = nb::none(),
             nb::arg("extra_tensors") = nb::list(),
             nb::arg("relay") = false,
+            nb::arg("max_sender_lanes") = 2u,
+            nb::arg("max_cable_lanes") = nb::none(),
+            nb::arg("cable_mux") = false,
+            nb::arg("instage_mux") = false,
+            nb::arg("relay_slices") = 16u,
+            nb::arg("reserve_links_for_later_service") = true,
             R"doc(
                 Build a sender+receiver pair in a SINGLE process (both meshes owned here).
 
@@ -431,7 +466,12 @@ void py_module_types(nb::module_& mod) {
                bool share_fabric_links,
                const std::string& fabric_link_group,
                const nb::list& extra_tensors,
-               bool relay) {
+               bool relay,
+               uint32_t max_sender_lanes,
+               const std::optional<uint32_t>& max_cable_lanes,
+               bool cable_mux,
+               bool instage_mux,
+               uint32_t relay_slices) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -444,7 +484,12 @@ void py_module_types(nb::module_& mod) {
                     fabric_link_group,
                     std::nullopt,
                     make_extra_tensors(*sender_mesh, extra_tensors),
-                    relay);
+                    relay,
+                    max_sender_lanes,
+                    max_cable_lanes,
+                    cable_mux,
+                    instage_mux,
+                    relay_slices);
                 // distributed_context left null -> the service uses get_current_world().
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
@@ -466,6 +511,11 @@ void py_module_types(nb::module_& mod) {
             nb::arg("fabric_link_group") = "",
             nb::arg("extra_tensors") = nb::list(),
             nb::arg("relay") = false,
+            nb::arg("max_sender_lanes") = 2u,
+            nb::arg("max_cable_lanes") = nb::none(),
+            nb::arg("cable_mux") = false,
+            nb::arg("instage_mux") = false,
+            nb::arg("relay_slices") = 16u,
             R"doc(
                 Build the SENDER endpoint in this (sender-rank) process. Must be called on
                 the rank equal to `sender_rank`; the matching `create_receiver` runs in the
@@ -497,7 +547,12 @@ void py_module_types(nb::module_& mod) {
                const std::optional<D2DStageGateConfig>& stage_gate,
                const nb::list& extra_tensors,
                bool relay,
-               bool reserve_links_for_later_service) {
+               bool reserve_links_for_later_service,
+               uint32_t max_sender_lanes,
+               const std::optional<uint32_t>& max_cable_lanes,
+               bool cable_mux,
+               bool instage_mux,
+               uint32_t relay_slices) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -510,8 +565,13 @@ void py_module_types(nb::module_& mod) {
                     fabric_link_group,
                     stage_gate,
                     make_extra_tensors(*receiver_mesh, extra_tensors),
-                    relay);
-                cfg.reserve_links_for_later_service = reserve_links_for_later_service;
+                    relay,
+                    max_sender_lanes,
+                    max_cable_lanes,
+                    cable_mux,
+                    instage_mux,
+                    relay_slices,
+                    reserve_links_for_later_service);
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
                     .receiver_rank = Rank{receiver_rank},
@@ -534,6 +594,11 @@ void py_module_types(nb::module_& mod) {
             nb::arg("extra_tensors") = nb::list(),
             nb::arg("relay") = false,
             nb::arg("reserve_links_for_later_service") = true,
+            nb::arg("max_sender_lanes") = 2u,
+            nb::arg("max_cable_lanes") = nb::none(),
+            nb::arg("cable_mux") = false,
+            nb::arg("instage_mux") = false,
+            nb::arg("relay_slices") = 16u,
             R"doc(
                 Build the RECEIVER endpoint in this (receiver-rank) process. Must be called
                 on the rank equal to `receiver_rank`; the matching `create_sender` runs in

@@ -58,10 +58,13 @@
 //   tt-run --rank-binding <rank_binding.yaml> --mpi-args "--allow-run-as-root --tag-output"
 //       ./build/test/ttnn/multiprocess/unit_tests_cross_process_d2d
 
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <thread>
 #include <utility>
@@ -71,6 +74,7 @@
 
 #include "gtest/gtest.h"
 
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/hal.hpp>
@@ -88,6 +92,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <internal/mesh_device.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 
@@ -97,6 +102,9 @@
 #include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync/inbound_socket_service_sync.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/d2d_pipeline_descriptor.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"
 #include "ttnn/services/h2d_socket_service.hpp"
@@ -1376,8 +1384,7 @@ void expect_relay_claim_failure_on_both_ranks(
     if (rank == *failing_rank) {
         EXPECT_NE(error.find("no free fabric router"), std::string::npos) << "rank " << rank << ": " << error;
     } else if (rank == 0 || rank == 1) {
-        EXPECT_NE(error.find("failed to set up its relay side"), std::string::npos)
-            << "rank " << rank << ": " << error;
+        EXPECT_NE(error.find("failed to set up its relay side"), std::string::npos) << "rank " << rank << ": " << error;
     }
     ctx->barrier();
 }
@@ -1527,6 +1534,1228 @@ TEST(CrossProcessD2DExport, BadCallFailsOnEveryRank) {
     auto file = D2DStreamService::export_pipeline_descriptor(service_id, none, Rank{0}, ctx);
     EXPECT_EQ(file != nullptr, rank == 0);
     ctx->barrier();
+}
+
+// ===========================================================================
+// Bidirectional Stage Sockets (Cable Mux + Bandwidth + Stage Compute Overlap)
+// ===========================================================================
+
+using ::tt::tt_metal::distributed::MeshBuffer;
+using ::tt::tt_metal::distributed::ReadShard;
+using ::tt::tt_metal::distributed::WriteShard;
+
+std::shared_ptr<MeshBuffer> bidir_mesh_buffer_view(const ttnn::Tensor& tensor) {
+    return std::shared_ptr<MeshBuffer>(const_cast<MeshBuffer*>(&tensor.mesh_buffer()), [](auto*) {});
+}
+
+class BidirectionalStageSocketsFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto& context = tt::tt_metal::MetalContext::instance();
+        if (static_cast<size_t>(*context.global_distributed_context().size()) !=
+            context.get_control_plane().get_mesh_graph().get_mesh_ids().size()) {
+            GTEST_SKIP() << "Needs one mesh per rank in the mesh graph descriptor.";
+        }
+        auto fabric_cfg = tt::tt_fabric::FabricConfig::MGD_DEFAULT;
+        if (const char* mode = std::getenv("BIDIR_FABRIC_MODE")) {
+            const std::string m(mode);
+            if (m == "2d") {
+                fabric_cfg = tt::tt_fabric::FabricConfig::FABRIC_2D;
+            } else if (m == "2d_torus_x") {
+                fabric_cfg = tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X;
+            } else if (m == "2d_torus_y") {
+                fabric_cfg = tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y;
+            } else if (m == "2d_torus_xy") {
+                fabric_cfg = tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+            }
+        }
+        tt::tt_fabric::FabricRouterConfig router_cfg{};
+        if (const char* payload_env = std::getenv("BIDIR_MAX_PAYLOAD_BYTES")) {
+            router_cfg.max_packet_payload_size_bytes = static_cast<size_t>(std::stoul(payload_env));
+        }
+        tt::tt_fabric::SetFabricConfig(
+            fabric_cfg,
+            tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+            std::nullopt,
+            tt::tt_fabric::FabricTensixConfig::DISABLED,
+            tt::tt_fabric::FabricUDMMode::DISABLED,
+            tt::tt_fabric::FabricManagerMode::DEFAULT,
+            router_cfg);
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig(context.get_system_mesh().shape()));
+    }
+
+    void TearDown() override {
+        if (!mesh_device_) {
+            return;
+        }
+        mesh_device_->close();
+        mesh_device_.reset();
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+    }
+
+    std::shared_ptr<MeshDevice> mesh_device_;
+};
+
+D2DStreamConfig make_bidir_relay_cfg(
+    const std::shared_ptr<MeshDevice>& mesh,
+    const ttnn::Shape& per_chip_shape,
+    const CoreRange& worker_cores,
+    const std::string& link_group,
+    bool cable_mux,
+    uint32_t cable_lanes,
+    uint32_t in_mesh_lanes,
+    bool reserve_links_for_later_service = true,
+    uint32_t metadata_size_bytes = 0,
+    bool instage_mux = false,
+    uint32_t relay_slices = 16u) {
+    const tt::tt_metal::TensorSpec global_spec(
+        per_chip_shape,
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt}));
+    return D2DStreamConfig{
+        .global_spec = global_spec,
+        .mapper = create_mesh_mapper(*mesh, MeshMapperConfig{.placements = replicate_all(*mesh)}),
+        .socket_mem_config = SocketMemoryConfig{BufferType::L1, /*fifo_size=*/4096u},
+        .sender_worker_cores = worker_cores,
+        .receiver_worker_cores = worker_cores,
+        .metadata_size_bytes = metadata_size_bytes,
+        .share_fabric_links = true,
+        .max_sender_lanes = in_mesh_lanes,
+        .max_cable_lanes = cable_lanes,
+        .cable_mux = cable_mux,
+        .instage_mux = instage_mux,
+        .relay_slices = relay_slices,
+        .fabric_link_group = link_group,
+        .relay = true,
+        .reserve_links_for_later_service = reserve_links_for_later_service,
+    };
+}
+
+// Zero-copy receiver handshake (placeholder_d2d_receiver_worker, num_iters = 1):
+// waits data_ready_sem, resets it, and atomic-incs consumed_counter.
+MeshWorkload make_recv_ack_workload(D2DStreamServiceReceiver* receiver, const std::shared_ptr<MeshDevice>& mesh) {
+    const auto& coords = receiver->get_backing_tensor().tensor_topology().mesh_coords();
+    const CoreRange worker_cores = receiver->get_worker_cores();
+    const std::vector<uint32_t> ct_args = {
+        static_cast<uint32_t>(receiver->get_data_ready_sem_addr()),
+        /*num_iters=*/1u,
+    };
+    MeshWorkload workload;
+    for (const auto& coord : coords) {
+        auto program = CreateProgram();
+        auto kernel = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/tensor/kernels/placeholder_d2d_receiver_worker.cpp",
+            worker_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
+        const auto svc_phys = device->worker_core_from_logical_core(receiver->get_service_core(coord));
+        const std::vector<uint32_t> rt_args = {
+            static_cast<uint32_t>(receiver->get_consumed_counter_addr(coord)),
+            static_cast<uint32_t>(svc_phys.x),
+            static_cast<uint32_t>(svc_phys.y),
+        };
+        for (const auto& wc : worker_cores) {
+            SetRuntimeArgs(program, kernel, wc, rt_args);
+        }
+        workload.add_program(MeshCoordinateRange(coord), std::move(program));
+    }
+    return workload;
+}
+
+void fill_backing_iota(const ttnn::Tensor& tensor, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
+    auto mb = bidir_mesh_buffer_view(tensor);
+    const size_t num_u32 = tensor.buffer()->size() / sizeof(uint32_t);
+    std::vector<uint32_t> vals = make_iota_u32(num_u32, base);
+    for (const auto& coord : tensor.tensor_topology().mesh_coords()) {
+        WriteShard(mesh->mesh_command_queue(), mb, vals, coord);
+    }
+    Finish(mesh->mesh_command_queue());
+}
+
+void verify_backing_iota(
+    const ttnn::Tensor& tensor, const std::shared_ptr<MeshDevice>& mesh, uint32_t base, const char* label) {
+    auto mb = bidir_mesh_buffer_view(tensor);
+    const size_t num_u32 = tensor.buffer()->size() / sizeof(uint32_t);
+    const std::vector<uint32_t> expected = make_iota_u32(num_u32, base);
+    std::vector<uint32_t> actual;
+    for (const auto& coord : tensor.tensor_topology().mesh_coords()) {
+        actual.clear();
+        ReadShard(mesh->mesh_command_queue(), actual, mb, coord);
+        EXPECT_EQ(actual, expected) << label << " mismatch at coord " << coord << " (expected base " << base << ")";
+    }
+}
+
+TEST_F(BidirectionalStageSocketsFixture, MismatchedCableMuxThrows) {
+    const auto& ctx = DistributedContext::get_current_world();
+    const int world_size = *ctx->size();
+    const int rank = *ctx->rank();
+    if (world_size < 2) {
+        GTEST_SKIP() << "Needs >= 2 ranks; got " << world_size;
+    }
+
+    const ttnn::Shape shape({1, 1, 32, 64});
+    const D2DEndpointConfig endpoints{.sender_rank = Rank{0}, .receiver_rank = Rank{1}, .distributed_context = ctx};
+    if (rank == 0) {
+        auto cfg = make_bidir_relay_cfg(mesh_device_, shape, kWorkerCores, "d2d-outbound", /*cable_mux=*/true, 2, 1);
+        EXPECT_THROW(D2DStreamService::create_sender(mesh_device_, std::move(cfg), endpoints), std::exception);
+    } else if (rank == 1) {
+        auto cfg = make_bidir_relay_cfg(mesh_device_, shape, kWorkerCores, "d2d-inbound", /*cable_mux=*/false, 1, 1);
+        EXPECT_THROW(D2DStreamService::create_receiver(mesh_device_, std::move(cfg), endpoints), std::exception);
+    }
+    ctx->barrier();
+}
+
+TEST_F(BidirectionalStageSocketsFixture, BidirectionalCableMuxCorrectnessAndTeardown) {
+    const auto& ctx = DistributedContext::get_current_world();
+    const int world_size = *ctx->size();
+    const int rank = *ctx->rank();
+    if (world_size < 2) {
+        GTEST_SKIP() << "Needs >= 2 ranks; got " << world_size;
+    }
+
+    // 1. Check dispatch-column service core pool on every chip (>= 6 free cores before D2D claims).
+    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
+    size_t min_claimable = 1000;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
+        const auto claimable = svc.get_claimable_cores(d);
+        min_claimable = std::min(min_claimable, claimable.size());
+        EXPECT_GE(claimable.size(), 6u) << "rank " << rank << " coord " << coord << " has too few service cores";
+    }
+    if (rank == 0) {
+        log_info(
+            tt::LogMetal,
+            "[bidir-check] mesh shape {} ({} chips/rank), world_size={}, min claimable dispatch-column cores/chip={}",
+            mesh_device_->shape(),
+            mesh_device_->num_devices(),
+            world_size,
+            min_claimable);
+    }
+
+    const ttnn::Shape shape({1, 1, 256, 256});  // 256 KB/chip (multi-page, >16 packets/lane)
+    auto fabric_sem = ttnn::global_semaphore::create_global_semaphore(
+        mesh_device_.get(),
+        CoreRangeSet(CoreRange{kStressWorkerCores.start_coord, kStressWorkerCores.start_coord}),
+        /*initial_value=*/0,
+        BufferType::L1);
+
+    auto build_all_streams = [&]() {
+        std::unique_ptr<D2DStreamServiceReceiver> act_in;
+        std::unique_ptr<D2DStreamServiceSender> act_out;
+        std::unique_ptr<D2DStreamServiceReceiver> grad_in;
+        std::unique_ptr<D2DStreamServiceSender> grad_out;
+
+        // Section 2.2 creation order: boundaries b = 0 .. P-2, activation pair then gradient pair.
+        // Uses BOTH cable_mux = true AND instage_mux = true with 2 cable lanes + 2 in-mesh lanes!
+        for (int b = 0; b + 1 < world_size; ++b) {
+            const D2DEndpointConfig act_ep{
+                .sender_rank = Rank{b}, .receiver_rank = Rank{b + 1}, .distributed_context = ctx};
+            if (rank == b) {
+                act_out = D2DStreamService::create_sender(
+                    mesh_device_,
+                    make_bidir_relay_cfg(
+                        mesh_device_,
+                        shape,
+                        kStressWorkerCores,
+                        "d2d-outbound",
+                        /*cable_mux=*/true,
+                        2,
+                        2,
+                        true,
+                        0,
+                        /*instage_mux=*/true),
+                    act_ep);
+            } else if (rank == b + 1) {
+                act_in = D2DStreamService::create_receiver(
+                    mesh_device_,
+                    make_bidir_relay_cfg(
+                        mesh_device_,
+                        shape,
+                        kStressWorkerCores,
+                        "d2d-inbound",
+                        /*cable_mux=*/true,
+                        2,
+                        2,
+                        /*reserve=*/true,
+                        0,
+                        /*instage_mux=*/true),
+                    act_ep);
+            }
+
+            const D2DEndpointConfig grad_ep{
+                .sender_rank = Rank{b + 1}, .receiver_rank = Rank{b}, .distributed_context = ctx};
+            if (rank == b + 1) {
+                grad_out = D2DStreamService::create_sender(
+                    mesh_device_,
+                    make_bidir_relay_cfg(
+                        mesh_device_,
+                        shape,
+                        kStressWorkerCores,
+                        "d2d-outbound",
+                        /*cable_mux=*/true,
+                        2,
+                        2,
+                        true,
+                        0,
+                        /*instage_mux=*/true),
+                    grad_ep);
+            } else if (rank == b) {
+                const bool more_services_follow = (b + 1 < world_size - 1);
+                grad_in = D2DStreamService::create_receiver(
+                    mesh_device_,
+                    make_bidir_relay_cfg(
+                        mesh_device_,
+                        shape,
+                        kStressWorkerCores,
+                        "d2d-inbound",
+                        /*cable_mux=*/true,
+                        2,
+                        2,
+                        more_services_follow,
+                        0,
+                        /*instage_mux=*/true),
+                    grad_ep);
+            }
+        }
+        return std::make_tuple(std::move(act_in), std::move(act_out), std::move(grad_in), std::move(grad_out));
+    };
+
+    // Round 1: simultaneous bidirectional transfers across all ranks + intra-mesh fabric contention,
+    // followed by tearing down `act` first while `grad` continues streaming!
+    {
+        auto [act_in, act_out, grad_in, grad_out] = build_all_streams();
+        auto& cq = mesh_device_->mesh_command_queue();
+
+        const uint32_t act_base = 1000u + static_cast<uint32_t>(rank) * 100u;
+        const uint32_t grad_base = 5000u + static_cast<uint32_t>(rank) * 100u;
+        if (act_out) {
+            fill_backing_iota(act_out->get_backing_tensor(), mesh_device_, act_base);
+        }
+        if (grad_out) {
+            fill_backing_iota(grad_out->get_backing_tensor(), mesh_device_, grad_base);
+        }
+        ctx->barrier();
+
+        MeshWorkload act_recv_wl = act_in ? make_recv_ack_workload(act_in.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload grad_recv_wl = grad_in ? make_recv_ack_workload(grad_in.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload act_sig_wl = act_out ? make_stress_signal_workload(act_out.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload grad_sig_wl =
+            grad_out ? make_stress_signal_workload(grad_out.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload act_gate_wl = act_out ? make_gate_workload(act_out.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload grad_gate_wl = grad_out ? make_gate_workload(grad_out.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload fabric_wl = make_stress_fabric_workload(mesh_device_, kStressWorkerCores, fabric_sem, 4u);
+
+        constexpr uint32_t kIters = 8;
+        // Prime transfer 0 in BOTH directions simultaneously.
+        if (act_out) {
+            act_out->release_fabric_links();
+            EnqueueMeshWorkload(cq, act_sig_wl, /*blocking=*/false);
+        }
+        if (grad_out) {
+            grad_out->release_fabric_links();
+            EnqueueMeshWorkload(cq, grad_sig_wl, /*blocking=*/false);
+        }
+
+        for (uint32_t iter = 0; iter < kIters; ++iter) {
+            // Receive before wait (Section 2.1).
+            if (act_in) {
+                act_in->release_fabric_links();
+                EnqueueMeshWorkload(cq, act_recv_wl, /*blocking=*/false);
+            }
+            if (grad_in) {
+                grad_in->release_fabric_links();
+                EnqueueMeshWorkload(cq, grad_recv_wl, /*blocking=*/false);
+            }
+
+            // Wait all open stream windows before intra-mesh collectives.
+            if (act_in) {
+                act_in->wait_for_fabric_links();
+            }
+            if (grad_in) {
+                grad_in->wait_for_fabric_links();
+            }
+            if (act_out) {
+                act_out->wait_for_fabric_links();
+                EnqueueMeshWorkload(cq, act_gate_wl, /*blocking=*/false);
+            }
+            if (grad_out) {
+                grad_out->wait_for_fabric_links();
+                EnqueueMeshWorkload(cq, grad_gate_wl, /*blocking=*/false);
+            }
+
+            // Intra-mesh fabric collective stress on ALL links of ALL chips.
+            EnqueueMeshWorkload(cq, fabric_wl, /*blocking=*/false);
+
+            if (iter + 1 < kIters) {
+                if (act_out) {
+                    act_out->release_fabric_links();
+                    EnqueueMeshWorkload(cq, act_sig_wl, /*blocking=*/false);
+                }
+                if (grad_out) {
+                    grad_out->release_fabric_links();
+                    EnqueueMeshWorkload(cq, grad_sig_wl, /*blocking=*/false);
+                }
+            }
+        }
+        Finish(cq);
+        ctx->barrier();
+
+        if (act_in) {
+            verify_backing_iota(
+                act_in->get_backing_tensor(),
+                mesh_device_,
+                1000u + static_cast<uint32_t>(rank - 1) * 100u,
+                "act_in simultaneous bidir");
+        }
+        if (grad_in) {
+            verify_backing_iota(
+                grad_in->get_backing_tensor(),
+                mesh_device_,
+                5000u + static_cast<uint32_t>(rank + 1) * 100u,
+                "grad_in simultaneous bidir");
+        }
+
+        // Teardown order A: destroy `act` first; prove `grad` keeps streaming through the shared cable mux!
+        act_in.reset();
+        act_out.reset();
+        ctx->barrier();
+
+        const uint32_t grad_after_act_teardown = 9000u + static_cast<uint32_t>(rank) * 100u;
+        if (grad_out) {
+            fill_backing_iota(grad_out->get_backing_tensor(), mesh_device_, grad_after_act_teardown);
+        }
+        ctx->barrier();
+        for (uint32_t iter = 0; iter < 4u; ++iter) {
+            if (grad_out) {
+                grad_out->release_fabric_links();
+                EnqueueMeshWorkload(cq, grad_sig_wl, /*blocking=*/false);
+            }
+            if (grad_in) {
+                grad_in->release_fabric_links();
+                EnqueueMeshWorkload(cq, grad_recv_wl, /*blocking=*/false);
+                grad_in->wait_for_fabric_links();
+            }
+            if (grad_out) {
+                grad_out->wait_for_fabric_links();
+                EnqueueMeshWorkload(cq, grad_gate_wl, /*blocking=*/false);
+            }
+        }
+        Finish(cq);
+        ctx->barrier();
+        if (grad_in) {
+            verify_backing_iota(
+                grad_in->get_backing_tensor(),
+                mesh_device_,
+                9000u + static_cast<uint32_t>(rank + 1) * 100u,
+                "grad_in after act teardown");
+        }
+
+        grad_in.reset();
+        grad_out.reset();
+        ctx->barrier();
+    }
+
+    // Round 2: re-create all streams on the SAME MeshDevice (proving zero leaked service cores,
+    // L1, or router claims!) and tear down in the OPPOSITE order (`grad` first, then `act`).
+    {
+        auto [act_in, act_out, grad_in, grad_out] = build_all_streams();
+        auto& cq = mesh_device_->mesh_command_queue();
+
+        // Destroy `grad` first, then run 4 transfers on `act`!
+        grad_in.reset();
+        grad_out.reset();
+        ctx->barrier();
+
+        const uint32_t act_after_grad_teardown = 12000u + static_cast<uint32_t>(rank) * 100u;
+        if (act_out) {
+            fill_backing_iota(act_out->get_backing_tensor(), mesh_device_, act_after_grad_teardown);
+        }
+        ctx->barrier();
+
+        MeshWorkload act_recv_wl = act_in ? make_recv_ack_workload(act_in.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload act_sig_wl = act_out ? make_stress_signal_workload(act_out.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload act_gate_wl = act_out ? make_gate_workload(act_out.get(), mesh_device_) : MeshWorkload{};
+
+        for (uint32_t iter = 0; iter < 4u; ++iter) {
+            if (act_out) {
+                act_out->release_fabric_links();
+                EnqueueMeshWorkload(cq, act_sig_wl, /*blocking=*/false);
+            }
+            if (act_in) {
+                act_in->release_fabric_links();
+                EnqueueMeshWorkload(cq, act_recv_wl, /*blocking=*/false);
+                act_in->wait_for_fabric_links();
+            }
+            if (act_out) {
+                act_out->wait_for_fabric_links();
+                EnqueueMeshWorkload(cq, act_gate_wl, /*blocking=*/false);
+            }
+        }
+        Finish(cq);
+        ctx->barrier();
+        if (act_in) {
+            verify_backing_iota(
+                act_in->get_backing_tensor(),
+                mesh_device_,
+                12000u + static_cast<uint32_t>(rank - 1) * 100u,
+                "act_in after grad teardown");
+        }
+
+        act_in.reset();
+        act_out.reset();
+        ctx->barrier();
+    }
+}
+
+struct BenchResult {
+    std::string name;
+    size_t shard_bytes = 0;
+    size_t stage_bytes_per_dir = 0;
+    double ms_per_iter = 0.0;
+    double gbps_per_dir = 0.0;
+    double gbps_total_bidir = 0.0;
+    double on_device_recv_wait_ms = 0.0;
+    double on_device_lease_wait_ms = 0.0;
+    double on_device_total_compute_wait_ms = 0.0;
+};
+
+TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchmark) {
+    const auto& ctx = DistributedContext::get_current_world();
+    const int world_size = *ctx->size();
+    const int rank = *ctx->rank();
+    if (world_size != 2) {
+        GTEST_SKIP() << "2-stage benchmark requires world_size == 2; got " << world_size;
+    }
+
+    const size_t chips_per_stage = mesh_device_->num_devices();
+    uint32_t default_mb = 8u;  // 8 MB/chip = Llama-70B TP4xCP4 boundary shard ([1,1,2048,2048] bf16)
+    if (const char* env_mb = std::getenv("BIDIR_SHARD_MB")) {
+        default_mb = static_cast<uint32_t>(std::stoul(env_mb));
+    }
+
+    constexpr uint32_t kWarmupIters = 5;
+    constexpr uint32_t kTimedIters = 25;
+    constexpr uint32_t kMaxTsSamples = 3u * (kTimedIters + 2u);
+    const uint32_t l1_align = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t raw_ts_bytes = (2u + 2u * kMaxTsSamples) * static_cast<uint32_t>(sizeof(uint32_t));
+    const uint32_t ts_buf_bytes = ((raw_ts_bytes + l1_align - 1u) / l1_align) * l1_align;
+
+    // Allocate persistent L1 timestamp buffer on worker core (0,0) across the mesh.
+    const CoreCoord ts_core{0, 0};
+    const CoreRange ts_core_range{ts_core, ts_core};
+    tt::tt_metal::distributed::DeviceLocalBufferConfig ts_local = {
+        .page_size = ts_buf_bytes,
+        .buffer_type = BufferType::L1,
+        .sharding_args = tt::tt_metal::BufferShardingArgs(
+            tt::tt_metal::ShardSpecBuffer(
+                CoreRangeSet(ts_core_range), {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = std::nullopt,
+        .sub_device_id = std::nullopt,
+    };
+    tt::tt_metal::distributed::MeshBufferConfig ts_mesh_cfg =
+        tt::tt_metal::distributed::ReplicatedBufferConfig{.size = ts_buf_bytes};
+    auto ts_buffer = MeshBuffer::create(ts_mesh_cfg, ts_local, mesh_device_.get());
+    const uint32_t ts_l1_addr = static_cast<uint32_t>(ts_buffer->address());
+
+    MeshWorkload ts_wl;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        auto program = CreateProgram();
+        CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_timestamp.cpp",
+            ts_core_range,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {ts_l1_addr, kMaxTsSamples}});
+        ts_wl.add_program(MeshCoordinateRange(coord), std::move(program));
+    }
+
+    auto reset_ts_buffers = [&]() {
+        std::vector<uint32_t> zeros(ts_buf_bytes / sizeof(uint32_t), 0u);
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            tt::tt_metal::detail::WriteToDeviceL1(
+                tt::tt_metal::internal::get_device(*mesh_device_, coord), ts_core, ts_l1_addr, zeros);
+        }
+    };
+
+    const auto compute_grid = mesh_device_->compute_with_storage_grid_size();
+    const CoreRange full_worker_grid{CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1}};
+
+    auto run_socket_cell = [&](const std::string& label,
+                               uint32_t shard_mb,
+                               bool bidirectional,
+                               bool cable_mux,
+                               bool instage_mux,
+                               uint32_t cable_lanes,
+                               uint32_t in_mesh_lanes,
+                               bool use_ttnn_runtime_ops,
+                               int num_matmuls,
+                               const ttnn::Tensor* mm_a,
+                               const ttnn::Tensor* mm_b,
+                               ttnn::Tensor* mm_out,
+                               MeshWorkload* intra_fabric_wl,
+                               uint32_t relay_slices = 16u) -> BenchResult {
+        // Page = 2048 * 4B = 8192B; rows = shard_mb * 128 -> exact shard_mb MiB/chip.
+        const ttnn::Shape shape({1, 1, shard_mb * 128u, 2048u});
+        const size_t shard_bytes = static_cast<size_t>(shard_mb) * 1024ull * 1024ull;
+        const size_t stage_bytes = shard_bytes * chips_per_stage;
+        const CoreRange workers = use_ttnn_runtime_ops ? full_worker_grid : kStressWorkerCores;
+
+        std::unique_ptr<D2DStreamServiceSender> act_out;
+        std::unique_ptr<D2DStreamServiceReceiver> act_in;
+        std::unique_ptr<D2DStreamServiceSender> grad_out;
+        std::unique_ptr<D2DStreamServiceReceiver> grad_in;
+
+        const D2DEndpointConfig act_ep{.sender_rank = Rank{0}, .receiver_rank = Rank{1}, .distributed_context = ctx};
+        if (rank == 0) {
+            act_out = D2DStreamService::create_sender(
+                mesh_device_,
+                make_bidir_relay_cfg(
+                    mesh_device_,
+                    shape,
+                    workers,
+                    "d2d-outbound",
+                    cable_mux,
+                    cable_lanes,
+                    in_mesh_lanes,
+                    true,
+                    0,
+                    instage_mux,
+                    relay_slices),
+                act_ep);
+        } else {
+            act_in = D2DStreamService::create_receiver(
+                mesh_device_,
+                make_bidir_relay_cfg(
+                    mesh_device_,
+                    shape,
+                    workers,
+                    "d2d-inbound",
+                    cable_mux,
+                    cable_lanes,
+                    in_mesh_lanes,
+                    /*reserve=*/bidirectional,
+                    0,
+                    instage_mux,
+                    relay_slices),
+                act_ep);
+        }
+
+        if (bidirectional) {
+            const D2DEndpointConfig grad_ep{
+                .sender_rank = Rank{1}, .receiver_rank = Rank{0}, .distributed_context = ctx};
+            if (rank == 1) {
+                grad_out = D2DStreamService::create_sender(
+                    mesh_device_,
+                    make_bidir_relay_cfg(
+                        mesh_device_,
+                        shape,
+                        workers,
+                        "d2d-outbound",
+                        cable_mux,
+                        cable_lanes,
+                        in_mesh_lanes,
+                        true,
+                        0,
+                        instage_mux,
+                        relay_slices),
+                    grad_ep);
+            } else {
+                grad_in = D2DStreamService::create_receiver(
+                    mesh_device_,
+                    make_bidir_relay_cfg(
+                        mesh_device_,
+                        shape,
+                        workers,
+                        "d2d-inbound",
+                        cable_mux,
+                        cable_lanes,
+                        in_mesh_lanes,
+                        /*reserve=*/false,
+                        0,
+                        instage_mux,
+                        relay_slices),
+                    grad_ep);
+            }
+        }
+
+        std::optional<ttnn::Tensor> act_send_src, grad_send_src, act_recv_dst, grad_recv_dst;
+        if (use_ttnn_runtime_ops) {
+            if (act_out) {
+                act_send_src = ttnn::create_device_tensor(
+                    act_out->get_backing_tensor().tensor_spec(),
+                    mesh_device_.get(),
+                    act_out->get_backing_tensor().tensor_topology());
+                fill_backing_iota(*act_send_src, mesh_device_, 0x100u + shard_mb);
+            }
+            if (grad_out) {
+                grad_send_src = ttnn::create_device_tensor(
+                    grad_out->get_backing_tensor().tensor_spec(),
+                    mesh_device_.get(),
+                    grad_out->get_backing_tensor().tensor_topology());
+                fill_backing_iota(*grad_send_src, mesh_device_, 0x900u + shard_mb);
+            }
+            if (act_in) {
+                act_recv_dst = ttnn::create_device_tensor(
+                    act_in->get_backing_tensor().tensor_spec(),
+                    mesh_device_.get(),
+                    act_in->get_backing_tensor().tensor_topology());
+            }
+            if (grad_in) {
+                grad_recv_dst = ttnn::create_device_tensor(
+                    grad_in->get_backing_tensor().tensor_spec(),
+                    mesh_device_.get(),
+                    grad_in->get_backing_tensor().tensor_topology());
+            }
+        } else {
+            if (act_out) {
+                fill_backing_iota(act_out->get_backing_tensor(), mesh_device_, 0x100u + shard_mb);
+            }
+            if (grad_out) {
+                fill_backing_iota(grad_out->get_backing_tensor(), mesh_device_, 0x900u + shard_mb);
+            }
+        }
+
+        auto& cq = mesh_device_->mesh_command_queue();
+        MeshWorkload act_recv_wl =
+            (!use_ttnn_runtime_ops && act_in) ? make_recv_ack_workload(act_in.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload grad_recv_wl =
+            (!use_ttnn_runtime_ops && grad_in) ? make_recv_ack_workload(grad_in.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload act_sig_wl = (!use_ttnn_runtime_ops && act_out)
+                                      ? make_stress_signal_workload(act_out.get(), mesh_device_)
+                                      : MeshWorkload{};
+        MeshWorkload grad_sig_wl = (!use_ttnn_runtime_ops && grad_out)
+                                       ? make_stress_signal_workload(grad_out.get(), mesh_device_)
+                                       : MeshWorkload{};
+        MeshWorkload act_gate_wl =
+            (!use_ttnn_runtime_ops && act_out) ? make_gate_workload(act_out.get(), mesh_device_) : MeshWorkload{};
+        MeshWorkload grad_gate_wl =
+            (!use_ttnn_runtime_ops && grad_out) ? make_gate_workload(grad_out.get(), mesh_device_) : MeshWorkload{};
+
+        auto do_send = [&](D2DStreamServiceSender* s, const std::optional<ttnn::Tensor>& src, MeshWorkload& sig_wl) {
+            if (!s) {
+                return;
+            }
+            if (use_ttnn_runtime_ops) {
+                (void)ttnn::experimental::outbound_socket_service_sync(*s, *src);
+                s->release_fabric_links();
+            } else {
+                s->release_fabric_links();
+                EnqueueMeshWorkload(cq, sig_wl, /*blocking=*/false);
+            }
+        };
+
+        auto do_recv = [&](D2DStreamServiceReceiver* r, const std::optional<ttnn::Tensor>& dst, MeshWorkload& recv_wl) {
+            if (!r) {
+                return;
+            }
+            r->release_fabric_links();
+            if (use_ttnn_runtime_ops) {
+                (void)ttnn::experimental::inbound_socket_service_sync(*r, 0u, 0u, dst);
+            } else {
+                EnqueueMeshWorkload(cq, recv_wl, /*blocking=*/false);
+            }
+        };
+
+        auto run_loop = [&](uint32_t iters, bool record_timestamps) {
+            do_send(act_out.get(), act_send_src, act_sig_wl);
+            do_send(grad_out.get(), grad_send_src, grad_sig_wl);
+
+            for (uint32_t i = 0; i < iters; ++i) {
+                if (record_timestamps) {
+                    EnqueueMeshWorkload(cq, ts_wl, /*blocking=*/false);  // t0: before Recv
+                }
+
+                do_recv(act_in.get(), act_recv_dst, act_recv_wl);
+                do_recv(grad_in.get(), grad_recv_dst, grad_recv_wl);
+
+                if (record_timestamps) {
+                    EnqueueMeshWorkload(cq, ts_wl, /*blocking=*/false);  // t1: after Recv, before lease WAIT
+                }
+
+                if (act_in) {
+                    act_in->wait_for_fabric_links();
+                }
+                if (grad_in) {
+                    grad_in->wait_for_fabric_links();
+                }
+                if (act_out) {
+                    act_out->wait_for_fabric_links();
+                    if (!use_ttnn_runtime_ops) {
+                        EnqueueMeshWorkload(cq, act_gate_wl, /*blocking=*/false);
+                    }
+                }
+                if (grad_out) {
+                    grad_out->wait_for_fabric_links();
+                    if (!use_ttnn_runtime_ops) {
+                        EnqueueMeshWorkload(cq, grad_gate_wl, /*blocking=*/false);
+                    }
+                }
+
+                if (record_timestamps) {
+                    EnqueueMeshWorkload(cq, ts_wl, /*blocking=*/false);  // t2: after WAIT (exact start of Compute!)
+                }
+
+                if (num_matmuls > 0) {
+                    for (int m = 0; m < num_matmuls; ++m) {
+                        (void)ttnn::operations::matmul::matmul(
+                            *mm_a,
+                            *mm_b,
+                            /*transpose_a=*/false,
+                            /*transpose_b=*/false,
+                            std::nullopt,
+                            std::nullopt,
+                            std::nullopt,
+                            std::nullopt,
+                            std::nullopt,
+                            std::nullopt,
+                            std::nullopt,
+                            *mm_out);
+                    }
+                    if (intra_fabric_wl != nullptr) {
+                        EnqueueMeshWorkload(cq, *intra_fabric_wl, /*blocking=*/false);
+                    }
+                }
+
+                if (i + 1 < iters) {
+                    do_send(act_out.get(), act_send_src, act_sig_wl);
+                    do_send(grad_out.get(), grad_send_src, grad_sig_wl);
+                }
+            }
+            Finish(cq);
+        };
+
+        ctx->barrier();
+        run_loop(kWarmupIters, /*record_timestamps=*/false);
+        reset_ts_buffers();
+        Synchronize(*mesh_device_, std::nullopt);
+        ctx->barrier();
+
+        const auto t0 = std::chrono::steady_clock::now();
+        run_loop(kTimedIters, /*record_timestamps=*/true);
+        Synchronize(*mesh_device_, std::nullopt);
+        ctx->barrier();
+        const auto t1 = std::chrono::steady_clock::now();
+
+        if (act_in) {
+            const auto& check_t = use_ttnn_runtime_ops ? *act_recv_dst : act_in->get_backing_tensor();
+            verify_backing_iota(check_t, mesh_device_, 0x100u + shard_mb, label.c_str());
+        }
+        if (grad_in) {
+            const auto& check_t = use_ttnn_runtime_ops ? *grad_recv_dst : grad_in->get_backing_tensor();
+            verify_backing_iota(check_t, mesh_device_, 0x900u + shard_mb, label.c_str());
+        }
+
+        // Read back on-device Tensix cycle timestamps across all chips of this stage and
+        // average the worst-case chip wait per iteration (since step collectives synchronize chips).
+        const double total_sec = std::chrono::duration<double>(t1 - t0).count();
+        double sum_recv_ms = 0.0;
+        double sum_lease_ms = 0.0;
+        // Drop iter 0 (priming send preceded t0) and average steady-state iters 1 .. kTimedIters - 1.
+        std::vector<std::vector<uint64_t>> chip_ts;
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            std::vector<uint32_t> raw;
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                tt::tt_metal::internal::get_device(*mesh_device_, coord), ts_core, ts_l1_addr, ts_buf_bytes, raw);
+            const uint32_t count = raw.at(0);
+            EXPECT_EQ(count, 3u * kTimedIters);
+            std::vector<uint64_t> ts(count);
+            for (uint32_t s = 0; s < count; ++s) {
+                ts[s] = (static_cast<uint64_t>(raw[2u + 2u * s + 1u]) << 32) | raw[2u + 2u * s];
+            }
+            chip_ts.push_back(std::move(ts));
+        }
+
+        constexpr double kCyclesPerMs = 1343000.0;
+        const uint32_t steady_iters = kTimedIters > 1 ? (kTimedIters - 1u) : 1u;
+        for (uint32_t i = 1; i < kTimedIters; ++i) {
+            double max_chip_recv_ms = 0.0;
+            double max_chip_lease_ms = 0.0;
+            for (const auto& ts : chip_ts) {
+                const double r_ms = static_cast<double>(ts[3u * i + 1u] - ts[3u * i + 0u]) / kCyclesPerMs;
+                const double l_ms = static_cast<double>(ts[3u * i + 2u] - ts[3u * i + 1u]) / kCyclesPerMs;
+                if (r_ms + l_ms > max_chip_recv_ms + max_chip_lease_ms) {
+                    max_chip_recv_ms = r_ms;
+                    max_chip_lease_ms = l_ms;
+                }
+            }
+            sum_recv_ms += max_chip_recv_ms;
+            sum_lease_ms += max_chip_lease_ms;
+        }
+        double avg_recv_wait_ms = sum_recv_ms / static_cast<double>(steady_iters);
+        double avg_lease_wait_ms = sum_lease_ms / static_cast<double>(steady_iters);
+        // For OneWay cells, rank 0 only sends while rank 1 receives; report the receiver rank's wait on rank 0.
+        if (!bidirectional) {
+            std::array<double, 2> waits{avg_recv_wait_ms, avg_lease_wait_ms};
+            auto span = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(waits.data()), sizeof(waits));
+            if (rank == 1) {
+                ctx->send(span, Rank{0}, tt::tt_metal::distributed::multihost::Tag{0x4257});
+            } else if (rank == 0) {
+                ctx->recv(span, Rank{1}, tt::tt_metal::distributed::multihost::Tag{0x4257});
+                avg_recv_wait_ms = waits[0];
+                avg_lease_wait_ms = waits[1];
+            }
+        }
+
+        act_in.reset();
+        act_out.reset();
+        grad_in.reset();
+        grad_out.reset();
+        ctx->barrier();
+
+        const double ms_per_iter = (total_sec * 1000.0) / static_cast<double>(kTimedIters);
+        const double gbps_per_dir =
+            (static_cast<double>(stage_bytes) * static_cast<double>(kTimedIters)) / (total_sec * 1e9);
+        return BenchResult{
+            .name = label,
+            .shard_bytes = shard_bytes,
+            .stage_bytes_per_dir = stage_bytes,
+            .ms_per_iter = ms_per_iter,
+            .gbps_per_dir = gbps_per_dir,
+            .gbps_total_bidir = bidirectional ? (2.0 * gbps_per_dir) : gbps_per_dir,
+            .on_device_recv_wait_ms = avg_recv_wait_ms,
+            .on_device_lease_wait_ms = avg_lease_wait_ms,
+            .on_device_total_compute_wait_ms = avg_recv_wait_ms + avg_lease_wait_ms,
+        };
+    };
+
+    std::vector<BenchResult> results;
+    {
+        const uint32_t mb = default_mb;
+        const std::string tag = std::to_string(mb) + "MB/chip";
+        results.push_back(run_socket_cell(
+            "OneWay_2Lane_Direct_S1_" + tag,
+            mb,
+            false,
+            false,
+            false,
+            2,
+            2,
+            false,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            1u));
+        results.push_back(run_socket_cell(
+            "OneWay_2Lane_Direct_S16_" + tag,
+            mb,
+            false,
+            false,
+            false,
+            2,
+            2,
+            false,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            16u));
+        results.push_back(run_socket_cell(
+            "OneWay_2Lane_AllMux_S1_" + tag,
+            mb,
+            false,
+            true,
+            true,
+            2,
+            2,
+            false,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            1u));
+        results.push_back(run_socket_cell(
+            "OneWay_2Lane_AllMux_S16_" + tag,
+            mb,
+            false,
+            true,
+            true,
+            2,
+            2,
+            false,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            16u));
+        results.push_back(run_socket_cell(
+            "Bidir_1Lane_Plain_S1_" + tag,
+            mb,
+            true,
+            false,
+            false,
+            1,
+            1,
+            false,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            1u));
+        results.push_back(run_socket_cell(
+            "Bidir_1Lane_Plain_S16_" + tag,
+            mb,
+            true,
+            false,
+            false,
+            1,
+            1,
+            false,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            16u));
+        results.push_back(run_socket_cell(
+            "Bidir_2Lane_CableMux_S16_" + tag,
+            mb,
+            true,
+            true,
+            false,
+            2,
+            1,
+            false,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            16u));
+        results.push_back(run_socket_cell(
+            "Bidir_2Lane_AllMux_S1_" + tag,
+            mb,
+            true,
+            true,
+            true,
+            2,
+            2,
+            false,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            1u));
+        results.push_back(run_socket_cell(
+            "Bidir_2Lane_AllMux_S16_" + tag,
+            mb,
+            true,
+            true,
+            true,
+            2,
+            2,
+            false,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            16u));
+        results.push_back(run_socket_cell(
+            "Bidir_2Lane_AllMux_TTNNOps_S16_" + tag,
+            mb,
+            true,
+            true,
+            true,
+            2,
+            2,
+            true,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            16u));
+    }
+
+    // Stage compute + intra-mesh fabric CCL contention benchmark (at default_mb = 8 MB/chip):
+    const auto mm_mapper =
+        create_mesh_mapper(*mesh_device_, MeshMapperConfig{.placements = replicate_all(*mesh_device_)});
+    const TensorLayout bf16_tile_dram(
+        DataType::BFLOAT16,
+        PageConfig(Layout::TILE),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
+    const tt::tt_metal::TensorSpec spec_a(ttnn::Shape({1, 1, 2048, 4096}), bf16_tile_dram);
+    const tt::tt_metal::TensorSpec spec_b(ttnn::Shape({1, 1, 4096, 2048}), bf16_tile_dram);
+    const tt::tt_metal::TensorSpec spec_out(ttnn::Shape({1, 1, 2048, 2048}), bf16_tile_dram);
+    const auto dummy_a = (*mm_mapper)(
+        ttnn::Tensor::from_vector<bfloat16>(std::vector<bfloat16>(2048ull * 4096ull, bfloat16(0.01f)), spec_a));
+    const auto dummy_b = (*mm_mapper)(
+        ttnn::Tensor::from_vector<bfloat16>(std::vector<bfloat16>(4096ull * 2048ull, bfloat16(0.01f)), spec_b));
+    ttnn::Tensor mm_a = dummy_a.to_device(mesh_device_.get());
+    ttnn::Tensor mm_b = dummy_b.to_device(mesh_device_.get());
+    const auto dummy_out = (*mm_mapper)(
+        ttnn::Tensor::from_vector<bfloat16>(std::vector<bfloat16>(2048ull * 2048ull, bfloat16(0.0f)), spec_out));
+    ttnn::Tensor mm_out =
+        ttnn::create_device_tensor(dummy_out.tensor_spec(), mesh_device_.get(), dummy_out.tensor_topology());
+
+    auto fabric_sem = ttnn::global_semaphore::create_global_semaphore(
+        mesh_device_.get(),
+        CoreRangeSet(CoreRange{kStressWorkerCores.start_coord, kStressWorkerCores.start_coord}),
+        /*initial_value=*/0,
+        BufferType::L1);
+    MeshWorkload intra_fabric_wl =
+        make_stress_fabric_workload(mesh_device_, kStressWorkerCores, fabric_sem, /*incs_per_conn=*/8u);
+
+    auto run_compute_only = [&](int num_matmuls) -> double {
+        auto& cq = mesh_device_->mesh_command_queue();
+        auto body = [&](uint32_t iters) {
+            for (uint32_t i = 0; i < iters; ++i) {
+                for (int m = 0; m < num_matmuls; ++m) {
+                    (void)ttnn::operations::matmul::matmul(
+                        mm_a,
+                        mm_b,
+                        false,
+                        false,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        mm_out);
+                }
+                EnqueueMeshWorkload(cq, intra_fabric_wl, /*blocking=*/false);
+            }
+            Finish(cq);
+        };
+        ctx->barrier();
+        body(kWarmupIters);
+        Synchronize(*mesh_device_, std::nullopt);
+        ctx->barrier();
+        const auto t0 = std::chrono::steady_clock::now();
+        body(kTimedIters);
+        Synchronize(*mesh_device_, std::nullopt);
+        ctx->barrier();
+        const auto t1 = std::chrono::steady_clock::now();
+        return (std::chrono::duration<double>(t1 - t0).count() * 1000.0) / static_cast<double>(kTimedIters);
+    };
+
+    for (int nm : {4, 16}) {
+        const double compute_only_ms = run_compute_only(nm);
+        const auto with_1lane_s1 = run_socket_cell(
+            "Compute" + std::to_string(nm) + "MM_Bidir_1Lane_S1",
+            default_mb,
+            true,
+            false,
+            false,
+            1,
+            1,
+            false,
+            nm,
+            &mm_a,
+            &mm_b,
+            &mm_out,
+            &intra_fabric_wl,
+            1u);
+        const auto with_all_mux_s1 = run_socket_cell(
+            "Compute" + std::to_string(nm) + "MM_Bidir_AllMux_S1",
+            default_mb,
+            true,
+            true,
+            true,
+            2,
+            2,
+            false,
+            nm,
+            &mm_a,
+            &mm_b,
+            &mm_out,
+            &intra_fabric_wl,
+            1u);
+        const auto with_all_mux_s16 = run_socket_cell(
+            "Compute" + std::to_string(nm) + "MM_Bidir_AllMux_S16",
+            default_mb,
+            true,
+            true,
+            true,
+            2,
+            2,
+            false,
+            nm,
+            &mm_a,
+            &mm_b,
+            &mm_out,
+            &intra_fabric_wl,
+            16u);
+        const auto with_all_mux_ttnn_s16 = run_socket_cell(
+            "Compute" + std::to_string(nm) + "MM_Bidir_AllMux_TTNNOps_S16",
+            default_mb,
+            true,
+            true,
+            true,
+            2,
+            2,
+            true,
+            nm,
+            &mm_a,
+            &mm_b,
+            &mm_out,
+            &intra_fabric_wl,
+            16u);
+
+        if (rank == 0) {
+            auto fmt_cell = [&](const BenchResult& b) {
+                return fmt::format(
+                    "step={:.3f}ms (+{:.3f}ms) [on-dev wait={:.3f}ms: recv={:.3f}ms, lease={:.3f}ms]",
+                    b.ms_per_iter,
+                    b.ms_per_iter - compute_only_ms,
+                    b.on_device_total_compute_wait_ms,
+                    b.on_device_recv_wait_ms,
+                    b.on_device_lease_wait_ms);
+            };
+            log_info(
+                tt::LogMetal,
+                "[bidir-compute-wait] mesh={} ({}x matmul + intra-mesh fabric): compute_only={:.3f}ms\n"
+                "  1-lane plain (S=1)   : {}\n"
+                "  2-lane AllMux (S=1)  : {}\n"
+                "  2-lane AllMux (S=16) : {}\n"
+                "  2-lane AllMux+TTNN16 : {}",
+                mesh_device_->shape(),
+                nm,
+                compute_only_ms,
+                fmt_cell(with_1lane_s1),
+                fmt_cell(with_all_mux_s1),
+                fmt_cell(with_all_mux_s16),
+                fmt_cell(with_all_mux_ttnn_s16));
+        }
+    }
+
+    if (rank == 0) {
+        log_info(
+            tt::LogMetal,
+            "==================== BIDIRECTIONAL SOCKET BENCHMARK ({}) ====================",
+            mesh_device_->shape());
+        for (const auto& r : results) {
+            log_info(
+                tt::LogMetal,
+                "[bidir-bench] {:<36s} | {:6.1f} MiB/dir | {:7.3f} ms/iter | {:6.2f} GB/s/dir | {:6.2f} GB/s total | "
+                "wait={:.3f}ms (recv={:.3f}, lease={:.3f})",
+                r.name,
+                static_cast<double>(r.stage_bytes_per_dir) / (1024.0 * 1024.0),
+                r.ms_per_iter,
+                r.gbps_per_dir,
+                r.gbps_total_bidir,
+                r.on_device_total_compute_wait_ms,
+                r.on_device_recv_wait_ms,
+                r.on_device_lease_wait_ms);
+        }
+        log_info(tt::LogMetal, "====================================================================================");
+    }
 }
 
 }  // namespace

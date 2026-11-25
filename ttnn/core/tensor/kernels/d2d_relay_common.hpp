@@ -14,13 +14,102 @@
 #include "api/tensor/tensor_accessor.h"
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
 namespace d2d_relay {
 
+struct MuxWaitState {
+    uint8_t mux_x = 0;
+    uint8_t mux_y = 0;
+    uint32_t mux_status_addr = 0;
+    uint32_t local_status_addr = 0;
+    bool ready = false;
+};
+
+// Build either a direct EDM router connection (ViaMux == false, 3 RT args) or a
+// FabricMux client connection (ViaMux == true, 15 RT args), returning the same
+// WorkerToFabricEdmSender type.
+template <bool ViaMux>
+FORCE_INLINE tt::tt_fabric::WorkerToFabricEdmSender build_connection(size_t& arg, MuxWaitState& wait_state) {
+    if constexpr (!ViaMux) {
+        return tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
+    } else {
+        const uint8_t mux_x = static_cast<uint8_t>(get_arg_val<uint32_t>(arg++));
+        const uint8_t mux_y = static_cast<uint8_t>(get_arg_val<uint32_t>(arg++));
+        const uint8_t ch_id = static_cast<uint8_t>(get_arg_val<uint32_t>(arg++));
+        const uint8_t num_bufs = static_cast<uint8_t>(get_arg_val<uint32_t>(arg++));
+        const size_t buf_bytes = get_arg_val<uint32_t>(arg++);
+        const size_t ch_base = get_arg_val<uint32_t>(arg++);
+        const size_t conn_info = get_arg_val<uint32_t>(arg++);
+        const size_t conn_hs = get_arg_val<uint32_t>(arg++);
+        const size_t flow_ctrl = get_arg_val<uint32_t>(arg++);
+        const size_t buf_idx = get_arg_val<uint32_t>(arg++);
+        const uint32_t status_addr = get_arg_val<uint32_t>(arg++);
+        const uint32_t local_fc = get_arg_val<uint32_t>(arg++);
+        const uint32_t local_td = get_arg_val<uint32_t>(arg++);
+        const uint32_t local_bi = get_arg_val<uint32_t>(arg++);
+        const uint32_t local_st = get_arg_val<uint32_t>(arg++);
+        wait_state = {mux_x, mux_y, status_addr, local_st, false};
+        return tt::tt_fabric::build_connection_to_fabric_endpoint<0>(
+            mux_x,
+            mux_y,
+            ch_id,
+            num_bufs,
+            buf_bytes,
+            ch_base,
+            conn_info,
+            conn_hs,
+            flow_ctrl,
+            buf_idx,
+            local_fc,
+            local_td,
+            local_bi);
+    }
+}
+
+template <bool ViaMux>
+FORCE_INLINE void open_connection(tt::tt_fabric::WorkerToFabricEdmSender& conn, MuxWaitState& wait_state) {
+    if constexpr (ViaMux) {
+        if (!wait_state.ready) {
+            tt::tt_fabric::wait_for_fabric_endpoint_ready(
+                wait_state.mux_x, wait_state.mux_y, wait_state.mux_status_addr, wait_state.local_status_addr);
+            wait_state.ready = true;
+        }
+    }
+    conn.open<ViaMux>();
+}
+
 // go_slot values that are not slots: at the start and end of a lease window the master tells
-// the sub to open or close its fabric connections.
+// the sub to open or close its fabric connections. Normal work items pack (slice << 8) | slot.
 constexpr uint32_t kGoOpenConns = 0xFFFFFFFEu;
 constexpr uint32_t kGoCloseConns = 0xFFFFFFFFu;
+
+FORCE_INLINE constexpr uint32_t pack_go_slot_slice(uint32_t slot, uint32_t slice) {
+    return (slice << 8) | (slot & 0xFFu);
+}
+FORCE_INLINE constexpr uint32_t unpack_go_slot(uint32_t packed) { return packed & 0xFFu; }
+FORCE_INLINE constexpr uint32_t unpack_go_slice(uint32_t packed) { return packed >> 8; }
+
+// Partition [0, TotalPages) into NumSlices contiguous slices, then split slice `s` across 1 or 2
+// lanes so the union of both lanes in slice `s` is always the exact contiguous range [sb, se),
+// regardless of whether an upstream or downstream hop uses 1 lane or 2 lanes.
+template <uint32_t TotalPages, uint32_t NumSlices>
+FORCE_INLINE void slice_page_range(uint32_t s, bool master, bool two_lanes, uint32_t& out_start, uint32_t& out_end) {
+    static_assert(NumSlices >= 1, "num_slices must be >= 1");
+    constexpr uint32_t kQuot = TotalPages / NumSlices;
+    constexpr uint32_t kRem = TotalPages % NumSlices;
+    const uint32_t sb = (s * kQuot) + (s < kRem ? s : kRem);
+    const uint32_t s1 = s + 1u;
+    const uint32_t se = (s1 * kQuot) + (s1 < kRem ? s1 : kRem);
+    if (!two_lanes) {
+        out_start = sb;
+        out_end = se;
+    } else {
+        const uint32_t mid = sb + ((se - sb + 1u) >> 1);
+        out_start = master ? sb : mid;
+        out_end = master ? mid : se;
+    }
+}
 
 // Write `size` bytes from L1 to a remote NoC address over fabric, in MaxPayload packets.
 // A nonzero inc_addr fuses a flushed atomic increment into the last packet ("all data landed").
@@ -117,18 +206,19 @@ FORCE_INLINE void fabric_write_pages(
         fabric_write_bytes<MaxPayload>(conn, out_acc.get_noc_addr(first), l1_src_addr, page_size, header, inc_addr);
         return;
     }
+    const uint32_t clamped = count <= NOC_SCATTER_WRITE_MAX_CHUNKS ? count : NOC_SCATTER_WRITE_MAX_CHUNKS;
     uint64_t dst[NOC_SCATTER_WRITE_MAX_CHUNKS];
     uint16_t sizes[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];
-    for (uint32_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < clamped; ++i) {
         dst[i] = out_acc.get_noc_addr(first + i);
-        if (i + 1 < count) {
+        if (i + 1 < clamped) {
             sizes[i] = static_cast<uint16_t>(page_size);
         }
     }
     header->to_noc_unicast_scatter_write(
-        tt::tt_fabric::NocUnicastScatterCommandHeader(dst, sizes, static_cast<uint8_t>(count)), count * page_size);
+        tt::tt_fabric::NocUnicastScatterCommandHeader(dst, sizes, static_cast<uint8_t>(clamped)), clamped * page_size);
     conn.wait_for_empty_write_slot();
-    conn.send_payload_without_header_non_blocking_from_address(l1_src_addr, count * page_size);
+    conn.send_payload_without_header_non_blocking_from_address(l1_src_addr, clamped * page_size);
     conn.send_payload_flush_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
 }
 
@@ -232,7 +322,13 @@ constexpr uint32_t kRelayExtraSegmentCtArgs = 3;
 
 // NumExtra is a template parameter so that `if constexpr` defers the accessor block: with no
 // extra segments it would sit past the last CT arg.
-template <uint32_t NumExtra, uint32_t CtOffset, uint32_t MaxPayload, uint32_t SlotBytes, uint32_t Depth, uint32_t TridBase>
+template <
+    uint32_t NumExtra,
+    uint32_t CtOffset,
+    uint32_t MaxPayload,
+    uint32_t SlotBytes,
+    uint32_t Depth,
+    uint32_t TridBase>
 FORCE_INLINE void stream_extra_segments(
     const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
@@ -249,8 +345,7 @@ FORCE_INLINE void stream_extra_segments(
             const uint32_t half = kernel_compile_time_args[ct + 1];
             const uint32_t total = kernel_compile_time_args[ct + 2];
             const auto in_acc = TensorAccessor(seg_args, get_arg_val<uint32_t>(addr_arg + (2 * s)), seg_page_size);
-            const auto out_acc =
-                TensorAccessor(seg_args, get_arg_val<uint32_t>(addr_arg + (2 * s) + 1), seg_page_size);
+            const auto out_acc = TensorAccessor(seg_args, get_arg_val<uint32_t>(addr_arg + (2 * s) + 1), seg_page_size);
             stream_sized_pages<MaxPayload, SlotBytes, Depth, TridBase>(
                 noc,
                 conn,
@@ -356,8 +451,9 @@ FORCE_INLINE void run_sub_lane(
     uint32_t last_go = 0;
     bool conns_open = false;
     while (true) {
+        invalidate_l1_cache();
         if (!advanced(go_count[0], last_go, 1)) {
-            if (terminated(termination_addr, terminate_value)) {
+            if (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_addr)[0] == terminate_value) {
                 break;
             }
             continue;

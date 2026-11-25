@@ -159,6 +159,32 @@ struct D2DStreamConfig {
     // knows how many data-landed increments to await.
     uint32_t max_sender_lanes = 2;
 
+    // Relay mode only: max lanes used by exit relays over inter-mesh cable links (1 or 2).
+    // nullopt => inherits max_sender_lanes (existing behavior). Set max_sender_lanes = 1
+    // and max_cable_lanes = 2 (with cable_mux = true) to run 2 cable lanes while keeping
+    // 1 in-mesh lane per stream.
+    std::optional<uint32_t> max_cable_lanes = std::nullopt;
+
+    // Relay mode only: place a persistent FabricMux on link 0 of each cable chip's cable
+    // direction so this stream's exit-relay lane 0 (FULL_SIZE_CHANNEL 0) and an opposite-
+    // direction stream's entry-relay credit return (HEADER_ONLY_CHANNEL 0) share link 0
+    // while exit-relay lane 1 uses link 1 directly. Both endpoints of each stream across
+    // the boundary must match on cable_mux.
+    bool cable_mux = false;
+
+    // Relay mode only: place a persistent lease-aware FabricMux on link 0 of each in-stage
+    // relay hop (inner-chip Sender/Receiver and cable-chip EntryRelayForward/ExitRelayCredit)
+    // so both in-stage links carry full-size data in both directions while returning credits
+    // over link 0's mux header-only channel, and relinquish the router during compute leases.
+    bool instage_mux = false;
+
+    // Relay mode only: number of pipelined sub-chunks ("slices") each per-shard transfer is
+    // split into across inner-chip Sender -> ExitRelay -> EntryRelay -> Receiver (1 = whole-
+    // shard store-and-forward; >1 overlaps in-stage and cable transfers so the cable does not
+    // sit idle waiting for full shards to accumulate in staging DRAM). Clamped on host to
+    // [1, min(256, max(1, total_pages / 2))]. Both endpoints must match.
+    uint32_t relay_slices = 16;
+
     // Lease group (LEASE mode only). Services on one chip that name the same non-empty
     // group may hold the same fabric routers: the caller guarantees their connections
     // never overlap, by granting them turns one at a time with release_fabric_links /
