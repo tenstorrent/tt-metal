@@ -407,6 +407,24 @@ jobs:
         with:
           pattern: llk-elfs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst
           path: ${{ runner.temp }}/offload-download
+      # The download lists artifacts through another API than the wait, which can lag it.
+      - name: "Offload: check the download"
+        id: offload-got
+        if: ${{ steps.offload-download.outcome == 'success' }}
+        shell: bash
+        run: echo "files=$(find "$RUNNER_TEMP/offload-download" -name '*.tar.zst' 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+      - name: "Offload: wait before the second attempt"
+        if: ${{ steps.offload-got.outputs.files == '0' }}
+        run: sleep 15
+      - name: "Offload: download the CPU-built ELFs, second attempt"
+        id: offload-download-retry
+        if: ${{ steps.offload-got.outputs.files == '0' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: llk-elfs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst
+          path: ${{ runner.temp }}/offload-download
       - name: "Offload: unpack and check the CPU-built ELFs"
         id: offload-unpack
         if: ${{ steps.offload-download.outcome == 'success' }}
