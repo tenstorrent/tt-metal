@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[5]
+SCRIPTS = REPO / ".github/scripts"
 CLASSIFY = SCRIPTS / "llk-perf-inputs-changed.sh"
 COMMITS = SCRIPTS / "llk-perf-baseline-commits.sh"
 
@@ -34,7 +34,10 @@ def _classify(*paths, cwd=None):
     "path, changed",
     [
         ("tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h", "true"),
-        ("tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h", "true"),
+        (
+            "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h",
+            "true",
+        ),
         ("tt_metal/tt-llk/common/inc/ckernel.h", "true"),
         ("tt_metal/tt-llk/tests/python_tests/perf_eltwise_unary_sfpu.py", "true"),
         ("tt_metal/tt-llk/tests/python_tests/helpers/perf/core.py", "true"),
@@ -45,15 +48,24 @@ def _classify(*paths, cwd=None):
         (".github/workflows/llk-perf-gate-impl.yaml", "true"),
         ("tt_metal/tt-llk/perf/regression_compare.py", "true"),
         ("tt_metal/hw/inc/internal/tt-1xx/blackhole/tensix_types.h", "true"),
-        ("tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h", "true"),
+        (
+            "tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h",
+            "true",
+        ),
         ("tt_metal/hw/inc/internal/risc_attribs.h", "true"),
         ("tt_metal/tt-llk/tests/sources/matmul_test.cpp", "true"),
-        ("tt_metal/tt-llk/tests/python_tests/helpers/test_variant_parameters.py", "true"),
+        (
+            "tt_metal/tt-llk/tests/python_tests/helpers/test_variant_parameters.py",
+            "true",
+        ),
         ("tt_metal/tt-llk/tests/python_tests/test_pack.py", "true"),
         ("tt_metal/tt-llk/tt_llk_quasar/llk_lib/llk_math_matmul.h", "false"),
         ("tt_metal/tt-llk/tests/python_tests/quasar/test_matmul_quasar.py", "false"),
         ("tt_metal/tt-llk/tests/python_tests/fuser/quasar/fpu/common.py", "false"),
-        ("tt_metal/tt-llk/tests/python_tests/fuser/tests/quasar/sfpu_unary_float_dest16.yaml", "false"),
+        (
+            "tt_metal/tt-llk/tests/python_tests/fuser/tests/quasar/sfpu_unary_float_dest16.yaml",
+            "false",
+        ),
         ("tt_metal/tt-llk/tests/helpers/include/sfpu_operations_quasar.h", "false"),
         ("tt_metal/tt-llk/tests/helpers/include/quasar_test_common.h", "false"),
         ("tt_metal/tt-llk/tests/helpers/ld/memory.quasar.ld", "false"),
@@ -104,11 +116,16 @@ def test_classify_does_not_depend_on_the_callers_directory(tmp_path):
     which must be found from the script, not from wherever it was run."""
     imported = "tt_metal/tt-llk/tests/python_tests/test_pack.py"
     assert _classify(imported, cwd=tmp_path) == "true"
-    assert _classify("tt_metal/tt-llk/tests/python_tests/test_matmul.py", cwd=tmp_path) == "false"
+    assert (
+        _classify("tt_metal/tt-llk/tests/python_tests/test_matmul.py", cwd=tmp_path)
+        == "false"
+    )
 
 
 def test_classify_any_changed_path_counts():
-    assert _classify("ttnn/a.cpp", "tt_metal/tt-llk/common/inc/b.h", "docs/c.md") == "true"
+    assert (
+        _classify("ttnn/a.cpp", "tt_metal/tt-llk/common/inc/b.h", "docs/c.md") == "true"
+    )
 
 
 def test_classify_no_paths_is_false():
@@ -116,18 +133,24 @@ def test_classify_no_paths_is_false():
 
 
 def test_classify_counts_functional_tests_that_perf_tests_import():
-    python_tests = SCRIPTS.parent.parent / "tt_metal/tt-llk/tests/python_tests"
+    python_tests = REPO / "tt_metal/tt-llk/tests/python_tests"
     imported = {
         name
         for perf in python_tests.glob("perf_*.py")
-        for name in re.findall(r"^\s*(?:from|import)\s+(test_\w+)", perf.read_text(), re.M)
+        for name in re.findall(
+            r"^\s*(?:from|import)\s+(test_\w+)", perf.read_text(), re.M
+        )
     }
     for name in imported:
-        assert _classify(f"tt_metal/tt-llk/tests/python_tests/{name}.py") == "true", name
+        assert (
+            _classify(f"tt_metal/tt-llk/tests/python_tests/{name}.py") == "true"
+        ), name
 
 
 def _git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout.strip()
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
 
 
 @pytest.fixture
@@ -154,7 +177,9 @@ def repo(tmp_path):
 
 
 def _commits(repo, *args):
-    return subprocess.run(["bash", str(COMMITS), *args], cwd=repo, capture_output=True, text=True)
+    return subprocess.run(
+        ["bash", str(COMMITS), *args], cwd=repo, capture_output=True, text=True
+    )
 
 
 def test_commits_lists_llk_commits_newest_first(repo):

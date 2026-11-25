@@ -51,7 +51,7 @@ TAIL = ("PARAMS", "MARKER", "METRIC", "MEAN", "TEST_NAME")
 SELECT = list(DENSE) + list(TAIL)
 
 
-def connect():
+def connect(sleep=time.sleep):
     """Open a read connection with the service keypair."""
     pem = os.environ.get("SNOWFLAKE_PRIVATE_KEY", "")
     if not pem.strip():
@@ -68,12 +68,20 @@ def connect():
         serialization.PrivateFormat.PKCS8,
         serialization.NoEncryption(),
     )
-    return snowflake.connector.connect(
-        account=os.environ.get("SNOWFLAKE_ACCOUNT", "TLUIIGS-MN66866"),
-        user=os.environ.get("SNOWFLAKE_USER", "SVC_TTOPS_SWEEPS"),
-        warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE", "PUBLIC"),
-        private_key=pkey,
-    )
+    # A network fault must not read as "no baseline": try three times, then fail.
+    for attempt in range(3):
+        try:
+            return snowflake.connector.connect(
+                account=os.environ.get("SNOWFLAKE_ACCOUNT", "TLUIIGS-MN66866"),
+                user=os.environ.get("SNOWFLAKE_USER", "SVC_TTOPS_SWEEPS"),
+                warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE", "PUBLIC"),
+                private_key=pkey,
+            )
+        except snowflake.connector.errors.OperationalError as e:
+            if attempt == 2:
+                raise
+            print(f"::warning::Snowflake connect failed ({e}); trying again")
+            sleep(30 * (attempt + 1))
 
 
 def pick_run(
