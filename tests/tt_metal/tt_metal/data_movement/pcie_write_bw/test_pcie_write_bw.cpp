@@ -107,6 +107,9 @@ bool run_dm(distributed::MeshDevice& mesh_device, const PCIeWriteBwConfig& test_
 
 /* ========== Sweep 1M transactions with varying transaction sizes; Test id = 604 ========== */
 TEST_F(UnitMeshFastDispatchFixture, PCIeWriteBandwidthSweep) {
+    if (!unit_tests::dm::has_pcie_core(this->device())) {
+        GTEST_SKIP() << "Device has no PCIe core";
+    }
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
