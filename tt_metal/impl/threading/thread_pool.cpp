@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <sys/resource.h>
 #include <numa.h>
+#include "common/executor.hpp"  // LOCAL ONLY (investigation): usable_cpu_count
 #include "impl/device/device_impl.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/tt_pause.hpp>
