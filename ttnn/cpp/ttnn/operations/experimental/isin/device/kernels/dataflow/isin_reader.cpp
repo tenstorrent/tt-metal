@@ -5,7 +5,6 @@
 #include "isin_common.hpp"
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
 
 #include <algorithm>
 #include <numeric>
@@ -43,8 +42,8 @@ FORCE_INLINE void isin_subchunks(
     }
 }
 
-void zero_buffer(const Noc& noc, const CircularBuffer& cb, uint32_t bytes) {
-    noc.async_write_zeros(cb, bytes);
+void zero_buffer(const Noc& noc, const DataflowBuffer& dfb, uint32_t bytes) {
+    noc.async_write_zeros(dfb, bytes);
     noc.write_zeros_l1_barrier();
 }
 
@@ -57,16 +56,16 @@ void zero_buffer(const Noc& noc, const CircularBuffer& cb, uint32_t bytes) {
 */
 template <typename elements_number_type>
 FORCE_INLINE void prefill_output(
-    const Noc& noc, const CircularBuffer& output_cb, uint32_t output_subchunk_size, bool invert) {
+    const Noc& noc, const DataflowBuffer& output_dfb, uint32_t output_subchunk_size, bool invert) {
     if (invert) {
-        const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
+        const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
         volatile tt_l1_ptr elements_number_type* output_chunk_begin_ptr =
             reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(output_l1_write_addr);
         for (uint32_t i = 0; i < output_subchunk_size; ++i) {
             output_chunk_begin_ptr[i] = 0xFFFFFFFF;
         }
     } else {
-        zero_buffer(noc, output_cb, output_subchunk_size * sizeof(uint32_t));
+        zero_buffer(noc, output_dfb, output_subchunk_size * sizeof(uint32_t));
     }
 }
 
@@ -83,28 +82,20 @@ void kernel_main() {
     constexpr auto ctas = get_ctas();
     static_assert(ctas.output_tensor_datum_size == sizeof(uint32_t), "isin output mask must be uint32");
 
-    const uint32_t elements_buffer_address = get_arg_val<uint32_t>(0);
-    const uint32_t test_elements_buffer_address = get_arg_val<uint32_t>(1);
-    const uint32_t subchunks_per_core = get_arg_val<uint32_t>(2);
-    const uint32_t subchunks_offset = get_arg_val<uint32_t>(3);
+    const uint32_t subchunks_per_core = get_arg(args::subchunks_per_core);
+    const uint32_t subchunks_offset = get_arg(args::subchunks_offset);
 
-    using elements_number_type = std_type_t<get_dataformat(ctas.elements_cb)>;
+    using elements_number_type = std_type_t<get_dataformat(dfb::elements)>;
 
     constexpr uint32_t elements_element_size = ctas.elements_tensor_datum_size;
     constexpr uint32_t test_elements_element_size = ctas.elements_tensor_datum_size;
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto elements_addr_gtor = TensorAccessor(
-        ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size * elements_element_size);
-    const auto test_elements_addr_gtor = TensorAccessor(
-        ctas.test_elements_accessor_args,
-        test_elements_buffer_address,
-        ctas.test_elements_size * test_elements_element_size);
+    const auto elements_addr_gtor = TensorAccessor(tensor::elements);
+    const auto test_elements_addr_gtor = TensorAccessor(tensor::test_elements);
 
     Noc noc;
-    CircularBuffer elements_cb(ctas.elements_cb);
-    CircularBuffer test_elements_cb(ctas.test_elements_cb);
-    CircularBuffer output_cb(ctas.output_cb);
+    DataflowBuffer elements_dfb(dfb::elements);
+    DataflowBuffer test_elements_dfb(dfb::test_elements);
+    DataflowBuffer output_dfb(dfb::output);
 
     /*
         for every subchunk (part of a stick) of the elements tensor - to which an analogous output chunk
@@ -121,15 +112,14 @@ void kernel_main() {
         // either the maximal defined single fetch size or the remainder, which is less than that number
         const uint32_t elements_subchunk_size =
             std::min(ctas.elements_size - elements_offset, ctas.single_fetch_subchunk_size);
-        load_to_cb(
-            ctas.elements_cb, elements_addr_gtor, elements_offset, elements_subchunk_size, elements_element_size);
-        elements_cb.wait_front(ONE_PAGE);
+        load_to_dfb(dfb::elements, elements_addr_gtor, elements_offset, elements_subchunk_size, elements_element_size);
+        elements_dfb.wait_front(ONE_PAGE);
         // prepare output mask for writing
-        output_cb.reserve_back(ONE_PAGE);
-        const uint32_t elements_l1_read_addr = elements_cb.get_read_ptr();
-        const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
+        output_dfb.reserve_back(ONE_PAGE);
+        const uint32_t elements_l1_read_addr = elements_dfb.get_read_ptr();
+        const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
         // Mask words are uint32, including the invert fill.
-        prefill_output<uint32_t>(noc, output_cb, elements_subchunk_size, ctas.invert);
+        prefill_output<uint32_t>(noc, output_dfb, elements_subchunk_size, ctas.invert);
 
         // for every subchunk of the test_elements stick
         for (uint32_t test_elements_subchunk_id = 0, test_elements_offset = 0;
@@ -138,14 +128,14 @@ void kernel_main() {
             // same as for elements_subchunk_size
             const uint32_t test_elements_subchunk_size =
                 std::min(ctas.test_elements_size - test_elements_offset, ctas.single_fetch_subchunk_size);
-            load_to_cb(
-                ctas.test_elements_cb,
+            load_to_dfb(
+                dfb::test_elements,
                 test_elements_addr_gtor,
                 test_elements_offset,
                 test_elements_subchunk_size,
                 test_elements_element_size);
-            test_elements_cb.wait_front(ONE_PAGE);
-            const uint32_t test_elements_l1_read_addr = test_elements_cb.get_read_ptr();
+            test_elements_dfb.wait_front(ONE_PAGE);
+            const uint32_t test_elements_l1_read_addr = test_elements_dfb.get_read_ptr();
 
             // exhaustively perform isin on a given elements' subchunks (one elements' subchunk vs all test_elements'
             // subchunks)
@@ -157,11 +147,11 @@ void kernel_main() {
                 test_elements_subchunk_size,
                 ctas.invert);
 
-            test_elements_cb.pop_front(ONE_PAGE);
+            test_elements_dfb.pop_front(ONE_PAGE);
         }
 
         // push the output subchunk once it's been checked against test_elements
-        output_cb.push_back(ONE_PAGE);
-        elements_cb.pop_front(ONE_PAGE);
+        output_dfb.push_back(ONE_PAGE);
+        elements_dfb.pop_front(ONE_PAGE);
     }
 }

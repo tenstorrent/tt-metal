@@ -6,11 +6,12 @@
 
 #include "isin_device_operation_types.hpp"
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 struct IsInProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(const IsinParams&, const IsinInputs&, Tensor&);
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const IsinParams&, const IsinInputs&, Tensor&);
 };
 
 }  // namespace ttnn::experimental::prim
