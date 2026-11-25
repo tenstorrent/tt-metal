@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 """Prefill attention core, block test (seconds, no model load), random inputs, local and global layers, first chunk
-and later chunks (ring rotation, s < 1024, far keys): the `r3` path (one SDPA with in-kernel banded rel bias and
-per-query sink) and the blocked path (bias-matmul mask, near/far split; no rel_logits) against a torch reference.
+and later chunks (ring rotation, s < 1024, far keys): the `rel_bias_sdpa` path (one SDPA with in-kernel banded rel
+bias and per-query sink) and the blocked path (bias-matmul mask, near/far split; no rel_logits) against a torch
+reference.
 
     pytest -s models/demos/inkling2_mini/tests/test_prefill_attn.py
 """
@@ -32,11 +33,11 @@ def device():
     ttnn.close_device(dev)
 
 
-def _pf(dev, max_ctx, st, r3):
+def _pf(dev, max_ctx, st, rel_bias_sdpa):
     pf = object.__new__(Inkling2Prefill)
     pf.device = dev
     pf.m = types.SimpleNamespace(max_ctx=max_ctx, states=[(st,)])
-    pf.layers, pf.chunk, pf.r3 = [], 2048, r3
+    pf.layers, pf.chunk, pf.rel_bias_sdpa = [], 2048, rel_bias_sdpa
     pf.hifi4 = ttnn.init_device_compute_kernel_config(
         dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
     )
@@ -83,13 +84,13 @@ def _reference(qs, k_pos, v_pos, rel, sink, p, s, is_global):
     return w @ v
 
 
-@pytest.mark.parametrize("path", ["r3", "blocked"])
+@pytest.mark.parametrize("path", ["rel_bias_sdpa", "blocked"])
 @pytest.mark.parametrize("is_global", [False, True], ids=["local", "global"])
 @pytest.mark.parametrize(
     "s, t", [(0, 256), (768, 256), (1280, 256), (2048, 2048)], ids=["first", "s768", "s1280", "later"]
 )
 def test_attention_core(device, path, is_global, s, t):
-    if path == "r3" and "rel_logits" not in (ttnn.transformer.scaled_dot_product_attention.__doc__ or ""):
+    if path == "rel_bias_sdpa" and "rel_logits" not in (ttnn.transformer.scaled_dot_product_attention.__doc__ or ""):
         pytest.skip("this build's SDPA has no rel_logits")
     torch.manual_seed(0)
     max_ctx = 4096 + 128
@@ -118,9 +119,9 @@ def test_attention_core(device, path, is_global, s, t):
         kv[:, :, :n, HEAD_DIM] = 1
     kv[:, :, :n, V_MEM:] = k_pos
     st = types.SimpleNamespace(k_ring=put(ring_k), v_ring=put(ring_v), kv_full=put(kv))
-    pf = _pf(device, max_ctx, st, path == "r3")
+    pf = _pf(device, max_ctx, st, path == "rel_bias_sdpa")
     args = (lp, put(qs), put(rel), put(sink), st, put(k_pos[:, :, s:]), put(v_pos[:, :, s:]), s, t)
-    if path == "r3":
+    if path == "rel_bias_sdpa":
         out = pf._attention_r3(*args)
     else:
         out = pf._global_blocked(*args) if is_global else pf._local_blocked(*args)

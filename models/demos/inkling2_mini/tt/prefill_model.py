@@ -12,9 +12,9 @@ rows (positions >= len(prompt)) keep the old ring slots, but kv_full gets all T 
 any read of it, so those rows are never read. Per application, everything is a [1,1,T,C] sequence tensor:
 - block / message attn-res: per-token softmax over depth (no cross-token mixing);
 - k=4 short convs: exact unaligned row slices of [3 history rows ++ chunk];
-- attention, in-kernel rel-bias path (r3=True; the SDPA needs `rel_logits`): one causal SDPA per layer, banded rel bias
-  rel_states @ rel_proj added in the kernel, per-query sink logit; local: ring (position order) ++ chunk, window 1024;
-  global: kv_full rows [0, s+T);
+- attention, in-kernel rel-bias path (rel_bias_sdpa=True; the SDPA needs `rel_logits`): one causal SDPA per layer,
+  banded rel bias rel_states @ rel_proj added in the kernel, per-query sink logit; local: ring (position order) ++
+  chunk, window 1024; global: kv_full rows [0, s+T);
 - attention, blocked path (older builds): banded rel bias in 128-query blocks (block b, row u, key col c <-> distance
   u + 1024 - c, so the whole additive mask is one batched matmul [rel_states, sink, 1] @ Bu[u]); local: SDPA over the
   blocks, keys = 1152 positions ++ 32 zero rows (sink: zero key and value); global: near part (positions
@@ -182,7 +182,7 @@ def _is_sticks(t):
     return tuple(t.shape)[:2] == (1, 1) and t.shape[-1] == 32
 
 
-def _has_r2(dev):
+def _has_sorted_id_reuse(dev):
     """Does this build's indexed sparse_matmul take more (sorted, repeated) ids than groups ? Older
     builds reject that in validation."""
     put = lambda t, dt, lay: ttnn.from_torch(t, dtype=dt, layout=lay, device=dev)  # noqa: E731
@@ -420,12 +420,12 @@ class _LayerPF:
         self.rel_scale = put(_host(w["attn.rel_clip_scale"]).view(1, N_HEADS, 1, D_REL))
         rel_p = _host(w["attn.rel_proj"]).view(D_REL, WINDOW)
         self.rel_proj = put(rel_p.view(1, 1, D_REL, WINDOW), ttnn.bfloat16)
-        if pf._pfheads is not None and pf.r3:  # PfHeads' 16-wide rel heads (each in its half of a tile)
+        if pf._pfheads is not None and pf.rel_bias_sdpa:  # PfHeads' 16-wide rel heads (each in its half of a tile)
             self.rel_scale_half = put(half_scale_rows(_host(w["attn.rel_clip_scale"]).view(N_HEADS, D_REL)))
             self.rel_proj_half = put(half_proj(rel_p), ttnn.bfloat16)
             if pf._pfrel is not None:  # the same projection, skewed per row phase (tt/fused/pf_rel.py)
                 self.rel_bsk = put(skew_proj(half_proj(rel_p).view(32, WINDOW)), ttnn.bfloat16)
-        self.bu = None if pf.r3 else put(_band_matrix(rel_p, lay.is_global), ttnn.bfloat16)
+        self.bu = None if pf.rel_bias_sdpa else put(_band_matrix(rel_p, lay.is_global), ttnn.bfloat16)
         # k/v conv taps per lag (fp32). Local: residual and 1/sqrt(K+1) folded in; global: static taps, the
         # residual and 1/sqrt(2K+1) are applied after adding the dynamic taps.
         self.conv_scale = 1.0 / math.sqrt((2 if lay.is_global else 1) * TAPS + 1)
@@ -484,8 +484,8 @@ class Inkling2Prefill:
         model,
         root=wcache.DEFAULT_TILE_ROOT,
         chunk=None,
-        r3=None,
-        r2=None,
+        rel_bias_sdpa=None,
+        sorted_id_reuse=None,
         slot_rows=64,
         group_grid=(9, 4),
         group_ibw=None,
@@ -506,11 +506,11 @@ class Inkling2Prefill:
     ):
         """model: a built Inkling2Model, before any Generator.capture(). chunk: max tokens per pass (a multiple of 128
         that divides 1024 or is a multiple of it); prefill(ids, chunk=...) may use any smaller valid size.
-        r3: banded-bias SDPA (needs a build whose SDPA takes `rel_logits`; None: use it when it does).
-        r2: one indexed sparse_matmul call with repeated sorted expert ids, weights read once per run of equal
-        ids (needs that build; None: probe for it).
+        rel_bias_sdpa: banded-bias SDPA (needs a build whose SDPA takes `rel_logits`; None: use it when it does).
+        sorted_id_reuse: one indexed sparse_matmul call with repeated sorted expert ids, weights read once per run of
+        equal ids (needs that build; None: probe for it).
         slot_rows: rows per expert slot. group_grid / group_ibw: grouped expert matmul grid and in0 block widths
-        (gate_up, down); None: whole K with r2 (the weight reuse needs it), else (12, 18).
+        (gate_up, down); None: whole K with sorted_id_reuse (the weight reuse needs it), else (12, 18).
         weighted_reduce: MoE combine by attn_res_weighted_reduce_nc. fused_glue: one-program attn-res, short convs
         (+ residual) and message-gate tail (tt/fused/pf_*.py, bit-equal to the op chains). trace: replay captured
         chunks (see "traced chunks" below; the outputs are bit-equal to the eager run).
@@ -532,12 +532,12 @@ class Inkling2Prefill:
         self.m = model
         self.device = dev = model.device
         self.gm = slot_rows
-        if r2 is None:
-            r2 = _has_r2(dev)
-        self.r2 = r2
-        if r3 is None:
-            r3 = "rel_logits" in (ttnn.transformer.scaled_dot_product_attention.__doc__ or "")
-        self.r3 = r3
+        if sorted_id_reuse is None:
+            sorted_id_reuse = _has_sorted_id_reuse(dev)
+        self.sorted_id_reuse = sorted_id_reuse
+        if rel_bias_sdpa is None:
+            rel_bias_sdpa = "rel_logits" in (ttnn.transformer.scaled_dot_product_attention.__doc__ or "")
+        self.rel_bias_sdpa = rel_bias_sdpa
         self.fused_glue = fused_glue
         self._pfconv = PfConv(dev) if fused_glue else None
         self._pfmsg = PfMessages(dev) if fused_glue else None
@@ -612,7 +612,7 @@ class Inkling2Prefill:
         self.chunk = chunk
         # routing buffers built on the device (tt/fused/pf_route.py), no host round trip; the sparse path needs
         # one slot-expert buffer per chunk (the indexed sparse_matmul takes all slots in one call)
-        self._pfroute = PfRoute(dev) if (self.unified or self.r2) else None
+        self._pfroute = PfRoute(dev) if (self.unified or self.sorted_id_reuse) else None
         # unified experts: gather + weight + sum of the k expert rows in one program (tt/fused/pf_combine.py)
         self._pfcomb = PfCombine(dev) if self.unified else None
         self.dev_route = self._pfroute is not None
@@ -650,11 +650,11 @@ class Inkling2Prefill:
         )
         self._sdpa_pc = {}
         self.group_grid = tuple(group_grid)  # 9x4: the decode MoE tuning (N = 72 tiles over 36 cores)
-        group_ibw = group_ibw or ((HIDDEN // 32, INTER // 32) if r2 else (12, 18))
+        group_ibw = group_ibw or ((HIDDEN // 32, INTER // 32) if sorted_id_reuse else (12, 18))
         self.group_ibw = {HIDDEN: group_ibw[0], INTER: group_ibw[1]}
         self.logits_cb = None
         self.wred = weighted_reduce
-        self.r2_step = 1 << 20 if r2 else NUM_EXPERTS  # sparse_matmul ids per call
+        self.sparse_ids_per_call = 1 << 20 if sorted_id_reuse else NUM_EXPERTS  # sparse_matmul ids per call
         self.r3_chunks = tuple(r3_chunks)
         # q|k|v|gate (2304 -> 6560) and w_o (3072 -> 2304) projections with hand-set 2D multicast configs that
         # accumulate K in blocks of 4 tiles (else 1 / 2): other fp32 summation order, ~-1.3 ms per application at
@@ -670,7 +670,7 @@ class Inkling2Prefill:
         self.moe_tap = None
         self._app_i = None
         self.trace = trace
-        self.fused_rel = True  # PfHeads for the 16-wide rel heads (needs _pfheads and r3)
+        self.fused_rel = True  # PfHeads for the 16-wide rel heads (needs _pfheads and rel_bias_sdpa)
         self._traces, self._warm, self._in = {}, set(), {}
         self._cap = self._cur = self._mem = None
         # a tt/mtp.DSparkDrafter: every chunk also writes the drafter's context for its positions (commit_chunk),
@@ -709,7 +709,7 @@ class Inkling2Prefill:
         self.c_etab = put(torch.arange(NUM_EXPERTS, dtype=torch.int32).view(1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         for lp in self.layers:  # router bias, one row per token
             lp.router_bias_rows = put(lp.router_bias_row.expand(1, 1, T, NUM_EXPERTS).contiguous())
-        if self.r3:
+        if self.rel_bias_sdpa:
             return
         nb, kb = T // QB, WINDOW + QB + 32
         e = torch.zeros(2, 1, 1, 1, D_REL + 2)
@@ -905,7 +905,8 @@ class Inkling2Prefill:
             qs = self._pfheads(qgrs, N_HEADS, 0, "l2", QK_CLIP, scale=lp.q_scale_rows, tau=tau_g, mult=SCALE)
         else:
             q = self._scaled_clip(_heads(_cols(qgrs, 0, 3072), N_HEADS, HEAD_DIM), lp.q_scale, QK_CLIP, tau_g)
-        if self._pfheads is not None and self.r3 and self.fused_rel:  # [1,24,T,32]: head h in columns 16 (h % 2) ..
+        # [1,24,T,32]: head h in columns 16 (h % 2) ..
+        if self._pfheads is not None and self.rel_bias_sdpa and self.fused_rel:
             rel = self._pfheads(qgrs, N_HEADS, 6144, "l2", REL_CLIP, scale=lp.rel_scale_half, tau=tau_g, hd=D_REL)
         else:
             rel = self._scaled_clip(_heads(_cols(qgrs, 6144, 6528), N_HEADS, D_REL), lp.rel_scale, REL_CLIP, tau_g)
@@ -933,7 +934,7 @@ class Inkling2Prefill:
             assert st.v_full is None, "prefill: split far caches (FAR_SPLIT) not supported"
             row = [v_c, k_c] if FAR_UNIT else [v_c, _rows(self.c_mass[cdt], 0, t), k_c]
             ttnn.fill_cache(st.kv_full, ttnn.concat(row, dim=-1), 0, update_idx=s)
-        if self.r3:
+        if self.rel_bias_sdpa:
             attn = self._attention_r3(lp, qs, rel, sink, st, k_c, v_c, s, t)
         elif not is_global:
             attn = self._local_blocked(lp, qs, rel, sink, st, k_c, v_c, s, t)
@@ -1179,7 +1180,7 @@ class Inkling2Prefill:
                 mcast_in0=True,
             )
         outs = []
-        step = self.r2_step
+        step = self.sparse_ids_per_call
         for i, idx in enumerate(ei):
             g0 = i * step
             ag = a if len(ei) == 1 else ttnn.slice(a, [0, g0, 0, 0], [1, min(g, g0 + step), self.gm, k])
@@ -1356,7 +1357,7 @@ class Inkling2Prefill:
         back[:, :n] = dest.reshape(n, TOP_K).T
         self._write(b["gi"], torch.from_numpy(gidx).view(1, -1), ttnn.uint32)
         for i, e in enumerate(b["ei"]):
-            g0 = i * self.r2_step
+            g0 = i * self.sparse_ids_per_call
             self._write(e, torch.from_numpy(eid[g0 : g0 + e.shape[-1]]).view(1, 1, 1, -1), ttnn.uint16)
         self._write(b["bi"], torch.from_numpy(back).view(1, -1), ttnn.uint32)
 
@@ -1545,7 +1546,10 @@ class Inkling2Prefill:
             "valid": put(torch.zeros(1, 1, t, 1), bf),  # rows < n (last chunk)
             "ringm": [put(torch.zeros(1, 1, WINDOW, 1), bf) for _ in range(nblk)],  # ring slot masks per block
             "gi": put(i32(1, ns * self.gm), ttnn.uint32, rm),
-            "ei": [put(i32(1, 1, 1, min(self.r2_step, ns - g0)), ttnn.uint16, rm) for g0 in range(0, ns, self.r2_step)],
+            "ei": [
+                put(i32(1, 1, 1, min(self.sparse_ids_per_call, ns - g0)), ttnn.uint16, rm)
+                for g0 in range(0, ns, self.sparse_ids_per_call)
+            ],
             "bi": put(i32(1, TOP_K * t), ttnn.uint32, rm),
         }
         if self._pfroute is not None:
