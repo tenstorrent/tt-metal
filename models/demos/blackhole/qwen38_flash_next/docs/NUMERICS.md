@@ -126,7 +126,7 @@ on the 1x4 p150 line and on the served stream (the 12-record acceptance table id
 row on divergence index and token sha256); the pass pair measured -0.51 ms of verify replay and -0.7 ms of pass wall
 per pass with tokens per pass unchanged.  `QWEN38_FUSED_OFF=qsa_score_pages,qsa_rows_post_attention` restores the
 chain.  A third fold, the out-projection's widen at 32 rows, measured zero at the replay floor and was not kept.
-Opt-in through `QWEN38_FUSED=<name>`: `final_mixer`, `position_advance`, `gdn_rows_prims_direct` (the MTP
+Opt-in through `QWEN38_FUSED=<name>`: `position_advance`, `gdn_rows_prims_direct` (the MTP
 verify rows' chunk recurrence as the composite's two phase prims called directly with the composite's own relayout ops
 in its order, bitwise by construction and on the line 2026-09-25: the seam the wrap's programs were proven against, a
 diagnostic beside the default).  `gdn_rows_scan` (2026-09-26, class COMPONENT against the served stream; on by default

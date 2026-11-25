@@ -24,11 +24,6 @@ MODULES = sorted(FUSED.glob("*/__init__.py")) + sorted(p for p in FUSED.glob("*.
 # (module, variant expression) -> why this launch's outputs are stamped elsewhere or not stamped (a shrinking list:
 # a launch that declares ``outputs`` must leave it)
 UNDECLARED: dict[tuple[str, str], str] = {
-    ("final_mixer", '"down"'): "opt-in kernel; its caller stamps (ttnn/final_mixer hook)",
-    ("final_mixer", '"low_rank"'): "opt-in kernel; its caller stamps",
-    ("final_mixer", '"gate"'): "opt-in kernel; its caller stamps",
-    ("final_mixer", '"normalize_down"'): "opt-in kernel; its caller stamps",
-    ("final_mixer", '"low_rank_gate"'): "opt-in kernel; its caller stamps",
     (
         "gdn_post_rows",
         '"cast_verify" if chunks == 1 else "cast"',

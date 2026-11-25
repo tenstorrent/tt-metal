@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import functools
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -265,8 +264,6 @@ class Qwen38TTNNFinalMixerWeights:
 class Qwen38TTNNFinalMixer:
     """Read the final four-branch residual into one hidden-width shard."""
 
-    _fused_forward = None  # QWEN38_FUSED=final_mixer binds ttnn/fused/final_mixer per instance; the body is the chain
-
     def __init__(
         self,
         mesh_device,
@@ -308,17 +305,6 @@ class Qwen38TTNNFinalMixer:
         # The gamma multiply runs on the flat row (the GR pattern); this view
         # shares the resident weight's buffer.
         self.norm_scale_flat = ttnn.experimental.view(weights.norm_scale, FLAT_LOCAL_SHAPE)
-        # QWEN38_FUSED=final_mixer: the fused programs (F2's stats/normalize/down/gate and the composite-order low-rank
-        # sum) bind at construction; the pinned chain below stays the class body.
-        from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
-
-        if fused_kernels.enabled("final_mixer") and weights.weight_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
-            raise ValueError(
-                "QWEN38_FUSED=final_mixer streams BF16 or BFP8 mixer weights (HiFi4 / HiFi2 like the chain); "
-                f"these final mixer weights are {weights.weight_dtype}"
-            )
-        if fused_kernels.enabled("final_mixer"):
-            self._fused_forward = functools.partial(fused_kernels.kernel("final_mixer").fused, self)
 
     def _normalize(self, residual):
         stats = ttnn.rms_norm_pre_all_gather(
@@ -373,8 +359,6 @@ class Qwen38TTNNFinalMixer:
         if _shape(residual) != RESIDUAL_LOCAL_SHAPE or residual.dtype != ttnn.bfloat16:
             raise ValueError(f"final mixer input must be TILE BF16 {RESIDUAL_LOCAL_SHAPE}")
         self.mesh_contract.validate_tensor(residual, placement=TensorPlacement.HIDDEN_SHARDED, shard_dim=3)
-        if self._fused_forward is not None:
-            return self._fused_forward(residual)
         # The flat row in the down matmul's activation layout; the gate
         # multiply reads the same shard at the end.
         normalized_ws = self._normalize(residual)

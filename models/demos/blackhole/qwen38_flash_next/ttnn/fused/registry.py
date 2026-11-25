@@ -71,7 +71,6 @@ DEFAULT_ON: frozenset[str] = frozenset(
 # registered kernel is treated as listed in QWEN38_FUSED_OFF and its caller takes the composed chain.
 TP8_READY: frozenset[str] = frozenset(
     {
-        "final_mixer",  # BF16 or BFP8 weights; tests/test_fused_final_mixer_tp8_device.py
         "router_tail",
         "position_derive",
         "untilize_rows",
@@ -204,11 +203,6 @@ def default_names() -> frozenset[str]:
     return DEFAULT_ON
 
 
-# Kernels that serve by default only off TP=4: bitwise at TP=8 with an e2e A/B there; their TP=4 default is unchanged.
-# final_mixer: 22 programs -> 3 (99.1 -> 67.0 us per call); e2e -0.027 ms/token on the 1x8 line, tokens equal.
-TP8_DEFAULT_ON: frozenset[str] = frozenset({"final_mixer"})
-
-
 TP8_KNOBS = {
     "QWEN38_TP8_QSA_ROWS_POST": "qsa_rows_post_attention",
     "QWEN38_TP8_QSA_SCORE_PAGES": "qsa_score_pages",
@@ -224,12 +218,12 @@ def edge_trim_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
 
 
 def enabled_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
-    """The kernels that run: ``DEFAULT_ON`` (plus ``TP8_DEFAULT_ON`` off TP=4) plus ``QWEN38_FUSED``, less
+    """The kernels that run: ``DEFAULT_ON`` plus ``QWEN38_FUSED``, less
     ``QWEN38_FUSED_OFF``; every name in either variable must be registered.  Off TP=4 only the kernels in ``TP8_READY``
     can run."""
 
     edge = edge_trim_names(environ)  # QWEN38_EDGE_TRIM=1: kernels served at TP=8 that are not in TP8_READY yet
-    defaults = default_names() if TP_SIZE == 4 else default_names() | TP8_DEFAULT_ON
+    defaults = default_names()
     names = (defaults | _names(environ, ENV) | edge) - _names(environ, OFF_ENV)
     if environ.get("QWEN38_ROW_GATHER", "1") == "1":  # the row_gather program's own switch (default on)
         names = names | {"row_gather"}
