@@ -367,10 +367,19 @@ class SFPU_BINOP_MODE(TemplateParameter):
     Emits ``constexpr int SFPU_BINOP_MODE = <n>;`` consumed by
     ``sfpu_binop_scalar_{test,perf}.cpp``, matching the BINOP_MODE enum in
     ``ckernel_sfpu_binop_with_unary.h`` (ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4).
+    ``quasar/sfpu_binop_scalar_quasar_test.cpp`` also takes 5 and 6 for the int32 kernels.
     """
 
     # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
-    _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
+    _MODE = {
+        "ADD": 0,
+        "SUB": 1,
+        "MUL": 2,
+        "DIV": 3,
+        "RSUB": 4,
+        "add_int32": 5,
+        "sub_int32": 6,
+    }
 
     binop_mathop: MathOperation = None
 
