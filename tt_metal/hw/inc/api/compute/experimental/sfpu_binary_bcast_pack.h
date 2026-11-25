@@ -19,7 +19,10 @@ namespace ckernel {
  * Pack-thread (TRISC2) variants of `sfpu_add_bcast_row_init` / `sfpu_add_bcast_row`
  * from api/compute/sfpu_binary_bcast.h, for a kernel whose fused activation also
  * runs on the pack thread (the SFPU registers are shared, so both must run on the
- * same thread). Same semantics and preconditions as the math-thread versions.
+ * same thread). Same semantics, preconditions and clobber contract (LREG4..7; on
+ * Wormhole also the SFPU replay slots and ADDR_MOD_6) as the math-thread versions,
+ * applied to the pack thread's state: a later SFPU op on the pack thread that set
+ * any of it at init must run its init again.
  * BH/WH only.
  */
 // clang-format on

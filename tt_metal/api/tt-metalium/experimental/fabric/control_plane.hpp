@@ -291,6 +291,9 @@ public:
 
     RoutingDirection eth_direction_to_routing_direction(eth_chan_directions direction) const;
 
+    tt::tt_fabric::fabric_connection_info_t get_host_rdma_connection_info(
+        FabricNodeId fabric_node_id, chan_id_t eth_chan) const;
+
     // Return ethernet channels on a chip that face external meshes (inter-mesh exit nodes)
     std::vector<chan_id_t> get_intermesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
     // Return ethernet channels on a chip that face other chips within the same mesh (intra-mesh)

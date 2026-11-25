@@ -5,10 +5,12 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <numeric>
 #include <limits>
 #include <set>
 
 #include "tt-metalium/allocator.hpp"
+#include "tt-metalium/workload/specification/kernel_spec.hpp"
 #include "tt-metalium/experimental/device.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/hal.hpp"
@@ -131,13 +133,23 @@ ttnn::Shape compute_matmul_output_shape(
 
     // Handle batch dimensions for the case where b_rank > a_rank
     for (auto index = 0; index < rank_difference; ++index) {
-        TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
+        TT_FATAL(
+            a_rank > 1 || input_shape_b[index] == 1,
+            "When in1 rank greater than in0 rank front dimensions need to be 1");
         output_shape[index] = input_shape_b[index];
     }
 
     // Copy dimensions from input_shape_a except the last one
     for (auto index = 0; index < a_rank - 1; ++index) {
         output_shape[rank_difference + index] = input_shape_a[index];
+    }
+
+    // Torch-style batch broadcasting: batch dims align from the right, and a size-1 dim takes the other's size.
+    if (a_rank >= 2 && b_rank >= 2) {
+        const auto batch_dims = get_output_batch_dims(input_shape_a, input_shape_b);
+        for (size_t index = 0; index < batch_dims.size(); ++index) {
+            output_shape[index] = batch_dims[index];
+        }
     }
 
     // The last dimension comes from input_tensor_b
@@ -164,18 +176,6 @@ ttnn::Shape compute_matmul_output_shape(
         }
         output_shape = ttnn::Shape(new_shape);
     }
-
-    // Optimization: Reuse input A (in0) across batches when A's batch dimensions are all 1
-    // and B's corresponding batch dimensions are > 1. The same A tensor is reused for each
-    // batch element of B rather than reading A repeatedly. Supported for rank >= 3 tensors
-    // with matching ranks and interleaved (non-sharded) memory layout.
-    if (a_rank >= 3 && b_rank == a_rank) {
-        for (int i = 0; i < static_cast<int>(a_rank) - 2; i++) {
-            if (input_shape_a[i] == 1 && input_shape_b[i] > 1) {
-                output_shape[i] = input_shape_b[i];
-            }
-        }
-    }
     return output_shape;
 }
 
@@ -199,6 +199,113 @@ ttnn::Shape compute_matmul_with_bias_output_shape(const ttnn::Shape& matmul_shap
     }
 
     return ttnn::Shape(result_shape);
+}
+
+ttsl::SmallVector<uint32_t> get_output_batch_dims(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
+    const auto batch_rank = [](const ttnn::Shape& shape) -> size_t { return shape.rank() > 2 ? shape.rank() - 2 : 0; };
+    const size_t rank = std::max(batch_rank(a_shape), batch_rank(b_shape));
+    // A shape with fewer batch dims reads as size 1 in the leading ones.
+    const auto batch_dim = [&](const ttnn::Shape& shape, size_t index) -> uint32_t {
+        const size_t missing = rank - batch_rank(shape);
+        return index < missing ? 1u : shape[static_cast<int>(index - missing)];
+    };
+    ttsl::SmallVector<uint32_t> dims(rank);
+    for (size_t index = 0; index < rank; ++index) {
+        const uint32_t a_dim = batch_dim(a_shape, index);
+        const uint32_t b_dim = batch_dim(b_shape, index);
+        TT_FATAL(
+            a_dim == b_dim || a_dim == 1 || b_dim == 1,
+            "Batch dims of {} and {} are not broadcastable",
+            a_shape,
+            b_shape);
+        dims[index] = a_dim == 1 ? b_dim : a_dim;
+    }
+    return dims;
+}
+
+uint32_t get_output_batch_size(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
+    const auto dims = get_output_batch_dims(a_shape, b_shape);
+    return std::accumulate(dims.begin(), dims.end(), 1u, std::multiplies<>());
+}
+
+std::optional<BatchBroadcast> get_batch_broadcast(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
+    const bool batch_dims_differ_with_batched_b = a_shape.rank() == b_shape.rank() && get_batch_size(b_shape) > 1 &&
+                                                  !std::equal(a_shape.cbegin(), a_shape.cend() - 2, b_shape.cbegin());
+    if (!batch_dims_differ_with_batched_b) {
+        return std::nullopt;
+    }
+    // Built innermost dim first. Size-1 dims are dropped and neighbours that broadcast alike are merged, since the
+    // readers pay a division per dim for every batch.
+    const auto output_dims = get_output_batch_dims(a_shape, b_shape);
+    BatchBroadcast broadcast;
+    uint32_t a_stride = 1;
+    uint32_t b_stride = 1;
+    for (size_t index = output_dims.size(); index-- > 0;) {
+        const uint32_t dim = output_dims[index];
+        const uint32_t in0_stride = a_shape[index] == 1 ? 0 : a_stride;
+        const uint32_t in1_stride = b_shape[index] == 1 ? 0 : b_stride;
+        a_stride *= a_shape[index];
+        b_stride *= b_shape[index];
+        if (dim == 1) {
+            continue;
+        }
+        const bool same_pattern = !broadcast.dims.empty() && (broadcast.in0_strides.back() == 0) == (in0_stride == 0) &&
+                                  (broadcast.in1_strides.back() == 0) == (in1_stride == 0);
+        if (same_pattern) {
+            broadcast.dims.back() *= dim;
+        } else {
+            broadcast.dims.push_back(dim);
+            broadcast.in0_strides.push_back(in0_stride);
+            broadcast.in1_strides.push_back(in1_stride);
+        }
+    }
+    std::reverse(broadcast.dims.begin(), broadcast.dims.end());
+    std::reverse(broadcast.in0_strides.begin(), broadcast.in0_strides.end());
+    std::reverse(broadcast.in1_strides.begin(), broadcast.in1_strides.end());
+    return broadcast;
+}
+
+void add_batch_broadcast_args(
+    tt::tt_metal::KernelSpec& kernel,
+    const BatchBroadcast& broadcast,
+    std::optional<uint32_t> in0_tiles_per_batch,
+    std::optional<uint32_t> in1_tiles_per_batch) {
+    const auto tile_strides = [](const std::vector<uint32_t>& strides, uint32_t tiles_per_batch) {
+        std::vector<uint32_t> result;
+        result.reserve(strides.size());
+        for (const uint32_t stride : strides) {
+            result.push_back(stride * tiles_per_batch);
+        }
+        return result;
+    };
+    kernel.compiler_options.defines.insert({"BATCH_BROADCAST", "1"});
+    kernel.compile_time_array_args.insert({"batch_dims", broadcast.dims});
+    if (in0_tiles_per_batch.has_value()) {
+        kernel.compile_time_array_args.insert(
+            {"in0_batch_strides", tile_strides(broadcast.in0_strides, *in0_tiles_per_batch)});
+    }
+    if (in1_tiles_per_batch.has_value()) {
+        kernel.compile_time_array_args.insert(
+            {"in1_batch_strides", tile_strides(broadcast.in1_strides, *in1_tiles_per_batch)});
+    }
+}
+
+bool supports_batch_broadcast(
+    const MatmulProgramConfig& program_config,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded() || output_mem_config.is_sharded()) {
+        return false;
+    }
+    if (const auto* mcast_2d = std::get_if<MatmulMultiCoreReuseMultiCastProgramConfig>(&program_config)) {
+        return !mcast_2d->fuse_batch;
+    }
+    if (const auto* mcast_1d = std::get_if<MatmulMultiCoreReuseMultiCast1DProgramConfig>(&program_config)) {
+        return !mcast_1d->fuse_batch && !mcast_1d->gather_in0;
+    }
+    return std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(program_config) ||
+           std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config);
 }
 
 tt::tt_metal::Tile get_output_tile(
@@ -280,7 +387,7 @@ void validate_matmul_reuse_work_split(
     const MatmulMultiCoreReuseProgramConfig& program_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set) {
-    const uint32_t B = ttnn::get_batch_size(a_shape_padded);
+    const uint32_t B = get_output_batch_size(a_shape_padded, b_shape_padded);
     const uint32_t Mt = get_M_dim(a_shape_padded, in0_tile, false);
     const uint32_t Nt = get_N_dim(b_shape_padded, in1_tile);
     const uint32_t per_core_M = program_config.per_core_M;

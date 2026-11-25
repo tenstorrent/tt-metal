@@ -94,8 +94,8 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         iface.fifo_limit_page_aligned = fifo_limit;
     } else {
         volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(noc_xy_addr);
-        const uint32_t sender_noc_x = xy[0];
-        const uint32_t sender_noc_y = xy[1];
+        const uint32_t sender_noc_x = load_prefetcher_pipe_config_word(xy, 0);
+        const uint32_t sender_noc_y = load_prefetcher_pipe_config_word(xy, 1);
 
         CrossNodeReceiverDFBInterface& iface = interface.receiver;
         iface.config_ptr = config_page_ptr;
@@ -298,8 +298,9 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id,
     const uint32_t config_page_addr = load_prefetcher_pipe_config_word(slot, 0);
     const uint32_t entry_size = load_prefetcher_pipe_config_word(slot, 1);
     // Host must have registered this local DFB as the relay for this persistent slot
-    // (DFBAdvancedOptions::prefetcher_pipe_relays); catches a mismatched token.
-    ASSERT(load_prefetcher_pipe_config_word(slot, 2) == relay_dfb_id);
+    // (DFBAdvancedOptions::prefetcher_pipe_relays); catches a mismatched token. The slot word
+    // also packs the credit-lane count, so compare the relay-id byte only.
+    ASSERT(prefetcher_pipe_slot_relay_id(load_prefetcher_pipe_config_word(slot, 2)) == relay_dfb_id);
     align_local_dfb_to_prefetcher_pipe_checkpoint(relay_dfb_id, config_page_addr, entry_size);
 }
 

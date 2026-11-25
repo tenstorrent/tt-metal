@@ -136,8 +136,8 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects the
 //   Uses LREG0..LREG7 transiently during SFPTRANSP phases. LREG6 is NOT
 //   preserved as a persistent mask (SFPTRANSP clobbers LREG4..LREG7 window);
 //   BCAST_ROW does not need the col-0 lane mask. The band body is recorded
-//   into SFPU replay slots 0..15 per full-tile call, and (without
-//   MM_THROTTLE) ADDR_MOD_6 is reprogrammed per call; that overwrites what
+//   into SFPU replay slots [0, REPLAY_LEN_ROW_BAND) per full-tile call, and
+//   (without MM_THROTTLE) ADDR_MOD_6 is reprogrammed per call; that overwrites what
 //   another SFPU op set at init (COL bcast, reduce, fast exp, abs, i0, ...),
 //   which must re-run its init after a ROW call. The
 //   call leaves the dest base register pointed at the data tile (as the
@@ -282,13 +282,6 @@ sfpi_inline void _col_load_data_band_() {
 // previous SFPU op's `_llk_math_eltwise_sfpu_done_` leaves it.
 inline void _col_tile_begin_(std::uint32_t dst_index_data) {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index_data);
-}
-
-// Restore the dest offset programmed by _llk_math_eltwise_sfpu_start_ once
-// the in-flight stores have drained (config writes must not overtake them).
-inline void _col_tile_end_() {
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0 /*tile_index*/);
 }
 
 // RWC.Dst += one face (FACE1_BASE -> FACE2_BASE), as two INCRWC steps.
@@ -671,9 +664,8 @@ inline void _calculate_sfpu_binary_bcast_col_band_(
 //
 // The mean and inv_std broadcasts are the two chains of the dual broadcast
 // (chain A: mean, chain B: inv_std; see the dual col-0 broadcast section).
-// The per-lane arithmetic (mask AND, three rotate-adds, subtract, multiply)
-// and its order are unchanged, so results are bit-identical to the serial
-// form.
+// Each chain keeps the per-lane ops and order of a single-chain broadcast, so
+// interleaving does not change results.
 //
 // Dest addressing is RWC-relative, as for add/sub/mul (see the BCAST_COL
 // dest addressing section above). The dual broadcast block is replayed from
@@ -743,6 +735,9 @@ sfpi_inline void _norm_centre_scale_store_band_rel_(std::uint32_t tile_rel) {
 // Point the math dest offset at the data tile.
 inline void _norm_col_tile_begin_(std::uint32_t dst_index_data) { _col_tile_begin_(dst_index_data); }
 
+// The normalize drivers walk RWC.Dst over the tile's 8 bands and, as on the
+// ROW and scalar paths, leave it at 48 and the dest base at the data tile for
+// the enclosing `_done_` / next `_start_` to reset.
 inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
     std::uint32_t dst_index_data,
     std::uint32_t dst_index_mean,
@@ -767,7 +762,6 @@ inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
             _advance_rwc_dst_one_face_();
         }
     }
-    _col_tile_end_();
 }
 
 inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
@@ -793,7 +787,6 @@ inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
             _advance_rwc_dst_one_face_();
         }
     }
-    _col_tile_end_();
 }
 
 inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
@@ -838,7 +831,6 @@ inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
             _advance_rwc_dst_one_face_();
         }
     }
-    _col_tile_end_();
 }
 
 // Broadcast element zero of the mean and inv_std tiles to all 32 lanes:
@@ -901,9 +893,8 @@ inline void _broadcast_scalars_from_dest_(std::uint32_t mean_addr, std::uint32_t
 // all addressed relative to RWC.Dst with the dest base register pointed at
 // the data tile, so the body is identical for the 8 bands of a tile. It is
 // recorded into the replay buffer while band 0 executes (Exec, no SFPU cost)
-// and replayed for bands 1..7; the RISC then issues a REPLAY and an INCRWC per
-// band instead of 8 runtime TT_SFPLOAD/TT_SFPSTORE encodes (3 RISC
-// instructions each). `out_rel` (the data -> out tile distance, 0 for
+// and replayed for bands 1..7; the RISC issues one REPLAY and one INCRWC per
+// band. `out_rel` (the data -> out tile distance, 0 for
 // the in-place API) is baked into the store immediates when recording.
 // Exactly REPLAY_LEN_SCALAR_NORM_BAND instructions.
 inline void _record_scalar_normalize_band_replay_(std::uint32_t out_rel) {
@@ -980,9 +971,8 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
 // the dest base register pointed at the data tile. That makes the per-band
 // body band-invariant (it ends by advancing RWC.Dst to the next band), so it
 // is recorded into the replay buffer once per full-tile call - executing
-// band 0 as it records - and replayed for the remaining 7 bands. The band
-// loop then costs the RISC one REPLAY per band instead of 8 encoded `TT_`
-// instructions.
+// band 0 as it records - and replayed for the remaining 7 bands, so the band
+// loop costs the RISC one REPLAY per band.
 //
 // The recording is per call rather than per init because the init is shared
 // across ADD / SUB / MUL (`sfpu_bcast_row_init`) and the body depends on the
@@ -1182,7 +1172,7 @@ inline void _sfpu_binary_bcast_init_() {
         _record_dual_broadcast_replay_();
     }
     // BCAST_ROW: nothing persists from the init. Each full-tile call records
-    // its band body into SFPU replay slots 0..15, clobbers LREG4..7 and
+    // its band body into SFPU replay slots [0, REPLAY_LEN_ROW_BAND), clobbers LREG4..7 and
     // (without MM_THROTTLE) reprograms ADDR_MOD_6, so any SFPU op that sets
     // that state at init (COL bcast, reduce, fast exp, abs, i0, ...) must
     // re-run its init after a ROW call.
