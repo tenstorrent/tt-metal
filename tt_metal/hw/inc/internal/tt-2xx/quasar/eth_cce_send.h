@@ -44,9 +44,8 @@ constexpr uint8_t kInlineSrcProtocol = 4;
 constexpr uint32_t kInlineValueBits = 52;
 
 // Keraunos local address of an HSIO tile's CCE SRAM: base + tile * stride + offset. The command buffer takes this
-// view for the source, and for the destination on an Ethernet link. The Keraunos-E100
-// spec (v1.0.9, ch. 12) says a CCE issues Grendel system addresses and the HSIO remap translates them, which this
-// view contradicts.
+// view for the source, and for the destination on an Ethernet link, and relies on the command buffer accepting
+// Keraunos local addresses there rather than Grendel system addresses translated by the HSIO remap.
 constexpr uint64_t kHsioLocalBase = 0x20000000;
 constexpr uint64_t kHsioTileStride = 0x4000000;
 constexpr uint64_t kHsioCceSramOffset = 0x2800000;
@@ -225,7 +224,8 @@ FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32
 
 // send_dword() on the latched NOC link, after its checks: stages @p val in TX queue @p q_num's word at
 // MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE, through the uncached alias, and sends those 8 bytes. @p q_num must be in
-// range. No inline write on an iDMA back-end: it leaves the AW coupler count of GREN-2020.
+// range. Not an inline write: an inline write on an iDMA back-end (VC 0 to 11) leaves a count in the back-end's AW
+// coupler that is never removed, and a leftover count hangs the next copy on that back-end.
 [[gnu::noinline]] inline void noc_send_dword(uint32_t q_num, uint32_t dest, uint64_t val) {
     const uint32_t stage = MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + q_num * sizeof(val);
     *reinterpret_cast<volatile uint64_t*>(static_cast<uintptr_t>(MEM_IERISC_UNCACHED_BASE + stage)) = val;
