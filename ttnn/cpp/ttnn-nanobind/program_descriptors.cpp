@@ -630,6 +630,42 @@ void py_module_types(nb::module_& mod) {
         .def_rw("noc", &tt::tt_metal::DataMovementConfigDescriptor::noc, "Network-on-chip to use")
         .def_rw("noc_mode", &tt::tt_metal::DataMovementConfigDescriptor::noc_mode, "NOC mode for data movement");
 
+    export_enum<tt::tt_metal::EthernetKernelMode>(mod, "EthernetKernelMode");
+
+    nb::class_<tt::tt_metal::EthernetConfigDescriptor>(mod, "EthernetConfigDescriptor", R"pbdoc(
+        Configuration descriptor for a kernel on Ethernet cores (EthernetConfig).
+
+        SENDER/RECEIVER kernels run on active (linked) Ethernet cores, which only take kernels in slow dispatch
+        (TT_METAL_SLOW_DISPATCH_MODE=1); IDLE kernels run on idle Ethernet cores. core_ranges are logical
+        Ethernet coordinates.
+    )pbdoc")
+        .def(nb::init<>(), R"pbdoc(
+            Default constructor for EthernetConfigDescriptor.
+        )pbdoc")
+        .def(
+            nb::init<
+                tt::tt_metal::EthernetKernelMode,
+                tt::tt_metal::NOC,
+                tt::tt_metal::DataMovementProcessor,
+                tt::tt_metal::NOC_MODE>(),
+            nb::arg("eth_mode") = tt::tt_metal::EthernetKernelMode::SENDER,
+            nb::arg("noc") = tt::tt_metal::NOC::NOC_0,
+            nb::arg("processor") = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            nb::arg("noc_mode") = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+            R"pbdoc(
+                Constructor for EthernetConfigDescriptor with parameters.
+
+                Args:
+                    eth_mode: SENDER or RECEIVER on an active Ethernet core, IDLE on an idle one (default: SENDER)
+                    noc: Network-on-chip to use (default: NOC 0)
+                    processor: Ethernet RISC-V processor to use (default: RISCV_0)
+                    noc_mode: NOC mode (default: DM_DEDICATED_NOC)
+            )pbdoc")
+        .def_rw("eth_mode", &tt::tt_metal::EthernetConfigDescriptor::eth_mode, "Ethernet kernel role")
+        .def_rw("noc", &tt::tt_metal::EthernetConfigDescriptor::noc, "Network-on-chip to use")
+        .def_rw("processor", &tt::tt_metal::EthernetConfigDescriptor::processor, "Ethernet processor to use")
+        .def_rw("noc_mode", &tt::tt_metal::EthernetConfigDescriptor::noc_mode, "NOC mode");
+
     export_enum<tt::tt_metal::UnpackToDestMode>(mod, "UnpackToDestMode");
 
     // nanobind bind_vector docs:

@@ -103,6 +103,15 @@ struct DataMovementConfigDescriptor {
     NOC noc = NOC::RISCV_0_default;
     NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
 };
+// Role of an Ethernet kernel: SENDER/RECEIVER run on active (linked) Ethernet cores, IDLE on idle ones.
+enum class EthernetKernelMode : uint8_t { SENDER = 0, RECEIVER = 1, IDLE = 2 };
+// An Ethernet-core kernel (EthernetConfig). Active Ethernet cores only take kernels in slow dispatch.
+struct EthernetConfigDescriptor {
+    EthernetKernelMode eth_mode = EthernetKernelMode::SENDER;
+    NOC noc = NOC::NOC_0;
+    DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
+    NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
+};
 struct ComputeConfigDescriptor {
     using UnpackToDestModes = std::vector<UnpackToDestMode>;
 
@@ -145,8 +154,13 @@ struct KernelDescriptor {
     using CommonRuntimeArgs = CoreRuntimeArgs;
     using BufferBindings = ttsl::SmallVector<BufferBinding, 4>;
     using CommonBufferBindings = ttsl::SmallVector<CommonBufferBinding, 2>;
-    using ConfigDescriptor = std::
-        variant<ReaderConfigDescriptor, WriterConfigDescriptor, DataMovementConfigDescriptor, ComputeConfigDescriptor>;
+    // EthernetConfigDescriptor is last so the indices of the other alternatives stay the same.
+    using ConfigDescriptor = std::variant<
+        ReaderConfigDescriptor,
+        WriterConfigDescriptor,
+        DataMovementConfigDescriptor,
+        ComputeConfigDescriptor,
+        EthernetConfigDescriptor>;
     enum class SourceType { FILE_PATH, SOURCE_CODE };
 
     std::string kernel_source;

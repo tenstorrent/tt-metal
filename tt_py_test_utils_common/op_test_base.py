@@ -136,6 +136,19 @@ class OpTestBase:
             compute_kernel_config=self.compute_config,
         )
 
+    # Override if run_device_operation does not return a device tensor: per-device torch tensors to compare.
+    def read_outputs(self, out, pool):
+        return list(pool.map(ttnn.to_torch, ttnn.get_device_tensors(out.cpu())))
+
+    # Override together with read_outputs.
+    def release_output(self, out):
+        out.deallocate(True)
+
+    # Override to also judge each output on its own: a list with one bool per device (True = this device's output is
+    # bad), counted like a non-deterministic output. Called on the reference outputs and at every determinism check.
+    def output_failures(self, outputs):
+        return None
+
     def deallocate_activations(self):
         self.activations.deallocate(True)
 
@@ -238,8 +251,15 @@ class OpTestBase:
                 for act in range(num_activation_tensors):
                     self.activations = self.convert_activations_to_memory_config(a_t[act])
                     output = self.run_device_operation()
-                    reference_out[act] = list(pool.map(ttnn.to_torch, ttnn.get_device_tensors(output.cpu())))
-                    output.deallocate(True)
+                    for device_idx in self.device_ids:
+                        ttnn.device.synchronize_device(self.get_device(device_idx))
+                    reference_out[act] = self.read_outputs(output, pool)
+                    self.release_output(output)
+                    bad = self.output_failures(reference_out[act])
+                    for output_id, failed in enumerate(bad or []):
+                        if failed:
+                            logger.warning(f"Device {self.device_ids[output_id]} reference output {act} failed")
+                            num_nd_outputs[output_id] += 1
                     if self.activation.mem_config.buffer_type == ttnn.BufferType.L1:
                         self.deallocate_activations()
 
@@ -288,8 +308,9 @@ class OpTestBase:
 
                 # Check if the output matches the first run output
                 if check_iteration:
-                    outputs = list(pool.map(ttnn.to_torch, ttnn.get_device_tensors(out.cpu())))
+                    outputs = self.read_outputs(out, pool)
                     matches = list(pool.map(torch.equal, reference_out[current_act_tensor], outputs))
+                    bad = self.output_failures(outputs) or [False] * num_devices
                     at_clock = (
                         f" (VF sweep AICLK {step['mhz']} MHz, VDD +{step['offset']} mV)" if clock is not None else ""
                     )
@@ -298,14 +319,19 @@ class OpTestBase:
 
                     for output_id in range(num_devices):
                         device_idx = self.device_ids[output_id]
-                        if matches[output_id]:
+                        if matches[output_id] and not bad[output_id]:
                             logger.debug(f"Device {device_idx} PCC: 1.0")
                         else:
-                            # For determinism check, we avoid calling comp_pcc func as it is heavy and with too many operations,
-                            # part of the code that replaces nans/infs with zeros starts leaking memory, even if deallocation is forced,
-                            # so we call it only in case we see tensors are not equal
-                            _, pcc = comp_pcc(reference_out[current_act_tensor][output_id], outputs[output_id])
-                            logger.warning(f"Device {device_idx} PCC: {pcc}{at_clock}")
+                            if not matches[output_id]:
+                                # For determinism check, we avoid calling comp_pcc func as it is heavy and with too many
+                                # operations, part of the code that replaces nans/infs with zeros starts leaking memory,
+                                # even if deallocation is forced, so we call it only in case we see tensors are not equal
+                                _, pcc = comp_pcc(
+                                    reference_out[current_act_tensor][output_id].float(), outputs[output_id].float()
+                                )
+                                logger.warning(f"Device {device_idx} PCC: {pcc}{at_clock}")
+                            else:
+                                logger.warning(f"Device {device_idx} output failed its own check{at_clock}")
                             num_nd_outputs[output_id] += 1
                             if clock is not None:
                                 step["nd"][output_id] += 1
@@ -316,7 +342,7 @@ class OpTestBase:
                         self.deallocate_activations()
                     self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
 
-                out.deallocate(True)
+                self.release_output(out)
 
                 logger.debug(f"Iteration = {i}, done!")
 

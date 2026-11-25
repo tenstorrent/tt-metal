@@ -132,7 +132,8 @@ void kernel_main() {
         const uint32_t x = get_arg_val<uint32_t>(2 + d * 3);
         const uint32_t y = get_arg_val<uint32_t>(3 + d * 3);
         const uint32_t dst_addr = get_arg_val<uint32_t>(4 + d * 3);
-        const uint64_t dst_noc_addr = get_noc_addr(x, y, dst_addr);
+        const uint64_t dst_noc_addr = x == NOC_DEST_DRAM_BANK ? get_noc_addr_from_bank_id<true>(y, dst_addr, noc_index)
+                                                              : get_noc_addr(x, y, dst_addr);
         volatile uint32_t* r = results + d * NOC_RESULT_WORDS;
         progress[NOC_PROGRESS_DEST] = d;
 

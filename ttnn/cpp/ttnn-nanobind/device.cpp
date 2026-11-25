@@ -52,6 +52,7 @@
 #include <tt-metalium/experimental/operation_timeout.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/ethernet_cores.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/execution/slow_dispatch.hpp>
@@ -695,6 +696,95 @@ void device_module(nb::module_& m_device) {
         nb::arg("mesh_device").noconvert(),
         nb::arg("device_coord"),
         get_l1_occupied_ranges_doc.data());
+
+    m_device.def(
+        "ExperimentalGetEthernetCores",
+        [](const MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord) {
+            std::vector<nb::dict> cores;
+            for (const auto& core :
+                 tt::tt_metal::experimental::ethernet::get_ethernet_cores(mesh_device, device_coord)) {
+                nb::dict entry;
+                entry["logical"] = nb::cast(core.logical);
+                entry["virtual"] = nb::cast(core.virtual_core);
+                entry["active"] = core.active;
+                entry["channel"] = core.channel;
+                cores.push_back(std::move(entry));
+            }
+            return cores;
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        R"doc(
+        Every Ethernet core of the chip at ``device_coord``, sorted by channel, as dicts with ``logical``
+        (CoreCoord for KernelDescriptor core_ranges), ``virtual`` (CoreCoord a NOC transaction addresses),
+        ``active`` (linked: kernels need slow dispatch and EthernetKernelMode SENDER/RECEIVER) and ``channel``.
+    )doc");
+    m_device.def(
+        "ExperimentalGetEthernetL1Range",
+        []() {
+            const auto range = tt::tt_metal::experimental::ethernet::get_common_unreserved_l1_range();
+            return std::make_pair(range.start, range.end);
+        },
+        R"doc(
+        ``(start, end)`` of the unreserved L1 that both active and idle Ethernet cores leave to kernels.
+    )doc");
+    m_device.def(
+        "ExperimentalGetEthernetRiscInfo",
+        []() {
+            const auto info = tt::tt_metal::experimental::ethernet::get_risc_info();
+            nb::dict out;
+            out["active_fw_cooperative"] = info.active_fw_cooperative;
+            out["active_eth_riscs"] = info.active_eth_riscs;
+            out["idle_eth_riscs"] = info.idle_eth_riscs;
+            return out;
+        },
+        R"doc(
+        Ethernet RISC counts and whether active-Ethernet base firmware is cooperative, as a dict. With non-cooperative
+        firmware and several active-Ethernet RISCs a kernel's NOC must equal its processor index; with one, NOC 1.
+    )doc");
+    m_device.def(
+        "ExperimentalReadL1",
+        [](const MeshDevice& mesh_device,
+           const distributed::MeshCoordinate& device_coord,
+           const CoreCoord& logical_core,
+           bool is_ethernet,
+           uint32_t address,
+           uint32_t size_bytes) {
+            return tt::tt_metal::experimental::ethernet::read_l1(
+                mesh_device, device_coord, logical_core, is_ethernet, address, size_bytes);
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        nb::arg("logical_core"),
+        nb::arg("is_ethernet"),
+        nb::arg("address"),
+        nb::arg("size_bytes"),
+        R"doc(
+        Read ``size_bytes`` of L1 at ``address`` from a core (logical coordinate; Ethernet if ``is_ethernet``) of the
+        chip at ``device_coord``, as a list of uint32 words.
+    )doc");
+
+    m_device.def(
+        "ExperimentalWriteL1",
+        [](const MeshDevice& mesh_device,
+           const distributed::MeshCoordinate& device_coord,
+           const CoreCoord& logical_core,
+           bool is_ethernet,
+           uint32_t address,
+           std::vector<uint32_t> words) {
+            tt::tt_metal::experimental::ethernet::write_l1(
+                mesh_device, device_coord, logical_core, is_ethernet, address, std::move(words));
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        nb::arg("logical_core"),
+        nb::arg("is_ethernet"),
+        nb::arg("address"),
+        nb::arg("words"),
+        R"doc(
+        Write a list of uint32 ``words`` to L1 at ``address`` on a core (logical coordinate; Ethernet if
+        ``is_ethernet``) of the chip at ``device_coord``.
+    )doc");
 
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.

@@ -28,6 +28,7 @@ NOC kernel_noc(const KernelDescriptor& kernel, tt::ARCH arch) {
             [arch](const ReaderConfigDescriptor&) { return tt::tt_metal::detail::preferred_noc_for_dram_read(arch); },
             [arch](const WriterConfigDescriptor&) { return tt::tt_metal::detail::preferred_noc_for_dram_write(arch); },
             [](const DataMovementConfigDescriptor& config) { return config.noc; },
+            [](const EthernetConfigDescriptor& config) { return config.noc; },
             [](const ComputeConfigDescriptor&) -> NOC {
                 TT_THROW("Multicast attachment requires a data-movement kernel");
             }},

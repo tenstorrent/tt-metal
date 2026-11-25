@@ -316,6 +316,8 @@ from ttnn.types import (
     ReaderConfigDescriptor,
     WriterConfigDescriptor,
     DataMovementConfigDescriptor,
+    EthernetConfigDescriptor,
+    EthernetKernelMode,
     ComputeConfigDescriptor,
     KernelDescriptor,
     RuntimeArgs,

@@ -556,59 +556,87 @@ void Program::populate_from_descriptor(const ProgramDescriptor& descriptor) {
         std::vector<std::filesystem::path> compiler_include_paths(
             kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
 
-        auto config = std::visit(
-            ttsl::overloaded{
-                [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
-                    return ReaderDataMovementConfig{
-                        std::move(compile_args),
-                        std::move(defines),
-                        std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
-                        std::move(compiler_include_paths)};
-                },
-                [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
-                    return WriterDataMovementConfig{
-                        std::move(compile_args),
-                        std::move(defines),
-                        std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
-                        std::move(compiler_include_paths)};
-                },
-                [&](const DataMovementConfigDescriptor& dm_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig> {
-                    return DataMovementConfig{
-                        .processor = dm_descriptor.processor,
-                        .noc = dm_descriptor.noc,
-                        .noc_mode = dm_descriptor.noc_mode,
-                        .compile_args = std::move(compile_args),
-                        .defines = std::move(defines),
-                        .named_compile_args = std::move(named_compile_args),
-                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
-                        .compiler_include_paths = std::move(compiler_include_paths),
-                    };
-                },
-                [&](const ComputeConfigDescriptor& compute_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig> {
-                    return ComputeConfig{
-                        .math_fidelity = compute_descriptor.math_fidelity,
-                        .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
-                        .dst_full_sync_en = compute_descriptor.dst_full_sync_en,
-                        .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
-                        .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
-                        .math_approx_mode = compute_descriptor.math_approx_mode,
-                        .enable_trisc2_rvv = compute_descriptor.enable_trisc2_rvv,
-                        .compile_args = std::move(compile_args),
-                        .defines = std::move(defines),
-                        .named_compile_args = std::move(named_compile_args),
-                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
-                        .compiler_include_paths = std::move(compiler_include_paths),
-                    };
-                },
-            },
-            kernel_descriptor.config);
+        // An Ethernet kernel goes through the EthernetConfig overloads; every other kind through the public ones.
+        const auto create_ethernet_kernel = [&](const EthernetConfigDescriptor& eth) -> KernelHandle {
+            TT_FATAL(
+                compiler_include_paths.empty(), "An Ethernet KernelDescriptor does not support compiler_include_paths");
+            EthernetConfig eth_config{
+                .eth_mode = static_cast<Eth>(eth.eth_mode),
+                .noc = eth.noc,
+                .processor = eth.processor,
+                .compile_args = std::move(compile_args),
+                .defines = std::move(defines),
+                .named_compile_args = std::move(named_compile_args),
+                .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::Os),
+                .noc_mode = eth.noc_mode,
+            };
+            return is_file
+                       ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, eth_config)
+                       : CreateKernelFromString(
+                             *this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, eth_config);
+        };
+        const auto* eth_descriptor = std::get_if<EthernetConfigDescriptor>(&kernel_descriptor.config);
+
+        auto config =
+            eth_descriptor
+                ? std::variant<DataMovementConfig, ComputeConfig>{}
+                : std::visit(
+                      ttsl::overloaded{
+                          [&](const EthernetConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
+                              TT_THROW("unreachable: Ethernet kernels are created by create_ethernet_kernel");
+                          },
+                          [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
+                              return ReaderDataMovementConfig{
+                                  std::move(compile_args),
+                                  std::move(defines),
+                                  std::move(named_compile_args),
+                                  kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                                  std::move(compiler_include_paths)};
+                          },
+                          [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
+                              return WriterDataMovementConfig{
+                                  std::move(compile_args),
+                                  std::move(defines),
+                                  std::move(named_compile_args),
+                                  kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                                  std::move(compiler_include_paths)};
+                          },
+                          [&](const DataMovementConfigDescriptor& dm_descriptor)
+                              -> std::variant<DataMovementConfig, ComputeConfig> {
+                              return DataMovementConfig{
+                                  .processor = dm_descriptor.processor,
+                                  .noc = dm_descriptor.noc,
+                                  .noc_mode = dm_descriptor.noc_mode,
+                                  .compile_args = std::move(compile_args),
+                                  .defines = std::move(defines),
+                                  .named_compile_args = std::move(named_compile_args),
+                                  .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                                  .compiler_include_paths = std::move(compiler_include_paths),
+                              };
+                          },
+                          [&](const ComputeConfigDescriptor& compute_descriptor)
+                              -> std::variant<DataMovementConfig, ComputeConfig> {
+                              return ComputeConfig{
+                                  .math_fidelity = compute_descriptor.math_fidelity,
+                                  .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
+                                  .dst_full_sync_en = compute_descriptor.dst_full_sync_en,
+                                  .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
+                                  .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
+                                  .math_approx_mode = compute_descriptor.math_approx_mode,
+                                  .enable_trisc2_rvv = compute_descriptor.enable_trisc2_rvv,
+                                  .compile_args = std::move(compile_args),
+                                  .defines = std::move(defines),
+                                  .named_compile_args = std::move(named_compile_args),
+                                  .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
+                                  .compiler_include_paths = std::move(compiler_include_paths),
+                              };
+                          },
+                      },
+                      kernel_descriptor.config);
 
         auto kernel_handle =
-            is_file
+            eth_descriptor ? create_ethernet_kernel(*eth_descriptor)
+            : is_file
                 ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
                 : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
 

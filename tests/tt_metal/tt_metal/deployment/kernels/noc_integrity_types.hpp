@@ -52,6 +52,11 @@ enum : uint32_t {
     NOC_STATUS_HANG,  // set by the host when a source stops making progress
 };
 
+// A destination whose x is NOC_DEST_DRAM_BANK addresses DRAM bank y (address = offset inside the bank) through the
+// firmware's per-NOC bank table, which picks that bank's endpoint for the kernel's NOC. Used by the Python test
+// (tests/didt/test_noc_integrity.py), which cannot look up DRAM endpoints per NOC; the C++ test passes coordinates.
+enum : uint32_t { NOC_DEST_DRAM_BANK = 0xFFFF };
+
 [[maybe_unused]]
 static const char* noc_pattern_name(uint32_t pattern) {
     switch (pattern) {
