@@ -124,8 +124,8 @@ void kernel_main() {
         const bool has_chunk = chunk_of_user[u];
         if constexpr (kKRtn) {
             // (S0-8: the passes whose compute produced new k rows — packed: a user's first pass; batched: the layer's
-            // first pass, every active user's row; otherwise every pass, row 0 — copied into cb_knew, those rows
-            // rounded to nearest on the bfp4 grid; compute waits for cb_knew before it places them)
+            // first pass, every active user's row; otherwise every pass, row 0 — copied into cb_knew, which compute
+            // waits for before it places them; the stored rows are re-encoded to nearest at the write-back)
             const bool makes_k = role >= 2 && (packed ? u % kPPU == 0 : (kTailBatched ? i % n_act == 0 : true));
             if (makes_k) {
                 cb_wait_front(cb_knr, Dt);
@@ -133,9 +133,9 @@ void kernel_main() {
                 const uint32_t from = get_read_ptr(cb_knr), to = get_write_ptr(cb_knew);
                 noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], from), to, Dt * kTile);
                 noc_async_read_barrier();
-                if constexpr (packed || verify) {
-                    // (packed / verify rows: the tail is packed in storage format for the step's own attention, so the
-                    // rows are rounded here, before compute places them)
+                if constexpr (verify && !packed) {
+                    // (a single-user verify — contiguous KV, which S0-8 does not take: chunk workers read row 0's tile
+                    // back from DRAM within the step, so its rows are rounded here, before compute places them)
                     for (uint32_t d = 0; d < Dt; d++) {
                         for (uint32_t r = 0; r < kVR; r++) {
                             rtn_bfp4_tile_row(to + d * kTile, r);
@@ -143,11 +143,11 @@ void kernel_main() {
                     }
                 }
                 cb_push_back(cb_knew, Dt);
-                if constexpr (packed || verify) {
+                if constexpr (verify && !packed) {
                     cb_pop_front(cb_knr, Dt);
                 }
                 // (otherwise compute goes on with the unrounded rows at once; cb_knr is kept until the write-back,
-                // which re-encodes the stored row to nearest: patch_bfp4_row)
+                // which re-encodes the stored rows to nearest: patch_bfp4_row)
             }
         }
         // the row max: face 0's rows, then (more than 16 rows) face 2's at 512 in the slot
@@ -192,6 +192,21 @@ void kernel_main() {
             const uint32_t tp0 = tile_of((u / kPPU) * kVR), n_tail = n_tail_of(u / kPPU);
             cb_wait_front(cb_flush, tail_pages(n_tail) * Dt);
             cb_wait_front(cb_flushv, tail_pages(n_tail) * Dt);
+            if constexpr (kKRtn) {
+                // (S0-8: the user's kVR new k rows — rows 0 .. kVR - 1 of its kept cb_knr copy — re-encoded to nearest
+                // in the packed tail tiles, off the critical path, as the plain rows below)
+                const uint32_t knr = get_read_ptr(cb_knr), flush = get_read_ptr(cb_flush);
+                if constexpr (kKPatch != 0) {
+                    invalidate_l1_cache();
+                    for (uint32_t r = 0; r < kVR; r++) {
+                        const uint32_t R = (u / kPPU) * kVR + r, t = flush + (tile_of(R) - tp0) * kKvRow;
+                        for (uint32_t d = 0; d < Dt; d++) {
+                            patch_bfp4_row(t + d * kKvTile, tail_pos[R], knr + d * kTile, r, kKPatch == 1);
+                        }
+                    }
+                }
+                cb_pop_front(cb_knr, Dt);
+            }
             for (uint32_t kv = 0; kv < 2; kv++) {
                 // (k from cb_flush in bf8 rows, v from cb_flushv in V's rows: kVRow)
                 const uint32_t row = kv == 0 ? kKvRow : kVRow, from = get_read_ptr(kv == 0 ? cb_flush : cb_flushv);
