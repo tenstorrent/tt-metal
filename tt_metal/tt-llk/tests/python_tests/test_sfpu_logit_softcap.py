@@ -198,11 +198,7 @@ def test_sfpu_logit_softcap(
 
 @dataclass
 class LOGIT_SOFTCAP_POLYNOMIAL(TemplateParameter):
-    """Select the polynomial overload, and record that choice on perf rows.
-
-    ``False`` emits nothing, so the driver keeps its default accurate overload.
-    The field is always present so both sweeps share one report schema.
-    """
+    """Select the polynomial overload; ``False`` keeps the accurate one but still records the column."""
 
     logit_softcap_polynomial: bool = True
 
