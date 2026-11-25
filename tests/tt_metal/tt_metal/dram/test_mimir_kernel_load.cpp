@@ -22,9 +22,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "dev_mem_map.h"
-// Mimir is on Grendel, whose device kernels take these from the tt-2.0.0 register headers (see qa_hal_grendel_l1.cpp).
-#include "internal/tt-2xx/tt-2.0.0/meta/registers/memory_port_cacheable_reg.h"
-#include "internal/tt-2xx/tt-2.0.0/meta/registers/memory_port_noncacheable_reg.h"
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
@@ -480,8 +477,6 @@ namespace {
 
 using namespace mimir_contract;
 
-static_assert(MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR == MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE);
-
 class HartZeroRunsDramKernel : public ::testing::TestWithParam<uint32_t> {};
 
 TEST_P(HartZeroRunsDramKernel, WritesMagic) {
@@ -497,8 +492,7 @@ TEST_P(HartZeroRunsDramKernel, WritesMagic) {
     const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
     const uint32_t magic = 0xC0FFEE04 + cce_index;
     const auto& hal = MetalContext::instance().hal();
-    const uint32_t result_dev_addr = MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR +
-                                     hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint32_t result_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const uint64_t result_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 
     Program program = CreateProgram();
