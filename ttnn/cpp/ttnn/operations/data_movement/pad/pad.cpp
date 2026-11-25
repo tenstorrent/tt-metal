@@ -703,7 +703,7 @@ ttnn::Tensor pad_with_route(
             const MemoryConfig height_sharded{
                 TensorMemoryLayout::HEIGHT_SHARDED,
                 requested_config.buffer_type(),
-                ShardSpec(grid, {shard_height, padded[-1]}, ShardOrientation::ROW_MAJOR)};
+                tt::tt_metal::ShardSpec(grid, {shard_height, padded[-1]}, ShardOrientation::ROW_MAJOR)};
             return ttnn::to_memory_config(output_tensor, height_sharded, std::nullopt);
         }
         return output_tensor;
