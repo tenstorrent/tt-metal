@@ -17,14 +17,19 @@
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "impl/kernels/kernel.hpp"
+#include "impl/program/kernel_compile_utils.hpp"
 #include "impl/program/program_impl.hpp"
+#include "jit_build/build.hpp"
+#include "jit_build/jit_build_options.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
 
+using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ProgramSpecTestGen1;
@@ -184,6 +189,63 @@ TEST_F(ProgramSpecTestGen1, CPU_RuntimeArrayValuesDoNotAffectKernelHash) {
     program.set_program_run_args(params);
 
     EXPECT_EQ(DMKernelHash(program), hash_before);
+}
+
+// ----------------------------------------------------------------------------
+// Kernel hash sensitivity to the opt level
+// ----------------------------------------------------------------------------
+//
+// compiler_options.opt_level sets the -O level of the kernel's compile and link, so the same source at another
+// level is a different binary. The kernel builds into <kernel name>/<KernelCompileHash>/, which hashes
+// compute_hash(). Without the opt level in it, changing only the level reuses the binary cached at the old one.
+
+constexpr const char* kOptLevelKernelName = "kernel";
+
+Program MakeOptLevelProgram(distributed::MeshDevice& mesh_device, KernelSpec kernel, KernelBuildOptLevel opt_level) {
+    kernel.compiler_options.opt_level = opt_level;
+    ProgramSpec spec;
+    spec.name = "opt_level_hash";
+    spec.kernels = {std::move(kernel)};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {kOptLevelKernelName})};
+    return Program(mesh_device, spec);
+}
+
+void ExpectOptLevelAffectsKernelHash(distributed::MeshDevice& mesh_device, const KernelSpec& kernel) {
+    Program prog_os = MakeOptLevelProgram(mesh_device, kernel, KernelBuildOptLevel::Os);
+    Program prog_o2 = MakeOptLevelProgram(mesh_device, kernel, KernelBuildOptLevel::O2);
+    Program prog_o2_again = MakeOptLevelProgram(mesh_device, kernel, KernelBuildOptLevel::O2);
+    auto kernel_os = prog_os.impl().get_kernel_by_spec_name(kOptLevelKernelName);
+    auto kernel_o2 = prog_o2.impl().get_kernel_by_spec_name(kOptLevelKernelName);
+    auto kernel_o2_again = prog_o2_again.impl().get_kernel_by_spec_name(kOptLevelKernelName);
+
+    EXPECT_NE(kernel_os->compute_hash(), kernel_o2->compute_hash())
+        << "Kernels that differ only in opt level must not share a JIT cache slot.";
+    EXPECT_EQ(kernel_o2->compute_hash(), kernel_o2_again->compute_hash());
+
+    // The build directory name. Same build key and build options, so only compute_hash() can tell them apart.
+    JitBuildEnv build_env;
+    JitBuildOptions build_options(build_env);
+    constexpr uint64_t build_key = 0;
+    EXPECT_NE(
+        tt::tt_metal::detail::KernelCompileHash(kernel_os, build_options, build_key),
+        tt::tt_metal::detail::KernelCompileHash(kernel_o2, build_options, build_key));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_OptLevelAffectsDataMovementKernelHash) {
+    ExpectOptLevelAffectsKernelHash(*mesh_device_, MakeMinimalGen1DMKernel(kOptLevelKernelName));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_OptLevelAffectsComputeKernelHash) {
+    ExpectOptLevelAffectsKernelHash(*mesh_device_, MakeMinimalGen1ComputeKernel(kOptLevelKernelName));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_OptLevelAffectsDataMovementKernelHash) {
+    ExpectOptLevelAffectsKernelHash(*mesh_device_, MakeMinimalGen2DMKernel(kOptLevelKernelName));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_OptLevelAffectsComputeKernelHash) {
+    ExpectOptLevelAffectsKernelHash(*mesh_device_, MakeMinimalGen2ComputeKernel(kOptLevelKernelName));
 }
 
 }  // namespace

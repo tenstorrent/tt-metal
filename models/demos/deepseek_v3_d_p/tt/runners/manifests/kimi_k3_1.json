@@ -3,7 +3,7 @@
     "PREFILL_MODEL": "kimi_k3_1",
     "PREFILL_NUM_LAYERS": "93",
     "PREFILL_MAX_SEQ_LEN": "1064960",
-    "PREFILL_NUM_USERS": "96",
+    "PREFILL_NUM_USERS": "88",
     "PREFILL_SP": "4",
     "PREFILL_TP": "4",
     "PREFILL_SP_AXIS": "1",

@@ -57,4 +57,40 @@ inline void llk_math_eltwise_binary_sfpu_mul_int(
         vector_mode);
 }
 
+/**
+ * @brief Performs elementwise fixed-point multiply: y = sign * ((|x0| * |x1|) >> 23)
+ *
+ * x1 is a Q0.23 fixed-point scale, so y is x0 rescaled by x1 / 2^23.
+ *
+ * @tparam APPROXIMATE: Approximation mode (unused for integer mul)
+ * @tparam DATA_FORMAT: Data format of the integer operands, values = <Int32>
+ * @tparam ITERATIONS: Number of iterations for given face
+ * @tparam SIGN_MAGNITUDE_FORMAT: Sign-magnitude Int32 encoding for operands and result
+ *
+ * @param idst0: The index of the tile in DST register buffer to use as first operand
+ * @param idst1: The index of the tile in DST register buffer to use as second operand
+ * @param odst: The index of the tile in DST register buffer to use as output
+ * @param vector_mode: Vector mode, values = <R/C/RC/None>
+ * @note Call @ref llk_math_eltwise_binary_sfpu_mul_int_init before this function. See
+ *       _mul_int32_sm_shift23_ for the exactness envelope.
+ */
+template <
+    bool APPROXIMATE,
+    DataFormat DATA_FORMAT,
+    int ITERATIONS = SFPU_ITERATIONS,
+    bool SIGN_MAGNITUDE_FORMAT = false>
+inline void llk_math_eltwise_binary_sfpu_mul_int_sm_shift23(
+    std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+    static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU mul_int sm_shift23 supports Int32 only");
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _mul_int32_sm_shift23_,
+        (APPROXIMATE, ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+        idst0,
+        idst1,
+        odst,
+        vector_mode);
+}
+
 }  // namespace ckernel

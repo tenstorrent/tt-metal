@@ -207,7 +207,8 @@ case "${MODEL}" in
     # is the deepest depth the golden's decoder-output stream covers, so sc1 is a real accuracy gate
     # rather than a smaller copy of sc4. sc1 keeps the default 256k context, so its perf probes are
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
-    # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
+    # baseline for sc4 -- 24 layers against 93. CI's sc4 leg and summary now run K3.1 (kimi_k3_1 below);
+    # K3's sc4 stays runnable by hand and keeps its perf_baselines.json entry.
     SC1_NUM_LAYERS=24
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized; \
       export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
@@ -237,15 +238,28 @@ case "${MODEL}" in
     # The adapter's defaults already name the K3.1 weights and golden, so only the 4x4 cache is resolved here.
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
+    if [ "${VARIANT}" = _packed ]; then
+      # Four 2,560-token chunks per forward (kimi_k3_1_packed.json), the production shape, traced with D2H acks; one
+      # slot fewer than kimi_k3_1.json, for the traced packed forward's scratch slot. Same golden and PCC gate. 4x4
+      # only: on the 8x4 layout's 5,120-token chunks the budget would pack two, not the four production runs.
+      case "${CONFIG}" in
+        sc1|sc4) ;;
+        *) echo "${MODEL} --variant packed runs the 4x4 configs (sc1, sc4) only" >&2; exit 2 ;;
+      esac
+      MANIFEST="${MANIFEST_DIR}/kimi_k3_1_packed.json"
+    fi
     SC1_NUM_LAYERS=24
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # The cache root is the adapter's ttnn_cache_default; 76 slots measured for the 8x4 stage.
     kimi_layout "${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill}" \
       kimi_k3_1 76
-    # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare. 10240 tokens is
-    # whole chunks in both layouts (4 of 2560 at 4x4, 2 of 5120 at 8x4), so every one of the 8192 golden
-    # positions is compared, the gate reads earlier chunks' KV from later ones, and the tail past 8192 is timed.
-    REQUEST_LEN=10240
+    # K3's 1M request, as K3 times it: whole chunks in both layouts (410 of 2560 at 4x4, 205 of 5120 at 8x4).
+    # The golden is the 8192-token prompt of a vLLM capture and its span bounds the compare, so the first 8192
+    # positions are PCC'd and the rest of the request (the trace's tokens repeated) is timed.
+    REQUEST_LEN=1049600
+    # Demand a measurement: until perf_baselines.json has a kimi_k3_1 entry for the config, the gate otherwise
+    # returns before reading the metrics, and a leg that measured nothing would pass green.
+    REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-1}"
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
