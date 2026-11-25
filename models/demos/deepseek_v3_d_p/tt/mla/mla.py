@@ -862,9 +862,8 @@ class ttMLA:
         )
         self._push_prefetch_grids = None
         if self._push_next_layer or self._push_own_layer:
-            query_rows = self.indexer_indices_shape()[2]
-            self._push_prefetch_grids = self._push.grids(query_rows)
-            self._push_prefetch_manager = self._push.prefetch_manager(query_rows)
+            self._push_prefetch_grids = self._push.grids()
+            self._push_prefetch_manager = self._push.prefetch_manager()
         if requested_overlap_profile is not None:
             if not self._has_indexer or self.kv_only or self._indexer_reuse:
                 # Only a non-kv-only full indexer layer can launch the two independent branches. Shared

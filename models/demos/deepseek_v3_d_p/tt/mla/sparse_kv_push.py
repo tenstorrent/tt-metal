@@ -113,7 +113,7 @@ class SparseKvPushPlanner:
         # Plans built (sparse_push_plan + all-gather), counted on the host.
         self.builds = 0
         self._buffers = {}
-        self._managers = {}  # query rows -> sub-device manager of grids(query rows)
+        self._manager = None  # sub-device manager of grids()
         # layer index -> (plan, buffer parity): the plan whose prefix rows the previous attention step already pushed,
         # beside its attention, into that buffer (None: the dense gather buffer)
         self.prefetched = {}
@@ -122,7 +122,7 @@ class SparseKvPushPlanner:
         # Pushes enqueued by part name (ALL / PREFIX / REST), counted on the host as they are enqueued.
         self.pushes = Counter()
 
-    def grids(self, query_rows: int):
+    def grids(self):
         """(attention, push) core grids for sparse_sdpa beside the next layer's prefix push.
 
         The push takes the fewest whole columns that hold its cores (prefetch_links links), in their rows furthest from
@@ -133,7 +133,7 @@ class SparseKvPushPlanner:
         push_cores = self.prefetch_links * PUSH_CORES_PER_LINK
         push_cols = divup(push_cores, grid.y)
         attention_cols = grid.x - push_cols
-        if attention_cols <= 0 or query_rows <= 0:
+        if attention_cols <= 0:
             raise ValueError(f"no room for {push_cores} push cores beside attention on a {grid.x}x{grid.y} grid")
         push_rows = divup(push_cores, push_cols)
         attention = ttnn.CoreRangeSet(
@@ -144,23 +144,22 @@ class SparseKvPushPlanner:
         )
         return attention, push
 
-    def prefetch_manager(self, query_rows: int):
+    def prefetch_manager(self):
         """Sub-device manager that runs attention (sub-device 0, whose cores sparse_sdpa takes by default) beside the
-        next layer's prefix push (sub-device 1), on grids(query_rows). Created at init, outside any trace capture."""
-        if query_rows not in self._managers:
-            attention, push = self.grids(query_rows)
-            self._managers[query_rows] = self.mesh_device.create_sub_device_manager(
+        next layer's prefix push (sub-device 1), on grids(). Created at init, outside any trace capture."""
+        if self._manager is None:
+            attention, push = self.grids()
+            self._manager = self.mesh_device.create_sub_device_manager(
                 [ttnn.SubDevice([attention]), ttnn.SubDevice([push])], 0
             )
-        return self._managers[query_rows]
+        return self._manager
 
     def release(self):
         """Unregister the sub-device managers before the mesh closes."""
-        if self._managers:
+        if self._manager is not None:
             self.mesh_device.clear_loaded_sub_device_manager()
-            for manager in self._managers.values():
-                self.mesh_device.remove_sub_device_manager(manager)
-            self._managers.clear()
+            self.mesh_device.remove_sub_device_manager(self._manager)
+            self._manager = None
 
     def buffer_spec(self, like: ttnn.Tensor, *, distinct_rows: int, max_rows: int, stripe_chunk: int):
         """The compact buffer's spec for up to `distinct_rows` pushed rows of `like`'s rows. A chip's distinct rows are

@@ -282,7 +282,8 @@ _GLM_PUSH_PERF_CEILING_US = {
 @pytest.mark.parametrize("layer", [14, 62], ids=["L14", "L62"])
 def test_sparse_kv_push_glm_perf(mesh_device, layer):
     """Each step of the push in a GLM-5.3 shared layer at the 1M request, with real top-k and the production
-    configuration (2 links, scaled FP8 rows, 160-row blocks, the planner's grids and sub-device manager)."""
+    configuration (2 links, the prefix beside attention on the planner's prefetch links, scaled FP8 rows, 160-row
+    blocks, the planner's grids and sub-device manager)."""
     from safetensors.numpy import load_file
 
     from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
@@ -295,8 +296,8 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
     cache_tokens = _TRACE_1M_START + chunk_global
     page_bytes = 704  # 656 B scaled FP8 rows, DRAM aligned
     planner = SparseKvPushPlanner(mesh_device, links)
-    attention_grid, push_grid = planner.grids(query_rows)
-    manager = planner.prefetch_manager(query_rows)
+    attention_grid, push_grid = planner.grids()
+    manager = planner.prefetch_manager()
     _, kv_dtype, kv_width = _KV_FORMATS[kv_fmt]
     buffer_rows = ttnn.experimental.sparse_kv_push_output_spec(
         mesh_device,
@@ -362,8 +363,10 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
         ttnn.deallocate(c)
 
     def push(part, **grid):
+        # The prefix on the push grid runs on the planner's prefetch links, as the model runs it beside attention.
+        kw = {**push_kw, "num_links": planner.prefetch_links} if grid else push_kw
         return lambda controller: ttnn.experimental.sparse_kv_push(
-            cache, output_tensor=compact_next, part=part, batch_index=1, **push_kw, **grid
+            cache, output_tensor=compact_next, part=part, batch_index=1, **kw, **grid
         )
 
     def attention(controller):
