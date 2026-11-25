@@ -87,7 +87,7 @@ ttnn:
     wh_llmbox_civ2: 40
     sim_wh_n150: 755
     sim_bh_p150: 740
-    sim_quasar: 50
+    sim_quasar: 75
   unit:
     wh_llmbox: 50
     wh_galaxy: 125
@@ -317,8 +317,8 @@ triage:
 
 llk:
   pr_gate:
-    wh_n150_civ2: 40
-    bh_p150b_civ2_viommu: 55  # +10: the SFPU ULP PR check (llk_pr_gate_tests.yaml)
+    wh_n150_civ2: 45  # +15: the SFPU ULP PR check (llk_pr_gate_tests.yaml)
+    bh_p150b_civ2_viommu: 60  # +15: the SFPU ULP PR check (llk_pr_gate_tests.yaml)
     sim_quasar_xl: 30
     cpu_medium: 10
   sanity:

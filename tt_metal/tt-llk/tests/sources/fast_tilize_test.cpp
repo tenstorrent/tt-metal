@@ -10,12 +10,20 @@
 #include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
 #include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
+
+// SrcA/SrcB dvalid handshakes per row of tiles: one per unit_dim 2 unit and two per unit_dim 3 unit,
+// so the row decomposition below always totals ceil(BLOCK_CT_DIM / 2); unit_dim 1 (BLOCK_CT_DIM == 1) uses SrcA only
+inline std::uint32_t fast_tilize_src_handshakes_per_row(const std::uint32_t block_ct_dim)
+{
+    return (block_ct_dim + 1) / 2;
+}
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -83,59 +91,78 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            const std::uint32_t handshakes = fast_tilize_src_handshakes_per_row(BLOCK_CT_DIM) * BLOCK_RT_DIM * LOOP_FACTOR;
+            if (BLOCK_CT_DIM == 1)
             {
-                std::uint32_t read_offset = i * BLOCK_CT_DIM * TILE_R_DIM;
-
-                std::uint32_t packed_tiles    = 0;
-                std::uint32_t remaining_tiles = BLOCK_CT_DIM;
-                std::uint32_t bank_density    = num_faces == 2 ? 2 : 1; // 16x32 tiny tiles can fit twice as many tiles in a single dest bank
-                std::uint32_t dest_size       = is_fp32_dest_acc_en ? 4 * bank_density : 8 * bank_density;
-                std::uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
-                std::uint32_t num_units       = dest_size / unit_dim;
-
-                while (packed_tiles < BLOCK_CT_DIM)
+                _perf_unpack_stream_set_valid<true, false, PERF_RUN_TYPE>(handshakes);
+            }
+            else
+            {
+                _perf_unpack_stream_set_valid<true, true, PERF_RUN_TYPE>(handshakes);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
+            {
+                for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
                 {
-                    const std::uint32_t tile_index = read_offset + packed_tiles;
-                    if (remaining_tiles > 2 * dest_size)
+                    std::uint32_t read_offset = i * BLOCK_CT_DIM * TILE_R_DIM;
+
+                    std::uint32_t packed_tiles    = 0;
+                    std::uint32_t remaining_tiles = BLOCK_CT_DIM;
+                    std::uint32_t bank_density    = num_faces == 2 ? 2 : 1; // 16x32 tiny tiles can fit twice as many tiles in a single dest bank
+                    std::uint32_t dest_size       = is_fp32_dest_acc_en ? 4 * bank_density : 8 * bank_density;
+                    std::uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
+                    std::uint32_t num_units       = dest_size / unit_dim;
+
+                    while (packed_tiles < BLOCK_CT_DIM)
                     {
-                        _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, unit_dim, num_units, BLOCK_CT_DIM, num_faces);
-                        packed_tiles += dest_size;
-                        remaining_tiles -= dest_size;
-                    }
-                    else if (remaining_tiles > dest_size)
-                    {
-                        const std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
-                        num_units                          = even_remainder / unit_dim;
-                        _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, unit_dim, num_units, BLOCK_CT_DIM, num_faces);
-                        packed_tiles += even_remainder;
-                        remaining_tiles -= even_remainder;
-                    }
-                    else
-                    {
-                        if (remaining_tiles % 2 == 0 || unit_dim == 1)
+                        const std::uint32_t tile_index = read_offset + packed_tiles;
+                        if (remaining_tiles > 2 * dest_size)
                         {
-                            num_units = remaining_tiles / unit_dim;
                             _llk_unpack_fast_tilize_block_(
                                 L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, unit_dim, num_units, BLOCK_CT_DIM, num_faces);
+                            packed_tiles += dest_size;
+                            remaining_tiles -= dest_size;
                         }
-                        else if (remaining_tiles == 3)
+                        else if (remaining_tiles > dest_size)
                         {
-                            _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, 3, 1, BLOCK_CT_DIM, num_faces);
+                            const std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
+                            num_units                          = even_remainder / unit_dim;
+                            _llk_unpack_fast_tilize_block_(
+                                L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, unit_dim, num_units, BLOCK_CT_DIM, num_faces);
+                            packed_tiles += even_remainder;
+                            remaining_tiles -= even_remainder;
                         }
                         else
                         {
-                            num_units = (remaining_tiles - 3) / unit_dim;
-                            _llk_unpack_fast_tilize_block_(
-                                L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, unit_dim, num_units, BLOCK_CT_DIM, num_faces);
-                            _llk_unpack_fast_tilize_block_(
-
-                                L1_ADDRESS(buffer_A[0]), tile_index + remaining_tiles - 3, formats.unpack_A_src, 3, 1, BLOCK_CT_DIM, num_faces);
+                            if (remaining_tiles % 2 == 0 || unit_dim == 1)
+                            {
+                                num_units = remaining_tiles / unit_dim;
+                                _llk_unpack_fast_tilize_block_(
+                                    L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, unit_dim, num_units, BLOCK_CT_DIM, num_faces);
+                            }
+                            else if (remaining_tiles == 3)
+                            {
+                                _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, 3, 1, BLOCK_CT_DIM, num_faces);
+                            }
+                            else
+                            {
+                                num_units = (remaining_tiles - 3) / unit_dim;
+                                _llk_unpack_fast_tilize_block_(
+                                    L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, unit_dim, num_units, BLOCK_CT_DIM, num_faces);
+                                _llk_unpack_fast_tilize_block_(
+                                    L1_ADDRESS(buffer_A[0]), tile_index + remaining_tiles - 3, formats.unpack_A_src, 3, 1, BLOCK_CT_DIM, num_faces);
+                            }
+                            packed_tiles += remaining_tiles;
+                            remaining_tiles = 0;
                         }
-                        packed_tiles += remaining_tiles;
-                        remaining_tiles = 0;
                     }
                 }
             }
@@ -172,60 +199,84 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            const std::uint32_t handshakes = fast_tilize_src_handshakes_per_row(BLOCK_CT_DIM) * BLOCK_RT_DIM * LOOP_FACTOR;
+            if (BLOCK_CT_DIM == 1)
             {
-                std::uint32_t packed_tiles    = 0;
-                std::uint32_t remaining_tiles = BLOCK_CT_DIM;
-                std::uint32_t bank_density    = num_faces == 2 ? 2 : 1; // 16x32 tiny tiles can fit twice as many tiles in a single dest bank
-                std::uint32_t dest_size       = is_fp32_dest_acc_en ? 4 * bank_density : 8 * bank_density;
-                std::uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
-                std::uint32_t num_units       = dest_size / unit_dim;
-
-                while (packed_tiles < BLOCK_CT_DIM)
+                _perf_math_stream_clear_valid<true, false, PERF_RUN_TYPE>(handshakes);
+            }
+            else
+            {
+                _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(handshakes);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
+            {
+                for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
                 {
-                    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                    std::uint32_t packed_tiles    = 0;
+                    std::uint32_t remaining_tiles = BLOCK_CT_DIM;
+                    std::uint32_t bank_density    = num_faces == 2 ? 2 : 1; // 16x32 tiny tiles can fit twice as many tiles in a single dest bank
+                    std::uint32_t dest_size       = is_fp32_dest_acc_en ? 4 * bank_density : 8 * bank_density;
+                    std::uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
+                    std::uint32_t num_units       = dest_size / unit_dim;
 
-                    if (remaining_tiles > 2 * dest_size)
+                    while (packed_tiles < BLOCK_CT_DIM)
                     {
-                        _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units, num_faces);
-                        packed_tiles += dest_size;
-                        remaining_tiles -= dest_size;
-                    }
-                    else if (remaining_tiles > dest_size)
-                    {
-                        const std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
-                        num_units                          = even_remainder / unit_dim;
-                        _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units, num_faces);
-                        packed_tiles += even_remainder;
-                        remaining_tiles -= even_remainder;
-                    }
-                    else
-                    {
-                        if (remaining_tiles % 2 == 0 || unit_dim == 1)
+                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
-                            num_units = remaining_tiles / unit_dim;
-                            _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units, num_faces);
+                            _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
                         }
-                        else if (remaining_tiles == 3)
+
+                        if (remaining_tiles > 2 * dest_size)
                         {
-                            _llk_math_fast_tilize_block_(0, formats.math, 3, 1, num_faces);
+                            _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units, num_faces);
+                            packed_tiles += dest_size;
+                            remaining_tiles -= dest_size;
+                        }
+                        else if (remaining_tiles > dest_size)
+                        {
+                            const std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
+                            num_units                          = even_remainder / unit_dim;
+                            _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units, num_faces);
+                            packed_tiles += even_remainder;
+                            remaining_tiles -= even_remainder;
                         }
                         else
                         {
-                            num_units = (remaining_tiles - 3) / unit_dim;
-                            _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units, num_faces);
-                            LLK_ASSERT(
-                                (remaining_tiles - 3 < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                                "remaining_tiles - 3 exceeds max dest tiles");
-                            _llk_math_fast_tilize_block_(remaining_tiles - 3, formats.math, 3, 1, num_faces);
+                            if (remaining_tiles % 2 == 0 || unit_dim == 1)
+                            {
+                                num_units = remaining_tiles / unit_dim;
+                                _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units, num_faces);
+                            }
+                            else if (remaining_tiles == 3)
+                            {
+                                _llk_math_fast_tilize_block_(0, formats.math, 3, 1, num_faces);
+                            }
+                            else
+                            {
+                                num_units = (remaining_tiles - 3) / unit_dim;
+                                _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units, num_faces);
+                                LLK_ASSERT(
+                                    (remaining_tiles - 3 < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                    "remaining_tiles - 3 exceeds max dest tiles");
+                                _llk_math_fast_tilize_block_(remaining_tiles - 3, formats.math, 3, 1, num_faces);
+                            }
+                            packed_tiles += remaining_tiles;
+                            remaining_tiles = 0;
                         }
-                        packed_tiles += remaining_tiles;
-                        remaining_tiles = 0;
-                    }
 
-                    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                        {
+                            _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        }
+                    }
                 }
             }
         }
@@ -269,69 +320,86 @@ void run_kernel(RUNTIME_PARAMETERS params)
         are_packers_configured_correctly(_llk_pack_fast_tilize_pack_src_format_<is_fp32_dest_acc_en>(use_32bit_dest, formats.pack_src), formats.pack_dst));
     {
         START_PERF_MEASURE("TILE_LOOP")
-        for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
+        }
+        else
+        {
+            constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
             {
-                std::uint32_t write_offset = i * BLOCK_CT_DIM;
-
-                std::uint32_t packed_tiles    = 0;
-                std::uint32_t remaining_tiles = BLOCK_CT_DIM;
-                std::uint32_t bank_density    = num_faces == 2 ? 2 : 1; // 16x32 tiny tiles can fit twice as many tiles in a single dest bank
-                std::uint32_t dest_size       = is_fp32_dest_acc_en ? 4 * bank_density : 8 * bank_density;
-                std::uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
-                std::uint32_t num_units       = dest_size / unit_dim;
-
-                while (packed_tiles < BLOCK_CT_DIM)
+                for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
                 {
-                    _llk_packer_wait_for_math_done_();
+                    std::uint32_t write_offset = i * BLOCK_CT_DIM;
 
-                    const std::uint32_t tile_index = write_offset + packed_tiles / bank_density;
-                    if (remaining_tiles > 2 * dest_size)
+                    std::uint32_t packed_tiles    = 0;
+                    std::uint32_t remaining_tiles = BLOCK_CT_DIM;
+                    std::uint32_t bank_density    = num_faces == 2 ? 2 : 1; // 16x32 tiny tiles can fit twice as many tiles in a single dest bank
+                    std::uint32_t dest_size       = is_fp32_dest_acc_en ? 4 * bank_density : 8 * bank_density;
+                    std::uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
+                    std::uint32_t num_units       = dest_size / unit_dim;
+
+                    while (packed_tiles < BLOCK_CT_DIM)
                     {
-                        _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
-                        packed_tiles += dest_size;
-                        remaining_tiles -= dest_size;
-                    }
-                    else if (remaining_tiles > dest_size)
-                    {
-                        const std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
-                        num_units                          = even_remainder / unit_dim;
-                        _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
-                        packed_tiles += even_remainder;
-                        remaining_tiles -= even_remainder;
-                    }
-                    else
-                    {
-                        if (remaining_tiles % 2 == 0 || unit_dim == 1)
+                        if constexpr (sync_with_math)
                         {
-                            num_units = remaining_tiles / unit_dim;
-                            _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
+                            _llk_packer_wait_for_math_done_();
                         }
-                        else if (remaining_tiles == 3)
+
+                        const std::uint32_t tile_index = write_offset + packed_tiles / bank_density;
+                        if (remaining_tiles > 2 * dest_size)
                         {
-                            _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), 3, 1, num_faces);
+                            _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
+                            packed_tiles += dest_size;
+                            remaining_tiles -= dest_size;
+                        }
+                        else if (remaining_tiles > dest_size)
+                        {
+                            const std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
+                            num_units                          = even_remainder / unit_dim;
+                            _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
+                            packed_tiles += even_remainder;
+                            remaining_tiles -= even_remainder;
                         }
                         else
                         {
-                            num_units = (remaining_tiles - 3) / unit_dim;
-                            _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
-                            LLK_ASSERT(
-                                (remaining_tiles - 3 < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                                "remaining_tiles - 3 exceeds max dest tiles");
-                            _llk_pack_fast_tilize_block_(remaining_tiles - 3, L1_ADDRESS(buffer_Res[tile_index + remaining_tiles - 3]), 3, 1, num_faces);
+                            if (remaining_tiles % 2 == 0 || unit_dim == 1)
+                            {
+                                num_units = remaining_tiles / unit_dim;
+                                _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
+                            }
+                            else if (remaining_tiles == 3)
+                            {
+                                _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), 3, 1, num_faces);
+                            }
+                            else
+                            {
+                                num_units = (remaining_tiles - 3) / unit_dim;
+                                _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
+                                LLK_ASSERT(
+                                    (remaining_tiles - 3 < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                    "remaining_tiles - 3 exceeds max dest tiles");
+                                _llk_pack_fast_tilize_block_(remaining_tiles - 3, L1_ADDRESS(buffer_Res[tile_index + remaining_tiles - 3]), 3, 1, num_faces);
+                            }
+                            packed_tiles += remaining_tiles;
+                            remaining_tiles = 0;
                         }
-                        packed_tiles += remaining_tiles;
-                        remaining_tiles = 0;
-                    }
 
-                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        if constexpr (sync_with_math)
+                        {
+                            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        }
+                    }
                 }
             }
         }
         PROFILER_SYNC();
     }
 
+    if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    }
     _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
         formats.pack_dst, FACE_R_DIM, num_faces, false /* partial_face */, false /* narrow_tile */, formats.pack_src, use_32bit_dest);
     // the uninit must hand the packer back with the caller's input format
