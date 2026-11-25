@@ -23,7 +23,12 @@ constexpr auto kWhereDF = DataFormat::Float32;
 constexpr auto kWhereDF = DataFormat::Float16_b;
 #endif
 
+#if defined(INP_UINT32)
 constexpr bool kIsInt = kWhereDF == DataFormat::Int32 || kWhereDF == DataFormat::UInt32;
+#else
+// No UInt32 reference here: Quasar's DataFormat has no UInt32, and kWhereDF is never UInt32 unless INP_UINT32.
+constexpr bool kIsInt = kWhereDF == DataFormat::Int32;
+#endif
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);

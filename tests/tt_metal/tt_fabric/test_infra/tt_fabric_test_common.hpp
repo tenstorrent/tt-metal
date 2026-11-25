@@ -15,16 +15,16 @@
 #include <cstdlib>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/system_mesh.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -546,7 +546,8 @@ public:
 
     tt::ARCH get_arch() const { return mesh_device_->arch(); }
 
-    tt::tt_metal::distributed::MeshDevice& get_mesh_device() const { return *mesh_device_; }
+    // Overrides IDeviceInfoProvider's const accessor with a covariant return, so TestDevice gets a mutable device.
+    tt::tt_metal::distributed::MeshDevice& get_mesh_device() const override { return *mesh_device_; }
 
     uint32_t get_max_connections_per_device() const override {
         auto arch = get_arch();

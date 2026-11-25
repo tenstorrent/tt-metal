@@ -9,11 +9,11 @@
 #include <limits>
 #include <unordered_map>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <hostdevcommon/fabric_mux_v2_common.h>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -333,6 +333,7 @@ void add_fabric_mux_v2_to_program(
 }
 
 void add_fabric_mux_v2_to_program(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::Program& program,
     const FabricMuxV2Config& config,
     const tt::tt_metal::CoreCoord& mux_logical_core,
@@ -342,6 +343,7 @@ void add_fabric_mux_v2_to_program(
     tt::tt_metal::NOC forwarder_noc) {
     std::vector<uint32_t> forwarder_runtime_args;
     append_fabric_connection_rt_args(
+        mesh_device,
         src_fabric_node_id,
         dst_fabric_node_id,
         link_idx,
@@ -404,6 +406,7 @@ void add_fabric_mux_v2_to_program(
 }
 
 void add_fabric_mux_v2_to_program(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::ProgramDescriptor& desc,
     const FabricMuxV2Config& config,
     const tt::tt_metal::CoreCoord& mux_logical_core,
@@ -413,6 +416,7 @@ void add_fabric_mux_v2_to_program(
     tt::tt_metal::NOC forwarder_noc) {
     std::vector<uint32_t> forwarder_runtime_args;
     append_fabric_connection_rt_args(
+        mesh_device,
         src_fabric_node_id,
         dst_fabric_node_id,
         link_idx,

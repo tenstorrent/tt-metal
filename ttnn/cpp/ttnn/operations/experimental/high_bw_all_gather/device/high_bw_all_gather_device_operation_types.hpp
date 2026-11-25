@@ -10,7 +10,7 @@
 #include <optional>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -26,6 +26,8 @@ struct HighBwAllGatherParams {
     // With no public cluster_axis, linearize the complete 2D mesh into a
     // direct-neighbor snake ring. cluster_axis is ignored in this mode.
     bool linearized_mesh_ring = false;
+    // Full-mesh mode only: mesh axis outermost in the gathered (stripe) order; 0 = row-major.
+    uint32_t full_mesh_outer_axis = 0;
 
     // Fabric setup info
     tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;

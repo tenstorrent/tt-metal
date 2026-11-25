@@ -124,7 +124,7 @@ Please refer to the CircularBuffers page for further details.
 In datareuse, we spawned reader and writer kernels per core. In mcast, we have designated core ranges (or more generally speaking, `groups`), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.
 
 Below, let's set some core ID\'s associated with a specific sender-receiver kernel. Take note that each ID is designated as one of two data movement processors, NCRISC (loading data from DRAM to L1) or BRISC (storing data from L1 to DRAM), as defined in the
-[tt_metal/api/tt-metalium/kernel_types.hpp](../../../tt_metal/api/tt-metalium/kernel_types.hpp) file.
+[tt_metal/api/tt-metalium/workload/legacy/kernel_types.hpp](../../../tt_metal/api/tt-metalium/workload/legacy/kernel_types.hpp) file.
 
 ``` cpp
 // Create reader and writer kernels per core group
@@ -167,7 +167,7 @@ auto unary_writer_kernel_noc1_id = tt_metal::CreateKernel(
 ```
 
 If you are interested in further details on how these work, we implore you to check out the exact dataflow kernels located in the
-[tt_metal/programming_examples/matmul_common/kernels/dataflow](../../../tt_metal/programming_examples/matmul_common/kernels/dataflow) file.
+[tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow](../../../tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow) file.
 You can see there are many arguments with which to experiment with, such as mcast destination nocs. You can imagine defining your own mcast scheme.
 
     in0_mcast_dest_noc_start_x

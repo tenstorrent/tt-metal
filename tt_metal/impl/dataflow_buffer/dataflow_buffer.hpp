@@ -6,14 +6,13 @@
 
 #include <cstdint>
 #include <optional>
-#include <utility>
 #include <variant>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 
-#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
+#include "tt_metal/hw/inc/api/dataflow/dfb_access.h"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -62,7 +61,8 @@ struct DataflowBufferConfig {
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
     bool borrows_memory = false;
     // When true, this local DFB is a CrossNode/PrefetcherPipe relay (borrowed ring +
-    // DM/TRISC credit bridge). Host binding generation emits RelayDFBBindingToken.
+    // DM/TRISC credit bridge). Host binding generation emits a RelayDFBBindingToken that
+    // carries both access patterns.
     bool is_relay = false;
 };
 

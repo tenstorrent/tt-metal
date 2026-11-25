@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // tt::ChipId
 #include <tt-umd/types/core_coordinates.hpp>          // CoreType
@@ -29,6 +29,9 @@ enum DispatchWorkerType : uint32_t {
     DISPATCH_S = 8,
     FABRIC_MUX = 17,         // Downstream from MMIO to remote mux. Tunnel index is required.
     RETURN_FABRIC_MUX = 18,  // Upstream from remote to MMIO mux. Tunnel index will be determined from the device id.
+    // A Tensor prefetcher kernel that shares the dispatch engine with the CQ kernels (Quasar, 1 CQ). Which
+    // kernel a node runs is its place in the chain of these nodes (tensor_prefetcher_kernels()).
+    TENSOR_PREFETCHER = 19,
     COUNT,
 };
 

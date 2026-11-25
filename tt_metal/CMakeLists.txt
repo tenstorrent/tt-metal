@@ -35,9 +35,21 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS api ${CMAKE_CURRENT_BINARY_DIR}/api
         FILES ${TT_METAL_PUBLIC_API}
+        FILE_SET deprecated_api
+        TYPE HEADERS
+        BASE_DIRS api
+        FILES ${TT_METAL_DEPRECATED_API}
     PRIVATE
         ${TT_METAL_SOURCES}
         ${API_GENERATED_HEADERS}
+)
+
+# The forwarding headers warn when included (an error under -Werror): verify only the api set, one header at a time.
+set_target_properties(
+    tt_metal
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # clang-tidy reads configuration relative to the generated translation unit,
@@ -202,6 +214,10 @@ if(TT_INSTALL)
             COMPONENT metalium-runtime
         FILE_SET
         api
+            DESTINATION COMPONENT
+            metalium-dev
+        FILE_SET
+        deprecated_api
             DESTINATION COMPONENT
             metalium-dev
     )

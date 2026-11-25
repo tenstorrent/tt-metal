@@ -5,14 +5,15 @@
 #pragma once
 
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/operation.hpp"
@@ -45,6 +46,11 @@ struct StridedAllGatherMinimalMatmulAsync {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
         const operation_attributes_t&, const tensor_args_t&);
+
+    // Leaves out strided_all_gather_async_struct.semaphore;
+    // StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments re-applies every semaphore address
+    // on a cache hit.
+    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::experimental::prim
 

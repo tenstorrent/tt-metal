@@ -5,21 +5,21 @@
 #include <tt_stl/fmt.hpp>
 #include <initializer_list>
 #include <tt-logger/tt-logger.hpp>
-#include <mesh_command_queue.hpp>
-#include <mesh_coord.hpp>
-#include <mesh_device.hpp>
-#include <mesh_device_view.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/host_region.hpp"
 #include <tt_stl/small_vector.hpp>
-#include <sub_device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
-#include <system_mesh.hpp>
-#include <maybe_remote.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/vocabulary/maybe_remote.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -33,15 +33,16 @@
 #include "impl/allocator/allocator.hpp"
 #include "pinned_memory_cache.hpp"
 #include <tt_stl/assert.hpp>
-#include "buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
 #include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "host_api.hpp"
-#include "mesh_config.hpp"
+#include "tt-metalium/workload/legacy/host_api.hpp"
+#include "tt-metalium/observability/profiler/device_profiler.hpp"
+#include "tt-metalium/mesh/mesh_config.hpp"
 #include "mesh_trace.hpp"
-#include "profiler_types.hpp"
+#include <tt-metalium/observability/profiler/profiler_types.hpp>
 #include <experimental/fabric/routing_table_generator.hpp>
-#include "shape_base.hpp"
+#include "tt-metalium/vocabulary/shape_base.hpp"
 #include <tt_stl/cleanup.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -56,10 +57,12 @@
 #include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
-#include "tracy/Tracy.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
-#include <env_lib.hpp>
+#include "common/env_lib.hpp"
 
 #include "allocator/l1_banking_allocator.hpp"
 #include "impl/device/mock_allocator.hpp"
@@ -99,15 +102,24 @@ int generate_unique_mesh_id() {
     return next_id++;
 }
 
+std::atomic<uint64_t> mesh_device_close_count{0};
+
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_default_thread_pool(
-    ContextId context_id, const std::vector<Device*>& physical_devices) {
+    ContextId context_id,
+    const std::vector<Device*>& physical_devices,
+    std::chrono::microseconds spin_window = std::chrono::microseconds(0)) {
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool(context_id);
     }
-    return create_device_bound_thread_pool(context_id, physical_devices);
+    return create_device_bound_thread_pool(context_id, physical_devices, spin_window);
 }
+
+// Covers the p90 host gap between fan-outs in GLM-5.2 and Kimi K2.7 prefill (144 us), so workers are still polling
+// when the next fan-out comes instead of paying a wake (~14 us for 32 workers). Past that, the wake is a small share
+// of the gap, and a longer window only costs every worker more idle CPU time.
+constexpr auto DISPATCH_POOL_SPIN = std::chrono::microseconds(250);
 
 // Helper function to verify all devices in the MeshDevice have the same value
 template <typename F>
@@ -376,7 +388,8 @@ MeshDeviceImpl::MeshDeviceImpl(
     mesh_id_(generate_unique_mesh_id()),
     view_(std::move(mesh_device_view)),
     parent_mesh_(std::move(parent_mesh)),
-    dispatch_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
+    dispatch_thread_pool_(
+        create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()), DISPATCH_POOL_SPIN)),
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     local_devices_ = view_->impl().get_devices();
@@ -974,7 +987,8 @@ tt_fabric::FabricNodeId MeshDeviceImpl::get_fabric_node_id(const MeshCoordinate&
 }
 
 MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_id) const {
-    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+    // An explicit id never consults the (deprecated) thread-local selection.
+    const uint8_t id = cq_id.has_value() ? *cq_id : MetalContext::current_command_queue_id_for_thread();
 
     // If the mesh device has no local devices, return the dummy mesh command queue.
     if (local_devices_.empty()) {
@@ -988,7 +1002,8 @@ MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_i
 }
 
 MeshCommandQueueBase& MeshDeviceImpl::mesh_command_queue_base(std::optional<uint8_t> cq_id) const {
-    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+    // An explicit id never consults the (deprecated) thread-local selection.
+    const uint8_t id = cq_id.has_value() ? *cq_id : MetalContext::current_command_queue_id_for_thread();
 
     // If the mesh device has no local devices, return the dummy mesh command queue.
     if (local_devices_.empty()) {
@@ -1129,8 +1144,11 @@ bool MeshDeviceImpl::close() {
     return false;
 }
 
+uint64_t MeshDeviceImpl::close_count() { return mesh_device_close_count.load(std::memory_order_acquire); }
+
 bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     TTZoneScopedD(MISC);
+    mesh_device_close_count.fetch_add(1, std::memory_order_acq_rel);
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
@@ -1263,6 +1281,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         destroy_metal_context_instance_on_close_ = false;
     }
 
+    // Again after teardown: entries checked while it ran are not trusted after it.
+    mesh_device_close_count.fetch_add(1, std::memory_order_acq_rel);
     return true;
 }
 
@@ -1888,15 +1908,25 @@ bool MeshDeviceImpl::initialize_impl(
         }
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
-                pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
+                pimpl_wrapper,
+                cq_id,
+                dispatch_thread_pool_,
+                std::bind(&MeshDeviceImpl::lock_api, this),
+                active_distributed_context_));
         }
     }
     Inspector::mesh_device_initialized(this);
 
-    // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
-    // cores so users don't observe a lazy side-effect on first DRAM-sender pipe creation.
-    if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+    // DRAM-sender state arena: always constructed up-front where this mesh runs DRAM-sender endpoints,
+    // so users don't observe a lazy side-effect on first DRAM-sender pipe creation.
+    dram_sender_placement_ = ::tt::tt_metal::dram_sender_placement(context_id_, num_hw_cqs());
+    if (dram_sender_placement_ == DramSenderPlacement::DramCore) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
+    } else if (dram_sender_placement_ == DramSenderPlacement::DispatchEngine) {
+        const auto layout = ::tt::tt_metal::tensor_prefetcher_region_layout(metal_env().get_cluster());
+        drisc_l1_arena_ = ::tt::tt_metal::DriscL1Arena::for_dispatch_engine(
+            metal_context().dispatch_mem_map().unused_l1_base() + layout.sender_state_zone_offset(),
+            layout.sender_state_zone_bytes());
     }
 
     is_internal_state_initialized = true;
@@ -1951,6 +1981,10 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
     return *tensor_prefetcher_;
 }
 
+bool MeshDeviceImpl::wait_for_cq_on_tensor_prefetcher_if_active(MeshCommandQueue& cq) const {
+    return tensor_prefetcher_ != nullptr && tensor_prefetcher_->enqueue_cq_signal_and_wait_if_active(cq);
+}
+
 std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
     if (!host_region_) {
         // A closed mesh has no live PCIe endpoint to provision against; a fresh region here
@@ -1961,87 +1995,33 @@ std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
     return host_region_;
 }
 
-CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
-    TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
-    const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
-    const uint32_t num_banks = soc_desc.get_num_dram_views();
+void MeshDeviceImpl::check_dram_bank(const IDevice* device, uint32_t bank_id) const {
+    const uint32_t num_banks = metal_env().get_cluster().get_soc_desc(device->id()).get_num_dram_views();
     TT_FATAL(
         bank_id < num_banks, "bank_id={} out of range for device {} (num_banks={})", bank_id, device->id(), num_banks);
+}
 
-    std::set<std::pair<size_t, size_t>> reserved;
-    for (const auto& c : soc_desc.dram_view_worker_cores.at(bank_id)) {
-        reserved.emplace(c.x, c.y);
+CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
+    TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
+    // On a dispatch engine an endpoint is only a role of its bank; no DRAM core is occupied.
+    if (dram_sender_placement_ == DramSenderPlacement::DispatchEngine) {
+        check_dram_bank(device, bank_id);
+        return CoreCoord(bank_id, 0);
     }
-    for (const auto& c : soc_desc.dram_view_eth_cores.at(bank_id)) {
-        reserved.emplace(c.x, c.y);
-    }
-
-    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
-    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
-    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
-        tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
-            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
-        if (!reserved.contains({coord.x, coord.y})) {
-            return soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
-        }
-    }
-    TT_THROW(
-        "No unused DRAM subchannel found for bank_id={} on device {}; all {} subchannels are reserved as "
-        "worker/eth endpoints",
-        bank_id,
-        device->id(),
-        num_subchannels);
+    return tt::tt_metal::pick_unused_dram_logical_core(
+        metal_env().get_cluster().get_soc_desc(device->id()), bank_id, device->id());
 }
 
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
-    const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
-
-    // Sender 0: the free non-endpoint subchannel.
-    const CoreCoord free_core = pick_unused_dram_logical_core(device, bank_id);
-
-    // Sender 1: the NOC1 worker-endpoint subchannel. Resolve its subchannel index by
-    // matching the endpoint's physical (TRANSLATED) coord against this bank's
-    // subchannels (mirrors the loop in pick_unused_dram_logical_core).
-    const CoreCoord noc1_endpoint_phys =
-        soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/static_cast<uint8_t>(1));
-    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
-    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
-    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
-        const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
-            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
-        if (coord.x == noc1_endpoint_phys.x && coord.y == noc1_endpoint_phys.y) {
-            const CoreCoord noc1_core =
-                soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
-            // A sender mapping resolves logical DRAM coords against one reference device and is then
-            // reused mesh-wide (see build_dram_sender_mapping), so a role must land on the same
-            // logical y on every device. dram_bank_endpoint_coords orders a bank as [NOC0 endpoint,
-            // NOC1 endpoint, remaining subchannels ascending], which pins the NOC1 endpoint to y == 1
-            // and every free subchannel above it -- but only while the bank's two worker endpoints are
-            // distinct subchannels. A descriptor that names one subchannel for both NOCs (Wormhole
-            // does) collapses that ordering and would let the free and NOC1 roles swap logical y
-            // between devices, which the per-device membership check cannot see. Wormhole has no DRAM
-            // senders, so require the split here rather than in the descriptor.
-            TT_FATAL(
-                noc1_core.y == 1 && free_core.y > noc1_core.y,
-                "DRAM bank {} on device {}: expected the NOC1 worker endpoint at logical y=1 with the free "
-                "subchannel above it, but found NOC1 at ({}, {}) and free at ({}, {}). A bank's NOC0 and NOC1 "
-                "worker endpoints must be distinct subchannels so that a sender's logical coord names the same "
-                "endpoint role on every device in the mesh; check this view's worker_endpoint pair in the SoC "
-                "descriptor.",
-                bank_id,
-                device->id(),
-                noc1_core.x,
-                noc1_core.y,
-                free_core.x,
-                free_core.y);
-            return {free_core, noc1_core};
-        }
+    // A dispatch engine holds every endpoint, so a second one per bank would only split the bank's
+    // receivers into two pipes without adding a data path.
+    if (dram_sender_placement_ == DramSenderPlacement::DispatchEngine) {
+        check_dram_bank(device, bank_id);
+        return {CoreCoord(bank_id, 0)};
     }
-    TT_THROW(
-        "Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={} on device {}",
-        bank_id,
-        device->id());
+    return tt::tt_metal::dram_sender_logical_cores(
+        metal_env().get_cluster().get_soc_desc(device->id()), bank_id, device->id());
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
@@ -2130,7 +2110,8 @@ void MeshDeviceImpl::quiesce_devices() {
             TT_ASSERT(
                 device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
                 "Last completed event is not 0");
-            TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
+            TT_ASSERT(
+                device->sysmem_manager().get_last_issued_event(command_queue->id()) == 0, "Last issued event is not 0");
         }
     }
 }

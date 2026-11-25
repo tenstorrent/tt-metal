@@ -12,26 +12,27 @@
 #include <span>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/memory_pin.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/memory/utils/memory_pin.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 #include <tt_stl/span.hpp>
 
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
-#include <tt-metalium/tensor/host_tensor.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/memory/tensor/host_tensor.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
 
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "common_tensor_test_utils.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -394,8 +395,10 @@ TEST(VectorConversionTest, ExactSpecPredicateCustomAlignment) {
 
     auto alignment = tt::tt_metal::Alignment({64, 64});
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+    auto spec = TensorSpec(
+        shape,
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
+            DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
 
     auto host_tensor = HostTensor::from_vector(input, spec);
 
@@ -409,8 +412,10 @@ TEST(VectorConversionTest, ExactSpecPredicateCustomAlignmentRvalueVector) {
 
     auto alignment = tt::tt_metal::Alignment({64, 64});
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+    auto spec = TensorSpec(
+        shape,
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
+            DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
 
     auto host_tensor = HostTensor::from_vector(std::move(input), spec);
 
@@ -423,8 +428,10 @@ TEST(VectorConversionTest, ExactSpecPredicateCustomAlignmentFromSpan) {
 
     auto alignment = tt::tt_metal::Alignment({64, 64});
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+    auto spec = TensorSpec(
+        shape,
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
+            DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
 
     auto host_tensor = HostTensor::from_span<float>(std::span<float>(input), spec);
 
@@ -441,8 +448,10 @@ TEST(VectorConversionTest, ExactSpecShardedPackedSizes) {
         ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 1})}), {32, 64}, ShardOrientation::ROW_MAJOR}};
     experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
     auto alignment = tt::tt_metal::Alignment({64, 64});
-    auto spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+    auto spec = TensorSpec(
+        shape,
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
+            DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
 
     auto host_tensor = HostTensor::from_vector(input, spec);
 

@@ -165,6 +165,7 @@ void FabricConnectionManager::process(
             mux_configs_.emplace(
                 mux_core.value(),
                 std::make_unique<FabricMuxConfig>(
+                    device_info_provider->get_mesh_device(),
                     num_full_size_channels,
                     num_header_only_channels,
                     num_buffers_full_size_channel,
@@ -358,7 +359,13 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
                     rt_args);
             } else {
                 append_fabric_connection_rt_args(
-                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+                    device_info_provider->get_mesh_device(),
+                    fabric_node_id,
+                    neighbor_node_id,
+                    key.link_idx,
+                    program_handle,
+                    core,
+                    rt_args);
             }
         }
     }
@@ -839,7 +846,12 @@ void TestDevice::create_mux_kernels() {
 
         auto mux_ct_args = mux_config->get_fabric_mux_compile_time_args();
         auto mux_rt_args = mux_config->get_fabric_mux_run_time_args(
-            fabric_node_id_, dst_node_id, connection_key.link_idx, program_handle_, mux_core);
+            device_info_provider_->get_mesh_device(),
+            fabric_node_id_,
+            dst_node_id,
+            connection_key.link_idx,
+            program_handle_,
+            mux_core);
 
         mux_worker.create_kernel(
             coord_,
@@ -1530,7 +1542,13 @@ void TestDevice::create_latency_sender_kernel(
 
     // Add fabric connection args
     tt::tt_fabric::append_fabric_connection_rt_args(
-        fabric_node_id_, dest_node, link_idx, program_handle_, {core}, rt_args);
+        device_info_provider_->get_mesh_device(),
+        fabric_node_id_,
+        dest_node,
+        link_idx,
+        program_handle_,
+        {core},
+        rt_args);
 
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
         {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};
@@ -1633,7 +1651,13 @@ void TestDevice::create_latency_responder_kernel(
 
     // Add fabric connection args (back to sender)
     tt::tt_fabric::append_fabric_connection_rt_args(
-        fabric_node_id_, sender_node, link_idx, program_handle_, {core}, rt_args);
+        device_info_provider_->get_mesh_device(),
+        fabric_node_id_,
+        sender_node,
+        link_idx,
+        program_handle_,
+        {core},
+        rt_args);
 
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
         {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};

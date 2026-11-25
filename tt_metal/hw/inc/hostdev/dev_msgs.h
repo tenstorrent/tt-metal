@@ -60,6 +60,9 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #elif defined(COMPILE_FOR_DRISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
 #elif defined(ARCH_QUASAR)
+#if !defined(HAL_BUILD)
+#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+#endif
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
 // Cached alias of the mailbox region. Needed for atomics.
 #define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
@@ -113,6 +116,8 @@ constexpr uint32_t RUN_SYNC_MSG_GO = 0x80;
 constexpr uint32_t RUN_SYNC_MSG_LOAD = 0x1;
 constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
 constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3;
+// Quasar kernel DM: the kernel has returned and its DFB exit records are written; it is now draining.
+constexpr uint32_t RUN_SYNC_MSG_DFB_DRAINING = 0x4;
 constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;
@@ -302,6 +307,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocInvalidTxnId = 18,
     DebugSanitizeNocSharedCmdBuf = 19,
     DebugSanitizeNocReadToRegAddr = 20,
+    DebugSanitizeNocMulticastOutsideNodeSet = 21,
 };
 
 struct debug_assert_msg_t {
@@ -328,11 +334,16 @@ enum debug_assert_type_t {
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
+// Each field has one writer: only the host writes unpause, and only processor i writes flags[i] (with a byte store,
+// so processors sharing a word never touch each other's flags). A processor that pauses sets its flag to 1 + its bit
+// of unpause and waits for that bit to change; the host flips the bit to let it go, and the processor then clears its
+// own flag. The host never writes flags, so it can't overwrite a pause another processor raised at the same time.
 struct debug_pause_msg_t {
-    volatile uint8_t flags[MaxProcessorsPerCoreType];
+    volatile uint32_t unpause;                              // written by the host only: bit i per processor i
+    volatile uint8_t flags[MaxProcessorsPerCoreType];       // written by the device only: 0 running, 1 or 2 paused
     uint8_t pad[(4 - (MaxProcessorsPerCoreType % 4)) % 4];  // CODEGEN:skip
 };
-// Needs to be 32b-divisible, since the host clears pause flags from host using read_core()/write_core().
+static_assert(MaxProcessorsPerCoreType <= 32);
 static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
 
 struct debug_ring_buf_msg_t {
@@ -347,7 +358,7 @@ struct debug_stack_usage_per_cpu_t {
 
 struct debug_stack_usage_t {
     debug_stack_usage_per_cpu_t cpu[MaxProcessorsPerCoreType];
-    uint8_t pad[12];  // CODEGEN:skip
+    uint8_t pad[8];  // CODEGEN:skip
 };
 
 struct debug_eth_link_t {

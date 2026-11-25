@@ -5,7 +5,6 @@
 #include "binary_ops.hpp"
 
 #include <memory>
-#include <stdexcept>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/binary/binary_composite.hpp>
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>
@@ -22,7 +21,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
@@ -58,25 +57,26 @@ ttnn::Tensor unbroadcast_grad(const autograd::TensorPtr& input, const ttnn::Tens
     auto grad_rank = grad_shape.rank();
     auto max_rank = std::max(input_rank, grad_rank);
 
-    ttsl::SmallVector<int64_t> broadcast_dims;
+    ttsl::SmallVector<int> broadcast_dims;
     for (size_t i = 0; i < max_rank; ++i) {
         auto input_dim = (i < max_rank - input_rank) ? 1u : input_shape[i - (max_rank - input_rank)];
         auto grad_dim = (i < max_rank - grad_rank) ? 1u : grad_shape[i - (max_rank - grad_rank)];
         if (input_dim != grad_dim) {
-            broadcast_dims.push_back(static_cast<int64_t>(i));
+            broadcast_dims.push_back(static_cast<int>(i));
         }
     }
 
-    auto reduced = ttnn::moreh_sum(
-        grad,
-        broadcast_dims,
-        /* keep_dim */ true,
-        /* output_tensor */ std::nullopt,
-        /* memory_config_arg */ std::nullopt,
-        core::ComputeKernelConfig::precise());
+    auto reduced = grad;
+    if (!broadcast_dims.empty()) {
+        reduced = ttnn::sum(
+            grad,
+            broadcast_dims,
+            /* keepdim */ true,
+            /* memory_config */ std::nullopt,
+            core::ComputeKernelConfig::precise());
+    }
 
-    // When ranks differ, moreh_sum with keep_dim preserves the grad's rank.
-    // Reshape back to the input's original shape so add_grad doesn't throw.
+    // Restore the input's rank after reducing any genuinely expanded dimensions.
     if (input_rank != grad_rank) {
         reduced = ttnn::reshape(reduced, input_shape);
     }
@@ -88,14 +88,26 @@ ttnn::Tensor unbroadcast_grad(const autograd::TensorPtr& input, const ttnn::Tens
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const ttnn::Tensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b));
-    autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
+    autograd::GradFunction grad = [a, out]() {
+        if (was_broadcasted(a, out->get_grad())) {
+            a->add_grad(unbroadcast_grad(a, out->get_grad()));
+        } else {
+            a->add_grad(out->get_grad());
+        }
+    };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a));
     return out;
 }
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::AutocastTensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b.get_tensor()));
-    autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
+    autograd::GradFunction grad = [a, out]() {
+        if (was_broadcasted(a, out->get_grad())) {
+            a->add_grad(unbroadcast_grad(a, out->get_grad()));
+        } else {
+            a->add_grad(out->get_grad());
+        }
+    };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a));
     return out;
 }
@@ -107,16 +119,20 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Tens
     out->set_value(
         ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none));
     autograd::GradFunction grad = [a, b, out]() {
-        if (was_broadcasted(a, out->get_grad())) {
-            a->add_grad(unbroadcast_grad(a, out->get_grad()));
-        } else {
-            a->add_grad(out->get_grad());
+        if (a->get_requires_grad()) {
+            if (was_broadcasted(a, out->get_grad())) {
+                a->add_grad(unbroadcast_grad(a, out->get_grad()));
+            } else {
+                a->add_grad(out->get_grad());
+            }
         }
 
-        if (was_broadcasted(b, out->get_grad())) {
-            b->add_grad(unbroadcast_grad(b, out->get_grad()));
-        } else {
-            b->add_grad(out->get_grad());
+        if (b->get_requires_grad()) {
+            if (was_broadcasted(b, out->get_grad())) {
+                b->add_grad(unbroadcast_grad(b, out->get_grad()));
+            } else {
+                b->add_grad(out->get_grad());
+            }
         }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
@@ -129,17 +145,20 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
 
     out->set_value(ttnn::subtract(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
-        if (was_broadcasted(a, out->get_grad())) {
-            a->add_grad(unbroadcast_grad(a, out->get_grad()));
-        } else {
-            a->add_grad(out->get_grad());
+        if (a->get_requires_grad()) {
+            if (was_broadcasted(a, out->get_grad())) {
+                a->add_grad(unbroadcast_grad(a, out->get_grad()));
+            } else {
+                a->add_grad(out->get_grad());
+            }
         }
 
-        auto neg_grad = ttnn::neg(out->get_grad());
-        if (was_broadcasted(b, neg_grad)) {
-            b->add_grad(unbroadcast_grad(b, neg_grad));
-        } else {
-            b->add_grad(neg_grad);
+        if (b->get_requires_grad()) {
+            if (was_broadcasted(b, out->get_grad())) {
+                b->add_grad(ttnn::neg(unbroadcast_grad(b, out->get_grad())));
+            } else {
+                b->add_grad(ttnn::neg(out->get_grad()));
+            }
         }
     };
 
@@ -156,25 +175,28 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
         b->get_value(),
         /* fast_and_approximate_mode*/ true));
     autograd::GradFunction grad = [a, b, out]() {
-        auto a_grad = ttnn::multiply(
-            out->get_grad(),
-            b->get_value(),
-            /* fast_and_approximate_mode*/ true);
-        auto b_grad = ttnn::multiply(
-            out->get_grad(),
-            a->get_value(),
-            /* fast_and_approximate_mode*/ true);
-
-        if (was_broadcasted(a, a_grad)) {
-            a->add_grad(unbroadcast_grad(a, a_grad));
-        } else {
-            a->add_grad(a_grad);
+        if (a->get_requires_grad()) {
+            auto a_grad = ttnn::multiply(
+                out->get_grad(),
+                b->get_value(),
+                /* fast_and_approximate_mode*/ true);
+            if (was_broadcasted(a, a_grad)) {
+                a->add_grad(unbroadcast_grad(a, a_grad));
+            } else {
+                a->add_grad(a_grad);
+            }
         }
 
-        if (was_broadcasted(b, b_grad)) {
-            b->add_grad(unbroadcast_grad(b, b_grad));
-        } else {
-            b->add_grad(b_grad);
+        if (b->get_requires_grad()) {
+            auto b_grad = ttnn::multiply(
+                out->get_grad(),
+                a->get_value(),
+                /* fast_and_approximate_mode*/ true);
+            if (was_broadcasted(b, b_grad)) {
+                b->add_grad(unbroadcast_grad(b, b_grad));
+            } else {
+                b->add_grad(b_grad);
+            }
         }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
@@ -199,9 +221,8 @@ autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::Tens
 
     out->set_value(ttnn::divide(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
-        if (was_broadcasted(a, out->get_grad()) || was_broadcasted(b, out->get_grad())) {
-            throw std::runtime_error("Broadcasting is not supported in the backward pass of operator/");
-        }
+        // div_bw reduces broadcast grads to each operand's shape and fuses the same-shape case into one kernel
+        // when both grads are requested; add_grad drops the grad of an operand that doesn't require it.
         auto res = ttnn::div_bw(out->get_grad(), a->get_value(), b->get_value());
         a->add_grad(res[0].value());
         b->add_grad(res[1].value());
@@ -244,8 +265,16 @@ autograd::TensorPtr min(const autograd::TensorPtr& a, const autograd::TensorPtr&
     out->set_value(ttnn::minimum(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
         auto res = ttnn::min_bw(out->get_grad(), a->get_value(), b->get_value());
-        a->add_grad(res[0]);
-        b->add_grad(res[1]);
+        if (was_broadcasted(a, res[0])) {
+            a->add_grad(unbroadcast_grad(a, res[0]));
+        } else {
+            a->add_grad(res[0]);
+        }
+        if (was_broadcasted(b, res[1])) {
+            b->add_grad(unbroadcast_grad(b, res[1]));
+        } else {
+            b->add_grad(res[1]);
+        }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
     return out;
@@ -256,8 +285,16 @@ autograd::TensorPtr max(const autograd::TensorPtr& a, const autograd::TensorPtr&
     out->set_value(ttnn::maximum(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
         auto res = ttnn::max_bw(out->get_grad(), a->get_value(), b->get_value());
-        a->add_grad(res[0]);
-        b->add_grad(res[1]);
+        if (was_broadcasted(a, res[0])) {
+            a->add_grad(unbroadcast_grad(a, res[0]));
+        } else {
+            a->add_grad(res[0]);
+        }
+        if (was_broadcasted(b, res[1])) {
+            b->add_grad(unbroadcast_grad(b, res[1]));
+        } else {
+            b->add_grad(res[1]);
+        }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
     return out;

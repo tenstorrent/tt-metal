@@ -11,7 +11,6 @@
 #include "ckernel_ops.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "llk_defs.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -199,8 +198,7 @@ void quant_init(const uint zero_point) {
     }
     constexpr std::uint32_t REPLAY_LEN =
         OUTPUT_FORMAT == DataFormat::Int8 ? QUANT_REPLAY_LEN_INT8_OUT : QUANT_REPLAY_LEN_2S_COMP;
-    lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
-    {
+    load_replay_buf(QUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         // m = RNE(A * B + zp_hi) + RNE_MAGIC
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /*mod1*/);
         TTI_SFPNOP;  // SFPSWAP does not wait for the SFPMAD result
@@ -214,7 +212,7 @@ void quant_init(const uint zero_point) {
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
             TTI_SFPXOR(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);  // b = (n + 128) ^ 0x80
         }
-    }
+    });
 }
 
 template <
@@ -252,8 +250,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         OUTPUT_FORMAT == DataFormat::Int8
             ? (INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_OUT : REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN)
             : (INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_IN : REQUANT_REPLAY_LEN_2S_COMP);
-    lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REPLAY_LEN);
-    {
+    load_replay_buf(REQUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         if constexpr (!INT8_INPUT) {
             // LREG0 has the input in 2's complement format. Convert to sign-magnitude before SFPCAST.
             // Skipped for INT8_INPUT since the value is non-negative after the excess-128 XOR.
@@ -274,7 +271,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
             TTI_SFPXOR(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);  // b = (n + 128) ^ 0x80
         }
-    }
+    });
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
@@ -291,8 +288,7 @@ void dequant_init(const uint zero_point) {
     constexpr std::uint32_t REPLAY_LEN =
         (SIGN_MAGNITUDE_FORMAT || INT8_INPUT) ? DEQUANT_REPLAY_LEN_SIGN_MAGN : DEQUANT_REPLAY_LEN_2S_COMP;
 
-    lltt::record<lltt::NoExec>(DEQUANT_REPLAY_SLOT, REPLAY_LEN);
-    {
+    load_replay_buf(DEQUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         if constexpr (!SIGN_MAGNITUDE_FORMAT && !INT8_INPUT) {
             // Input arrives in 2's-complement bits in LREG0 (INT32_2S_COMP
             // SFPLOAD is a no-op on BH); convert to sign-magnitude so the
@@ -312,7 +308,7 @@ void dequant_init(const uint zero_point) {
         // (which reads LREG0) is similarly handled by the SFPU's implicit
         // RAW stall, so no trailing TTI_SFPNOP is required.
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*mod1*/);
-    }
+    });
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
@@ -346,7 +342,7 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off);  // operand A (fp32)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, REPLAY_LEN);                              // RNE MAD + clamp + convert
+        TTI_REPLAY(QUANT_REPLAY_SLOT, REPLAY_LEN, 0, 0);                              // RNE MAD + clamp + convert
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);  // store + dst_reg += 2
     }
 }
@@ -380,7 +376,7 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
-        lltt::replay(REQUANT_REPLAY_SLOT, REPLAY_LEN);
+        TTI_REPLAY(REQUANT_REPLAY_SLOT, REPLAY_LEN, 0, 0);
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);  // store + dst_reg += 2
     }
 }
@@ -397,7 +393,7 @@ inline void calculate_quant_int32_int8_pack(
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off);  // operand A (fp32)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);               // RNE MAD + clamp + convert + XOR
+        TTI_REPLAY(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT, 0, 0);               // RNE MAD + clamp + convert + XOR
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);
     }
 }
@@ -423,7 +419,7 @@ inline void calculate_requant_int32_int8_pack(
             _int8_input_unbias_();  // byte ^ 0x80 (int32 input is converted inside the recorded body)
         }
         // [int32 input: 2's-comp -> sign-mag] + CAST + RNE MAD + clamp + convert + XOR
-        lltt::replay(REQUANT_REPLAY_SLOT, REPLAY_LEN);
+        TTI_REPLAY(REQUANT_REPLAY_SLOT, REPLAY_LEN, 0, 0);
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);
     }
 }
@@ -460,7 +456,7 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
-        lltt::replay(DEQUANT_REPLAY_SLOT, REPLAY_LEN);
+        TTI_REPLAY(DEQUANT_REPLAY_SLOT, REPLAY_LEN, 0, 0);
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, out_off);  // store fp32 + dst_reg += 2
     }
 }

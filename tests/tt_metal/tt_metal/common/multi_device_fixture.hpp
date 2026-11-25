@@ -5,17 +5,17 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include <boost/algorithm/string.hpp>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 #include <tt_stl/reflection.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "mesh_dispatch_fixture.hpp"
-#include "system_mesh.hpp"
+#include "tt-metalium/discovery/system_mesh.hpp"
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"

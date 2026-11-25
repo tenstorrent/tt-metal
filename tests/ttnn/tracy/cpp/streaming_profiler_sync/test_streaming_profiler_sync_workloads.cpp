@@ -31,19 +31,19 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/system_mesh.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -187,7 +187,7 @@ int run() {
     }
     clear_flags(worker_l1, cores);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     const auto kernel = CreateKernel(
         program,
         std::string(kKernelDir) + "host_poke_dm.cpp",
@@ -310,7 +310,7 @@ distributed::MeshWorkload make_multicast(
     const CoreCoord virtual_low = mesh.worker_core_from_logical_core(low);
     const CoreCoord virtual_high = mesh.worker_core_from_logical_core(high);
     const uint32_t num_dests = static_cast<uint32_t>(cores.size() - 1);
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     program.set_runtime_id(runtime_id);
     const auto kernel = CreateKernel(
         program,
@@ -540,7 +540,7 @@ distributed::MeshWorkload build_workload(
     uint32_t runtime_id) {
     std::map<ChipId, Program> programs;
     for (const ChipId chip : std::views::keys(chips)) {
-        programs.emplace(chip, CreateProgram()).first->second.set_runtime_id(runtime_id);
+        programs.emplace(chip, CreateProgram(mesh_device)).first->second.set_runtime_id(runtime_id);
     }
     for (const Pair& pair : pairs) {
         for (uint32_t index = 0; index < pair.size(); index++) {
@@ -561,7 +561,7 @@ distributed::MeshWorkload build_workload(
                 kRounds,
                 static_cast<uint32_t>(dst.chip_id),
                 static_cast<uint32_t>(dst.mesh_id.get())};
-            tt::tt_fabric::append_fabric_connection_rt_args(src, dst, self.link, program, self.core, args);
+            tt::tt_fabric::append_fabric_connection_rt_args(mesh_device, src, dst, self.link, program, self.core, args);
             SetRuntimeArgs(program, kernel, self.core, args);
         }
     }

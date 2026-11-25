@@ -11,10 +11,9 @@
 // near a full buffer, closing them pushed write_idx past the 1024-word buffer into the neighboring
 // math buffer because the buffers are contiguous in memory.
 //
-//   501 fillers -> write_idx = 2 (kernel start) + 2*501 = 1004.
-//   The old guard then let ~6 nested zones open before blocking further opens; unwinding their
-//   closes (plus the enclosing kernel zone) drove write_idx to ~1030 -> 6 words spilled into
-//   the math buffer.
+//   501 fillers -> write_idx = 2*501 = 1002 (a zone writes nothing at open and reserves its 4 words).
+//   With the enclosing kernel zone's 4 words reserved, 4 nested zones open before the guard blocks the next
+//   one, and their closes plus the kernel zone's end at write_idx = 1022, inside the buffer.
 //
 // FILLER_COUNT / NEST_DEPTH are injected from the Python test (OVERRUN_FILL) via build.h.
 

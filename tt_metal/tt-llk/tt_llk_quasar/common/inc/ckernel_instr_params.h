@@ -69,17 +69,11 @@ struct p_unpacr
     constexpr static std::uint32_t UNP_SET_DVALID    = 0x2;
     constexpr static std::uint32_t UNP_CLRSRC_ZERO   = 0x0;
     constexpr static std::uint32_t UNP_CLRSRC_NEGINF = 0x1;
-    constexpr static std::uint32_t UNP_CLRSRC_ONE    = 0x2;
-    constexpr static std::uint32_t UNP_CLRSRC_IMM    = 0x3;
 
     constexpr static std::uint32_t UNP_STALL_FPU_RD = 0x0;
     constexpr static std::uint32_t UNP_STALL_UNP_WR = 0x1;
 
     constexpr static std::uint32_t UNP_CLRSRC_RESET_ALL_BANKS = 0x1;
-    constexpr static std::uint32_t UNP_CLRSRC_ONE_FP16A       = 0x0;
-    constexpr static std::uint32_t UNP_CLRSRC_ONE_FP16B       = 0x1;
-    constexpr static std::uint32_t UNP_CLRSRC_ONE_TF32        = 0x1;
-    constexpr static std::uint32_t UNP_CLRSRC_ONE_INT8        = 0x2;
 };
 
 struct p_set_inc_sel
@@ -442,10 +436,11 @@ struct p_sfpu
         constexpr static std::uint32_t FP32_SM32_EN = 0x800; // if src_c should be interpreted as a FP32/SMAG32 value
     };
 
+    // Pinned to SFPI's Quasar SFPCAST_MOD1_SM32_TO_INT32 / SFPCAST_MOD1_INT32_TO_SM32 by static_asserts in ckernel_sfpu_quant.h.
     struct sfp_sfpcast_mod
     {
-        constexpr static std::uint32_t SM32_TO_2SC  = 0x3; // sign+magnitude int32 -> 2's complement
-        constexpr static std::uint32_t TWO_SC_TO_SM = 0x2; // 2's complement -> sign+magnitude int32
+        constexpr static std::uint32_t SM32_TO_2SC  = 0x2; // sign+magnitude int32 -> 2's complement (-0 -> 0)
+        constexpr static std::uint32_t TWO_SC_TO_SM = 0x3; // 2's complement -> sign+magnitude int32 (INT32_MIN saturates to 0xFFFFFFFF)
     };
 
     struct sfp_binary_mod

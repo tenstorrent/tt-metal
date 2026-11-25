@@ -4,10 +4,11 @@
 #include "transpose_wh_sharded_rm_program_factory.hpp"
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <algorithm>
@@ -101,7 +102,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     log_debug(tt::LogOp, "shard_height: {}", shard_height);
     log_debug(tt::LogOp, "dst_single_tile_size: {}", dst_single_tile_size);
 
-    bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32;
+    // 8-bit ints go through 32-bit Dest; UnpackToDest below stays 32-bit-only.
+    bool fp32_dest_acc_en = ttnn::operations::data_movement::requires_32bit_dest(src0_dfb_data_format);
 
     auto& all_cores = shard_spec.grid;
     [[maybe_unused]] uint32_t num_cores = shard_spec.num_cores();

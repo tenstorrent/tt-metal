@@ -5,8 +5,8 @@
 #include "impl/memory_tracking/shm_tracking_processor.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
 #include "impl/device/device_impl.hpp"
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
 #include "distributed/mesh_device_impl.hpp"

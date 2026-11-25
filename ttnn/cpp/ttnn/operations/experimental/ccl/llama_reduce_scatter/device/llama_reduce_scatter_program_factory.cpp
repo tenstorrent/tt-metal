@@ -3,16 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llama_reduce_scatter_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
@@ -706,6 +706,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_desc
             if (plan.forward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     plan.forward_fabric_node_id.value(),
                     core_args.link_idx,
@@ -717,6 +718,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_desc
             if (plan.backward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     plan.backward_fabric_node_id.value(),
                     core_args.link_idx,

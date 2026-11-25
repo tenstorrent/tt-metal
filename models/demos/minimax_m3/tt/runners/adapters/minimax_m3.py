@@ -114,6 +114,11 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         self.model_config = model_dims(text_config)
         logger.info(f"[minimax_m3] model variant {self.variant.name}")
 
+    @property
+    def hf_model_path(self) -> str:
+        """The dir ``_model_path`` resolves, for the variant selected at construction."""
+        return checkpoint_dir_env() or self.variant.weights_dir
+
     # high_bw_all_gather (MSA cache read) parks its semaphores in L1_SMALL; 0 makes it fall back to general
     # L1 with a warning and an L1-fragmentation risk. Same value as tt/ccl.py L1_SMALL_SIZE (kept literal so
     # importing the adapter stays cheap).
@@ -147,10 +152,12 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # Weight cache
     # ------------------------------------------------------------------
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """The tilized ``.tensorbin`` cache dir, mirroring ``ModelArgs.weight_cache_path(bfloat8_b)`` (the
         layout the cache-populate run wrote): ``{default_weight_cache_root()}/tensor_cache_bfp8_{MeshShape}``.
         The model reads its per-tensor caches from here (on a hit the bf16 source is never touched)."""
+        if sp_axis != 0:
+            raise ValueError("MiniMax M3 prefill runs SP on mesh axis 0 only")
         from models.demos.minimax_m3.tt.model_config import default_weight_cache_root
 
         cache_dir = default_weight_cache_root(_model_path())
