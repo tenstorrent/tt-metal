@@ -9,6 +9,7 @@
 #include <set>
 #include <tuple>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
@@ -41,6 +42,7 @@ public:
         fold_1d_corners();
         add_relays();
         add_scatters();
+        add_splits();
         for (const auto& vc : g_.vcs) {
             add_eth_edges(vc.id);
         }
@@ -195,6 +197,69 @@ private:
             for (auto& e : g_.edges) {
                 if (e.transport == Transport::Noc && e.from == *partner_rx) {
                     e.from = *live_rx;
+                }
+            }
+        }
+    }
+
+    // The send side of more live links than the domain has planes: a live perimeter router whose plane has no domain
+    // router (an aux router) takes, on its relay sender, what a same-side router owning a plane splits off to it (by
+    // destination chip, in the kernel). Owners and aux routers pair in plane order; an aux router already taking a
+    // relay takes no split. Not with VC1: VC0 has no relay sender then (as for a relay, #67139), so an aux router
+    // carries only what is for its own chip.
+    void add_splits() {
+        if (std::any_of(g_.vcs.begin(), g_.vcs.end(), [](const Vc& vc) { return vc.id == 1; })) {
+            return;
+        }
+        auto plane_has_domain_router = [&](RouterIndex r) {
+            const auto& p = g_.routers[r].port;
+            for (RouterIndex o : on_chip_plane_[{p.node, p.plane}]) {
+                if (g_.routers[o].port.capability != EdgeCapability::INTERDOMAIN) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        std::map<std::pair<FabricNodeId, PortDirection>, std::pair<std::vector<RouterIndex>, std::vector<RouterIndex>>>
+            sides;  // -> (owners, aux), in plane order (routers are added in port order)
+        for (RouterIndex r = 0; r < g_.routers.size(); ++r) {
+            const auto& p = g_.routers[r].port;
+            if (p.capability != EdgeCapability::INTERDOMAIN || p.relay_plane) {
+                continue;
+            }
+            auto& [owners, aux] = sides[{p.node, p.direction}];
+            (plane_has_domain_router(r) ? owners : aux).push_back(r);
+        }
+        for (auto& [side, routers] : sides) {
+            auto& [owners, aux] = routers;
+            if (!aux.empty()) {
+                // scenario 4 (#65599): an aux router lands only what is for its own chip; the design (Galaxy, 2 links
+                // per pair) has at most one more link than planes per side
+                log_warning(
+                    tt::LogFabric,
+                    "fabric graph: {} {} has {} link(s) on no routing plane: they deliver only to this chip{}",
+                    side.first,
+                    *side.second,
+                    aux.size(),
+                    aux.size() > 1 ? " (more than the design's one; paired with owners in plane order)" : "");
+            }
+            std::sort(owners.begin(), owners.end(), [&](auto a, auto b) {
+                return g_.routers[a].port.plane < g_.routers[b].port.plane;
+            });
+            std::sort(aux.begin(), aux.end(), [&](auto a, auto b) {
+                return g_.routers[a].port.plane < g_.routers[b].port.plane;
+            });
+            for (size_t k = 0; k < std::min(owners.size(), aux.size()); ++k) {
+                auto [slot, fresh] = forwarding_.try_emplace({aux[k], 0, side.second}, 0);
+                if (!fresh) {
+                    continue;  // takes a relay already
+                }
+                slot->second = add_channel(
+                    LogicalChannel{.router = aux[k], .vc = 0, .kind = ChannelKind::Sender, .from = side.second});
+                for (ChannelIndex c : g_.channels_of(owners[k], ChannelKind::Sender)) {
+                    if (g_.channels[c].vc != 2) {  // VC0/VC1 traffic leaving the domain only
+                        g_.edges.push_back(LogicalEdge{.from = c, .to = slot->second, .transport = Transport::Noc});
+                    }
                 }
             }
         }

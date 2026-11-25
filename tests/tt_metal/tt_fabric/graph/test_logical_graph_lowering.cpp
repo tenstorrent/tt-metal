@@ -1246,5 +1246,27 @@ TEST(FabricGraphScatter, ValidationRejectsLandingOffThePartnerPlane) {
     }));
 }
 
+// ---------------------------------------------------------------- routing plane mismatch, scenarios 3 and 4
+
+TEST(FabricGraphSplit, OwnerSplitsOntoAuxAndAuxLandsOnlyLocally) {
+    // chip 0's N side has three live links; the domain routes on planes 0 and 1: plane 2's router is an aux router
+    const auto [ports, g, rules] = lower_with_perimeter(chip0_north({true, true, true}));
+    const auto aux = *g.find_router("m0.c0.N.p2");
+    const auto owner = *g.find_router("m0.c0.N.p0");
+    size_t splits = 0;
+    for (const auto& e : g.edges) {
+        if (e.transport == Transport::Noc && g.channels[e.from].kind == ChannelKind::Sender) {
+            EXPECT_EQ(g.channels[e.from].router, owner);
+            EXPECT_EQ(g.channels[e.to].router, aux);
+            EXPECT_TRUE(is_relay_sender(g, g.channels[e.to]));
+            ++splits;
+        }
+    }
+    EXPECT_EQ(splits, g.channels_of(owner, ChannelKind::Sender).size());
+    EXPECT_TRUE(sends_on_its_link(g, "m0.c0.N.p0")) << "the owner still sends over its own link";
+    EXPECT_EQ(vc2_turns_out(g, "m0.c0.N.p2"), 0u) << "scenario 4: the aux router lands only for its own chip";
+    EXPECT_TRUE(find_problems(g, *rules, ValidationLimits{}).empty());
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric::graph

@@ -531,6 +531,7 @@ struct RoutedPort {
     uint32_t peer_chan = 0;
     uint32_t plane = 0;
     bool live = true;
+    bool owned = true;  // its plane has a domain router (else an aux router: more links than planes)
     InterDomainMetadata md;
 };
 
@@ -687,6 +688,74 @@ void check_scatter(
     }
 }
 
+// Scenario 3 (#65598), seen from the receiving side: the peer routes on fewer planes than it has links, and its routers
+// owning a plane split what goes to an odd destination chip onto its aux links. In the far-only round the peer sends
+// only from ports owning a plane, so here, toward another chip, the planes of the peer's aux links carry exactly the
+// odd chips' traffic.
+void check_split(
+    const std::map<uint64_t, tt::tt_fabric::FabricNodeId>& node_of,
+    const std::vector<RoutedPort>& peer_routed,
+    const std::map<std::pair<uint64_t, uint32_t>, uint64_t>& before,
+    const std::map<std::pair<uint64_t, uint32_t>, uint64_t>& after) {
+    if (!MetalContext::instance().rtoptions().get_enable_fabric_telemetry()) {
+        return;
+    }
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    size_t checked = 0;
+    for (const auto& q : peer_routed) {
+        if (q.owned || !q.live || !node_of.contains(q.peer_asic)) {
+            continue;  // only the planes the peer's aux links land on
+        }
+        // aux links pair with the links owning a plane in plane order, one each: an unpaired one carries no split
+        size_t owners = 0;
+        size_t rank = 0;
+        for (const auto& o : peer_routed) {
+            if (o.asic == q.asic && o.live) {
+                owners += o.owned;
+                rank += !o.owned && o.plane < q.plane;
+            }
+        }
+        if (rank >= owners) {
+            continue;
+        }
+        const auto& landing = node_of.at(q.peer_asic);
+        for (const auto& [other_asic, other] : node_of) {
+            const auto out = control_plane.get_forwarding_direction(landing, other);
+            if (other_asic == q.peer_asic || !out) {
+                continue;
+            }
+            const auto chans = control_plane.get_active_fabric_eth_routing_planes_in_direction(landing, *out);
+            if (chans.size() <= q.plane) {
+                continue;
+            }
+            const auto a = after.find({q.peer_asic, chans[q.plane]});
+            const auto b = before.find({q.peer_asic, chans[q.plane]});
+            if (a == after.end() || b == before.end()) {
+                continue;
+            }
+            const uint64_t sent = a->second - b->second;
+            log_info(
+                tt::LogTest,
+                "{} toward chip {}: plane {} (the peer's aux link) sent {}",
+                landing,
+                other.chip_id,
+                q.plane,
+                sent);
+            if ((other.chip_id & 1u) != 0) {
+                EXPECT_GT(sent, 0u) << landing << " plane " << q.plane << ": nothing split onto it";
+            } else {
+                EXPECT_EQ(sent, 0u) << landing << " plane " << q.plane << ": an even chip's traffic split";
+            }
+            ++checked;
+        }
+    }
+    const bool peer_has_aux =
+        std::any_of(peer_routed.begin(), peer_routed.end(), [](const RoutedPort& q) { return q.live && !q.owned; });
+    if (peer_has_aux) {
+        EXPECT_GT(checked, 0u) << "the peer has aux links, but no telemetry on the planes they land on here";
+    }
+}
+
 TEST(InterDomain, RelayingPlanes) {
     const auto domain = env_u32("TT_INTER_DOMAIN_ID");
     const auto peer_domain = env_u32("TT_INTER_DOMAIN_PEER_ID");
@@ -694,14 +763,22 @@ TEST(InterDomain, RelayingPlanes) {
     if (!domain || !peer_domain || dir_env == nullptr) {
         GTEST_SKIP() << "needs a peer process: see run_inter_domain_sanity.sh";
     }
-    if (MetalContext::instance().rtoptions().get_fabric_inter_domain_down_planes().empty()) {
-        GTEST_SKIP() << "needs TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES";
+    const bool planes_down = !MetalContext::instance().rtoptions().get_fabric_inter_domain_down_planes().empty();
+    const bool fewer_planes = env_u32("TT_INTER_DOMAIN_ROUTING_PLANES_1").has_value() ||
+                              env_u32("TT_INTER_DOMAIN_ROUTING_PLANES_2").has_value();
+    if (!planes_down && !fewer_planes) {
+        GTEST_SKIP() << "needs TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES or TT_INTER_DOMAIN_ROUTING_PLANES_<domain>";
     }
     const fs::path dir(dir_env);
     auto mine = [&](const std::string& what) { return dir / ("d" + std::to_string(*domain) + "." + what); };
     auto theirs = [&](const std::string& what) { return dir / ("d" + std::to_string(*peer_domain) + "." + what); };
 
-    SetFabricConfig(FabricConfig::FABRIC_2D);
+    // scenario 3: this domain routes on fewer planes than it has links
+    const auto routing_planes = env_u32(("TT_INTER_DOMAIN_ROUTING_PLANES_" + std::to_string(*domain)).c_str());
+    SetFabricConfig(
+        FabricConfig::FABRIC_2D,
+        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        routing_planes ? std::optional<uint8_t>(*routing_planes) : std::nullopt);
     auto mesh =
         distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::SystemMesh::instance().shape()));
     std::map<uint64_t, distributed::MeshCoordinate> coord_of;
@@ -730,6 +807,16 @@ TEST(InterDomain, RelayingPlanes) {
     ASSERT_LE(ports.size() * 3, kRelayMaxSlots);
     ASSERT_TRUE(wait_settled(ports)) << "a router did not reach DRAIN (live) or RELAY (relaying)";
     size_t relaying = 0;
+    const auto& cp = MetalContext::instance().get_control_plane();
+    auto owns_plane = [&](const InterDomainPort& port) {
+        for (const auto& [asic, node] : node_of) {
+            const auto out = node == port.node ? std::nullopt : cp.get_forwarding_direction(port.node, node);
+            if (out && cp.get_active_fabric_eth_routing_planes_in_direction(port.node, *out).size() > port.plane) {
+                return true;
+            }
+        }
+        return node_of.size() == 1;
+    };
     for (const auto& port : ports) {
         mine_routed.push_back(RoutedPort{
             .asic = get_inter_domain_port_asic(port),
@@ -738,12 +825,15 @@ TEST(InterDomain, RelayingPlanes) {
             .peer_chan = port.peer_chan,
             .plane = port.plane,
             .live = port.link_trained,
+            .owned = owns_plane(port),
             .md = get_inter_domain_metadata(port, *domain)});
         EXPECT_EQ(get_inter_domain_state(port), port.link_trained ? InterDomainState::DRAIN : InterDomainState::RELAY)
             << port.node << " chan " << int(port.eth_chan);
         relaying += !port.link_trained;
     }
-    ASSERT_GT(relaying, 0u) << "no relaying router: is a plane down?";
+    if (planes_down) {
+        ASSERT_GT(relaying, 0u) << "no relaying router: is a plane down?";
+    }
     log_info(tt::LogTest, "domain {}: {} routed ports, {} relaying", *domain, ports.size(), relaying);
 
     std::map<uint64_t, RxInfo> rx;
@@ -762,7 +852,7 @@ TEST(InterDomain, RelayingPlanes) {
         std::ostringstream o;
         for (const auto& p : mine_routed) {
             o << "port " << p.asic << " " << p.chan << " " << p.peer_asic << " " << p.peer_chan << " " << p.plane << " "
-              << p.live << " " << p.md.domain_id << " " << p.md.vc2_receiver_channel_addr << " "
+              << p.live << " " << p.owned << " " << p.md.domain_id << " " << p.md.vc2_receiver_channel_addr << " "
               << p.md.vc2_receiver_channel_slots << " " << p.md.max_packet_size_bytes << " " << p.md.layout_fingerprint
               << "\n";
         }
@@ -780,9 +870,9 @@ TEST(InterDomain, RelayingPlanes) {
         while (in >> kind) {
             if (kind == "port") {
                 RoutedPort p;
-                in >> p.asic >> p.chan >> p.peer_asic >> p.peer_chan >> p.plane >> p.live >> p.md.domain_id >>
-                    p.md.vc2_receiver_channel_addr >> p.md.vc2_receiver_channel_slots >> p.md.max_packet_size_bytes >>
-                    p.md.layout_fingerprint;
+                in >> p.asic >> p.chan >> p.peer_asic >> p.peer_chan >> p.plane >> p.live >> p.owned >>
+                    p.md.domain_id >> p.md.vc2_receiver_channel_addr >> p.md.vc2_receiver_channel_slots >>
+                    p.md.max_packet_size_bytes >> p.md.layout_fingerprint;
                 peer_routed.push_back(p);
             } else {
                 uint64_t asic = 0;
@@ -907,7 +997,17 @@ TEST(InterDomain, RelayingPlanes) {
                 append_inter_domain_connection_rt_args(port, program, core, args);
             };
             add(exit_asic, port.peer_asic, 3 * i, std::nullopt, 0, through_port);
+            // into the peer's other chips only through a far end that owns a plane (an aux router lands nothing in
+            // its domain), and in the far-only round only from a port owning one (so what crosses the peer on an aux
+            // link's plane was split off)
+            bool far_end_owned = false;
+            for (const auto& q : peer_routed) {
+                far_end_owned |= q.asic == port.peer_asic && q.chan == port.peer_chan && q.owned;
+            }
             for (const auto& [far, _] : peer_rx) {
+                if (!far_end_owned || (far_only && !mine_routed[i].owned)) {
+                    break;
+                }
                 if (far != port.peer_asic) {
                     add(exit_asic, far, 3 * i + 2, std::nullopt, 0, through_port);
                     break;  // one is enough
@@ -916,7 +1016,8 @@ TEST(InterDomain, RelayingPlanes) {
             for (const auto& [asic, dev] : device_of) {
                 const auto from = node_of.at(asic);
                 const auto out = control_plane.get_forwarding_direction(from, exit);
-                if (asic == exit_asic || !out || control_plane.get_chip_neighbors(from, *out).empty()) {
+                if (asic == exit_asic || !out || control_plane.get_chip_neighbors(from, *out).empty() ||
+                    control_plane.get_active_fabric_eth_routing_planes_in_direction(from, *out).size() <= port.plane) {
                     continue;
                 }
                 add(asic,
@@ -991,7 +1092,9 @@ TEST(InterDomain, RelayingPlanes) {
             EXPECT_GE(checked, static_cast<size_t>(into_here));
             EXPECT_GT(checked, 0u);
         } else if (sent_before_far_round && device_of.size() > 1) {
-            check_scatter(*mesh, node_of, ports, *sent_before_far_round, packets_sent_by_asic(*mesh, node_of));
+            const auto after = packets_sent_by_asic(*mesh, node_of);
+            check_scatter(*mesh, node_of, ports, *sent_before_far_round, after);
+            check_split(node_of, peer_routed, *sent_before_far_round, after);
         }
         step("received");
 

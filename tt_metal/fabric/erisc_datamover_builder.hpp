@@ -626,6 +626,8 @@ private:
         uint32_t registration_addr = 0;
         uint32_t location_info_addr = 0;
         uint32_t vc_relative_channel = 0;
+        // a live router owning a plane that splits some of what it sends to the target (an aux router), not a down one
+        bool split = false;
     };
     std::optional<InterDomainRelay> inter_domain_relay_;
     // A live inter-domain router that also lands traffic on its scatter partner's plane (its scatter bank is listed as

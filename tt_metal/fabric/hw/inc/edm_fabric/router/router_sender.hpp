@@ -33,7 +33,16 @@
 #include "router_round.hpp"
 #include "router_telemetry.hpp"
 
+namespace fabric_router::relay {
+struct Target;  // router_inter_domain_relay.hpp
+}  // namespace fabric_router::relay
+
 namespace fabric_router::sender {
+
+// A splitting router's relay connection (is_inter_domain_split), set at init.
+inline relay::Target* split_target = nullptr;
+// Packets split off so far (a round that splits is not idle: total_sent).
+inline uint32_t split_count = 0;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Channels and their features
@@ -244,7 +253,19 @@ struct SenderChannelState {
     [[no_unique_address]] Present<SenderChannel<CH>::worker, uint32_t, 0> connection_state =
         present<SenderChannel<CH>::worker, 0>(tt::tt_fabric::connection_interface::unused_connection_value);
     [[no_unique_address]] Present<!SenderChannel<CH>::worker, uint64_t, 1> upstream_free_slots_addr{};
+    // packets split off to the aux router (is_inter_domain_split): credited when they leave, apart from completions
+    [[no_unique_address]] Present<is_inter_domain_split, uint32_t, 3> split{};
 };
+
+// Slots credited for split packets so far (0 where nothing splits).
+template <size_t CH>
+FORCE_INLINE uint32_t split_of(const SenderChannelState<CH>& state) {
+    if constexpr (is_inter_domain_split) {
+        return state.split;
+    } else {
+        return 0;
+    }
+}
 
 // VC's send state: its remote receiver channel's progress, and its worker channel's state where the VC has a serviced
 // worker channel. (Its forwarding channels' states are SenderChannelStates::forwarding.)
@@ -364,7 +385,8 @@ struct WorkerChannel {
     static FORCE_INLINE bool check_connection(SenderChannelState<CH>& state, uint32_t semaphore) {
         if (semaphore != state.connection_state) {
             const uint32_t returned =
-                SenderChannel<CH>::first_level_ack ? state.progress.first_level_acked : state.progress.completed;
+                (SenderChannel<CH>::first_level_ack ? state.progress.first_level_acked : state.progress.completed) +
+                split_of(state);
             state.connection_state = connection_event(semaphore, state.connection_state, returned);
             return true;
         }
@@ -608,10 +630,53 @@ FORCE_INLINE bool send(
 template <size_t CH>
 FORCE_INLINE void credit_slots(const SenderChannelState<CH>& state, uint32_t n, uint32_t returned) {
     if constexpr (SenderChannel<CH>::worker) {
-        WorkerChannel<CH>::credit(returned, WorkerChannel<CH>::connected(state));
+        WorkerChannel<CH>::credit(returned + split_of(state), WorkerChannel<CH>::connected(state));
     } else {
         ForwardingChannel<CH>::credit(state.upstream_free_slots_addr, n);
     }
+}
+
+// A splitting router (scenario 3): channel CH's next packet goes to the aux router instead of over the link when its
+// destination chip's low bit is set (the design's dest_device & 0x1; one path per destination keeps its order). Returns
+// whether the packet is the aux router's: then it was relayed, or it waits for room there (never the link). Out of
+// line; a template on the relay's type, which is complete only where the sender loop is instantiated.
+enum class Split : uint32_t { NO, RELAYED, WAITS };
+
+// The packet in `slot`, for the aux router when its destination chip's low bit is set: relayed if the aux router has
+// room, else it waits (never the link). One copy for every channel; a template on the relay's type, which is complete
+// only where the sender loop is instantiated.
+template <typename Target = relay::Target>
+__attribute__((noinline)) Split split_relay(uint32_t slot) {
+    auto* header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(slot);
+    if ((header->dst_start_chip_id & 1u) == 0) {
+        return Split::NO;
+    }
+    Target& target = *reinterpret_cast<Target*>(split_target);
+    if (!target.admit()) {
+        return Split::WAITS;
+    }
+    const uint32_t size = header->get_payload_size_excluding_header() + sizeof(PACKET_HEADER_TYPE);
+    target.relay(slot, size);
+    split_count++;
+    return Split::RELAYED;
+}
+
+// A splitting router (scenario 3): channel CH's next packet goes to the aux router instead of over the link when its
+// destination chip's low bit is set (the design's dest_device & 0x1; one path per destination keeps its order). Returns
+// whether the packet is the aux router's (relayed, or waiting for room there).
+template <size_t CH>
+FORCE_INLINE bool split_packet(SenderChannelState<CH>& state) {
+    const uint32_t slot = state.progress.next_slot_addr;
+    const Split split = split_relay(slot);
+    if (split == Split::RELAYED) {
+        state.progress.next_slot_addr =
+            slot == SenderChannel<CH>::last_slot_addr ? SenderChannel<CH>::first_slot_addr : slot + channel_buffer_size;
+        increment_local_update_ptr_val<SenderChannel<CH>::free_slots_stream>(1);
+        state.split = state.split + 1;
+        credit_slots<CH>(
+            state, 1, SenderChannel<CH>::first_level_ack ? state.progress.first_level_acked : state.progress.completed);
+    }
+    return split != Split::NO;
 }
 
 // The loop-local VC's worker channel, on the loop's copy of its state (visited every pass): send if it has a packet and
@@ -627,6 +692,11 @@ FORCE_INLINE void visit_worker(
     uint32_t completions = 0;
     uint32_t sent_acks = 0;  // the ack count the send read (first-level-ack VCs)
     bool sent = false;
+    if constexpr (is_inter_domain_split) {
+        if (has_packet && split_packet<CH>(state)) {
+            has_packet = false;
+        }
+    }
     if (has_packet && remote.has_room(SenderChannel<CH>::remote_free_slots_to_send)) {
         sent = send<CH>(
             progress.next_slot_addr, remote, progress.sent, progress.completed, completions, sent_acks, send_yielded);
@@ -679,6 +749,11 @@ FORCE_INLINE void visit_channel_with_work(
     bool has_packet,
     RemoteReceiverChannelProgress<SenderChannel<CH>::vc>& remote,
     bool& send_yielded) {
+    if constexpr (is_inter_domain_split) {
+        if (has_packet && split_packet<CH>(state)) {
+            has_packet = false;
+        }
+    }
     uint32_t sent = state.progress.sent;
     uint32_t completed = state.progress.completed;
     uint32_t completions = 0;
@@ -914,8 +989,9 @@ FORCE_INLINE uint32_t sent_by_worker(LoopCopy& loop_copy, SenderChannelStates& s
 template <typename LoopCopy>
 FORCE_INLINE uint32_t total_sent(LoopCopy& loop_copy, SenderChannelStates& states) {
     return forwarded<SenderChannels::forwarding_channels>(states) +
-           sent_by_other_workers<SenderChannels::other_worker_channels>(states) + sent_by_worker<0>(loop_copy, states) +
-           sent_by_worker<1>(loop_copy, states) + sent_by_worker<2>(loop_copy, states);
+           sent_by_other_workers<SenderChannels::other_worker_channels>(states) + split_count +
+           sent_by_worker<0>(loop_copy, states) + sent_by_worker<1>(loop_copy, states) +
+           sent_by_worker<2>(loop_copy, states);
 }
 
 // Whether a sender channel holds a packet (telemetry, once per round; the pass's register groups).

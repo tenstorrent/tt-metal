@@ -204,7 +204,8 @@ void GraphFabricBuilder::connect_routers() {
         }
         if (g.channels[e.from].kind == ChannelKind::Sender) {
             if (relaying.insert(up).second) {
-                builder_of(up).connect_inter_domain_relay(builder_of(down), graph_.index_in_vc[e.to]);
+                builder_of(up).connect_inter_domain_relay(
+                    builder_of(down), graph_.index_in_vc[e.to], /*split=*/!g.routers[up].port.relay_plane);
             }
             continue;
         }

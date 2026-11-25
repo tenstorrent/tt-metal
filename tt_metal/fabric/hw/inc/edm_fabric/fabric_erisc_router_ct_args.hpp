@@ -1066,10 +1066,16 @@ static_assert(!is_inter_domain_router || NUM_ACTIVE_ERISCS == 2, "inter-domain r
 // An inter-domain router whose link is down relays all it sends into the relay sender channel (VC0, at fabric position
 // INTER_DOMAIN_RELAY_SENDER_POSITION) of a same-side router on another plane (router_inter_domain_relay.hpp).
 constexpr bool is_inter_domain_relay = NAMED_CT_ARG_OR("INTER_DOMAIN_RELAY", 0) != 0;
+// A live inter-domain router owning a plane, with a same-side aux router (a live link, no plane in this domain): it
+// splits what it would send over its link by destination chip (the low bit set: to the aux router's relay sender),
+// through the same relay connection (scenario 3).
+constexpr bool is_inter_domain_split = NAMED_CT_ARG_OR("INTER_DOMAIN_SPLIT", 0) != 0;
+constexpr bool has_inter_domain_relay_target = is_inter_domain_relay || is_inter_domain_split;
 constexpr uint32_t inter_domain_relay_num_slots = NAMED_CT_ARG_OR("INTER_DOMAIN_RELAY_NUM_SLOTS", 0);
 constexpr uint32_t inter_domain_relay_sender_position = NAMED_CT_ARG_OR("INTER_DOMAIN_RELAY_SENDER_POSITION", 0);
 constexpr uint32_t inter_domain_relay_credit_stream = NAMED_CT_ARG_OR("INTER_DOMAIN_RELAY_CREDIT_STREAM_ID", 0);
 static_assert(!is_inter_domain_relay || is_inter_domain_router, "only an inter-domain router relays");
+static_assert(!(is_inter_domain_relay && is_inter_domain_split));
 // An inter-domain router whose side has a relaying router (a down link) scatters what it receives across two planes:
 // its own and the relaying router's (the partner plane), by the destination chip's low bit, so each destination keeps
 // one plane and its packets their order. The partner plane's downstream connections are listed as VC0's (a perimeter
