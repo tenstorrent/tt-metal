@@ -67,10 +67,10 @@ def is_4x4_subtorus() -> bool:
     return set(topologies) == {("4", "4", "RING", "RING")}
 
 
-def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
+def kda_device_params(mesh_shape: tuple[int, int], wrap_both_axes: bool = False, **overrides) -> dict:
     """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload.
 
-    8x4 takes K3's TorusXY, a 4x4 prefill stage (a Galaxy tray half) its TorusX, a ring of chips the torus over its
+    8x4 takes K3's TorusXY, a 4x4 prefill stage (a Galaxy tray half) its TorusX (TorusXY with `wrap_both_axes`, for the single-Galaxy [RING, RING] carve), a ring of chips the torus over its
     one axis (TorusY for Nx1, TorusX for 1xN), and 2x2, 2x4 and 4x2 an unwrapped Fabric2D.
     The 4x4 subtorus takes TorusXY.
     """
@@ -78,7 +78,7 @@ def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
     if (rows, columns) == (8, 4):
         profile = torus_xy_device_params
     elif (rows, columns) == (4, 4):
-        profile = torus_xy_device_params if is_4x4_subtorus() else torus_x_device_params
+        profile = torus_xy_device_params if wrap_both_axes or is_4x4_subtorus() else torus_x_device_params
     elif columns == 1 and rows > 1:
         profile = torus_y_device_params
     elif rows == 1 and columns > 1:

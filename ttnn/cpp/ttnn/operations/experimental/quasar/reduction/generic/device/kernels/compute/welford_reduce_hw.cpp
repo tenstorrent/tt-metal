@@ -129,7 +129,9 @@ void kernel_main() {
                     cb_in_obj.wait_front(onetile);
                     // copy_tile reads cb_in. For FP32 input, c_0 carries UnpackToDestFp32
                     // so the FP32 mantissa is preserved into DEST.
+                    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
                     copy_tile(cb_in, 0, input_dst);
+                    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                     cb_in_obj.pop_front(onetile);
 
                     if (ht < (Ht - 1)) {
@@ -174,7 +176,9 @@ void kernel_main() {
         reconfig_data_format_srca(cb_combined);
         tile_regs_acquire();
         copy_init(cb_combined);
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(cb_combined, 0, input_dst);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         if constexpr (is_std) {
             sqrt_tile_init();
             sqrt_tile(input_dst);

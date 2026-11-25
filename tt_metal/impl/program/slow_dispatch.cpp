@@ -14,10 +14,10 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
-#include "circular_buffer_constants.h"
-#include <tt-metalium/core_coord.hpp>
-#include "device.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include "tt-metalium/workload/legacy/circular_buffer_constants.h"
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "tt-metalium/mesh/legacy/device.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "hostdev/remote_dfb_constants.h"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/context/metal_context.hpp"
@@ -32,12 +32,12 @@
 #include "llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "program_impl.hpp"
-#include "tt_metal.hpp"
+#include "tt-metalium/execution/slow_dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include <internal/service/service_core_manager.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"

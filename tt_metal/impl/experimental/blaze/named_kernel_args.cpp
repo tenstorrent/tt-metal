@@ -17,9 +17,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>  // ttsl::hash for hash_named_args_schema
 

@@ -8,6 +8,7 @@
 
 #include "cmath_common.h"
 #include "llk_defs.h"
+#include "llk_sync.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -229,10 +230,11 @@ inline void _llk_math_set_dvalid_()
 // The following functions should be removed once the above issue is resolved.
 
 /**
- * @brief Initialize the math/pack synchronization semaphore and reset the destination section base.
+ * @brief Initialize the Dest ownership and loan semaphores and reset the Dest section base.
  *
- * Waits for outstanding packs to drain before claiming the destination register, then seeds the
- * MATH_PACK semaphore (one count for SyncFull, two for SyncHalf double-buffering).
+ * Waits for previous pack operations to finish before taking ownership of Dest. Initializes MATH_PACK
+ * with a maximum of one for SyncFull or two for SyncHalf. Each loan semaphore has a maximum of one.
+ * All counts start at zero.
  *
  * @tparam DST: Destination synchronization mode, values = <SyncFull/SyncHalf>
  */
@@ -264,10 +266,11 @@ inline void _llk_math_wait_for_dest_available_()
 }
 
 /**
- * @brief Signal completion of a destination section, posting the MATH_PACK semaphore and flipping banks in half-sync mode.
+ * @brief Signal completion of a Dest section, posting the MATH_PACK semaphore and flipping banks in SyncHalf mode.
  *
  * @tparam DST: Destination synchronization mode, values = <SyncFull/SyncHalf>
  * @tparam EN_32BIT_DEST: Set to true if the destination register is in 32-bit (Float32/Int32) mode
+ * @note Call @ref _llk_tile_regs_return_ first if this section is on loan.
  */
 template <DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_math_dest_section_done_()

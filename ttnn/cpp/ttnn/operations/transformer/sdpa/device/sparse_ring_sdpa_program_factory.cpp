@@ -15,6 +15,9 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_kv_chains.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_ring_balance_plan.hpp"
+#include "ttnn/global_semaphore.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <algorithm>
 #include <array>
@@ -26,15 +29,20 @@
 #include <optional>
 #include <cmath>
 #include <limits>
+#include <memory>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <internal/cluster_noc_helpers.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
 
 using namespace tt::tt_metal;
@@ -136,14 +144,15 @@ struct CheckedRuntimeArgList {
 RingWorkMasks build_ring_work_masks(
     const ttnn::prim::SparseRingSDPAParams& args,
     const ttnn::prim::SparseRingSDPAInputs& tensor_args,
-    const RingWritePlan& ring_write_plan) {
+    const RingWritePlan& ring_write_plan,
+    uint32_t logical_n) {
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     TT_FATAL(
         ring_size <= std::numeric_limits<uint32_t>::digits,
         "SparseRingSDPA host ring-work masks support up to {} ring iterations. Got ring_size={}",
         std::numeric_limits<uint32_t>::digits,
         ring_size);
-    const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
+    const uint32_t logical_nt = tt::div_up(logical_n, tt::constants::TILE_HEIGHT);
     const uint32_t kv_local_padded_Nt = tensor_args.local_kv_seq_len() / tt::constants::TILE_HEIGHT;
     const uint32_t k_chunk_tile_count = args.get_k_chunk_size() / tt::constants::TILE_HEIGHT;
     const uint32_t num_local_k_chunks = tt::div_up(tensor_args.local_kv_seq_len(), args.get_k_chunk_size());
@@ -237,6 +246,122 @@ namespace ttnn::prim {
 
 namespace {
 
+struct BalanceConfig {
+    bool on = false;
+    bool remote = false;
+    CoreCoord core;      // logical
+    uint32_t units = 0;  // NH x q_blocks, head-major
+    uint32_t cores = 0;
+    uint32_t q_blocks = 0;    // Q blocks per head
+    uint32_t cost_words = 0;  // cost words per core in a table page
+    uint32_t unit_cost = 0;   // fixed cost per unit (sparse_balance::kUnitCost, plus the pooled entries' work)
+    uint32_t swappable = 0;   // full Q blocks (a partial last block never moves)
+    uint32_t devices = 1;
+    uint32_t scratch_bytes = 0;
+};
+
+// The balance core: the next core the gather's worker selection would take after its own workers.
+std::optional<CoreCoord> choose_balance_core(
+    const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args) {
+    const auto& ag = args.all_gather_operation_attributes;
+    auto* mesh = tensor_args.input_q.device();
+    const auto gather = ttnn::ccl::try_choose_worker_cores(
+        ag.num_links, 2, mesh, ag.sub_device_id, args.ccl_core_grid_offset, std::nullopt, ag.core_allocation_strategy);
+    const auto more = ttnn::ccl::try_choose_worker_cores(
+        1,
+        2 * ag.num_links + 1,
+        mesh,
+        ag.sub_device_id,
+        args.ccl_core_grid_offset,
+        std::nullopt,
+        ag.core_allocation_strategy);
+    if (!gather.all_placeable() || !more.all_placeable() || more.cores.size() != gather.cores.size() + 1) {
+        return std::nullopt;
+    }
+    for (const auto& c : more.cores) {
+        if (std::find(gather.cores.begin(), gather.cores.end(), c) == gather.cores.end()) {
+            return c;
+        }
+    }
+    return std::nullopt;
+}
+
+// Cross-device swaps write other devices' DRAM with this device's bank map (as the gather does).
+bool same_dram_banks_on_every_device(tt::tt_metal::distributed::MeshDevice* mesh) {
+    const auto banks_of = [](const tt::tt_metal::IDevice* device) {
+        std::vector<std::array<uint64_t, 3>> banks;
+        for (const auto& bank : tt::tt_metal::internal::get_dram_bank_table(device->id())) {
+            banks.push_back({bank.noc_x, bank.noc_y, bank.base_addr});
+        }
+        return banks;
+    };
+    const auto devices = mesh->get_devices();
+    const auto first = banks_of(devices.front());
+    return std::all_of(devices.begin(), devices.end(), [&](const auto* device) { return banks_of(device) == first; });
+}
+
+BalanceConfig make_balance_config(const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args) {
+    BalanceConfig c;
+    // Pooled route: a unit also processes one pooled entry per mask block, ~1.5 x blocks / 64 kept blocks (calibrated).
+    const uint32_t mask_blocks = tensor_args.block_mask.logical_shape()[3];
+    c.unit_cost = sparse_balance::kUnitCost + (tensor_args.pooled_route() ? tt::div_up(mask_blocks * 3, 128) : 0u);
+    // Logical, as the work split.
+    const uint32_t q_tiles = tt::div_up(tensor_args.input_q.logical_shape()[2], tt::constants::TILE_HEIGHT);
+    const uint32_t mask_row_bytes = mask_blocks * sizeof(uint32_t);
+    const CoreCoord grid = args.program_config.compute_with_storage_grid_size;
+    c.q_blocks = tt::div_up(q_tiles, args.block_tiles());
+    c.cores = grid.x * grid.y;
+    c.units = tensor_args.input_q.logical_shape()[1] * c.q_blocks;
+    const uint32_t max_q = tt::div_up(c.units, c.cores);
+    c.cost_words = sparse_balance::cost_words_per_core(max_q);
+    c.swappable = q_tiles / args.block_tiles();
+    const auto core = choose_balance_core(args, tensor_args);
+    // Limits: 15-bit unit indices, kMaxCoreUnits per table, a core's costs (64-byte aligned) in one reader plan page,
+    // the balance kernel's local scratch budget, a head's bins in a byte.
+    const uint32_t plan_page_bytes = 64 + mask_row_bytes;
+    const sparse_balance::StaticSplit split{c.units, c.cores, c.q_blocks};
+    if (!core.has_value() || c.units >= (1u << 15) || c.q_blocks > sparse_balance::kMaxUnitsPerHead ||
+        max_q > sparse_balance::kMaxCoreUnits || c.cost_words * sizeof(uint32_t) + 63 > plan_page_bytes ||
+        split.max_bins() > sparse_balance::kMaxBins ||
+        sparse_balance::local_scratch_bytes(c.q_blocks, split.max_bins()) > sparse_balance::kMaxLocalScratchBytes) {
+        return c;
+    }
+    constexpr uint32_t kMaxScratchBytes = 512 * 1024;  // the balance core's L1 holds the cost pages and the plan
+    const auto scratch = [&](uint32_t devices) {
+        return sparse_balance::Scratch(devices, c.cores, c.cost_words, c.q_blocks, c.swappable, c.units).words *
+                   sizeof(uint32_t) +
+               64;
+    };
+    c.core = *core;
+    c.on = scratch(1) <= kMaxScratchBytes;
+    // Fabric increments address the balance core with this device's NoC coordinates: every device must map it alike.
+    auto* mesh = tensor_args.input_q.device();
+    const CoreCoord noc = mesh->worker_core_from_logical_core(c.core);
+    bool same_noc = true;
+    for (auto* device : mesh->get_devices()) {
+        same_noc = same_noc && device->worker_core_from_logical_core(c.core) == noc;
+    }
+    c.remote = c.on && same_noc && args.ring_size > 1 && !args.all_gather_operation_attributes.full_mesh &&
+               tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
+               scratch(args.ring_size) <= kMaxScratchBytes && same_dram_banks_on_every_device(mesh);
+    c.devices = c.remote ? static_cast<uint32_t>(args.ring_size) : 1u;
+    c.scratch_bytes = scratch(c.devices);
+    return c;
+}
+
+// The balance kernel's DRAM buffers and fabric semaphores, owned by the cached workload (all but table: remote only).
+struct BalanceResources {
+    std::shared_ptr<Tensor> table;
+    std::shared_ptr<Tensor> partner;
+    std::shared_ptr<Tensor> import_q;
+    std::shared_ptr<Tensor> import_mask;
+    std::shared_ptr<Tensor> export_out;
+    std::optional<GlobalSemaphore> tables_arrived;
+    std::optional<GlobalSemaphore> imports_arrived;
+    std::optional<GlobalSemaphore> returns_arrived;
+    std::optional<GlobalSemaphore> tables_read;
+};
+
 // Per-coord ProgramDescriptor build, looped over coords by create_workload_descriptor().
 //
 // The kernels keep the dense ring op's argument layout: positional compile-time and runtime args for features this
@@ -247,7 +372,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const SparseRingSDPAParams& args,
     const SparseRingSDPAInputs& tensor_args,
     SparseRingSDPAResult& output_tensors,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+    const BalanceConfig& balancing,
+    const BalanceResources* balance_res) {
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
         "build_sparse_ring_sdpa_program_descriptor requires mesh_dispatch_coordinate");
@@ -328,9 +455,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t gathered_padded_Nt = gathered_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const RingWorkMasks ring_work_masks = build_ring_work_masks(args, tensor_args, ring_write_plan);
+    // With logical_n_tensor the kernels read the length on device; host values use the padded length.
+    const bool has_logical_n_tensor = tensor_args.logical_n_tensor.has_value();
+    const uint32_t host_logical_n =
+        has_logical_n_tensor ? kv_local_padded_N * ring_size : static_cast<uint32_t>(args.logical_n);
+    const RingWorkMasks ring_work_masks = build_ring_work_masks(args, tensor_args, ring_write_plan, host_logical_n);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(use_head_chain, k_uses_batch_chain);
-    const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
+    const uint32_t logical_nt = tt::div_up(host_logical_n, tt::constants::TILE_HEIGHT);
     // Chunked-prefill Q mapping words of the shared runtime-arg layout; unused here.
     constexpr uint32_t kUnusedQMappingWord = 0;
 
@@ -362,7 +493,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // Global chunk width the kernels divide by the ring size (one Q slab per device).
     const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
 
-    const uint32_t compile_time_logical_n = static_cast<uint32_t>(args.logical_n);
+    const uint32_t compile_time_logical_n = has_logical_n_tensor ? 0u : static_cast<uint32_t>(args.logical_n);
+    const uint32_t compile_time_logical_nt = has_logical_n_tensor ? 0u : logical_nt;
     const uint32_t compile_time_global_n_partial_col = compile_time_logical_n % tt::constants::TILE_HEIGHT;
 
     const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
@@ -442,12 +574,29 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
 
-    // The plan page's 16-word header carries the shard's kept-block bits (one word per 32 blocks) plus the union
-    // piece bits (2 words) and the pooled flag.
-    TT_FATAL(
-        tt::div_up(mask_nb, 32u) + 3 <= 16,
-        "SparseRingSDPA: {} blocks per shard exceed the plan header (at most 416)",
-        mask_nb);
+    const bool balance = balancing.on;
+    log_debug(
+        tt::LogOp,
+        "SparseRingSDPA load balancing: within the device {}, across devices {}, balance core {}",
+        balancing.on,
+        balancing.remote,
+        balancing.core);
+    constexpr uint32_t kBalanceScratchCb = 0;
+    if (balance) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = balancing.scratch_bytes,
+            .core_ranges = CoreRangeSet(CoreRange(balancing.core)),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(kBalanceScratchCb),
+                .data_format = tt::DataFormat::RawUInt32,
+                .page_size = balancing.scratch_bytes,
+            }}},
+        });
+    }
+
+    // The plan page's header carries the shard's kept-block bits (one word per 32 blocks) plus the union piece bits
+    // (2 words) and the pooled flag. A multiple of 16 words keeps the mask-row scratch after it 64 B aligned.
+    const uint32_t plan_header_words = tt::round_up(tt::div_up(mask_nb, 32u) + 3, 16u);
     // Group delivery: one producer per head group multicasts each piece. The K/V CBs hold 3 pieces with it (the
     // producer sends the next piece while members compute), 2 without.
     const bool group_mcast = use_head_chain;
@@ -512,7 +661,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // Shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp) when the save-to-staging branch cannot fire
     // (ring_size == 1 or one Q block per core) and the full output fits in 2 row groups.
     const bool streaming_shrink_fits = Sq_chunk_t <= 2 * writer_out_row_group_h;
-    const bool streaming_shrink_safe = (ring_size == 1 || max_q_per_core == 1) && streaming_shrink_fits;
+    // With load balancing a core may hold more units than the static split gives it.
+    const bool streaming_shrink_safe = (ring_size == 1 || max_q_per_core == 1) && streaming_shrink_fits && !balance;
     if (streaming_shrink_safe) {
         out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
         TT_FATAL(
@@ -640,6 +790,12 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     TensorAccessorArgs(pooled_k_buf).append_to(reader_compile_time_args);
     TensorAccessorArgs(pooled_v_buf).append_to(reader_compile_time_args);
     TensorAccessorArgs(block_counts_buf).append_to(reader_compile_time_args);
+    tt::tt_metal::Buffer* const balance_table_buf = balance ? balance_res->table->buffer() : nullptr;
+    TensorAccessorArgs(balance_table_buf).append_to(reader_compile_time_args);
+    tt::tt_metal::Buffer* const logical_n_buf = has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr;
+    if (has_logical_n_tensor) {
+        TensorAccessorArgs(logical_n_buf).append_to(reader_compile_time_args);
+    }
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -699,6 +855,31 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (k_uses_batch_chain) {
         batch_sems = ChainSemaphores::create(desc, core_grid_set);  // shared-K chain
     }
+    // SDPA cores: unit table ready, imports arrived. Balance core: cores that wrote costs, swapped-in outputs written.
+    struct BalanceSemaphores {
+        uint32_t table = 0, import = 0, costs = 0, outputs = 0;
+    } balance_sems;
+    if (balance) {
+        const auto add_semaphore = [&](const CoreRangeSet& cores) {
+            const uint32_t id = static_cast<uint32_t>(desc.semaphores.size());
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = cores, .initial_value = 0});
+            return id;
+        };
+        const CoreRangeSet balance_core_set(CoreRange(balancing.core));
+        balance_sems.table = add_semaphore(core_grid_set);
+        balance_sems.import = add_semaphore(core_grid_set);
+        balance_sems.costs = add_semaphore(balance_core_set);
+        balance_sems.outputs = add_semaphore(balance_core_set);
+        constexpr size_t kGatherSemaphores = 4;  // 3 sync + writers' flag
+        constexpr size_t kMaxSemaphores = 16;    // per core
+        TT_FATAL(
+            desc.semaphores.size() + kGatherSemaphores <= kMaxSemaphores,
+            "SparseRingSDPA load balancing: {} semaphores leave no room for the gather's",
+            desc.semaphores.size());
+    }
+    const CoreCoord balance_core_noc =
+        balance ? mesh_device->worker_core_from_logical_core(balancing.core) : CoreCoord{0, 0};
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
     const auto sem_args_offset = reader_compile_time_args.size();
@@ -754,6 +935,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    if (has_logical_n_tensor) {
+        TensorAccessorArgs(logical_n_buf).append_to(writer_compile_time_args);
+    }
 
     std::vector<uint32_t> compute_compile_time_args = {
         NH,
@@ -764,7 +948,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         q_local_padded_Nt,
         kv_local_padded_Nt,
         compile_time_logical_n,
-        logical_nt,
+        compile_time_logical_nt,
         0,  // Lt
         0,  // L
         num_local_q_chunks,
@@ -879,11 +1063,20 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     constexpr uint32_t kResidentGroup = 4;
     const bool has_block_counts = tensor_args.block_counts.has_value();
     const uint32_t block_counts_bytes = tt::round_up(mask_n_blocks_pad, 32u);
+    // The counts page: block counts, then logical_n, logical_nt and active_ring_iter_mask (logical_n_tensor).
+    const bool has_counts_page = has_block_counts || has_logical_n_tensor;
+    const uint32_t length_words_offset = has_block_counts ? block_counts_bytes : 0u;
+    const uint32_t counts_page_bytes = length_words_offset + (has_logical_n_tensor ? 32u : 0u);
+    if (has_logical_n_tensor) {
+        defines["SPARSE_LOGICAL_N_TENSOR"] = std::to_string(length_words_offset);
+    }
     const uint32_t key_bias_tiles =
-        (has_block_counts || args.logical_n % tt::constants::TILE_WIDTH != 0) ? 2 * (Sk_chunk_t / block_tiles) : 0u;
+        (has_block_counts || has_logical_n_tensor || args.logical_n % tt::constants::TILE_WIDTH != 0)
+            ? 2 * (Sk_chunk_t / block_tiles)
+            : 0u;
     struct CbLayout {
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
-            recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity;
+            recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity, balance;
     };
     const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, bool pairs, const auto& alloc) -> CbLayout {
         const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {
@@ -911,37 +1104,44 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         l.prev_out = tile_cb(out_im_tiles * slots, state_tile_size, state_df);
         l.recip_scratch = tile_cb(1, im_tile_size, im_df);  // 1-tile recip scratch for res_normalize_slot
         l.sum_in = tile_cb(statistics_tiles * slots, state_tile_size, state_df);
-        // Plan pages: a 16-word summary [kept-block words][union piece bits lo, hi][do_pooled], then the Q block's
-        // mask row. Two pages: compute reads one iteration's records while the reader fills the next.
-        l.sparse_plan = alloc(64 + mask_row_bytes, 2, tt::DataFormat::UInt32);
+        // Plan pages: a header [kept-block words][union piece bits lo, hi][do_pooled], then the Q block's mask row.
+        // Two pages: compute reads one iteration's records while the reader fills the next.
+        l.sparse_plan = alloc(plan_header_words * sizeof(uint32_t) + mask_row_bytes, 2, tt::DataFormat::UInt32);
         // One pooled chunk of bias tiles in flight; only with the pooled route.
         l.pooled_bias = pooled_route ? tile_cb(Sk_chunk_t, mask_tile_size, mask_df)
                                      : std::numeric_limits<uint32_t>::max();  // inactive
-        // One byte per global block, filled once by the reader.
-        l.block_counts = has_block_counts ? alloc(block_counts_bytes, 1, tt::DataFormat::UInt32)
-                                          : std::numeric_limits<uint32_t>::max();  // inactive
+        // One byte per global block, filled once by the reader, then the length words.
+        l.block_counts = has_counts_page ? alloc(counts_page_bytes, 1, tt::DataFormat::UInt32)
+                                         : std::numeric_limits<uint32_t>::max();  // inactive
         // Key bias: one column-bias tile per block whose real tokens end inside a tile, two pieces' worth. Needed
-        // only with block_counts or a logical_n off a tile boundary.
+        // only with block_counts, logical_n_tensor or a logical_n off a tile boundary.
         l.key_bias = key_bias_tiles > 0 ? tile_cb(key_bias_tiles, mask_tile_size, mask_df)
                                         : std::numeric_limits<uint32_t>::max();  // inactive
+        l.balance = balance ? alloc(sparse_balance::kTableWords * sizeof(uint32_t), 1, tt::DataFormat::UInt32)
+                            : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
     };
+    const uint64_t cb_alignment = mesh_device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
     const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages, bool pairs) -> uint64_t {
         uint64_t bytes = 0;
         uint32_t index = 0;
         lay_out_cbs(
             slots, kv_pages, pairs, [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
-                bytes += static_cast<uint64_t>(page_size_bytes) * num_pages;
+                bytes += tt::align(static_cast<uint64_t>(page_size_bytes) * num_pages, cb_alignment);
                 return index++;
             });
         return bytes;
     };
 
     // Pass split. S = slots per pass: the largest count (at most kResidentMaxSlots, the core's block count and
-    // q_blocks_per_pass) whose CBs end below the lowest live L1 buffer. P passes split every core's blocks evenly, so
-    // each working core needs at least P blocks (no empty pass; group members stay in lockstep).
-    // The live L1 top is not in the program hash: a cached program keeps the S of the call that built it.
-    const uint64_t usable_l1 = ttnn::operations::core::available_program_l1_capacity(mesh_device);
+    // q_blocks_per_pass) whose CBs end kL1Headroom below the lowest live L1 buffer. P passes split every core's blocks
+    // evenly, so each working core needs at least P blocks (no empty pass; group members stay in lockstep).
+    // The live L1 top is not in the program hash: a cached program keeps the S of the call that built it and is
+    // relaunched under whatever L1 buffers were allocated since. The headroom leaves room for those; without it the
+    // 4x8 omni pipeline's CBs at rung 147712 ended 832 B above a later launch's lowest buffer.
+    constexpr uint32_t kL1Headroom = 4096;
+    const uint64_t available_l1 = ttnn::operations::core::available_program_l1_capacity(mesh_device);
+    const uint64_t usable_l1 = available_l1 > kL1Headroom ? available_l1 - kL1Headroom : 0;
     uint32_t max_slots = std::min(kResidentMaxSlots, max_q_per_core);
     if (args.q_blocks_per_pass.has_value()) {
         max_slots = std::min(max_slots, *args.q_blocks_per_pass);
@@ -1001,7 +1201,26 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         "SparseRingSDPA: several Q passes need more than one local head (a single head shares K over every core), got "
         "NH {}",
         NH);
-    const uint32_t resident_slots = tt::div_up(max_q_per_core, num_q_passes);
+    const uint32_t pass_slots = tt::div_up(max_q_per_core, num_q_passes);
+    uint32_t resident_slots = pass_slots;
+    if (balance) {
+        // Spare slots for units moved in: a quarter more (at least 2), if L1 allows, leaving kBalanceL1Reserve free
+        // for L1 buffers allocated after the program is cached.
+        constexpr uint64_t kBalanceL1Reserve = 32 * 1024;
+        const uint64_t headroom_l1 = usable_l1 > kBalanceL1Reserve ? usable_l1 - kBalanceL1Reserve : 0;
+        const uint32_t most = std::min(
+            {kResidentMaxSlots,
+             pass_slots + std::max(2u, tt::div_up(pass_slots, 4u)),
+             args.q_blocks_per_pass.value_or(kResidentMaxSlots)});
+        for (uint32_t n = most; n > resident_slots; --n) {
+            if (cb_bytes_for_slots(n, kv_cb_pages, pair_steps) <= headroom_l1) {
+                resident_slots = n;
+                break;
+            }
+        }
+    }
+    const uint32_t balance_cap = std::min(sparse_balance::kMaxCoreUnits, num_q_passes * resident_slots);
+    TT_FATAL(!balance || balance_cap >= max_q_per_core, "SparseRingSDPA: unit tables smaller than a core's units");
     log_debug(
         tt::LogOp,
         "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages, pair steps {} "
@@ -1015,6 +1234,20 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         usable_l1);
 
     const CbLayout cbs = lay_out_cbs(resident_slots, kv_cb_pages, pair_steps, allocate_cb);
+    if (balance) {
+        // The balance core writes each core's unit table at its own copy's address, so the table CB spans it too.
+        // Allocated first, it sits below the SDPA CBs and the scratch, so neither pushes it past L1.
+        CBDescriptor table_cb = desc.cbs.back();
+        TT_FATAL(table_cb.format_descriptors[0].buffer_index == cbs.balance, "SparseRingSDPA: unit-table CB not last");
+        desc.cbs.pop_back();
+        table_cb.core_ranges = table_cb.core_ranges.merge(CoreRangeSet(CoreRange(balancing.core)));
+        TT_FATAL(
+            table_cb.total_size + balancing.scratch_bytes <= usable_l1,
+            "SparseRingSDPA load balancing: the balance core's {} B of CBs exceed {} B of L1",
+            table_cb.total_size + balancing.scratch_bytes,
+            usable_l1);
+        desc.cbs.insert(desc.cbs.begin(), std::move(table_cb));
+    }
     const uint32_t cb_q_in = cbs.q_in;
     const uint32_t cb_k_in = cbs.k_in;
     const uint32_t cb_v_in = cbs.v_in;
@@ -1032,7 +1265,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // Without the pooled route the bias CB is not allocated; the kernels still take an id (and its tile size), so
     // they get Q's, which they never touch through it.
     const uint32_t cb_pooled_bias = pooled_route ? cbs.pooled_bias : cbs.q_in;
-    const uint32_t cb_block_counts = has_block_counts ? cbs.block_counts : cbs.q_in;
+    const uint32_t cb_block_counts = has_counts_page ? cbs.block_counts : cbs.q_in;
     const uint32_t cb_key_bias = key_bias_tiles > 0 ? cbs.key_bias : cbs.q_in;
 
     // The dense op's padding-mask and scale CBs: the resident step masks padding by narrowing its K width and applies
@@ -1053,16 +1286,17 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t cb_sum_out = inactive_cb;
     const uint32_t cb_signal = inactive_cb;
     const uint32_t cb_kv_pad_derived = inactive_cb;
-    // All Q blocks' plan records go in one page per ring iteration, after the 16-word header and the shard slice
+    // All Q blocks' plan records go in one page per ring iteration, after the header and the shard slice
     // (mask_nb_pad words), when they fit in the page; otherwise each block gets its own page (plan_rec_base = 0).
     const uint32_t plan_rec_words = tt::div_up(mask_nb, 32u) + 3;
     const bool plan_fits_one_page =
-        (16 + mask_nb_pad + resident_slots * plan_rec_words) * sizeof(uint32_t) <= 64 + mask_row_bytes;
-    const uint32_t plan_rec_base = plan_fits_one_page ? 16 + mask_nb_pad : 0;
+        (plan_header_words + mask_nb_pad + resident_slots * plan_rec_words) * sizeof(uint32_t) <=
+        plan_header_words * sizeof(uint32_t) + mask_row_bytes;
+    const uint32_t plan_rec_base = plan_fits_one_page ? plan_header_words + mask_nb_pad : 0;
     {
         uint64_t cb_bytes = 0;
         for (const auto& cb : desc.cbs) {
-            cb_bytes += cb.total_size;
+            cb_bytes += cb.core_ranges.intersects(core_grid_set) ? cb.total_size : 0;
         }
         log_debug(
             tt::LogOp,
@@ -1256,6 +1490,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"kv_cb_pages", kv_cb_pages},
         // Words of per-shard kept-block bits in each plan page (block b: word b/32, bit b%32).
         {"plan_block_words", tt::div_up(mask_nb, 32u)},
+        // Words of the plan page header, a multiple of 16 (see plan_header_words above).
+        {"plan_header_words", plan_header_words},
         // Group delivery by multicast (see group_mcast above).
         {"group_mcast", group_mcast ? 1u : 0u},
         // The one-page plan's record base word (0 = a page per block); see plan_rec_base above.
@@ -1270,7 +1506,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"pooled_last_tiles", pooled_last_tiles},
         {"mask_row_bytes", mask_row_bytes},
         // Logical length in tokens, for the on-device pooled-column bias.
-        {"sparse_logical_n", static_cast<uint32_t>(args.logical_n)},
+        {"sparse_logical_n", compile_time_logical_n},
         {"cb_sparse_plan", cb_sparse_plan},
         {"cb_pooled_bias", cb_pooled_bias},
         // Real tokens per block: given (block_counts) or the geometric lengths; see the CB layout above.
@@ -1279,6 +1515,15 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"key_bias_tiles", key_bias_tiles},
         {"cb_key_bias", cb_key_bias},
         {"cb_sum_identity", cbs.sum_identity},
+        {"balance", balance ? 1u : 0u},
+        {"balance_remote", balancing.remote ? 1u : 0u},
+        {"balance_cost_words", balancing.cost_words},
+        {"balance_unit_cost", balancing.unit_cost},
+        {"balance_sem_table", balance_sems.table},
+        {"balance_sem_import", balance_sems.import},
+        {"balance_sem_costs", balance_sems.costs},
+        {"balance_sem_outputs", balance_sems.outputs},
+        {"cb_balance", balance ? cbs.balance : cbs.q_in},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = named_args;
@@ -1447,13 +1692,21 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         reader_args.append(reader_signaler_args);
 
         // Block-sparse args, read by the kernel at rotated_args_base. Word offsets from there:
-        //   +0 mask, +1 pooled K, +2 pooled V, +3 block counts (null: geometric), then the kPooledBiasTableWords
-        //   packed bf16 table, then the group delivery words.
+        //   +0 mask, +1 pooled K, +2 pooled V, +3 block counts (null: geometric), then (load balancing) 6 balance
+        //   words, the kPooledBiasTableWords packed bf16 table, then the group delivery words.
         // Buffer entries are registered as bindings and re-patched on cache hits by the descriptor adapter.
         reader_args.push_back(tensor_args.block_mask.buffer());
         reader_args.push_back(pooled_k_buf);  // null without the pooled route; positions do not move
         reader_args.push_back(pooled_v_buf);
         reader_args.push_back(block_counts_buf);
+        if (balance) {
+            reader_args.push_back(i);
+            reader_args.push_back(balance_table_buf);
+            reader_args.push_back(static_cast<uint32_t>(balance_core_noc.x));
+            reader_args.push_back(static_cast<uint32_t>(balance_core_noc.y));
+            reader_args.push_back(balancing.remote ? balance_res->import_q->buffer() : nullptr);
+            reader_args.push_back(balancing.remote ? balance_res->import_mask->buffer() : nullptr);
+        }
         for (uint32_t w = 0; w < kPooledBiasTableWords; ++w) {
             reader_args.push_back(pooled_bias_table[w]);
         }
@@ -1479,6 +1732,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
+        if (balancing.remote) {
+            writer_args.push_back(balance_res->export_out->buffer());
+            writer_args.push_back(static_cast<uint32_t>(balance_core_noc.x));
+            writer_args.push_back(static_cast<uint32_t>(balance_core_noc.y));
+        }
         writer_kernel.emplace_runtime_args(core, writer_args.args);
 
         // Compute args
@@ -1503,6 +1761,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 
+    if (has_logical_n_tensor) {
+        for (auto* kernel : {&reader_kernel, &writer_kernel}) {
+            KernelDescriptor::RTArgList common_args;
+            common_args.push_back(logical_n_buf);
+            kernel->emplace_common_runtime_args(common_args);
+        }
+    }
+
     // Push the SDPA kernels into desc before invoking the all-gather helper so the helper appends its own kernels
     // after these, at kFirstAllGatherKernelIndex.
     static_assert(kReaderKernelIndex == 0 && kWriterKernelIndex == 1 && kComputeKernelIndex == 2);
@@ -1520,6 +1786,35 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k, input_tensor_v};
     std::vector<Tensor> all_gather_output_tensors = {gathered_input_tensor_k, gathered_input_tensor_v};
+    RingAttentionBalance ring_balance;
+    if (balancing.remote) {
+        ring_balance.table = balance_res->table->buffer();
+        ring_balance.partner = balance_res->partner->buffer();
+        ring_balance.q = q_buf;
+        ring_balance.import_q = balance_res->import_q->buffer();
+        ring_balance.mask = tensor_args.block_mask.buffer();
+        ring_balance.import_mask = balance_res->import_mask->buffer();
+        ring_balance.export_out = balance_res->export_out->buffer();
+        ring_balance.out = out_buf;
+        ring_balance.tables_arrived_addr = static_cast<uint32_t>(balance_res->tables_arrived->address());
+        ring_balance.imports_arrived_addr = static_cast<uint32_t>(balance_res->imports_arrived->address());
+        ring_balance.returns_arrived_addr = static_cast<uint32_t>(balance_res->returns_arrived->address());
+        ring_balance.tables_read_addr = static_cast<uint32_t>(balance_res->tables_read->address());
+        ring_balance.balance_core_noc = balance_core_noc;
+        ring_balance.heads = NH;
+        ring_balance.q_blocks = num_local_q_chunks;
+        ring_balance.q_row_tiles = q_local_padded_Nt;
+        ring_balance.dht = DHt;
+        ring_balance.vdht = vDHt;
+        ring_balance.block_tiles = block_tiles;
+        ring_balance.mask_rows = mask_nqb_pad;
+        ring_balance.mask_row_bytes = mask_row_bytes;
+        ring_balance.table_page_bytes =
+            sparse_balance::table_page_words(balancing.cores, balancing.cost_words, balancing.q_blocks) *
+            sizeof(uint32_t);
+        ring_balance.q_page_bytes = q_buf->page_size();
+        ring_balance.out_page_bytes = out_buf->page_size();
+    }
     // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits.
     ring_attention_all_gather_async_multi_core_with_workers_helper(
         desc,
@@ -1549,7 +1844,75 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // consumer implements the second-half wait.
         sdpa_fused_op_signaler->split_forwarding_enabled,
         /*partial_readiness_enabled=*/false,
-        rank_mapping);
+        rank_mapping,
+        balancing.remote ? &ring_balance : nullptr);
+
+    // The balance kernel, after the gather's kernels (they supply the writers' flag).
+    if (balance) {
+        KernelDescriptor balance_kernel{};
+        balance_kernel.kernel_source =
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/sparse_ring_balance.cpp";
+        balance_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        balance_kernel.core_ranges = CoreRangeSet(CoreRange(balancing.core));
+        balance_kernel.config = ReaderConfigDescriptor{};
+        std::vector<uint32_t> balance_compile_args;
+        TensorAccessorArgs(balance_res->table->buffer()).append_to(balance_compile_args);
+        TensorAccessorArgs(balancing.remote ? balance_res->partner->buffer() : nullptr).append_to(balance_compile_args);
+        balance_kernel.compile_time_args = balance_compile_args;
+        balance_kernel.named_compile_time_args = {
+            {"balance_units", balancing.units},
+            {"balance_cores", balancing.cores},
+            {"balance_q_blocks", balancing.q_blocks},
+            {"num_q_passes", num_q_passes},
+            {"balance_cap", balance_cap},
+            {"balance_cost_words", balancing.cost_words},
+            {"balance_remote", balancing.remote ? 1u : 0u},
+            {"balance_devices", balancing.devices},
+            {"balance_swappable", balancing.swappable},
+            {"balance_grid_x", static_cast<uint32_t>(grid_size.x)},
+            {"balance_sem_costs", balance_sems.costs},
+            {"balance_sem_outputs", balance_sems.outputs},
+            {"balance_sem_table", balance_sems.table},
+            {"balance_sem_import", balance_sems.import},
+            {"cb_balance", cbs.balance},
+            {"balance_writer_flag", ring_balance.writer_flag_semaphore},
+            {"balance_cb", kBalanceScratchCb},
+        };
+        const uint32_t tensor_rank =
+            rank_mapping.full_mesh
+                ? ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<
+                      ttnn::ring_attention_all_gather::kRowMajorRankMapping>(
+                      transport_rank, rank_mapping.mesh_rows, rank_mapping.mesh_cols, rank_mapping.orientation)
+                : transport_rank;
+        KernelDescriptor::RTArgList balance_args;
+        balance_args.push_back(balance_res->table->buffer());
+        balance_args.push_back(balancing.remote ? balance_res->partner->buffer() : nullptr);
+        balance_args.push_back(tensor_rank);
+        balance_args.push_back(ring_balance.tables_arrived_addr);
+        balance_args.push_back(ring_balance.imports_arrived_addr);
+        balance_args.push_back(ring_balance.returns_arrived_addr);
+        balance_args.push_back(ring_balance.tables_read_addr);
+        balance_args.push_back(static_cast<uint32_t>(ring_balance.writer_cores_noc.size()));
+        for (uint32_t x = 0; x < grid_size.x; ++x) {
+            balance_args.push_back(static_cast<uint32_t>(mesh_device->worker_core_from_logical_core({x, 0}).x));
+        }
+        for (uint32_t y = 0; y < grid_size.y; ++y) {
+            balance_args.push_back(static_cast<uint32_t>(mesh_device->worker_core_from_logical_core({0, y}).y));
+        }
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            const CoreCoord v = mesh_device->worker_core_from_logical_core({i % grid_size.x, i / grid_size.x});
+            TT_FATAL(
+                v.x == mesh_device->worker_core_from_logical_core({i % grid_size.x, 0}).x &&
+                    v.y == mesh_device->worker_core_from_logical_core({0, i / grid_size.x}).y,
+                "SparseRingSDPA load balancing: the SDPA grid's NoC coordinates are not a product of rows and columns");
+        }
+        for (const CoreCoord& w : ring_balance.writer_cores_noc) {
+            balance_args.push_back(static_cast<uint32_t>(w.x));
+            balance_args.push_back(static_cast<uint32_t>(w.y));
+        }
+        balance_kernel.emplace_runtime_args(balancing.core, balance_args);
+        desc.kernels.push_back(std::move(balance_kernel));
+    }
 
     return desc;
 }
@@ -1567,8 +1930,68 @@ tt::tt_metal::WorkloadDescriptor SparseRingSDPAProgramFactory::create_workload_d
     tt::tt_metal::WorkloadDescriptor wd;
     const auto coords = tensor_coords.coords();
     wd.programs.reserve(coords.size());
+    // Made before the per-coord builds so their L1 counts in the CB fit.
+    std::optional<BalanceResources> balance_res;
+    const BalanceConfig balancing = make_balance_config(args, tensor_args);
+    if (balancing.on) {
+        auto* mesh = tensor_args.input_q.device();
+        const auto dram = tt::tt_metal::MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+        const auto words = [&](uint32_t rows, uint32_t width) {
+            return std::make_shared<Tensor>(create_device_tensor(
+                tt::tt_metal::TensorSpec(
+                    ttnn::Shape({1, 1, rows, width}),
+                    tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram)),
+                mesh));
+        };
+        balance_res.emplace();
+        // One page per device (indexed by rank) even when only this device's is read.
+        balance_res->table = words(
+            static_cast<uint32_t>(args.ring_size),
+            sparse_balance::table_page_words(balancing.cores, balancing.cost_words, balancing.q_blocks));
+        if (balancing.remote) {
+            balance_res->partner = words(1, tt::round_up(balancing.q_blocks, 16u));
+            balance_res->import_q =
+                std::make_shared<Tensor>(create_device_tensor(tensor_args.input_q.tensor_spec(), mesh));
+            balance_res->import_mask =
+                std::make_shared<Tensor>(create_device_tensor(tensor_args.block_mask.tensor_spec(), mesh));
+            balance_res->export_out =
+                std::make_shared<Tensor>(create_device_tensor(output_tensors.at(0).tensor_spec(), mesh));
+            log_debug(
+                tt::LogOp,
+                "SparseRingSDPA: cross-device balancing buffers, {} B of DRAM per device for this program",
+                balance_res->import_q->buffer()->size() + balance_res->import_mask->buffer()->size() +
+                    balance_res->export_out->buffer()->size());
+            const CoreRangeSet balance_core_set(CoreRange(balancing.core));
+            const auto make_sem = [&] {
+                return ttnn::global_semaphore::create_global_semaphore(mesh, balance_core_set, 0, BufferType::L1);
+            };
+            balance_res->tables_arrived = make_sem();
+            balance_res->imports_arrived = make_sem();
+            balance_res->returns_arrived = make_sem();
+            balance_res->tables_read = make_sem();
+            tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
+            for (const auto* sem :
+                 {&*balance_res->tables_arrived,
+                  &*balance_res->imports_arrived,
+                  &*balance_res->returns_arrived,
+                  &*balance_res->tables_read}) {
+                wd.semaphores.push_back(*sem);
+            }
+        }
+        for (const auto& t :
+             {balance_res->table,
+              balance_res->partner,
+              balance_res->import_q,
+              balance_res->import_mask,
+              balance_res->export_out}) {
+            if (t != nullptr) {
+                wd.buffers.push_back({t, t->buffer()});
+            }
+        }
+    }
     for (const auto& coord : coords) {
-        auto desc = build_sparse_ring_sdpa_program_descriptor(args, tensor_args, output_tensors, coord);
+        auto desc = build_sparse_ring_sdpa_program_descriptor(
+            args, tensor_args, output_tensors, coord, balancing, balance_res.has_value() ? &*balance_res : nullptr);
         wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return wd;

@@ -47,15 +47,15 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal {
 

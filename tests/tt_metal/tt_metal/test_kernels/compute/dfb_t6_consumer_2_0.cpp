@@ -76,10 +76,12 @@ void kernel_main() {
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id += share) {
         dfb.wait_front(share);
         for (uint32_t j = 0; j < share; ++j) {
-            acquire_dst();
+            tile_regs_acquire();
+            tile_regs_wait();
             // TEN-4746: the unpack orders pop_front after wait_front; one per tile, a no-op on MATH/PACK.
             ckernel::dummy_unpack(dfb.get_id());
-            release_dst();
+            tile_regs_commit();
+            tile_regs_release();
         }
 #ifdef UCK_CHLKC_UNPACK
         {
