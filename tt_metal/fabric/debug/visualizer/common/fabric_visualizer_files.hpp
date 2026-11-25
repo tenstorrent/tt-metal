@@ -16,6 +16,12 @@
 //       captures/<capture_id>/
 //           fabric_capture_rank_<r>_of_<n>.json  the capture record
 //           fabric_capture_rank_<r>_of_<n>.bin   the bytes it read
+//           fabric_decoded_rank_<r>_of_<n>.json  what decode made of them
+//
+// Every file is written to a temporary name beside it and then moved to its own, so a file under its name is always
+// complete.
+
+#include <unistd.h>
 
 #include <cstdint>
 #include <cstdlib>
@@ -35,6 +41,37 @@ inline constexpr uint32_t k_manifest_version = 1;
 inline constexpr std::string_view k_capture_file_kind = "fabric_capture";
 inline constexpr uint32_t k_capture_version = 1;
 
+// A decoded file's file_kind and decoded_version. The manifest within keeps its own manifest_version.
+inline constexpr std::string_view k_decoded_file_kind = "fabric_decoded";
+inline constexpr uint32_t k_decoded_version = 1;
+
+// One rank's decoded file name, by its rank in the whole job: fabric_decoded_rank_<mpi_rank + 1>_of_<world_size>.json.
+inline std::string make_decoded_file_name(uint32_t mpi_rank, uint32_t world_size) {
+    return "fabric_decoded_rank_" + std::to_string(mpi_rank + 1) + "_of_" + std::to_string(world_size) + ".json";
+}
+
+// Where a file is written before it's moved to `path`: beside it, so the move stays on one filesystem, and named by
+// the process, so two writers don't share one.
+inline std::filesystem::path make_temporary_path(const std::filesystem::path& path) {
+    return path.string() + ".tmp." + std::to_string(::getpid());
+}
+
+// Moves `from` to `to`, and returns why it couldn't. Without `replace`, fails if `to` already exists: a hard link
+// refuses an existing name, where a rename would replace it. With it, a rename replaces whatever is at `to`.
+inline std::error_code move_into_place(
+    const std::filesystem::path& from, const std::filesystem::path& to, bool replace) {
+    std::error_code error;
+    if (replace) {
+        std::filesystem::rename(from, to, error);
+        return error;
+    }
+    std::filesystem::create_hard_link(from, to, error);
+    if (!error) {
+        std::filesystem::remove(from, error);
+    }
+    return error;
+}
+
 // One rank's manifest file name, by its rank in the whole job:
 // fabric_manifest_rank_<mpi_rank + 1>_of_<world_size>.json.
 inline std::string make_manifest_file_name(uint32_t mpi_rank, uint32_t world_size) {
@@ -51,19 +88,26 @@ inline std::filesystem::path make_run_directory(const std::filesystem::path& log
     return make_runs_directory(logs_dir) / run_id;
 }
 
-// The newest run's folder under `logs_dir` that holds `file_name`, such as one rank's manifest. A run id starts with
-// the UTC time it was made, so the newest run is the last by name. Null when no run's folder holds it.
-inline std::optional<std::filesystem::path> find_latest_run_directory(
-    const std::filesystem::path& logs_dir, std::string_view file_name) {
+// The folder in `parent` that's last by name and holds `file_name`, which can be a path within it. Run ids and capture
+// ids both start with the UTC time they were made, so the last by name is the newest. Null when no folder holds it.
+inline std::optional<std::filesystem::path> find_last_directory_holding(
+    const std::filesystem::path& parent, const std::filesystem::path& file_name) {
     std::optional<std::filesystem::path> latest;
     std::error_code error;
-    for (const auto& entry : std::filesystem::directory_iterator(make_runs_directory(logs_dir), error)) {
+    for (const auto& entry : std::filesystem::directory_iterator(parent, error)) {
         if (entry.is_directory() && std::filesystem::exists(entry.path() / file_name) &&
             (!latest.has_value() || entry.path().filename() > latest->filename())) {
             latest = entry.path();
         }
     }
     return latest;
+}
+
+// The newest run's folder under `logs_dir` that holds `file_name`, such as one rank's manifest. Null when no run's
+// folder holds it.
+inline std::optional<std::filesystem::path> find_latest_run_directory(
+    const std::filesystem::path& logs_dir, const std::filesystem::path& file_name) {
+    return find_last_directory_holding(make_runs_directory(logs_dir), file_name);
 }
 
 // A process's rank in its job, and the job's size.
@@ -102,16 +146,61 @@ inline std::optional<std::filesystem::path> find_latest_manifest(const std::file
     return *run_directory / file_name;
 }
 
+// The folder every capture of a run sits in.
+inline std::filesystem::path make_captures_directory(const std::filesystem::path& run_directory) {
+    return run_directory / "captures";
+}
+
 // One capture's folder in its run's folder. A run can be captured many times, and each capture's files sit in a
 // folder named by its capture id.
 inline std::filesystem::path make_capture_directory(
     const std::filesystem::path& run_directory, std::string_view capture_id) {
-    return run_directory / "captures" / capture_id;
+    return make_captures_directory(run_directory) / capture_id;
+}
+
+// The run's folder a capture record is in: <run>/captures/<capture_id>/<record>.
+inline std::filesystem::path get_run_directory_of_capture_record(const std::filesystem::path& record_path) {
+    return record_path.parent_path().parent_path().parent_path();
 }
 
 // One rank's capture file name without its extension, by its rank in the whole job.
 inline std::string make_capture_file_stem(uint32_t mpi_rank, uint32_t world_size) {
     return "fabric_capture_rank_" + std::to_string(mpi_rank + 1) + "_of_" + std::to_string(world_size);
+}
+
+// One rank's capture record file name, by its rank in the whole job. Its .bin has the same stem.
+inline std::string make_capture_record_file_name(uint32_t mpi_rank, uint32_t world_size) {
+    return make_capture_file_stem(mpi_rank, world_size) + ".json";
+}
+
+// `rank`'s record of capture `capture_id`, in the newest run under `logs_dir` that has one. Null when no run does.
+inline std::optional<std::filesystem::path> find_capture_record(
+    const std::filesystem::path& logs_dir, JobRank rank, std::string_view capture_id) {
+    const std::filesystem::path record_in_run =
+        make_capture_directory("", capture_id) / make_capture_record_file_name(rank.mpi_rank, rank.world_size);
+    const std::optional<std::filesystem::path> run_directory = find_latest_run_directory(logs_dir, record_in_run);
+    if (!run_directory.has_value()) {
+        return std::nullopt;
+    }
+    return *run_directory / record_in_run;
+}
+
+// `rank`'s record in the newest capture of the newest run that has the rank's manifest: the run capture finds by
+// default, and its latest capture. Null when that run has no capture with the rank's record, or there's no such run.
+inline std::optional<std::filesystem::path> find_latest_capture_record(
+    const std::filesystem::path& logs_dir, JobRank rank) {
+    const std::optional<std::filesystem::path> run_directory =
+        find_latest_run_directory(logs_dir, make_manifest_file_name(rank.mpi_rank, rank.world_size));
+    if (!run_directory.has_value()) {
+        return std::nullopt;
+    }
+    const std::string record_file_name = make_capture_record_file_name(rank.mpi_rank, rank.world_size);
+    const std::optional<std::filesystem::path> capture_directory =
+        find_last_directory_holding(make_captures_directory(*run_directory), record_file_name);
+    if (!capture_directory.has_value()) {
+        return std::nullopt;
+    }
+    return *capture_directory / record_file_name;
 }
 
 }  // namespace tt::tt_fabric::visualizer
