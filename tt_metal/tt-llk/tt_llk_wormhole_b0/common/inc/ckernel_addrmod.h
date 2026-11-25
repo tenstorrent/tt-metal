@@ -36,7 +36,7 @@ struct addr_mod_t
         std::uint8_t clr  = 0;
         std::uint8_t cr   = 0;
 
-        constexpr std::uint8_t val() const
+        __attribute__((always_inline)) inline constexpr std::uint8_t val() const
         {
             return (incr & SRC_INCR_MASK) | ((cr & 0x1) << 6) | ((clr & 0x1) << 7);
         }
@@ -50,7 +50,7 @@ struct addr_mod_t
         std::uint8_t cr      = 0;
         std::uint8_t c_to_cr = 0;
 
-        constexpr std::uint16_t val() const
+        __attribute__((always_inline)) inline constexpr std::uint16_t val() const
         {
             return (incr & DEST_INCR_MASK) | ((cr & 0x1) << 10) | ((clr & 0x1) << 11) | ((c_to_cr & 0x1) << 12);
         }
@@ -62,7 +62,7 @@ struct addr_mod_t
         std::uint8_t incr = 0;
         std::uint8_t clr  = 0;
 
-        constexpr std::uint16_t val() const
+        __attribute__((always_inline)) inline constexpr std::uint16_t val() const
         {
             return (incr & 0x3) | ((clr & 0x1) << 2);
         }
@@ -74,7 +74,7 @@ struct addr_mod_t
         std::uint8_t incr = 0;
         std::uint8_t clr  = 0;
 
-        constexpr std::uint16_t val() const
+        __attribute__((always_inline)) inline constexpr std::uint16_t val() const
         {
             return (incr & 0xF) | ((clr & 0x1) << 4);
         }
@@ -90,12 +90,12 @@ struct addr_mod_t
     addr_mod_src_t pack_ydst     = {};
 
     // SrcA/B register is combination of A and B values
-    constexpr std::uint16_t src_val() const
+    __attribute__((always_inline)) inline constexpr std::uint16_t src_val() const
     {
         return srca.val() | (srcb.val() << 8);
     }
 
-    constexpr std::uint16_t pack_val() const
+    __attribute__((always_inline)) inline constexpr std::uint16_t pack_val() const
     {
         return pack_ysrc.val() | (pack_ydst.val() << 6);
     }
@@ -154,7 +154,7 @@ struct addr_mod_pack_t
         std::uint8_t clr  = 0;
         std::uint8_t cr   = 0;
 
-        constexpr std::uint8_t val() const
+        __attribute__((always_inline)) inline constexpr std::uint8_t val() const
         {
             return (incr & 0xF) | ((cr & 0x1) << 4) | ((clr & 0x1) << 5);
         }
@@ -165,7 +165,7 @@ struct addr_mod_pack_t
         std::uint8_t incr = 0;
         std::uint8_t clr  = 0;
 
-        constexpr std::uint8_t val() const
+        __attribute__((always_inline)) inline constexpr std::uint8_t val() const
         {
             return (incr & 0x1) | ((clr & 0x1) << 1);
         }
