@@ -520,8 +520,10 @@ targets:
             perf:
               decode_t/s/u: 15.9
               decode_t/s: 15.9
-              prefill_t/s: 449.7
-              prefill_time_to_token: 0.1846
+              # Means of the 7 scheduled runs 11-19..11-25 on f10cs05/07/08/09
+              # (prefill 412-622 t/s, TTFT 0.133-0.201 s). 622 t/s on 11-25 was above the old 449.7 band.
+              prefill_t/s: 509.87
+              prefill_time_to_token: 0.1659
               # Widened to +/-30% (default is +/-15%): prefill t/s and TTFT on this leg
               # swing >15% between runners (PR #59424, pt.9). Observed within +/-30%
               # across runs 105288186828 (f10cs06) and 105412280076 (f10cs09).
@@ -1056,7 +1058,9 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 64.0
+              # Mean of the 7 scheduled runs 11-19..11-25 on f10cs05-09 (70.5-74.3 t/s/u, every run above 64.0;
+              # 74.1 on 11-22 and 74.3 on 11-25 were above the old +15 % bound).
+              decode_t/s/u: 71.86
               prefill_time_to_first_token: 40
             accuracy: {}
           # data-parallel e2e legs (b4/b8) emit ml_model_name "llama-3.1-8b" -> resolve here.
