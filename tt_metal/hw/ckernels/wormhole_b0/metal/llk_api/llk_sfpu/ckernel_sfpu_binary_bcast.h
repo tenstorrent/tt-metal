@@ -805,9 +805,8 @@ inline void _broadcast_scalars_from_dest_(std::uint32_t mean_addr, std::uint32_t
 // all addressed relative to RWC.Dst with the dest base register pointed at
 // the data tile, so the body is identical for the 8 bands of a tile. It is
 // recorded into the replay buffer while band 0 executes (Exec, no SFPU cost)
-// and replayed for bands 1..7; the RISC then issues a REPLAY and an INCRWC per
-// band instead of 8 runtime TT_SFPLOAD/TT_SFPSTORE encodes (3 RISC
-// instructions each). `out_rel` (the data -> out tile distance, 0 for
+// and replayed for bands 1..7; the RISC issues one REPLAY and one INCRWC per
+// band. `out_rel` (the data -> out tile distance, 0 for
 // the in-place API) is baked into the store immediates when recording.
 // Exactly REPLAY_LEN_SCALAR_NORM_BAND instructions.
 inline void _record_scalar_normalize_band_replay_(std::uint32_t out_rel) {

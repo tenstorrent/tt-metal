@@ -129,6 +129,7 @@ def _check(res, golden, fmt):
         bad = int((r[fin] != g[fin]).sum())
         assert bad == 0, f"{bad}/{int(fin.sum())} finite lanes not bit exact"
         return
+    # 1 bf16 ulp: fp32 dest result packed to bf16 vs torch RNE of the fp32 golden.
     rtol = 2**-7
     err = (r[fin] - g[fin]).abs()
     tol = rtol * g[fin].abs() + 1e-30
@@ -224,3 +225,14 @@ FUNC_CASES = [
 @parametrize(case=FUNC_CASES)
 def test_sfpu_normalize_bcast_scalar(case):
     run_norm_scalar(case)
+
+
+# loop_factor 2: the second iteration runs in dest section 1 (SyncHalf) and is the one packed.
+SECTION1_CASES = [
+    f"{f}-{l}-sp-rt0" for f in FMTS for l in ("B_below", "D_outbelow", "G_rowpost")
+]
+
+
+@parametrize(case=SECTION1_CASES)
+def test_sfpu_normalize_bcast_scalar_dest_section1(case):
+    run_norm_scalar(case, loop_factor=2)
