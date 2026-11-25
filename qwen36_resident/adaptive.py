@@ -18,7 +18,7 @@ import torch
 import ttnn
 from qwen36_resident import weights as Q
 from qwen36_resident.dflash import ResidentDFlashRows, SpecRowsSession
-from qwen36_resident.model import ATTN_TAILS, TOP_K, Dims, ResidentModel, State, is_attn
+from qwen36_resident.model import ATTN_PIPE, ATTN_TAILS, TOP_K, Dims, ResidentModel, State, is_attn
 
 
 class User:
@@ -77,7 +77,10 @@ class AdaptiveEngine:
             R=R,
             prefill=True,
             kv_pool_blocks=kv_pool_blocks,
-            l1_union=dict(cand_words=d.n * 2 * TOP_K * self.PLAIN_ROWS, attn_tails=ATTN_TAILS),
+            # (attn_q_slots: the plain build's O-2 q / M slots, model.py)
+            l1_union=dict(
+                cand_words=d.n * 2 * TOP_K * self.PLAIN_ROWS, attn_tails=ATTN_TAILS, attn_q_slots=2 if ATTN_PIPE else 1
+            ),
         )
         self.R, self.pp = R, self.spec.pp
         sts = [

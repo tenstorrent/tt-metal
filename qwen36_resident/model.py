@@ -734,7 +734,8 @@ class ResidentModel:
         buffers would not fit); same mesh, checkpoint, core layout and pool geometry, asserted. Its own: GDN state, conv
         history, token state, semaphores, programs, trace. Only one of the two may run at a time (sync between).
         l1_union (the model built first): sizes its shared L1 scratch for the other geometry too, a dict of
-        slot_words (attention row-max slots), cand_words (hub candidates, per chip) and attn_tails."""
+        slot_words (attention row-max slots), cand_words (hub candidates, per chip), attn_tails and attn_q_slots (O-2's
+        q / M slots)."""
         self.mesh, self.d, self.layers, self.interval, self.lm_head = mesh, d, layers, interval, lm_head
         self._share, self._l1_union = share, dict(l1_union or {})
         assert share is None or (share.mesh is mesh and share.layers == layers and share.lm_head == lm_head)
@@ -1088,10 +1089,21 @@ class ResidentModel:
 
         # ---- attention: q / M buffers, norm weights, KV caches (position tile t -> bank t % banks)
         Dt, heads_a = d.Dt, d.h
-        # (O-2: q and M take two slots, user i in slot i & 1)
+        # (O-2: q and M take two slots, user i in slot i & 1; l1_union attn_q_slots: allocated for the other geometry's
+        # too — the CBs over them, T(0) / T(3), take this build's own slots)
         nq = 2 if self.attn_pipe else 1
-        q_t = l1(torch.zeros(WORKERS * TILE * nq, Dt * TILE), work_grid, [TILE * nq, Dt * TILE], tile=full, key="q")
-        M_t = l1(torch.zeros((WORKERS + 1) * TILE * nq, TILE), attn_grid, [TILE * nq, TILE], tile=full, key="M")
+        nq_alloc = max(nq, int(self._l1_union.get("attn_q_slots", 1)))
+        q_t = l1(
+            torch.zeros(WORKERS * TILE * nq_alloc, Dt * TILE),
+            work_grid,
+            [TILE * nq_alloc, Dt * TILE],
+            tile=full,
+            key="q",
+        )
+        M_t = l1(
+            torch.zeros((WORKERS + 1) * TILE * nq_alloc, TILE), attn_grid, [TILE * nq_alloc, TILE], tile=full, key="M"
+        )
+        self._attn_q_cb = (nq * Dt * TILE * TILE * 2, nq * TILE * TILE * 2)  # (bytes: the q / M CBs over q_t / M_t)
         # attention of a verify of R > 2 rows: passes of P rows (P * heads <= 32, P dividing R; attn_common.hpp)
         self.attn_group = (
             max(p for p in range(1, R + 1) if R % p == 0 and p * d.h <= TILE) if R > 2 and ATTN_PACKED else 1
@@ -1592,8 +1604,8 @@ class ResidentModel:
                 cb(5, tail_grid, (2 if self.attn_pipe else 1) * (2 if packed else 1), *f32),
             ]
             cbs += [
-                T(0, q_t),
-                T(3, M_t),
+                T(0, q_t, total_size=self._attn_q_cb[0]),
+                T(3, M_t, total_size=self._attn_q_cb[1]),
                 T(4, one_t),
                 cb(1, work_grid, 2 * kv_block * Dt, K_DT, TILE_BYTES[K_DT]),  # (S0-8: K's format)
                 cb(2, work_grid, 2 * kv_block * Dt, V_DT, TILE_BYTES[V_DT]),  # (S0: V's format)
