@@ -992,6 +992,14 @@ def _patch_risc_debug() -> None:
         if not already_halted_by_triage:
             original_hw_halt(self)
             session.add_halted_core(risc_location)
+            if self.risc_info.noc_block.device.is_blackhole():
+                # A Blackhole core halted right after a fence (or pause) wedges on a debug memory read: tt-exalens#1332
+                location = self.risc_info.noc_block.location
+                risc_debug = self.risc_info.noc_block.get_risc_debug(self.risc_info.risc_name, self.risc_info.neo_id)
+                for _ in range(4):
+                    if location.noc_read32(risc_debug.read_gpr(32) - 4) & 0x707F != 0x000F:
+                        break
+                    self.step()
 
     BabyRiscDebugHardware.halt = patched_halt  # type: ignore[method-assign]
 
