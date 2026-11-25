@@ -1870,20 +1870,26 @@ class TestConfig:
             TestConfig.TESTS_WORKING_DIR,
         )
 
-    @staticmethod
-    def _trisc_unit_key(unit: str, build_h: str) -> str:
-        """The preprocessed unit without the build.h constants it does not name, directly or through
-        another kept line. Everything else in build.h stays in, so what is dropped cannot change the code.
-        """
-        rest, constants, statement, depth, in_build_h = [], [], "", 0, False
-        for line in unit.splitlines():
-            if line.startswith("# "):
-                in_build_h = f'"{build_h}"' in line
-                if not in_build_h:
-                    rest.append(line.replace(build_h, "build.h"))
-                continue
-            if not in_build_h:
-                rest.append(line)
+    def _compile_kernel_part_once(self, compile_command, source):
+        # build.h holds every parameter of the variant, but a TRISC names only some of them, so variants
+        # often compile a TRISC to the same code. Key on the flags, the source, and the build.h lines the
+        # unit names (directly or through another kept line), and build it once. The names a unit uses
+        # do not depend on the build.h constants, so one preprocessing per flags and source finds them.
+        variant_dir = str(TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id)
+        command = [
+            compile_command[0],
+            f"-ffile-prefix-map={variant_dir}=build",
+            *compile_command[1:],
+        ]
+        cwd = TestConfig.TESTS_WORKING_DIR
+        build_h = Path(variant_dir) / "build.h"
+        if not build_h.exists():
+            run_shell_command(command, cwd, source)
+            return
+        constants, statement, depth = [], "", 0
+        for line in build_h.read_text().splitlines():
+            if line.startswith("#"):
+                constants.append((None, line + "\n"))
                 continue
             statement += line + "\n"
             depth += line.count("{") - line.count("}")
@@ -1894,54 +1900,50 @@ class TestConfig:
                 )
                 constants.append((name.group(1) if name else None, statement))
                 statement = ""
-        rest.append(statement)
-        names = set(re.findall(r"\w+", "\n".join(rest)))
+        constants.append((None, statement))
+        fixed = json.dumps([token.replace(variant_dir, "") for token in command[:-1]])
+        fixed += source + "".join(text for name, text in constants if name is None)
+        trisc_dir = TestConfig.ARTEFACTS_DIR / "trisc"
+        trisc_dir.mkdir(exist_ok=True)
+        names_file = trisc_dir / f"{sha256(fixed.encode()).hexdigest()}.names"
+        with FileLock(f"{names_file}.lock"):
+            if not names_file.exists():
+                unit = subprocess.run(
+                    command[: command.index("-x")] + ["-E", "-x", "c++", "-"],
+                    cwd=cwd,
+                    input=source,
+                    capture_output=True,
+                    text=True,
+                )
+                if unit.returncode:
+                    run_shell_command(command, cwd, source)
+                    return
+                rest, in_build_h = [], False
+                for line in unit.stdout.splitlines():
+                    if line.startswith("# "):
+                        in_build_h = f'"{build_h}"' in line
+                    elif not in_build_h:
+                        rest.append(line)
+                names_file.write_text(
+                    json.dumps(sorted(set(re.findall(r"\w+", "\n".join(rest)))))
+                )
+        names = set(json.loads(names_file.read_text()))
+        names.update(re.findall(r"\w+", "".join(t for n, t in constants if n is None)))
         kept, grew = set(), True
         while grew:
             grew = False
             for i, (name, text) in enumerate(constants):
-                if i not in kept and (name is None or name in names):
+                if name is not None and i not in kept and name in names:
                     kept.add(i)
                     names.update(re.findall(r"\w+", text))
                     grew = True
-        return "\n".join(rest) + "".join(
-            t for i, (_, t) in enumerate(constants) if i in kept
-        )
-
-    def _compile_kernel_part_once(self, compile_command, source):
-        # build.h holds every parameter of the variant, but a TRISC reads only some of them, so
-        # variants often compile a TRISC the same way. Key on what the unit uses and build it once.
-        variant_dir = str(TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id)
-        command = [
-            compile_command[0],
-            f"-ffile-prefix-map={variant_dir}=build",
-            *compile_command[1:],
-        ]
-        cwd = TestConfig.TESTS_WORKING_DIR
-        head = command[: command.index("-x")]
-        unit = subprocess.run(
-            head + ["-E", "-x", "c++", "-"],
-            cwd=cwd,
-            input=source,
-            capture_output=True,
-            text=True,
-        )
-        if unit.returncode:
-            run_shell_command(command, cwd, source)
-            return
-        key = json.dumps([token.replace(variant_dir, "") for token in command[:-1]])
-        digest = sha256(
-            (
-                key + TestConfig._trisc_unit_key(unit.stdout, f"{variant_dir}/build.h")
-            ).encode()
-        ).hexdigest()
-        built = TestConfig.ARTEFACTS_DIR / "trisc" / f"{digest}.elf"
-        with FileLock(TestConfig.SYNC_DIR / f"trisc-{digest}.lock"):
+        fixed += "".join(text for i, (_, text) in enumerate(constants) if i in kept)
+        built = trisc_dir / f"{sha256(fixed.encode()).hexdigest()}.elf"
+        with FileLock(f"{built}.lock"):
             if built.exists():
                 shutil.copyfile(built, command[-1])
                 return
             run_shell_command(command, cwd, source)
-            built.parent.mkdir(exist_ok=True)
             shutil.copyfile(command[-1], built)
 
     def build_elfs(self):
