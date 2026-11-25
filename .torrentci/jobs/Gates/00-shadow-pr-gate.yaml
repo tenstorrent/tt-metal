@@ -11,3 +11,8 @@ dashboards:
     conditions: {apply-on: [pull-request, merge-queue]}
     members:
       - {job: asan-build, when: {changed: [any-code, image]}}
+      # runtime-smoke-tests (cpu-only leg).
+      - {job: smoke-cpu-asan, when: {changed: [cmake, tt-metalium, tt-metalium-tests, tt-nn-tests, image]}}
+      - job: llk-hardware-free
+        when: {changed: [llk-wormhole, llk-blackhole, llk-common, llk-sfpi, llk-tests, llk-ci, llk-perf, llk-hardware-free,
+                         llk-quasar]}
