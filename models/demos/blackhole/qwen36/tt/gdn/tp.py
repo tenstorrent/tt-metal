@@ -571,6 +571,8 @@ class TPGatedDeltaNet:
         self._cfg_onehot = ttnn.init_device_compute_kernel_config(
             mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
         )
+        # [1, 2*Nv, Nv] one-hot for _select_b; None: forward_prefill slices b.
+        self._b_select = self._build_b_select() if tpc.prefill_gdn_b_select_enabled() else None
         # Which of the two conv mirrors is authoritative. The traced batched verify advances only the
         # window buffers (refilling the K conv_states taps in the trace would cost ~10 ms/iteration
         # over 48 layers, and nothing in the spec loop reads them), so after a spec loop
@@ -986,7 +988,36 @@ class TPGatedDeltaNet:
             self.args.gdn_value_dim_tp,
         )
 
-    def _project_qkvzab(self, x, S, out_mc=None):
+    def _build_b_select(self):
+        """[1, 2*Nv, Nv] bf16 one-hot whose column j picks row Nv + j: b_j out of the [a | b] block. None when [a | b]
+        is wider than one tile. Written to the device once, before any trace capture."""
+        Nv = self.Nv
+        if 2 * Nv > tpc.TILE_SIZE:
+            return None
+        sel = torch.zeros(1, 2 * Nv, Nv, dtype=torch.bfloat16)
+        sel[0, Nv + torch.arange(Nv), torch.arange(Nv)] = 1.0
+        return ttnn.from_torch(
+            sel,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+
+    def _select_b(self, ab, out_mc):
+        """b = ab[..., Nv:2*Nv] by a one-hot matmul. b starts mid-tile, so ttnn.slice untilizes, slices and re-tilizes
+        the whole [S, 2*Nv] block. HiFi4 with fp32 accumulation and one nonzero term per output element return every
+        bf16 value unchanged, except that -0.0 may come back as +0.0 (b only feeds a sigmoid)."""
+        return ttnn.matmul(
+            ab,
+            self._b_select,
+            compute_kernel_config=self._cfg_onehot,
+            memory_config=out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+        )
+
+    def _project_qkvzab(self, x, S, out_mc=None, select_b=False):
         """Project x → (qkv, z, a, b). Fused path: one [qkv|z|a|b] matmul then slice.
         out_mc: placement of the qkvzab matmul + slices. None → DRAM; prefill+decode now pass L1 to
         keep qkvzab + q/k/v/z/a/b resident (was DRAM to spare NoC traffic — re-measure if reverting)."""
@@ -1058,7 +1089,11 @@ class TPGatedDeltaNet:
             ab = ttnn.slice(qkvzab, (0, 0, az), (1, S, _ab_end), memory_config=out_mc)
             ttnn.deallocate(qkvzab)
             a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=out_mc)
-            b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=out_mc)
+            # select_b (forward_prefill): b by the one-hot when it exists and [a | b] is exactly 2*Nv wide.
+            if select_b and self._b_select is not None and ab.shape[-1] == 2 * Nv:
+                b = self._select_b(ab, out_mc)
+            else:
+                b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=out_mc)
             ttnn.deallocate(ab)
             return qkv, z, a, b
         qkvz = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvz_progcfg)
@@ -1155,7 +1190,7 @@ class TPGatedDeltaNet:
 
         # Prefill qkvzab in L1 (DRAM above S=2048): keeps proj + q/k/v/z/a/b resident for conv+gate prep.
         _L1 = tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG)
-        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_L1)
+        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_L1, select_b=True)
         if checkpoint is not None:
             # Every checkpoint is at least K - 1 tokens into this forward, so its history rows are all in qkv.
             ck_conv = ttnn.matmul(
