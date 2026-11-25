@@ -243,6 +243,12 @@ def pytest_runtestloop(session):
     replaced = _rebind(_stand_ins())
     start = time.monotonic()
     _STATE["dry"] = True
+    # Some fixtures collect garbage before every test (models/conftest.py). A full collection costs tens of
+    # milliseconds with torch and ttnn loaded; in the dry pass the young generations are enough, as for the plugin's
+    # own collection after a body. PRECOMPILE_FULL_GC=1 is a temporary switch for comparing the two.
+    real_collect = gc.collect
+    if not os.environ.get("PRECOMPILE_FULL_GC"):
+        gc.collect = lambda generation=1: real_collect(min(generation, 1))
     try:
         ttnn._ttnn.device.SetDryPass(True)
         for i, item in enumerate(items):
@@ -251,6 +257,7 @@ def pytest_runtestloop(session):
             runtestprotocol(item, nextitem=items[i + 1] if i + 1 < len(items) else None, log=False)
     finally:
         _STATE["dry"] = False
+        gc.collect = real_collect
         ttnn._ttnn.device.SetDryPass(False)
         ttnn.set_fabric_config = real_set_fabric_config
         _restore(replaced)
