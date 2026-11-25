@@ -312,11 +312,11 @@ released around the prefill and the reply's first six steps capture them again (
 | any, token by token | | 126.5 s | about 500 s |
 | 36864 | 8192 (one pass up to 8448) | 2.4 s; 2.1 s when the same length came before | 10.5 s |
 | 131072 | 4096 | 6.7 s; 3.6 s | 13.2 s |
-| 196608 | off: 0.2 GiB of DRAM short | | |
+| 196608 | off: about 0.3 GiB of DRAM short | | |
 
 - It costs DRAM, so context: 1.05 GiB for the prefill's own tensors, 2 GiB of room for a layer's rebuilt experts,
-  0.26 GiB per 1024 tokens of a pass. Passes of 8192 tokens fit up to about a 70K context, 4096 up to 124K, 2048
-  up to 155K; the server says at start what it uses, or how much is short.
+  0.26 GiB per 1024 tokens of a pass. By that rule passes of 8192 tokens fit up to about a 94K context, 4096 up to
+  151K, 2048 up to 180K (measured: 36864 and 131072); the server says at start what it uses, or how much is short.
 - It costs decode speed: the plain class only (no speculative decode: 64 against 77 tok/s on predictable text),
   and no expert prefetch (its L1 ring is not given back when the traces are released): 15.2 against 14.9 ms a step.
 - The reply after a prefill is the demo's prefill reply, not the token-by-token one: for that prompt they part at

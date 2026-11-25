@@ -40,8 +40,9 @@ step (tt/pf_tiles.py). The decode's L1 weight staging and the prefill's programs
 traces are released before the prefill, and the reply's first six steps run eagerly and capture them again
 (Generator.begin_live). It needs
 - DRAM: about 1.05 GiB for the prefill's own tensors, 2 GiB of room for a layer's rebuilt experts and 0.26 GiB per
-  1024 tokens of a pass, so a ``--max-model-len`` below the largest: passes of 8192 tokens up to about 70K, of
-  4096 up to about 124K, of 2048 up to about 155K (`_prefill_chunk` picks, or says how much DRAM is short);
+  1024 tokens of a pass, so a ``--max-model-len`` below the largest. With a 128 MiB trace region: passes of 8192
+  tokens up to about 94K, of 4096 up to about 151K, of 2048 up to about 180K; at 196608 about 0.3 GiB is short
+  (`_prefill_chunk` picks, or says how much);
 - L1: a 48 KB kernel-config ring, ``"worker_l1_size": 1411136`` (the prefill's largest program leaves 57 KB of
   L1 free under the 56 KB ring, and the decode modules keep 58 KB), and decode without the expert prefetch, whose
   L1 ring is not given back when the traces are released: decode is about 0.3 ms a token slower in this mode.

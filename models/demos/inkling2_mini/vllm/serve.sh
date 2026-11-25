@@ -14,8 +14,8 @@
 #   SPEC=0             no speculative decode (it is on: greedy and sampled requests; needs the drafter weights)
 #   FAST=1             fast mode (own3-l8 experts)
 #   PREFILL=<tokens>   chunked prefill for new prompts of at least that many tokens (off). It implies SPEC=0, decodes
-#                      a little slower, and needs DRAM that a smaller CTX frees: CTX=65536 for passes of 8192 tokens
-#                      (the server says at start what it uses, or how much DRAM is short)
+#                      a little slower, and needs DRAM that a smaller CTX frees: about 0.3 GiB is short at 196608;
+#                      CTX=131072 runs passes of 4096 tokens (the server says at start what it uses or lacks)
 # and the model's own: INKLING_MODE, INKLING_CACHE_DIR, INKLING_CACHE, INKLING_SPEC_MAX_CTX (modes.py).
 set -e
 : "${INKLING_CKPT:?set INKLING_CKPT to the checkpoint directory (tokenizer, chat template)}"
