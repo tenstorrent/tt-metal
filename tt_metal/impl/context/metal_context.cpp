@@ -380,7 +380,9 @@ void MetalContext::teardown() {
         dprint_server_.reset();
     }
 
-    if (!get_cluster().is_mock_or_emulated() && !host_only_) {
+    // Also on a host-only context: with no server thread running, detach only closes the kernel-name files that
+    // kernel registration opened. Skipping it leaks two file descriptors per open.
+    if (!get_cluster().is_mock_or_emulated()) {
         watcher_server_->detach_devices();
     }
     watcher_server_.reset();
