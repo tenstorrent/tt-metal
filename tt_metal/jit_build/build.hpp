@@ -243,6 +243,8 @@ void queue_ahead_build(std::function<size_t()> build_fn);
 size_t wait_for_ahead_builds(bool drop_queued = false);
 // Whether a queued build has not finished yet.
 bool ahead_builds_pending();
+// Experiment: while held, queued builds are recorded but not started; releasing the hold starts them all.
+void hold_ahead_builds(bool hold);
 // Diagnostic: note a kernel ("<name>/<hash>") whose build a dry run queued, and take the ones noted for the first
 // time since the last call.
 void note_queued_ahead_build(std::string kernel);

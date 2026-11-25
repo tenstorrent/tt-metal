@@ -1337,7 +1337,29 @@ std::mutex ahead_builds_mutex;
 std::vector<std::shared_future<void>> ahead_builds;
 std::atomic<size_t> ahead_built{0};
 std::atomic<bool> drop_ahead_builds{false};
+// Experiment: while held, queued builds are kept here and not started (both under ahead_builds_mutex).
+bool ahead_builds_held = false;
+std::vector<std::function<void()>> held_ahead_builds;
+
+void submit_ahead_builds(std::vector<std::function<void()>> tasks) {
+    const std::lock_guard<std::mutex> lock(detail::GetExecutorMutex());
+    for (auto& task : tasks) {
+        detail::GetExecutor().silent_async(std::move(task));
+    }
+}
 }  // namespace
+
+void hold_ahead_builds(bool hold) {
+    std::vector<std::function<void()>> release;
+    {
+        const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
+        ahead_builds_held = hold;
+        if (!hold) {
+            release.swap(held_ahead_builds);
+        }
+    }
+    submit_ahead_builds(std::move(release));
+}
 
 void queue_ahead_build(std::function<size_t()> build_fn) {
     auto task = std::make_shared<std::packaged_task<void()>>([build_fn = std::move(build_fn)] {
@@ -1360,19 +1382,25 @@ void queue_ahead_build(std::function<size_t()> build_fn) {
     {
         const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
         ahead_builds.emplace_back(task->get_future());
+        if (ahead_builds_held) {
+            held_ahead_builds.emplace_back([task] { (*task)(); });
+            return;
+        }
     }
     // Onto the executor's own queue. detail::async() would run the build on this thread whenever every worker is
     // busy, and a dry run would then spend its time building instead of finding the next program.
-    const std::lock_guard<std::mutex> lock(detail::GetExecutorMutex());
-    detail::GetExecutor().silent_async([task] { (*task)(); });
+    submit_ahead_builds({[task] { (*task)(); }});
 }
 
 size_t wait_for_ahead_builds(bool drop_queued) {
     std::vector<std::shared_future<void>> builds;
+    std::vector<std::function<void()>> held;
     {
         const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
         builds.swap(ahead_builds);
+        held.swap(held_ahead_builds);  // a wait must not wait for builds that were never started
     }
+    submit_ahead_builds(std::move(held));
     drop_ahead_builds = drop_queued;
     for (auto& build : builds) {
         build.get();

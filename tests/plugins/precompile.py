@@ -249,8 +249,12 @@ def pytest_runtestloop(session):
     real_collect = gc.collect
     if not os.environ.get("PRECOMPILE_FULL_GC"):
         gc.collect = lambda generation=1: real_collect(min(generation, 1))
+    # Experiment, PRECOMPILE_BUILD=after: no kernel is built during the dry pass; everything it found is built when
+    # it ends, and the real pass starts once that is done.
+    build_after = os.environ.get("PRECOMPILE_BUILD") == "after"
     try:
         ttnn._ttnn.device.SetDryPass(True)
+        ttnn._ttnn.device.HoldQueuedBuilds(build_after)
         for i, item in enumerate(items):
             # log=False: no report of a dry body reaches the terminal, JUnit or -x. nextitem=None on the last item
             # tears every fixture down, so the real pass sets everything up again.
@@ -258,6 +262,8 @@ def pytest_runtestloop(session):
     finally:
         _STATE["dry"] = False
         gc.collect = real_collect
+        dry_seconds = time.monotonic() - start
+        ttnn._ttnn.device.HoldQueuedBuilds(False)
         ttnn._ttnn.device.SetDryPass(False)
         ttnn.set_fabric_config = real_set_fabric_config
         _restore(replaced)
@@ -266,8 +272,13 @@ def pytest_runtestloop(session):
     torch.set_rng_state(rng[2])
     for item, saved in zip(items, properties):
         item.user_properties[:] = saved
+    if build_after:
+        ttnn._ttnn.device.FinishQueuedBuilds(drop_queued=False)
+        print(
+            f"\nPRECOMPILE: builds after the dry pass took {time.monotonic() - start - dry_seconds:.1f} s", flush=True
+        )
     print(
-        f"\nPRECOMPILE: on ({why}). Dry pass over {len(items)} tests took {time.monotonic() - start:.1f} s "
+        f"\nPRECOMPILE: on ({why}). Dry pass over {len(items)} tests took {dry_seconds:.1f} s "
         f"({_STATE['bodies']} bodies, {_STATE['ended_early']} ended early, {_STATE['timed_out']} timed out; "
         f"{_STATE['body_seconds']:.1f} s in bodies). Kernels: {present} already present, "
         f"{_kernels_in_cache() - present} built so far; queued builds go on behind the real pass. "

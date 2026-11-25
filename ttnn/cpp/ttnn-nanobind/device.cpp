@@ -454,6 +454,10 @@ void device_module(nb::module_& m_device) {
         )doc");
     m_device.def("EndDryRun", &tt::tt_metal::experimental::dry_run::end, "End the dry run started by BeginDryRun.");
     m_device.def(
+        "HoldQueuedBuilds",
+        &tt::tt_metal::experimental::dry_run::hold_queued_builds,
+        "Experiment: while held (True), queued kernel builds are not started; False starts them all.");
+    m_device.def(
         "BlockedChipAccesses",
         &tt::tt_metal::experimental::dry_run::blocked_chip_accesses,
         "How many chip reads and writes were attempted, and blocked, on host-only devices in dry passes.");

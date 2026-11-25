@@ -60,6 +60,9 @@ struct Scope {
  */
 size_t finish_queued_builds(bool drop_queued = true);
 
+/** Experiment: while held, queued kernel builds are recorded but not started; releasing the hold starts them all. */
+void hold_queued_builds(bool hold);
+
 /** Diagnostic: the kernels ("<name>/<hash>") whose builds dry runs queued for the first time since the last call. */
 std::vector<std::string> take_queued_builds();
 
