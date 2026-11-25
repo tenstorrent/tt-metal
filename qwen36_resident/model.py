@@ -147,6 +147,9 @@ K_PATCH = int(os.environ.get("RESIDENT_KV_K_PATCH", "1"))
 # O-1c (default off until validated): row-group builds send the hub their partials as bfp8 batch x 32 tiles (half the
 # all-reduce's fabric bytes; streamer_common.hpp kHubBfp8, mlp_hub.cpp slot_bytes)
 HUB_BFP8 = os.environ.get("RESIDENT_HUB_BFP8", "0") == "1"  # (A/B: 0 leaves the write-back's k row truncated)
+# (with HUB_BFP8: the hub adds the residual in fp32 instead of chip 0's partial carrying it through bfp8; mlp_hub.cpp
+# kHubRes — RESIDENT_HUB_RES=0 for the A/B)
+HUB_RES = os.environ.get("RESIDENT_HUB_RES", "1") == "1"
 # O-2 (default off until validated): row-group builds overlap a layer's attention users (attn_common.hpp kAttnPipe)
 ATTN_PIPE = os.environ.get("RESIDENT_ATTN_PIPE", "0") == "1"
 SEM_m1, SEM_PART1 = 14, 15  # (O-2: the odd iterations' row-max / partial semaphores, attention cores only)
@@ -769,6 +772,9 @@ class ResidentModel:
         # (row groups: two attention tail cores, attn_common.hpp kTails; the chunk workers are the others)
         self.attn_tails = ATTN_TAILS if rows and groups > 1 and not verify else 1
         self.attn_pipe = ATTN_PIPE and rows and groups > 1 and not verify and self.attn_tails == 1
+        # (O-1c accuracy: with bfp8 hub partials the hub adds the residual; not the fc draft layer, whose first round
+        # has none)
+        self.hub_res = HUB_BFP8 and HUB_RES and groups > 1 and fc is None
         assert self.attn_tails in (1, 2)
         # with row groups the rows' positions live past the token state's x0 / rope (active_rows.hpp tok_pos_off);
         # one group keeps them in the head's words 1 .. batch
@@ -1482,7 +1488,10 @@ class ResidentModel:
             x_views = HIDDEN * B // (TILE * TILE)
             # (O-1c: the slots as bfp8 32x32 views of four batch x 32 tiles, streamer_writer.cpp)
             cbs.append(cb(0, hub_grid, 2 * n * x_views, *((ttnn.bfloat8_b, 1088) if HUB_BFP8 and groups > 1 else ())))
-            cbs.append(cb(2, hub_grid, x_views))
+            # (hub_res: an x entry per group, each the next round's residual; then the x0-written token: mlp_hub.cpp)
+            cbs.append(cb(2, hub_grid, (groups if self.hub_res else 1) * x_views))
+            if self.hub_res:
+                cbs.append(cb(5, hub_grid, 1, ttnn.uint32, 16))
             # (the feed: its candidates in fabric packets, mlp_hub.cpp cand_packets)
             cand_packets = -(-4 * self._cand_words // packet_bytes) if self.feed else 0
             free_headers = 4 if groups > 1 else 0  # (row groups: the slot-free signals, mlp_hub.cpp)
@@ -1773,6 +1782,8 @@ class ResidentModel:
                 ("kv_v_tile", TILE_BYTES[V_DT]),  # (attn_common.hpp kVTile: the V cache's tile, S0)
                 ("kv_k_tile", TILE_BYTES[K_DT]),  # (attn_common.hpp kKvTile: the K cache's tile, S0-8)
                 ("hub_bfp8", int(HUB_BFP8 and self.groups > 1)),  # (O-1c: bfp8 hub partials)
+                ("hub_res", int(self.hub_res)),  # (O-1c accuracy: the hub adds the residual, mlp_hub.cpp kHubRes)
+                ("tok_x0", TOK_X0),
                 ("attn_pipe", int(self.attn_pipe)),  # (attn_common.hpp kAttnPipe, O-2)
                 ("sem_m1", SEM_m1),
                 ("sem_part1", SEM_PART1),

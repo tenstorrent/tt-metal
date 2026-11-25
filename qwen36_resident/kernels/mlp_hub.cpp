@@ -152,6 +152,13 @@ constexpr uint32_t slot_bytes = kHubBfp8 ? vector_bytes / 2048 * 1088 : vector_b
 constexpr uint32_t slot_pages = vector_bytes / 2048;  // CB 0 pages (32x32 views) of one chip's slot
 constexpr uint32_t x_pages = vector_bytes / 2048;     // CB 2 pages of x
 static_assert(!kHubBfp8 || published, "bfp8 slots: the compute sums them");
+// O-1c accuracy (named arg hub_res): the residual is added here, in fp32 DEST, not folded into chip 0's bfp8 partial
+// — x (CB 2) holds an entry per active group (the k-th active group's: entry k), each round's x written over the
+// previous one, which the compute reads as the residual; x0 of the token state there first (named arg tok_x0, group g
+// at tok_x0 + g vector_bytes)
+constexpr bool kHubRes = get_named_compile_time_arg_val("hub_res") != 0;
+constexpr uint32_t kTokX0 = get_named_compile_time_arg_val("tok_x0");
+static_assert(!kHubRes || (kHubBfp8 && groups > 1), "the hub residual: row groups with bfp8 partials");
 // (row groups: the records go to the slots once every sub-round of the step is summed — the streamers wait for the
 // last slots semaphore first — so both parities' slots hold them; bf16 slots fit them in parity 0 alone)
 static_assert(
@@ -499,6 +506,19 @@ void kernel_main() {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(3)) = ag.n;
         cb_push_back(3, 1);
     }
+    if constexpr (kHubRes) {
+        // x0 of every active group into its residual entry, then the compute may start (CB 5)
+        const InterleavedAddrGen<true> tok0{.bank_base_address = tok_addr, .page_size = tok_bytes};
+        for (uint32_t k = 0; k < ag.n; k++) {
+            noc_async_read(
+                tok0.get_noc_addr(0, kTokX0 + ag.g[k] * vector_bytes), cb_base(2) + k * vector_bytes, vector_bytes);
+        }
+        noc_async_read_barrier();
+        cb_reserve_back(5, 1);
+        cb_push_back(5, 1);
+    }
+    if constexpr (groups > 1) {
+    }
     // sub-round s = round l, k-th active row group g (groups == 1: s == l): group g's partials all-reduced through
     // slot[s & 1], its x multicast to the streamers' x at group offset g
     // sub-round s: gather + send (the fabric part) and finish (the peers' slots in, sum, multicast). Row groups with
@@ -575,7 +595,7 @@ void kernel_main() {
                         (uint32_t)free_hdr[par][1], sizeof(PACKET_HEADER_TYPE));
                 }
             }
-            src = get_read_ptr(2);
+            src = kHubRes ? cb_base(2) + (s % ag.n) * vector_bytes : get_read_ptr(2);  // (kHubRes: entry k)
             bytes = vector_bytes;
             if (l + 1 == layers && arg0 != 0) {
                 const InterleavedAddrGen<true> dump{.bank_base_address = arg0, .page_size = vector_bytes};

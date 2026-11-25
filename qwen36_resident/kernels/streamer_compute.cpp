@@ -538,7 +538,7 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
 template <uint32_t E>
 // (in0_pages: the pages in0 moves per layer, groups x in0_tiles or, for o sharing the activation's memory, more)
 FORCE_INLINE void project_to_partial(uint32_t in0_cb, uint32_t in0_pages, uint32_t nd, uint32_t pout_off) {
-    if constexpr (chip == 0) {
+    if constexpr (chip == 0 && !kHubRes) {
         matmul<E>(in0_cb, cb_dout, nd, nd_max);
         cb_pop_front(in0_cb, in0_pages);
         add_residual(nd, pout_off);
@@ -615,7 +615,7 @@ void kernel_main() {
         const bool attn = is_attn(l);
         // mixer half
         mark(l, 0);
-        rmsnorm(nd, pout_off, kHInPlace && chip == 0);
+        rmsnorm(nd, pout_off, kHInPlace && chip == 0 && !kHubRes);
         mark(l, 1);
         if (attn) {
             matmul<kQkvg>(cb_h, cb_qkvz, nq_attn, kBlk);
@@ -631,7 +631,7 @@ void kernel_main() {
         mark(l, 4);
         // mlp half
         mark(l, 5);
-        rmsnorm(nd, pout_off, kHInPlace && chip == 0);
+        rmsnorm(nd, pout_off, kHInPlace && chip == 0 && !kHubRes);
         mark(l, 6);
         matmul<kGateUp>(cb_h, cb_g, 2 * ng, kBlk, cb_u, ng);
         cb_pop_front(cb_h, groups * Ht);

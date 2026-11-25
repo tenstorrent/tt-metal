@@ -108,6 +108,8 @@ constexpr uint32_t cb_part = kHubBfp8 ? 47 : 10;
 // batch mantissa bytes: 288 B at batch 8, not the 272 B tt-metal sizes it as — tests/bfp8_tiny_probe.py; ttnn's own
 // typecast config pads the exponents to 64 B)
 constexpr uint32_t kPartExpPad = 32;
+// O-1c accuracy (named arg hub_res): the hub adds the residual (mlp_hub.cpp), chip 0 sends its partial without it
+constexpr bool kHubRes = get_named_compile_time_arg_val("hub_res") != 0;
 constexpr uint32_t kPartTileBytes = kHubBfp8 ? kPartExpPad + kTileBytes / 2 : kTileBytes;
 constexpr uint32_t kBlkBytes = kBlk * kTileBytes;  // kBlkViews 32x32 bf16 tiles
 // 32x32 views of a column block that hold its first n tiles
