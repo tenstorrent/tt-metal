@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <algorithm>
@@ -164,8 +165,10 @@ void MetalContext::initialize(
 
     // Inside a dry pass the context is set up on the host only. Runs that watch or profile the device, and fabric
     // opens that launch routers, keep the real open.
+    // TT_METAL_DRY_REAL_OPEN=1 is a temporary switch for comparing the two kinds of open on one build.
     const bool host_only =
-        experimental::dry_run::in_pass() && !get_cluster().is_mock_or_emulated() && !rtoptions().get_watcher_enabled() &&
+        experimental::dry_run::in_pass() && std::getenv("TT_METAL_DRY_REAL_OPEN") == nullptr &&
+        !get_cluster().is_mock_or_emulated() && !rtoptions().get_watcher_enabled() &&
         !rtoptions().get_profiler_enabled() && !rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint) &&
         !(tt_fabric::is_tt_fabric_config(get_fabric_config()) &&
           has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC));
