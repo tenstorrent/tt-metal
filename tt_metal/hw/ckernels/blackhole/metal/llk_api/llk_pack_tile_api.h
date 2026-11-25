@@ -30,7 +30,7 @@ template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool s
 inline void llk_pack_init_body(
     const std::uint32_t pack_output, const std::uint32_t num_tiles, const std::uint32_t input_operand) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
-    const std::uint32_t output_id = get_output_id(pack_output);
+    const std::uint32_t output_id = llk_pack_config_output_id(get_output_id(pack_output));
 
     if constexpr (!skip_addrmod_config) {
         LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
