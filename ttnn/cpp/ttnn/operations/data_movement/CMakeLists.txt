@@ -119,6 +119,7 @@ target_sources(
             concat/device/concat_s2s_rm_program_factory.hpp
             concat/device/concat_s2s_tiled_program_factory.hpp
             concat/device/concat_tiled_unaligned_program_factory.hpp
+            concat/device/concat_tiled_row_shift_program_factory.hpp
             # copy/
             copy/copy_nanobind.hpp
             # data_movement nanobind

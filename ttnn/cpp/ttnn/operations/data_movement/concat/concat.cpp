@@ -304,6 +304,14 @@ ttnn::Tensor concat_native(
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
 
+    // A tile-layout row concat is handled natively by ConcatTiledRowShiftProgramFactory, whose program takes
+    // every row count at run time, whole tiles or not. Inputs whose rows are not whole tiles otherwise go
+    // through untilize -> row-major concat -> retilize, each of which builds a program per shape.
+    if (ttnn::prim::can_use_tiled_row_shift_concat(
+            input_tensors, static_cast<uint32_t>(dim), groups, mem_config, sub_core_grids)) {
+        return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
+    }
+
     // Issue #43371: When concat is on the last dim and the last dim is not buffer-aligned,
     // the fallback path transposes dims -2/-1 so that the (small) last dim moves to dim[-2]
     // and concat proceeds along the new last dim.  If dim[-2] is very large the transposed
