@@ -306,6 +306,10 @@ void RunCceMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<di
 // every entry and the final head are checked.
 void RunMultiWriterTest(
     MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool sem_wrap) {
+    const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+    if (grid.x == 0 || grid.y == 0) {
+        GTEST_SKIP() << "Tensix multi-writer ringbuf requires a non-empty compute grid";
+    }
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
