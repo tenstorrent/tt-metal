@@ -98,10 +98,12 @@ enum class HalL1MemAddrType : uint8_t {
     FW_STAGE,  // Always-on ethernet firmware execution-stage breadcrumb (eth_status_t.eth_fw_stage)
     TENSIX_FABRIC_CONNECTIONS,
     FABRIC_CONNECTION_LOCK,
-    ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)
-    L1_ECC_HALT,    // L1 ECC halt record and BRISC release code, l1_ecc_halt_slot_t (Blackhole Tensix only)
-    RING_BUF_HEAD,  // Watcher MPSC ring buffer head, outside the mailbox (Quasar dispatch only)
-    COUNT           // Keep this last so it always indicates number of enum options
+    ETH_PTP_TRACE,            // Runtime FW entry/exit PTP stamps (Blackhole only)
+    L1_ECC_HALT,              // L1 ECC halt record and BRISC release code, l1_ecc_halt_slot_t (Blackhole Tensix only)
+    RING_BUF_HEAD,            // Watcher MPSC ring buffer head, outside the mailbox (Quasar dispatch only)
+    ETH_LINK,                 // Ethernet-link slot, written before launch (Quasar only)
+    KERAUNOS_NOC_CHANNELS,    // KeraunosNocChannels of a Keraunos CCE, written before launch (Quasar Ethernet only)
+    COUNT                     // Keep this last so it always indicates number of enum options
 };
 
 enum class HalDramMemAddrType : uint8_t {
@@ -484,6 +486,7 @@ private:
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
+    bool eth_base_firmware_ = true;
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     // Whether this arch addresses its PCIE/DRAM non-worker cores through virtual coordinates
     // (Blackhole, Quasar) rather than physical ones (Wormhole). ETH is virtualized on every arch.
@@ -675,6 +678,9 @@ public:
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
+    // True when base Ethernet firmware runs on a linked (ACTIVE_ETH) core beside metal: its mailbox, routing info,
+    // retrain and link-status words exist. False on Quasar, whose linked Ethernet cores are Keraunos CCEs.
+    bool has_eth_base_firmware() const { return this->eth_base_firmware_; }
     const std::unordered_set<dev_msgs::AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }

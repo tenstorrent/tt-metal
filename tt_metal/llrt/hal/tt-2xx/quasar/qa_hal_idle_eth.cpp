@@ -6,6 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include <tt-metalium/math.hpp>
+#include "hostdev/keraunos_noc_channels.h"
 #include "hostdev/dev_msgs.h"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
@@ -41,7 +42,14 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     static_assert(PROCESSOR_COUNT == MEM_IERISC_LOCAL_HARTS);
     static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
+    static_assert(sizeof(KeraunosNocChannels) <= MEM_IERISC_NOC_CHANNELS_SIZE);
+    static_assert(MEM_IERISC_PACKET_HEADER_POOL_SIZE == MEM_PACKET_HEADER_POOL_SIZE);
     static_assert(MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS <= MEM_IERISC_L1_SIZE);
+    // The addresses the idle-Ethernet firmware and kernels are linked at; every router region sits above them.
+    static_assert(MEM_IERISC_SPA_ROUTES_BASE == 0x27c80 && MEM_IERISC_SPA_ROUTES_SIZE == 0x80);
+    static_assert(MEM_IERISC_KERNEL_CONFIG_BASE == 0x27d00 && MEM_IERISC_KERNEL_CONFIG_SIZE == 0x800);
+    static_assert(MEM_IERISC_KERNEL_BASE == 0x28500 && MEM_IERISC_KERNEL_SIZE == MEM_DM_KERNEL_SIZE);
+    static_assert(MEM_IERISC_ROUTING_TABLE_BASE == 0x88500);
 
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
@@ -59,7 +67,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_IERISC_KERNEL_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        tt::align(MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS, max_alignment);
+        tt::align(MEM_IERISC_UNRESERVED_BASE, max_alignment);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_IERISC_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_IERISC_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =
@@ -67,6 +75,12 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_IERISC_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SCRATCH;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERAUNOS_NOC_CHANNELS)] = MEM_IERISC_NOC_CHANNELS_BASE;
+    // The control plane writes routing info to every Ethernet core, linked or not, as on Blackhole, and the worker
+    // connection table to the idle ones a Keraunos chip runs workers on.
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
+        MEM_IERISC_FABRIC_CONNECTIONS_BASE;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -84,6 +98,10 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERAUNOS_NOC_CHANNELS)] = MEM_IERISC_NOC_CHANNELS_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
+        MEM_IERISC_FABRIC_CONNECTIONS_SIZE;
 
     assert_kernel_config_no_overlap(mem_map_bases, mem_map_sizes, HalL1MemAddrType::UNRESERVED, "ethernet");
 
@@ -92,7 +110,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;
     std::vector<uint8_t> processor_classes_num_fw_binaries;
     // An empty ethernet list leaves this slot with no processors. Nothing is built or loaded, and
-    // the active slot stays the on-package image.
+    // the active slot, a CCE whose Ethernet link has a peer, has no processors either.
     if (programmable) {
         std::vector<HalJitBuildConfig> processors;
         std::vector<std::pair<std::string, std::string>> names;
@@ -113,7 +131,8 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
         }
         processor_classes.push_back(std::move(processors));
         processor_classes_names.push_back(std::move(names));
-        processor_classes_num_fw_binaries.push_back(/*one image per CCE*/ MEM_IERISC_ETH_CCES);
+        // One image per CCE.
+        processor_classes_num_fw_binaries.push_back(MEM_IERISC_ETH_CCES);
     }
 
     return {

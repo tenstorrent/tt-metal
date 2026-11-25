@@ -30,7 +30,7 @@
 #include "internal/risc_attribs.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_IDLE_ERISC)
+#if defined(KERAUNOS_CCE)
 
 namespace experimental::keraunos {
 

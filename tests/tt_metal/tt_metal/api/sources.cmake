@@ -64,6 +64,7 @@ set(UNIT_TESTS_API_SOURCES
     test_tensor_prefetcher_signal.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
+    test_keraunos_noc_channels.cpp
     test_host_write_dma.cpp
     test_kernel_compile_cache.cpp
     test_kernel_creation.cpp

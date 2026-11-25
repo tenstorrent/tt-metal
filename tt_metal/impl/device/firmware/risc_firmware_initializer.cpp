@@ -38,6 +38,8 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_context.hpp"
+#include "hostdev/eth_link.h"
+#include "hostdev/keraunos_noc_channels.h"
 #include "hostdev/keraunos_spa_routes.h"
 #include "hostdev/mimir_cce_spa_routes.h"
 #include "hostdevcommon/common_values.hpp"
@@ -55,6 +57,12 @@ namespace {
 // True when this Quasar chip's soc descriptor lists ethernet cores.
 bool quasar_device_has_ethernet_cores(const Cluster& cluster, ChipId device_id) {
     return cluster.arch() == ARCH::QUASAR && !cluster.get_soc_desc(device_id).logical_eth_core_to_chan_map.empty();
+}
+
+// A Quasar chip with Ethernet cores whose descriptor lists them as Keraunos cores (keraunos.cores).
+bool quasar_device_has_keraunos_cores(const Cluster& cluster, ChipId device_id) {
+    return quasar_device_has_ethernet_cores(cluster, device_id) &&
+           !cluster.get_soc_desc(device_id).get_arch_descriptor().get_keraunos().cores.empty();
 }
 
 tt::umd::RiscType dram_core_reset_riscs(ARCH arch) {
@@ -164,18 +172,68 @@ std::optional<uint32_t> dram_channel_for_translated_core(const metal_SocDescript
     return std::nullopt;
 }
 
-// Mock devices reuse the on-disk firmware sources of a real arch's package.
-// We only ship sources for Wormhole and Blackhole today; Quasar mock has
-// no `tt-2xx/trisc.cc` etc. installed at the expected path, so calling
-// build_firmware() against a Quasar mock blows up in cc1plus with
-// "No such file or directory". Real silicon devices always have sources
-// available and bypass this check.
-bool mock_firmware_sources_available_for(tt::ARCH arch) {
-    switch (arch) {
-        case tt::ARCH::WORMHOLE_B0:
-        case tt::ARCH::BLACKHOLE: return true;
-        default: return false;
+// The Ethernet-link slot (HalL1MemAddrType::ETH_LINK) of linked Quasar Ethernet core `logical_eth` on `chip`. Fatal
+// when the cluster's link table has no peer for the core, or the peer has no keraunos.cores entry.
+EthLink quasar_eth_link_slot(const Cluster& cluster, ChipId chip, const CoreCoord& logical_eth) {
+    const auto& soc = cluster.get_soc_desc(chip);
+    const uint32_t chan = soc.logical_eth_core_to_chan_map.at(logical_eth);
+    EthLink slot{};
+    const auto& connections = cluster.get_ethernet_connections();
+    const auto chip_links = connections.find(chip);
+    TT_FATAL(
+        chip_links != connections.end() && chip_links->second.contains(chan),
+        "Chip {} Ethernet core {} (channel {}) is active, but the cluster's link table lists no peer for it",
+        chip,
+        logical_eth.str(),
+        chan);
+    const auto& [peer_chip, peer_chan] = chip_links->second.at(chan);
+    slot.peer_tile = cluster.get_soc_desc(peer_chip).get_keraunos_core_for_channel(peer_chan).hsio;
+    slot.valid = ETH_LINK_VALID;
+    return slot;
+}
+
+// The Ethernet channels (KeraunosNocChannels, hostdev/keraunos_noc_channels.h) of Keraunos chip `chip`, from its SoC
+// descriptor, the same for every core of the chip. Fatal when the chip has more channels than the record holds, a
+// core on a tile its cores word has no bit for, or a Keraunos core whose virtual coordinate is not
+// (KERAUNOS_NOC_CCE0_X + eth_cce, hsio), the rule the device resolves a core's own coordinate by.
+KeraunosNocChannels keraunos_noc_channels(const Cluster& cluster, ChipId chip) {
+    const auto& soc = cluster.get_soc_desc(chip);
+    const uint32_t num_channels = soc.get_num_eth_channels();
+    TT_FATAL(
+        num_channels <= KERAUNOS_NOC_CHANNELS_MAX,
+        "Chip {} has {} Ethernet channels, a Keraunos CCE resolves {}",
+        chip,
+        num_channels,
+        KERAUNOS_NOC_CHANNELS_MAX);
+    KeraunosNocChannels channels{};
+    channels.num_channels = num_channels;
+    for (uint32_t chan = 0; chan < num_channels; chan++) {
+        const tt::umd::KeraunosCore& core = soc.get_keraunos_core_for_channel(chan);
+        const CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+            chip, soc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL), CoreType::ETH);
+        TT_FATAL(
+            virtual_core.x == KERAUNOS_NOC_CCE0_X + core.eth_cce && virtual_core.y == core.hsio,
+            "Chip {} Ethernet channel {} (HSIO tile {}, CCE{}) is at virtual {}, not ({}, {})",
+            chip,
+            chan,
+            core.hsio,
+            core.eth_cce,
+            virtual_core.str(),
+            KERAUNOS_NOC_CCE0_X + core.eth_cce,
+            core.hsio);
+        const uint8_t entry = keraunos_noc_channel(core.hsio, core.eth_cce);
+        TT_FATAL(
+            core.hsio < KERAUNOS_NOC_CORES_MAX / 2,
+            "Chip {} Ethernet channel {} is on HSIO tile {}, a Keraunos CCE resolves tiles below {}",
+            chip,
+            chan,
+            core.hsio,
+            KERAUNOS_NOC_CORES_MAX / 2);
+        channels.channels[chan] = entry;
+        channels.cores |= 1u << entry;
     }
+    channels.valid = KERAUNOS_NOC_CHANNELS_VALID;
+    return channels;
 }
 
 int firmware_wait_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
@@ -323,14 +381,11 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             // depend on -- without them, JIT-compiling kernels on a mock device fails with
             // "non constant or forward reference address expression". So we run it for mock as
             // well as real devices, with two exceptions:
-            //   1. Mock devices whose arch has no firmware sources packaged (currently Quasar).
-            //      cc1plus would fatal on missing source files; mock kernel JIT on Quasar is not
-            //      yet supported and would require a separate sources fix.
+            //   1. Mock devices that skip kernel JIT (Cluster::mock_skips_kernel_jit()).
             //   2. Emule devices on any arch. Emule's kernel JIT uses an x86 toolchain, so the
             //      riscv firmware ELFs are never linked or consumed.
-            const bool skip_fw_build = cluster_.get_target_device_type() == tt::TargetDevice::Emule ||
-                                       (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
-                                        !mock_firmware_sources_available_for(cluster_.arch()));
+            const bool skip_fw_build =
+                cluster_.get_target_device_type() == tt::TargetDevice::Emule || cluster_.mock_skips_kernel_jit();
             if (!skip_fw_build) {
                 build_env_manager.build_firmware(device_id);
             }
@@ -552,14 +607,17 @@ void RiscFirmwareInitializer::clear_launch_messages_on_eth_cores(tt::ChipId devi
 }
 
 void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId device_id) {
+    // A Quasar Ethernet core is a Keraunos CCE: no base firmware to return to or to keep ERISC0 for.
+    const bool quasar_ethernet = quasar_device_has_ethernet_cores(cluster_, device_id);
     for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        if (rtoptions_.get_enable_2_erisc_mode()) {
+        if (rtoptions_.get_enable_2_erisc_mode() && hal_.has_eth_base_firmware()) {
             llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(
                 descriptor_->env_impl(), device_id, virtual_core);
         }
-        tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
+        tt::umd::RiscType reset_val = quasar_ethernet ? tt::umd::RiscType::ALL_NEO_DMS
+                                                      : tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
         cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
     }
 }
@@ -1484,7 +1542,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                     }
                 }
             }
-            launch_msg.kernel_config().mode() = (!rtoptions_.get_fast_dispatch() or is_idle_eth)
+            launch_msg.kernel_config().mode() = (!rtoptions_.get_fast_dispatch() or is_idle_eth or !hal_.has_eth_base_firmware())
                                                     ? dev_msgs::DISPATCH_MODE_HOST
                                                     : dev_msgs::DISPATCH_MODE_DEV;
             prepare_initial_launch_msg();
@@ -1522,6 +1580,31 @@ void RiscFirmwareInitializer::initialize_firmware(
                     }
                 }
             }
+            if (quasar_device_has_keraunos_cores(cluster_, device_id)) {
+                // A CCE resolves NOC addresses with KeraunosNocChannels and KeraunosSpaRoutes. An idle core has its
+                // routes from the block above; a linked core takes them here, at the same CCE-relative address.
+                const auto& soc_k = cluster_.get_soc_desc(device_id);
+                const KeraunosNocChannels channels = keraunos_noc_channels(cluster_, device_id);
+                cluster_.write_core(
+                    &channels,
+                    sizeof(channels),
+                    tt_cxy_pair(device_id, virtual_core),
+                    hal_.get_dev_addr(core_type, HalL1MemAddrType::KERAUNOS_NOC_CHANNELS));
+                if (!is_idle_eth) {
+                    const auto* keraunos_core = soc_k.find_keraunos_core(soc_k.translate_coord_to(
+                        tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0));
+                    TT_FATAL(
+                        keraunos_core != nullptr,
+                        "Chip {} Ethernet core {} has no keraunos.cores entry",
+                        device_id,
+                        virtual_core.str());
+                    const KeraunosSpaRoutes routes = keraunos_spa_routes_for_core(soc_k, *keraunos_core);
+                    const uint64_t routes_addr =
+                        hal_.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
+                        hal_.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+                    cluster_.write_core(&routes, sizeof(routes), tt_cxy_pair(device_id, virtual_core), routes_addr);
+                }
+            }
             if (quasar_ethernet) {
                 // All eight harts start together, and the completion word is 0. The L1 wipe leaves it at 0, so seed
                 // INIT or hart 0 treats the other harts as finished before they have written their slots.
@@ -1546,8 +1629,9 @@ void RiscFirmwareInitializer::initialize_firmware(
                 cluster_.write_core(data.data(), data.size(), tt_cxy_pair(device_id, virtual_core), ncrisc_halt_addr);
             }
 
+            // 2-ERISC mode is base firmware on ERISC0 releasing ERISC1; without base firmware the host launches.
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
-                !rtoptions_.get_enable_2_erisc_mode()) {
+                !rtoptions_.get_enable_2_erisc_mode() || !hal_.has_eth_base_firmware()) {
                 if (is_idle_eth && !quasar_ethernet) {
                     // Disable all ERISC interrupts on idle eth: base FW interrupts can corrupt PC when
                     // we switch to runtime FW. Must happen before we write PC and deassert.
@@ -1764,20 +1848,23 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     const bool has_quasar_ethernet = quasar_device_has_ethernet_cores(cluster_, device_id);
     std::unordered_set<CoreCoord> multi_risc_active_eth_cores;
 
-    for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
-        static std::vector<uint32_t> zero_vec_erisc_init(
-            hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) /
-                sizeof(uint32_t),
-            0);
+    // APP_SYNC_INFO is base Ethernet firmware's.
+    if (hal_.has_eth_base_firmware()) {
+        for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
+            static std::vector<uint32_t> zero_vec_erisc_init(
+                hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) /
+                    sizeof(uint32_t),
+                0);
 
-        CoreCoord virtual_core =
-            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+            CoreCoord virtual_core =
+                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
 
-        cluster_.write_core_immediate(
-            device_id,
-            virtual_core,
-            zero_vec_erisc_init,
-            hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
+            cluster_.write_core_immediate(
+                device_id,
+                virtual_core,
+                zero_vec_erisc_init,
+                hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
+        }
     }
 
     log_debug(tt::LogMetal, "Initializing active ethernet cores");
@@ -1787,6 +1874,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
+    const bool keraunos_ethernet = quasar_device_has_keraunos_cores(cluster_, device_id);
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
@@ -1799,6 +1887,25 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             hal_.get_dev_addr(
                 llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core),
                 HalL1MemAddrType::CORE_INFO));
+        if (keraunos_ethernet) {
+            // ACTIVE_ETH has one image, linked into CCE0's SRAM.
+            TT_FATAL(
+                cluster_.get_keraunos_eth_cce(device_id, virtual_core) == 0,
+                "Chip {} Ethernet core {} is CCE1 of its HSIO tile; a linked Ethernet core must be CCE0",
+                device_id,
+                eth_core.str());
+            const auto slot = quasar_eth_link_slot(cluster_, device_id, eth_core);
+            TT_FATAL(
+                hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK) == sizeof(slot),
+                "HAL Ethernet-link slot is {} B, the host writes {} B",
+                hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK),
+                sizeof(slot));
+            cluster_.write_core_immediate(
+                &slot,
+                sizeof(slot),
+                {static_cast<size_t>(device_id), virtual_core},
+                hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK));
+        }
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         if (!hal_.get_eth_fw_is_cooperative()) {
@@ -1876,7 +1983,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     cluster_.l1_barrier(device_id);
 
     for (const auto& worker_core : not_done_cores) {
-        if (multi_risc_active_eth_cores.contains(worker_core) && rtoptions_.get_enable_2_erisc_mode()) {
+        // Base firmware releases a 2-ERISC core itself; a core without base firmware is deasserted here.
+        if (multi_risc_active_eth_cores.contains(worker_core) && rtoptions_.get_enable_2_erisc_mode() &&
+            hal_.has_eth_base_firmware()) {
             continue;
         }
 

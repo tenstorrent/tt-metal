@@ -25,9 +25,10 @@ uint32_t get_trinity_l1_size();
 
 dev_msgs::Factory create_tensix_dev_msgs_factory();
 HalCoreInfoType create_tensix_mem_map(IpVariant variant);
-HalCoreInfoType create_active_eth_mem_map();
+HalCoreInfoType create_active_eth_mem_map(bool programmable);
 // programmable installs the eight-hart image. An empty ethernet list passes false, so this slot
-// has no processors and nothing is loaded. The active slot stays the on-package image.
+// has no processors and nothing is loaded. The active slot is a CCE whose Ethernet link has a peer, and
+// create_active_eth_mem_map builds it the same way, with the fabric router's HAL entries.
 HalCoreInfoType create_idle_eth_mem_map(bool programmable);
 HalCoreInfoType create_dispatch_mem_map(IpVariant variant);
 // drisc_l1_noc_offset 0 keeps the Mimir-local tag. A package ATT descriptor passes the CCE SRAM window.
