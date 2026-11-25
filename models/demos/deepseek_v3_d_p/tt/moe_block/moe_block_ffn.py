@@ -96,11 +96,14 @@ class MoEBlockFfnOptions:
         L1), "shared" (slot grants from one free list), "flat_cores" (rings in the flat expert cores' free L1),
         "shared_flat_cores" (shared's grants on flat_cores' slots); None: the planner's (rings or flat_cores, ranked).
     sp_axis: the mesh axis SP runs on (1: the 4x4 tray-half stage, SP on the axis-1 ring, TP on the axis-0 line); the
-        block's ops run on the transposed mesh (MoEBlockConfig.sp_axis)."""
+        block's ops run on the transposed mesh (MoEBlockConfig.sp_axis).
+    routed_weights: the routed experts' weight format (MoEDtypes.routed_weights): bfloat4_b (TtMoe's cache holds them
+        so) or bfloat8_b (from host weights only). The block's ops and this layer's weight layout both follow it."""
 
     combine_snap: Optional[float] = None
     combine_landing: Optional[str] = None
     sp_axis: int = 0
+    routed_weights: ttnn.DataType = ttnn.bfloat4_b
 
 
 @dataclass
@@ -272,6 +275,7 @@ class TtMoEBlockFfn:
             # (the model's slab, the one its mesh opened L1_SMALL for: moe_impl.moe_block_words_slab)
             cfg.words_slab_bytes = self.words_slab
             dtypes = moe_block_utils.MoEDtypes()
+            dtypes.routed_weights = opts.routed_weights
             t0 = time.time()
             res = moe_block_utils.MoEBlockResources(self.mesh, self.dims, cfg, dtypes)
             block = MoEBlock(
@@ -333,7 +337,7 @@ class TtMoEBlockFfn:
             E // N,
             E,
             kw["max_tokens_per_expert"],
-            weights_bf8=False,
+            weights_bf8=block.dtypes.routed_weights == ttnn.bfloat8_b,
             pin=1,
             layout=kw["layout"],
         ).as_dict()
@@ -344,7 +348,8 @@ class TtMoEBlockFfn:
         * the head's (prepare_moe_head_weights): its planned layout's GX x GY matmul cores (the regions, GY K blocks
           dealt round-robin over a column's cores), MT (the gate / up and down pass widths) and K step KB (the blocks'
           K rows), and the shared expert's weight dtype - not NCH or NIT (row chunks / router iterations);
-        * the routed experts' (flat_gather): the flat plan's _ROUTED_PACKING fields.
+        * the routed experts' (flat_gather): the flat plan's _ROUTED_PACKING fields and their weight dtype (the plan's
+          tile bytes and the laid-out tensors' format).
         The tail's W' (prepare_moe_tail_weights) is laid out by the engine's columns and K ranges, from the grid and
         the model's dims - the same at every chunk."""
         fit = moe_block_utils.plan_moe_head(block.resources, block.dtypes, block.accumulators)
@@ -360,13 +365,13 @@ class TtMoEBlockFfn:
         flat = self._routed_layout(block)
         routed = tuple(
             (k, tuple(v) if isinstance(v, (list, tuple)) else v) for k in self._ROUTED_PACKING for v in [flat.get(k)]
-        )
+        ) + (("routed_weights", str(block.dtypes.routed_weights)),)
         return head, routed
 
     def _routed(self, block, sources=None):
         """This layer's flat expert tensors (gidx, w_gu, w_d), laid out on the device from TtMoe's bfp4 cache - or from
         sources(experts): the same plain sources (s = le * 3 + gate / up / down, [1, 1, in, out] bfp4 a chip, DRAM) made
-        some other way (_host_sources)."""
+        some other way (_host_sources), in the block's routed weight dtype."""
         fw = flat_weights_module()
         R, C = tuple(self.mesh.shape)
         N, E = R * C, self.dims.num_experts
@@ -374,7 +379,8 @@ class TtMoEBlockFfn:
         kw = block.expert_kw
         lay = self._routed_layout(block)
         lo = kw["layout"]
-        key = (Hr, I, epc, tuple(lo.key()), kw["max_tokens_per_expert"])
+        wdt = block.dtypes.routed_weights  # (the plan's tile bytes come from it: the face maps depend on it too)
+        key = (Hr, I, epc, tuple(lo.key()), kw["max_tokens_per_expert"], str(wdt))
         # (the layer's sources go to DRAM GATHER_EXPERTS local experts at a time and are freed after their gather:
         # all 3 epc of them next to the laid-out dest held one layer's routed weights twice - 65 MB a bank on K3, which
         # the last layer of an SC4 stage at 100 slots did not have)
@@ -391,12 +397,15 @@ class TtMoEBlockFfn:
             )
         shapes = fw.flat_weight_shapes(Hr, I, epc, lay)
         dst = {
-            n: fw.uninitialized_bank_sharded(*shapes[n], lay["dram_banks"], ttnn.bfloat4_b, self.mesh)
-            for n in ("w_gu", "w_d")
+            n: fw.uninitialized_bank_sharded(*shapes[n], lay["dram_banks"], wdt, self.mesh) for n in ("w_gu", "w_d")
         }
         if sources is not None:
             cache = "host weights"  # (the log's label: no TtMoe cache, no checkpoint looked up)
         else:
+            assert wdt == ttnn.bfloat4_b, (
+                f"MoE block layer {self.layer_idx}: routed weights {wdt}, but TtMoe's cache holds bfloat4_b experts "
+                "(give host weights for another format)"
+            )
             cache = self.cache
             if cache is None:
                 assert self.adapter is not None, "MoE block: a model without an adapter gives its cache_path"
@@ -413,10 +422,13 @@ class TtMoEBlockFfn:
         for e0, e1, sub in batches:
             t1 = time.time()
             srcs = (
-                sources(range(e0, e1))
+                sources(range(e0, e1), wdt)
                 if sources is not None
                 else device_sources(self.mesh, self.layer_idx, epc, cache, experts=range(e0, e1))
             )
+            # (flat_gather copies pages: a source in another format than the dest would be laid out as garbage)
+            bad = sorted({str(t.dtype) for t in srcs if t.dtype != wdt})
+            assert not bad, f"MoE block layer {self.layer_idx}: sources in {bad}, laid out as {wdt}"
             t2 = time.time()
             for n, (rows, fm) in sub.items():
                 gather(self.mesh, srcs, fm, dst[n], pages=rows)
@@ -440,10 +452,11 @@ class TtMoEBlockFfn:
         )
         return gidx, dst["w_gu"], dst["w_d"]
 
-    def _host_sources(self, experts):
+    def _host_sources(self, experts, dtype=ttnn.bfloat4_b):
         """The state dict's routed experts as flat_gather's plain sources (device_sources' layout): per local expert le
-        and projection, chip n's expert n * epc + le transposed to [in, out], bfp4 in DRAM - a batch of experts at a
-        time, so the host holds one projection of every chip at once (not the layer packed)."""
+        and projection, chip n's expert n * epc + le transposed to [in, out], in dtype (the block's routed weight
+        format) in DRAM - a batch of experts at a time, so the host holds one projection of every chip at once (not the
+        layer packed)."""
         R, C = tuple(self.mesh.shape)
         N = R * C
         epc = self.dims.num_experts // N
@@ -463,7 +476,7 @@ class TtMoEBlockFfn:
                 srcs.append(
                     ttnn.from_torch(
                         x,
-                        dtype=ttnn.bfloat4_b,
+                        dtype=dtype,
                         layout=ttnn.TILE_LAYOUT,
                         device=self.mesh,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
