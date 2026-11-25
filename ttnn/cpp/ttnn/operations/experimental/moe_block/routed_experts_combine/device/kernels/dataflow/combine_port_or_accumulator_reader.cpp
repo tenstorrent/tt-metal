@@ -36,6 +36,8 @@
 #include "combine_options.hpp"
 #include "../combine_names.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/combine_plan_words.hpp"
+// (the accumulator role's quantized rows: at file scope here, not inside its namespace below)
+#include "quantized_row_stage.hpp"
 
 namespace port_role {
 #define COMBINE_ROLE_FUNCTION_NAME role_main

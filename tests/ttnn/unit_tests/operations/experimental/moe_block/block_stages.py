@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_dims, moe_block_w
 from block_cases import MESHES, MODELS
 from models.demos.deepseek_v3_d_p.tt.moe_block.flat_gather import flat_weights_module
 from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import MoEBlock
+from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import routed_y_quant_config
 
 moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
@@ -185,6 +186,8 @@ class BlockStages:
             chunk_tokens=case.chunk, num_links=2, combine_snap=SNAP, persist_l1_small=True
         )
         cfg.words_slab_bytes = moe_block_words_slab(model.cfg)
+        # (the routed rows' wire format: MOE_ROUTED_Y_QUANT=fp8|int8, MOE_ROUTED_Y_QUANT_BLOCK=32|64|96; bf16 by default)
+        cfg.routed_y_quant, cfg.routed_y_quant_block = routed_y_quant_config()
         self.dtypes = moe_block_utils.MoEDtypes()
         self.res = moe_block_utils.MoEBlockResources(mesh, d, cfg, self.dtypes)
         self.block = MoEBlock(mesh, self.res, dtypes=self.dtypes, layout=layout)

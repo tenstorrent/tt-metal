@@ -53,11 +53,15 @@ namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
 // Circular buffer indices on the combine's cores (disjoint from the flat expert's cores; all bound to the arena).
 inline constexpr uint8_t kCbInj = 0, kCbRow = 1, kCbMeta = 2, kCbTab = 3, kCbAcc = 4, kCbOut = 5, kCbW = 6;
+inline constexpr uint8_t kCbFac = 7;  // (quantized fp8 rows: the accumulators' factor tiles, quantized_row_stage.hpp)
 
 // What the combine is planned from (k3 TtK3TokenSplitMoE.__init__: combine_auto on the flat plan's free cores).
 struct CombinePlanInputs {
     uint32_t home_tokens = 0;                         // home tokens a chip (S)
     uint32_t row_elements = 0;                        // row width (bf16 elements): the routed width Hr (W)
+    // the rows' format (common/kernels/quantized_row.hpp: 0 bf16) and their producers (the flat expert's down cores)
+    uint32_t row_format = 0;
+    uint32_t row_producers = 0;
     std::vector<tt::tt_metal::CoreCoord> free_cores;  // logical cores the flat plan leaves free (row-major)
     uint32_t arena_bytes = 0;                         // the combine's L1 budget a core (exchange_arena_bytes)
     std::optional<uint32_t> accumulator_count;        // the accumulator count the MoE head planned (pins A)
@@ -121,6 +125,8 @@ struct CombinePlan {
     // (CB_OUT), weights (CB_W)
     uint32_t row_cb_offset = 0, meta_cb_offset = 0, accumulator_fp32_offset = 0, output_cb_offset = 0,
              weight_cb_offset = 0;
+    // quantized rows: the fp8 factor CB, the reader's cells scratch (a row in flight's cells each)
+    uint32_t factor_cb_offset = 0, cells_scratch_offset = 0;
     uint32_t local_ring_offset = 0;  // the accumulators' local ring
 
     PortCores port_core;  // (chip, dir, link) -> logical core

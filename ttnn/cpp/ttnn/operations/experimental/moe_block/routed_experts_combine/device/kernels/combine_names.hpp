@@ -72,6 +72,13 @@ inline constexpr const char* kOutputCb = "output_cb";
 // ---- shapes ----
 inline constexpr const char* kRowBytes = "row_bytes";
 inline constexpr const char* kRowTiles = "row_tiles";
+// the rows' format (common/kernels/quantized_row.hpp: quantized_row::Format), values and producers a row; the fp8
+// factor CB; the accumulator reader's cells scratch (arena-relative: a row in flight's cells each)
+inline constexpr const char* kRowFormat = "row_format";
+inline constexpr const char* kRowElements = "row_elements";
+inline constexpr const char* kRowProducers = "row_producers";
+inline constexpr const char* kFactorCb = "factor_cb";
+inline constexpr const char* kCellsScratchOffset = "cells_scratch_offset";
 inline constexpr const char* kLandingSlotBytes = "landing_slot_bytes";
 inline constexpr const char* kInjectionSlotBytes = "injection_slot_bytes";
 inline constexpr const char* kLandingSlotsPerAccumulator = "landing_slots_per_accumulator";

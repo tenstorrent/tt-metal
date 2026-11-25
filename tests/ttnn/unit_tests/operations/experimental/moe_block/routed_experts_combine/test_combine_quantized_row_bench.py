@@ -102,7 +102,12 @@ def golden(y, gates, fmt, block, n_rows):
     return (counts.float() * Q).to(torch.bfloat16), ref
 
 
-def run(device, fmt, block=32, n_rows=256, fidelity=ttnn.MathFidelity.HiFi4, seed=0):
+ACCUMULATOR_COMPUTE = "ttnn/cpp/ttnn/operations/experimental/moe_block/routed_experts_combine/device/kernels/compute/accumulator_compute.cpp"
+
+
+def run(device, fmt, block=32, n_rows=256, fidelity=ttnn.MathFidelity.HiFi4, seed=0, accumulator=False):
+    """accumulator: the combine's own accumulator_compute.cpp (its named args, the reader speaking its meta protocol)
+    instead of the bench's compute kernel."""
     y, gates = make_rows(seed)
     sb = slot_bytes(fmt)
     t_in = ttnn.from_torch(
@@ -139,7 +144,7 @@ def run(device, fmt, block=32, n_rows=256, fidelity=ttnn.MathFidelity.HiFi4, see
         cb(1, ttnn.bfloat16, 2048, 2),
         cb(2, ttnn.uint16, 2048, 2 * ROW_TILES),  # (fp8's FP16 factors: the JIT takes no FP16 CB next to BF16 ones)
         cb(3, ttnn.uint32, 64, 4),
-        cb(10, ttnn.uint32, sb, POOL),
+        cb(10, ttnn.uint32, sb, POOL + 1),  # (the pool, then the reader's cells scratch)
         cb(16, ttnn.bfloat16, 2048, 2 * ROW_TILES),
         cb(24, ttnn.int32, 4096, TOKENS * ROW_TILES),
     ]
@@ -156,7 +161,7 @@ def run(device, fmt, block=32, n_rows=256, fidelity=ttnn.MathFidelity.HiFi4, see
         ttnn.KernelDescriptor(
             kernel_source=f"{KERNELS}/combine_consume_reader.cpp",
             core_ranges=core,
-            compile_time_args=[f, n_rows, POOL, sb, H, PRODUCERS, TOKENS]
+            compile_time_args=[f, n_rows, POOL, sb, H, PRODUCERS, TOKENS, int(accumulator)]
             + ttnn.TensorAccessorArgs(t_in).get_compile_time_args(),
             runtime_args=reader_rt,
             config=ttnn.ReaderConfigDescriptor(),
@@ -176,6 +181,27 @@ def run(device, fmt, block=32, n_rows=256, fidelity=ttnn.MathFidelity.HiFi4, see
             config=compute_config,
         ),
     ]
+    if accumulator:
+        compute = ttnn.KernelDescriptor(
+            kernel_source=ACCUMULATOR_COMPUTE,
+            core_ranges=core,
+            compile_time_args=[],
+            runtime_args=[],
+            config=compute_config,
+        )
+        compute.named_compile_time_args = [
+            ("row_cb", 0),
+            ("weight_cb", 1),
+            ("factor_cb", 2),
+            ("meta_cb", 3),
+            ("output_cb", 16),
+            ("accumulator_cb", 24),
+            ("row_tiles", ROW_TILES),
+            ("max_tokens_per_accumulator", TOKENS),
+            ("snap_step_bits", 0x38800000),  # q = 2^-14
+            ("row_format", f),
+        ]
+        kernels[2] = compute
     ttnn.generic_op([t_in, t_out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
     got = ttnn.to_torch(t_out)
     want, ref = golden(y, gates, fmt, block, n_rows)
@@ -197,11 +223,13 @@ CASES = [
 ]
 
 
+@pytest.mark.parametrize("accumulator", [False, True], ids=["bench", "accumulator_compute"])
 @pytest.mark.parametrize("fmt, block", CASES)
-def test_combine_quantized_row_consume(device, fmt, block):
+def test_combine_quantized_row_consume(device, fmt, block, accumulator):
+    """accumulator_compute: the combine's own accumulator_compute.cpp on the staged rows."""
     if ttnn.get_arch_name() != "blackhole":
         pytest.skip("Blackhole only")
-    got, want, ref = run(device, fmt, block)
+    got, want, ref = run(device, fmt, block, accumulator=accumulator)
     diff, max_ulp, rel = compare(got, want, ref)
     logger.info(
         f"{fmt} 1x{block}: {diff} of {got.numel()} outputs differ from the golden (max {max_ulp} bf16 ulp); "
