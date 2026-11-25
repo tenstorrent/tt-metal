@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 
@@ -71,6 +71,7 @@ WatcherNodeRanges MakeWatcherNodeRanges(
 
 ProgramResources RegisterResources(
     distributed::MeshDevice& mesh_device,
+    const distributed::MeshCoordinateRange& devices,
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     const KernelRiscMaskMap& risc_masks,
@@ -96,6 +97,7 @@ ProgramResources RegisterResources(
 
     WireDFBAliases(spec, resources.dfbs.id, program_impl);
     resources.semaphores = RegisterSemaphores(spec, collected, metal_env, program_impl);
+    resources.fabric_connections = RegisterFabricConnections(mesh_device, devices, spec, program_impl);
     resources.watcher_node_ranges = MakeWatcherNodeRanges(mesh_device, spec, collected, metal_env);
     return resources;
 }

@@ -39,8 +39,8 @@
 
 #include <cstddef>
 #include <string_view>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include <cstdint>
 #include <limits>

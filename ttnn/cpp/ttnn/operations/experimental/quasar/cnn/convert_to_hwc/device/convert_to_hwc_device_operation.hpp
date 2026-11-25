@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <functional>
+#include <optional>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "convert_to_hwc_program_factory.hpp"
+
+#include "convert_to_hwc_device_operation_types.hpp"
+
+namespace ttnn::experimental::prim::qsr {
+
+struct ConvertToHWCDeviceOperation {
+    using operation_attributes_t = ConvertToHwcParams;
+    using tensor_args_t = ConvertToHwcInputs;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<ConvertToHWCProgramFactory>;
+
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+};
+
+}  // namespace ttnn::experimental::prim::qsr
+
+namespace ttnn::prim::qsr {
+
+ttnn::experimental::prim::qsr::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
+    const Tensor& input, const tt::tt_metal::MemoryConfig& memory_config, const tt::tt_metal::DataType& dtype);
+
+}  // namespace ttnn::prim::qsr

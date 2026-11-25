@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 
 namespace tt::tt_metal::experimental::tt_fabric {

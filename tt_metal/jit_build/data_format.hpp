@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 #include <span>
-#include <tt-metalium/tt_backend_api_types.hpp>     // for DataFormat
+#include <tt-metalium/data_formats/data_format.hpp>  // for DataFormat
 #include <tt-umd/types/arch.hpp>                // for ARCH
 
 namespace tt::tt_metal {

@@ -7,7 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "common/executor.hpp"
 #include "device/firmware/firmware_initializer.hpp"
 #include "impl/context/context_descriptor.hpp"

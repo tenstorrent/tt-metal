@@ -15,7 +15,6 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -51,7 +50,7 @@ inline void calculate_gelu_appx() {
         sfpi::l_reg[GELU_APPX_HALF_LREG] = half;
     }
     // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), lut pass r+1, mad pass r+1.
-    lltt::record(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN);
+    TTI_REPLAY(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN, 0, 0, 0, 1);
     {
         sfpi::vFloat half = sfpi::l_reg[GELU_APPX_HALF_LREG];
         sfpi::vFloat result = sfpi::l_reg[GELU_APPX_RESULT_LREG];
@@ -63,7 +62,7 @@ inline void calculate_gelu_appx() {
     }
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN);
+        TTI_REPLAY(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN, 0, 0, 0, 0);
     }
     sfpi::dst_reg[0].mode(ADDR_MOD_6) = sfpi::vFloat(sfpi::l_reg[GELU_APPX_RESULT_LREG]);
 }
@@ -76,7 +75,7 @@ inline void calculate_gelu_appx() {
 // Three active regions (plus zero default):
 //   x >= 2.78125:                  Identity (result = x)
 //   -3.125 <= x < 2.78125:         Core CDF polynomial (degree-13 in u=x²)
-//   -5.54259443 < x < -3.125:      Moroz exp_21f: GELU = x · round_to_grid(H), H = exp(-x²/2)·corr_H
+//   -5.54259443 < x < -3.125:      Moroz exp_21f: GELU = x · round_to_grid(H), H = 2^(Q(x) - 127)
 //   x <= -5.54259443:               Zero (matches torch.gelu BF16 saturation)
 //
 // Deep-tail grid rounding: in the deep tail (-5.54259443, -4.828125] torch computes
@@ -92,26 +91,32 @@ inline void calculate_gelu_appx() {
 // v_if/v_and narrowing: widest region first, each v_and overwrites for narrower set.
 // =============================================================================
 
-// Degree-13 CDF polynomial for Phi(x) over [-3.125, 2.78125]
-// Phi(x) = 0.5 + x * p(x²); only odd powers, evaluated via u=x² Horner (7 MADs).
-// Minimax-fitted with BF16-ULP weighting → MaxULP = 0.87 < 1.
-constexpr float GELU_CDF_CORE_C0 = 5.000000000e-01f;
-constexpr float GELU_CDF_CORE_C1 = 3.9894227818e-01f;
-constexpr float GELU_CDF_CORE_C3 = -6.6361041488e-02f;
-constexpr float GELU_CDF_CORE_C5 = 9.7720050615e-03f;
-constexpr float GELU_CDF_CORE_C7 = -1.0717806322e-03f;
-constexpr float GELU_CDF_CORE_C9 = 8.1812159812e-05f;
-constexpr float GELU_CDF_CORE_C11 = -3.8082057209e-06f;
-constexpr float GELU_CDF_CORE_C13 = 7.9821413868e-08f;
+// Every constant is reloaded each pass: one SFPLOADI if it is exact in bf16 or fp16a, two otherwise.
+// So all coefficients are fitted on those grids, except the four marked Prgm, which gelu_init puts in
+// the programmable constant registers. Fitted on all bf16 inputs for the fewest results that differ
+// from torch: 37 of 58298 normal inputs, each by 1 ULP.
 
-// Degree-3 H-form correction polynomial for the exp-based region (-5.54259443, -3.125].
-// H(x) = ½·erfc(|x|/√2) ≈ exp(-x²/2) · corr_H(x), and GELU(x) = x · H(x).
-// Fitted (uniform relative error) so the deep-tail snap is exact and the smooth
-// region stays ULP ≤ 1. See deep-tail snap below for why the H-form matters.
-constexpr float GELU_HCORR_C0 = 3.0369991064e-01f;
-constexpr float GELU_HCORR_C1 = 9.5413386822e-02f;
-constexpr float GELU_HCORR_C2 = 1.3809983619e-02f;
-constexpr float GELU_HCORR_C3 = 7.5950479368e-04f;
+// Degree-13 CDF polynomial for Phi(x) over [-3.125, 2.78125]
+// Phi(x) = 0.5 + x * p(x²); only odd powers.
+constexpr float GELU_CDF_CORE_C0 = 5.000000000e-01f;
+constexpr float GELU_CDF_CORE_C1 = 3.9887374640e-01f;    // Prgm0
+constexpr float GELU_CDF_CORE_C3 = -6.6067621112e-02f;   // Prgm1
+constexpr float GELU_CDF_CORE_C5 = 9.5703462139e-03f;    // Prgm2
+constexpr float GELU_CDF_CORE_C7 = -1.0137557983e-03f;   // fp16a
+constexpr float GELU_CDF_CORE_C9 = 7.3492527008e-05f;    // fp16a
+constexpr float GELU_CDF_CORE_C11 = -3.2186508179e-06f;  // bf16
+constexpr float GELU_CDF_CORE_C13 = 6.3329935074e-08f;   // bf16
+
+// Exp region: H(x) = ½·erfc(|x|/√2) = 2^(Q(x) - 127), Q quadratic in x (log2 error 1.7e-3).
+constexpr float GELU_EXP_Q0 = 1.2540007019e+02f;   // Prgm3
+constexpr float GELU_EXP_Q1 = 5.7226562500e-01f;   // bf16
+constexpr float GELU_EXP_Q2 = -6.9091796875e-01f;  // fp16a
+// 2^frac ≈ 1 + C1·m + C2·m², m the 23-bit mantissa as an integer.
+constexpr float GELU_EXP_C1 = 7.8231096268e-08f;  // bf16
+constexpr float GELU_EXP_C2 = 4.7739590059e-15f;  // bf16
+
+// Same bf16 inputs as -5.54259443 (the first x where libm erff = -1), but fp16a-exact.
+constexpr float GELU_SAT_BF16 = -5.546875f;
 
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
@@ -119,21 +124,28 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
     sfpi::vFloat x2 = x * x;
 
-    v_if(x > -5.54259443f) {
-        // Shared smooth H ≈ ½·erfc(|x|/√2) via Moroz exp_21f · corr_H.
-        constexpr float NEG_HALF_ONE_LN2 = -0.72134752044f;  // -0.5 / ln(2)
-        sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
+    v_if(x > GELU_SAT_BF16) {
+        // Core polynomial first, as an interleaved even/odd split in x⁴, so its MADs overlap the exp
+        // chain below. PolynomialEvaluator's split of 7 coefficients would add a C11 + x⁴·0 MAD.
+        sfpi::vFloat x4 = x2 * x2;
+        sfpi::vFloat even = GELU_CDF_CORE_C9 + x4 * GELU_CDF_CORE_C13;
+        sfpi::vFloat odd = GELU_CDF_CORE_C7 + x4 * GELU_CDF_CORE_C11;
+        even = sfpi::vConstFloatPrgm2 + x4 * even;
+        odd = sfpi::vConstFloatPrgm1 + x4 * odd;
+        even = sfpi::vConstFloatPrgm0 + x4 * even;
+        sfpi::vFloat odd_poly = even + x2 * odd;
+        sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
+
+        // H = 2^(Q(x) - 127) via Moroz exp_21f.
+        sfpi::vFloat xlog2 = PolynomialEvaluator::eval(x, sfpi::vConstFloatPrgm3, GELU_EXP_Q1, GELU_EXP_Q2);
 
         sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
         sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
         sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
         sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
-        frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
-        sfpi::vFloat exp_val = sfpi::setexp(frac, exponential_part);
-
-        sfpi::vFloat H =
-            exp_val * PolynomialEvaluator::eval(x, GELU_HCORR_C0, GELU_HCORR_C1, GELU_HCORR_C2, GELU_HCORR_C3);
+        frac = PolynomialEvaluator::eval(frac, 1.0f, GELU_EXP_C1, GELU_EXP_C2);
+        sfpi::vFloat H = sfpi::setexp(frac, exponential_part);
 
         // Exp region (-5.54259443, -3.125]: GELU = x · round_to_grid(H).
         // Round H to the nearest multiple of 2⁻²⁵: adding 0.375 = (2²³+2²²)·2⁻²⁵ shifts H's
@@ -151,16 +163,6 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         // itself on Quasar (issue #50208), and each fit is closed at its own end anyway: the H-form
         // covers (-5.54259443, -3.125] and the core polynomial [-3.125, 2.78125].
         v_and(x > -3.125f);
-        sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
-            x2,
-            GELU_CDF_CORE_C1,
-            GELU_CDF_CORE_C3,
-            GELU_CDF_CORE_C5,
-            GELU_CDF_CORE_C7,
-            GELU_CDF_CORE_C9,
-            GELU_CDF_CORE_C11,
-            GELU_CDF_CORE_C13);
-        sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
         result = x * phi;
 
         // Identity region x > 2.78125.
@@ -199,8 +201,13 @@ inline void gelu_init() {
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         _init_reciprocal_<false>();
+    } else {
+        // BF16 accurate mode: the full-fp32 coefficients of calculate_gelu_piecewise.
+        sfpi::vConstFloatPrgm0 = GELU_CDF_CORE_C1;
+        sfpi::vConstFloatPrgm1 = GELU_CDF_CORE_C3;
+        sfpi::vConstFloatPrgm2 = GELU_CDF_CORE_C5;
+        sfpi::vConstFloatPrgm3 = GELU_EXP_Q0;
     }
-    // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
 }
 
 // FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.

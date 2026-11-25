@@ -12,10 +12,10 @@
 
 #include "moreh_norm_backward_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>

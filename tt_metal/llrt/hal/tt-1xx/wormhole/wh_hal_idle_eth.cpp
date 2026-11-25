@@ -13,7 +13,7 @@ using namespace tt::tt_metal::wormhole::idle_eth;
 #include <cstdint>
 
 #include "dev_mem_map.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include <tt-umd/types/core_coordinates.hpp>

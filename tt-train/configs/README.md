@@ -198,9 +198,9 @@ Optional configuration for pipeline parallelism:
 | `blocks_per_rank` | dict | Mapping of rank ID to number of blocks |
 
 ### Training Mode Effects
-- **Three-tier training**: When `enabled=true` and no pipeline_parallel_config
 - **Pipeline parallel**: When `enabled=true` and pipeline_parallel_config is provided
 - **Standard training**: When `enabled=false`
+- **Not supported**: `enabled=true` without pipeline_parallel_config stops `nano_gpt` with an error
 
 ### Constraints
 - Gradient clipping is not supported with multihost training
@@ -265,7 +265,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `type` | str | — | Optimizer type (e.g. `"AdamW"`, `"MorehAdamW"`) |
-| `lr` | float | 3e-4 | Learning rate |
+| `lr` | float | 1e-3 | Learning rate |
 | `beta1` | float | 0.9 | Exponential decay rate for first moment |
 | `beta2` | float | 0.999 | Exponential decay rate for second moment |
 | `epsilon` | float | 1e-8 | Numerical stability constant |

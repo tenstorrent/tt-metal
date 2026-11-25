@@ -7,7 +7,7 @@
 #include <memory>
 
 #include <tt-metalium/experimental/sram_arena/sram_arena_properties.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 namespace tt::tt_metal::experimental {
 

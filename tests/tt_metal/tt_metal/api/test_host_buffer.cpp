@@ -9,8 +9,8 @@
 #include <functional>
 #include <vector>
 
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/memory/utils/memory_pin.hpp>
 
 namespace tt::tt_metal {
 namespace {

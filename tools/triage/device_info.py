@@ -9,7 +9,8 @@ Usage:
 Description:
     Per-device hardware report: tray/board grouping, ASIC position, architecture,
     board type, PCI bus id and BDF, unique id, ARC firmware version, and ARC
-    postcode state. One row per device.
+    postcode state. One row per device. An unhealthy device has no row; a
+    warning names it and says why.
 
     Groups multiple chips that share a physical sub-unit through the `Tray/Board`
     column - UBB tray (1..4) on Wormhole/Blackhole Galaxy boards, board id on
@@ -24,7 +25,7 @@ from dataclasses import dataclass
 
 from tt_umd import ClusterDescriptor
 
-from triage import ScriptConfig, triage_field, run_script
+from triage import ScriptConfig, log_warning, triage_field, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.umd_device import TimeoutDeviceRegisterError
@@ -110,6 +111,11 @@ def _row_sort_key(per_device_result) -> tuple:
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     cd = context.cluster_descriptor
+    # No script shows an unhealthy device, so name it here
+    for chip_id in cd.get_unhealthy_devices():
+        errors = cd.get_health_errors()[chip_id]
+        reasons = ", ".join(f"{type(error).__name__}: {error.message()}" for error in errors)
+        log_warning(f"Device {chip_id} is unhealthy: {reasons or 'reason unavailable'}")
     pci_bdfs = cd.get_chip_pci_bdfs()
     results = run_checks.run_per_device_check(lambda device: get_device_info(device, cd, pci_bdfs))
     if results:

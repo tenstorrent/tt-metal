@@ -10,7 +10,6 @@
 #include <type_traits>
 
 #include "ckernel.h"
-#include "lltt.h"
 
 // Code sequences: driving an execution unit from a table instead of from branches.
 //
@@ -54,7 +53,7 @@ public:
      * @brief Resolve an instruction fragment to a replay handle over this sequence.
      *
      * @param needle: The fragment to replay, as characters of the sequence.
-     * @note Returns 0 when unrepresentable; lltt::replay_insn always sets an opcode bit, so 0 is never a
+     * @note Returns 0 when unrepresentable; TT_OP_REPLAY always sets an opcode bit, so 0 is never a
      *       real handle. @ref make_table rejects those, a standalone handle needs its own static_assert.
      */
     constexpr std::uint32_t fragment(const char* needle) const
@@ -80,7 +79,7 @@ public:
             }
             if (k == needle_len)
             {
-                return lltt::replay_insn(m_replay_base + i, needle_len);
+                return TT_OP_REPLAY(m_replay_base + i, needle_len, 0, 0);
             }
         }
         return 0; // not a substring of this sequence
@@ -133,7 +132,7 @@ public:
 
         // The only arch-divergent code in this file: Blackhole disables instruction gathering around the
         // record window via ckernel::load_replay_buf; Wormhole has no gathering and records directly.
-        lltt::record(m_replay_base, CodeLen);
+        TTI_REPLAY(m_replay_base, CodeLen, 0, 1);
         emit_all();
     }
 

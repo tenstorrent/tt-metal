@@ -11,9 +11,9 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
