@@ -4,10 +4,10 @@
 
 #include "data_format.hpp"
 
-#include <tt_stl/assert.hpp>  // for tt_throw, TT_FATAL
+#include <tt_stl/assert.hpp>                                     // for tt_throw, TT_FATAL
 #include <tt-metalium/workload/specification/compute_modes.hpp>  // for tt::tt_metal::UnpackToDestMode
-#include <set>            // for set
-#include <unordered_map>  // for unordered_map
+#include <set>                                                   // for set
+#include <unordered_map>                                         // for unordered_map
 
 namespace tt {
 
@@ -135,9 +135,7 @@ std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_
 }
 
 DataFormat get_single_unpack_dst_format(
-    const DataFormat src_format,
-    const DataFormat /*pack_format*/,
-    const DataFormat unpack_conditional_dst_format) {
+    const DataFormat src_format, const DataFormat /*pack_format*/, const DataFormat unpack_conditional_dst_format) {
     // NOTE: DataFormat::UInt8 is intentionally not remapped to Int8 here. The unpacker's 4-bit
     // OutDataFormat register field has no UInt8 encoding; the LLK applies masked_data_format()
     // at the register-write site so UInt8 (=30) lands as INT8 (=14) in the bitfield. We preserve
@@ -210,11 +208,11 @@ std::vector<DataFormat> get_unpack_dst_formats(
         } else {
             if (src_format == DataFormat::Float32 && !unpack_to_dest_mode.empty() &&
                 unpack_to_dest_mode[i] != tt::tt_metal::UnpackToDestMode::Default) {
-                unpack_dst_format.push_back(get_single_unpack_dst_format(
-                    src_format, DataFormat::Invalid, DataFormat::Float32));
+                unpack_dst_format.push_back(
+                    get_single_unpack_dst_format(src_format, DataFormat::Invalid, DataFormat::Float32));
             } else {
-                unpack_dst_format.push_back(get_single_unpack_dst_format(
-                    src_format, DataFormat::Invalid, unpack_conditional_dst_format));
+                unpack_dst_format.push_back(
+                    get_single_unpack_dst_format(src_format, DataFormat::Invalid, unpack_conditional_dst_format));
             }
         }
     }
@@ -239,9 +237,7 @@ DataFormat get_single_pack_src_format(
     tt::ARCH arch) {
     if (data_format == DataFormat::Fp8_e4m3) {
         TT_FATAL(
-            tt::is_data_format_supported(DataFormat::Fp8_e4m3, arch),
-            "Fp8 E4M3 mode not supported on arch {}",
-            arch);
+            tt::is_data_format_supported(DataFormat::Fp8_e4m3, arch), "Fp8 E4M3 mode not supported on arch {}", arch);
     }
 
     DataFormat pack_src_format;
@@ -268,8 +264,20 @@ DataFormat get_single_pack_src_format(
     } else if (data_format == DataFormat::Fp8_e4m3) {
         pack_src_format = is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
     } else if (fp32_dest_acc_en) {
-        if (arch == tt::ARCH::QUASAR && !tt::is_integer_format(data_format)) {
-            pack_src_format = DataFormat::Float32;
+        if (arch == tt::ARCH::QUASAR) {
+            if (!tt::is_integer_format(data_format)) {
+                pack_src_format = DataFormat::Float32;
+            } else if (data_format == DataFormat::Int8 || data_format == DataFormat::UInt8) {
+                // A 32-bit Dest holds an 8-bit integer as a sign-magnitude word split across two rows,
+                // so the packer has to read it as Int32 and let the gasket narrow to the L1 datum.
+                // Naming the L1 format here reads a single row and loses the magnitude.
+                pack_src_format = DataFormat::Int32;
+            } else {
+                // The remaining integers are already as wide as the Dest datum. Int16 reaches here only
+                // on Quasar; this walks every CB, so ProgramSpec rejects a consumed Int16 input unless
+                // it unpacks to Dest.
+                pack_src_format = data_format;
+            }
         } else if (is_bfp_format(data_format)) {
             if (bfp8_pack_precise) {
                 pack_src_format = DataFormat::Float32;
@@ -290,10 +298,6 @@ DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::UInt8;
         } else if (data_format == DataFormat::Int8) {
             pack_src_format = DataFormat::Int8;
-        } else if (arch == tt::ARCH::QUASAR && data_format == DataFormat::Int16) {
-            // Quasar pack source only; Wormhole/Blackhole still throw. This walks every CB,
-            // so ProgramSpec rejects a consumed Int16 input unless it unpacks to Dest.
-            pack_src_format = DataFormat::Int16;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", data_format);
         }
