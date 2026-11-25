@@ -110,10 +110,11 @@ TEST(InterDomainMesh, OneMeshIsTheWorkloads) {
     EXPECT_FALSE(domain.direction(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 2)).has_value());
 }
 
-TEST(InterDomainMesh, OneLineMeshTakesTheSquareOnItsPhysicalLinks) {
-    // a 1x16 mesh snaking over a 4x4 grid of chips
-    const auto workload = stacked(1, 1, 16);
-    auto at = [](ChipId i) { return std::pair(i / 4, (i / 4) % 2 == 0 ? i % 4 : 3 - i % 4); };
+// a 1x16 mesh's chip i at its place in a 4x4 grid, snaking
+std::pair<ChipId, ChipId> snake_at(ChipId i) { return {i / 4, (i / 4) % 2 == 0 ? i % 4 : 3 - i % 4}; }
+
+std::vector<DomainLink> snake_links() {
+    const auto at = snake_at;
     std::vector<DomainLink> physical;
     for (ChipId a = 0; a < 16; ++a) {
         for (ChipId b = a + 1; b < 16; ++b) {
@@ -126,12 +127,41 @@ TEST(InterDomainMesh, OneLineMeshTakesTheSquareOnItsPhysicalLinks) {
             }
         }
     }
+    return physical;
+}
+
+TEST(InterDomainMesh, OneLineMeshTakesTheSquareOnItsPhysicalLinks) {
+    const auto workload = stacked(1, 1, 16);
+    const auto physical = snake_links();
     const auto domain = make_inter_domain_mesh(workload, physical);
     EXPECT_EQ(domain.shape(), MeshShape(4, 4));
     EXPECT_TRUE(domain.translates());
     EXPECT_EQ(domain.vc2_links.size(), physical.size() - 15);
     for (const auto& l : domain.vc2_links) {
         EXPECT_TRUE(domain.direction(l.a, l.b).has_value());
+    }
+}
+
+TEST(InterDomainMesh, ThePerimeterKeepsItsDirections) {
+    // the 4x4's inner chips each have a cable out of the domain: the square would leave it no direction
+    const auto workload = stacked(1, 1, 16);
+    const auto physical = snake_links();
+    std::map<FabricNodeId, uint32_t> perimeter;
+    for (ChipId i = 0; i < 16; ++i) {
+        const auto [y, x] = snake_at(i);
+        if (y > 0 && y < 3 && x > 0 && x < 3) {
+            perimeter[FabricNodeId(MeshId{0}, i)] = 1;
+        }
+    }
+    const auto domain = make_inter_domain_mesh(workload, physical, perimeter);
+    EXPECT_NE(domain.shape(), MeshShape(4, 4));
+    std::map<FabricNodeId, uint32_t> used = perimeter;
+    for (ChipId i = 0; i < 16; ++i) {
+        used[FabricNodeId(MeshId{0}, i)] += (i > 0) + (i < 15);
+    }
+    for (const auto& l : domain.vc2_links) {
+        EXPECT_LE(++used[l.a], 4u);
+        EXPECT_LE(++used[l.b], 4u);
     }
 }
 
