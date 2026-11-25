@@ -342,7 +342,7 @@ void py_module(nb::module_& m) {
                 if (!result.is_valid()) {
                     throw nb::python_error();
                 }
-                auto* ptr = reinterpret_cast<std::byte*>(PyBytes_AS_STRING(result.ptr()));
+                auto* ptr = reinterpret_cast<std::byte*>(PyBytes_AsString(result.ptr()));
                 {
                     nb::gil_scoped_release release;
                     self.recv(ttsl::Span<std::byte>(ptr, nbytes), DistRank{source}, DistTag{tag});
