@@ -13,8 +13,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* result = reinterpret_cast<tt_l1_ptr uint32_t*>(l1_address);
     result[0] = value;
 #if defined(ARCH_QUASAR)
-    // A cached store reaches L1 memory, where the host reads it, only once both cache levels are flushed.
-    flush_l1_dcache(l1_address);
+    // The host reads L1 memory, which a cached store reaches only after an L2 flush. The flush probes L1 D$ for the
+    // dirty line, so no separate L1 flush is needed.
     flush_l2_cache_range(l1_address, sizeof(uint32_t));
 #endif
 }
