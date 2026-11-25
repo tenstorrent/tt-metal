@@ -4,22 +4,153 @@
 
 #include "generic_op_nanobind.hpp"
 
+#include <algorithm>
+#include <cstddef>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include "device/generic_program_spec_device_operation.hpp"
 #include "generic_op.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/program_spec.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::generic {
 
+namespace {
+
+using ttnn::experimental::MeshProgramRunArgs;
+using ttnn::experimental::MeshProgramSpec;
+using ttnn::experimental::ProgramRunArgs;
+using ttnn::experimental::ProgramSpec;
+
+// A tensor argument that holds only some devices of its tensor, such as a per-device view, for generic_op's check that
+// it holds every device its program runs on (operation_attributes_t::tensor_views). generic_op's other checks, which
+// run first, cover every tensor argument.
+bool holds_some_devices(const Tensor& tensor) {
+    return is_device_tensor(tensor) && tensor.is_allocated() && !tensor.device_storage().is_uniform_storage();
+}
+
+// On a one-device mesh every tensor holds the only device, so there are no views to read. generic_op rejects
+// io_tensors with no tensor on a device, and a tensor argument on another MeshDevice than io_tensors.
+bool on_one_device_mesh(const std::vector<Tensor>& io_tensors) {
+    const auto entry = std::ranges::find_if(
+        io_tensors, [](const Tensor& tensor) { return is_device_tensor(tensor) && tensor.is_allocated(); });
+    return entry == io_tensors.end() || entry->device()->num_devices() == 1;
+}
+
+TensorViews::value_type view_of(const ProgramRunArgs& run_args, std::string_view name, const Tensor& tensor) {
+    const auto devices = tensor.device_storage().get_coords();
+    return {run_args, std::string(name), std::vector<ttnn::MeshCoordinate>(devices.begin(), devices.end())};
+}
+
+// The views in run args made in Python, read from the ttnn.Tensors they keep, with the GIL held. The visitors capture
+// one reference each, which std::function holds without allocating.
+TensorViews tensor_views(const std::vector<Tensor>& io_tensors, const ProgramRunArgs& run_args) {
+    if (on_one_device_mesh(io_tensors)) {
+        return {};
+    }
+    struct Found {
+        const ProgramRunArgs& run_args;
+        TensorViews views;
+    } found{run_args, {}};
+    ttnn::program_spec::for_each_python_tensor_arg(run_args, [&found](std::string_view name, const Tensor& tensor) {
+        if (holds_some_devices(tensor)) {
+            found.views.push_back(view_of(found.run_args, name, tensor));
+        }
+    });
+    return std::move(found.views);
+}
+
+TensorViews tensor_views(const std::vector<Tensor>& io_tensors, const MeshProgramRunArgs& run_args) {
+    if (on_one_device_mesh(io_tensors)) {
+        return {};
+    }
+    struct Found {
+        const MeshProgramRunArgs& run_args;
+        TensorViews views;
+    } found{run_args, {}};
+    ttnn::program_spec::for_each_python_tensor_arg(
+        run_args, [&found](std::size_t program, std::string_view name, const Tensor& tensor) {
+            if (holds_some_devices(tensor)) {
+                found.views.push_back(view_of(found.run_args.programs[program].second, name, tensor));
+            }
+        });
+    return std::move(found.views);
+}
+
+// The Metal 2.0 forms as Python calls them: each reads the views while it holds the GIL, then releases it for the call
+// itself, as bind_function does for other overloads. ttnn::experimental's C++ functions call the same ttnn::prim
+// functions without views.
+Tensor generic_op_from_python(
+    const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
+    auto views = tensor_views(io_tensors, run_args);
+    const nb::gil_scoped_release release;
+    return ttnn::prim::generic_op(io_tensors, spec, run_args, std::move(views));
+}
+
+Tensor generic_op_from_python(
+    const std::vector<Tensor>& io_tensors, const MeshProgramSpec& spec, const MeshProgramRunArgs& run_args) {
+    auto views = tensor_views(io_tensors, run_args);
+    const nb::gil_scoped_release release;
+    return ttnn::prim::generic_op(io_tensors, spec.programs, run_args.programs, std::move(views));
+}
+
+void prepare_generic_op_from_python(
+    const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
+    auto views = tensor_views(io_tensors, run_args);
+    const nb::gil_scoped_release release;
+    ttnn::prim::prepare_generic_op(io_tensors, spec, run_args, std::move(views));
+}
+
+void prepare_generic_op_from_python(
+    const std::vector<Tensor>& io_tensors, const MeshProgramSpec& spec, const MeshProgramRunArgs& run_args) {
+    auto views = tensor_views(io_tensors, run_args);
+    const nb::gil_scoped_release release;
+    ttnn::prim::prepare_generic_op(io_tensors, spec.programs, run_args.programs, std::move(views));
+}
+
+}  // namespace
+
 // Defined in generic_op_device_operation.cpp
 ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor);
+
+// The paragraphs that the Note sections of both generic_op forms' docstrings share, after each form's own first
+// paragraph.
+constexpr const char* OUTPUT_LABEL_FIX = R"doc(
+            After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the label may have changed but
+            the program has not run, so give back the label the output had before the call with
+            ``output.update_tensor_topology(topology)``, which moves no data. Save that label first with
+            ``output.tensor_topology()``, which returns a copy.
+
+            If the program places the output's data otherwise, such as the same data on every device from a sharded
+            input, or different data on each device from replicated inputs, fix the label the same way after each call
+            that runs it. When every tensor in io_tensors is on every device of the mesh, build the label that ttnn
+            gives its own tensors with that placement, from the output's devices::
+
+                coords = output.tensor_topology().mesh_coords()
+                shape = output.device().shape
+                # The same data on every device, as ttnn.allocate_tensor_on_device labels a tensor
+                # (ttnn.from_torch gives it the 1-D form, MeshShape([len(coords)]) with one Replicate):
+                same = ttnn.TensorTopology(shape, [ttnn.PlacementReplicate()] * shape.dims(), coords)
+                # Split along tensor dimension dim, device by device, as ttnn.shard_tensor_to_mesh_mapper does:
+                split = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(dim)], coords)
+
+            A label can also give each mesh axis its own placement: ``shape`` with one placement for each of its
+            axes, as ``ttnn.create_mesh_mapper`` labels a tensor for a ``ttnn.MeshMapperConfig`` that does not
+            override the mesh shape. Split each tensor dimension across one mesh axis at most: ttnn's ops relabel any
+            other axis it is split across as replicated. Tensors on part of the mesh, and data that no label
+            describes, such as a partial sum on each device, are not covered here. Fix another tensor's label the
+            same way if the program changes how its data is placed.
+)doc";
 
 void bind_generic_operation(nb::module_& mod) {
     std::string doc =
@@ -38,10 +169,23 @@ void bind_generic_operation(nb::module_& mod) {
                 MeshProgramDescriptor for explicit per-device control.
 
         Returns:
-            ttnn.Tensor: Handle to the output tensor.
+            ttnn.Tensor: Handle to the output tensor, the last entry of io_tensors. When the tensors are not all on
+            the same devices, it holds only its parts on the devices of the tensor in io_tensors that is on the
+            fewest devices.
 
+        Note:
+            The output's tensor topology is a label of how its data is placed across the mesh: its mesh placements and
+            distribution shape. As for most ops, each generic_op call merges this label from the labels of all the
+            tensors in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually makes the
+            output sharded along it. Other tensors in io_tensors keep their labels. The label changes before the program
+            is compiled and before some of generic_op's checks, so a call that raises can still change it.
+)doc";
+    doc += OUTPUT_LABEL_FIX;
+    doc += R"doc(
         Example:
-            Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
+            Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples. For the Metal 2.0
+            ProgramSpec form, see ttnn.experimental.generic_op and the TT-NN guide "Running your own kernels with
+            generic_op and a ProgramSpec".
         )doc";
 
     // Overload for MeshProgramDescriptor (explicit mesh control)
@@ -69,7 +213,9 @@ void bind_generic_operation(nb::module_& mod) {
 
             Hashes kernel sources, compile-time args, core ranges, CB structure,
             and semaphores. Excludes runtime arg values and buffer addresses,
-            making it suitable as a cache key for structural equivalence.
+            making it suitable as a cache key for structural equivalence. The
+            one exception is a global CB's addresses, which are hashed because a
+            cache hit does not re-point them.
         )pbdoc");
 }
 
@@ -85,6 +231,10 @@ void bind_generic_operation_preparation(nb::module_& mod) {
         generic_op call with the same tensors and program is a cache hit. A failed preparation leaves the program
         cache unchanged, with one exception: when a ProgramSpec is already cached, its run args are applied to the
         cached program first, so DFB size overrides stay in effect even if the preparation then fails.
+
+        Like the generic_op call it prepares, it changes the output's tensor topology: the label of how the data of the
+        output, the last entry of io_tensors, is placed across the mesh. A failed preparation can leave the label
+        changed too. The note of ttnn.generic_op or ttnn.experimental.generic_op says how to give the old label back.
 
         Args:
             io_tensors (List[ttnn.Tensor]): The tensors the generic_op call would receive.
@@ -121,20 +271,20 @@ void bind_generic_operation_preparation(nb::module_& mod) {
         nb::arg("program_descriptor"));
 
     // The Metal 2.0 forms join this binding: a second prepare_generic_op in the module would replace the first.
-    auto program_spec_overload = ttnn::overload_t(
+    auto program_spec_overload = ttnn::gil_held_overload_t(
         static_cast<void (*)(
             const std::vector<Tensor>&,
             const ttnn::experimental::ProgramSpec&,
-            const ttnn::experimental::ProgramRunArgs&)>(&ttnn::experimental::prepare_generic_op),
+            const ttnn::experimental::ProgramRunArgs&)>(&prepare_generic_op_from_python),
         nb::arg("io_tensors"),
         nb::arg("spec"),
         nb::arg("run_args"));
 
-    auto mesh_program_spec_overload = ttnn::overload_t(
+    auto mesh_program_spec_overload = ttnn::gil_held_overload_t(
         static_cast<void (*)(
             const std::vector<Tensor>&,
             const ttnn::experimental::MeshProgramSpec&,
-            const ttnn::experimental::MeshProgramRunArgs&)>(&ttnn::experimental::prepare_generic_op),
+            const ttnn::experimental::MeshProgramRunArgs&)>(&prepare_generic_op_from_python),
         nb::arg("io_tensors"),
         nb::arg("spec"),
         nb::arg("run_args"));
@@ -144,11 +294,6 @@ void bind_generic_operation_preparation(nb::module_& mod) {
 }
 
 void bind_generic_operation_program_spec(nb::module_& mod) {
-    using ttnn::experimental::MeshProgramRunArgs;
-    using ttnn::experimental::MeshProgramSpec;
-    using ttnn::experimental::ProgramRunArgs;
-    using ttnn::experimental::ProgramSpec;
-
     const char* doc = R"doc(
         Runs a Metal 2.0 program, given as a ttnn.experimental.ProgramSpec (everything fixed about the program) and
         a ttnn.experimental.ProgramRunArgs (the values of this call), with named arguments and tensors bound by name.
@@ -170,42 +315,57 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
                 devices of the tensor in io_tensors that is on the fewest devices (every other tensor must be on them
                 too), or a program for each mesh coordinate range.
             run_args (ttnn.experimental.ProgramRunArgs or ttnn.experimental.MeshProgramRunArgs): The values of this
-                call, or of each range's program.
+                call, or of each range's program. A tensor argument that is another view of a tensor io_tensors lists,
+                such as one device's view from ttnn.get_device_tensors, must hold every device its program runs on,
+                since on each device a program reads that device's part of the tensor: bind a one-device view only in a
+                program that runs on that device alone.
 
         Returns:
-            ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the
-                same devices, only its parts on the devices of the tensor in io_tensors that is on the fewest
-                devices.
+            ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the same
+            devices, it holds only its parts on the devices of the tensor in io_tensors that is on the fewest
+            devices.
 
+        Note:
+            The output's tensor topology is a label of how its data is placed across the mesh: its mesh placements
+            and distribution shape. As for most ops, each generic_op or prepare_generic_op call merges this label
+            from the labels of all the tensors in io_tensors, the output's own included, so a tensor sharded along a
+            mesh axis usually makes the output sharded along it. Other tensors in io_tensors keep their labels. The
+            label changes before the program is compiled and before some of the call's checks, such as those of the
+            run args against the spec, so a call that raises can still change it.
+)doc";
+    const char* doc_after_note = R"doc(
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter or
                 DFB at fault; if a tensor is on another MeshDevice or misses a device the program runs on; if the
                 MeshProgramSpec has no programs, its ranges overlap or reach outside the mesh, or the run args' ranges
-                differ from the spec's; if io_tensors is empty or holds a tensor that is not allocated on a device, or
+                differ from the spec's; if a tensor argument misses a device its program runs on, such as a
+                per-device view; if io_tensors is empty or holds a tensor that is not allocated on a device, or
                 one allocated per core; if Metal rejects the run args, such as a DFB size it cannot take; or, on a
                 first call, if Metal rejects the spec, a kernel does not compile or the program does not fit the
                 kernel-configuration buffer.
 
         Example:
-            Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for usage examples
+            See the TT-NN guide "Running your own kernels with generic_op and a ProgramSpec", and
+            tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for more examples.
         )doc";
+    const std::string full_doc = std::string(doc) + OUTPUT_LABEL_FIX + doc_after_note;
 
-    auto program_spec_overload = ttnn::overload_t(
+    auto program_spec_overload = ttnn::gil_held_overload_t(
         static_cast<Tensor (*)(const std::vector<Tensor>&, const ProgramSpec&, const ProgramRunArgs&)>(
-            &ttnn::experimental::generic_op),
+            &generic_op_from_python),
         nb::arg("io_tensors"),
         nb::arg("spec"),
         nb::arg("run_args"));
 
-    auto mesh_program_spec_overload = ttnn::overload_t(
+    auto mesh_program_spec_overload = ttnn::gil_held_overload_t(
         static_cast<Tensor (*)(const std::vector<Tensor>&, const MeshProgramSpec&, const MeshProgramRunArgs&)>(
-            &ttnn::experimental::generic_op),
+            &generic_op_from_python),
         nb::arg("io_tensors"),
         nb::arg("spec"),
         nb::arg("run_args"));
 
     ttnn::bind_function<"generic_op", "ttnn.experimental.">(
-        mod, doc, program_spec_overload, mesh_program_spec_overload);
+        mod, full_doc.c_str(), program_spec_overload, mesh_program_spec_overload);
 
     mod.def(
         "compute_program_spec_hash",

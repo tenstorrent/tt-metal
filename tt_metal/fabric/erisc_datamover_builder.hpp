@@ -25,6 +25,7 @@
 #include "builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/builder/fabric_master_router_selection.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
 
@@ -270,8 +271,14 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_noc_ids = {};
     std::array<NocCmdBuf, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
 
-    // emd vcs
-    std::size_t edm_noc_vc = 0;
+    // The router's pair of EDM NoC VCs: forwards to the next router go out on one, writes to its own chip on the other.
+    std::size_t edm_noc_vc_forward = 0;
+    std::size_t edm_noc_vc_local_write = 0;
+    // Sets the pair from the forward VC: local writes take the next EDM VC, wrapping around.
+    void set_edm_noc_vcs(std::size_t forward_vc) {
+        edm_noc_vc_forward = forward_vc;
+        edm_noc_vc_local_write = DEFAULT_NOC_VC + ((forward_vc - DEFAULT_NOC_VC + 1) % NUM_EDM_NOC_VCS);
+    }
 
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
@@ -464,6 +471,14 @@ public:
         std::unordered_map<std::string, uint32_t> named;
     };
     [[nodiscard]] CompileTimeArgs get_compile_time_args(uint32_t risc_id) const;
+
+    // The length of each VC's downstream arrays in the kernel (VC0_DOWNSTREAM_EDM_SIZE and VC1_DOWNSTREAM_EDM_SIZE).
+    // Note: This is only valid once the router's downstream connections are made.
+    [[nodiscard]] std::array<uint32_t, 2> get_downstream_edm_array_sizes() const;
+
+    // Creates the master routercandidate type that describes the router's downstream connections. Only valid once the
+    // router's downstream connections are made.
+    [[nodiscard]] MasterRouterCandidate describe_master_router_candidate() const;
 
     // Helper for `get_compile_time_args`
     void get_telemetry_compile_time_args(uint32_t risc_id, std::unordered_map<std::string, uint32_t>& named_args) const;

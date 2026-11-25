@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <variant>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -108,6 +109,22 @@ TEST(RouterChannelLayoutsTest, MergeRejectsARouterBuiltTwice) {
     // between two other ranks
     local = rank1;
     EXPECT_ANY_THROW(RouterChannelLayouts::merge(local, gathered, num_records, 1));
+}
+
+TEST(RouterChannelLayoutsTest, PeerOutsideTheBuildIsNull) {
+    RouterChannelLayouts layouts;
+    const FabricNodeId built(MeshId{0}, 0);
+    layouts.publish(built, 1, layout_with({{0x2000, 4}}, {}));
+
+    const auto peer = layouts.peer(built, 1);
+    ASSERT_FALSE(std::holds_alternative<NullPeerLayout>(peer));
+    EXPECT_EQ(
+        std::get<std::reference_wrapper<const RouterChannelLayout>>(peer).get().receivers[0][0].base_address, 0x2000u);
+    // a chip that wasn't opened
+    EXPECT_TRUE(std::holds_alternative<NullPeerLayout>(layouts.peer(FabricNodeId(MeshId{0}, 4), 11)));
+    EXPECT_TRUE(std::holds_alternative<NullPeerLayout>(layouts.peer(FabricNodeId(MeshId{1}, 0), 1)));
+    // a built chip missing a router is still a bug
+    EXPECT_ANY_THROW(layouts.peer(built, 2));
 }
 
 TEST(RouterChannelLayoutsTest, PackRejectsTooManyReceivers) {
