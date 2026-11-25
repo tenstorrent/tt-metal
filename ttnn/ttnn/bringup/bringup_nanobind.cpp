@@ -19,6 +19,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod);
 namespace ttnn::operations::bringup::detail {
 void bind_moe_fused_swiglu(nb::module_& mod);
 }
+namespace ttnn::operations::bringup::detail {
+void bind_post_combine_reduce(nb::module_& mod);
+}
 // END FORKED OPS (fork_op.py)
 
 namespace ttnn::bringup {
@@ -28,6 +31,7 @@ void py_module([[maybe_unused]] nb::module_& mod) {  // unused until the first f
     ::ttnn::operations::bringup::bind_sdpa(mod);
     ::ttnn::operations::bringup::detail::bind_unified_routed_expert_ffn(mod);
     ::ttnn::operations::bringup::detail::bind_moe_fused_swiglu(mod);
+    ::ttnn::operations::bringup::detail::bind_post_combine_reduce(mod);
     // END FORKED OPS (fork_op.py)
 }
 
