@@ -745,6 +745,11 @@ class MiniMaxH3Pipeline:
         self.trace_denoise = path.trace_denoise
         self.bucket_denoise = path.bucket_denoise
         self.dynamic_length = path.dynamic_length
+        if self.dynamic_length and self.trace_denoise and self.vsa_config is not None:
+            raise ValueError(
+                "VSA with trace_denoise needs the bucketed path; dynamic_length re-captures per length "
+                "and would replay a stale routing plan (see tracked follow-up)"
+            )
         self.agmm_mode = resolve_agmm_mode(agmm_mode)
         self.precompute_adaln_modulation = precompute_adaln_modulation
         self.ff1_output_dtype = ff1_output_dtype
