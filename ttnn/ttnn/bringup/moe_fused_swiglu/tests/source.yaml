@@ -1,0 +1,6 @@
+# The source op's own tests, run in place against this fork (python -m bringup_fw.testing.fork_source).
+# Best-effort selection: see FORK_OP.md (the bring-up method), "Carry the source op's tests".
+upstream_sha: 8c48b4e4af43c481b79608d76e6d6915e2e7a8df
+swap:
+  ttnn.experimental.deepseek_prefill.moe_fused_swiglu: ttnn.bringup.moe_fused_swiglu
+tests: []

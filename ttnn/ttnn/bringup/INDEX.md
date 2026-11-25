@@ -26,3 +26,4 @@ users are switched back.
 |---|---|---|---|
 | `sdpa` | `ttnn/cpp/ttnn/operations/transformer/sdpa` @ `b5ce2601ea3` | build fixes (shared types, namespaces); ring_mla latent V at fp32 DEST (streaming path); ring_mla `exact_score_exp` (fp32-accurate softmax exp); sparse_sdpa `exact_exp` (accurate score exp, removes the sink-share bias) | kimi_k27_code, hy4_preview |
 | `unified_routed_expert_ffn` | `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn` @ `4deb30807d4` | `high_precision`: caller's fidelity + fp32 dest, bf16 x / intermediates / output, Float32 partials (default off) | qwen3_8_flash_next prefill |
+| `moe_fused_swiglu` | `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu` @ `8c48b4e4af4` | pin build compat (local fast_silu_glu_sfpu.h, `buffer()` API); `stochastic_rounding` (default on = source); end-of-reader NoC write + atomic drain | qwen3_6_35b_a3b, ornith_1_5_35b_a3b |
