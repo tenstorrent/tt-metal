@@ -1,10 +1,20 @@
 # row_major_flat_tiles — skip tilize / untilize on ROW_MAJOR data when the math does not need tiles
 
-**Problem type:** compute-bound: format conversion the math does not need  ·  **Concept(s):** (1) flat tiles: 1024 contiguous row-major elements in a CB page, used as a 32×32 tile with no tilize / untilize; (2) a per-row reduction over whole flat tiles (W a multiple of 1024): DEST accumulate + whole-tile scalar reduce + scalar broadcast
-**First profiled on:** `bgd-lab-22-special-adamjanovic-for-reservation-169096` · WH B0 n150, 8×8 = 64 Tensix cores · 1000 MHz · 2026-11-19 · `9dc2b92132c` (+ this example, uncommitted) ([`report_wh_n150.md`](report_wh_n150.md))
-**Blackhole:** the `l1_sharded` reduce case (below) is measured on BH p150b (`bh-50-special-adamjanovic-for-reservation-177924`, 13×10 grid, 2026-11-24, [`report_l1_bh_p150b.md`](report_l1_bh_p150b.md)); the interleaved DRAM cases are not measured on BH.
+**Problem type:** compute-bound: format conversion the math does not need  ·  **Concept(s):** (1) flat tiles: 1024 contiguous row-major elements in a CB page, used as a 32×32 tile with no tilize / untilize; (2) a per-row reduction on flat tiles — whole flat tiles per row (W % 1024 == 0), several narrow rows per flat tile (W divides 16, per-row sums by 0/1 matmuls), or zero-tailed flat tiles (any W, on L1 shards)
+**Measured on:** BH p150b for **L1-sharded** inputs (`bh-50-special-adamjanovic-for-reservation-177924`, 13×10 grid, 2026-11-24, [`report_l1_bh_p150b.md`](report_l1_bh_p150b.md)) · WH B0 n150 for **interleaved DRAM** (`bgd-lab-22-special-adamjanovic-for-reservation-169096`, 2026-11-19, [`report_wh_n150.md`](report_wh_n150.md)); interleaved DRAM is not measured on BH.
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
+
+## Read this first — which regime are you in?
+| Your op's input | Verdict | Where |
+|---|---|---|
+| **`ROW_MAJOR` sharded in L1 (HEIGHT / WIDTH / BLOCK), fewer than 32 sticks per Tensix core, or sticks narrower than 32 elements** | **Use flat tiles: the tilize path spends most of its time on zero padding.** BH p150b, per-row reduce + apply: 1 stick per Tensix core **16–24×**, 4–8 sticks **4–7.5×**, 1–2k sticks of 8–16 elements **4.2–4.6×** | [L1-sharded section](#l1-sharded-reduce--the-regimes-where-the-baseline-is-mostly-padding-bh-p150b) |
+| `ROW_MAJOR` sharded in L1, ≥ 32 sticks per Tensix core and W ≥ 32 | Small gain (only the conversion is saved): 1.12–1.46× for W % 1024 == 0; zero-tailed flat tiles lose (0.3–0.6×) | same section |
+| `ROW_MAJOR` interleaved DRAM, few tile-rows | 1.16–1.85× (WH B0), W % 1024 == 0 for a per-row reduction | [measured result](#measured-result) |
+| `ROW_MAJOR` interleaved DRAM, full grid, DRAM-bound | 1.00× — no gain | same |
+
+The "W % 1024 == 0" condition and the "1.00× when DRAM-bound" verdict below describe the **interleaved DRAM**
+case only. They are not reasons to defer flat tiles on a sharded input.
 
 ## The problem
 An op takes a `Layout::ROW_MAJOR` tensor (one page = one stick of W elements) and returns one. The usual
@@ -12,10 +22,13 @@ kernel stages 32 stick pieces, tilizes them, computes on tiles, untilizes, and w
 the math does not depend on where an element sits inside a tile, the two conversions are pure overhead: an
 elementwise op maps element i of a page to element i of the output page in any layout, and a sum over a
 whole tile is the same sum in any order. So 1024 contiguous row-major elements copied into a CB page can be
-used as a tile directly — a **flat tile**. For a per-row reduction this works when every row is a whole
-number of flat tiles (W % 1024 == 0): no flat tile then holds elements of two rows.
+used as a tile directly — a **flat tile**. On interleaved DRAM (one page = one stick) a per-row reduction here uses
+whole flat tiles per row (W % 1024 == 0). On an L1 shard the S × W elements are contiguous, so narrow rows can
+share a flat tile (W divides 16) or each row can take zero-tailed flat tiles (any W) — see the L1-sharded section.
+And on a shard the bigger cost is usually not the conversion but the padding: a tilize path stages every shard
+into 32-row × 32-column tiles whatever S and W are.
 
-## What this isolates — and how
+## What this isolates — and how (interleaved DRAM cases)
 - **Concepts:** (1) drop tilize → compute → untilize for flat tiles; (2) the per-row reduction on flat tiles:
   per row, sum its Wf = W / 1024 flat tiles in DEST, collapse the tile to one scalar (REDUCE_SCALAR) × 1/W,
   subtract that scalar from the row's flat tiles (scalar broadcast).
