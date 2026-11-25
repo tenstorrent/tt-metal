@@ -23,7 +23,7 @@
 // Compile-time args: all named (combine_names.hpp), the same whether this role runs alone or in a two-role kernel;
 // the output's accessor args are the only positional ones
 constexpr uint32_t cb_out = get_named_compile_time_arg_val(combine_names::kOutputCb);
-constexpr uint32_t row_bytes = get_named_compile_time_arg_val(combine_names::kRowBytes);
+constexpr uint32_t row_bytes = get_named_compile_time_arg_val(combine_names::kOutRowBytes);  // (an output row, bf16)
 constexpr uint32_t NT = get_named_compile_time_arg_val(combine_names::kRowTiles);
 constexpr uint32_t A = get_named_compile_time_arg_val(combine_names::kAccumulatorCount);
 constexpr auto o_args =

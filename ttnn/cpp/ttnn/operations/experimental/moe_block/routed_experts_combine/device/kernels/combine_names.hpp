@@ -72,6 +72,7 @@ inline constexpr const char* kOutputCb = "output_cb";
 // ---- shapes ----
 inline constexpr const char* kRowBytes = "row_bytes";
 inline constexpr const char* kRowTiles = "row_tiles";
+inline constexpr const char* kOutRowBytes = "out_row_bytes";  // an output row's bytes (bf16: W x 2)
 // the rows' format (common/kernels/quantized_row.hpp: quantized_row::Format), values and producers a row; the fp8
 // factor CB; the accumulator reader's cells scratch (arena-relative: a row in flight's cells each)
 inline constexpr const char* kRowFormat = "row_format";

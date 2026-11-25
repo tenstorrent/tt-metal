@@ -297,7 +297,9 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
             in.accumulator_count.value_or(kAccMax),
             in.mode,
             l,
-            pool_slots);
+            pool_slots,
+            in.row_format,
+            in.row_producers);
     };
     // no landing given: the rings in the accumulators' L1 or on the flat expert cores, whichever ranks higher
     // (combine_choice_key). 2x4 GLM-5.3-Flash experts + combine: chunk 5120 with 1 landing slot a source and an 8-slot
@@ -813,6 +815,7 @@ CombineHandles add_combine_program(
             {names::kAccumulatorTableOffset, plan.accumulator_table_offset},
             {names::kAccumulatorTableBytes, plan.accumulator_table_bytes},
             {names::kOutputCb, kCbOut},
+            {names::kOutRowBytes, pc.out_row_bytes},
             {names::kRowTiles, NT}};
         // (positional compile-time args: the accessor args - the output's, the device plan's, the routed-header
         // cache's and the per-chip accumulator table's; without per_chip_accumulator_table the plan's stands in,
@@ -1006,6 +1009,7 @@ CombineHandles add_combine_program(
         NamedArgs aw_named = {
             {names::kOutputCb, kCbOut},
             {names::kRowBytes, pc.row_bytes},
+            {names::kOutRowBytes, pc.out_row_bytes},
             {names::kRowTiles, NT},
             {names::kAccumulatorCount, A}};
         append_accessor(

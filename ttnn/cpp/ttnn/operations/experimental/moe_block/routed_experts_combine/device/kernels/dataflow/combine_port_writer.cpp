@@ -133,6 +133,7 @@ constexpr bool landing_on_flat_expert_cores = combine_options::landing_on_flat_e
 constexpr bool accumulators_on_ports = combine_options::accumulators_on_ports;
 constexpr uint32_t cb_out = get_named_compile_time_arg_val(combine_names::kOutputCb);
 constexpr uint32_t NT_ = get_named_compile_time_arg_val(combine_names::kRowTiles);
+constexpr uint32_t out_row_bytes = get_named_compile_time_arg_val(combine_names::kOutRowBytes);  // (bf16 output)
 constexpr auto o_args =
     TensorAccessorArgs<get_named_compile_time_arg_val(combine_names::kPortWriterOutputAccessorFirstArg)>();
 
@@ -296,7 +297,7 @@ void kernel_main() {
         }
     }
     const uint32_t hwords = area + WORDS_OFF;
-    const auto ob = TensorAccessor(o_args, o_addr, row_bytes);
+    const auto ob = TensorAccessor(o_args, o_addr, out_row_bytes);
     volatile tt_l1_ptr uint32_t* hland =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC) + combine_formats::kMiscPortLanded;
     const uint32_t hbase =
@@ -361,7 +362,7 @@ void kernel_main() {
     // the accumulator writer's step (as accumulator_writer): one finished token row to the output
     auto write_out = [&]() {
         if (accumulators_on_ports && wr_i < n_tok && cb_pages_available_at_front(cb_out, NT_)) {
-            noc_async_write(get_read_ptr(cb_out), ob.get_noc_addr(wr_i * A + acc_me), row_bytes);
+            noc_async_write(get_read_ptr(cb_out), ob.get_noc_addr(wr_i * A + acc_me), out_row_bytes);
             noc_async_writes_flushed();
             cb_pop_front(cb_out, NT_);
             ++wr_i;

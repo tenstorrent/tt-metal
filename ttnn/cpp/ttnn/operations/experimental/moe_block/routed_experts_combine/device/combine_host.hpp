@@ -60,7 +60,8 @@ constexpr uint32_t align64(uint64_t v) { return static_cast<uint32_t>((v + 63) /
 // A W-wide row's landing slot: the row (one fabric packet), its 32 B trailer at row_bytes, 64 B aligned. The row is
 // bf16, or quantized (common/kernels/quantized_row.hpp: its W values a byte each, then a 16-byte cell per producer).
 struct RowSlot {
-    uint32_t row_bytes = 0;
+    uint32_t row_bytes = 0;      // a row on the wire (bf16, or quantized_row.hpp's quantized row)
+    uint32_t out_row_bytes = 0;  // an output row (bf16: W x 2)
     uint32_t row_tiles = 0;   // flat tiles a row (1024 values: rows are handled as flat tiles)
     uint32_t slot_bytes = 0;  // the slot's stride: the row and its trailer, 64 B aligned
     uint32_t format = 0;      // quantized_row::Format (0 bf16)
@@ -153,7 +154,9 @@ CombineLayout combine_l1_layout(
     uint32_t depth = 8,
     uint32_t local_ring_slots_reserved = 8,
     bool shared_landing = false,
-    uint32_t pool_slots = 0);
+    uint32_t pool_slots = 0,
+    uint32_t row_format = 0,      // (the rows' wire format, quantized_row.hpp, and its producers: row_slot)
+    uint32_t row_producers = 0);
 
 enum class CombineMode : uint8_t { PortsApart = 0, AccOnPorts = 1 };
 
@@ -213,7 +216,9 @@ CombineAuto combine_auto(
     uint32_t a_max = kAccMax,
     std::optional<CombineMode> mode = std::nullopt,
     CombineLanding landing = CombineLanding::Rings,
-    uint32_t pool_slots = 0);
+    uint32_t pool_slots = 0,
+    uint32_t row_format = 0,  // (the rows' wire format, quantized_row.hpp, and its producers: row_slot)
+    uint32_t row_producers = 0);
 
 // The credit policy: a port returns a source's credits once it consumed return_credits_after_rows of its rows; its
 // idle credit snapshots are batched (idle_snapshot_rows rows, or idle_snapshot_age_cycles cycles old). The kernels

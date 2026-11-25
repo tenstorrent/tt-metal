@@ -28,6 +28,7 @@ RowSlot row_slot(uint32_t W, uint32_t format, uint32_t producers) {
     p.format = format;
     p.producers = qr::is_quantized(f) ? producers : 0;
     p.row_bytes = qr::row_bytes(f, W, p.producers);
+    p.out_row_bytes = W * 2;
     p.row_tiles = (W + qr::kFlatTileValues - 1) / qr::kFlatTileValues;
     p.slot_bytes = align64(align64(p.row_bytes) + 32);
     p.row_page_bytes = qr::row_page_bytes(f);
@@ -79,8 +80,10 @@ CombineLayout combine_l1_layout(
     uint32_t depth,
     uint32_t local_ring_slots_reserved,
     bool shared_landing,
-    uint32_t pool_slots) {
-    const auto pc = row_slot(W);
+    uint32_t pool_slots,
+    uint32_t row_format,
+    uint32_t row_producers) {
+    const auto pc = row_slot(W, row_format, row_producers);
     const int64_t slot_bytes = pc.slot_bytes;
     const int64_t state_bytes = state_layout(N, A, shared_landing ? kGrants : 0).rings_offset;
     const uint32_t max_tokens_per_accumulator = (S + A - 1) / A;
@@ -176,7 +179,9 @@ CombineAuto combine_auto(
     uint32_t a_max,
     std::optional<CombineMode> mode,
     CombineLanding landing,
-    uint32_t pool_slots) {
+    uint32_t pool_slots,
+    uint32_t row_format,
+    uint32_t row_producers) {
     const bool shared_landing = landing_shared(landing);
     if (!landing_on_flat(landing)) {
         pool_slots = 0;
@@ -222,7 +227,9 @@ CombineAuto combine_auto(
                     depth,
                     local_reserve,
                     shared_landing,
-                    pool_slots);
+                    pool_slots,
+                    row_format,
+                    row_producers);
                 if (!lay.fits) {
                     last = lay;
                     continue;
