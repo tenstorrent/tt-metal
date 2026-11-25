@@ -45,8 +45,7 @@ them again: Generator.begin_live). It needs
   tokens up to about 94K, of 4096 up to about 151K, of 2048 up to about 180K; at 196608 about 0.3 GiB is short
   (`_prefill_chunk` picks, or says how much);
 - L1: a 48 KB kernel-config ring, ``"worker_l1_size": 1411136`` (the prefill's largest program leaves 57 KB of
-  L1 free under the 56 KB ring, and the decode modules keep 58 KB), and decode without the expert prefetch, whose
-  L1 ring is not given back when the traces are released: decode is about 0.3 ms a token slower in this mode.
+  L1 free under the 56 KB ring, and the decode modules keep 58 KB).
 """
 
 from __future__ import annotations
@@ -165,8 +164,7 @@ class Inkling2ForCausalLM:
         """(the generator with its traces captured, the output dicts of its step traces)."""
         from models.demos.inkling2_mini.tt.generator import Generator
 
-        # with the chunked prefill: no expert prefetch (release() does not give its L1 ring back)
-        gen = Generator(self.model, experts=False if self.pf is not None else None)
+        gen = Generator(self.model)
         gen.capture()
         return gen, gen.out
 

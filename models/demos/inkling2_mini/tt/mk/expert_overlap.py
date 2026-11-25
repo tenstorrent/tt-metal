@@ -150,13 +150,17 @@ class ExpertOverlap:
 
     # Between two decode steps, around a chunked prefill (which needs the ring's L1): suspend() takes the queued
     # request and frees the ring, resume() makes the pipes again at the same L1 addresses (the traces' expert
-    # steps and prefetch requests carry them), starts the prefetcher and queues app 0's request as __init__ does.
+    # steps and prefetch requests carry them) and queues app 0's request as __init__ does. The prefetcher keeps
+    # running in between: a stop drops the requests the decode traces captured (their replays would then wait
+    # for slabs no one sends), and its write pointers must go on from where the traces left them.
     def suspend(self, model):
         assert self.i == 0, "suspend between decode steps only"
-        self._drain(model)
+        self._drain(model, stop=False)
         self._at = (self.ep.space.buffer_address(), self.ep.space.config_address())
+        self._signal = self.ep.signal
         for e in self.orig.values():
             e.ring = None
+        self.ep.running = False  # (the ring goes; the prefetcher itself stays started)
         self.ep.release()
         self.ep = None
 
@@ -170,13 +174,12 @@ class ExpertOverlap:
                 e.ring = None
             return False
         self.ep = ep
-        ep.start(**self.mpfe)
-        ttnn.synchronize_device(self.device)
+        ep.running, ep.signal = True, self._signal
         self._request(0)
         return True
 
-    def _drain(self, model):
-        """Take the queued request for app 0 and stop the prefetcher."""
+    def _drain(self, model, stop=True):
+        """Take the queued request for app 0 and (stop) stop the prefetcher."""
         # the queued request for app 0: run app 0's step once more (output dropped) so its slabs are popped
         L = self.apps[0][0]
         ex = self.orig[L]
@@ -195,7 +198,10 @@ class ExpertOverlap:
             ttnn.deallocate(ex(x, w, ids, guess=self.masks[self.src[0]], signal=self.ep.signal))
             self.ep.stepped()
         self.ep.close()
-        self.ep.stop()
+        if stop:
+            self.ep.stop()
+        else:
+            ttnn.synchronize_device(dev)
         for t in (x, w, ids):
             ttnn.deallocate(t)
 
