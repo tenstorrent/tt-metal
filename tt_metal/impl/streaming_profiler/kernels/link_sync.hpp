@@ -377,25 +377,18 @@ struct RouterPort {
             next_poll_refclk = eth_ptp::kRefclkLo.read() + kBurstPollTicks;
         }
     }
-    // Starts the port the first time. After that, serves it and schedules when it is next served.
+    // Starts the port the first time. After that, serves it until the host stops it. Each time, schedules when the
+    // port is next served.
     __attribute__((noinline, cold)) static void serve_port() {
         if (port.l1 == nullptr) {
             port.start();
-            schedule_next_poll();
-            return;
-        }
-        if (port.stopped) {
-            // A stopped port is served as rarely as next_poll_refclk allows.
-            next_poll_refclk = eth_ptp::kRefclkLo.read() + TransmitterPort::kMaxLeadTicks;
-            return;
-        }
-        invalidate_l1_cache();
-        if (port.ctl() == kernel_profiler::LinkSyncCtl::Stop) {
-            port.stop();
-            return;
-        }
-        if (port.due()) {
-            port.serve();
+        } else if (!port.stopped) {
+            invalidate_l1_cache();
+            if (port.ctl() == kernel_profiler::LinkSyncCtl::Stop) {
+                port.stop();
+            } else if (port.due()) {
+                port.serve();
+            }
         }
         schedule_next_poll();
     }
