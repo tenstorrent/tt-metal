@@ -323,6 +323,8 @@
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/accuracy \
           models/demos/deepseek_v3_d_p/tests/kda/test_long_context_golden.py \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_chain_golden.py \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_moe_long_context_host.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
         python3 -m pytest -vvv --tb=short -k "torusxy-mesh-8x4" \
