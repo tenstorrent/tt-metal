@@ -44,9 +44,11 @@ inline void fence() { asm volatile("fence" ::: "memory"); }
 // The core's workers hand each other L1 data through local semaphores: plain L1 words, so the TRISCs can use them too.
 inline void wait_at_least(uint32_t sem_addr, uint32_t v) {
     auto* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+    WAYPOINT("SPPW");  // a worker stuck here shows in the watcher log
     do {
         invalidate_l1_cache();
     } while (*sem < v);
+    WAYPOINT("SPPD");
     fence();
 }
 
@@ -116,7 +118,7 @@ inline void bucket(
     }
 }
 
-// Sets the bits of every row the two workers handed this worker, and flags their chunks dirty (one byte per chunk,
+// Sets the bits of every row the workers handed this worker, and flags their chunks dirty (one byte per chunk,
 // so concurrent writers need no atomics). Returns the largest row + 1 (0 = none).
 inline uint32_t scatter(
     const uint32_t* buckets,
