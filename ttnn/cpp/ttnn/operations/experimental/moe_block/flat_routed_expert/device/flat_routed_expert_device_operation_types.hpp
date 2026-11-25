@@ -66,6 +66,13 @@ struct FlatRoutedExpertParams {
     uint32_t cmb_rt = 0;
     // combine overlap: the y writers' L1 hand-off args after the report args (y_row_major.hpp combine_handoff)
     bool y_l1 = false;
+    // quantized y rows (common/kernels/quantized_row.hpp: a quantized_row::Format, 0 bf16): y is [rows,
+    // quantized_row::row_bytes] uint8 row major (the values, then a 16-byte cell of exponent bytes per down core),
+    // quantized on the down cores (y_quant.hpp). Implies y_row_major and down_fp32 (in half sync); no effect on the
+    // plan
+    uint32_t y_quant = 0;
+    // values a scale block (32, or 0: the down compute's pass width - 96 for GLM)
+    uint32_t y_quant_block = 0;
     FlatLayoutOptions layout;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -82,6 +89,8 @@ struct FlatRoutedExpertParams {
         "math_fidelity",
         "cmb_rt",
         "y_l1",
+        "y_quant",
+        "y_quant_block",
         "layout");
     auto attribute_values() const {
         return std::make_tuple(
@@ -98,6 +107,8 @@ struct FlatRoutedExpertParams {
             math_fidelity,
             cmb_rt,
             y_l1,
+            y_quant,
+            y_quant_block,
             layout);
     }
 };

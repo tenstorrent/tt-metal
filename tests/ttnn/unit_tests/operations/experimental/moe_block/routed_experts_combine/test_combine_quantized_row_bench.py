@@ -13,9 +13,7 @@ Rows (GLM-5.3, H = 6144, 32 producer cores of 192 columns), then the 32-byte tra
   int8:  [H sign-magnitude int8][32 cells: 12 Bfp8_b exponent bytes]           6688 B
 
 The goldens model the device's arithmetic exactly (outputs within 1 bf16 ulp: the count -> bf16 readout). Each
-format's quantizer here is what the producer (the flat expert's down cores) would do:
-  fp8   s = 2^ceil(log2(max(amax, 1e-4) / 448)) a block, e4m3 RNE, |q| < 2^-6 flushed to 0
-  int8  s = 2^ceil(log2(max(amax, 1e-30) / 127)) a block, q = RNE(y / s) in -127 .. 127 (never 0x80)
+format's quantizer is the producer's (the flat expert's down cores, y_quant.hpp): moe_block/quantized_row_golden.py.
 
 Perf (device profiler zones CMB-RD / CMB-CMP, cycles a row):
   TT_METAL_DEVICE_PROFILER=1 VARIANT=int8-1x32 FIDELITY=HiFi4 python <this file>
@@ -33,11 +31,9 @@ import ttnn
 
 HERE = Path(__file__).resolve().parent
 KERNELS = "tests/ttnn/unit_tests/operations/experimental/moe_block/routed_experts_combine/kernels"
-_spec = importlib.util.spec_from_file_location(
-    "y_fp8_quant_test", HERE.parent / "flat_routed_expert" / "test_flat_y_fp8_quant.py"
-)
-fp8_quant = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(fp8_quant)
+_spec = importlib.util.spec_from_file_location("quantized_row_golden", HERE.parent / "quantized_row_golden.py")
+qgolden = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(qgolden)
 
 FORMATS = {"bf16": 0, "fp8": 1, "int8": 2}  # quantized_row::Format
 H = 6144
@@ -66,23 +62,8 @@ def make_rows(seed=0):
 
 
 def quantize(y, fmt, block):
-    """(value bytes uint8 [rows, H], exponent bytes uint8 [rows, H / 16], the values the consumer reads, fp32)."""
-    rows = y.shape[0]
-    if fmt == "fp8":
-        codes, scales = fp8_quant.golden(y, block)
-        codes = torch.where((codes & 0x78) == 0, torch.zeros_like(codes), codes)  # (subnormals flushed: +0)
-        e = (scales.view(torch.int32) >> 23).to(torch.uint8).repeat_interleave(block // 16, dim=1)
-        vals = codes.view(torch.float8_e4m3fn).float() * torch.pow(2.0, e.float() - 127).repeat_interleave(16, 1)
-        return codes, e, vals
-    r = y.reshape(rows, -1, block)
-    amax = r.abs().amax(-1, keepdim=True).clamp(min=1e-30)
-    log2s = torch.ceil(torch.log2(amax / 127))
-    q = torch.round(r / torch.pow(2.0, log2s)).clamp(-127, 127)
-    vals = (q * torch.pow(2.0, log2s)).reshape(rows, -1)
-    q = q.reshape(rows, -1).to(torch.int32)
-    codes = (((q < 0).to(torch.int32) << 7) | q.abs()).to(torch.uint8)
-    e = (log2s.reshape(rows, -1) + 133).to(torch.uint8).repeat_interleave(block // 16, dim=1)
-    return codes, e, vals
+    """(value bytes, exponent bytes a 16 values, the values the consumer reads): moe_block/quantized_row_golden.py"""
+    return qgolden.quantize(y, fmt, block)
 
 
 def wire_rows(y, gates, fmt, block):

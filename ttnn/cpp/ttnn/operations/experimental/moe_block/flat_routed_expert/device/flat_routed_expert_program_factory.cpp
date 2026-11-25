@@ -288,6 +288,10 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["x_ring_blocks"] = p.x_ring_blocks;
     options["y_row_major"] = cfg.y_row_major ? 1 : 0;
     options["y_row_major_rows"] = 0;  // (the down kernels': their column width's)
+    options["y_quant"] = cfg.y_quant;
+    options["y_quant_block_tiles"] = cfg.y_quant_block / 32;  // (0: the pass width)
+    options["y_quant_producers"] = cfg.y_quant ? ND : 0;
+    options["y_row_stride_tiles"] = 0;  // (the down kernels': their column width's)
     options["down_core_count"] = ND;
     options["h_arrived_sem"] = HARR;
     options["h_slot_free_sem"] = HSFREE;
@@ -414,9 +418,25 @@ FlatProgramHandles add_flat_routed_expert_program(
     // the row-major out CB (bf16 row tiles of PCD pages) takes what the down cores' arena holds after the out region's
     // start up to the CBs every arena core shares (meta 6 / counts 7 at meta_off, past the largest role; the plan's
     // 2 KB margin is kept), at most 2 MT (a virtual expert ahead) and 8 (the writers' transaction ids 8..15)
+    // quantized y (cfg.y_quant): a pass of the down compute is at most 3 fp32 tiles (half sync: 4, one spare for the
+    // scales), the out CB's rows padded by a pass when it is odd (y_quant.hpp), and a cells CB (512 B a row tile)
+    const bool yq = cfg.y_quant != 0;
+    auto largest_divisor = [](uint32_t value, uint32_t cap) {
+        for (uint32_t divisor = std::min(cap, value); divisor > 1; --divisor) {
+            if (value % divisor == 0) {
+                return divisor;
+            }
+        }
+        return 1u;
+    };
+    auto yq_stride = [&](uint32_t pw) {
+        const uint32_t pass = largest_divisor(pw, 3);
+        return pw + (pass % 2 ? pass : 0);
+    };
+    auto yrm_row_tile_bytes = [&](uint32_t pw) { return yq ? yq_stride(pw) * 1024 + 32 * 16 : pw * 2048; };
     auto yrm_rows = [&](uint32_t pw) {
         const uint32_t room = p.schedule_page_offset - p.down_output_offset - 2048;
-        return std::min({room / (pw * 2048), 2 * MT, 8u});
+        return std::min({room / yrm_row_tile_bytes(pw), 2 * MT, 8u});
     };
     // x relays: primaries (feed their snake) + helpers (read / tilize half of x each, into both primaries' rings)
     auto rl_off = [&](uint32_t idx) { return idx < NR ? 0 : (idx - NR) / NR + 1; };
@@ -623,6 +643,7 @@ FlatProgramHandles add_flat_routed_expert_program(
         const Options down_options = with(
             options,
             {{"y_row_major_rows", yrm ? yrm_rows(pw) : 0u},
+             {"y_row_stride_tiles", yq ? yq_stride(pw) : 0u},
              {"down_weight_ring_blocks", ring},
              {"down_columns", pw},
              {"down_k_block_tiles", kd},
@@ -655,7 +676,8 @@ FlatProgramHandles add_flat_routed_expert_program(
             const char* v = std::getenv(name);
             return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
         };
-        const bool down_full_sync = cfg.down_fp32 && exp_env("TT_FLAT_EXP_DOWN_HALF_SYNC") == 0;
+        // (quantized y: half sync - the quantize of a pass on the PACK thread overlaps the next pass's matmul)
+        const bool down_full_sync = cfg.down_fp32 && !yq && exp_env("TT_FLAT_EXP_DOWN_HALF_SYNC") == 0;
         const auto kc =
             cp("down_compute.cpp",
                cores,
@@ -748,6 +770,18 @@ FlatProgramHandles add_flat_routed_expert_program(
             return;
         }
         TT_FATAL(yrm_rows(pw) >= 1, "flat_routed_expert: row-major y: no room for one row tile");
+        if (yq) {  // the values (UInt8 tiles of the padded row stride), then the cells
+            TT_FATAL(
+                2 * pw <= 16 && largest_divisor(pw, 3) % std::max(1u, cfg.y_quant_block / 32) == 0,
+                "flat_routed_expert: quantized y: {} columns a down core (at most 8; a scale block of {} values must "
+                "divide the pass width)",
+                pw,
+                cfg.y_quant_block);
+            const uint32_t values = yrm_rows(pw) * yq_stride(pw) * 1024;
+            arena_cb(16, p.down_output_offset, values, cores, tt::DataFormat::UInt8, 1024);
+            arena_cb(17, p.down_output_offset + values, yrm_rows(pw) * 512, cores, tt::DataFormat::UInt8, 512);
+            return;
+        }
         arena_cb(16, p.down_output_offset, yrm_rows(pw) * pw * 2048, cores, tt::DataFormat::Float16_b, 2048);
     };
     // (the read / tilize CBs on the helper relays only: the primaries read nothing - their arena there is free)

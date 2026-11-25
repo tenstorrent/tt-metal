@@ -129,6 +129,17 @@ constexpr uint32_t down_blocks_per_expert =
 constexpr bool y_row_major = get_named_compile_time_arg_val("y_row_major") != 0;
 // row tiles of y in flight per down core (the row-major out CB's capacity)
 constexpr uint32_t y_row_major_rows = get_named_compile_time_arg_val("y_row_major_rows");
+// quantized y rows (common/kernels/quantized_row.hpp: a quantized_row::Format; 0: bf16): the down compute quantizes
+// each pass (y_quant.hpp) into a UInt8 out CB and each row's exponent bytes into its cell (CB c_17), the y writer sends
+// the values and the cell. Implies y_row_major.
+constexpr uint32_t y_quant = get_named_compile_time_arg_val("y_quant");
+// tiles of a scale block (a divisor of the down compute's pass width)
+constexpr uint32_t y_quant_block_tiles = get_named_compile_time_arg_val("y_quant_block_tiles");
+// the producers of a quantized row: the down cores (a cell each, at H + 16 x down core in the row)
+constexpr uint32_t y_quant_producers = get_named_compile_time_arg_val("y_quant_producers");
+// the row-major out CB's row stride in tiles (the down kernels': their column width's; quantized: the columns plus one
+// pass when the pass width is odd - pack_untilize_dest of an odd width into 8 bits writes a tile past the pass)
+constexpr uint32_t y_row_stride_tiles = get_named_compile_time_arg_val("y_row_stride_tiles");
 // DRAM banks the down weight blocks are spread over (block k of a core in its bank pattern's position k % banks)
 constexpr uint32_t down_weight_banks = get_named_compile_time_arg_val("down_weight_banks");
 // the down weight ring's capacity in blocks

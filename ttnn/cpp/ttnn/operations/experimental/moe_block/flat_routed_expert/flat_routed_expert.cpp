@@ -115,7 +115,9 @@ ttnn::Tensor flat_routed_expert(
     bool down_fp32,
     uint32_t math_fidelity,
     const FlatLayoutOptions& layout,
-    const std::optional<ttnn::Tensor>& output) {
+    const std::optional<ttnn::Tensor>& output,
+    uint32_t y_quant,
+    uint32_t y_quant_block) {
     using namespace tt::tt_metal;
     TT_FATAL(
         activation <= 3, "flat_routed_expert: activation {}: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU", activation);
@@ -130,20 +132,29 @@ ttnn::Tensor flat_routed_expert(
         pin,
         layout);
     cfg.activation = activation;
-    cfg.y_row_major = y_row_major;
-    cfg.down_fp32 = down_fp32;
+    TT_FATAL(y_quant <= 2, "flat_routed_expert: y_quant {}: 0 bf16, 1 fp8 e4m3, 2 int8", y_quant);
+    TT_FATAL(
+        y_quant_block == 0 || y_quant_block == 32 || y_quant_block == 64 || y_quant_block == 96,
+        "flat_routed_expert: y_quant_block {}: 0 (the pass width), 32, 64 or 96 values",
+        y_quant_block);
+    // (quantized y: row major, fp32 DEST)
+    cfg.y_row_major = y_row_major || y_quant != 0;
+    cfg.down_fp32 = down_fp32 || y_quant != 0;
+    cfg.y_quant = y_quant;
+    cfg.y_quant_block = y_quant ? y_quant_block : 0;
     cfg.math_fidelity = math_fidelity;
     const auto plan = flat_routed_expert_plan(*device, cfg);
     // (the output: a caller's tensor, e.g. a persistent buffer another program reads at a fixed address; validated)
     const uint32_t y_rows =
         token_index ? token_index->logical_shape()[-1] : dispatched_buffer.logical_shape()[-2] / x_pages_per_row;
-    const ttnn::Tensor y_output = output ? *output
-                                         : ttnn::empty(
-                                               ttnn::Shape({y_rows, cfg.hidden}),
-                                               y_row_major ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
-                                               y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
-                                               device,
-                                               MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+    const ttnn::Tensor y_output =
+        output ? *output
+               : ttnn::empty(
+                     ttnn::Shape({y_rows, flat_y_width(cfg, *plan)}),
+                     cfg.y_quant ? DataType::UINT8 : (cfg.y_row_major ? DataType::BFLOAT16 : DataType::BFLOAT8_B),
+                     cfg.y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
+                     device,
+                     MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     // per-launch scratch: the arena (every role's buffers) and the relays' freed words; freed right after the launch
     // (the device reads them in order), so they never pin L1 against the next op's circular buffers
     const auto& [arena_spec, words_spec] = host_detail::scratch_specs(*plan);
