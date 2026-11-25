@@ -288,11 +288,9 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_sha
 /**
  * @brief Run one tile of unary broadcast math: set dest write addr
  *
- * @tparam unpack_to_dest: When true, UNP_A unpacks to the Dest register
  * @param tile_idx: Destination tile index within current dest bank (SyncHalf)
- * @note Call @ref _llk_math_eltwise_unary_broadcast_init_ with matching template args before this function.
+ * @note Call @ref _llk_math_eltwise_unary_broadcast_init_ before this function.
  */
-template <bool unpack_to_dest>
 inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx)
 {
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
