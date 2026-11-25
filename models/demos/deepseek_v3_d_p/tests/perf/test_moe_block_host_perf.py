@@ -81,7 +81,7 @@ CASES = [
 # fastest run, traced the mean of the runs. A case without targets only reports.
 TARGETS_MS = {
     "kimi_k3-8x4-5120": (2.21, 2.12),
-    "kimi_k3_1-4x4-sp1-2560": (3.40, 3.31),
+    "kimi_k3_1-4x4-sp1-2560": (3.27, 3.17),
     # GLM-5.3: each the mean over 3 runs of that run's number (fastest untraced sample, traced replay)
     "glm53-8x4-5120": (1.32, 1.21),
     "glm53-xy4-sp1-2560": (1.55, 1.44),
