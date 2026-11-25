@@ -13,11 +13,17 @@
 #include <cstdint>
 
 #include "api/compute/common_globals.h"
-#include "ckernel_trisc_common.h"  // trisc::get_dest_max_tiles
+#include "ckernel_trisc_common.h"                                  // trisc::get_dest_max_tiles
+#include "api/compute/experimental/2_0/internal/llk_descriptor.h"  // is_legal_tile_shape
 
 namespace ckernel {
 namespace experimental {
 namespace detail {
+
+// Full 32x32 tile (tilize / untilize: tiny tiles need the strided buffer descriptor, not wired up yet).
+constexpr bool is_32x32(TensorShape s) {
+    return is_legal_tile_shape(s) && s.total_num_faces() == 4 && s.face_r_dim == 16;
+}
 
 // Dest tiles per section for the kernel's sync mode and Dest width.
 template <bool is_fp32_dest_acc_en>

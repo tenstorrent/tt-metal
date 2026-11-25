@@ -29,14 +29,14 @@ void kernel_main() {
     using OutOp = experimental::LLKOperand<static_cast<DataFormat>(out_desc.format), out_desc.shape>;
 
     compute_kernel_hw_startup(InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
-    experimental::pack_untilize_init<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(
+    experimental::pack_untilize_src_to_dest_init<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(
         InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         cb0.wait_front(1);
         cb16.reserve_back(1);
 
-        experimental::pack_untilize_block<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(
+        experimental::pack_untilize_src_to_dest_block<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(
             InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
 
         cb0.pop_front(1);
