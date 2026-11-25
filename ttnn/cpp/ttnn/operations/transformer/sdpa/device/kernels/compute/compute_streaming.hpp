@@ -151,6 +151,74 @@ struct RingStreamingMaskCtx : LocalNPaddedTilesField<DynamicLocalN, LocalNPadded
     }
 };
 
+#if (defined(TRISC_MATH) || defined(TRISC_PACK)) && !defined(ARCH_QUASAR)
+namespace ckernel::sfpu {
+
+// exp(x * scale) with the accurate exp and the full fp32 scale: the softmax exp of the exact
+// (math_approx_mode=false) path. The approximate exp folds the scale into exp_init's constants, but the
+// accurate exp_init ignores its scale argument and the accurate exp's own SCALE_EN multiplies by a bf16
+// immediate, so the scale is applied here, in an LReg, before the exp. Literal constants only: no exp_init
+// state and no replay buffer. -inf (masked keys) gives +0.
+template <bool is_fp32_dest_acc_en, std::uint32_t scale_fp32, int ITERATIONS>
+inline void calculate_sdpa_scaled_exp_accurate() {
+    constexpr float scale = __builtin_bit_cast(float, scale_fp32);
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(val * scale);
+        sfpi::dst_reg++;
+    }
+}
+
+// First-column form (VectorMode::C) for the running-max correction exp((prev_max - cur_max) * scale). Same
+// walk and accurate exp as calculate_exponential_first_column's approximate arm, but with the fp32 scale
+// instead of its truncated bf16 one, so the correction rescales earlier chunks with the same scale the chunk
+// exp used (a bf16-truncated scale over-weights them by exp(scale_err * |max jump|)).
+template <bool is_fp32_dest_acc_en, std::uint32_t scale_fp32>
+inline void calculate_sdpa_scaled_exp_first_column() {
+    constexpr float scale = __builtin_bit_cast(float, scale_fp32);
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+        sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(val * scale);
+        sfpi::dst_reg += 2;
+    }
+}
+
+}  // namespace ckernel::sfpu
+#endif
+
+// Pack-thread launchers for the two functors above (like exp_packthread_tile: no-ops on the other threads).
+template <uint32_t scale_fp32, int iterations>
+ALWI void sdpa_scaled_exp_accurate_packthread_tile(uint32_t idst, VectorMode vector_mode) {
+#ifdef ARCH_QUASAR
+    static_assert(scale_fp32 != scale_fp32, "sdpa_scaled_exp_accurate_packthread_tile: not ported to Quasar");
+#else
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sdpa_scaled_exp_accurate,
+        (DST_ACCUM_MODE, scale_fp32, iterations),
+        idst,
+        vector_mode));
+#endif
+}
+
+template <uint32_t scale_fp32>
+ALWI void sdpa_scaled_exp_first_column_packthread_tile(uint32_t idst) {
+#ifdef ARCH_QUASAR
+    static_assert(scale_fp32 != scale_fp32, "sdpa_scaled_exp_first_column_packthread_tile: not ported to Quasar");
+#else
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sdpa_scaled_exp_first_column,
+        (DST_ACCUM_MODE, scale_fp32),
+        idst,
+        VectorMode::C));
+#endif
+}
+
 template <uint32_t srca_old_cb, uint32_t srca_new_cb, uint32_t srcb_old_cb, uint32_t srcb_new_cb>
 ALWI void sdpa_maybe_reconfig_data_format(uint32_t runtime_srca_old_cb, uint32_t runtime_srcb_old_cb) {
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
@@ -336,8 +404,11 @@ void reduce_c_row_group(
 /**
  * In-place sub_exp on cb_qkt_im: subtracts max, applies exp with ReLU clamping,
  * writes back to same positions. Accumulates row sums into reduce_cb.
+ *
+ * exp_approx: the approximate exp, whose scale the caller's exp_packthread_tile_init<true, scale_fp32> baked
+ * in. false: the accurate exp, scaled here by the fp32 scale_fp32 (sdpa_scaled_exp_accurate_packthread_tile).
  */
-template <bool profiling_enabled, uint32_t scale_fp32>
+template <bool profiling_enabled, uint32_t scale_fp32, bool exp_approx = true>
 void sub_exp_block_bcast_cols(
     uint32_t inout_cb,
     uint32_t max_cb,
@@ -382,7 +453,11 @@ void sub_exp_block_bcast_cols(
         constexpr VectorMode vector_mode_exp = VectorMode::None;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
-                exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
+                if constexpr (exp_approx) {
+                    exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
+                } else {
+                    sdpa_scaled_exp_accurate_packthread_tile<scale_fp32, iterations>(dst_index++, vector_mode_exp);
+                }
             }
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -431,8 +506,11 @@ void sub_exp_block_bcast_cols(
 /**
  * Column-only exp(prev_max - cur_max) for SALAD corrections.
  * Operates on first-column subset of tiles.
+ *
+ * fp32_scale: scale by the fp32 scale_fp32 with the accurate exp (sdpa_scaled_exp_first_column_packthread_tile),
+ * matching the chunk exp's scale. false keeps exp_tile_first_column's bf16-truncated scale.
  */
-template <bool profiling_enabled, uint32_t scale_fp32>
+template <bool profiling_enabled, uint32_t scale_fp32, bool fp32_scale = false>
 void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t sbh) {
     const uint32_t tiles_per_row = sbh;
     const uint32_t global_row_base = q_subblock * tiles_per_row;
@@ -455,7 +533,11 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     {
         tile_regs_wait();
         for (uint32_t dst_index = 0; dst_index < tiles_per_row; dst_index++) {
-            PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(dst_index)));
+            if constexpr (fp32_scale) {
+                sdpa_scaled_exp_first_column_packthread_tile<scale_fp32>(dst_index);
+            } else {
+                PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(dst_index)));
+            }
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 

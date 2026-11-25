@@ -14,6 +14,7 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
+from ttnn.operations.transformer_golden import MASKED_INDEX
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import (
     ATTENTION_SINK_SHAPES,
     make_attention_sink_inputs,
@@ -311,6 +312,79 @@ def test_sparse_sdpa_pcc_multi_chunk(device, nv_fn, nv_id):
     out, scale = run_op(q, kv, indices, device, kc, V_DIM)
     p = pcc(out, golden(q, kv, indices, scale, V_DIM))
     assert p >= 0.99, f"PCC {p:.5f} ({nv_id})"
+
+
+# ---- exp mode: the accurate exp (math_approx_mode=False) must apply the softmax scale, and both modes must
+# rescale earlier chunks with the scale the chunk exp used ----
+MLA_192_SCALE = 192**-0.5  # Kimi K3.1 MLA (qk_nope 128 + qk_rope 64): far from 1, and inexact in bf16
+
+
+def snr_db(actual, expected):
+    actual, expected = actual.float(), expected.float()
+    return 10 * torch.log10(expected.pow(2).sum() / (actual - expected).pow(2).sum()).item()
+
+
+def rising_order(q, kv, indices):
+    """Sort each row's valid keys by head-mean score so the running max climbs in every chunk (the flash
+    correction then rescales every earlier chunk). The masked tail stays a tail."""
+    indices = indices.clone()
+    for s in range(indices.shape[2]):
+        row = indices[0, 0, s]
+        nv = int((row != MASKED_INDEX).sum())
+        ids = row[:nv]
+        indices[0, 0, s, :nv] = ids[torch.argsort((q[0, :, s] @ kv[0, 0, ids].T).mean(0))]
+    return indices
+
+
+# Minimum output SNR (dB) vs the fp32 golden per (KV format, compute config), about 1 dB under what Blackhole p100a
+# measures: bf16 KV default 27.9, exact HiFi2 28.9, exact HiFi4 + fp32 DEST 41.3; scaled FP8 default 34.8, exact
+# HiFi4 44.3. Before the fix the exact configs ran the approximate exp (about 33 dB at HiFi4); making that exp
+# accurate without applying the softmax scale gave about -11 dB.
+EXP_MODE_MIN_SNR = {
+    ("bf16", "default"): 27.0,
+    ("bf16", "exact_hifi2_bf16_dest"): 28.0,
+    ("bf16", "exact_hifi4_fp32_dest"): 40.0,
+    ("scaled_fp8", "default"): 33.5,
+    ("scaled_fp8", "exact_hifi4_fp32_dest"): 43.0,
+}
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("kv_format,config", list(EXP_MODE_MIN_SNR), ids=lambda x: x)
+def test_sparse_sdpa_exp_mode_accuracy(device, kv_format, config):
+    H, S, T, TOPK, kc = 32, 32, 2048, 1024, 128  # 8 chunks, masked tails of 0..299 keys
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK - (s * 97) % 300, seed=70)
+    q = q.to(torch.bfloat16).float()  # the q the op sees
+    if kv_format == "bf16":
+        kv = kv.to(torch.bfloat16).float()
+        tt_kv, fmt = bf16_dev(kv, device), BF16_KV
+    else:
+        tt_kv, kv = make_scaled_kv_cache(device, 1, T, seed=71, round_scale=True)
+        fmt = SCALED_FP8_KV
+    indices = rising_order(q, kv, indices)
+    kwargs = {}
+    if config != "default":
+        hifi4 = config == "exact_hifi4_fp32_dest"
+        kwargs["compute_kernel_config"] = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4 if hifi4 else ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=hifi4,
+        )
+    out = ttnn.transformer.sparse_sdpa(
+        bf16_dev(q, device),
+        tt_kv,
+        idx_dev(indices, device),
+        V_DIM,
+        kv_format=fmt,
+        scale=MLA_192_SCALE,
+        k_chunk_size=kc,
+        **kwargs,
+    )
+    actual, expected = ttnn.to_torch(out).float(), golden(q, kv, indices, MLA_192_SCALE, V_DIM)
+    snr, score = snr_db(actual, expected), pcc(actual, expected)
+    min_snr = EXP_MODE_MIN_SNR[(kv_format, config)]
+    assert snr >= min_snr and score >= 0.999, f"SNR {snr:.2f} dB (min {min_snr}), PCC {score:.6f}"
 
 
 # ---- q may sit in L1; DRAM and L1 q are distinct programs (different q accessor) ----
