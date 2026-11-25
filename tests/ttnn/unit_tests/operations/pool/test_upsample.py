@@ -659,3 +659,40 @@ def test_upsample_nearest_float_rejects_uint32_overflow(device, expect_error):
     )
     with expect_error(RuntimeError, "overflows uint32"):
         ttnn.upsample(input_tensor, [1e10, 1.0], mode="nearest")
+
+
+@pytest.mark.parametrize(
+    "shapes, scale",
+    [
+        # FLUX.2's VAE decoder over image sizes.
+        ([(1, 64, 64, 64), (1, 48, 96, 64), (1, 30, 170, 64), (1, 96, 40, 64)], 2),
+        ([(2, 40, 50, 32), (1, 70, 33, 32), (3, 20, 41, 32)], [2, 3]),
+        # Fewer rows than cores: one program per row count.
+        ([(1, 2, 4, 64), (1, 4, 2, 64), (2, 2, 2, 64)], 2),
+    ],
+)
+def test_upsample_nearest_interleaved_one_program_over_sizes(device, shapes, scale):
+    # With runtime_shapes the row-major interleaved program takes the row counts and the output height and width
+    # at run time, so every image size with the same channel count shares it.
+    scale_h, scale_w = (scale, scale) if isinstance(scale, int) else scale
+    entries = None
+    for shape in shapes:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        y = ttnn.upsample(x, scale_factor=scale, runtime_shapes=True)
+        expected = torch_input.repeat_interleave(scale_h, dim=1).repeat_interleave(scale_w, dim=2)
+        assert torch.equal(ttnn.to_torch(y), expected), shape
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        assert device.num_program_cache_entries() == entries, shape
+
+
+def test_upsample_nearest_interleaved_without_runtime_shapes_keeps_one_program_per_size(device):
+    entries = device.num_program_cache_entries()
+    for shape in [(1, 64, 64, 64), (1, 48, 96, 64)]:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        y = ttnn.upsample(x, scale_factor=2)
+        expected = torch_input.repeat_interleave(2, dim=1).repeat_interleave(2, dim=2)
+        assert torch.equal(ttnn.to_torch(y), expected), shape
+    assert device.num_program_cache_entries() == entries + 2

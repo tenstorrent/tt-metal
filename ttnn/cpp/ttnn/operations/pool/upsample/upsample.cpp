@@ -86,7 +86,8 @@ ttnn::Tensor upsample(
     std::variant<int, std::array<int, 2>, float, std::array<float, 2>> scale_factor,
     const std::string& mode,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    bool runtime_shapes) {
     tt::tt_metal::MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
 
     // Parse scale factors from variant - extract as floats
@@ -154,6 +155,6 @@ ttnn::Tensor upsample(
     }
 
     // For nearest mode, pass to unified prim (device op handles factory selection)
-    return ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config);
+    return ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config, std::nullopt, runtime_shapes);
 }
 }  // namespace ttnn::operations::upsample

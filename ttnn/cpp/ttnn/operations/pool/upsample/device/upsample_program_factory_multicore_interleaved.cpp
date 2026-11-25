@@ -22,6 +22,100 @@ namespace ttnn::prim {
 using namespace tt::tt_metal;
 namespace metal2 = tt::tt_metal;
 
+namespace {
+
+// Each core's row range and, for tiled input, its block count. A block is a row of input tiles for tiled input
+// and one input row (stick) for row-major input.
+metal2::ProgramRunArgs interleaved_run_args(const Tensor& input, const Tensor& output) {
+    const metal2::KernelSpecName READER{"reader"};
+    const metal2::KernelSpecName WRITER{"writer"};
+    const metal2::KernelSpecName COMPUTE{"compute"};
+    const metal2::TensorParamName INPUT{"input"};
+    const metal2::TensorParamName OUTPUT{"output"};
+
+    const bool is_tiled_layout = input.layout() == Layout::TILE;
+    const auto& output_shape = output.padded_shape();
+    const auto grid = output.device()->compute_with_storage_grid_size();
+    const std::uint32_t num_cores_y = grid.y;
+    std::uint32_t input_cb_required_pages = 1;
+    std::uint32_t work_units_to_split = input.physical_volume() / input.padded_shape()[-1];
+    if (is_tiled_layout) {
+        const auto& tile_shape = input.tensor_spec().tile().get_tile_shape();
+        input_cb_required_pages = input.padded_shape()[-1] / tile_shape[1];
+        work_units_to_split /= tile_shape[0];
+    }
+    const auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_group_1, work_per_core_group_2] =
+        split_work_to_cores(grid, work_units_to_split);
+
+    metal2::KernelRunArgs reader_run_args{.kernel = READER};
+    metal2::KernelRunArgs writer_run_args{.kernel = WRITER};
+    metal2::KernelRunArgs compute_run_args{.kernel = COMPUTE};
+    for (std::uint32_t i = 0, blocks_processed = 0; i < num_cores; i++) {
+        const CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        std::uint32_t blocks_per_core = 0;
+        if (core_group_1.contains(core)) {
+            blocks_per_core = work_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            blocks_per_core = work_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
+        }
+
+        const std::uint32_t reader_units = blocks_per_core * input_cb_required_pages;
+        const std::uint32_t reader_start = blocks_processed * input_cb_required_pages;
+
+        metal2::AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"num_pages", reader_units}, {"start_page_id", reader_start}});
+        metal2::AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_blocks_to_read", blocks_per_core},
+             {"start_block_id", blocks_processed},
+             {"height", output_shape[1]},
+             {"width", output_shape[2]}});
+        if (is_tiled_layout) {
+            metal2::AddRuntimeArgsForNode(
+                compute_run_args.runtime_arg_values, core, {{"per_core_block_cnt", blocks_per_core}});
+        }
+
+        blocks_processed += blocks_per_core;
+    }
+    metal2::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    if (is_tiled_layout) {
+        run_args.kernel_run_args.push_back(std::move(compute_run_args));
+    }
+    run_args.tensor_args = {
+        {INPUT, metal2::TensorArgument{input.mesh_tensor()}},
+        {OUTPUT, metal2::TensorArgument{output.mesh_tensor()}},
+    };
+    return run_args;
+}
+
+}  // namespace
+
+bool upsample_interleaved_is_shape_free(const UpsampleParams& operation_attributes, const Tensor& input_tensor) {
+    // The writer steps through logical rows, so the rows split over the cores must not include padding.
+    return operation_attributes.runtime_shapes && input_tensor.layout() == Layout::ROW_MAJOR &&
+           !input_tensor.is_sharded() && !operation_attributes.output_mem_config.is_sharded() &&
+           input_tensor.logical_volume() != 0 && input_tensor.padded_shape() == input_tensor.logical_shape();
+}
+
+metal2::ProgramRunArgs UpsampleMultiCoreInterleavedProgramFactory::override_runtime_arguments(
+    const UpsampleParams& operation_attributes,
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    if (!upsample_interleaved_is_shape_free(operation_attributes, input_tensor)) {
+        // The hash holds the full shapes, so only the tensors change.
+        metal2::ProgramRunArgs run_args;
+        run_args.tensor_args.insert({metal2::TensorParamName{"input"}, input_tensor.mesh_tensor()});
+        run_args.tensor_args.insert({metal2::TensorParamName{"output"}, output_tensor.mesh_tensor()});
+        return run_args;
+    }
+    return interleaved_run_args(input_tensor, output_tensor);
+}
+
 ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
     const metal2::KernelSpecName READER{"reader"};
@@ -57,11 +151,9 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
     const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    const auto& output_shape = output.padded_shape();
     MeshDevice* const device = output.device();
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Declare variables that will be set based on layout
     std::uint32_t input_unit_size;
@@ -195,14 +287,19 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
+    // The row width, and so the page size, stays in the key.
+    metal2::TensorSpecRelaxations relaxations;
+    relaxations.dynamic_tensor_shape = upsample_interleaved_is_shape_free(operation_attributes, input_tensor);
+    relaxations.match_page_size = relaxations.dynamic_tensor_shape;
+
     metal2::ProgramSpec spec{
         .name = "upsample_multicore_interleaved",
         .kernels = {reader, writer},
         .dataflow_buffers = {src0_dfb},
         .tensor_parameters =
             {
-                {.unique_id = INPUT, .spec = input_mesh.tensor_spec()},
-                {.unique_id = OUTPUT, .spec = output_mesh.tensor_spec()},
+                {.unique_id = INPUT, .spec = input_mesh.tensor_spec(), .relaxations = relaxations},
+                {.unique_id = OUTPUT, .spec = output_mesh.tensor_spec(), .relaxations = relaxations},
             },
     };
     if (out_dfb) {
@@ -257,55 +354,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
     }
 
     // Per-core runtime args
-    /*
-    For tiled input, a block refers to a row of input tiles
-    For row-major input, a block refers to a single input row (stick)
-    */
-    metal2::ProgramRunArgs run_args;
-    metal2::KernelRunArgs reader_run_args{.kernel = READER};
-    metal2::KernelRunArgs writer_run_args{.kernel = WRITER};
-    metal2::KernelRunArgs compute_run_args{.kernel = COMPUTE};
-
-    for (std::uint32_t i = 0, blocks_processed = 0; i < num_cores; i++) {
-        const CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        std::uint32_t blocks_per_core = 0;
-        if (core_group_1.contains(core)) {
-            blocks_per_core = work_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            blocks_per_core = work_per_core_group_2;
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
-        }
-
-        const std::uint32_t reader_units = blocks_per_core * input_cb_required_pages;
-        const std::uint32_t reader_start = blocks_processed * input_cb_required_pages;
-
-        metal2::AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"num_pages", reader_units}, {"start_page_id", reader_start}});
-        metal2::AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            core,
-            {{"num_blocks_to_read", blocks_per_core},
-             {"start_block_id", blocks_processed},
-             {"height", output_shape[1]},
-             {"width", output_shape[2]}});
-        if (is_tiled_layout) {
-            metal2::AddRuntimeArgsForNode(
-                compute_run_args.runtime_arg_values, core, {{"per_core_block_cnt", blocks_per_core}});
-        }
-
-        blocks_processed += blocks_per_core;
-    }
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
-    if (is_tiled_layout) {
-        run_args.kernel_run_args.push_back(std::move(compute_run_args));
-    }
-    run_args.tensor_args = {
-        {INPUT, metal2::TensorArgument{input_mesh}},
-        {OUTPUT, metal2::TensorArgument{output_mesh}},
-    };
-
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec), .run_params = interleaved_run_args(input, output)};
 }
 
 }  // namespace ttnn::prim

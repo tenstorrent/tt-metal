@@ -41,6 +41,39 @@ UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
     return UpsampleNearestFloatProgramFactory{};
 }
 
+ttsl::hash::hash_t UpsampleOperation::compute_program_hash(const operation_attributes_t& args, const Tensor& input) {
+    // The flag leaves out of the full hash: where it has no effect, the program is the same either way.
+    const auto full_hash = [&] {
+        auto without_flag = args;
+        without_flag.runtime_shapes = false;
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<UpsampleOperation>, without_flag, input);
+    };
+    if (!upsample_interleaved_is_shape_free(args, input)) {
+        return full_hash();
+    }
+    const auto factory = select_program_factory(args, input);
+    if (!std::holds_alternative<UpsampleMultiCoreInterleavedProgramFactory>(factory)) {
+        return full_hash();
+    }
+    // The kernels take the row counts and the output height and width at run time. The row width sets the page
+    // sizes, and up to one row per core the core set and the input buffering follow the row count, so those stay
+    // in the key. At exactly one row per core the input is single-buffered, hence `>`.
+    const auto grid = input.device()->compute_with_storage_grid_size();
+    const uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1];
+    const uint32_t rows_key = num_rows > grid.x * grid.y ? 0 : num_rows;
+    return tt::tt_metal::operation::hash_operation<UpsampleOperation>(
+        args,
+        factory.index(),
+        input.dtype(),
+        input.layout(),
+        input.memory_config(),
+        input.padded_shape().rank(),
+        input.padded_shape()[-1],
+        input.tensor_spec().tensor_layout().get_alignment(),
+        rows_key);
+}
+
 void UpsampleOperation::validate_on_program_cache_miss(const operation_attributes_t& args, const Tensor& input) {
     // Basic tensor validation
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Input tensor must be on device");
@@ -167,7 +200,8 @@ ttnn::Tensor upsample(
     const std::string& mode,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config) {
+    const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config,
+    bool runtime_shapes) {
     return ttnn::device_operation::launch<UpsampleOperation>(
         UpsampleParams{
             .scale_factor_h = scale_factor_h,
@@ -175,7 +209,8 @@ ttnn::Tensor upsample(
             .mode = mode,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config,
-            .sliding_window_config = sliding_window_config},
+            .sliding_window_config = sliding_window_config,
+            .runtime_shapes = runtime_shapes},
         input_tensor);
 }
 
