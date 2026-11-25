@@ -135,14 +135,9 @@ GroupedMatmulLayout GroupedMatmulDeviceOperation::compute_layout(
     }
 
     // Lanes are the core rows and columns split N, as ttnn.matmul's 2D layout without transpose_mcast.
-    // Per-expert lanes give each expert a row of its own.
+    // Per-expert lanes give each expert a row of its own; with more experts than rows, expert e goes to
+    // row e % rows (each row multiplies its experts one after another).
     const auto grid = input.device()->compute_with_storage_grid_size();
-    TT_FATAL(
-        !attributes.per_expert_lanes || num_experts <= grid.y,
-        "grouped_matmul: per_expert_lanes gives each expert a core row, so num_experts must be at most the grid's {} "
-        "rows, got {}",
-        grid.y,
-        num_experts);
     const uint32_t n_tiles = n / kTileSize;
     const uint32_t column_n_tiles = tt::div_up(n_tiles, grid.x);
     const uint32_t num_columns = tt::div_up(n_tiles, column_n_tiles);
@@ -165,7 +160,8 @@ GroupedMatmulLayout GroupedMatmulDeviceOperation::compute_layout(
         .rows = input_shape[2],
         .k_tiles = k / kTileSize,
         .n_tiles = n_tiles,
-        .num_lanes = attributes.per_expert_lanes ? num_experts : static_cast<uint32_t>(grid.y),
+        .num_lanes = attributes.per_expert_lanes ? std::min(num_experts, static_cast<uint32_t>(grid.y))
+                                                 : static_cast<uint32_t>(grid.y),
         .num_columns = num_columns,
         .column_n_tiles = column_n_tiles,
         .last_column_n_tiles = last_column_n_tiles,

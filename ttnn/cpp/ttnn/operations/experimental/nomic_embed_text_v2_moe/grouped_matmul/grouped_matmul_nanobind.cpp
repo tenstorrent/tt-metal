@@ -54,8 +54,9 @@ void bind_grouped_matmul(nb::module_& mod) {
                 input's.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): defaults to HiFi4
                 with fp32 accumulation.
-            per_expert_lanes (bool): give each expert a core row of its own; num_experts must be
-                at most the grid's rows. The output is the same bit for bit. Defaults to False.
+            per_expert_lanes (bool): give each expert a core row of its own (expert e on row
+                e % rows when there are more experts than rows). The output is the same bit for bit.
+                Defaults to False.
 
         Returns:
             ttnn.Tensor: (1, 1, rows, N).

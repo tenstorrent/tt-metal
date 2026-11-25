@@ -49,12 +49,13 @@ struct LaneBlocks {
 
 // The shared schedule deals the blocks round-robin to the lanes, lane l taking blocks l, l +
 // num_lanes, ..., so that one weight slice serves all lanes at once. With per-expert lanes, lane l
-// multiplies all of expert l's blocks and none of the others'. Every kernel walks the blocks
-// through this function, so the two schedules cannot disagree between kernels.
+// multiplies all blocks of the experts e with e % num_lanes == l (one expert per lane when there are
+// no more experts than lanes) and none of the others'. Every kernel walks the blocks through this
+// function, so the two schedules cannot disagree between kernels.
 template <uint32_t num_lanes, bool per_expert_lanes>
 LaneBlocks lane_blocks(uint32_t expert, uint32_t first_block, uint32_t num_blocks, uint32_t lane) {
     if constexpr (per_expert_lanes) {
-        return {first_block, 1, expert == lane ? num_blocks : 0};
+        return {first_block, 1, expert % num_lanes == lane ? num_blocks : 0};
     } else {
         const uint32_t offset = first_block % num_lanes;
         const uint32_t first = first_block - offset + lane + (lane < offset ? num_lanes : 0);
