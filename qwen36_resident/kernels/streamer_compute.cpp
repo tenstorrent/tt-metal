@@ -364,7 +364,7 @@ FORCE_INLINE void silu_mul(uint32_t ng) {
     cb_pop_front(cb_u, groups * kBlk);
 }
 
-// cb_pout = cb_dout + x[pout_off : pout_off + nd] (kHInPlace: from cb_xres)
+// cb_part (cb_pout, or bfp8 CB 47: O-1c) = cb_dout + x[pout_off : pout_off + nd] (kHInPlace: from cb_xres)
 __attribute__((noinline)) void add_residual(uint32_t nd, uint32_t pout_off) {
     constexpr uint32_t xcb = kHInPlace ? cb_xres : cb_x;
     cb_wait_front(cb_dout, groups * nd_max);
@@ -373,9 +373,10 @@ __attribute__((noinline)) void add_residual(uint32_t nd, uint32_t pout_off) {
     }
     reconfig_full_operand(cb_dout, xcb);
     add_init(cb_dout, xcb);
-    pack_init(cb_pout);
+    pack_reconfig_data_format(cb_part);  // (the tile dims: batch x 32 already, from cb_dout's pack)
+    pack_init(cb_part);
     for (uint32_t gr = 0; gr < groups; gr++) {
-        cb_reserve_back(cb_pout, nd_max);
+        cb_reserve_back(cb_part, nd_max);
         const uint32_t din = gr * nd_max, xin = kHInPlace ? gr * nd_max : gr * Ht + pout_off;
         for (uint32_t t0 = 0; group_on(gr) && t0 < nd; t0 += kDst) {
             const uint32_t n = t0 + kDst <= nd ? kDst : nd - t0;
@@ -386,11 +387,11 @@ __attribute__((noinline)) void add_residual(uint32_t nd, uint32_t pout_off) {
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t d = 0; d < n; d++) {
-                pack_tile(d, cb_pout);
+                pack_tile(d, cb_part);
             }
             tile_regs_release();
         }
-        cb_push_back(cb_pout, nd_max);
+        cb_push_back(cb_part, nd_max);
     }
     cb_pop_front(cb_dout, groups * nd_max);
     if constexpr (kHInPlace) {
@@ -542,7 +543,7 @@ FORCE_INLINE void project_to_partial(uint32_t in0_cb, uint32_t in0_pages, uint32
         cb_pop_front(in0_cb, in0_pages);
         add_residual(nd, pout_off);
     } else {
-        matmul<E>(in0_cb, cb_pout, nd, nd_max);
+        matmul<E>(in0_cb, cb_part, nd, nd_max);
         cb_pop_front(in0_cb, in0_pages);
     }
 }
@@ -606,7 +607,7 @@ void kernel_main() {
             cb_wait_front(cb_h, Ht);
             cb_pop_front(cb_h, skip);
         }
-        matmul<kQkvz>(cb_h, cb_pout, nd, nd_max);
+        matmul<kQkvz>(cb_h, cb_part, nd, nd_max);
         cb_pop_front(cb_h, Ht - skip);
         cb_pop_front(cb_x, groups * Ht);
     }

@@ -143,7 +143,10 @@ K_BFP4 = os.environ.get("RESIDENT_KV_K_BFP4", "0") == "1"
 K_DT = ttnn.bfloat4_b if K_BFP4 else ttnn.bfloat8_b
 # (S0-8 A/B: 0 = the decode-written K rows truncated by the packer, no writer hop — a timing probe, not for serving)
 K_RTN = os.environ.get("RESIDENT_KV_K_RTN", "1") == "1"
-K_PATCH = int(os.environ.get("RESIDENT_KV_K_PATCH", "1"))  # (A/B: 0 leaves the write-back's k row truncated)
+K_PATCH = int(os.environ.get("RESIDENT_KV_K_PATCH", "1"))
+# O-1c (default off until validated): row-group builds send the hub their partials as bfp8 batch x 32 tiles (half the
+# all-reduce's fabric bytes; streamer_common.hpp kHubBfp8, mlp_hub.cpp slot_bytes)
+HUB_BFP8 = os.environ.get("RESIDENT_HUB_BFP8", "0") == "1"  # (A/B: 0 leaves the write-back's k row truncated)
 KV_ROW = (HD // TILE) * TILE_BYTES[K_DT]  # one position tile of a K cache page (bf8; bfp4 with K_BFP4)
 # Strata S0 step 1 (RESIDENT_KV_V_BFP4, default off): the V caches / pool in bfp4 tiles, K stays bf8 (V tolerates 4-bit
 # mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
@@ -1358,6 +1361,13 @@ class ResidentModel:
                 ),
                 tiny_cb(9, groups * nd_max),
                 tiny_cb(10, groups * nd_max),
+                # (O-1c: the bfp8 partial for the hub; cb_pout stays as the writer's staging)
+                # (pages of 32 + 32 B: packed from fp32 DST, a bfp8 batch x 32 tile's exponents come padded to 32 B)
+                *(
+                    [cb(47, grid, groups * nd_max, ttnn.bfloat8_b, page=32 + 32 * B, tiny_tile=True)]
+                    if HUB_BFP8 and groups > 1
+                    else []
+                ),
                 *(
                     [aliased(11, 12, d.Ht), aliased(13, 14, d.Ht)]
                     if groups == 1
@@ -1381,7 +1391,8 @@ class ResidentModel:
             # packets x 2 directions) and a word
             hub_headers = 4 * -(-HIDDEN * 2 * B // packet_bytes)
             x_views = HIDDEN * B // (TILE * TILE)
-            cbs.append(cb(0, hub_grid, 2 * n * x_views))
+            # (O-1c: the slots as bfp8 32x32 views of four batch x 32 tiles, streamer_writer.cpp)
+            cbs.append(cb(0, hub_grid, 2 * n * x_views, *((ttnn.bfloat8_b, 1088) if HUB_BFP8 and groups > 1 else ())))
             cbs.append(cb(2, hub_grid, x_views))
             # (the feed: its candidates in fabric packets, mlp_hub.cpp cand_packets)
             cand_packets = -(-4 * self._cand_words // packet_bytes) if self.feed else 0
@@ -1626,6 +1637,7 @@ class ResidentModel:
                 ("attn_tails", self.attn_tails),  # (attn_common.hpp kTails)
                 ("kv_v_tile", TILE_BYTES[V_DT]),  # (attn_common.hpp kVTile: the V cache's tile, S0)
                 ("kv_k_tile", TILE_BYTES[K_DT]),  # (attn_common.hpp kKvTile: the K cache's tile, S0-8)
+                ("hub_bfp8", int(HUB_BFP8 and self.groups > 1)),  # (O-1c: bfp8 hub partials)
                 ("kv_k_rot", int(K_BFP4)),  # (attn_common.hpp kKRot: q / k rotated by HAD after RoPE, S0-8)
                 ("kv_k_rtn", int(K_BFP4 and K_RTN)),  # (kKRtn: the tail writer rounds the decode-written K rows)
                 ("kv_k_patch", int(K_PATCH)),  # (kKPatch: ... re-encoding the packed row at the write-back)

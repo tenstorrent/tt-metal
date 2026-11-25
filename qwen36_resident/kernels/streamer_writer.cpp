@@ -182,9 +182,9 @@ void kernel_main() {
     static_assert(groups == 1 || o_tiles == Ot, "the mixers' o block per group is the out projection's K");
     auto send_partial = [&](uint32_t round) {
         for (uint32_t g = 0, k = 0; g < groups; g++) {
-            cb_wait_front(cb_pout, nd_max);
+            cb_wait_front(cb_part, nd_max);
             if (!ag.has(g)) {
-                cb_pop_front(cb_pout, nd_max);
+                cb_pop_front(cb_part, nd_max);
                 continue;
             }
             while (hub_slots == 0) {
@@ -197,12 +197,26 @@ void kernel_main() {
                     noc_semaphore_wait_min(slots_sem, sr - 1);
                 }
             }
-            const uint32_t dst = hub_slots + (((sr & 1) * num_chips + chip) * Ht + pout_off) * kTileBytes;
-            noc_async_write(get_read_ptr(cb_pout), get_noc_addr(hub_x, hub_y, dst), nd * kTileBytes);
+            if constexpr (kHubBfp8) {
+                // (O-1c: four consecutive bfp8 batch x 32 tiles [16 B exponents | 256 B mantissas] are, byte for byte,
+                // one bfp8 32x32 tile [64 B exponents | 1024 B mantissas] when their sections are gathered — the hub
+                // sums those 32x32 views as fast as its bf16 ones; the elements map as in the bf16 views)
+                static_assert(kTileBytes == 512 && Ht % 4 == 0, "bfp8 views: batch 8, whole views");
+                const uint32_t base = hub_slots + ((sr & 1) * num_chips + chip) * (Ht / 4) * 1088;
+                const uint32_t src = get_read_ptr(cb_part);
+                for (uint32_t i = 0; i < nd; i++) {
+                    const uint32_t t = pout_off + i, view = base + (t / 4) * 1088, at = src + i * kPartTileBytes;
+                    noc_async_write(at, get_noc_addr(hub_x, hub_y, view + (t % 4) * 16), 16);
+                    noc_async_write(at + kPartExpPad, get_noc_addr(hub_x, hub_y, view + 64 + (t % 4) * 256), 256);
+                }
+            } else {
+                const uint32_t dst = hub_slots + (((sr & 1) * num_chips + chip) * Ht + pout_off) * kTileBytes;
+                noc_async_write(get_read_ptr(cb_part), get_noc_addr(hub_x, hub_y, dst), nd * kTileBytes);
+            }
             noc_async_write_barrier();
             // (row groups: parity-0 sub-rounds count in the gather word's low half, parity 1 in its high half)
             noc_semaphore_inc(hub_gather_sem, groups == 1 ? 1 : 1u << (16 * (sr & 1)));
-            cb_pop_front(cb_pout, nd_max);
+            cb_pop_front(cb_part, nd_max);
         }
     };
     // (row groups: group gr's projection block at gr * kBlk tiles of cb_qkvz_out goes to block gr of the mixers' row

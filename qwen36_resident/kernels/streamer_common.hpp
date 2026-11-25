@@ -100,6 +100,15 @@ constexpr uint32_t kUnit = 64;
 constexpr uint32_t batch = get_compile_time_arg_val(54);
 static_assert(batch == 1 || batch == 2 || batch == 4 || batch == 8, "custom_mm takes 1, 2, 4 or 8 rows");
 constexpr uint32_t kTileBytes = 64 * batch;        // a batch x 32 bf16 tile
+// O-1c (named arg hub_bfp8): the partial for the hub packed as bfp8 batch x 32 tiles (17 / 32 of bf16's bytes: half the
+// all-reduce's fabric traffic) into CB 47; cb_pout stays as the writer's staging for the feed's records / lists
+constexpr bool kHubBfp8 = get_named_compile_time_arg_val("hub_bfp8") != 0;
+constexpr uint32_t cb_part = kHubBfp8 ? 47 : 10;
+// (packed from an fp32 DST, a bfp8 batch x 32 tile comes out as its 2 * batch exponents padded to 32 B, then the 32 *
+// batch mantissa bytes: 288 B at batch 8, not the 272 B tt-metal sizes it as — tests/bfp8_tiny_probe.py; ttnn's own
+// typecast config pads the exponents to 64 B)
+constexpr uint32_t kPartExpPad = 32;
+constexpr uint32_t kPartTileBytes = kHubBfp8 ? kPartExpPad + kTileBytes / 2 : kTileBytes;
 constexpr uint32_t kBlkBytes = kBlk * kTileBytes;  // kBlkViews 32x32 bf16 tiles
 // 32x32 views of a column block that hold its first n tiles
 constexpr uint32_t views_of(uint32_t n) { return (n * batch + 31) / 32; }

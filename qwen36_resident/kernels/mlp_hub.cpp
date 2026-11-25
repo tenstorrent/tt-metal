@@ -123,9 +123,6 @@ constexpr uint32_t cand_bytes = 4 * kCandWords;
 constexpr uint32_t cand_packets = (cand_bytes + packet_bytes - 1) / packet_bytes;
 static_assert(
     groups == 1 || (feed && cand_bytes >= 64), "row groups run with the feed (their active groups, CCL bases)");
-static_assert(
-    groups == 1 || num_streamers * kFeedRows * (sample ? sampling::kListBytes : 16) <= num_chips * vector_bytes,
-    "row groups: the records fit the parity-0 slots");
 constexpr uint32_t n_taps = get_compile_time_arg_val(22);
 static_assert(n_taps <= 5 && (n_taps == 0 || published), "taps are written from the summed x");
 constexpr uint32_t tap_rounds[5] = {
@@ -146,6 +143,20 @@ static_assert(links == 1 || links == 2, "one or two fabric links");
 constexpr uint32_t mc_nocs = get_compile_time_arg_val(30);
 constexpr uint32_t kTapTile = 2048;                          // a bf16 32x32 tile of a tap tensor
 constexpr uint32_t kRowsTile = vector_bytes / hidden_tiles;  // a batch x 32 bf16 tile of x
+// O-1c (named arg hub_bfp8): the partial slots hold bfp8 (17 / 32 of bf16's bytes: half the fabric traffic of the
+// all-reduce); the compute sums them into bf16 x
+constexpr bool kHubBfp8 = get_named_compile_time_arg_val("hub_bfp8") != 0;
+// (the streamers write each tile's exponent / mantissa sections into bfp8 32x32 views of four tiles: the compute sums
+// 32x32 views either way, x stays bf16 32x32 views)
+constexpr uint32_t slot_bytes = kHubBfp8 ? vector_bytes / 2048 * 1088 : vector_bytes;
+constexpr uint32_t slot_pages = vector_bytes / 2048;  // CB 0 pages (32x32 views) of one chip's slot
+constexpr uint32_t x_pages = vector_bytes / 2048;     // CB 2 pages of x
+static_assert(!kHubBfp8 || published, "bfp8 slots: the compute sums them");
+// (row groups: the records go to the slots once every sub-round of the step is summed — the streamers wait for the
+// last slots semaphore first — so both parities' slots hold them; bf16 slots fit them in parity 0 alone)
+static_assert(
+    groups == 1 || num_streamers * kFeedRows * (sample ? sampling::kListBytes : 16) <= 2 * num_chips * slot_bytes,
+    "row groups: the records fit the slots");
 constexpr uint32_t kTapTiles = hidden_tiles / num_chips;     // this chip's hidden tiles
 
 // this chip's columns of x (batch x 32 tiles at `x`) into the tap tensor at `addr` (rows of 32x32 tiles; row group g
@@ -160,7 +171,7 @@ void write_tap(uint32_t x, uint32_t addr, uint32_t g) {
         noc_async_write(src + face_rows, tap.get_noc_addr(t, at + 512), face_rows);
     }
 }
-constexpr uint32_t packets_per_vector = (vector_bytes + packet_bytes - 1) / packet_bytes;
+constexpr uint32_t packets_per_vector = (slot_bytes + packet_bytes - 1) / packet_bytes;
 constexpr uint32_t kRopeEntry = 128;  // compact rope table page: cos[32] | sin[32] bf16
 static_assert(rope_bytes == 3 * 2048, "the token state's rope tiles: cos, sin, -sin");
 constexpr uint32_t num_headers = 2 * packets_per_vector * 2 + (feed ? 2 * cand_packets : 0) + (groups > 1 ? 4 : 0);
@@ -376,8 +387,8 @@ void kernel_main() {
     for (uint32_t par = 0; par < 2; par++) {
         for (uint32_t p = 0; p < packets_per_vector; p++) {
             const uint32_t off = p * packet_bytes;
-            const uint32_t bytes = off + packet_bytes <= vector_bytes ? packet_bytes : vector_bytes - off;
-            const uint64_t dst = get_noc_addr(my_x[0], my_y[0], slots + (par * num_chips + chip) * vector_bytes + off);
+            const uint32_t bytes = off + packet_bytes <= slot_bytes ? packet_bytes : slot_bytes - off;
+            const uint64_t dst = get_noc_addr(my_x[0], my_y[0], slots + (par * num_chips + chip) * slot_bytes + off);
             const uint64_t sem = get_noc_addr(my_x[0], my_y[0], ccl_sem_addr[par]);
             for (uint32_t dir = 0; dir < 2; dir++) {
                 volatile PACKET_HEADER_TYPE* h = allocate();
@@ -499,7 +510,7 @@ void kernel_main() {
     auto send_sub = [&](uint32_t s) {
         const uint32_t l = s / ag.n, g = ag.g[s % ag.n];
         const uint32_t par = s & 1;
-        const uint32_t base = slots + par * num_chips * vector_bytes;
+        const uint32_t base = slots + par * num_chips * slot_bytes;
         if constexpr (groups == 1) {
             noc_semaphore_wait_min(gather, num_streamers * (s + 1));
         } else {
@@ -519,9 +530,9 @@ void kernel_main() {
                 }
             }
             for (uint32_t p = 0; p < packets_per_vector; p++) {
-                const uint32_t src = base + chip * vector_bytes + p * packet_bytes;
+                const uint32_t src = base + chip * slot_bytes + p * packet_bytes;
                 const uint32_t bytes =
-                    (p + 1) * packet_bytes <= vector_bytes ? packet_bytes : vector_bytes - p * packet_bytes;
+                    (p + 1) * packet_bytes <= slot_bytes ? packet_bytes : slot_bytes - p * packet_bytes;
                 auto& f = links > 1 && (p & 1) ? fabric1 : fabric;
                 if (f.has_forward_connection()) {
                     perform_payload_send(f.get_forward_connection(), src, bytes, hdr[par][p][0]);
@@ -537,18 +548,17 @@ void kernel_main() {
     auto finish_sub = [&](uint32_t s) {
         const uint32_t l = s / ag.n, g = ag.g[s % ag.n];
         const uint32_t par = s & 1;
-        const uint32_t base = slots + par * num_chips * vector_bytes;
+        const uint32_t base = slots + par * num_chips * slot_bytes;
         if constexpr (num_chips > 1) {
             noc_semaphore_wait_min(ccl_sem[par], expected[par]);
         }
         mark(s, 2);
         // published: the compute sums the slots into x
-        uint32_t src = base, bytes = num_chips * vector_bytes;
+        uint32_t src = base, bytes = num_chips * slot_bytes;
         if constexpr (published) {
-            constexpr uint32_t views = vector_bytes / 2048;
-            cb_reserve_back(0, num_chips * views);
-            cb_push_back(0, num_chips * views);
-            cb_wait_front(2, views);
+            cb_reserve_back(0, num_chips * slot_pages);
+            cb_push_back(0, num_chips * slot_pages);
+            cb_wait_front(2, x_pages);
             mark(s, 3);
             if constexpr (groups > 1 && num_chips > 1) {
                 // the slots of parity par are summed: tell the peers (their pipelined send of s + 2 waits for it).
@@ -613,7 +623,7 @@ void kernel_main() {
                 }
             }
             noc_async_write_barrier();
-            cb_pop_front(2, vector_bytes / 2048);
+            cb_pop_front(2, x_pages);
         }
         mark(s, 5);
     };
