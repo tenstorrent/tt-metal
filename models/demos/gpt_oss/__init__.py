@@ -70,9 +70,17 @@ def _model_path():
     return next((p for p in _CI_CHECKPOINTS if os.path.exists(p)), _CI_CHECKPOINTS[-1])
 
 
+_GPT_OSS_20B_HUB_ID = "openai/gpt-oss-20b"
+
+
 def is_gpt_oss_20b(path):
-    name = path.lower()
-    return "20b" in name and "120b" not in name
+    """Whether path is the gpt-oss-20b checkpoint the GPTQ release weights were rounded from: the Hub id
+    openai/gpt-oss-20b, or a local directory named gpt-oss-20b (the name ModelArgs requires). Any other Hub id or
+    directory name (a fine-tune, say) gets no release settings. A fine-tune saved under the directory name gpt-oss-20b
+    cannot be told apart here: set GPT_OSS_RELEASE_DEFAULTS=0 for it."""
+    if not os.path.isdir(path):
+        return path.strip("/") == _GPT_OSS_20B_HUB_ID
+    return os.path.basename(os.path.normpath(path)) == "gpt-oss-20b"
 
 
 def has_checkpoint(path):

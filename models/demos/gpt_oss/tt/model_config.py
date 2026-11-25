@@ -132,7 +132,10 @@ class ModelArgs:
         # program is built for the first time after the decode trace is captured -- its kernel binaries would be
         # allocated where a trace replay can overwrite them (TT_METAL_TRACE_ALLOC_TRACKING=1) -- and no request waits
         # on a bucket's first build (13-16 s at 4K, measured).
-        self.warm_every_bucket = determine_device_name(self.mesh_device) == "P150x4"
+        # gpt-oss-20b only: 120B on the same machine keeps the capped warmup (its every-bucket warmup is unmeasured).
+        self.warm_every_bucket = (
+            self.model_name == "gpt-oss-20b" and determine_device_name(self.mesh_device) == "P150x4"
+        )
         if self.warm_every_bucket:
             self.capped_warmup_seq_len = 1 << (self.max_seq_len.bit_length() - 1)
         else:

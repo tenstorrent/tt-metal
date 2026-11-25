@@ -199,6 +199,13 @@ class Model:
         )
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
+        # gpt-oss-20b (32 experts) on a Blackhole 1x4 mesh (QuietBox 2) selects a prefill's last-token tile with the
+        # exact one-hot matmul of last_tile_rows, whose position is data; other models and meshes keep ttnn.slice.
+        self.select_last_tile_by_matmul = (
+            hf_config.num_local_experts == 32
+            and tuple(mesh_device.shape) == (1, 4)
+            and ttnn.device.is_blackhole(mesh_device)
+        )
         self.core_grid = ttnn.CoreCoord(8, 8)
         self.head_dim = hf_config.head_dim
         self.max_local_batch_size = max_local_batch_size
@@ -554,7 +561,9 @@ class Model:
                 hidden_states = gather_users(rows, batch_size, sp_axis)
                 rows.deallocate(True)
             else:
-                hidden_states = self._gather_prefill_rows(hidden_states, get_last_token, sp_axis)
+                hidden_states = self._gather_prefill_rows(
+                    hidden_states, get_last_token, sp_axis, self.select_last_tile_by_matmul
+                )
             if get_last_token != -1:
                 get_last_token = -1  # already the [1, 1, 32, H] tile of the last token
         logits = hidden_states
@@ -575,7 +584,12 @@ class Model:
                 for t in tiles:
                     t.deallocate(True)
             else:
-                logits_sliced = last_tile_rows(logits, get_last_token)
+                if self.select_last_tile_by_matmul:
+                    logits_sliced = last_tile_rows(logits, get_last_token)
+                else:
+                    logits_sliced = ttnn.slice(
+                        logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1])
+                    )
                 logits.deallocate(True)
                 logits = logits_sliced
             hidden_states = logits
@@ -665,16 +679,32 @@ class Model:
         return picked
 
     @staticmethod
-    def _gather_prefill_rows(rows, get_last_token, cluster_axis):
+    def _gather_prefill_rows(rows, get_last_token, cluster_axis, by_matmul=False):
         """End of a sequence-parallel prefill: rows is this device's [1, 1, S / N, H] share of the final residual
         (device d: rows d * S / N onward). get_last_token == -1: all-gather all S rows. Otherwise return the 32-row tile
-        at get_last_token (tile-aligned), [1, 1, 32, H] on every device (last_tile_rows)."""
+        at get_last_token (tile-aligned), [1, 1, 32, H] on every device: with by_matmul, last_tile_rows; else every
+        device slices its local rows at get_last_token % (S / N), an all-gather of those tiles gives [1, 1, 32 N, H], and
+        the tile of device get_last_token // (S / N) is the one."""
         if get_last_token == -1:
             full = ttnn.all_gather(rows, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             rows.deallocate(True)
             return full
-        out = last_tile_rows(rows, get_last_token, cluster_axis)
+        if by_matmul:
+            out = last_tile_rows(rows, get_last_token, cluster_axis)
+            rows.deallocate(True)
+            return out
+        local = rows.shape[-2]
+        assert get_last_token % 32 == 0 and local % 32 == 0, f"get_last_token {get_last_token}, rows {local}"
+        off = get_last_token % local
+        # A slice covering the whole tensor (one tile of rows per device) aliases its input: no slice then.
+        tile = rows if local == 32 else ttnn.slice(rows, (0, 0, off, 0), (1, 1, off + 32, rows.shape[-1]))
+        tiles = ttnn.all_gather(tile, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if tile is not rows:
+            tile.deallocate(True)
         rows.deallocate(True)
+        d = get_last_token // local
+        out = ttnn.slice(tiles, (0, 0, 32 * d, 0), (1, 1, 32 * d + 32, tiles.shape[-1]))
+        tiles.deallocate(True)
         return out
 
     def _page_table_mesh_mapper(self, B):

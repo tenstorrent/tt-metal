@@ -91,3 +91,24 @@ def test_off_and_model_rules(monkeypatch, tmp_path):
     assert gpt_oss.apply_release_defaults() == []
     monkeypatch.setenv("HF_MODEL", "openai/gpt-oss-120b")
     assert gpt_oss.apply_release_defaults() == []
+
+
+@pytest.mark.parametrize(
+    "path, expected",
+    [
+        ("openai/gpt-oss-20b", True),
+        ("someone/gpt-oss-20b", False),  # another Hub repo of the same name: a fine-tune, say
+        ("someone/gpt-oss-20b-finetune", False),
+        ("openai/gpt-oss-120b", False),
+    ],
+)
+def test_model_rule_hub_ids(path, expected):
+    assert gpt_oss.is_gpt_oss_20b(path) == expected
+
+
+@pytest.mark.parametrize("name, expected", [("gpt-oss-20b", True), ("my-gpt-oss-20b-ft", False), ("gpt-oss-120b", False)])
+def test_model_rule_directories(tmp_path, name, expected):
+    d = tmp_path / "models" / name  # (the fixture's tmp_path/gpt-oss-20b is HF_MODEL)
+    d.mkdir(parents=True)
+    assert gpt_oss.is_gpt_oss_20b(str(d)) == expected
+    assert gpt_oss.is_gpt_oss_20b(str(d) + "/") == expected
