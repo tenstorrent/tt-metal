@@ -464,14 +464,16 @@ jobs:
       - name: Record the source run
         env:
           SOURCE_RUN: ${{ inputs.use-artifacts-from-run }}
+          BUILD_TYPE: ${{ inputs.build-type }}
+          RUN_URL_BASE: ${{ github.server_url }}/${{ github.repository }}/actions/runs
           BUILD: ${{ steps.download.outputs.build-artifact-name }}
           PACKAGES: ${{ steps.download.outputs.packages-artifact-name }}
           WHEEL: ${{ steps.download.outputs.wheel-artifact-name }}
           TTNN_IMPORT: ${{ steps.download.outputs.ttnn-import-artifact-name }}
         run: |
           {
-            echo "### ${{ inputs.build-type }}: no build; artifacts reused from run ${SOURCE_RUN}"
-            echo "Source: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${SOURCE_RUN}"
+            echo "### ${BUILD_TYPE}: no build; artifacts reused from run ${SOURCE_RUN}"
+            echo "Source: ${RUN_URL_BASE}/${SOURCE_RUN}"
             echo ""
             echo "- build: \`${BUILD:-none}\`"
             echo "- packages: \`${PACKAGES:-none}\`"

@@ -115,7 +115,6 @@ runs:
     - name: Download artifacts
       id: download
       shell: bash
-      # The patterns hold a ref name, so they go in through env, not into the script text.
       env:
         BUILD_PATTERN: ${{ inputs.build-artifact-pattern }}
         REQUIRE_BUILD: ${{ inputs.require-build-artifact }}

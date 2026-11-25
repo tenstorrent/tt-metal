@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# Find the merge-queue run that already built a commit, so that the push run for
-# the same commit can take those builds and not build the commit again.
+# Find the merge-queue run that built a commit, for reuse of its builds.
 #
 # Usage: find-merge-queue-builds.sh <workflow-file> <sha> <key>=<caller-job-id> [...]
 #
 # For each <key>, the script writes "<key>=<run-id>" to $GITHUB_OUTPUT (stdout
 # when GITHUB_OUTPUT is not set). <run-id> is the newest successful merge_group
 # run of <workflow-file> for <sha> in which the build jobs of <caller-job-id>
-# ran and passed. When no run agrees, the script writes "<key>=" and the caller
-# builds as before. That is the path for an admin merge or a direct push.
+# ran and passed. When no run agrees, the script writes "<key>=".
 #
-# The script does not fail. An API error gives empty outputs, so a lookup
-# problem costs a build and never removes a build.
+# The script does not fail. An API error gives empty outputs.
 #
 # Env: GH_TOKEN, GITHUB_REPOSITORY, and WAIT_SECONDS (default 300): how long to
 # wait for a queue run of <sha> that is not complete yet.
@@ -58,9 +55,7 @@ if ! printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$'; then
     exit 0
 fi
 
-# Wait only when no completed run is there yet. The 'destroyed' run of the queue
-# entry starts at the merge, so it can still run when the push run starts; do not
-# wait for it when the 'checks_requested' run is already complete.
+# Wait while no run is successful and some run is not complete, up to WAIT_SECONDS.
 deadline=$((SECONDS + WAIT_SECONDS))
 while :; do
     if ! RUNS=$(gh api "repos/${REPO}/actions/workflows/${WORKFLOW}/runs?head_sha=${SHA}&event=merge_group&per_page=100" \

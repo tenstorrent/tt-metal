@@ -59,7 +59,7 @@ on:
       - destroyed
   push:
     branches:
-      # The merge-queue run of the same commit already built it; find-queue-builds reuses that build
+      # find-queue-builds reuses the build of the merge-queue run of the same commit, when one exists
       - main
 
 concurrency:
@@ -127,13 +127,11 @@ jobs:
       manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
       llk-ci-docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
 
-  # A push to main runs this workflow on the commit that the merge queue already
-  # built and tested in its merge_group run. Find that run, so asan-build takes its
-  # artifacts. All tests still run. With no successful queue run (an admin merge
-  # or a direct push) or an API error, the output is empty and the push run builds
-  # as before. It runs whenever find-changed-files runs and always passes: only its
-  # steps skip or fail soft. A skipped or failed job here would skip the jobs that
-  # need asan-build.
+  # On push (or a dispatch with reuse-builds-from-sha), find the successful
+  # merge_group run of the same commit. The output is that run id, or empty.
+  # asan-build takes the artifacts of that run, or builds when it is empty. The
+  # job runs on the same events as find-changed-files; only its steps are
+  # conditional and fail soft.
   find-queue-builds:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-slim
@@ -790,8 +788,6 @@ jobs:
         with:
           # verify-time-budgets is required, not optional: it has no build dependency
           # and never skips, so a skip would mean it silently stopped gating.
-          # find-queue-builds is required: when it fails, asan-build and its tests skip,
-          # and an optional skip would let the gate pass with no build.
           required-jobs: "verify-time-budgets, find-queue-builds"
           optional-jobs: >-
             asan-build, code-analysis,
