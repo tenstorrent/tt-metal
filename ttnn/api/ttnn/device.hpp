@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 #include "ttnn/types.hpp"

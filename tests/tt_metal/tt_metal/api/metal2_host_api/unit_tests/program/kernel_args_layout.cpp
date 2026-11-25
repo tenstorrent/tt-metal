@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 
 #include "impl/kernels/kernel.hpp"

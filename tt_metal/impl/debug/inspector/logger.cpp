@@ -9,7 +9,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_device_view_impl.hpp"
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <iomanip>
 #include <chrono>
 

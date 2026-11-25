@@ -19,7 +19,7 @@
 #include "impl/data_format/bfp_simd.hpp"
 #include <tt_stl/joined_tasks.hpp>
 
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include <tt-umd/types/arch.hpp>
 #include "jit_build/data_format.hpp"
 

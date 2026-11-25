@@ -6,7 +6,7 @@
 
 #include <string_view>
 
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 
 #include "unary_backward_op_types.hpp"
 

@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
 
