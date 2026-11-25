@@ -63,7 +63,7 @@ links:
   - {a: {device: M, port: 1}, b: {device: B, port: 0}, backend: ethernet}
 )yaml";
 
-// mmk 26ww45: one CCE0 on each of tiles 0 to 3, tiles 0-1 and 2-3 wired (row 8). The hart
+// mmk: one CCE0 on each of tiles 0 to 3, tiles 0-1 and 2-3 wired (row 8). The hart
 // count is the test's choice; the rows read it from here.
 PackageFacts mmk() { return {{{0, 0}, {1, 0}, {2, 0}, {3, 0}}, 4, kSram, {{0, 1}, {2, 3}}}; }
 

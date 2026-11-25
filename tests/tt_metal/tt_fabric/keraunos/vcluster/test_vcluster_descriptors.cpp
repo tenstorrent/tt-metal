@@ -281,7 +281,7 @@ Manifest checked(std::string_view yaml, const fs::path& package = package_soc_de
 // --- package_facts -----------------------------------------------------------------------------------------------
 
 // The package facts: the cores from keraunos.cores, 8 harts a CCE, the SRAM size from eth_l1_size, and the Ethernet
-// tile pairs (0, 1) and (2, 3) of 26ww45.eth-pcs-output-inter.
+// tile pairs (0, 1) and (2, 3).
 TEST(VclusterDescriptors, PackageFacts) {
     const PackageFacts facts = package_facts(package_soc_desc());
     EXPECT_EQ(facts.cores, (std::vector<CceId>{{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}, {2, 1}, {3, 1}}));

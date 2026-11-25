@@ -115,8 +115,8 @@ struct PackageFacts {
     std::vector<CceId> cores;         // the SoC descriptor's keraunos.cores (row 2)
     uint32_t harts_per_cce = 0;       // harts of every CCE (row 3)
     uint64_t sram_bytes_per_cce = 0;  // SRAM of every CCE; a region is exactly this (rows 1 and 4)
-    // HSIO tile pairs the session's bring-up wired with Ethernet, in either order (row 8). On mmk 26ww45 with
-    // chippy bringup_mmk.py KER_ETH_LINKS: {0, 1} and {2, 3}.
+    // HSIO tile pairs the session's bring-up wired with Ethernet, in either order (row 8). On the emulated mmk
+    // package: {0, 1} and {2, 3}.
     std::vector<std::pair<uint32_t, uint32_t>> ethernet_tile_pairs;
 };
 

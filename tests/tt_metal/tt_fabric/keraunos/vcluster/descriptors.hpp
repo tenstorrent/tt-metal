@@ -87,8 +87,8 @@ std::vector<std::pair<uint32_t, uint32_t>> noc_links(const Manifest& manifest);
 
 // The package facts check_manifest() takes, from the package SoC descriptor at `package_soc_desc`: its
 // keraunos.cores as (hsio, eth_cce), MEM_IERISC_LOCAL_HARTS harts a CCE, eth_l1_size bytes of SRAM a CCE, and the
-// Ethernet tile pairs (0, 1) and (2, 3) the mmk 26ww45.eth-pcs-output-inter bring-up wires (chippy bringup_mmk.py
-// KER_ETH_LINKS). Throws std::runtime_error (TT_FATAL) when the file cannot be read, lacks keraunos.cores or
+// Ethernet tile pairs (0, 1) and (2, 3), whose Ethernet ports are wired to each other on the emulated mmk package.
+// Throws std::runtime_error (TT_FATAL) when the file cannot be read, lacks keraunos.cores or
 // eth_l1_size, or holds a value of the wrong type there (naming the file).
 PackageFacts package_facts(const std::filesystem::path& package_soc_desc);
 

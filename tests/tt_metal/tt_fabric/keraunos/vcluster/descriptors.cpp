@@ -47,8 +47,7 @@ constexpr uint32_t kBoardUpiShift = 36;
 constexpr uint64_t kFirstChipUniqueId = kQuasarBoardUpi << kBoardUpiShift;
 constexpr const char* kQuasar = "quasar";
 
-// The HSIO tile pairs the mmk 26ww45.eth-pcs-output-inter bring-up wires with Ethernet (chippy bringup_mmk.py
-// KER_ETH_LINKS).
+// The HSIO tile pairs whose Ethernet ports are wired to each other on the emulated mmk package.
 const std::vector<std::pair<uint32_t, uint32_t>> kWiredEthernetTilePairs = {{0, 1}, {2, 3}};
 
 constexpr const char* kClusterDescFile = "cluster_desc.yaml";
