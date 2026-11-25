@@ -4,12 +4,12 @@
 
 #include "all_gather_minimal_matmul_async_device_operation.hpp"
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -19,7 +19,7 @@
 #include "ttnn/operations/common/hash_without_rows.hpp"
 #include <algorithm>
 #include <bit>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tuple>
 #include <unordered_map>
 #include <utility>

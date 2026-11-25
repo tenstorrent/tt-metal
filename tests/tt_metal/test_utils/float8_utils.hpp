@@ -7,9 +7,9 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/float8.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
 
 namespace tt::test_utils {
 

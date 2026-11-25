@@ -72,11 +72,9 @@ add_subdirectory(deepseek_moe_post_combine_tilize)
 add_subdirectory(dropout)
 add_subdirectory(fft)
 add_subdirectory(fused_msda)
+add_subdirectory(gdn)
 add_subdirectory(modulated_deform_conv2d)
 add_subdirectory(multi_scale_deformable_attn)
-add_subdirectory(nomic_embed_text_v2_moe/routed_combine)
-add_subdirectory(nomic_embed_text_v2_moe/grouped_matmul)
-add_subdirectory(nomic_embed_text_v2_moe/routing_metadata)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
 add_subdirectory(ssm)
@@ -126,11 +124,9 @@ target_link_libraries(
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::FusedMSDA
+        TTNN::Ops::Experimental::GDN
         TTNN::Ops::Experimental::ModulatedDeformConv2d
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
-        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine
-        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmul
-        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SSM
@@ -187,9 +183,6 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FusedMSDA>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::ModulatedDeformConv2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmul>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SSM>

@@ -11,9 +11,10 @@ Header locations below are relative to `tt_metal/api/`.
 
 | Header location | Audience | Allowed API dependencies |
 | --- | --- | --- |
-| `tt-metalium/`, excluding `experimental/` | Stable public API | Stable |
+| `tt-metalium/`, excluding `experimental/` and `legacy/` | Stable public API | Stable |
+| `tt-metalium/<component>/legacy/` | A replacement exists in the stable API; retained for existing callers | Stable, legacy |
 | `tt-metalium/experimental/` | External users accepting change | Stable, experimental |
-| `internal/` | Tenstorrent components only | Stable, experimental, internal |
+| `internal/` | Tenstorrent components only | Stable, experimental, internal, legacy |
 
 Internal headers belong in `tt_metal/api/internal/`, never `tt_metal/api/tt-metalium/internal/`.
 See the [internal API README](../../tt_metal/api/internal/README.md) for the

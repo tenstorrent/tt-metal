@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 
 namespace ttnn::operations::experimental::deepseek::moe::moe_gate_mm {
 

@@ -282,10 +282,10 @@ run_tests() {
 	run_test 'DRAM tests' $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py &&
 		last_dram_ok=1 || last_dram_ok=0
 
-	run_test 'PCIe read test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0 &&
+	run_test 'PCIe read test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Reading Host/size:1073741824/page_size:32768/readers:1/writers:0/host_copy:0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_read_ok=1 || last_pcie_read_ok=0
 
-	run_test 'PCIe write test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0 &&
+	run_test 'PCIe write test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Writing Host/size:1073741824/page_size:32768/readers:0/writers:1/host_copy:0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_write_ok=1 || last_pcie_write_ok=0
 
 	emit_section 'Test results'

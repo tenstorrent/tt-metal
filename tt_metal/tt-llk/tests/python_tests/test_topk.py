@@ -273,6 +273,7 @@ def _run_topk_sfpu(
     sort_mode: str,
     split_phase: int = 0,
     split_reinit: bool = False,
+    split_phase2: int = 0,
 ):
     stable_sort = sort_mode == "stable"
     fused_stable = sort_mode == "fused"
@@ -313,6 +314,7 @@ def _run_topk_sfpu(
                 topk_rank_stamped=rank_stamped,
                 topk_split_phase=split_phase,
                 topk_split_reinit=split_reinit,
+                topk_split_phase2=split_phase2,
             ),
         ],
         runtimes=[
@@ -429,11 +431,12 @@ def test_topk_sfpu(
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
-    input_dimensions=[[32, 128]],
+    input_dimensions=[[32, 128], [64, 128]],
     K=[32],
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
     sort_mode=["unstable", "stable", "fused", "rank_stamped"],
     split_phase=[1, 2, 3, 4],
+    split_phase2=[0, 2, 3],
     split_reinit=[False, True],
 )
 def test_topk_sfpu_split_local_sort(
@@ -443,13 +446,20 @@ def test_topk_sfpu_split_local_sort(
     sort_direction: TopKSortDirection,
     sort_mode: str,
     split_phase: int,
+    split_phase2: int,
     split_reinit: bool,
 ):
     """Local sort resumed at a nonzero start phase must match the single-call sort.
 
-    split_reinit=False replays the windows the first call left recorded; True re-runs the
-    topk init in between, so the second call records them from scratch.
+    split_reinit=False replays the windows the previous call left recorded; True re-runs the
+    topk init and clears the replay buffer in between, so each call records them from scratch.
+    split_phase2 > 0 adds a middle call [split_phase, split_phase2), covering the phase ranges
+    (1,1), (1,2) and (2,2) of the phase 0..3 group pass. [64, 128] runs a second tile row.
     """
+    if split_phase2 and split_phase2 <= split_phase:
+        pytest.skip("split_phase2 must exceed split_phase.")
+    if input_dimensions[0] > 32 and (split_phase2 or split_reinit):
+        pytest.skip("The second tile row is covered by the two-call, no-reinit split.")
     _run_topk_sfpu(
         formats,
         input_dimensions,
@@ -458,6 +468,7 @@ def test_topk_sfpu_split_local_sort(
         sort_mode,
         split_phase=split_phase,
         split_reinit=split_reinit,
+        split_phase2=split_phase2,
     )
 
 

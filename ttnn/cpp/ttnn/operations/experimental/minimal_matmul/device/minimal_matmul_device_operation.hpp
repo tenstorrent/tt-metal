@@ -7,7 +7,7 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/tensor/tensor.hpp"

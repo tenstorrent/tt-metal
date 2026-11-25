@@ -1,0 +1,36 @@
+# Int32 unary bitwise and / or / xor with 0x70FF00F5 under SyncFull (sfpu_int32_unary.yaml runs them
+# under SyncHalf).
+# Int32 must be unpacked straight to Dest and needs a 32-bit Dest; only non-negative values are
+# checked (see sfpu_int32_binary_bitwise_fmod_remainder.yaml).
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Int32]
+    stimuli:
+      include:
+        - [2.0, 40.0]
+        - [123456000.0, 123456030.0]
+        - [2147483600.0, 2147483646.0]
+        - 0.0
+        - 65535.0
+        - 65536.0
+        - 1073741824.0
+        - 2147483647.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Int32
+
+operations:
+  - dest_sync: SyncFull
+    math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [UnaryBitwiseAnd, UnaryBitwiseOr, UnaryBitwiseXor]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}
