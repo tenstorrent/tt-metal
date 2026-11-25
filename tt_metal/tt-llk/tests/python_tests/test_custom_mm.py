@@ -18,7 +18,7 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
               ``face_r_dim = M`` rows tall. So M is restricted to {1,2,4,8}.
   in1 (B)  -> SrcA, full ``[32,32]`` tiles, or 2-face ``[32,16]`` ones for N = 16 * ct_dim
               (``tile_c = 16``), which give ``[M,16]`` output tiles holding a single face.
-  rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim in [1,256], LoFi only.
+  rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim >= 1, LoFi only.
 
 The SplitAcc layouts accumulate the second k-face apart and finalize on the last call,
 merging it back; the other layouts need no finalization. Either way DEST ends up holding the
@@ -49,6 +49,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
+from helpers.custom_mm_utils import face_walk_operands
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import (
@@ -124,6 +125,16 @@ class CUSTOM_MM_TRANSPOSE(TemplateParameter):
         return f"constexpr bool CUSTOM_MM_TRANSPOSE = {str(self.transpose).lower()};"
 
 
+@dataclass
+class CUSTOM_MM_READ_TRANSPOSED(TemplateParameter):
+    """in1 tiles are stored c-major / k-minor and the unpacker walks them column by column."""
+
+    in1_read_transposed: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.in1_read_transposed).lower()};"
+
+
 class CustomMMStimuliConfig(StimuliConfig):
     """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct [32,32] or [32,16] tiles).
 
@@ -146,6 +157,9 @@ class CustomMMStimuliConfig(StimuliConfig):
         )
         self.packed_a = packed_a
         self.packed_b = packed_b
+        # in0 is packed densely; reserve only its bytes
+        self.tile_count_A = max(1, -(-len(packed_a) // self.tile_size_A_bytes))
+        self._calculate_tile_sizes()
 
     def write(self, location: str = "0,0"):
         from ttexalens.tt_exalens_lib import write_to_device
@@ -168,6 +182,7 @@ def _build_custom_mm(
     dest_sync=DestSync.Half,
     tile_c=DEFAULT_TILE_C_DIM,
     transpose=False,
+    read_transposed=False,
     *,
     is_perf=False,
     run_types=None,
@@ -177,6 +192,7 @@ def _build_custom_mm(
 
     ``tile_c`` is the in1 and output tile width: 32, or 16 for [32,16] in1 tiles.
     ``transpose`` stores each in1 tile as B^T: [tile_c, 32], so [32,32] or [16,32].
+    ``read_transposed`` stores the in1 tiles c-major / k-minor, the order the unpacker then walks.
     """
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * tile_c
@@ -192,44 +208,48 @@ def _build_custom_mm(
     for i in range(kt * 2):
         packed_a += in0_packer(torch_a[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM])
 
-    # in1 (B -> SrcA): kt*ct [32,tile_c] tiles, k-major / c-minor -- the order the SrcA
-    # CFGSHIFTMASK walk reads them (read_transposed=false: contiguous tiles). With transpose
+    # in1 (B -> SrcA): kt*ct [32,tile_c] tiles, k-major / c-minor, or c-major / k-minor with
+    # read_transposed -- the order the SrcA CFGSHIFTMASK walk reads them. With transpose
     # each tile holds B^T, [tile_c, 32]; its faces still go along K in order for a [16,32] tile.
     in1_tile_dims = (
         [tile_c, DEFAULT_TILE_R_DIM] if transpose else [DEFAULT_TILE_R_DIM, tile_c]
     )
     packed_b = b""
     golden_b = torch_b.clone()
-    for r in range(kt):
-        for c in range(ct):
-            rows = slice(r * DEFAULT_TILE_R_DIM, (r + 1) * DEFAULT_TILE_R_DIM)
-            cols = slice(c * tile_c, (c + 1) * tile_c)
-            blk = torch_b[rows, cols]
-            if transpose:
-                blk = blk.T.contiguous()
-            # Face-major (tilized) layout inside each in1 tile. Tilize in the input
-            # format so the returned dtype matches the packer (pack_fp32 rejects a
-            # bfloat16 tensor, which is tilize_block's default Float16_b dtype).
-            tiled_blk = tilize_block(
-                blk,
+    tile_order = (
+        [(r, c) for c in range(ct) for r in range(kt)]
+        if read_transposed
+        else [(r, c) for r in range(kt) for c in range(ct)]
+    )
+    for r, c in tile_order:
+        rows = slice(r * DEFAULT_TILE_R_DIM, (r + 1) * DEFAULT_TILE_R_DIM)
+        cols = slice(c * tile_c, (c + 1) * tile_c)
+        blk = torch_b[rows, cols]
+        if transpose:
+            blk = blk.T.contiguous()
+        # Face-major (tilized) layout inside each in1 tile. Tilize in the input
+        # format so the returned dtype matches the packer (pack_fp32 rejects a
+        # bfloat16 tensor, which is tilize_block's default Float16_b dtype).
+        tiled_blk = tilize_block(
+            blk,
+            dimensions=in1_tile_dims,
+            stimuli_format=in1_format,
+            tile_dimensions=in1_tile_dims,
+        ).flatten()
+        # BFP packers need the face count; the others pack the whole tensor.
+        packed_tile = (
+            in1_packer(tiled_blk, num_faces=in1_num_faces)
+            if in1_format in _BFP_UNPACKERS
+            else in1_packer(tiled_blk)
+        )
+        packed_b += packed_tile
+        if in1_format in _BFP_UNPACKERS:
+            stored = untilize_block(
+                _BFP_UNPACKERS[in1_format](packed_tile, num_faces=in1_num_faces),
                 dimensions=in1_tile_dims,
-                stimuli_format=in1_format,
                 tile_dimensions=in1_tile_dims,
-            ).flatten()
-            # BFP packers need the face count; the others pack the whole tensor.
-            packed_tile = (
-                in1_packer(tiled_blk, num_faces=in1_num_faces)
-                if in1_format in _BFP_UNPACKERS
-                else in1_packer(tiled_blk)
             )
-            packed_b += packed_tile
-            if in1_format in _BFP_UNPACKERS:
-                stored = untilize_block(
-                    _BFP_UNPACKERS[in1_format](packed_tile, num_faces=in1_num_faces),
-                    dimensions=in1_tile_dims,
-                    tile_dimensions=in1_tile_dims,
-                )
-                golden_b[rows, cols] = stored.T if transpose else stored
+            golden_b[rows, cols] = stored.T if transpose else stored
 
     # Golden: plain A @ B (LoFi), row-major, NOT tilized -- the device-side layout is
     # undone in _device_rows. Instantiate MatmulGolden directly (not via
@@ -261,6 +281,7 @@ def _build_custom_mm(
                 calls if calls is not None else CUSTOM_MM_CALLS(),
                 CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
                 CUSTOM_MM_TRANSPOSE(transpose),
+                CUSTOM_MM_READ_TRANSPOSED(read_transposed),
                 CUSTOM_MM_LAYOUT(layout),
                 DEST_SYNC(dest_sync),
             ],
@@ -321,6 +342,7 @@ def _run_custom_mm(
     layout=CustomMmDestLayout.Dense,
     tile_c=DEFAULT_TILE_C_DIM,
     transpose=False,
+    read_transposed=False,
     *,
     is_perf=False,
     perf_report=None,
@@ -352,6 +374,7 @@ def _run_custom_mm(
         layout,
         tile_c=tile_c,
         transpose=transpose,
+        read_transposed=read_transposed,
         is_perf=is_perf,
         run_types=run_types,
         loop_factor=loop_factor,
@@ -382,7 +405,10 @@ def _run_custom_mm(
 
     assert passed_test(
         golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
-    ), f"custom_mm matmul failed for M={M} kt={kt} ct={ct} tile_c={tile_c} transpose={transpose} formats={formats}"
+    ), (
+        f"custom_mm matmul failed for M={M} kt={kt} ct={ct} tile_c={tile_c} transpose={transpose} "
+        f"read_transposed={read_transposed} formats={formats}"
+    )
     return res_tensor
 
 
@@ -475,7 +501,7 @@ def test_custom_mm_split_acc_multi_call(layout, ct):
 
 
 # kt above CUSTOM_MM_MAX_MOP_ITERATIONS (128) splits the unpack over several TT_MOPs, with the one-slot MOP at ct = 1
-# and the four-slot one at ct = 4 (Bfp8_b weights keep that B within L1). 256 is the widest kt_dim.
+# and the four-slot one at ct = 4 (Bfp8_b weights keep that B within L1).
 LONG_K_CASES = [
     pytest.param(
         8,
@@ -508,6 +534,52 @@ LONG_K_CASES = [
 def test_custom_mm_long_k(formats, M, kt, ct):
     """kt_dim past one TT_MOP's 128 iterations, at the one- and four-slot unpack MOP widths."""
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
+
+
+# One walk (255), two (256, 300, and 510 = 2 x 255) and three (511, 765). The transposed case carries the SrcA
+# column walk across a walk boundary. Bfp8_b and Bfp4_b weights keep B within L1.
+FACE_WALK_CASES = [
+    pytest.param(
+        M,
+        kt,
+        ct,
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format),
+        read_transposed,
+        id=f"m{M}-k{kt}-ct{ct}-{in1_format.name}"
+        + ("-read_transposed" if read_transposed else ""),
+    )
+    for M, kt, ct, in1_format, read_transposed in (
+        (8, 255, 1, DataFormat.Float16_b, False),
+        (8, 256, 1, DataFormat.Float16_b, False),
+        (8, 256, 2, DataFormat.Bfp8_b, False),
+        (8, 300, 4, DataFormat.Bfp4_b, False),
+        (2, 300, 4, DataFormat.Bfp4_b, True),
+        (4, 510, 1, DataFormat.Bfp8_b, False),
+        (8, 511, 1, DataFormat.Bfp8_b, False),
+        (1, 765, 1, DataFormat.Bfp8_b, False),
+    )
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats,read_transposed", FACE_WALK_CASES)
+def test_custom_mm_face_walk_exact(formats, M, kt, ct, read_transposed):
+    """kt_dim at and past one SrcB face walk, compared exactly against A @ B."""
+    torch_a, torch_b = face_walk_operands(M, kt, ct)
+    res = _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        operands=(torch_a, torch_b),
+        read_transposed=read_transposed,
+    )
+    golden = (torch_a @ torch_b).to(res.dtype)
+    assert torch.equal(res, golden), (
+        f"custom_mm kt={kt}: {(res != golden).sum().item()} of {res.numel()} "
+        "outputs differ from the exact golden"
+    )
 
 
 ODD_K_CASES = [

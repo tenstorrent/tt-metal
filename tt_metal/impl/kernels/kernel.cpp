@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <device.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -20,7 +20,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "base_types.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
@@ -898,6 +898,12 @@ uint64_t Kernel::compute_hash() const {
     // Independent of compile_time_args_ values: same words with a different split must not collide.
     hasher.update(static_cast<uint64_t>(this->compile_time_vararg_count_));
     hasher.update(this->config_hash());
+    // The -O level passed to the compiler and the linker: the same source built at another level is a different
+    // binary. Hashed here rather than in each config_hash() so that every kernel type picks it up.
+    for (std::string_view opt_level : {this->get_compiler_opt_level(), this->get_linker_opt_level()}) {
+        hasher.update(static_cast<uint64_t>(opt_level.size()));
+        hasher.update(opt_level);
+    }
 
     // Include paths affect compilation: the gcc -I order is significant (left-to-right
     // header resolution), so different lists or orderings must produce different binaries.

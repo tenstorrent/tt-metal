@@ -659,64 +659,71 @@ Tensor unary_chain(
         input_tensor, ops_chain, memory_config, optional_output_tensor, sub_core_grids);
 }
 
-template <typename T>
+namespace {
+
+Tensor unary_with_scalar_variant(
+    operations::unary::UnaryOpType op_type,
+    const Tensor& input_tensor,
+    operations::unary::ScalarVariant param,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    // Floating-point codegen casts the scalar to float, so normalizing here keeps add_sfpu(t, 128) and
+    // add_sfpu(t, 128.0f) on one program cache entry. Integer dtypes keep the exact scalar.
+    if (is_floating_point(input_tensor.dtype())) {
+        param = std::visit([](auto value) { return static_cast<float>(value); }, param);
+    }
+    return std::visit(
+        [&](auto value) {
+            return operations::unary::detail::unary_impl(
+                input_tensor,
+                {operations::unary::EltwiseUnaryWithParam{op_type, value}},
+                memory_config,
+                optional_output_tensor,
+                sub_core_grids);
+        },
+        param);
+}
+
+}  // namespace
+
 Tensor rsub_sfpu(
     const Tensor& input_tensor,
-    T param,
+    operations::unary::ScalarVariant param,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return unary_with_scalar_variant(
+        operations::unary::UnaryOpType::RSUB,
         input_tensor,
-        {EltwiseUnaryWithParam{UnaryOpType::RSUB, {param}}},
-        memory_config,
-        optional_output_tensor,
-        sub_core_grids);
-}
-
-template Tensor ttnn::rsub_sfpu<float>(
-    const Tensor&,
-    float,
-    const std::optional<MemoryConfig>&,
-    const std::optional<Tensor>&,
-    const std::optional<CoreRangeSet>&);
-
-template Tensor ttnn::rsub_sfpu<int>(
-    const Tensor&,
-    int,
-    const std::optional<MemoryConfig>&,
-    const std::optional<Tensor>&,
-    const std::optional<CoreRangeSet>&);
-
-Tensor add_sfpu(
-    const Tensor& input_tensor,
-    float param,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, param)},
+        param,
         memory_config,
         optional_output_tensor,
         sub_core_grids);
 }
 
 Tensor add_sfpu(
-    float param,
+    const Tensor& input_tensor,
+    operations::unary::ScalarVariant param,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return unary_with_scalar_variant(
+        operations::unary::UnaryOpType::ADD_UNARY_SFPU,
+        input_tensor,
+        param,
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
+Tensor add_sfpu(
+    operations::unary::ScalarVariant param,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, param)},
-        memory_config,
-        optional_output_tensor,
-        sub_core_grids);
+    return add_sfpu(input_tensor, param, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 Tensor mul_sfpu(
@@ -751,32 +758,26 @@ Tensor mul_sfpu(
 
 Tensor sub_sfpu(
     const Tensor& input_tensor,
-    float param,
+    operations::unary::ScalarVariant param,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return unary_with_scalar_variant(
+        operations::unary::UnaryOpType::SUB_UNARY_SFPU,
         input_tensor,
-        {EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, param}},
+        param,
         memory_config,
         optional_output_tensor,
         sub_core_grids);
 }
 
 Tensor sub_sfpu(
-    float param,
+    operations::unary::ScalarVariant param,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam{UnaryOpType::RSUB, param}},
-        memory_config,
-        optional_output_tensor,
-        sub_core_grids);
+    return rsub_sfpu(input_tensor, param, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 Tensor div_sfpu(

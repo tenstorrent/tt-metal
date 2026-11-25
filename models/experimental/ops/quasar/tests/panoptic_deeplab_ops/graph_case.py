@@ -92,6 +92,19 @@ DTYPE = {
     "UINT8": ttnn.uint8,
 }
 
+# Quasar has no block-float formats (``is_supported_quasar`` in tt_backend_api_types.cpp), so a
+# captured bfloat8_b / bfloat4_b case is rejected before the op runs. With
+# ``TTNN_GRAPH_OPS_BF8_AS_BF16=1`` those tensors — and a ``DataType::BFLOAT8_B`` inside a
+# ``Conv2dConfig`` (``_CPP_ENUM_OVERRIDES``) — are materialized and checked as bfloat16 instead;
+# the PCC floor keeps the block-float allowance because ``_PCC_BY_DTYPE`` is keyed on the
+# capture string, not on the ttnn dtype. Same switch as the qwen3_vl / gpt_oss suites (#59575).
+BF8_AS_BF16 = os.environ.get("TTNN_GRAPH_OPS_BF8_AS_BF16", "") not in ("", "0", "false", "False")
+_CPP_ENUM_OVERRIDES = {}
+if BF8_AS_BF16:
+    DTYPE["BFLOAT8_B"] = ttnn.bfloat16
+    DTYPE["BFLOAT4_B"] = ttnn.bfloat16
+    _CPP_ENUM_OVERRIDES = {"DataType::BFLOAT8_B": ttnn.bfloat16, "DataType::BFLOAT4_B": ttnn.bfloat16}
+
 LAYOUT = {"TILE": ttnn.TILE_LAYOUT, "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT}
 
 MEM_LAYOUT = {
@@ -311,12 +324,16 @@ _BOOL_FIELDS = frozenset(
 )
 
 
-def build_program_config(spec):
-    """Rebuild a captured program config (e.g. SDPAProgramConfig(...))."""
+def build_program_config(spec, quasar_cls=None):
+    """Rebuild a captured program config (e.g. SDPAProgramConfig(...)).
+
+    ``quasar_cls`` is the quasar fork's copy of the class (see ``U.quasar_program_config_class``),
+    used instead of ``ttnn.<kind>`` when the op is routed to ``ttnn.experimental.quasar``.
+    """
     if spec is None:
         return None
     kind = spec["kind"]
-    cls = getattr(ttnn, kind, None)
+    cls = quasar_cls or getattr(ttnn, kind, None)
     if cls is None:
         pytest.skip(f"{kind} is not exposed on this ttnn build")
 
@@ -352,6 +369,11 @@ def build_program_config(spec):
     for name in _MUST_BE_EMPTY:
         if fields.get(name):
             pytest.skip(f"{kind}.{name}={fields[name]!r} is not reconstructible from the capture")
+
+    if quasar_cls is not None:
+        for name, default in U.QUASAR_CONFIG_DROPPED_FIELDS.get(kind, {}).items():
+            if kwargs.pop(name, default) != default:
+                pytest.skip(f"{kind}.{name}={fields[name]!r} has no equivalent in the quasar fork's config")
 
     try:
         return cls(**kwargs)
@@ -421,6 +443,8 @@ def _unary_with_param(spec):
 
 
 def _cpp_enum(kind, name, raw):
+    if str(raw) in _CPP_ENUM_OVERRIDES:
+        return _CPP_ENUM_OVERRIDES[str(raw)]
     namespace, _, value = str(raw).partition("::")
     enum = _CPP_ENUMS.get(namespace)
     member = getattr(enum, value, None) if enum is not None else None
@@ -654,8 +678,10 @@ def _build_value(spec, mesh_device, case, op_name, key, torch_sink):
     if kind == "mem":
         return build_memory_config(spec, mesh_device)
     if kind == "cfg":
-        builder = _OP_CONFIG_BUILDERS.get(spec["kind"], build_program_config)
-        return builder(spec)
+        builder = _OP_CONFIG_BUILDERS.get(spec["kind"])
+        if builder is not None:
+            return builder(spec)
+        return build_program_config(spec, quasar_cls=U.quasar_program_config_class(op_name, spec["kind"]))
     if kind == "dtype":
         return DTYPE[spec["v"]]
     if kind == "layout":
@@ -1224,21 +1250,22 @@ LOSSLESS = frozenset(
 
 # Dtypes each dtype converts into without rounding (block-float values are a 7- or 3-bit
 # mantissa under a shared exponent, which bfloat16 holds exactly).
+# Keyed on the ttnn dtypes actually built (``DTYPE``), so a ``TTNN_GRAPH_OPS_BF8_AS_BF16`` run
+# judges the bfloat16 it really ran.
 _EXACT_INTO = {
-    "BFLOAT4_B": {"BFLOAT4_B", "BFLOAT8_B", "BFLOAT16", "FLOAT32"},
-    "BFLOAT8_B": {"BFLOAT8_B", "BFLOAT16", "FLOAT32"},
-    "BFLOAT16": {"BFLOAT16", "FLOAT32"},
-    "FLOAT32": {"FLOAT32"},
+    ttnn.bfloat4_b: {ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32},
+    ttnn.bfloat8_b: {ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32},
+    ttnn.bfloat16: {ttnn.bfloat16, ttnn.float32},
+    ttnn.float32: {ttnn.float32},
 }
 
 
 def _holds_exactly(case, out):
     """Whether ``out``'s dtype can represent every value of every float input."""
-    want = next((name for name, dt in DTYPE.items() if dt == out.dtype), None)
     for spec in _tensor_specs(case):
         if spec["dtype"] in _INT_DTYPES:
             continue
-        if want not in _EXACT_INTO.get(spec["dtype"], ()):
+        if out.dtype not in _EXACT_INTO.get(DTYPE[spec["dtype"]], ()):
             return False
     return True
 
@@ -1507,7 +1534,7 @@ def _check_finite(host, case, op_name, index):
     )
 
 
-def _check_placement(got, spec, mesh_device, op_name, index, source="captured"):
+def _check_placement(got, spec, mesh_device, op_name, index, source="captured", op_picks_grid=False):
     """Assert the output landed in the expected layout / buffer type / shard.
 
     Without this a no-op ``to_memory_config`` or ``interleaved_to_sharded`` — one
@@ -1517,7 +1544,11 @@ def _check_placement(got, spec, mesh_device, op_name, index, source="captured"):
     The shard *detail* (grid, per-core shape, orientation) is compared only when the
     expected grid exists on this device: on a smaller device the op derives its own
     grid, and the capture's absolute core coordinates are then not the answer to
-    compare against (the memory layout and buffer type still are).
+    compare against (the memory layout and buffer type still are). When
+    ``op_picks_grid`` is set the op chose its output shard grid from this device's grid
+    (see ``_op_picks_grid``): the orientation is still compared, and so is the shard
+    width of a height-sharded output (the channels each core holds, which the grid does
+    not change); the core range and the grid-dependent shard dimensions are not.
     """
     if "layout" in spec:
         want_layout = LAYOUT[spec["layout"]]
@@ -1538,6 +1569,18 @@ def _check_placement(got, spec, mesh_device, op_name, index, source="captured"):
         got_mem.buffer_type == want_buffer
     ), f"{op_name}: output[{index}] buffer type {got_mem.buffer_type} != {source} {want_buffer}"
 
+    if mem.get("shard") is not None and op_picks_grid:
+        got_shard, want_shard = got_mem.shard_spec, mem["shard"]
+        assert got_shard is not None, f"{op_name}: output[{index}] has no shard spec, {source} is sharded"
+        want_orientation = ORIENTATION[want_shard["orientation"]]
+        assert (
+            got_shard.orientation == want_orientation
+        ), f"{op_name}: output[{index}] shard orientation {got_shard.orientation} != {source} {want_orientation}"
+        if want_mem_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            assert (
+                got_shard.shape[1] == want_shard["shape"][1]
+            ), f"{op_name}: output[{index}] shard width {got_shard.shape[1]} != {source} {want_shard['shape'][1]}"
+        return
     if mem.get("shard") is None or not _shard_grid_fits(mem, mesh_device)[0]:
         return
     want_mem = build_memory_config(mem, mesh_device)
@@ -1559,6 +1602,37 @@ def _output_tensors(out):
     return []
 
 
+_POOL_OPS = frozenset({"ttnn.max_pool2d", "ttnn.avg_pool2d"})
+
+# The compute grid the capture ran on (README: 20-core Blackhole, 5x4).
+_CAPTURE_GRID = (5, 4)
+# Ops that pick their output shard grid from the device's compute grid when the call
+# names no output memory_config: conv2d shards over as many cores as the device has, so
+# a 5x4 capture's 4x4 block-sharded output becomes 8x4 on a 32-core Quasar grid.
+_OP_PICKS_GRID_OPS = frozenset({"ttnn.conv2d"})
+
+
+def _op_picks_grid(case, op_name, mesh_device):
+    """Did the op choose this output's shard grid itself, for a grid other than the capture's?
+
+    Not when the call fixes the grid: an explicit ``override_sharding_config`` names it, and
+    an input that is already sharded keeps its own grid unless ``reshard_if_not_optimal``
+    asks conv2d to re-derive one (conv2d_utils.cpp, ``needs_shard_or_reshard``). Those
+    outputs land on the captured grid on any device it fits, so they keep the full check.
+    """
+    kwargs = case["kwargs"]
+    if op_name not in _OP_PICKS_GRID_OPS or kwargs.get("memory_config") is not None:
+        return False
+    conv_config = (kwargs.get("conv_config") or {}).get("fields", {})
+    if conv_config.get("override_sharding_config"):
+        return False
+    input_mem = (kwargs.get("input_tensor") or {}).get("mem") or {}
+    if input_mem.get("shard") is not None and not conv_config.get("reshard_if_not_optimal"):
+        return False
+    grid = mesh_device.compute_with_storage_grid_size()
+    return (grid.x, grid.y) != _CAPTURE_GRID
+
+
 def _check_output(out, case, mesh_device, op_name):
     """Check every returned tensor against its captured spec, then its values.
 
@@ -1577,6 +1651,7 @@ def _check_output(out, case, mesh_device, op_name):
             expected
         ), f"{op_name}: op returned {len(tensors)} tensor(s), capture recorded {len(expected)}"
 
+    op_picks_grid = _op_picks_grid(case, op_name, mesh_device)
     for i, got in enumerate(tensors):
         spec = expected[i] if i < len(expected) else None
         source = "captured"
@@ -1587,15 +1662,26 @@ def _check_output(out, case, mesh_device, op_name):
         if not spec:
             continue
 
+        pool_single_slice = False
         if "shape" in spec:
             want_shape = tuple(spec["shape"])
-            assert (
-                tuple(got.shape) == want_shape
-            ), f"{op_name}: output[{i}] shape {tuple(got.shape)} != {source} {want_shape}"
+            got_shape = tuple(got.shape)
+            if op_name in _POOL_OPS and len(want_shape) == 4 and want_shape[:2] != (1, 1):
+                # pool2d returns [N, H, W, C] in DRAM from its DRAM-sliced path but a flattened
+                # [1, 1, N*H*W, C] sharded L1 tensor when one slice fits (pool2d_DRAM -> pool2d_L1),
+                # and the slice count depends on the grid: the 20-core capture sliced, a 32-core
+                # Quasar grid may not. Accept that output; the golden check still runs.
+                flat = (1, 1, want_shape[0] * want_shape[1] * want_shape[2], want_shape[3])
+                if got_shape == flat:
+                    want_shape, pool_single_slice = flat, True
+            assert got_shape == want_shape, f"{op_name}: output[{i}] shape {got_shape} != {source} {want_shape}"
         if "dtype" in spec:
             want_dtype = DTYPE[spec["dtype"]]
             assert got.dtype == want_dtype, f"{op_name}: output[{i}] dtype {got.dtype} != {source} {want_dtype}"
-        _check_placement(got, spec, mesh_device, op_name, i, source)
+        # A single-slice pool's flattened L1 output can't match the captured DRAM placement, but its
+        # layout must still be the requested one (TILE output takes a different kernel path).
+        placement_spec = {k: v for k, v in spec.items() if k != "mem"} if pool_single_slice else spec
+        _check_placement(got, placement_spec, mesh_device, op_name, i, source, op_picks_grid)
 
     for i, t in enumerate(tensors):
         _check_finite(from_tt(t, mesh_device), case, op_name, i)
@@ -1657,6 +1743,7 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
             alias if alias is not None else _build_value(spec, mesh_device, case, op_name, name, torch_inputs)
         )
 
+    op = U.quasar_routed(op_name, op)
     for name, value in U.default_kwargs(op_name, mesh_device).items():
         kwargs.setdefault(name, value)
 

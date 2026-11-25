@@ -34,7 +34,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     compose,
     placements,
     release,
+    stage_layout,
     synthetic_state_dict,
     token_ids,
     upload_tokens,
@@ -52,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_device_params
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
@@ -71,13 +73,14 @@ RECOVERY_FROM = 22
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        fabric2d_device_params(
-            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        moe_block_device_params(
+            KimiK3Config,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
         ),
         0,
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-8x4",
+        id="torus-xy-8x4",
     ),
     # Two 4x4 stages (SP=4 on the axis-1 ring, TP=4 on the axis-0 line) run back to back on one
     # tray half: the boundary is the one between a Galaxy's top and bottom stages. Needs the Galaxy
@@ -85,13 +88,19 @@ PLACEMENTS = [
     # tests/run_4x4_stage_tests.sh); unnarrowed, the system mesh is 8x4 and requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
-        torus_x_device_params(
-            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
-        ),
+        moe_block_device_params(KimiK3Config, torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE)),
         1,
         0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="4x4-sp1",
+    ),
+    pytest.param(
+        (4, 4),
+        torus_xy_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        1,
+        0,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="xy4-sp1",
     ),
 ]
 
@@ -291,8 +300,9 @@ def test_pipeline_split_matches_golden(mesh_device, device_params, sp_axis, tp_a
 
 # --- Synthetic weights: split against undivided (K3.1) ----------------------------------------------
 #
-# The K3.1 golden runs one stage, so the split's oracle is the undivided stack on the same weights, cut at the
-# layer-12 seal.
+# The split's oracle is the undivided stack on the same weights, cut at the layer-12 seal (on 4x4, the runner's
+# boundary between stages 0 and 1; on real weights against the trace that cut is test_transformer_depth.py's
+# K3.1 ladder at 4x4). One chunk of the layout (`stage_layout`): 5120 tokens on 8x4, 2560 on 4x4.
 # The handoff is a lossless bf16 concat/slice, so everything produced before the cut -- layers 0-11 and their
 # caches -- must be bit-identical. After the cut it is not: main's AttnRes takes the read that straddles the
 # rank boundary as a closed site of the next block's batch, after the seal, while the undivided walk takes it
@@ -302,19 +312,18 @@ def test_pipeline_split_matches_golden(mesh_device, device_params, sp_axis, tp_a
 #
 # Layers 0-15: the boundary at 12 gives rank 1 one inherited sealed block, and layer 15 is its one
 # full-attention layer (slot 0 of rank 1's kvpe and index caches, slot 3 of the undivided ones).
-SP_SHARDS = 8  # the 8x4 mesh's SP ranks; tokens are contiguous per rank
-
-
-def _worst_shard_pcc(want, got) -> float:
-    """The lowest PCC over the SP shards' token rows (8 x 640 on 8x4), so a fault confined to one rank's
-    tokens shows under the aggregate."""
-    shards = zip(want.float().chunk(SP_SHARDS), got.float().chunk(SP_SHARDS))
+def _worst_shard_pcc(want, got, sp_shards: int) -> float:
+    """The lowest PCC over the SP shards' token rows (tokens are contiguous per SP rank: 8 x 640 on 8x4,
+    4 x 640 on 4x4), so a fault confined to one rank's tokens shows under the aggregate."""
+    shards = zip(want.float().chunk(sp_shards), got.float().chunk(sp_shards))
     return min(float(str(comp_pcc(w, g)[1]).split()[-1]) for w, g in shards)
 
 
 # Bar for everything rank 1 produces (layers 12-15, the layer-15 caches, the final output). Measured on 8x4
-# (bh-glx-120-b08u02, 2026-11-16): worst shard 0.99949 (kvpe cache of layer 15), layers 0.99956-0.99967. The
-# test is deterministic, so the bar's margin is for numerics moving, not noise: 0.998 admits ~4x the measured
+# (bh-glx-120-b08u02, 2026-11-16): worst shard 0.99949 (kvpe cache of layer 15), layers 0.99956-0.99967.
+# Re-measured on 4x4-sp1 (2560-token chunk, 4 shards of 640; top tray half of a Blackhole Galaxy, 2026-11-18):
+# worst shard 0.99950 (kvpe cache of layer 15), layers 0.99957-0.99968, index cache 0.99971, output 0.99981;
+# the same margin as 8x4, so one bar serves both. The test is deterministic, so the bar's margin is for numerics moving, not noise: 0.998 admits ~4x the measured
 # 1 - PCC. A rank that lost the inherited sealed set is expected, not measured on these weights, to land far
 # lower.
 POST_CUT_SHARD_PCC = 0.998
@@ -324,7 +333,9 @@ SYNTHETIC_LAYERS = 16
 
 
 def _run_window(mesh_device, state_dict, ids):
-    """The undivided stack, then the two ranks: per-GLOBAL-layer outputs, final output, caches by global layer."""
+    """The undivided stack, then the two ranks, over one chunk of `ids`: per-GLOBAL-layer outputs, final output,
+    caches by global layer."""
+    seq = len(ids)
 
     def run(ranks):
         per_layer, kv, hidden = {}, {}, None
@@ -346,8 +357,8 @@ def _run_window(mesh_device, state_dict, ids):
                     kvpe_cache=caches.kvpe,
                     index_kv_cache=caches.index,
                     actual_start=0,
-                    actual_end=SEQ_LEN,
-                    layer_tap=lambda idx, h: per_layer.__setitem__(first + idx, compose(mesh_device, h, SEQ_LEN)),
+                    actual_end=seq,
+                    layer_tap=lambda idx, h: per_layer.__setitem__(first + idx, compose(mesh_device, h, seq)),
                 )
                 ttnn.deallocate(inputs)
                 slots = {
@@ -357,11 +368,11 @@ def _run_window(mesh_device, state_dict, ids):
                 }
                 for name, cache in (("kvpe", caches.kvpe), ("index", caches.index)):
                     if cache is not None:
-                        natural = cache_rows(mesh_device, cache, SEQ_LEN, SEQ_LEN)
+                        natural = cache_rows(mesh_device, cache, seq, seq)
                         kv.update({(name, layer): natural[slot] for slot, layer in slots.items()})
             finally:
                 release(stack, caches)
-        output = compose(mesh_device, hidden, SEQ_LEN)
+        output = compose(mesh_device, hidden, seq)
         ttnn.deallocate(hidden)
         return per_layer, output, kv
 
@@ -372,8 +383,8 @@ def _run_window(mesh_device, state_dict, ids):
 
 # This test builds three stacks in one process (undivided, then the two ranks), and a released stack does not
 # return all its L1_SMALL: about 3.7 KB/bank once, then +128 B/bank per further stack (3776 / 3904 / 4032 B
-# after each release at 8192 B), so K3.1's own L1_SMALL_SIZE (2048 B) runs out building the split's first
-# stack. The fix is PR #65843 (TT_CCL keeps the sparse-MLA overlap semaphores for the mesh's lifetime); this
+# after each release at 8192 B), so K3.1's L1_SMALL_SIZE before the MoE block (2048 B) ran out building the
+# split's first stack. The fix is PR #65843 (TT_CCL keeps the sparse-MLA overlap semaphores for the mesh's lifetime); this
 # test-local size goes away once it lands. The runner's constant stays.
 SPLIT_L1_SMALL_SIZE = 8192
 
@@ -385,9 +396,11 @@ SPLIT_L1_SMALL_SIZE = 8192
     indirect=["mesh_device", "device_params"],
 )
 def test_synthetic_split_matches_undivided(mesh_device, device_params):
+    layout = stage_layout(mesh_device)
+    seq, sp_shards = layout.chunk, mesh_device.shape[layout.sp_axis]
     state_dict = synthetic_state_dict(0, SYNTHETIC_LAYERS)
     (whole_layers, whole_out, whole_kv), (split_layers, split_out, split_kv) = _run_window(
-        mesh_device, state_dict, token_ids(SEQ_LEN)
+        mesh_device, state_dict, token_ids(seq)
     )
 
     failures = []
@@ -396,12 +409,14 @@ def test_synthetic_split_matches_undivided(mesh_device, device_params):
     def check(what, layer, want, got):
         if layer < BOUNDARY:
             if not torch.equal(want, got):
-                failures.append(f"{what} differs before the cut (worst SP-shard pcc {_worst_shard_pcc(want, got):.6f})")
+                failures.append(
+                    f"{what} differs before the cut (worst SP-shard pcc {_worst_shard_pcc(want, got, sp_shards):.6f})"
+                )
             return
         # Rank 1 is not bit-exact on main: its first AttnRes read takes the boundary site as a closed site
         # (a different reduction order than the undivided walk's open-site read, 1-3 bf16 ulps on about half
         # its elements). The exact boundary read is pending in #65539; until then a per-SP-shard PCC bar.
-        pcc = 1.0 if torch.equal(want, got) else _worst_shard_pcc(want, got)
+        pcc = 1.0 if torch.equal(want, got) else _worst_shard_pcc(want, got, sp_shards)
         post_cut[what] = pcc
         if pcc < POST_CUT_SHARD_PCC:
             failures.append(f"{what}: worst SP-shard pcc {pcc:.6f} < {POST_CUT_SHARD_PCC}")
@@ -413,7 +428,7 @@ def test_synthetic_split_matches_undivided(mesh_device, device_params):
 
     assert set(split_kv) == set(whole_kv), f"split wrote {sorted(split_kv)}, undivided {sorted(whole_kv)}"
     for (name, layer), want in sorted(whole_kv.items()):
-        assert want[:SEQ_LEN].abs().amax(dim=-1).gt(0).all(), f"{name} cache of layer {layer}: a row is unwritten"
+        assert want[:seq].abs().amax(dim=-1).gt(0).all(), f"{name} cache of layer {layer}: a row is unwritten"
         check(f"{name} cache of layer {layer}", layer, want, split_kv[(name, layer)])
     for what, pcc in post_cut.items():
         logger.info(f"  after the cut, {what}: worst SP-shard pcc {pcc:.7f} (bar {POST_CUT_SHARD_PCC})")

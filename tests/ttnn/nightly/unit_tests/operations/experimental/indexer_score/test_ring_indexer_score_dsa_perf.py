@@ -301,7 +301,7 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, bounds_source):
     sp, tp = mesh_device.shape
     assert (sp, tp) in RING_PERF_MESHES
     assert ttnn.get_num_devices() == sp * tp, "perf proxy must use the complete physical box"
-    assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    assert ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     assert kv_len % 32 == 0
     assert GLM53_Q_PER_SP_RANK == GLM53_Q_PER_CHIP * GLM53_TP
 
@@ -421,7 +421,7 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, bounds_source):
             "q_per_chip={} duration={:.3f} ms, fpu_util={:.2f}% (expected {:.2f}%, band [{:.2f}, {:.2f}])".format(
                 tuple(mesh_device.shape),
                 bounds_source,
-                ttnn.get_fabric_config(),
+                ttnn.get_fabric_config(mesh_device),
                 GLM53_INDEX_HEADS,
                 GLM53_K_CACHE_CAPACITY,
                 kv_len,

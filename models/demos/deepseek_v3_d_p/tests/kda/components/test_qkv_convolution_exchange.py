@@ -93,6 +93,14 @@ _MESHES = [
     _mesh((2, 2), 0, kda_device_params((2, 2)), "mesh-2x2", "quietbox-SP2xTP2-fabric-2d", _COVERAGE),
     # One 4x4 prefill stage (a Galaxy tray half): the SP4 ring is mesh axis 1, a straight X wrap.
     _mesh((4, 4), 1, kda_device_params((4, 4)), "mesh-4x4", "galaxy4x4-SP4xTP4-torus-x", _GALAXY_4X4_SP4XTP4),
+    _mesh(
+        (4, 4),
+        1,
+        kda_device_params((4, 4), wrap_both_axes=True),
+        "mesh-4x4",
+        "galaxy4x4-SP4xTP4-torus-xy",
+        _GALAXY_4X4_SP4XTP4,
+    ),
 ]
 
 
@@ -354,11 +362,9 @@ def _ring_perf_case(shape: tuple[int, int], sp_axis: int, case_id: str, referenc
     )
 
 
-# The BF16-DST references (LoudBox 63.6 us, QuietBox 64.0 us; #62559) scaled by the FP32-DST / BF16-DST ratio 1.3245,
-# measured on LoudBox bh-lb-18 over 3 interleaved rounds. QuietBox was not measured; it assumes LoudBox's ratio.
 _PERF_CASES = [
-    _ring_perf_case((8, 1), 0, "loudbox-SP8xTP1-ring", 84.2),
-    _ring_perf_case((4, 1), 0, "quietbox-SP4xTP1-ring", 84.8),
+    _ring_perf_case((8, 1), 0, "loudbox-SP8xTP1-ring", 58.7),
+    _ring_perf_case((4, 1), 0, "quietbox-SP4xTP1-ring", 58.8),
 ]
 
 

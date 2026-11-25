@@ -52,6 +52,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    NUM_TILES_IN_BLOCK,
     REDUCE_TO_ONE,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -70,6 +71,9 @@ mathop_mapping = {
 }
 
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
+
+# Per-tile SrcA scales: distinct magnitudes make a re-read SrcA tile miss the golden
+DISTINCT_TILE_SCALES = torch.tensor([1.0, 1.25, 1.5, 1.75])
 
 # Int8 data accumulates in an Int32 Dest. An Int8 output only holds a max without overflow.
 INT_REDUCE_FORMATS = [
@@ -170,6 +174,8 @@ def test_reduce_quasar(
     *,
     is_perf=False,
     perf_report=None,
+    unpack_num_tiles=1,
+    distinct_tile_magnitudes=False,
     input_dimensions=None,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
@@ -184,6 +190,17 @@ def test_reduce_quasar(
         input_dimensions_B=tile_dimensions,
         tile_dimensions=tile_dimensions,
     )
+    assert (
+        tile_cnt % unpack_num_tiles == 0
+    ), f"tile_cnt {tile_cnt} must be a multiple of unpack_num_tiles {unpack_num_tiles}"
+
+    if distinct_tile_magnitudes:
+        tile_scales = DISTINCT_TILE_SCALES[
+            torch.arange(tile_cnt) % len(DISTINCT_TILE_SCALES)
+        ]
+        src_A = (
+            src_A * tile_scales.repeat_interleave(tile_shape.total_tile_size())
+        ).to(src_A.dtype)
 
     if pool_type in [
         ReducePool.Max,
@@ -260,6 +277,7 @@ def test_reduce_quasar(
                 tile_dimensions=tile_dimensions,
             ),
             TILE_COUNT(tile_cnt),
+            NUM_TILES_IN_BLOCK(input_num_tiles_in_block=unpack_num_tiles),
             REDUCE_TO_ONE(is_reduce_to_one),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
@@ -306,6 +324,33 @@ def test_reduce_quasar(
         tile_shape=tile_shape,
         print_errors=True,
     ), "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    tile_dimensions=[(32, 32), (16, 32)],
+    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
+    pool_type=POOL_TYPES,
+    unpack_num_tiles=[1, 2, 4],
+)
+def test_reduce_quasar_multi_tile_unpack(
+    formats, tile_dimensions, reduce_dim, pool_type, unpack_num_tiles
+):
+    test_reduce_quasar(
+        formats,
+        tile_dimensions,
+        DestAccumulation.No,
+        reduce_dim,
+        pool_type,
+        MathFidelity.LoFi,
+        is_reduce_to_one=False,
+        dest_sync=DEST_SYNC().dest_sync,  # DestSync.Half
+        run_types=[PerfRunType.L1_TO_L1],
+        loop_factor=1,
+        unpack_num_tiles=unpack_num_tiles,
+        distinct_tile_magnitudes=True,
+    )
 
 
 # Tiles folded into the single output tile: N >= 8.
@@ -482,6 +527,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
+            NUM_TILES_IN_BLOCK(),
             REDUCE_TO_ONE(False),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),

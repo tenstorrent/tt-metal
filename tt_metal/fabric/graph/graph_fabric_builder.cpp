@@ -123,20 +123,6 @@ std::unique_ptr<FabricRouterBuilder> GraphFabricBuilder::make_router(const Route
         inputs_of(r));
 }
 
-chan_id_t GraphFabricBuilder::pick_master_router_chan() const {
-    const chan_id_t chan = graph_.eth_chans[graph_.handshake_masters.at(local_node_)];
-    TT_FATAL(routers_.contains(chan), "fabric graph: chip {} handshake master {} was not built", local_node_, chan);
-    // the graph replays stock's pick; a different one would hang the handshake
-    const chan_id_t stock = FabricBuilder::pick_master_router_chan();
-    TT_FATAL(
-        chan == stock,
-        "fabric graph: chip {} handshake master is channel {}, stock picks {}",
-        local_node_,
-        chan,
-        stock);
-    return chan;
-}
-
 KernelCreationContext GraphFabricBuilder::kernel_creation_context() const {
     uint32_t mask = 0;
     for (const auto& [chan, r] : on_chip_) {
@@ -144,7 +130,7 @@ KernelCreationContext GraphFabricBuilder::kernel_creation_context() const {
     }
     return KernelCreationContext{
         .is_2D_routing = fabric_context_.is_2D_routing_enabled(),
-        .master_router_chan = graph_.eth_chans[graph_.handshake_masters.at(local_node_)],
+        .master_router_chan = master_router_chan_,
         .num_local_fabric_routers = on_chip_.size(),
         .router_channels_mask = mask,
     };
