@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <sched.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -33,9 +34,21 @@
 
 namespace tt::jit_build::utils {
 
+namespace {
+thread_local bool idle_priority_commands = false;
+}  // namespace
+
+IdlePriorityCommands::IdlePriorityCommands(bool on) : before_(idle_priority_commands) { idle_priority_commands = on; }
+IdlePriorityCommands::~IdlePriorityCommands() { idle_priority_commands = before_; }
+bool IdlePriorityCommands::active() { return idle_priority_commands; }
+
 bool run_command(const std::string& cmd, const std::string& log_file, bool verbose) {
     TTZoneScopedD(JIT);
     TTZoneTextD(JIT, cmd.c_str(), cmd.length());
+    if (idle_priority_commands && !verbose) {
+        // system() cannot set the child's priority; exec_command() can, and appends to the log the same way.
+        return exec_command({"/bin/sh", "-c", cmd}, "", log_file);
+    }
     int ret;
     static std::mutex io_mutex;
 
@@ -220,8 +233,22 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
     }
 
     pid_t pid = 0;
-    int spawn_ret =
-        posix_spawnp(&pid, argv[0], &file_actions, nullptr, const_cast<char* const*>(argv.data()), ::environ);
+    int spawn_ret = -1;
+    if (idle_priority_commands) {
+        posix_spawnattr_t attr;
+        posix_spawnattr_init(&attr);
+        const sched_param param{};
+        posix_spawnattr_setschedpolicy(&attr, SCHED_IDLE);
+        posix_spawnattr_setschedparam(&attr, &param);
+        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSCHEDULER);
+        spawn_ret = posix_spawnp(&pid, argv[0], &file_actions, &attr, const_cast<char* const*>(argv.data()), ::environ);
+        posix_spawnattr_destroy(&attr);
+    }
+    if (spawn_ret != 0) {
+        // Normal priority, also when the idle policy was refused.
+        spawn_ret =
+            posix_spawnp(&pid, argv[0], &file_actions, nullptr, const_cast<char* const*>(argv.data()), ::environ);
+    }
 
     if (log_fd >= 0) {
         close(log_fd);

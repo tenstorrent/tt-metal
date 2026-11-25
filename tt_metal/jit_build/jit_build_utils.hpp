@@ -18,6 +18,23 @@ namespace tt::jit_build::utils {
 
 bool run_command(const std::string& cmd, const std::string& log_file, bool verbose);
 
+// For the lifetime of the object, the commands the calling thread starts through run_command() and exec_command()
+// run at idle priority (SCHED_IDLE) when |on| is set: they get the CPUs nothing else wants. Kernel builds queued by a
+// dry run use it, so that the compilers do not slow the thread that runs the tests.
+class IdlePriorityCommands {
+public:
+    explicit IdlePriorityCommands(bool on);
+    ~IdlePriorityCommands();
+    IdlePriorityCommands(const IdlePriorityCommands&) = delete;
+    IdlePriorityCommands& operator=(const IdlePriorityCommands&) = delete;
+
+    // Whether the calling thread's commands run at idle priority now.
+    static bool active();
+
+private:
+    bool before_;
+};
+
 // Like run_command but bypasses the shell entirely by using posix_spawn with an explicit
 // argument vector.  Immune to shell metacharacter injection.
 // |working_dir| is passed as the cwd for the child process (empty = inherit parent cwd).

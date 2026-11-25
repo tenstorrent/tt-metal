@@ -1283,7 +1283,11 @@ void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* 
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
-    events.emplace_back(detail::async(build_func));
+    // A step keeps the command priority of the thread that launched it, whichever thread runs it.
+    events.emplace_back(detail::async([build_func, idle = jit_build::utils::IdlePriorityCommands::active()] {
+        const jit_build::utils::IdlePriorityCommands priority(idle);
+        build_func();
+    }));
 }
 
 void sync_build_steps(std::vector<std::shared_future<void>>& events) {
@@ -1338,6 +1342,13 @@ void queue_ahead_build(std::function<size_t()> build_fn) {
         if (drop_ahead_builds) {
             return;
         }
+        // The compilers of a queued build run at idle priority, so they do not slow the thread that runs the
+        // tests. TT_METAL_AHEAD_BUILD_PRIORITY=normal is a temporary switch for comparing the two.
+        static const bool idle = [] {
+            const char* priority = std::getenv("TT_METAL_AHEAD_BUILD_PRIORITY");
+            return priority == nullptr || std::string_view(priority) != "normal";
+        }();
+        const jit_build::utils::IdlePriorityCommands priority(idle);
         try {
             ahead_built += build_fn();
         } catch (const std::exception& e) {
