@@ -61,3 +61,15 @@ def test_reconcile_keeps_the_users_boxes():
 def test_reconcile_restores_a_missing_table():
     locked = bbox.plan(f"A red balloon over a field <balloon_1> [{BALLOON}]", "t2i")[2]
     assert bbox.reconcile("Just a caption with no table.", locked) == f"Just a caption with no table. [{BALLOON}]"
+
+
+@pytest.mark.parametrize(
+    "prompt, finished",
+    [
+        ('A red balloon over a field <balloon_1> [{"id": "balloon_1", "bbox": [100, 200, 400, 500]}]', True),
+        ('A red balloon over a field [{"id": "balloon_1", "bbox": [100, 200, 400, 500]}]', False),
+        ("A red balloon over a field", False),
+    ],
+)
+def test_is_finished_needs_every_row_cited(prompt, finished):
+    assert bbox.is_finished(prompt) is finished

@@ -56,6 +56,12 @@ def detect(prompt: str) -> tuple[str, list[dict]] | None:
     return (locked.group(1) if locked else text), rows
 
 
+def is_finished(prompt: str) -> bool:
+    """An upsampler answer, not a request: its box table is cited in full as <id>s in the caption."""
+    found = detect(prompt)
+    return found is not None and all(f"<{row['id']}>" in found[0] for row in found[1])
+
+
 def upsampling_input(prompt: str, rows: list[dict]) -> str:
     return (
         f"ORIGINAL PROMPT:\n{prompt.strip()}\n\n"
