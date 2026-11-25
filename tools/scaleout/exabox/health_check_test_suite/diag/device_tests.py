@@ -90,17 +90,20 @@ PYTESTS = {
         ],
     },
     # gddr_act_c3: SDPA-mimic GDDR read stream on DRAM controller 3 with the matmul
-    # load on, 300 s on every chip (~5.5 min with bring-up). Catches the lane-3
-    # 64 MB address alias (bit 26) that the DramDeployment patterns miss. The alias
-    # shows on some boots and not others, so a clean run clears one boot; tiers
-    # rerun it after a reset (Tier.retest). Its 900 s timeout is a marker on the test.
+    # load on, 300 s on every chip, then on all 8 controllers at once for 300 s
+    # (~10.3 min with bring-up). Catches the lane-3 64 MB address alias (bit 26)
+    # that the DramDeployment patterns miss. The first hit fails the test without
+    # running the rest. The alias shows on some boots and not others, so a clean
+    # run clears one boot; tiers rerun it after a reset (Tier.retest). Its 1200 s
+    # timeout is a marker on the test.
     "gddr_act_c3": {
         "target": "tests/tt_metal/tt_metal/deployment/dram/test_dram_act_patterns.py::test_dram_act_c3_screen",
         "args": ["-s"],
     },
     # gddr_act_all: gddr_act_c3's stream on all 8 DRAM controllers at once, then alone on controllers 3, 1, 7
-    # and 0, 300 s each (~25.5 min with bring-up), for an alias on a controller other than 3. The first hit
-    # fails the test without running the rest. Its 3600 s timeout is a marker on the test.
+    # and 0, 300 s each (~25.5 min with bring-up), so 1, 7 and 0 also get the whole stream. Covers both of
+    # gddr_act_c3's passes. The first hit fails the test without running the rest. Its 3600 s timeout is a
+    # marker on the test.
     "gddr_act_all": {
         "target": "tests/tt_metal/tt_metal/deployment/dram/test_dram_act_patterns.py::test_dram_act_all_ctrls_screen",
         "args": ["-s"],

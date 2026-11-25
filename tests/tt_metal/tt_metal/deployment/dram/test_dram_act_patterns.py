@@ -975,37 +975,37 @@ def test_dram_act_patterns():
 
 # Fixed config for the health check: defaults with no env knobs read, so a shell's ACT_* / STRESS_* settings
 # cannot change what it screens. The SDPA-mimic read stream (sdpa form) on controller 3, row 0x200, GDDR bank 3,
-# for 300 s with the matmul arm on: the load that exposes the lane-3 64 MB (bit 26) alias. The sdpa16 form never
-# caught a boot this one missed. On a faulty die the alias shows on some boots and not others, and a weak bad boot
-# took up to about 4 minutes to hit, so one run screens one boot.
+# for 300 s with the matmul arm on: the load that exposes the lane-3 64 MB (bit 26) alias. Then the same form for
+# 300 s on all 8 controllers at once, to reach an alias outside controller 3; each controller gets only an eighth of
+# the stream there, so it does not replace the controller 3 pass. The sdpa16 form never caught a boot this one
+# missed. On a faulty die the alias shows on some boots and not others, and a weak bad boot took up to about
+# 4 minutes to hit, so one run screens one boot. The first hit fails the test without running the rest.
 SCREEN_CFG = {
     "ctrls": [3],
     "patterns": ["v2"],
     "arms": ["on"],
     "iters": 4000,
     "seconds": 300.0,
-    "v2_plan": [(3, "orig_bank3", "sdpa")],
+    "v2_plan": [(3, "orig_bank3", "sdpa"), ("all", "orig_bank3", "sdpa")],
+    "v2_stop_on_hit": True,
     "v2_launch_s": 60.0,
     "self_test": 1,
 }
 
 
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1200)
 def test_dram_act_c3_screen():
     chips, cfg = act_config(env={})
     cfg.update(SCREEN_CFG)
     run_act(chips, cfg)
 
 
-# The same screen widened past controller 3: the sdpa form for 300 s on all 8 controllers at once, then alone on
-# each controller faults have been seen on (3, 1, 7, 0, in that order). The all-controller pass covers the other
-# four, but each controller gets only an eighth of the stream there, which missed weak bad boots that controller 3
-# alone caught, so the common ones also get the full stream. The first hit fails the test without running the rest.
+# The same screen widened further: the sdpa form for 300 s on all 8 controllers at once, then alone on each
+# controller faults have been seen on (3, 1, 7, 0, in that order), so 1, 7 and 0 also get the full stream.
 SCREEN_ALL_ORDER = ("all", 3, 1, 7, 0)
 SCREEN_ALL_CFG = {
     **SCREEN_CFG,
     "v2_plan": [(c, "orig_bank3", "sdpa") for c in SCREEN_ALL_ORDER],
-    "v2_stop_on_hit": True,
 }
 
 

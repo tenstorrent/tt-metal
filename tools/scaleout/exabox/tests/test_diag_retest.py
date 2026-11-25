@@ -122,7 +122,9 @@ class TestTierRetest(unittest.TestCase):
 
     def test_act_tests_are_retested(self):
         self.assertEqual(TIERS["weekly"].retest, ("gddr_act_c3",))
-        self.assertEqual(TIERS["full"].retest, ("gddr_act_c3", "gddr_act_all"))
+        self.assertEqual(TIERS["full"].retest, ("gddr_act_all",))
+        # gddr_act_all runs both of gddr_act_c3's passes.
+        self.assertNotIn("gddr_act_c3", TIERS["full"].tests)
 
 
 if __name__ == "__main__":

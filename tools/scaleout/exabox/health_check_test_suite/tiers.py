@@ -124,12 +124,13 @@ TIERS: dict[str, Tier] = {
     ),
     # daily, with every test and the full GDDR pattern set.
     "weekly": _WEEKLY,
-    # weekly plus gddr_act_all and the sys-triage bundle: everything, for a unit
-    # with an issue, so the run's logs can go straight on its DIIM ticket.
+    # weekly with gddr_act_all in place of gddr_act_c3 (it runs both of its
+    # passes), plus the sys-triage bundle: everything, for a unit with an issue,
+    # so the run's logs can go straight on its DIIM ticket.
     "full": replace(
         _WEEKLY,
-        tests=(*_WEEKLY.tests, "gddr_act_all"),
-        retest=(*_WEEKLY.retest, "gddr_act_all"),
+        tests=tuple("gddr_act_all" if t == "gddr_act_c3" else t for t in _WEEKLY.tests),
+        retest=("gddr_act_all",),
         sys_triage=True,
     ),
     # Data collection before a BMC reboot. No resets and no tests: a reset
