@@ -58,7 +58,6 @@ constexpr const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/mi
 // The loopback's ends.
 constexpr uint32_t kSenderHsio = 0;
 constexpr uint32_t kReceiverHsio = 1;
-// The emulator runs that passed used 8 iterations of 256 bytes.
 constexpr uint32_t kIterations = 8;
 constexpr uint32_t kPayloadBytes = 256;
 static_assert(
@@ -250,7 +249,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // Sends on CMDBUF_1 as eth_cce_send.h does; the credit through eth_write_remote_reg().
         OrderingVariant{"CmdBuf1", {}},
-        // The credit as compat's 8-byte inline update, cce_eth::send_dword() called directly.
+        // The credit as an 8-byte inline update, cce_eth::send_dword() called directly.
         OrderingVariant{"Credit8", {{"KERAUNOS_CREDIT_SEND_DWORD", "1"}}}),
     [](const ::testing::TestParamInfo<OrderingVariant>& info) { return std::string(info.param.name); });
 

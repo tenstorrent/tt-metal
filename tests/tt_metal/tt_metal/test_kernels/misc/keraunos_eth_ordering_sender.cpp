@@ -8,7 +8,7 @@
 // credit.
 //
 // Compile-time define (the host passes it):
-//   KERAUNOS_CREDIT_SEND_DWORD  1: the credit is cce_eth::send_dword() with snoop (compat's inline update, as the
+//   KERAUNOS_CREDIT_SEND_DWORD  1: the credit is cce_eth::send_dword() with snoop (the inline update of the
 //                               router's fabric_send_credit_word) called directly;
 //                               unset: internal_::eth_write_remote_reg(), which wraps the same 8-byte write unsnooped.
 //

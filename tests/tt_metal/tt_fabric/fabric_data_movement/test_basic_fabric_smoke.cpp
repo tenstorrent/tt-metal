@@ -168,9 +168,8 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     EXPECT_EQ(sender_bytes, receiver_bytes);
     EXPECT_EQ(sender_bytes, uint64_t{worker_mem_map.packet_payload_size_bytes} * num_packets);
 
-    // On Keraunos, as chippy's compat harness checks: after the traffic, closing the devices terminates every master
-    // router. Unless a router did not terminate, the devices are then re-opened, so the fixture's other tests find
-    // them as before.
+    // On Keraunos: after the traffic, closing the devices terminates every master router. Unless a router did not
+    // terminate, the devices are then re-opened, so the fixture's other tests find them open.
     if (BaseFabricFixture::workers_on_ethernet_cores(sender_device)) {
         constexpr auto kTerminateTimeout = std::chrono::minutes(10);
         const auto fabric_config = tt::tt_fabric::GetFabricConfig();
