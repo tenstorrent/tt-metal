@@ -4,7 +4,8 @@
 //
 // Quasar 2.0 compute API tilize (tilize_block) and untilize (copy_block + pack_untilize_dest_block) at SyncHalf,
 // 16/32-bit Dest, Float16_b L1, two tile rows each. Checked bit-exact against a host re-layout of the input; outputs
-// start as a sentinel. Test names: tilize_b<block>_<dest>, untilize_b<block>_f<full>_<dest>.
+// start as a sentinel. Test names: tilize_b<block>_<dest>, untilize_b<block>_f<full>_<dest>; _e<n>: every DFB entry
+// holds n tiles (the operand's tile index scales the DFB entry cursor).
 
 #include "quasar_2_0_test_common.hpp"
 
@@ -18,12 +19,14 @@ struct TilizeCase {
     std::uint32_t block;
     std::uint32_t full;  // row width in tiles (tilize: == block)
     bool fp32;
+    std::uint32_t entry = 1;  // tiles per DFB entry (divides block)
 };
 
 std::string tilize_case_name(const ::testing::TestParamInfo<TilizeCase>& info) {
     const TilizeCase& c = info.param;
     return std::string(c.untilize ? "untilize" : "tilize") + "_b" + std::to_string(c.block) +
-           (c.untilize ? "_f" + std::to_string(c.full) : "") + (c.fp32 ? "_fp32" : "_fp16b");
+           (c.untilize ? "_f" + std::to_string(c.full) : "") + (c.fp32 ? "_fp32" : "_fp16b") +
+           (c.entry > 1 ? "_e" + std::to_string(c.entry) : "");
 }
 
 constexpr std::uint32_t ROWS = 2;  // tile rows
@@ -42,11 +45,13 @@ TEST_P(Quasar2_0Tilize, Run) {
     ProgramIo io;
     io.compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize_untilize_2_0_quasar.cpp";
     io.fp32_dest = c.fp32;
-    io.ct_args = {{"op", c.untilize ? 1u : 0u}, {"rows", ROWS}, {"block", c.block}, {"full", c.full}};
+    io.entry_tiles = c.entry;
+    io.ct_args = {
+        {"op", c.untilize ? 1u : 0u}, {"rows", ROWS}, {"block", c.block}, {"full", c.full}, {"entry", c.entry}};
     io.inputs.push_back(random_tiles(n, 7 * c.block + c.full + (c.fp32 ? 100 : 0)));
     io.out_tiles.push_back(n);
-    io.in_depth.push_back(2 * c.block);
-    io.out_depth.push_back(2 * c.full);
+    io.in_depth.push_back(2 * c.block / c.entry);
+    io.out_depth.push_back(2 * c.full / c.entry);
     const std::vector<Tiles> outs = run_program(*this->devices_.at(0), io);
 
     const Tiles& in = io.inputs[0];
@@ -75,7 +80,9 @@ INSTANTIATE_TEST_SUITE_P(
         TilizeCase{true, 1, 1, false},
         TilizeCase{true, 4, 4, false},
         TilizeCase{true, 4, 8, false},
-        TilizeCase{true, 4, 4, true}),
+        TilizeCase{true, 4, 4, true},
+        TilizeCase{false, 4, 4, false, 4},
+        TilizeCase{true, 4, 8, false, 4}),
     tilize_case_name);
 
 }  // namespace

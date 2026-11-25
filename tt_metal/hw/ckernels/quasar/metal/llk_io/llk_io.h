@@ -30,6 +30,13 @@ inline bool dfb_op_is_whole_share(const LocalDFBInterface& intf, std::uint32_t n
     return intf.block_size <= 1 || num_tiles * intf.stride_size_tiles == static_cast<std::uint32_t>(intf.block_size);
 }
 
+// Whether an n-tile op from this counter's cursor stays inside its ring. The cursor wraps only between ops, so
+// an op whose tiles straddle the ring end would read/write past it (num_entries not a multiple of the op size).
+inline bool dfb_window_fits_ring(const LocalDFBInterface& intf, const DFBTCSlot& slot, std::uint32_t n) {
+    return dfb_slot_cursor_offset_units(intf, slot, slot.cursor_entry_idx + (n - 1u) * intf.stride_size_tiles) <
+           slot.ring_size;
+}
+
 // Move one counter's cursor past an n-tile op: to the op's last entry, then `jump` entries to
 // this counter's next entry. Wraps to the ring base at the end.
 inline void dfb_step_slot(const LocalDFBInterface& intf, DFBTCSlot& slot, std::uint32_t n) {

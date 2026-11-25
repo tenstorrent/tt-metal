@@ -63,7 +63,8 @@ inline void tilize_init(LLKOperand<InFormat, InShape> in, LLKOperand<OutFormat, 
  * Id-free tilize of one block, Quasar: unpacks `block` tiles from the row-major input (tile input_tile_index of the
  * block-wide rows, i.e. row group input_tile_index / block, column input_tile_index % block, counted from in's first
  * tile), then per tile copies it to Dest and packs it to out tile output_tile_index + t. Self-syncs Dest per tile
- * (tile_regs_acquire .. release inside): call outside a kernel Dest section. Contiguous operands (stride 1).
+ * (tile_regs_acquire .. release inside): call outside a kernel Dest section. Contiguous operands (stride 1): bind
+ * their DFBs BLOCKED or 1:1, since a multi-thread STRIDED binding gives stride_tiles > 1.
  *
  * | Param Type | Name                | Description                                       | Type        | Valid Range        | Required |
  * |------------|---------------------|---------------------------------------------------|-------------|--------------------|----------|

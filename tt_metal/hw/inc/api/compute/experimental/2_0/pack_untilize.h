@@ -73,7 +73,8 @@ inline void pack_untilize_dest_init(LLKOperand<OutFormat, OutShape> out) {
  * Id-free pack-untilize of a block from Dest, Quasar (pack TRISC only): for each of block_rt_dim tile rows r, packs
  * Dest tiles r * block_ct_dim + tile_dst_rt_offset + tile_dst_ct_offset .. + block_ct_dim - 1 into row-major columns
  * block_c_index * block_ct_dim .. of tile row r of out (rows full_ct_dim tiles wide, from out's first tile). Call
- * between tile_regs_wait and tile_regs_release; the caller owns Dest sync. Contiguous out (stride 1).
+ * between tile_regs_wait and tile_regs_release; the caller owns Dest sync. Contiguous out (stride 1): bind its DFB
+ * BLOCKED or 1:1, since a multi-thread STRIDED binding gives stride_tiles > 1.
  *
  * | Param Type | Name                | Description                                       | Type        | Valid Range               | Required |
  * |------------|---------------------|---------------------------------------------------|-------------|---------------------------|----------|

@@ -374,7 +374,7 @@ public:
     }
 #endif
 
-#endif // DFB_DESCRIPTORS_DEFINED
+#endif  // DFB_DESCRIPTORS_DEFINED
 
 #ifdef COMPILE_FOR_TRISC
     uint32_t get_tile_address(uint32_t tile_index);
@@ -407,11 +407,30 @@ public:
     uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
     uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
 
+#if defined(COMPILE_FOR_TRISC) && defined(ARCH_QUASAR) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
+    // Quasar operand at this hart's current cursor (read cursor on unpack, write cursor on pack), in tile units.
+    // The cursor counts DFB entries; an entry may hold several tiles (e.g. one tilize block), so scale by tiles per
+    // entry. Mx formats (tile_words == 0) keep the legacy one-tile-per-entry assumption.
+    template <typename Operand>
+    [[nodiscard]] Operand operand_at_cursor() const {
+        const auto& dfb = local_dfb_interface_;
+        std::uint32_t tile_idx = dfb.tc_slots[dfb.tc_idx].cursor_entry_idx;
+        if constexpr (Operand::tile_words != 0) {
+            const std::uint32_t tiles_per_entry = dfb.entry_size / Operand::tile_words;
+            ASSERT(tiles_per_entry != 0 && tiles_per_entry * Operand::tile_words == dfb.entry_size);
+            // A stride of several multi-tile entries is not one tile step: only contiguous rings may hold more.
+            ASSERT(tiles_per_entry == 1 || dfb.stride_size_tiles == 1);
+            tile_idx *= tiles_per_entry;
+        }
+        return Operand{dfb.tc_slots[0].base_addr, tile_idx, dfb.stride_size_tiles};
+    }
+#endif
+
 #ifdef COMPILE_FOR_TRISC
     // Returns the LLKOperand pointing to the front (reading address) of the DFB
     // Functionalities meant to be used with LLKOperand for LLK 2.0
     // Take the operand after wait_front(n) and before pop_front(): it names the waited entries.
-    // Quasar: {ring base (one buffer descriptor covers the ring), current read entry, stride in tiles}, no -1.
+    // Quasar: {ring base (one buffer descriptor covers the ring), current read tile, stride in tiles}, no -1.
     //
     // Parameters:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
@@ -419,8 +438,7 @@ public:
     [[nodiscard]] Operand front() const {
 #ifdef ARCH_QUASAR
 #ifdef UCK_CHLKC_UNPACK
-        const auto& dfb = local_dfb_interface_;
-        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].cursor_entry_idx, dfb.stride_size_tiles};
+        return operand_at_cursor<Operand>();
 #else
         return Operand{0};  // only the unpack TRISC reads the front; other TRISCs never use the address
 #endif
@@ -434,7 +452,7 @@ public:
     // Returns the LLKOperand pointing to the back (writing address) of the DFB
     // Functionalities meant to be used with LLKOperand for LLK 2.0
     // Take the operand after reserve_back(n) and before push_back(): it names the reserved entries.
-    // Quasar: {ring base (one buffer descriptor covers the ring), current write entry, stride in tiles}, no -1.
+    // Quasar: {ring base (one buffer descriptor covers the ring), current write tile, stride in tiles}, no -1.
     //
     // Parameters:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
@@ -442,8 +460,7 @@ public:
     [[nodiscard]] Operand back() const {
 #ifdef ARCH_QUASAR
 #ifdef UCK_CHLKC_PACK
-        const auto& dfb = local_dfb_interface_;
-        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].cursor_entry_idx, dfb.stride_size_tiles};
+        return operand_at_cursor<Operand>();
 #else
         return Operand{0};  // only the pack TRISC writes the back; other TRISCs never use the address
 #endif
@@ -489,7 +506,7 @@ private:
     void wait_front_impl(uint16_t num_entries);
     void pop_front_impl(uint16_t num_entries);
     uint32_t get_write_ptr_impl() const;
-    uint32_t get_read_ptr_impl()  const;
+    uint32_t get_read_ptr_impl() const;
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     static constexpr uint32_t L1_UNCACHED_OFFSET = MEM_L1_UNCACHED_BASE;
@@ -537,12 +554,10 @@ private:
     // on every RR TC this object owns. After push_back(N) in the relay loop, the
     // outstanding gap is those N entries.
     void wait_relay_consumer_caught_up() const;
-#endif // !COMPILE_FOR_TRISC
-#endif // ARCH_QUASAR
+#endif  // !COMPILE_FOR_TRISC
+#endif  // ARCH_QUASAR
 
-    constexpr uint32_t address_units_to_bytes(uint32_t units) const {
-        return units << cb_addr_shift;
-    }
+    constexpr uint32_t address_units_to_bytes(uint32_t units) const { return units << cb_addr_shift; }
 
     uint16_t logical_dfb_id_;
 

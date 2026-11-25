@@ -9,8 +9,9 @@
 // _lta: S2 with in/out as resident L1 tensors read through LocalTensorAccessor (no DFBs, no DM kernels), per L1
 // format; the Dest sync is the same as the DFB runs, so SyncHalf only. _sem: _lta, but a DM kernel writes in from
 // DRAM and then signals the compute kernel through a shared semaphore.
-// X4_t2_<pattern>: two compute threads with the in DFB consumed STRIDED (compute stride_tiles 2), BLOCKED (blocks of
-// 2 in and out) or ALL (one reader, each thread copies every tile); Float16_b, SyncHalf, 16-bit Dest.
+// T_<rd><ci>_<co><wr>_r<R>c<C>w<W>: a DFB topology, Float16_b, SyncHalf, 16-bit Dest, 64 tiles, blocks of 4. R DM
+// readers -> in -> C compute threads -> out -> W DM writers; <rd><ci> are the in DFB's producer / consumer patterns and
+// <co><wr> the out DFB's (S = STRIDED, B = BLOCKED, A = ALL). 1:N, N:1 and N:M thread counts on every pairing.
 // _relu / _l1acc: S2 with the pack features: ReLU (negatives -> 0) and L1 accumulation (each section packed twice,
 // out = 2 x in).
 
@@ -25,21 +26,37 @@ struct CopyCase {
     std::uint32_t s;  // sync case S1..S8; S12-S14 early returns
     bool full_sync;
     bool fp32;
-    bool fp32_in = false;      // Float32 L1 in and out (fp32 Dest only)
-    bool lta = false;          // operands via LocalTensorAccessor instead of DFBs
-    bool sem = false;          // lta, with in written by a DM kernel that signals compute through a semaphore
-    std::uint8_t threads = 1;  // compute threads; > 1 runs an X4 DFB-pattern case (S is unused)
-    DFBAccessPattern pattern = DFBAccessPattern::STRIDED;
+    bool fp32_in = false;    // Float32 L1 in and out (fp32 Dest only)
+    bool lta = false;        // operands via LocalTensorAccessor instead of DFBs
+    bool sem = false;        // lta, with in written by a DM kernel that signals compute through a semaphore
     std::uint32_t pack = 0;  // kernel mode for a pack feature: 20 = ReLU, 21 = L1 accumulation
+    int family = -1;         // >= 0: a topology case FAMILIES[family] with threads r / c / w (S is unused)
+    std::uint8_t r = 1, c = 1, w = 1;
 };
+
+// DFB pattern pairings of a topology case: reader -> compute on in, compute -> writer on out.
+struct Family {
+    const char* name;
+    DFBAccessPattern reader, in, out, writer;
+};
+constexpr DFBAccessPattern S_ = DFBAccessPattern::STRIDED, B_ = DFBAccessPattern::BLOCKED, A_ = DFBAccessPattern::ALL;
+constexpr Family FAMILIES[] = {
+    {"SS_SS", S_, S_, S_, S_},
+    {"SB_BS", S_, B_, B_, S_},
+    {"SA_SS", S_, A_, S_, S_},
+    {"BB_BB", B_, B_, B_, B_},
+    {"BA_SS", B_, A_, S_, S_},
+    {"BS_SB", B_, S_, S_, B_},
+    {"SS_SA", S_, S_, S_, A_},
+    {"SB_BA", S_, B_, B_, A_},
+};
+constexpr std::uint32_t TOPO_BLOCK = 4;
 
 std::string copy_case_name(const ::testing::TestParamInfo<CopyCase>& info) {
     const CopyCase& c = info.param;
-    if (c.threads > 1) {
-        return "X4_t" + std::to_string(c.threads) +
-               (c.pattern == DFBAccessPattern::BLOCKED ? "_blocked"
-                : c.pattern == DFBAccessPattern::ALL   ? "_all"
-                                                       : "_strided");
+    if (c.family >= 0) {
+        return std::string("T_") + FAMILIES[c.family].name + "_r" + std::to_string(c.r) + "c" + std::to_string(c.c) +
+               "w" + std::to_string(c.w);
     }
     return "S" + std::to_string(c.s) + (c.full_sync ? "_full" : "_half") +
            (c.fp32_in ? "_fp32in"
@@ -71,8 +88,12 @@ std::vector<CopyCase> copy_cases() {
     cases.push_back({2, false, true, false, true});
     cases.push_back({2, false, true, true, true});
     cases.push_back({2, false, false, false, true, true});
-    for (DFBAccessPattern pattern : {DFBAccessPattern::STRIDED, DFBAccessPattern::BLOCKED, DFBAccessPattern::ALL}) {
-        cases.push_back({.s = 0, .full_sync = false, .fp32 = false, .threads = 2, .pattern = pattern});
+    // Readers + writers <= 6 DM threads, ALL consumers <= 4.
+    constexpr std::uint8_t TOPOS[][3] = {{1, 2, 1}, {1, 4, 1}, {2, 1, 2}, {4, 1, 2}, {2, 2, 2}, {2, 4, 2}, {4, 2, 2}};
+    for (int f = 0; f < static_cast<int>(std::size(FAMILIES)); ++f) {
+        for (const auto& t : TOPOS) {
+            cases.push_back({.s = 0, .full_sync = false, .fp32 = false, .family = f, .r = t[0], .c = t[1], .w = t[2]});
+        }
     }
     for (std::uint32_t pack : {20u, 21u}) {
         cases.push_back({.s = 2, .full_sync = false, .fp32 = false, .pack = pack});
@@ -127,12 +148,20 @@ TEST_P(Quasar2_0Datacopy, Run) {
     if (c.pack != 0) {
         mode = c.pack;
     }
-    if (c.threads > 1) {
-        // BLOCKED: block = threads = tiles per op, so each STRIDED DM op is one tile.
-        tps = c.pattern == DFBAccessPattern::BLOCKED ? c.threads : cap;
-        n = 2 * tps * c.threads;
+    const Family* fam = c.family >= 0 ? &FAMILIES[c.family] : nullptr;
+    if (fam) {
+        // A compute op covers its whole share of a block: the block on a BLOCKED side and on ALL facing a BLOCKED
+        // reader, block / threads on STRIDED facing a BLOCKED DM side, any size (4) between STRIDED / ALL sides.
+        const bool dm_blocked = fam->reader == B_ || fam->writer == B_;
+        tps = fam->in == B_ || fam->out == B_ || (fam->in == A_ && fam->reader == B_) ? TOPO_BLOCK
+              : dm_blocked                                                            ? TOPO_BLOCK / c.c
+                                                                                      : 4;
+        n = 64;
     }
-    const bool all = c.pattern == DFBAccessPattern::ALL;
+    const bool all = fam && fam->in == A_;
+    const std::uint32_t threads = fam ? c.c : 1;
+    // Copies of each input tile in the output, in a row: one per ALL compute thread, then one per ALL writer.
+    const std::uint32_t reps = (all ? threads : 1) * (fam && fam->writer == A_ ? c.w : 1);
     // Skip per run (datacopy_2_0_quasar.cpp mode 12): S12 returns before compute_kernel_hw_startup, S13 right after it,
     // S14 with Dest left unpacked; the next run is checked. A run with skip != 0 is not checked. Two programs per test:
     // more do not fit one emulator session.
@@ -149,35 +178,40 @@ TEST_P(Quasar2_0Datacopy, Run) {
         io.lta = c.lta;
         io.sem = c.sem;
         const std::uint32_t halves = c.fp32_in ? 2 : 1;  // uint16 halves per element
-        io.threads = c.threads;
-        io.pattern = c.pattern;
+        if (fam) {
+            io.threads = c.c;
+            io.readers = c.r;
+            io.writers = c.w;
+            io.block = TOPO_BLOCK;
+            io.reader_pattern = fam->reader;
+            io.pattern = fam->in;
+            io.out_pattern = fam->out;
+            io.writer_pattern = fam->writer;
+        }
         // num_tiles is per compute thread: an ALL thread copies every tile, the others share them.
-        io.ct_args = {{"num_tiles", all ? n : n / c.threads}, {"tiles_per_section", tps}, {"mode", mode}};
+        io.ct_args = {{"num_tiles", all ? n : n / threads}, {"tiles_per_section", tps}, {"mode", mode}};
         io.rt_args = {{"skip", skip}};
         const std::uint32_t pairs = mode == 7 ? 2 : 1;
         for (std::uint32_t p = 0; p < pairs; ++p) {
             // Early returns move only what the kernel consumes and packs: a DFB left with entries hangs the DM kernels.
             const std::uint32_t in_tiles = skip == 0 ? n / pairs : skip == 3 ? 2 * tps : 0;
             io.inputs.push_back(random_tiles(halves * in_tiles, 100 * c.s + 10 * run + p));
-            io.out_tiles.push_back(skip == 0 ? (all ? n * c.threads : n / pairs) : skip == 3 ? tps : 0);
-            io.in_depth.push_back(2 * tps * c.threads);
-            io.out_depth.push_back(2 * tps * c.threads);
+            io.out_tiles.push_back(skip == 0 ? (all ? n * threads : n / pairs) : skip == 3 ? tps : 0);
+            io.in_depth.push_back(fam ? 32 : 2 * tps);
+            io.out_depth.push_back(fam ? 32 : 2 * tps);
         }
         const std::vector<Tiles> outs = run_program(*this->devices_.at(0), io);
         if (skip != 0) {
             continue;
         }
         for (std::uint32_t p = 0; p < pairs; ++p) {
-            Tiles want = io.inputs[p];
-            if (all) {  // out tile k * threads + t is thread t's copy of input tile k
-                want.clear();
-                for (std::size_t k = 0; k < n; ++k) {
-                    for (std::uint32_t t = 0; t < c.threads; ++t) {
-                        want.insert(
-                            want.end(),
-                            io.inputs[p].begin() + k * TILE_ELEMS,
-                            io.inputs[p].begin() + (k + 1) * TILE_ELEMS);
-                    }
+            Tiles want;
+            for (std::size_t k = 0; k < io.inputs[p].size() / TILE_ELEMS / halves; ++k) {
+                for (std::uint32_t t = 0; t < reps; ++t) {
+                    want.insert(
+                        want.end(),
+                        io.inputs[p].begin() + k * halves * TILE_ELEMS,
+                        io.inputs[p].begin() + (k + 1) * halves * TILE_ELEMS);
                 }
             }
             for (std::uint16_t& v : want) {

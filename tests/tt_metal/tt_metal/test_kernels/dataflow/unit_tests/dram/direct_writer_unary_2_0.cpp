@@ -25,7 +25,13 @@ void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
     uint32_t dram_page_stride = get_arg(args::dram_page_stride);
 
-    uint32_t ublock_size_tiles = 1;
+#ifdef PAGES_PER_CALL
+    // Any DFB pattern: thread t's call j moves PAGES_PER_CALL entries (a BLOCKED side moves a whole block per
+    // call, a STRIDED side one entry) to/from DRAM pages (j * threads + t) * PAGES_PER_CALL onward.
+    constexpr uint32_t ublock_size_tiles = PAGES_PER_CALL;
+#else
+    constexpr uint32_t ublock_size_tiles = 1;
+#endif
 
     const uint32_t consumer_idx = get_my_thread_id();
 
@@ -39,9 +45,13 @@ void kernel_main() {
     // consumer skips per tile. For a DFB with N consumers interleaved
     // round-robin, stride_factor = N, and each consumer walks DRAM tiles
     // [consumer_idx, consumer_idx+N, consumer_idx+2N, ...].
+#ifdef PAGES_PER_CALL
+    const uint32_t stride_factor = get_num_threads() * ublock_size_tiles;
+#else
     uint32_t stride_factor = dfb.get_stride_size() / ublock_size_bytes;
+#endif
 
-    uint32_t tlocal_dst_addr = dst_addr + (consumer_idx * dram_page_stride);
+    uint32_t tlocal_dst_addr = dst_addr + (consumer_idx * ublock_size_tiles * dram_page_stride);
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR

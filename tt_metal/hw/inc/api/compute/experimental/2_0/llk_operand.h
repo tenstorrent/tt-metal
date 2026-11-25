@@ -49,7 +49,8 @@ namespace experimental {
  * runtime "where" is three numbers: the base an op init programs into its buffer descriptor (bd_base), the tile index
  * of the operand's first tile relative to that base (entry_idx), and the tile step between its consecutive tiles
  * (stride_tiles). Tile i of the operand is entry_idx + i * stride_tiles. DataflowBuffer::front/back fill all three
- * (bd_base = ring base, so one init covers the whole ring); a raw L1 address is {addr, 0, 1}.
+ * (bd_base = ring base, so one init covers the whole ring); a raw L1 address is {addr, 0, 1}. entry_idx counts tiles,
+ * not DFB entries: front/back scale the entry cursor by the tiles one entry holds (see tile_words).
  *
  * | Param Type | Name         | Description                                             | Type        | Valid Range | Required |
  * |------------|--------------|---------------------------------------------------------|-------------|-------------|----------|
@@ -75,6 +76,26 @@ struct LLKOperand {
 
     // The descriptor the LLK APIs accept (buffer L1 format + geometry).
     static constexpr LLKMemDescriptor descriptor = LLKMemDescriptor{Format, Shape};
+
+    // One tile's L1 size in 16B words, for formats with a fixed datum size; 0 for block-exponent (Mx) formats.
+    // DataflowBuffer::front/back divide a DFB entry by it to turn the entry cursor into a tile index (an entry may
+    // hold several tiles, e.g. a tilize block). 0 keeps the legacy one-tile-per-entry assumption.
+    static constexpr std::uint32_t tile_words = [] {
+        switch (Format) {
+            case DataFormat::Float32:
+            case DataFormat::Tf32:
+            case DataFormat::Int32: return Shape.total_tensor_size() * 4u / 16u;
+            case DataFormat::Float16:
+            case DataFormat::Float16_b:
+            case DataFormat::Int16:
+            case DataFormat::UInt16: return Shape.total_tensor_size() * 2u / 16u;
+            case DataFormat::Fp8R:
+            case DataFormat::Fp8P:
+            case DataFormat::Int8:
+            case DataFormat::UInt8: return Shape.total_tensor_size() / 16u;
+            default: return 0u;
+        }
+    }();
 };
 #else
 template <DataFormat Format, TensorShape Shape>

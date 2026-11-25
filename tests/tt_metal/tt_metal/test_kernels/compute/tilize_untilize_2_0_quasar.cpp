@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Quasar 2.0 tilize / untilize with only the id-free 2.0 compute API.
-// Compile-time args: op (0 = tilize, 1 = untilize), rows (tile rows), block, full (row width in tiles).
+// Compile-time args: op (0 = tilize, 1 = untilize), rows (tile rows), block, full (row width in tiles), entry (tiles
+// per DFB entry; divides block, so DFB counts are tiles / entry).
 //   * tilize: per tile row, tilize_block of `block` tiles from a row-major in DFB (rows `block` tiles wide) to out.
 //     tilize_block self-syncs Dest.
 //   * untilize: per tile row, per column block: copy_block of `block` tiles into Dest, then pack_untilize_dest_block
@@ -30,7 +31,9 @@ void kernel_main() {
     constexpr std::uint32_t rows = get_arg(args::rows);
     constexpr std::uint32_t block = get_arg(args::block);
     constexpr std::uint32_t full = get_arg(args::full);
+    constexpr std::uint32_t entry = get_arg(args::entry);
     static_assert(full % block == 0, "no tails: block must divide the row width");
+    static_assert(block % entry == 0, "a block is whole DFB entries");
 
     DataflowBuffer in(dfb::in0);
     DataflowBuffer out(dfb::out0);
@@ -39,28 +42,28 @@ void kernel_main() {
     if constexpr (op == 0) {
         ex::tilize_init<block>(in.template front<In>(), out.template back<Out>());
         for (std::uint32_t r = 0; r < rows; ++r) {
-            in.wait_front(block);
-            out.reserve_back(block);
+            in.wait_front(block / entry);
+            out.reserve_back(block / entry);
             ex::tilize_block<block>(in.template front<In>(), out.template back<Out>());
-            out.push_back(block);
-            in.pop_front(block);
+            out.push_back(block / entry);
+            in.pop_front(block / entry);
         }
     } else {
         ex::copy_src_to_dest_init(in.template front<In>());
         ex::pack_untilize_dest_init<block, full>(out.template back<Out>());
         for (std::uint32_t r = 0; r < rows; ++r) {
-            out.reserve_back(full);
+            out.reserve_back(full / entry);
             for (std::uint32_t c = 0; c < full / block; ++c) {
-                in.wait_front(block);
+                in.wait_front(block / entry);
                 ckernel::tile_regs_acquire();
                 ex::copy_src_to_dest_block<block, 1>(in.template front<In>(), 0);
                 ckernel::tile_regs_commit();
                 ckernel::tile_regs_wait();
                 ex::pack_untilize_dest_block<block, full>(out.template back<Out>(), c);
                 ckernel::tile_regs_release();
-                in.pop_front(block);
+                in.pop_front(block / entry);
             }
-            out.push_back(full);
+            out.push_back(full / entry);
         }
     }
 }
