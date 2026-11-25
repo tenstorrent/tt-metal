@@ -39,7 +39,7 @@ using tt::tt_metal::WriterConfigDescriptor;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// Kernel order in create_descriptor; the override indexes kernels by these.
+// Kernel order in create_descriptor; override_runtime_arguments looks kernels up by these indices.
 constexpr uint32_t kReaderKernelIndex = 0;
 constexpr uint32_t kWriterKernelIndex = 1;
 constexpr uint32_t kComputeKernelIndex = 2;
