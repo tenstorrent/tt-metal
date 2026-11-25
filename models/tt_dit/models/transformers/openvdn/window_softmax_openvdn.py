@@ -106,7 +106,7 @@ class WindowSoftmax:
             exp_approx_mode=False,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
-            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
         )
         self._masks: dict[tuple[int, int], ttnn.Tensor] = {}
 

@@ -143,11 +143,15 @@ def spd_inverse(
     scale = ttnn.multiply(ttnn.reciprocal(ttnn.add(lam_max, 1.0)), 2.0)
     x = ttnn.multiply(ttnn.add(ttnn.multiply(m, 0.0), eye), scale)
 
-    m_parts = split_bf16(m, 2)
-    for _ in range(iterations):
-        x_parts = split_bf16(x, 2)
-        e = ttnn.subtract(eye, split_matmul(m_parts, x_parts, config=config))
-        x = ttnn.add(x, split_matmul(x_parts, e, config=config))
+    # The residual `I - M X` sets the floor: with two bf16 parts (~17 bits) the error grows with the condition
+    # number (1.5 % RMSE at cond ~1000), so the last `refine` iterations form it from three parts (fp32-exact).
+    refine = 3
+    m_parts = split_bf16(m, 3)
+    for it in range(iterations):
+        parts = 3 if it >= iterations - refine else 2
+        x_parts = split_bf16(x, parts)
+        e = ttnn.subtract(eye, split_matmul(m_parts[:parts], x_parts, config=config))
+        x = ttnn.add(x, split_matmul(x_parts[:2], e, config=config))
 
     return ttnn.multiply(ttnn.add(x, _transpose(x)), 0.5)
 
@@ -167,8 +171,8 @@ def vdn_factor_apply(
     """
     eye = identity(a.device(), a.shape[-1])
     inv = spd_inverse(ttnn.add(a, eye), max_eig=max_eig, config=config)
-    inv_parts = split_bf16(inv, 2)
-    injection = split_matmul(b, inv_parts, config=config)
+    # Three parts: B lies mostly along A's dominant direction, where inv is smallest and two parts lose most of it.
+    injection = split_matmul(b, inv, parts=3, config=config)
     transition = None if alpha is None else _transpose(ttnn.multiply(inv, alpha))
     return transition, injection
 

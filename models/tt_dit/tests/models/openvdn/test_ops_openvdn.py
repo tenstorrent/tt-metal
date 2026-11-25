@@ -297,6 +297,32 @@ def test_linear_state_chain(mesh_device):
 
 
 @ONE_CHIP
+@pytest.mark.parametrize("keys", [256, 832])
+def test_sdpa_dense_baseline(mesh_device, keys):
+    """Not an OpenVDN op: the stock dense SDPA, with the window softmax's configs, on the same kind of inputs. Its
+    error is the floor the window softmax (built from these calls) can reach. Recorded, not asserted."""
+    gen = torch.Generator().manual_seed(7)
+    h, rows = 2, 320
+    scale = HEAD_DIM**-0.5
+    q = torch.randn(1, h, rows, HEAD_DIM, generator=gen).bfloat16()
+    k, v = (torch.randn(1, h, keys, HEAD_DIM, generator=gen).bfloat16() for _ in range(2))
+    expected = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=scale)
+    layout = WindowLayout(total=rows, video_start=0, num_frames=1, tokens_per_frame=rows)
+    attention = WindowSoftmax(mesh_device, layout, [(0, 0)], scale=scale)
+    out = ttnn.transformer.scaled_dot_product_attention(
+        *(_to_device(x, mesh_device, ttnn.bfloat16) for x in (q, k, v)),
+        is_causal=False,
+        scale=scale,
+        program_config=attention.program_config,
+        compute_kernel_config=attention.compute_config,
+    )
+    try:
+        _check(f"sdpa_dense_baseline[K{keys}]", ttnn.to_torch(out), expected, pcc=BF16_PCC, rmse=BF16_RMSE, keys=keys)
+    except AssertionError as e:
+        logger.warning(f"baseline below the window softmax thresholds: {e}")
+
+
+@ONE_CHIP
 @pytest.mark.parametrize(
     ("tokens", "globals_rows"), [(64, 64), (48, 40)], ids=["tile_aligned", "unaligned"]
 )
@@ -328,6 +354,9 @@ def test_window_softmax(mesh_device, tokens, globals_rows):
 
     out = attention(device_rows(q), device_rows(k), device_rows(v))
     out = ttnn.to_torch(out)[0].permute(1, 0, 2)
+    for (q0, q1), key_ranges in attention.groups:  # a wrong key set shows up as one bad group
+        err = (out[q0:q1].double() - expected[q0:q1].double()).pow(2).mean().sqrt() / expected[q0:q1].double().std()
+        logger.info(f"window_softmax group rows [{q0}, {q1}) keys {key_ranges}: RMSE/std {err.item():.2e}")
     tag = "tile_aligned" if tokens % 32 == 0 and globals_rows % 32 == 0 else "unaligned"
     _check(
         f"window_softmax[{tag}]",
