@@ -116,8 +116,8 @@ class MmioRace(Check):
                         consumer_after = p.get("line", 0)
 
             hint = "LOCALLY_ORDERED" if local_ordering else "NO_LOCAL_ORDERING"
-            # Quasar ENABLES Auto TTSync (set_ttsync_enables<TRACK_ALL> in
-            # llk_math_common.h), so the per-RISC TTSync HW-orders a TRACKED CFG/GPR
+            # Quasar ENABLES Auto TTSync (on at HW reset; LLK never disables it
+            # via set_ttsync_enables), so the per-RISC TTSync HW-orders a TRACKED CFG/GPR
             # MMIO write against the consuming Tensix instruction at ISSUE (Confluence
             # "Every Conceivable TTSync Detail", page 1340276980) — the manual
             # STALLWAIT(TRISC_CFG)/REG2FLOP discipline WH/BH need is not required, so a
