@@ -1539,8 +1539,8 @@ class SFPU_SCALE_EN(TemplateParameter):
 class SOFTMAX_K(TemplateParameter):
     """Number of valid lanes ``k`` for the softmax_k SFPU entry (``_softmax_k_<k>``).
 
-    ``k`` counts values per row inside face 0's 16 columns; columns >= k must be
-    exactly 0.0 in DEST (the kernel's predication treats 0.0 as padding).
+    ``k`` counts values per row inside face 0's 16 columns (1..16). Columns >= k are
+    padding: their input is ignored and their output is 0.0.
     """
 
     softmax_k: int = 16

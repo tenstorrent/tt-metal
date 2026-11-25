@@ -7,8 +7,7 @@
 constant vector register 11 via ``TTI_SFPCONFIG``. ``p_sfpu::LCONST_neg1`` is that same
 register -- a core-wide constant that other SFPU kernels read as -1.0 -- and sinkhorn is
 the only site in the Blackhole tree that programs register 11 without putting -1.0 back.
-``ckernel_sfpu_softmax_k.h`` programs it too and restores it before returning; sinkhorn
-does not. The header comment acknowledges the clobber but scopes the constraint to
+The header comment acknowledges the clobber but scopes the constraint to
 sinkhorn's own row-norm body; it outlives the call.
 
 The kernel composes two ops the compute API exposes side by side and validates only the
