@@ -72,9 +72,9 @@
           }
         },
         "8kw": {
-          "throughput_tok_s": 31990,
-          "ttft_s": 25.31,
-          "chunk_time_ms": 607
+          "throughput_tok_s": 31225,
+          "ttft_s": 25.42,
+          "chunk_time_ms": 572
         }
       },
       "sc4_rr_packed": {
@@ -87,9 +87,9 @@
           }
         },
         "8kw": {
-          "throughput_tok_s": 35003,
-          "ttft_s": 24.08,
-          "chunk_time_ms": 928
+          "throughput_tok_s": 34998,
+          "ttft_s": 23.95,
+          "chunk_time_ms": 1089
         }
       }
     },

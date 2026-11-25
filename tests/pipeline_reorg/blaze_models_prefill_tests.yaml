@@ -2374,7 +2374,7 @@
     bh_sc4:
       timeout: 40
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   budget_type: demo
@@ -2399,7 +2399,7 @@
     bh_sc4:
       timeout: 40
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   budget_type: demo
