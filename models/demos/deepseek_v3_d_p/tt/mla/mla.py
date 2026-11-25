@@ -2518,7 +2518,7 @@ class ttMLA:
         kv_a,
     ):
         """A shared layer's stems when the previous step pre-sent its prefix: the KV stem and its cache write first,
-        then the rest push (one link, on the prefix push's cores) beside the q stem (every other core). The rest
+        then the rest push (on the prefix push's cores) beside the q stem (every other core). The rest
         push needs only this chunk's KV and the cached plan, and the q stem needs neither. Returns the stems'
         outputs and _push_own_rows' result for _sparse_pushed_attn."""
         tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(

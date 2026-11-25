@@ -101,9 +101,11 @@ class SparseKvPushPlanner:
     def __init__(self, mesh_device, links: int):
         self.mesh_device = mesh_device
         self.links = links
-        # Links of the prefix push beside attention. It has slack there (it ends long before attention), while every
-        # core it takes slows attention, so it runs on one link's cores and leaves the rest to attention.
-        self.prefetch_links = min(links, 1)
+        # Links of the pushes beside other work (the prefix beside attention, the rest beside the q stem): all of them.
+        # How long a push takes depends on how many distinct rows the top-k needs. With diverse top-k it is the longest
+        # thing in the layer (512K GLM-5.3 shared layer with random index keys: 13.0 ms on one link, 8.3 on two),
+        # while the cores a second link takes cost attention almost nothing (it is DRAM bound).
+        self.prefetch_links = links
         grid = mesh_device.compute_with_storage_grid_size()
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
@@ -136,7 +138,7 @@ class SparseKvPushPlanner:
         The push takes the fewest whole columns that hold its cores (prefetch_links links), in their rows furthest from
         the Ethernet row; attention takes every other column. More attention cores make sparse_sdpa faster even when
         its busiest core keeps the same token count (GLM, 160 rows: 100 cores beat 80), and the push still finishes
-        well before attention on its one link."""
+        well before attention when the top-k is concentrated."""
         grid = self.mesh_device.compute_with_storage_grid_size()
         push_cores = self.prefetch_links * PUSH_CORES_PER_LINK
         push_cols = divup(push_cores, grid.y)
@@ -163,9 +165,9 @@ class SparseKvPushPlanner:
         return self._managers[query_rows]
 
     def q_stem_grids(self):
-        """(q stem, push) core grids for a shared layer's rest push beside its q stem: the push on one link's cores in
-        the bottom rows of the last columns (where the prefix push runs beside attention), the q stem on every other
-        core. q_stem_columns is how many whole columns the q stem keeps, for rectangular matmul grids."""
+        """(q stem, push) core grids for a shared layer's rest push beside its q stem: the push on prefetch_links'
+        cores in the bottom rows of the last columns (where the prefix push runs beside attention), the q stem on every
+        other core. q_stem_columns is how many whole columns the q stem keeps, for rectangular matmul grids."""
         grid = self.mesh_device.compute_with_storage_grid_size()
         push_cores = self.prefetch_links * PUSH_CORES_PER_LINK
         push_cols = divup(push_cores, grid.y)
