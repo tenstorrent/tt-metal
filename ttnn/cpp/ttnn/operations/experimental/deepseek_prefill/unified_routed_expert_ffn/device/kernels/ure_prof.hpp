@@ -6,7 +6,7 @@
 
 // Stall counters for the unified routed-expert kernels (device profiler builds with URE_PROF only).
 // URE_T(i, stmt) adds the wall-clock cycles stmt took on this RISC to counter i; URE_EMIT() writes the
-// counters as timestamped data at the end of the kernel (zone names URE-00 .. URE-15, see perf/A9-report.md).
+// counters as timestamped data at the end of the kernel (zone names URE-00 .. URE-15).
 // Each TRISC thread compiles its own copy, so a compute-kernel counter exists once per thread.
 
 #include <cstdint>
