@@ -49,13 +49,6 @@ on the plan's packing fields (`down_bank_patterns`, `down_weight_slots`, `down_w
 options. The down reads' rate is set by their NOC0 distance to the bank: rotating every core over all banks averages
 about 12 hops a block, the nearest banks under 2.
 
-## x forwarding
-
-Every gate/up core receives all of x for its sub-block's rows (at M 320 about ten times its weight bytes), forwarded
-hop by hop along its rectangle's snake by the predecessor's NCRISC (`gate_up_x_forwarder.cpp`), 6 pieces in flight
-(transaction ids 1..6; the weight reads on the same RISC use 8..15). One hop's bandwidth is its bytes in flight over
-the NoC latency, so the depth sets the x rate; no L1 - the pieces land in the successor's x ring.
-
 ## Roles and kernels (`device/kernels`)
 
 | Role | Cores | Kernels |
