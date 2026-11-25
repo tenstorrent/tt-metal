@@ -15,7 +15,7 @@
 // dev_mem_map.h defines CCE_RESET_VECTOR_BASE as a macro; read UMD's constant of the same name with the macro hidden.
 #pragma push_macro("CCE_RESET_VECTOR_BASE")
 #undef CCE_RESET_VECTOR_BASE
-#include "umd/device/arch/grendel_implementation.hpp"
+#include "tt-umd/arch/grendel_implementation.hpp"
 #include "umd/device/coordinates/grendel_noc_address_resolver.hpp"
 namespace tt::tt_metal::mimir_test::snoop_ctl_impl {
 // SMC view of CCE0's tt_cluster_ctrl register plane: its first register is RESET_VECTOR_0 (CCE-local 0x03000000).
@@ -29,7 +29,7 @@ namespace snoop_ctl_impl {
 
 inline constexpr uint64_t kRemapBaseAddress = tt::umd::grendel::CCE_DMRISC_REMAP_BASE;
 inline constexpr uint64_t kRemapEntryStride = tt::umd::grendel::CCE_DMRISC_REMAP_ENTRY_STRIDE;
-// Entry 1 is the local Mimir's SRAM window (UMD cce_dmrisc_remap_entries).
+// Entry 1 is the local Mimir's SRAM window (UMD mimir_cce_dmrisc_remap_entries).
 inline constexpr uint64_t kSramRemapEntry = 1;
 inline constexpr uint64_t kRemapAttrsOffset = 0x18;
 // NOC_SNOOP_TL_MASTER_CFG offset in tt_cluster_ctrl (tt-2.0.0 tt_cluster_ctrl_reg.h, CCE-local 0x03000124).
@@ -38,7 +38,7 @@ inline constexpr uint64_t kSnoopMasterConfigOffset = 0x124;
 // Channel 0: the SMC core of the CCE's Mimir already selects the Mimir, so chiplet-local windows.
 uint64_t cce_register_address(uint32_t cce_index, uint64_t register_address) {
     return tt::umd::mimir_local_address_windows(configured_soc_desc())
-        .cce_control_address(0, location_for_cce(cce_index), register_address);
+        .mimir_cce_control_address(0, location_for_cce(cce_index), register_address);
 }
 
 uint64_t sram_remap_attrs_address(uint32_t cce_index) {

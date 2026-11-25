@@ -18,7 +18,7 @@
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "umd/device/utils/error_detail.hpp"
+#include "tt-umd-utils/error.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>

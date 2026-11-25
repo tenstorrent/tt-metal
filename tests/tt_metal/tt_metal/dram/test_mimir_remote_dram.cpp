@@ -21,7 +21,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "umd/device/types/arch.hpp"
+#include "tt-umd/types/arch.hpp"
 #include "dev_mem_map.h"
 #include "llrt/hal.hpp"
 #include <tt-metalium/distributed.hpp>

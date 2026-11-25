@@ -22,7 +22,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "dev_mem_map.h"
 #include "hostdev/cce_spa_routes.h"
-#include "umd/device/utils/error_detail.hpp"
+#include "tt-umd-utils/error.hpp"
 #include "llrt/rtoptions.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"

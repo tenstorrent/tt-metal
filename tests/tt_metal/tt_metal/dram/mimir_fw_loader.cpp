@@ -27,7 +27,7 @@
 // dev_mem_map.h defines CCE_RESET_VECTOR_BASE as a macro, which collides with UMD's constant of the same name.
 #pragma push_macro("CCE_RESET_VECTOR_BASE")
 #undef CCE_RESET_VECTOR_BASE
-#include "umd/device/arch/grendel_implementation.hpp"
+#include "tt-umd/arch/grendel_implementation.hpp"
 #pragma pop_macro("CCE_RESET_VECTOR_BASE")
 
 namespace tt::tt_metal::mimir_test {

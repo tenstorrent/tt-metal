@@ -24,7 +24,7 @@
 // dev_mem_map.h defines CCE_RESET_VECTOR_BASE as a macro; read UMD's constant of the same name with the macro hidden.
 #pragma push_macro("CCE_RESET_VECTOR_BASE")
 #undef CCE_RESET_VECTOR_BASE
-#include "umd/device/arch/grendel_implementation.hpp"
+#include "tt-umd/arch/grendel_implementation.hpp"
 namespace tt::tt_metal::mimir_test::hw_state_impl {
 inline constexpr uint64_t kCceResetVectorBaseAddress = tt::umd::grendel::CCE_RESET_VECTOR_BASE;
 }
@@ -57,7 +57,7 @@ inline constexpr uint64_t kCceRemapStartOffset = 0x00;
 inline constexpr uint64_t kCceRemapEndOffset = 0x08;
 inline constexpr uint64_t kCceRemapRemapStartOffset = 0x10;
 inline constexpr uint64_t kCceRemapAttrsOffset = 0x18;
-using CceRemapEntries = decltype(tt::umd::cce_dmrisc_remap_entries(tt::umd::GrendelAddressWindows{}, 0));
+using CceRemapEntries = decltype(tt::umd::mimir_cce_dmrisc_remap_entries(tt::umd::GrendelAddressWindows{}, 0));
 inline constexpr uint64_t kCceRemapEntriesPerCce = std::tuple_size_v<CceRemapEntries>;
 inline constexpr uint64_t kGddrIntlvFlagOutStatus0Address = 0x04004058ULL;
 inline constexpr uint64_t kGddrCapFlagOutStatus0Address = 0x04004358ULL;
@@ -144,7 +144,7 @@ uint64_t d2d_tile_offset(const D2dTile& tile) { return static_cast<uint64_t>(til
 
 uint64_t cce_register_address(const metal_SocDescriptor& soc, uint32_t location, uint64_t register_address) {
     // Channel 0: the SMC core already selects the Mimir, so chiplet-local windows.
-    return tt::umd::mimir_local_address_windows(soc).cce_control_address(0, location, register_address);
+    return tt::umd::mimir_local_address_windows(soc).mimir_cce_control_address(0, location, register_address);
 }
 
 uint64_t ss_bar_address(const D2dTile& tile, uint64_t offset) {
@@ -275,10 +275,10 @@ void add_ss_bar_window(
 // Mimir's CCE SRAM, then its GDDR. D2D1 reaches GDDR one D2D lane above D2D0. BAR3 is spare.
 void append_ss_bar_expected(std::vector<MimirRegister>& registers, const D2dTile& tile) {
     const tt::umd::GrendelAddressWindows windows;
-    const CceRemapEntries remap_entries = tt::umd::cce_dmrisc_remap_entries(windows, tile.mimir_index);
+    const CceRemapEntries remap_entries = tt::umd::mimir_cce_dmrisc_remap_entries(windows, tile.mimir_index);
     const uint64_t d2d1_gddr_offset = tile.d2d_index != 0 ? CCE_GDDR_D2D_LANE_INSTANCES * windows.dram_stride : 0;
     for (uint32_t bar_index = 0; bar_index < remap_entries.size(); ++bar_index) {
-        const tt::umd::CceDmriscRemapEntry& entry = remap_entries[bar_index];
+        const tt::umd::MimirCceDmriscRemapEntry& entry = remap_entries[bar_index];
         const bool is_gddr = bar_index == remap_entries.size() - 1;
         const uint64_t lane_offset = is_gddr ? d2d1_gddr_offset : 0;
         add_ss_bar_window(
@@ -314,10 +314,10 @@ void append_cce_remap_expected(
     std::vector<MimirRegister>& registers, const metal_SocDescriptor& soc, uint32_t mimir_index) {
     // Chippy programs the remap; compare it with UMD's package windows.
     const CceRemapEntries expected_entries =
-        tt::umd::cce_dmrisc_remap_entries(tt::umd::GrendelAddressWindows{}, mimir_index);
+        tt::umd::mimir_cce_dmrisc_remap_entries(tt::umd::GrendelAddressWindows{}, mimir_index);
     for (uint32_t location = 0; location < locations_per_channel(soc); ++location) {
         for (uint32_t entry_index = 0; entry_index < kCceRemapEntriesPerCce; ++entry_index) {
-            const tt::umd::CceDmriscRemapEntry& entry = expected_entries[entry_index];
+            const tt::umd::MimirCceDmriscRemapEntry& entry = expected_entries[entry_index];
             const uint64_t entry_base = cce_register_address(
                 soc, location, kCceRemapBaseAddress + static_cast<uint64_t>(entry_index) * kCceRemapEntryStride);
             const std::string prefix = fmt::format("M{}.CCE{}.DMRISC_REMAP{}", mimir_index, location, entry_index);
@@ -509,7 +509,8 @@ std::string mimir_identity_mismatch(const Cluster& cluster, const metal_SocDescr
         const uint64_t base10_value =
             read_smc_value(cluster, soc, chip, tile.mimir_index, ss_bar_address(tile, kSsBarBase10Offset), false);
         const uint64_t base10_expected =
-            tt::umd::cce_dmrisc_remap_entries(tt::umd::GrendelAddressWindows{}, tile.mimir_index)[1].region_start &
+            tt::umd::mimir_cce_dmrisc_remap_entries(tt::umd::GrendelAddressWindows{}, tile.mimir_index)[1]
+                .region_start &
             0xFFFFFFFFULL;
         if (base10_value != base10_expected) {
             mismatches.push_back(

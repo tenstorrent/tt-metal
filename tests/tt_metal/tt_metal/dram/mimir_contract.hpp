@@ -30,8 +30,8 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "umd/device/soc_arch_descriptor.hpp"
-#include "umd/device/types/core_coordinates.hpp"
+#include "tt-umd/soc_arch_descriptor.hpp"
+#include "tt-umd/types/core_coordinates.hpp"
 
 namespace tt::tt_metal {
 namespace mimir_contract {
