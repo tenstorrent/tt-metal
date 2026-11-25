@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Loop-pass message split (E10d), one data-movement kernel per output tile column j: the [1, 1, 48, C] fp32
+// Loop-pass message split, one data-movement kernel per output tile column j: the [1, 1, 48, C] fp32
 // messages (row 4 l + i = message i of loop layer l: q, k, v, mlp) -> per layer a qkv row tensor [1, 1, 3, C] and
 // an mlp row tensor [1, 1, 1, C], each with its dense twin. Replaces 24 selector matmuls per pass and lets the
 // message gates read 3 dense pages instead of gathering each message row.

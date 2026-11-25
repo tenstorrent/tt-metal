@@ -35,7 +35,7 @@ void kernel_main() {
         DeviceZoneScopedN("W_scatter");
         const uint32_t out = get_read_ptr(cb_out);
         if constexpr (get_named_compile_time_arg_val("split3")) {
-            // E10d loop messages (nq = 4): outputs 0..2 -> the qkv row tensor + twin, output 3 -> the mlp ones
+            // loop messages (nq = 4): outputs 0..2 -> the qkv row tensor + twin, output 3 -> the mlp ones
             const uint32_t mlp_addr = get_arg_val<uint32_t>(3), mlp_dense = get_arg_val<uint32_t>(4);
             rowio::write_pages(out_dense, 4096, o_row * T, 3 * T, out);
             rowio::write_pages(mlp_dense, 4096, o_row2 * T, T, out + 3 * T * 4096);

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// M2 staging of a message-gate combine core's F or G slice (tt/mk/gate_stage.py): the kz x nt fp32 tiles at pages
+// Staging of a message-gate combine core's F or G slice (tt/mk/gate_stage.py): the kz x nt fp32 tiles at pages
 // kt * nct + col0 + j (4 KB, interleaved DRAM) into this core's L1 staging shard at `stage`, in the order the
 // combine reads them ([kt][j]). One read in flight (the hosting program waits on small DRAM reads of its own).
 // Runtime args: tensor address, col0, staging L1 address.

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Staged copy (M2, tt/mk/gate_stage.py) of tt/fused/kernels/gate_combine_{reader,writer}.cpp: one extra runtime arg
+// Staged copy (tt/mk/gate_stage.py) of tt/fused/kernels/gate_combine_{reader,writer}.cpp: one extra runtime arg
 // (last), `stage`: when non-zero, this core's F (bytes 0 .. kz * nt * 4 KB) and G (next kz * nt * 4 KB) slices were
 // copied into local L1 at `stage` earlier, in the order read here, and are taken from there instead of DRAM.
 //

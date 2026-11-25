@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Staged copy of tt/fused/kernels/bank_linear_reader.cpp (M2): the first `staged` bytes of this core's weight range
+// Staged copy of tt/fused/kernels/bank_linear_reader.cpp: the first `staged` bytes of this core's weight range
 // were copied earlier into this core's L1 staging shard (tt/mk/stage.py, while another program computed); they are
 // read from there, the rest from DRAM as before. Same bytes into the same cb_w slots, so the output is unchanged.
 // Bank-streamed decode linear, reader (NCRISC, NOC0), one core next to DRAM bank `bank` (tt/fused/bank_linear.py).

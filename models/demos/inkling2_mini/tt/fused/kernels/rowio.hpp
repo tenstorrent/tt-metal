@@ -33,7 +33,7 @@ FORCE_INLINE void zero_words(uint32_t l1, uint32_t bytes) {
 // into dense L1 at dst (C = 32 * ntc elements; the pad up to pad_bytes is zeroed). stage: 64B-aligned scratch of
 // ntc * 128 bytes. DRAM reads must be 64B aligned, so whole 64B blocks are staged and the chunks copied out.
 // [j0, j1): only these tiles (the two data-movement RISCs can each gather a part; the pad goes with the last part).
-template <bool DRAM = true>  // false: an L1-interleaved input (E10d: the MoE output)
+template <bool DRAM = true>  // false: an L1-interleaved input (the MoE output)
 FORCE_INLINE void gather_row(
     uint32_t base,
     uint32_t tile_bytes,

@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t out_dense = get_arg_val<uint32_t>(4);  // dense twin of the output (0: none)
 
     {
-        // E10c: inputs this RISC reads while the reader gathers x and reads taps / ring. Args 5..: the reader's x args,
+        // inputs this RISC reads while the reader gathers x and reads taps / ring. Args 5..: the reader's x args,
         // ring slots at lag 1, 2, 3, taps, resid args.
         constexpr uint32_t has_resid = get_named_compile_time_arg_val("has_resid");
         constexpr uint32_t cb_x = 0, cb_resid = 3, cb_stage = 26,

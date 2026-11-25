@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// M2 weight staging (tt/mk/stage.py): copies bytes [off, off + n) of this core's contiguous weight range in DRAM bank
+// Weight staging (tt/mk/stage.py): copies bytes [off, off + n) of this core's contiguous weight range in DRAM bank
 // `bank` (tile slot `slot`, page = slot * n_banks + bank) into this core's L1 staging shard at the same offset.
 // Runs as an extra data-movement kernel inside another program (on cores that program does not use), so the copy
 // overlaps that program's compute. Reads in `piece`-byte pieces, `in_flight` outstanding (a host program that

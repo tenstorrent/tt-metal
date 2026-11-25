@@ -90,7 +90,7 @@ void kernel_main() {
 #endif
 
     if constexpr (get_named_compile_time_arg_val("split_out")) {
-        // row norm (E10d): first half of the output row scatter (the writer does the rest)
+        // row norm: first half of the output row scatter (the writer does the rest)
         const uint32_t out_addr = get_arg_val<uint32_t>(9), out_tile = get_arg_val<uint32_t>(10);
         const uint32_t out_es = get_arg_val<uint32_t>(11), out_row = get_arg_val<uint32_t>(12);
         cb_wait_front(16, T);

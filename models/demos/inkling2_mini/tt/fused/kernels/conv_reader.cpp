@@ -11,7 +11,7 @@ void kernel_main() {
     constexpr uint32_t T = get_named_compile_time_arg_val("pages");  // dense pages per vector
     constexpr uint32_t cb_x = 0, cb_ring = 1, cb_taps = 2, cb_sync = 25, cb_stage = 24;
 
-    // x only; the writer gathers the second half of a row-form x and reads ring, taps and resid (E10c)
+    // x only; the writer gathers the second half of a row-form x and reads ring, taps and resid
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t x_tile = get_arg_val<uint32_t>(1);
     const uint32_t x_es = get_arg_val<uint32_t>(2);

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Message-gate prep + down_proj (E10c), writer of K part s. Prep cores wait for their rms row (cb_np), then bump
+// Message-gate prep + down_proj, writer of K part s. Prep cores wait for their rms row (cb_np), then bump
 // sem_x on every core (args 0..2 unused). s > 0: send rows 0..R-1 of the kz partial tiles into packed rows of the
 // root's cb_recv (same L1 address on every core) and bump the root's sem_z. Root: wait for all partials, hand them
 // to compute, write z rows (compact, several copies) to DRAM.

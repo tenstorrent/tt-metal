@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Message-gate prep + down_proj (E10c), reader of K part s (one core per part).
+// Message-gate prep + down_proj, reader of K part s (one core per part).
 //   prep cores (prep = 1, one per gated vector): the gate-prep reader (attnres_reader, args 0..8)
 //   then: down_proj tiles of K part s (prefetched), wait until every prep core has its rms row, x tiles of part s
 //   from their L1. A part is kt consecutive K tiles from x_first; down_proj pages w_first .. (kt * kz).

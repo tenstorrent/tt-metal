@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Message-gate prep + down_proj (E10c), compute of K part s. Prep cores first run the gate-prep compute
+// Message-gate prep + down_proj, compute of K part s. Prep cores first run the gate-prep compute
 // (attnres_compute with nq = 0: bf16 rms(v)). Then partial z_s = x_s @ down_s (fp32 DST); the root (s = 0) adds
 // the other parts' partial rows, packed into nb tiles per z tile, with selection matmuls (S[r, g] = 1 where packed
 // row g came from row r; partials enter the FPU as tf32, like the reduce of the ttnn.sum it replaces), packs z. The z
