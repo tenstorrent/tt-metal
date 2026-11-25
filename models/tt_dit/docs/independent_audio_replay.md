@@ -95,10 +95,15 @@ warm capture, for example) could land on one and be overwritten by the next audi
 replay. The vocoder, mel decoder and BWE tracers resolve `hold_capture_frees`
 on the instance (`self.hold_capture_frees`, default off); H3's audio decoder sets
 it on its vocoder. With it on, `ttnn.set_trace_capture_hold` is set around
-`begin_trace_capture`, the allocator keeps every DRAM range freed during that
-capture reserved, and `release_trace` returns them. Cost: the capture's DRAM
-intermediates without reuse between them, held for the trace's lifetime
-(`Tracer.capture_hold_bytes`, per bank). L1 is not held (L1 tensors do not live
+`begin_trace_capture`. During the capture freed DRAM is reused as in eager and
+each freed range is recorded; at `end_trace_capture` the allocator reserves the
+part of those ranges that is free then, and a buffer still live there (an
+output) stays allocated when freed later. `release_trace` returns both. Cost: at
+most the union of the ranges the capture freed (about the capture's eager peak),
+held for the trace's lifetime (`Tracer.capture_hold_bytes`, per bank). Until
+task #6721 the capture kept every freed range with no reuse, so the hold was the
+sum of all intermediates: about 7.4 GB per chip for a 15 s 768x1344 H3 ref2va
+vocoder capture, and later idle warms ran out of DRAM (`bank_manager.cpp:437`). L1 is not held (L1 tensors do not live
 across a replay call). With the hold, a warm-captured audio trace is safe for later
 jobs of any shape, so ltx-server's H3 ref2va warm may capture it.
 

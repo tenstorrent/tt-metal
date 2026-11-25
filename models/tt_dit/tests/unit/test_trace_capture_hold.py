@@ -7,10 +7,11 @@
 A trace rewrites its intermediates' addresses on every replay. With the hold, the DRAM a capture
 frees stays reserved until the trace is released, so a later job's buffers cannot land on it. This
 checks the Python side with a fake ttnn: the hold is set only around begin_trace_capture, and only
-H3's audio decoder asks for it. LTX's mel decoder, vocoders and BWE keep it off (task #6623): the hold
-reserves the capture's intermediates without reuse, and the LTX 6 s 1080p cold warm-up then ran out
-of DRAM on cs04 in the Gemma warm-up after the audio capture pass. Run directly; no device or quality
-acceptance.
+H3's audio decoder asks for it. LTX's mel decoder, vocoders and BWE keep it off (task #6623): before
+task #6721 the hold reserved the capture's intermediates without reuse, and the LTX 6 s 1080p cold
+warm-up then ran out of DRAM on cs04 in the Gemma warm-up after the audio capture pass. The
+allocator side (reuse during capture, reserve the freed union at capture end) is checked on device.
+Run directly; no device or quality acceptance.
 """
 
 import ast

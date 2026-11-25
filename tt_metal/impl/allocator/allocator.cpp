@@ -317,13 +317,19 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     }
 
     switch (buffer_type) {
-        case BufferType::DRAM:
+        case BufferType::DRAM: {
+            const DeviceAddr size = buffer->aligned_size_per_bank();
+            // Recorded even when an older hold keeps it: this capture may use it too, and the older
+            // hold hands it over on release (release_capture_hold).
             if (capture_hold_depth_ > 0) [[unlikely]] {
-                capture_held_dram_.emplace_back(address, buffer->aligned_size_per_bank());
-            } else {
-                dram_manager_->deallocate_buffer(address);
+                capture_freed_dram_.emplace_back(address, address + size);
             }
+            if (!held_dram_by_token_.empty() && this->defer_into_capture_hold(address, size)) [[unlikely]] {
+                break;
+            }
+            dram_manager_->deallocate_buffer(address);
             break;
+        }
         case BufferType::L1: l1_manager_->deallocate_buffer(address); break;
         case BufferType::L1_SMALL: l1_small_manager_->deallocate_buffer(address); break;
         case BufferType::TRACE: trace_buffer_manager_->deallocate_buffer(address); break;
@@ -340,7 +346,7 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
 void AllocatorImpl::deallocate_buffers() {
     std::lock_guard<std::mutex> lock(mutex_);
     // deallocate_all frees every range, the held ones included: drop the hold records with them.
-    capture_held_dram_.clear();
+    capture_freed_dram_.clear();
     held_dram_by_token_.clear();
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
@@ -355,17 +361,65 @@ void AllocatorImpl::begin_capture_hold() {
     std::lock_guard<std::mutex> lock(mutex_);
     TT_FATAL(capture_hold_depth_ == 0, "capture hold is already open; nested trace captures cannot hold");
     capture_hold_depth_ = 1;
-    capture_held_dram_.clear();
+    capture_freed_dram_.clear();
 }
 
 std::uint64_t AllocatorImpl::end_capture_hold() {
     std::lock_guard<std::mutex> lock(mutex_);
     TT_FATAL(capture_hold_depth_ == 1, "end_capture_hold without begin_capture_hold");
     capture_hold_depth_ = 0;
+
+    CaptureHold hold;
+    std::sort(capture_freed_dram_.begin(), capture_freed_dram_.end());
+    for (const auto& [begin, end] : capture_freed_dram_) {
+        if (!hold.freed.empty() && begin <= hold.freed.back().second) {
+            hold.freed.back().second = std::max(hold.freed.back().second, end);
+        } else {
+            hold.freed.emplace_back(begin, end);
+        }
+    }
+    capture_freed_dram_.clear();
+
+    // Reserve the free gaps of the freed ranges. The live parts are buffers allocated during capture
+    // and still held by the caller; defer_into_capture_hold keeps them when they are freed later.
+    const auto allocated = dram_manager_->get_allocated_ranges();
+    auto live = allocated.begin();
+    for (const auto& [begin, end] : hold.freed) {
+        while (live != allocated.end() && live->second <= begin) {
+            ++live;
+        }
+        DeviceAddr cursor = begin;
+        for (auto it = live; it != allocated.end() && it->first < end; ++it) {
+            if (it->first > cursor) {
+                hold.held.emplace_back(cursor, it->first - cursor);
+            }
+            cursor = std::max(cursor, it->second);
+        }
+        if (cursor < end) {
+            hold.held.emplace_back(cursor, end - cursor);
+        }
+    }
+    for (const auto& [address, size] : hold.held) {
+        dram_manager_->mark_allocated(BankManager::AllocatorDependencies::AllocatorID{0}, address, size);
+    }
+
     const auto token = next_capture_hold_token_++;
-    held_dram_by_token_.emplace(token, std::move(capture_held_dram_));
-    capture_held_dram_.clear();
+    held_dram_by_token_.emplace(token, std::move(hold));
     return token;
+}
+
+bool AllocatorImpl::defer_into_capture_hold(DeviceAddr address, DeviceAddr size) {
+    const DeviceAddr end = address + size;
+    for (auto& [token, hold] : held_dram_by_token_) {
+        // First freed range ending after address; it overlaps when it begins before end.
+        auto it = std::upper_bound(
+            hold.freed.begin(), hold.freed.end(), address, [](DeviceAddr a, const auto& r) { return a < r.second; });
+        if (it != hold.freed.end() && it->first < end) {
+            hold.held.emplace_back(address, size);
+            return true;
+        }
+    }
+    return false;
 }
 
 void AllocatorImpl::release_capture_hold(std::uint64_t token) {
@@ -374,10 +428,15 @@ void AllocatorImpl::release_capture_hold(std::uint64_t token) {
     if (it == held_dram_by_token_.end()) {
         return;  // already freed by deallocate_buffers
     }
-    for (const auto& [address, size] : it->second) {
+    CaptureHold hold = std::move(it->second);
+    held_dram_by_token_.erase(it);
+    // A range another live trace also wrote to moves to that trace's hold instead of being freed.
+    for (const auto& [address, size] : hold.held) {
+        if (!held_dram_by_token_.empty() && this->defer_into_capture_hold(address, size)) {
+            continue;
+        }
         dram_manager_->deallocate_buffer(address);
     }
-    held_dram_by_token_.erase(it);
 }
 
 std::size_t AllocatorImpl::capture_hold_bytes(std::uint64_t token) const {
@@ -385,7 +444,7 @@ std::size_t AllocatorImpl::capture_hold_bytes(std::uint64_t token) const {
     auto it = held_dram_by_token_.find(token);
     std::size_t total = 0;
     if (it != held_dram_by_token_.end()) {
-        for (const auto& [address, size] : it->second) {
+        for (const auto& [address, size] : it->second.held) {
             total += size;
         }
     }
@@ -701,6 +760,8 @@ DeviceAddr AllocatorImpl::get_dram_deletion_high_water_mark() const {
 
 void AllocatorImpl::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
+    capture_freed_dram_.clear();
+    held_dram_by_token_.clear();
     dram_manager_->clear();
     l1_manager_->clear();
     l1_small_manager_->clear();
@@ -779,6 +840,8 @@ void AllocatorImpl::override_state(const AllocatorState& state) {
     }
 
     // Clear all buffer types
+    capture_freed_dram_.clear();
+    held_dram_by_token_.clear();
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
