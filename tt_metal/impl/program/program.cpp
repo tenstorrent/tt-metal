@@ -3504,9 +3504,23 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     }
                     return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
                 });
-                // The reuse sidecar is written once, by the submission that sent the kernel.
-                if (result == RemoteCompileCoordinator::SubmitResult::Sent && preprocess_and_ship) {
-                    preprocessed_kernels.push_back(kernel);
+                // Feed the JIT cache stats, as build() does on the local path: a kernel sent to a
+                // server is a miss of the local cache, a reused one is a hit.
+                const uint32_t num_binaries = kernel->expected_num_binaries();
+                switch (result) {
+                    case RemoteCompileCoordinator::SubmitResult::Sent:
+                        BuildCacheTelemetry::inst().record_compile(num_binaries, num_binaries);
+                        // The reuse sidecar is written once, by the submission that sent the kernel.
+                        if (preprocess_and_ship) {
+                            preprocessed_kernels.push_back(kernel);
+                        }
+                        break;
+                    case RemoteCompileCoordinator::SubmitResult::Reused:
+                        BuildCacheTelemetry::inst().record_compile(num_binaries, 0);
+                        break;
+                    case RemoteCompileCoordinator::SubmitResult::Deduplicated:
+                        BuildCacheTelemetry::inst().record_jit_once_dedup();
+                        break;
                 }
                 // Always recorded: cached kernels still need read_binaries() to load the on-disk ELF.
                 submitted_kernels.emplace_back(kernel, std::move(build_options));
