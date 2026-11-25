@@ -996,6 +996,11 @@ class MiniMaxH3Pipeline:
     # ------------------------------------------------------------------ construction
 
     @classmethod
+    def _base_partitions(cls, task: str) -> tuple[str, ...]:
+        transformer = "transformer_ref" if task == "ref2va" else "transformer"
+        return (transformer, "text_encoder", "vae", "audio_vae")
+
+    @classmethod
     def create_pipeline(
         cls,
         *,
@@ -1046,14 +1051,7 @@ class MiniMaxH3Pipeline:
         denoise instead of once a step; `trace_denoise` configs always project once a step. `ff1_output_dtype`: see
         `__init__`.
         """
-        transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
-        weights_dir = resolve_weights_dir(
-            transformer_subfolder,
-            "text_encoder",
-            "vae",
-            "audio_vae",
-            weights_dir=weights_dir,
-        )
+        weights_dir = resolve_weights_dir(*cls._base_partitions(task), weights_dir=weights_dir)
         return cls(
             mesh_device=mesh_device,
             weights_dir=weights_dir,

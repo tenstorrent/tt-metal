@@ -16,7 +16,10 @@ import pytest
 import torch
 
 from ....pipelines.minimax_h3.pdd_minimax_h3 import MiniMaxH3PDDContract
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.pipeline_minimax_h3_pdd import MiniMaxH3PDDPipeline
 from ....pipelines.minimax_h3.scheduler import MiniMaxH3Scheduler
+from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
 
 # FastH3 OmniRef PDD-8's fastvideo_inference.json.
 OMNIREF_PDD8 = {
@@ -74,6 +77,22 @@ def test_contract_rejects_inconsistent_exports(tmp_path, expect_error, edit, mes
 def test_contract_checks_the_transformer_config(tmp_path, expect_error):
     with expect_error(ValueError, "pdd_steps"):
         _export(tmp_path, pdd_steps=16)
+
+
+def test_pdd_base_dir_needs_no_transformer(tmp_path):
+    for name in ("text_encoder", "vae", "audio_vae"):
+        (tmp_path / name).mkdir()
+    assert resolve_weights_dir(*MiniMaxH3PDDPipeline._base_partitions("ref2va"), weights_dir=tmp_path) == tmp_path
+
+
+def test_base_pipeline_still_requires_transformer_ref():
+    assert "transformer_ref" in MiniMaxH3Pipeline._base_partitions("ref2va")
+
+
+def test_pdd_rejects_an_export_without_transformer_ref(tmp_path, expect_error):
+    (tmp_path / "fastvideo_inference.json").write_text(json.dumps(OMNIREF_PDD8))
+    with expect_error(WeightsNotFoundError, str(tmp_path)):
+        MiniMaxH3PDDPipeline(pdd_export_dir=tmp_path)
 
 
 @pytest.mark.parametrize("modality", ["video", "audio"])

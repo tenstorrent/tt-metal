@@ -29,8 +29,10 @@ from .pdd_minimax_h3 import PDD_HEADS, MiniMaxH3PDDContract
 from .pipeline_minimax_h3 import MiniMaxH3Pipeline
 from .scheduler import MiniMaxH3Scheduler
 from .vsa_geometry import VSA_TILE_TOKENS
+from .weights_minimax_h3 import WeightsNotFoundError
 
 _GATE_SUFFIX = ".attn.to_gate_compress.weight"
+_INDEX_FILE = "diffusion_pytorch_model.safetensors.index.json"
 
 
 def _export_digest(transformer_dir: Path) -> str:
@@ -48,6 +50,8 @@ class MiniMaxH3PDDPipeline(MiniMaxH3Pipeline):
         if task != "ref2va":
             raise ValueError(f"a PDD export is a ref2va student, got task {task!r}")
         self.pdd_export_dir = Path(pdd_export_dir)
+        if not (self.pdd_export_dir / "transformer_ref" / _INDEX_FILE).is_file():
+            raise WeightsNotFoundError(f"PDD export at {self.pdd_export_dir} is missing transformer_ref/{_INDEX_FILE}")
         self.pdd = MiniMaxH3PDDContract.from_export(self.pdd_export_dir)
         for name, value in (("video_shift", self.pdd.video_shift), ("audio_shift", self.pdd.audio_shift)):
             if kwargs.get(name) not in (None, value):
@@ -73,6 +77,10 @@ class MiniMaxH3PDDPipeline(MiniMaxH3Pipeline):
             f"PDD export {self.pdd_export_dir.name}: {self.pdd.num_forwards} forwards over a {self.pdd.pdd_steps}-head "
             f"grid, blocks {list(self.pdd.step_indices)}, shifts {self.pdd.video_shift:g}/{self.pdd.audio_shift:g}"
         )
+
+    @classmethod
+    def _base_partitions(cls, task: str) -> tuple[str, ...]:
+        return ("text_encoder", "vae", "audio_vae")
 
     @staticmethod
     def export_vsa_config(export_dir: str | Path) -> MiniMaxH3VSAConfig:
