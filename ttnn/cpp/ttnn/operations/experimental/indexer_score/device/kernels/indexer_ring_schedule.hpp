@@ -6,8 +6,8 @@
 
 namespace indexer_ring_schedule {
 
-// Pure host/device iterator over one lane's shard-major K units. The shard order is
-// shared by every core; only lane = block + column * num_blocks is per-core.
+// Pure host/device iterator over one lane's K units, in arrival order (wave, then unit, then shard of the
+// wave). The shard order is shared by every core; only lane = block + column * num_blocks is per-core.
 // Geometry is compile-time constant in kernels, without specializing on core/rank.
 struct Geometry {
     uint32_t ring_size;
@@ -21,12 +21,22 @@ struct Geometry {
 // Global round-robin over arrival order: every (wave, unit, shard-of-wave) item gets one running index and
 // lane l takes the items whose index is l mod lane_count. Each wave starts where the previous one stopped, so
 // the lanes share the remainders of all waves and the busiest lane carries ceil(items / lanes) units. Restarting
-// at lane 0 every wave instead piled each wave's remainder onto the same lanes. Which core computes a unit
-// moves; how it is computed does not, so the output is unchanged.
-constexpr uint32_t wave_items(const Geometry& g, uint32_t wave) {
+// at lane 0 every wave instead piled each wave's remainder onto the same lanes.
+// Wave 0 is the local shard; wave w > 0 is the pair of shards 2w-1 and 2w, or only 2w-1 when it is the last shard.
+struct WaveShape {
+    uint32_t first_shard;
+    uint32_t shards;
+};
+
+constexpr WaveShape wave_shape(const Geometry& g, uint32_t wave) {
     const uint32_t first_shard = wave == 0 ? 0 : 2 * wave - 1;
-    const uint32_t wave_size = wave == 0 || first_shard + 1 == g.ring_size ? 1 : 2;
-    return g.units_per_shard * wave_size;
+    return {first_shard, wave == 0 || first_shard + 1 == g.ring_size ? 1u : 2u};
+}
+
+// Items (shard units) in one wave. band_count() and Iterator::next() both size waves with this, so the host's
+// band count always matches what the kernels iterate.
+constexpr uint32_t wave_items(const Geometry& g, uint32_t wave) {
+    return g.units_per_shard * wave_shape(g, wave).shards;
 }
 
 constexpr uint32_t band_count(const Geometry& g, uint32_t lane) {
@@ -55,14 +65,13 @@ public:
         const uint32_t wave_count = geometry_.ring_size / 2 + 1;
         const uint32_t lane_count = geometry_.num_blocks * geometry_.cols;
         while (wave_ < wave_count) {
-            const uint32_t first_shard = wave_ == 0 ? 0 : 2 * wave_ - 1;
-            const uint32_t wave_size = wave_ == 0 || first_shard + 1 == geometry_.ring_size ? 1 : 2;
-            const uint32_t n = geometry_.units_per_shard * wave_size;
+            const WaveShape shape = wave_shape(geometry_, wave_);
+            const uint32_t n = wave_items(geometry_, wave_);
             if (idx_ < n) {
-                const uint32_t unit = idx_ / wave_size;
-                const uint32_t member = idx_ - unit * wave_size;
+                const uint32_t unit = idx_ / shape.shards;
+                const uint32_t member = idx_ % shape.shards;
                 physical_start =
-                    get_shard(first_shard + member) * geometry_.tiles_per_shard + unit * geometry_.tiles_per_unit;
+                    get_shard(shape.first_shard + member) * geometry_.tiles_per_shard + unit * geometry_.tiles_per_unit;
                 idx_ += lane_count;
                 return true;
             }

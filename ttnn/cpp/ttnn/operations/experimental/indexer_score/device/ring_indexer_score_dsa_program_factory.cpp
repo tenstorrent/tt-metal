@@ -183,7 +183,7 @@ ProgramDescriptor build_ring_program_descriptor(
     // A zero-band core is harmless for a single group phase, and retaining the ring-wide basis preserves the
     // measured production and partial-readiness receiver grids. With multiple phases, however, its compute
     // kernel returns while its reader can block on the next single-buffered q/w multicast. Size that geometry
-    // from one shard so every participating lane has work in every arrival schedule.
+    // from one shard so every participating lane has at least one unit in every wave.
     const uint32_t lane_sizing_units = num_groups > 1 ? units_per_shard : work_unit_count;
     const uint32_t cols_used = cols_for_bands(lane_sizing_units, compute_cols_x);
     const uint32_t num_blocks =
