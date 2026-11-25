@@ -847,10 +847,16 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     if constexpr (fuse_bias) {
         // The writer pushes the bias row once; it is waited and read by tile offset for every block but
-        // never popped. Pop it so the buffer is left balanced.
-        cb_bias.wait_front(bias_ntiles_w);
-        dummy_unpack(bias_cb_id);
-        cb_bias.pop_front(bias_ntiles_w);
+        // never popped. Pop it so the buffer is left balanced. A skip_compute core never reads the bias and its
+        // writer (skip_work) never pushes it.
+#ifdef CHECK_SKIP_COMPUTE
+        if (!skip_compute)
+#endif
+        {
+            cb_bias.wait_front(bias_ntiles_w);
+            dummy_unpack(bias_cb_id);
+            cb_bias.pop_front(bias_ntiles_w);
+        }
     }
 #endif
 }  // void kernel_main()
