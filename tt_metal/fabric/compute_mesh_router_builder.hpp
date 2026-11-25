@@ -97,6 +97,12 @@ public:
     void connect_inter_domain_relay(ComputeMeshRouterBuilder& target, uint32_t channel);
 
     /**
+     * This inter-domain router's VC2 receiver also lands traffic on its scatter partner's plane: connect it to
+     * `downstream`'s VC2 sender channel `channel` (a router on the partner plane), as its scatter bank.
+     */
+    void connect_inter_domain_scatter(ComputeMeshRouterBuilder& downstream, uint32_t channel);
+
+    /**
      * Settings two routers on one chip share for their link pairing: the NoC VC both use, and the
      * core placement for link `link_idx` of `num_links`.
      */

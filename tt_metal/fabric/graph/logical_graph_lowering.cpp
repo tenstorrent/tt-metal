@@ -40,6 +40,7 @@ public:
         }
         fold_1d_corners();
         add_relays();
+        add_scatters();
         for (const auto& vc : g_.vcs) {
             add_eth_edges(vc.id);
         }
@@ -171,6 +172,30 @@ private:
         for (const auto& [r, relay] : relay_to) {
             for (ChannelIndex c : g_.channels_of(r, ChannelKind::Sender)) {
                 g_.edges.push_back(LogicalEdge{.from = c, .to = relay, .transport = Transport::Noc});
+            }
+        }
+    }
+
+    // The receive side of a down link: a live perimeter router lands, on the plane of the router that relays into it
+    // (its partner plane), what the domain would have received on that plane, scattered by destination chip. It takes
+    // over the partner's VC2 turns into the domain. A router further down a relay chain keeps its own (it receives
+    // nothing).
+    void add_scatters() {
+        for (RouterIndex r = 0; r < g_.routers.size(); ++r) {
+            const auto& p = g_.routers[r].port;
+            if (!p.relay_plane) {
+                continue;
+            }
+            const RouterIndex target = by_key_.at(RouterKey{p.node, p.direction, *p.relay_plane});
+            const auto partner_rx = g_.receiver(r, 2);
+            const auto live_rx = g_.receiver(target, 2);
+            if (g_.routers[target].port.relay_plane || !partner_rx || !live_rx) {
+                continue;
+            }
+            for (auto& e : g_.edges) {
+                if (e.transport == Transport::Noc && e.from == *partner_rx) {
+                    e.from = *live_rx;
+                }
             }
         }
     }

@@ -91,12 +91,16 @@ constexpr bool pair_has_one_destination(std::index_sequence<VCs...>) {
     return ((((pair >> VCs) & 1u) == 0 || has_one_destination<VCs>()) && ...);
 }
 
-// The downstream routers of VC, as the host sets them.
-template <size_t VC>
+// The downstream routers of VC, as the host sets them. CREDIT_VC: the VC whose local credit registers keep this
+// router's copies of their free slots (VC's own; an inter-domain router's scatter bank keeps VC2's in VC0's, which a
+// perimeter router has no use for: is_inter_domain_scatter).
+template <size_t VC, size_t CREDIT_VC = VC>
 struct DownstreamTraits {
+    static constexpr size_t vc = VC;
     static_assert(VC < DOWNSTREAM_EDM_COUNT_BY_VC.size(), "the host lists downstream routers for VC0, VC1 and VC2");
     static constexpr size_t count = DOWNSTREAM_EDM_COUNT_BY_VC[VC];
-    static constexpr uint32_t num_slots = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[VC];
+    // the host records a bank's ring size where it lists the bank (a scatter bank: as VC0's)
+    static constexpr uint32_t num_slots = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[CREDIT_VC];
     // The last slot's offset from the ring's base (the ring wraps after it).
     static constexpr uint32_t last_slot_offset = (num_slots - 1) * channel_buffer_size;
     static constexpr uint8_t data_cmd_buf = CommandBuffers::forward_data[VC];
@@ -105,7 +109,7 @@ struct DownstreamTraits {
 
     // This router's local copy of entry ENTRY's free-slots register (the downstream credits it as it sends).
     template <size_t ENTRY>
-    static constexpr uint32_t local_credit_stream = local_downstream_credit_streams[VC][ENTRY];
+    static constexpr uint32_t local_credit_stream = local_downstream_credit_streams[CREDIT_VC][ENTRY];
     // The position the direction ranking gives entry ENTRY's sender channel for this router's traffic: VC's first
     // forwarding position (VC0's channel 0 is its worker channel), plus this router's direction's compact index on the
     // downstream; a 1D downstream has one forwarding channel. Only forwarding_position's check reads it.
@@ -414,10 +418,10 @@ struct Relay {
 
 // The downstream connections of one VC as the receiver loop uses them: each downstream sender channel's progress, and
 // the links set at init. Holding the links by value puts a forward's slot bounds at a fixed offset from its progress,
-// one load away.
-template <size_t VC>
+// one load away. CREDIT_VC: DownstreamTraits'.
+template <size_t VC, size_t CREDIT_VC = VC>
 struct Downstreams {
-    using Traits = DownstreamTraits<VC>;
+    using Traits = DownstreamTraits<VC, CREDIT_VC>;
     static constexpr uint32_t live = live_downstreams<VC>();
 
     std::array<DownstreamSenderChannelProgress, Traits::count> progress;  // by entry
@@ -503,6 +507,56 @@ private:
     }
 };
 
+// An inter-domain router's scatter bank (is_inter_domain_scatter): VC2's downstream routers on the partner plane. Kept
+// off the hot path and small: one out-of-line admit and one out-of-line forward, by runtime index; the forward is
+// stateless, then puts back the forward buffers' partial preset (the bank shares VC2's buffers).
+
+// The VC2 downstream args the forward buffers' preset is made from (a full preset names its destination), kept from
+// init so a scatter forward can put the preset back. They point into kernel_main's runtime args, live for the run.
+inline DownstreamArgs scatter_preset_args{};
+
+template <typename Bank>  // Downstreams<2, 0>; a template, so a router without VC2 never names its traits
+__attribute__((noinline)) bool scatter_admit(Bank& bank, uint32_t forward_to) {
+    for (uint32_t names = forward_to; names != 0; names &= names - 1) {
+        const size_t entry = downstream_entry(__builtin_ctz(names));
+        auto& progress = bank.progress[entry];
+        if (progress.free_slots == 0) {
+            progress.free_slots =
+                NOC_STREAM_READ_REG(
+                    local_downstream_credit_streams[0][entry], STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX) &
+                stream_count_mask;
+            if (progress.free_slots == 0) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+template <typename Bank>
+__attribute__((noinline)) void scatter_forward_all(
+    Bank& bank, uint32_t forward_to, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
+    using Traits = typename Bank::Traits;
+    for (uint32_t names = forward_to; names != 0; names &= names - 1) {
+        const size_t entry = downstream_entry(__builtin_ctz(names));
+        auto& progress = bank.progress[entry];
+        const auto& link = bank.links[entry];
+        const uint32_t dst = progress.next_slot_addr;
+        while (!noc_cmd_buf_ready(Traits::noc, Traits::data_cmd_buf)) {
+        }
+        forward_stateless<Traits::noc, Traits::data_cmd_buf>(link, dst, src_addr, size_bytes, trid);
+        progress.next_slot_addr = slot_after(dst, link.first_slot_addr, Traits::last_slot_offset);
+        progress.free_slots--;
+        increment_local_update_ptr_val(static_cast<uint8_t>(local_downstream_credit_streams[0][entry]), -1);
+    }
+    if constexpr (CommandBuffers::forward_presets) {
+        while (!noc_cmd_buf_ready(Traits::noc, Traits::data_cmd_buf)) {
+        }
+        // the pair's preset is its lowest forwarding VC's (CommandBuffers::presets_forward_pair)
+        ForwardCommands<lowest_bit(CommandBuffers::vcs_on_forward_pair(Traits::vc))>::preset(scatter_preset_args);
+    }
+}
+
 // The receiver's downstream connections: the downstream routers of each VC a receiver channel here forwards on
 // (any_forwards_on_vc: VC0's, VC1's, VC2's), and UDM's relay, each where this router has it. In memory (the receiver
 // loop takes them by reference): only forwards touch them, so they stay out of the registers every packet needs.
@@ -511,6 +565,8 @@ struct DownstreamConnections {
     [[no_unique_address]] Present<any_forwards_on_vc(1), Downstreams<1>, 1> vc1;
     [[no_unique_address]] Present<any_forwards_on_vc(2), Downstreams<2>, 3> vc2;
     [[no_unique_address]] Present<udm_mode, Relay, 2> relay;
+    // An inter-domain router's scatter bank: VC2's downstream routers on the partner plane (is_inter_domain_scatter).
+    [[no_unique_address]] Present<is_inter_domain_scatter && any_forwards_on_vc(2), Downstreams<2, 0>, 4> vc2_scatter;
 
     // VC's downstream routers.
     template <size_t VC>
@@ -532,9 +588,9 @@ struct DownstreamConnections {
 
 // Before the Ethernet handshake: zero the teardown semaphores, set the local credit copies to the ring size, fill the
 // links and the progress.
-template <size_t VC>
-__attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, const DownstreamArgs& args) {
-    using Traits = DownstreamTraits<VC>;
+template <size_t VC, size_t CREDIT_VC>
+__attribute__((noinline)) void init_downstreams(Downstreams<VC, CREDIT_VC>& downstreams, const DownstreamArgs& args) {
+    using Traits = DownstreamTraits<VC, CREDIT_VC>;
     auto& links = downstreams.links;
     uint32_t dense = 0;
     for_each_index<Traits::count>([&](auto entry_constant) {
@@ -570,9 +626,9 @@ __attribute__((noinline)) void open_downstream(const DownstreamArgs& args, uint3
 }
 
 // After the handshake: open each connection.
-template <size_t VC>
+template <size_t VC, size_t CREDIT_VC = VC>
 __attribute__((noinline)) void open_downstreams(const DownstreamArgs& args) {
-    using Traits = DownstreamTraits<VC>;
+    using Traits = DownstreamTraits<VC, CREDIT_VC>;
     uint32_t dense = 0;
     for_each_index<Traits::count>([&](auto entry_constant) {
         constexpr size_t entry = decltype(entry_constant)::value;

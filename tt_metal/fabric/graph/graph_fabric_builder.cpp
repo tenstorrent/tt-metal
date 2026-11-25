@@ -208,6 +208,11 @@ void GraphFabricBuilder::connect_routers() {
             }
             continue;
         }
+        if (g.routers[up].port.plane != g.routers[down].port.plane) {
+            // a live perimeter router landing on its scatter partner's plane (validated by the graph)
+            builder_of(up).connect_inter_domain_scatter(builder_of(down), graph_.index_in_vc[e.to]);
+            continue;
+        }
         builder_of(up).connect_to_downstream_channel(builder_of(down), g.channels[e.to].vc, graph_.index_in_vc[e.to]);
     }
     for (const auto& link : graph_.links) {

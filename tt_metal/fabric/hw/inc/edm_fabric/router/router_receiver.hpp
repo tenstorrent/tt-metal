@@ -311,13 +311,13 @@ FORCE_INLINE void record_forwarded(uint32_t forward_to) {
 
 // A 1D sparse multicast going past this chip: write this chip's page group, advance write_idx and chip_idx, forward the
 // advanced header. The local write comes first because it reads the indices before the advance. Out of line: rare.
-template <size_t VC>
+template <size_t VC, typename Routers>
 __attribute__((noinline)) void sparse_multicast_hop(
     tt_l1_ptr PACKET_HEADER_TYPE* header,
     uint16_t payload_size,
     uint32_t route_word,
     uint32_t forward_to,
-    Downstreams<ReceiverChannel<VC>::forwards_on_vc>& downstreams,
+    Routers& downstreams,
     uint32_t slot_addr,
     uint32_t size,
     uint8_t trid) {
@@ -329,6 +329,13 @@ __attribute__((noinline)) void sparse_multicast_hop(
     ReceiverChannel<VC>::Routing::update_for_next_hop(header, route_word);
     downstreams.forward_all(forward_to, slot_addr, size, trid);
     record_forwarded<VC>(forward_to);
+}
+
+// Whether an inter-domain router sends a packet into the domain on its partner plane: the destination chip's low bit
+// (one plane per destination keeps each destination's packets in order). Out of line: perimeter routers only.
+__attribute__((noinline)) bool scatters_to_partner_plane(tt_l1_ptr PACKET_HEADER_TYPE* header) {
+    const volatile PACKET_HEADER_TYPE* const volatile_header = header;
+    return (volatile_header->dst_start_chip_id & 1u) != 0;
 }
 
 // Admits, forwards and/or delivers, then retires the next slot's packet. Returns false when a downstream had no room;
@@ -346,7 +353,16 @@ FORCE_INLINE bool handle(
     if constexpr (ReceiverChannel<VC>::forwards) {
         auto& routers = downstreams.template of<ReceiverChannel<VC>::forwards_on_vc>();
         const typename Routing::Route route(route_word);
-        if (route.forwards() && !routers.admit(route.forward_to())) {
+        // an inter-domain router lands some of it on its partner plane (scatter bank): only the admit and the forward
+        // differ, so the rest of the step stays one copy
+        bool partner = false;
+        if constexpr (VC == 2 && is_inter_domain_scatter) {
+            partner = route.forwards() && scatters_to_partner_plane(header);
+            if (partner && !scatter_admit(downstreams.vc2_scatter, route.forward_to())) {
+                return false;
+            }
+        }
+        if (route.forwards() && !partner && !routers.admit(route.forward_to())) {
             return false;
         }
         if constexpr (ReceiverChannel<VC>::delivers_through_relay) {
@@ -372,7 +388,16 @@ FORCE_INLINE bool handle(
             // Forward first (the downstream router starts sooner), then write here.
             if (route.forwards()) {
                 Routing::update_for_next_hop(header, route_word);
-                routers.forward_all(route.forward_to(), progress.next_slot_addr, size, trid);
+                if constexpr (VC == 2 && is_inter_domain_scatter) {
+                    if (partner) {
+                        scatter_forward_all(
+                            downstreams.vc2_scatter, route.forward_to(), progress.next_slot_addr, size, trid);
+                    } else {
+                        routers.forward_all(route.forward_to(), progress.next_slot_addr, size, trid);
+                    }
+                } else {
+                    routers.forward_all(route.forward_to(), progress.next_slot_addr, size, trid);
+                }
                 record_forwarded<VC>(route.forward_to());
             }
             if (route.delivers()) {
@@ -737,6 +762,10 @@ FORCE_INLINE Connections set_up_channels(const RuntimeArgs& args) {
         }
         if constexpr (any_forwards_on_vc(2)) {
             init_downstreams(downstreams.vc2, args.vc2());
+            if constexpr (is_inter_domain_scatter) {
+                init_downstreams(downstreams.vc2_scatter, args.vc0());  // listed as VC0's
+                scatter_preset_args = args.of_vc<lowest_bit(CommandBuffers::vcs_on_forward_pair(2))>();
+            }
         }
         if constexpr (udm_mode) {
             init_relay(downstreams.relay, args.relay);
@@ -770,6 +799,12 @@ FORCE_INLINE void open_connections(const RuntimeArgs& args) {
     }
     if constexpr (any_forwards_on_vc(2) && open_downstream_vc2_connections) {
         open_downstreams<2>(args.vc2());
+        static_assert(
+            !is_inter_domain_scatter || !open_downstream_vc0_connections,
+            "the scatter bank is listed as VC0's: opened once, here");
+        if constexpr (is_inter_domain_scatter) {
+            open_downstreams<2, 0>(args.vc0());
+        }
     }
     if constexpr (udm_mode) {
         open_relay(args.relay);

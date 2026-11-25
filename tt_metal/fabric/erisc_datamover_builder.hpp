@@ -628,6 +628,9 @@ private:
         uint32_t vc_relative_channel = 0;
     };
     std::optional<InterDomainRelay> inter_domain_relay_;
+    // A live inter-domain router that also lands traffic on its scatter partner's plane (its scatter bank is listed as
+    // VC0's downstream connections).
+    bool inter_domain_scatter_ = false;
 
     // This router relays into `target`'s VC0 sender channel (absolute and VC-relative index).
     void setup_inter_domain_relay(

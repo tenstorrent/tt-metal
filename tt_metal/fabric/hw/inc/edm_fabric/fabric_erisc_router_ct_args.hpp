@@ -1070,3 +1070,12 @@ constexpr uint32_t inter_domain_relay_num_slots = NAMED_CT_ARG_OR("INTER_DOMAIN_
 constexpr uint32_t inter_domain_relay_sender_position = NAMED_CT_ARG_OR("INTER_DOMAIN_RELAY_SENDER_POSITION", 0);
 constexpr uint32_t inter_domain_relay_credit_stream = NAMED_CT_ARG_OR("INTER_DOMAIN_RELAY_CREDIT_STREAM_ID", 0);
 static_assert(!is_inter_domain_relay || is_inter_domain_router, "only an inter-domain router relays");
+// An inter-domain router whose side has a relaying router (a down link) scatters what it receives across two planes:
+// its own and the relaying router's (the partner plane), by the destination chip's low bit, so each destination keeps
+// one plane and its packets their order. The partner plane's downstream connections are listed as VC0's (a perimeter
+// router has no VC0 receiver) and kept in VC0's local credit registers.
+constexpr bool is_inter_domain_scatter = NAMED_CT_ARG_OR("INTER_DOMAIN_SCATTER", 0) != 0;
+static_assert(!is_inter_domain_scatter || (is_inter_domain_router && !is_inter_domain_relay));
+#if !defined(FABRIC_2D)
+static_assert(!is_inter_domain_scatter, "scatter is 2D only (1D sparse multicast takes no scatter decision)");
+#endif

@@ -763,6 +763,13 @@ void ComputeMeshRouterBuilder::connect_inter_domain_relay(ComputeMeshRouterBuild
     erisc_builder_->setup_inter_domain_relay(*target_builder, target.vc_shape_.flat_sender_id(0, channel), channel);
 }
 
+void ComputeMeshRouterBuilder::connect_inter_domain_scatter(ComputeMeshRouterBuilder& downstream, uint32_t channel) {
+    // the scatter bank is listed as VC0's downstream connections (a perimeter router has no VC0 receiver)
+    erisc_builder_->setup_downstream_vc_connection(
+        downstream.get_builder_for_vc_channel(2, channel), 0, 2, downstream.vc_shape_.flat_sender_id(2, channel), channel);
+    erisc_builder_->inter_domain_scatter_ = true;
+}
+
 void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouterBuilder& downstream_router) {
     // Establish VC connections between this router and the specified downstream router
     // This function does NOT iterate through targets - it connects to the single downstream_router passed in.
