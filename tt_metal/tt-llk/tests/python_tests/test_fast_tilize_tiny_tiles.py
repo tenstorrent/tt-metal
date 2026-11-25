@@ -19,6 +19,7 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import calculate_tile_size_bytes, get_tile_params
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+from test_fast_tilize import assert_exact_widening
 from ttexalens.tt_exalens_lib import read_from_device
 
 TILE_DIMENSIONS = [16, 32]
@@ -134,3 +135,7 @@ def test_fast_tilize_tiny_tiles(
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output])
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    # Float16_b -> Float32 is an exact widening, so it must match bit for bit
+    # (the Float32 tolerance above hides garbage in the low 16 bits of each datum).
+    if formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float32:
+        assert_exact_widening(golden_tensor, res_tensor)

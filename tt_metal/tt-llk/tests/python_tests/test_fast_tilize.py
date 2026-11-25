@@ -4,7 +4,7 @@
 import pytest
 import torch
 from conftest import skip_for_blackhole
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -66,11 +66,47 @@ def test_fast_tilize(
     dest_acc,
     dimensions,
 ):
-
-    input_height, input_width = dimensions
-
     if formats.input == DataFormat.Bfp8_b:
         pytest.skip("Bfp8_b input format is not supported for fast tilize")
+
+    golden_tensor, res_tensor = _run_fast_tilize(formats, dest_acc, dimensions)
+
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    if formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float32:
+        assert_exact_widening(golden_tensor, res_tensor)
+
+
+# Float16_b -> Float32 is an exact widening, so compare bit for bit: the Float32
+# tolerance of passed_test hides garbage in the low 16 bits of each datum (the
+# packer reading 16-bit Dest with a Float32 input format under fp32_dest_acc_en).
+@skip_for_blackhole
+@parametrize(
+    formats=[InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32)],
+    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    dimensions=[(1, 1), (1, 2), (2, 3), (1, 5), (3, 8)],
+)
+def test_fast_tilize_bf16_to_fp32_exact(
+    formats,
+    dest_acc,
+    dimensions,
+):
+    golden_tensor, res_tensor = _run_fast_tilize(formats, dest_acc, dimensions)
+
+    assert_exact_widening(golden_tensor, res_tensor)
+
+
+def assert_exact_widening(golden_tensor, res_tensor):
+    golden_bits = golden_tensor.to(torch.float32).view(torch.int32)
+    res_bits = res_tensor.to(torch.float32).view(torch.int32)
+    mismatches = int((golden_bits != res_bits).sum())
+    assert mismatches == 0, (
+        f"{mismatches} of {res_tensor.numel()} datums are not the exact "
+        "Float16_b -> Float32 widening of the input"
+    )
+
+
+def _run_fast_tilize(formats, dest_acc, dimensions):
+    input_height, input_width = dimensions
 
     input_dimensions = [input_height * 32, input_width * 32]
 
@@ -114,4 +150,4 @@ def test_fast_tilize(
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output])
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    return golden_tensor, res_tensor
