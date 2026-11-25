@@ -993,8 +993,10 @@ TT_ALWAYS_INLINE void topk_fused_ph4_pair() {
 // it. ph0/ph1 (8 slots together) do not fit next to them and are issued inline. The fused-key
 // 32-datum window (topk_fused_ph0_to_4_pair) uses no replay slots.
 constexpr int topk_ls_ph2_replay_start = 16;
-constexpr int topk_ls_ph2_replay_count = 9;
-constexpr int topk_ls_ph3_replay_start = 25;
+constexpr int topk_ls_ph2_replay_count = 9;  // unstable bitonic_topk_ph2_st3_to_1
+constexpr int topk_ls_ph3_replay_start = topk_ls_ph2_replay_start + topk_ls_ph2_replay_count;
+static_assert(
+    topk_ls_ph3_replay_start + bitonic_topk_ph3_body_count <= 32, "local-sort replay slots exceed the buffer");
 
 // One 16-datum group of the local sort's fused phase 0..3 pass: the phases [PH_LO, PH_HI]
 // (0 <= PH_LO <= PH_HI <= 3) run back to back on the 16 datums held in LREGs (values LREG0..3,
@@ -1005,11 +1007,8 @@ constexpr int topk_ls_ph3_replay_start = 25;
 // trailing SFPENCC of every comparator). One exception: a float-mode store16 flushes fp32
 // denormals to zero, so keeping them in LREGs across phases can change their tie order
 // against zeros (the values themselves are unchanged).
-// One straight-line function per phase range, picked once per pass (see
-// bitonic_topk_pick_ph0_to_3_group): the group loop is RISC-issue-bound, and runtime
-// phase-range branches inside it cost more than the store/load round trips they replace
-// (comparator-stable mode measured up to +8% over the per-phase passes that way). Not inlined:
-// unswitched into the caller, each range would carry its own unrolled copy of the group loop.
+// One straight-line body per phase range, picked per column (bitonic_topk_pick_ph0_to_3_group):
+// the group loop is RISC-issue-bound, so it carries no runtime phase-range branches.
 template <bool STABLE_SORT, bool FUSED, TopkTieOrder TIE_ORDER, int PH_LO, int PH_HI>
 inline void bitonic_topk_ph0_to_3_group_body(bool dir) {
     static_assert(0 <= PH_LO && PH_LO <= PH_HI && PH_HI <= 3, "group pass covers phases 0..3");
@@ -1034,6 +1033,7 @@ inline void bitonic_topk_ph0_to_3_group_body(bool dir) {
 }
 
 // The 4 groups of one column (load16 / phases / store16 each): one indirect call per column.
+// noinline: inlined, each phase range would carry its own copy of the group loop.
 template <bool STABLE_SORT, bool FUSED, TopkTieOrder TIE_ORDER, int PH_LO, int PH_HI>
 [[gnu::noinline]] void bitonic_topk_ph0_to_3_group(bool dir) {
     constexpr int ldst_count = FUSED ? 4 : 8;
@@ -1154,8 +1154,8 @@ inline void _bitonic_topk_phases_steps(
         }
     }
 
-    // Record the replay windows (recorded, not executed); see the layout at
-    // bitonic_topk_ph0_to_3_group. The load/store windows survive across local sorts; the ph2/ph3
+    // Record the replay windows (recorded, not executed); see the layout above
+    // topk_ls_ph2_replay_start. The load/store windows survive across local sorts; the ph2/ph3
     // bodies are recorded per call, and only when a pass below replays them.
     if (topk_replay_init >= 0) {
         lltt::record<lltt::NoExec>(0, ldst_count);
