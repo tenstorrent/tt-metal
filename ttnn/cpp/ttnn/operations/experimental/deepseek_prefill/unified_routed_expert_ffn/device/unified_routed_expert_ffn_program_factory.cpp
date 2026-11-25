@@ -109,6 +109,18 @@ void visit_weight_buffers(const std::vector<ttnn::Tensor>& tensors, const Fn& fn
     }
 }
 
+// PF layout: the gate_up and down extra tensors, last in the reader's and the writer's common args.
+template <typename Fn>
+void visit_pf_extra_buffers(const UnifiedRoutedExpertFfnInputs& t, const Fn& fn) {
+    for (const auto* extra : {&t.gate_up_extra, &t.down_extra}) {
+        if (extra->has_value()) {
+            auto* buffer = (*extra)->buffer();
+            TT_FATAL(buffer != nullptr, "PF extra buffer must be allocated on device");
+            fn(buffer);
+        }
+    }
+}
+
 // Reader common args: x, counts, index table, region offsets, gate/up/down weights, optional biases.
 template <typename Fn>
 void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fuse_bias, const Fn& fn) {
@@ -138,6 +150,7 @@ void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fus
         TT_FATAL(idx_buffer != nullptr, "x_row_index buffer must be allocated on device");
         fn(idx_buffer);
     }
+    visit_pf_extra_buffers(t, fn);
 }
 
 // Writer common args: output, region offsets, up/down weights.
@@ -152,6 +165,7 @@ void visit_writer_common_buffers(
     fn(start_buffer);
     visit_weight_buffers(t.up_projs, fn);
     visit_weight_buffers(t.down_projs, fn);
+    visit_pf_extra_buffers(t, fn);
 }
 
 template <typename Visit>
@@ -183,9 +197,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t M_tiles_full = op.m_tiles;
     const uint32_t K_gate_tiles = x_shape[-1] / TILE;  // = N_gate K = emb / TILE
     // Stacked experts: gate_projs[0] is the whole [.., E, K, 2*hidden] gate_up tensor (gate = left half).
-    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE / (op.stacked_experts ? 2 : 1);  // = hidden / TILE
-    const uint32_t K_down_tiles = down_shape[-2] / TILE;                                      // = hidden / TILE
-    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;                                 // = emb / TILE
+    // PF layout: the main tensors leave tile columns out (validated), so hidden and emb come from the K dims.
+    const uint32_t K_down_tiles = down_shape[-2] / TILE;  // = hidden / TILE
+    const uint32_t N_gate_tiles_full =
+        op.pf_layout ? K_down_tiles : gate_shape[-1] / TILE / (op.stacked_experts ? 2 : 1);  // = hidden / TILE
+    const uint32_t N_down_tiles_full = op.pf_layout ? K_gate_tiles : down_shape[-1] / TILE;  // = emb / TILE
 
     // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
     // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
@@ -296,9 +312,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // shard would still read correctly through the run loop but would split or straddle the slice,
     // losing the point, so it fails host-side instead. gate and up are pinned equal: the reader
     // and the writer read them through a single shared compile-time width.
-    const uint32_t gate_shard_w = nd_shard_n_tiles(t.gate_projs[0]);
-    const uint32_t up_shard_w = nd_shard_n_tiles(t.up_projs[0]);
-    const uint32_t d_shard_w = nd_shard_n_tiles(t.down_projs[0]);
+    // PF layout: its one-column shards are read tile by tile through their own page map (weight_runs.hpp), so
+    // the kernels take width 0.
+    const uint32_t gate_shard_w = op.pf_layout ? 0 : nd_shard_n_tiles(t.gate_projs[0]);
+    const uint32_t up_shard_w = op.pf_layout ? 0 : nd_shard_n_tiles(t.up_projs[0]);
+    const uint32_t d_shard_w = op.pf_layout ? 0 : nd_shard_n_tiles(t.down_projs[0]);
     TT_FATAL(
         gate_shard_w == up_shard_w,
         "gate_proj and up_proj must share a weight layout: ND shard widths {} and {} tiles",
@@ -1040,7 +1058,21 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     }
     // Stacked experts: page offsets of expert g's blocks (g = global expert id) and the gate_up row stride.
     tt::tt_metal::KernelDescriptor::Defines stacked_defines;
-    if (op.stacked_experts) {
+    if (op.pf_layout) {
+        // PF layout (UnifiedRoutedExpertFfnParams::pf_layout): the page map's constants.
+        const uint32_t pf_nb = t.gate_projs[0].memory_config().nd_shard_spec()->grid.num_cores();
+        stacked_defines.emplace_back("PF_LAYOUT", "1");
+        stacked_defines.emplace_back("PF_NB", std::to_string(pf_nb));
+        stacked_defines.emplace_back("PF_X_PER", std::to_string(pf_nb - 2));
+        stacked_defines.emplace_back("PF_X_LO", "2");
+        stacked_defines.emplace_back("PF_GU_BASE", std::to_string(gate_shape[-1] / TILE / 2));
+        stacked_defines.emplace_back("PF_GU_KT", std::to_string(K_gate_tiles));
+        stacked_defines.emplace_back("PF_D_MAIN", std::to_string(down_shape[-1] / TILE));
+        stacked_defines.emplace_back("PF_D_KT", std::to_string(K_down_tiles));
+        for (const auto& d : stacked_defines) {
+            reader_defines.push_back(d);
+        }
+    } else if (op.stacked_experts) {
         const uint32_t gu_row_tiles = gate_shape[-1] / TILE;
         stacked_defines.emplace_back("STACKED_EXPERTS", "1");
         stacked_defines.emplace_back("GU_ROW_TILES", std::to_string(gu_row_tiles));
@@ -1059,6 +1091,19 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // x_row_index accessor: last in the reader's accessor stream (after the optional bias block).
     if (op.x_indexed) {
         tt::tt_metal::TensorAccessorArgs(t.x_row_index->buffer()).append_to(reader_ct_args);
+    }
+    // PF layout: the extra tensors' accessors end the reader's and the writer's accessor streams, and their
+    // addresses the common args; the kernels get both positions as defines.
+    tt::tt_metal::KernelDescriptor::Defines writer_defines;
+    if (op.pf_layout) {
+        reader_defines.emplace_back("PF_X_CT", std::to_string(reader_ct_args.size()));
+        tt::tt_metal::TensorAccessorArgs(t.gate_up_extra->buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.down_extra->buffer()).append_to(reader_ct_args);
+        uint32_t reader_common = 0, writer_common = 0;
+        visit_reader_common_buffers(t, fuse_bias, [&](tt::tt_metal::Buffer*) { ++reader_common; });
+        visit_writer_common_buffers(t, out_buffer, [&](tt::tt_metal::Buffer*) { ++writer_common; });
+        reader_defines.emplace_back("PF_X_RT", std::to_string(reader_common - 2));
+        writer_defines.emplace_back("PF_X_RT", std::to_string(writer_common - 2));
     }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
@@ -1138,6 +1183,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
     // DOWN_SPLIT: down accessor follows up in the writer's compile-arg stream.
     tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(writer_ct_args);
+    if (op.pf_layout) {
+        writer_defines.emplace_back("PF_X_CT", std::to_string(writer_ct_args.size()));
+        tt::tt_metal::TensorAccessorArgs(t.gate_up_extra->buffer()).append_to(writer_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.down_extra->buffer()).append_to(writer_ct_args);
+    }
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
@@ -1148,6 +1198,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
     writer_kernel_desc.defines = stacked_defines;
+    for (const auto& d : writer_defines) {
+        writer_kernel_desc.defines.push_back(d);
+    }
 
     // Compute kernel compile-time args: positional + named CB ids.
     std::vector<uint32_t> compute_ct_args = {

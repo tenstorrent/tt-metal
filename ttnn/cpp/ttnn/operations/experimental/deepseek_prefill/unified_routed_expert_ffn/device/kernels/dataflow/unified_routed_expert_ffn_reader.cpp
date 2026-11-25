@@ -271,6 +271,11 @@ void kernel_main() {
     constexpr uint32_t idx_rows_accessor_offset = start_args.next_compile_time_args_offset();
     constexpr uint32_t COMMON_ROW_IDX = COMMON_WEIGHTS + 3 * experts_per_chip;
 #endif
+#ifdef PF_LAYOUT
+    // PF layout: the extra tensors' accessors end the accessor stream, their addresses the common args.
+    constexpr auto pf_gu_x_args = TensorAccessorArgs<PF_X_CT>();
+    constexpr auto pf_d_x_args = TensorAccessorArgs<pf_gu_x_args.next_compile_time_args_offset()>();
+#endif
     // x_row_index (x_indexed): one ROW_MAJOR page of UINT32 x-row ids, read in per-chunk slices.
     uint32_t row_idx_l1 = 0;
     if constexpr (x_indexed) {
@@ -465,12 +470,27 @@ void kernel_main() {
             get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 1 * experts_per_chip + local_expert_id);
         const uint32_t down_addr_e =
             get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 2 * experts_per_chip + local_expert_id);
+#ifndef PF_LAYOUT
         const auto gate_acc = TensorAccessor(gate_args, gate_addr_e, gate_tile_bytes);
         const auto up_acc = TensorAccessor(up_args, up_addr_e, up_tile_bytes);
         const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
+#endif
 
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
-#ifdef STACKED_EXPERTS
+#ifdef PF_LAYOUT
+        // PF layout: gate and up are column sets of the one gate_up main tensor; see weight_runs.hpp.
+        [[maybe_unused]] const uint32_t up_addr_unused = up_addr_e;
+        const auto gu_main_acc = TensorAccessor(gate_args, gate_addr_e, gate_tile_bytes);
+        const auto d_main_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
+        const auto gu_extra_acc = TensorAccessor(pf_gu_x_args, get_common_arg_val<uint32_t>(PF_X_RT), gate_tile_bytes);
+        const auto d_extra_acc =
+            TensorAccessor(pf_d_x_args, get_common_arg_val<uint32_t>(PF_X_RT + 1), down_tile_bytes);
+        const unified_routed_expert_ffn::PfGateUp gate_acc{gu_main_acc, gu_extra_acc, global_expert_id, 0};
+        [[maybe_unused]] const unified_routed_expert_ffn::PfGateUp up_acc{
+            gu_main_acc, gu_extra_acc, global_expert_id, 1};
+        const unified_routed_expert_ffn::PfDown down_acc{d_main_acc, d_extra_acc, global_expert_id};
+        [[maybe_unused]] constexpr uint32_t gate_page_off = 0, up_page_off = 0, down_page_off = 0, gu_row_stride = 0;
+#elif defined(STACKED_EXPERTS)
         // Stacked weights: expert g's gate / up are the column halves of its [K, 2*hidden] block of the gate_up
         // tensor, its down block follows the previous experts' blocks.
         [[maybe_unused]] const uint32_t gate_page_off = global_expert_id * GU_EXPERT_TILES;

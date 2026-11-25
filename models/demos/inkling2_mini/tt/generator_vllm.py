@@ -121,9 +121,13 @@ class Inkling2ForCausalLM:
     PF_ONE = 8448
 
     def _prefill_chunk(self):
-        """(tokens per prefill pass that fit in the DRAM free now or None, GiB left over for that pass or short)."""
+        """(tokens per prefill pass that fit in the DRAM free now or None, GiB left over for that pass or short).
+        The rebuild room only when the build's expert op can not read the PF tensors in place."""
+        from models.demos.inkling2_mini.tt.prefill_model import pf_inplace_op
+
         v = ttnn.get_memory_view(self.device, ttnn.BufferType.DRAM)
-        room = v.num_banks * v.total_bytes_free_per_bank / 2**30 - self.PF_GIB[0] - self.PF_GIB[1]
+        room = v.num_banks * v.total_bytes_free_per_bank / 2**30 - self.PF_GIB[0]
+        room -= 0.0 if pf_inplace_op() else self.PF_GIB[1]
         chunk = next((c for c in self.PF_CHUNKS if self.PF_GIB[2] * c / 1024 <= room), None)
         return chunk, room - self.PF_GIB[2] * (chunk or self.PF_CHUNKS[-1]) / 1024
 

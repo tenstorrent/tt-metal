@@ -81,7 +81,11 @@ ttnn::Tensor unified_routed_expert_moe(
     // Row groups: 1, or 2 (the 8 rows as two 4-row grids running different experts).
     uint32_t core_row_groups = 1,
     // Worker rows: 8 or 10 (0: 8).
-    uint32_t core_grid_y = 0);
+    uint32_t core_grid_y = 0,
+    // PF layout (stacked experts): gate_projs / up_projs hold the gate_up main tensor, down_projs the down main
+    // tensor, and these the tiles they leave out (UnifiedRoutedExpertFfnParams::pf_layout). Both or neither.
+    const std::optional<ttnn::Tensor>& gate_up_extra = std::nullopt,
+    const std::optional<ttnn::Tensor>& down_extra = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

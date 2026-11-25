@@ -47,6 +47,89 @@ bool is_dram_nd_sharded_by_tile_rows(const ttnn::Tensor& t) {
            shard_shape[-1] % tt::constants::TILE_WIDTH == 0;
 }
 
+// PF layout (UnifiedRoutedExpertFfnParams::pf_layout): the main tensors and their extra tensors agree with each
+// other and with the logical sizes (emb = x's K, hidden = down's K).
+void validate_pf_layout(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t) {
+    constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
+    TT_FATAL(op.stacked_experts, "gate_up_extra / down_extra need stacked expert weights (one gate_up tensor)");
+    TT_FATAL(!op.fuse_bias, "gate_up_extra / down_extra: expert biases are not supported in the PF layout");
+    const auto& gu = t.gate_projs[0];
+    const auto& dn = t.down_projs[0];
+    const auto& gu_shape = gu.padded_shape();
+    const auto& dn_shape = dn.padded_shape();
+    TT_FATAL(gu_shape.rank() >= 3 && dn_shape.rank() >= 3, "PF layout needs [.., E, K, N] main tensors");
+    TT_FATAL(gu_shape[-3] == dn_shape[-3], "PF gate_up / down expert counts differ");
+    for (uint32_t e = 0; e < op.experts_per_chip; ++e) {
+        TT_FATAL(
+            t.gate_projs[e].buffer() == gu.buffer() && t.up_projs[e].buffer() == gu.buffer() &&
+                t.down_projs[e].buffer() == dn.buffer(),
+            "PF layout: every gate/up slot must hold the gate_up main tensor and every down slot the down main tensor");
+    }
+    uint32_t nb = 0;
+    for (const auto& [name, w] :
+         std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{{"gate_up", gu}, {"down", dn}}) {
+        const auto& mem = w.memory_config();
+        TT_FATAL(
+            mem.buffer_type() == tt::tt_metal::BufferType::DRAM && mem.created_with_nd_shard_spec() &&
+                mem.nd_shard_spec().has_value(),
+            "PF {} main tensor must be DRAM ND-sharded, got {}",
+            name,
+            mem);
+        const auto& spec = *mem.nd_shard_spec();
+        const auto& shape = w.padded_shape();
+        TT_FATAL(
+            spec.shard_shape.rank() >= 3 && spec.shard_shape[-1] == TILE && spec.shard_shape[-2] == shape[-2] &&
+                spec.shard_shape[-3] == shape[-3],
+            "PF {} main tensor: one shard per tile column ([E, K, 32]), got shard shape {} for {}",
+            name,
+            spec.shard_shape,
+            shape);
+        const uint32_t banks = spec.grid.num_cores();
+        TT_FATAL(banks > 2 && (nb == 0 || banks == nb), "PF {} main tensor is sharded over {} banks", name, banks);
+        nb = banks;
+    }
+    const uint32_t E = gu_shape[-3];
+    const uint32_t kt_gu = gu_shape[-2] / TILE;
+    const uint32_t kt_d = dn_shape[-2] / TILE;  // = hidden / 32, the gate (and up) tile columns
+    const uint32_t gu_main = gu_shape[-1] / TILE;
+    const uint32_t d_main = dn_shape[-1] / TILE;
+    const uint32_t emb = t.x.padded_shape()[-1] / TILE;
+    TT_FATAL(
+        dn_shape[-2] % TILE == 0 && gu_main % (2 * nb) == 0 && gu_main == 2 * (kt_d - 1),
+        "PF gate_up main tensor has {} tile columns, expected 2 * (hidden / 32 - 1) = {} in blocks of {}",
+        gu_main,
+        2 * (kt_d - 1),
+        nb);
+    TT_FATAL(
+        d_main % nb == 0 && d_main < emb && emb - d_main < nb,
+        "PF down main tensor has {} tile columns for emb / 32 = {} over {} banks",
+        d_main,
+        emb,
+        nb);
+    const uint32_t gu_pages = nb * ((E + nb - 3) / (nb - 2)) * 2 * kt_gu;
+    const uint32_t d_pages = nb * E * kt_d;
+    for (const auto& [name, x, main, pages] :
+         std::initializer_list<std::tuple<const char*, const ttnn::Tensor&, const ttnn::Tensor&, uint32_t>>{
+             {"gate_up_extra", *t.gate_up_extra, gu, gu_pages}, {"down_extra", *t.down_extra, dn, d_pages}}) {
+        TT_FATAL(x.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
+        TT_FATAL(x.device() == t.x.device(), "{} must be on the same mesh device as x", name);
+        TT_FATAL(
+            x.layout() == tt::tt_metal::Layout::TILE && is_dram_interleaved(x),
+            "{} must be TILE, DRAM-interleaved",
+            name);
+        TT_FATAL(
+            x.dtype() == main.dtype(), "{} dtype {} differs from its main tensor's {}", name, x.dtype(), main.dtype());
+        const auto& shape = x.padded_shape();
+        TT_FATAL(
+            shape[-1] == TILE && shape.volume() == static_cast<uint64_t>(pages) * TILE * TILE,
+            "{} must be [.., {} * 32, 32] (one tile column of {} pages), got {}",
+            name,
+            pages,
+            pages,
+            shape);
+    }
+}
+
 // compute_kernel_config is not in the program hash: the factory reads its fidelity and DEST mode from the op
 // attributes (math_fidelity, precise), which are. Reject settings the kernels do not honor.
 void validate_compute_kernel_config(const std::optional<ttnn::DeviceComputeKernelConfig>& config) {
@@ -142,7 +225,12 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         x_shape[-1],
         gate_shape[-2],
         up_shape[-2]);
-    if (op.stacked_experts) {
+    TT_FATAL(
+        t.gate_up_extra.has_value() == t.down_extra.has_value() && op.pf_layout == t.gate_up_extra.has_value(),
+        "gate_up_extra and down_extra come together (PF layout)");
+    if (op.pf_layout) {
+        validate_pf_layout(op, t);
+    } else if (op.stacked_experts) {
         // One [.., E, K, 2*hidden] gate_up tensor and one [.., E, hidden, emb] down tensor in every slot.
         const auto& ref_gu = t.gate_projs[0];
         const auto& ref_d = t.down_projs[0];
@@ -173,7 +261,8 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             gate_shape[-1],
             down_shape[-2]);
     }
-    TT_FATAL(down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
+    TT_FATAL(
+        op.pf_layout || down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
 
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
@@ -529,7 +618,9 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t zero_output_row,
     uint32_t core_grid_x,
     uint32_t core_row_groups,
-    uint32_t core_grid_y) {
+    uint32_t core_grid_y,
+    const std::optional<ttnn::Tensor>& gate_up_extra,
+    const std::optional<ttnn::Tensor>& down_extra) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::
         UnifiedRoutedExpertFfnDeviceOperation;
     // Checked here, not in validate_on_program_cache_miss, so it also runs on cache hits: the reader uses
@@ -563,7 +654,8 @@ ttnn::Tensor unified_routed_expert_moe(
             .row_groups = core_row_groups,
             .grid_y = core_grid_y == 0
                           ? ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::kCoreGridY
-                          : core_grid_y},
+                          : core_grid_y,
+            .pf_layout = gate_up_extra.has_value() || down_extra.has_value()},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,
@@ -576,7 +668,9 @@ ttnn::Tensor unified_routed_expert_moe(
             .gate_biases = gate_biases,
             .up_biases = up_biases,
             .down_biases = down_biases,
-            .x_row_index = x_row_index});
+            .x_row_index = x_row_index,
+            .gate_up_extra = gate_up_extra,
+            .down_extra = down_extra});
 }
 
 }  // namespace ttnn::prim

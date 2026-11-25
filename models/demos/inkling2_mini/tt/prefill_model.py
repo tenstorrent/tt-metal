@@ -223,11 +223,11 @@ EXPERT_ROW_GROUPS = 2  # 4: no faster on prose8k
 EXPERT_GRID_Y = 10  # all 10 worker rows, two 5-row groups (a smaller grid or older build: the next entry)
 
 
-def _has_unified(dev, w_gate_up, w_down, fidelity, w_up=None):
+def _has_unified(dev, w_gate_up, w_down, fidelity, w_up=None, extra=None):
     """Does this build's deepseek_prefill.unified_routed_expert_moe take stacked expert weights (the same
     [1, E, K, 2I] tensor in every gate / up slot) at this math fidelity (precise mode)? A no-expert call: older
     builds reject the shapes or any fidelity but LoFi. Returns None (no), or the op's extra keywords: core_grid_x
-    when the build takes it."""
+    when the build takes it. extra: keywords the call must take as well (the PF layout's extra tensors)."""
     op = getattr(getattr(ttnn.experimental, "deepseek_prefill", None), "unified_routed_expert_moe", None)
     if op is None:
         return None
@@ -249,11 +249,18 @@ def _has_unified(dev, w_gate_up, w_down, fidelity, w_up=None):
         try:
             op(x, u32([0] * NUM_EXPERTS), u32([0] * NUM_EXPERTS), u32(list(range(NUM_EXPERTS))), e, u,
                [w_down] * NUM_EXPERTS, 32, compute_kernel_config=ckc, activation=ttnn.RoutedExpertActivation.SituGlu,
-               x_row_index=u32([32] * 64), output_row_major=True, zero_output_row=32, **kw)  # fmt: skip
+               x_row_index=u32([32] * 64), output_row_major=True, zero_output_row=32, **kw, **(extra or {}))  # fmt: skip
             return kw
         except (RuntimeError, TypeError):
             pass
     return None
+
+
+def pf_inplace_op():
+    """Does this build's unified expert op read PF-layout expert tensors in place (gate_up_extra / down_extra)?
+    INKLING_PF_INPLACE=0: no (the rebuild, tt/pf_tiles.py)."""
+    op = getattr(getattr(ttnn.experimental, "deepseek_prefill", None), "unified_routed_expert_moe", None)
+    return os.environ.get("INKLING_PF_INPLACE", "1") != "0" and "gate_up_extra" in (getattr(op, "__doc__", "") or "")
 
 
 def _host(t):
@@ -526,10 +533,16 @@ class Inkling2Prefill:
         self.unified_kw = {}  # extra unified_routed_expert_moe keywords this build takes
         fids = [expert_fidelity] if expert_fidelity else [ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.LoFi]
         self.expert_fidelity = fids[0]
+        # PF-layout experts read in place by the unified op (a build whose op takes gate_up_extra / down_extra);
+        # else rebuilt for every expert step (tt/pf_tiles.py). INKLING_PF_INPLACE=0 keeps the rebuild.
+        self.pf_inplace = False
         if experts in ("auto", "unified"):
-            gate, up, down, tmp = self._expert_weights(self.layers[0])
+            if self.layers[0].pf_moe is not None and pf_inplace_op():
+                gate, up, down, _, xkw = self._expert_weights(self.layers[0], inplace=True)
+                self.pf_inplace = _has_unified(dev, gate, down, fids[-1], up, xkw) is not None
+            gate, up, down, tmp, xkw = self._expert_weights(self.layers[0])
             for fid in fids:
-                kw = _has_unified(dev, gate, down, fid, up)
+                kw = _has_unified(dev, gate, down, fid, up, xkw)
                 if kw is not None:
                     self.expert_fidelity = fid
                     break
@@ -1176,7 +1189,7 @@ class Inkling2Prefill:
         the softcapped SwiGLU): expert e reads its region of rows (token rows through the row index), the output
         rows are gathered back per (k, token) and weighted -> [1,1,T,C] bf16. Pad tokens read the zeroed spare
         row."""
-        gate, up, down, tmp = self._expert_weights(lp)
+        gate, up, down, tmp, xkw = self._expert_weights(lp)
         if tmp:
             self._tick("moe.rebuild")
         y = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
@@ -1194,6 +1207,7 @@ class Inkling2Prefill:
             output_row_major=True,
             zero_output_row=b["u_rows"] - 32,
             **self.unified_kw,
+            **xkw,
         )
         for w in tmp:  # (the queue keeps the frees behind the expert program)
             ttnn.deallocate(w)
@@ -1211,19 +1225,24 @@ class Inkling2Prefill:
         ttnn.deallocate(y)
         return _bf16(ttnn.sum(ttnn.multiply(yb, wk), dim=1, keepdim=True))
 
-    def _expert_weights(self, lp):
-        """(gate, up, down, tensors to free after the step) of a layer for the unified expert op. A PF-layout
-        cache: the plain tensors, rebuilt from the PF tensors with whole-tile moves (tt/pf_tiles.py), so a process
-        that decodes on the PF cache can prefill in chunks. They take DRAM only during the layer's expert step."""
+    def _expert_weights(self, lp, inplace=None):
+        """(gate, up, down, tensors to free after the step, extra op keywords) of a layer for the unified expert
+        op, so a process that decodes on a PF-layout cache can prefill in chunks. A PF-layout cache, in place
+        (self.pf_inplace): the PF main tensors, with their extra tensors as keywords; the op reads the tiles where
+        they are. Else the plain tensors, rebuilt from the PF tensors with whole-tile moves (tt/pf_tiles.py): they
+        take DRAM during the layer's expert step."""
         if lp.pf_moe is None:
-            return lp.w_gate_up, lp.w_gate_up, lp.w_down, []
+            return lp.w_gate_up, lp.w_gate_up, lp.w_down, [], {}
+        moe = lp.pf_moe
+        if self.pf_inplace if inplace is None else inplace:
+            xkw = {"gate_up_extra": moe.fused.gu_x, "down_extra": moe.fused.dn_x}
+            return moe.w_gate_up, moe.w_gate_up, moe.w_down, [], xkw
         from models.demos.inkling2_mini.tt import pf_tiles
 
-        moe = lp.pf_moe
         gate_up = pf_tiles.gate_up(moe.w_gate_up, moe.fused.gu_x)
         down = pf_tiles.down(moe.w_down, moe.fused.dn_x)
         self.n_rebuilt = getattr(self, "n_rebuilt", 0) + 1
-        return gate_up, gate_up, down, [gate_up, down]
+        return gate_up, gate_up, down, [gate_up, down], {}
 
     def _urows(self, t):
         """Fixed row count of the unified expert buffer: tile-aligned expert regions (sum < 8 t + 128 * 31) + a

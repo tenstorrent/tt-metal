@@ -186,6 +186,11 @@ void kernel_main() {
     // DOWN_SPLIT: down accessor follows up in the compile-arg stream.
     constexpr uint32_t down_accessor_offset = up_args.next_compile_time_args_offset();
     constexpr auto down_args = TensorAccessorArgs<down_accessor_offset>();
+#ifdef PF_LAYOUT
+    // PF layout: the extra tensors' accessors end the accessor stream, their addresses the common args.
+    constexpr auto pf_gu_x_args = TensorAccessorArgs<PF_X_CT>();
+    constexpr auto pf_d_x_args = TensorAccessorArgs<pf_gu_x_args.next_compile_time_args_offset()>();
+#endif
     // Per-expert `up` base addresses follow output/start in the common arguments; COMMON_UP is its first index.
     // up_addr(e) = arg[COMMON_UP + e].
     constexpr uint32_t COMMON_UP = 2;
@@ -274,10 +279,20 @@ void kernel_main() {
     // single-expert kernel — only the per-expert bindings differ.
     URE_T0(15);
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+#ifndef PF_LAYOUT
         const auto up_acc =
             TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
+#endif
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
-#ifdef STACKED_EXPERTS
+#ifdef PF_LAYOUT
+        // PF layout: up is a column set of the gate_up main tensor; see weight_runs.hpp.
+        const auto gu_main_acc =
+            TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
+        const auto gu_extra_acc = TensorAccessor(pf_gu_x_args, get_common_arg_val<uint32_t>(PF_X_RT), up_tile_bytes);
+        [[maybe_unused]] const unified_routed_expert_ffn::PfGateUp up_acc{
+            gu_main_acc, gu_extra_acc, global_expert_id, 1};
+        [[maybe_unused]] constexpr uint32_t gate_page_off = 0, up_page_off = 0, down_page_off = 0, gu_row_stride = 0;
+#elif defined(STACKED_EXPERTS)
         // Stacked weights: expert g's gate / up are the column halves of its [K, 2*hidden] block of the gate_up
         // tensor, its down block follows the previous experts' blocks.
         [[maybe_unused]] const uint32_t gate_page_off = global_expert_id * GU_EXPERT_TILES;
@@ -429,8 +444,16 @@ void kernel_main() {
             // corrupts the gate/up path from the second chunk on.
             if constexpr (writer_split_down) {
                 if (is_up_sender) {
+#ifdef PF_LAYOUT
+                    const auto d_main_acc = TensorAccessor(
+                        down_args, get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id), down_tile_bytes);
+                    const auto d_extra_acc =
+                        TensorAccessor(pf_d_x_args, get_common_arg_val<uint32_t>(PF_X_RT + 1), down_tile_bytes);
+                    const unified_routed_expert_ffn::PfDown down_acc{d_main_acc, d_extra_acc, global_expert_id};
+#else
                     const auto down_acc = TensorAccessor(
                         down_args, get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id), down_tile_bytes);
+#endif
                     // cb_in1_down is double-buffered with one push per down K-block, and this
                     // RISC never pushes, so its write pointer is static: index the live slot
                     // off the block counter, exactly as the UP_SPLIT block does.

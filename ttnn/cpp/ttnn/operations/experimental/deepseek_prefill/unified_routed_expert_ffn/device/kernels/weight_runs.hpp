@@ -26,6 +26,34 @@
 // contiguous run exists: run() collapses to 1 and this degenerates to the per-tile read.
 namespace unified_routed_expert_ffn {
 
+#ifdef PF_LAYOUT
+// PF layout (program factory: UnifiedRoutedExpertFfnParams::pf_layout): a stacked expert tensor kept as a main
+// tensor (ND-sharded, one tile column per shard) that leaves tile columns out, and an extra tensor with those.
+// These stand in for the weight accessor at the read sites; WeightRuns::read maps each tile to its page.
+//   PF_NB banks; PF_GU_BASE gate (and up) columns in the gate_up main tensor, in blocks of PF_NB: gate, up, gate..;
+//   PF_GU_KT / PF_D_KT tile rows per expert; PF_D_MAIN columns in the down main tensor; PF_X_PER experts share a
+//   block of gate_up extra slots, one bank each from PF_X_LO up.
+template <class Main, class Extra>
+struct PfGateUp {
+    const Main& main;
+    const Extra& extra;
+    uint32_t expert;  // global expert id
+    uint32_t up;      // 0: the gate columns, 1: the up columns
+};
+
+template <class Main, class Extra>
+struct PfDown {
+    const Main& main;
+    const Extra& extra;
+    uint32_t expert;
+};
+
+template <class Main, class Extra>
+PfGateUp(const Main&, const Extra&, uint32_t, uint32_t) -> PfGateUp<Main, Extra>;
+template <class Main, class Extra>
+PfDown(const Main&, const Extra&, uint32_t) -> PfDown<Main, Extra>;
+#endif
+
 template <uint32_t SHARD_W = 0>
 struct WeightRuns {
     // Length of the maximal contiguous run starting at tile column j, clipped to end.
@@ -75,6 +103,58 @@ struct WeightRuns {
             off += len;
         }
     }
+
+#ifdef PF_LAYOUT
+    // PF layout: the same tiles, one read each (a core's columns sit in different shards).
+    template <class Main, class Extra>
+    static FORCE_INLINE void read(
+        const Noc& noc,
+        const PfGateUp<Main, Extra>& w,
+        uint32_t row,
+        uint32_t /*n_tiles_full*/,
+        uint32_t j0,
+        uint32_t jend,
+        uint32_t l1_base,
+        uint32_t page_bytes,
+        uint32_t /*row_stride*/ = 0,
+        uint32_t /*page_off*/ = 0) {
+        const uint32_t main_row = (w.expert * PF_GU_KT + row) * (2 * PF_GU_BASE);
+        const uint32_t extra_page =
+            PF_NB * ((w.expert / PF_X_PER) * 2 * PF_GU_KT + w.up * PF_GU_KT + row) + PF_X_LO + w.expert % PF_X_PER;
+        for (uint32_t j = j0; j < jend; ++j) {
+            const CoreLocalMem<uint32_t> dst(l1_base + (j - j0) * page_bytes);
+            if (j < PF_GU_BASE) {
+                const uint32_t col = (j / PF_NB) * 2 * PF_NB + w.up * PF_NB + j % PF_NB;
+                noc.async_read(w.main, dst, page_bytes, {.page_id = main_row + col}, {});
+            } else {
+                noc.async_read(w.extra, dst, page_bytes, {.page_id = extra_page}, {});
+            }
+        }
+    }
+
+    template <class Main, class Extra>
+    static FORCE_INLINE void read(
+        const Noc& noc,
+        const PfDown<Main, Extra>& w,
+        uint32_t row,
+        uint32_t /*n_tiles_full*/,
+        uint32_t j0,
+        uint32_t jend,
+        uint32_t l1_base,
+        uint32_t page_bytes,
+        uint32_t /*row_stride*/ = 0,
+        uint32_t /*page_off*/ = 0) {
+        const uint32_t expert_row = w.expert * PF_D_KT + row;
+        for (uint32_t j = j0; j < jend; ++j) {
+            const CoreLocalMem<uint32_t> dst(l1_base + (j - j0) * page_bytes);
+            if (j < PF_D_MAIN) {
+                noc.async_read(w.main, dst, page_bytes, {.page_id = expert_row * PF_D_MAIN + j}, {});
+            } else {
+                noc.async_read(w.extra, dst, page_bytes, {.page_id = PF_NB * expert_row + (j - PF_D_MAIN)}, {});
+            }
+        }
+    }
+#endif
 };
 
 }  // namespace unified_routed_expert_ffn

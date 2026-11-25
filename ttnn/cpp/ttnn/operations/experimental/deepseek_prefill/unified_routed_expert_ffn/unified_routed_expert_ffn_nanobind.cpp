@@ -80,6 +80,11 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             core_row_groups (int, optional): 1, or 2: the 8 worker rows as two 4-row grids that run
                 different experts, so a tail of an expert rounds up to 4 tile-rows instead of 8.
             core_grid_y (int, optional): worker rows, 8 or 10 (0: 8); core_row_groups must divide it.
+            gate_up_extra, down_extra (ttnn.Tensor, optional; both or neither): stacked experts in the PF
+                layout, read in place. gate_projs / up_projs then hold the gate_up main tensor
+                [1, E, emb, 2 * (hidden - 32)] and down_projs the down main tensor (both DRAM ND-sharded, one
+                tile column per shard), and these two the tile columns the main tensors leave out. Same
+                outputs as the stacked tensors with the same tiles.
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -111,7 +116,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("zero_output_row") = std::numeric_limits<uint32_t>::max(),
         nb::arg("core_grid_x") = 0,
         nb::arg("core_row_groups") = 1,
-        nb::arg("core_grid_y") = 0);
+        nb::arg("core_grid_y") = 0,
+        nb::arg("gate_up_extra") = nb::none(),
+        nb::arg("down_extra") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail
