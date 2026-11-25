@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import functools
 import json
 import os
 import queue
@@ -1860,6 +1861,48 @@ def test_async_rollout_server_rejects_an_empty_dataset(expect_error):
     config = _remote_grpo_config(rollout_backend="ttt_remote_async")
     with expect_error(ValueError, "needs a non-empty dataset"):
         GRPOTrainer._build_rollout_server(SimpleNamespace(config=config), None, lambda: [])
+
+
+@pytest.mark.parametrize("enable_ddp", [False, True])
+def test_async_rollout_server_batch_prompts_match_the_trainer(monkeypatch, enable_ddp):
+    from ttml.trainers.grpo_trainer import distributed as grpo_distributed
+
+    device_config = DeviceConfig({"device_config": {"mesh_shape": [1, 2], "enable_ddp": enable_ddp}})
+    context = SimpleNamespace(
+        get_device=lambda: SimpleNamespace(get_num_devices=device_config.total_devices),
+        is_parallelism_context_initialized=lambda: False,
+        initialize_distributed_context=lambda *args: None,
+    )
+    fake_ttml = SimpleNamespace(
+        autograd=SimpleNamespace(AutoContext=SimpleNamespace(get_instance=lambda: context)),
+        maybe_mesh=lambda: build_mesh(device_config),
+        core=SimpleNamespace(
+            distributed=SimpleNamespace(
+                shard_tensor_to_mesh_mapper=lambda device, dim: None,
+                concat_mesh_to_tensor_composer=lambda device, dim: None,
+            )
+        ),
+    )
+    monkeypatch.setattr(grpo_distributed, "ttml", fake_ttml)
+    monkeypatch.setattr(grpo_trainer_module, "ttml", fake_ttml)
+    tokenizer = SimpleNamespace(encode=lambda text, add_special_tokens: [len(text)])
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", lambda *args, **kwargs: tokenizer)
+    monkeypatch.setattr(threaded_weight_bridge.ThreadedWeightBridge, "receiver", lambda **kwargs: None)
+    monkeypatch.setattr(RolloutQueue, "producer", lambda **kwargs: None)
+    monkeypatch.setattr(async_rollout, "AsyncRolloutServer", lambda **kwargs: kwargs["rollout_batch_source"])
+    dataset = Dataset.from_dict({"prompt": [f"prompt {i}" for i in range(8)]})
+    trainer = SimpleNamespace(
+        config=_remote_grpo_config(rollout_backend="ttt_remote_async", prompts_to_train=8),
+        model_source=HF_MODEL_ID,
+        rollout_sampler=SimpleNamespace(submeshes=[None]),
+        reward_funcs=[],
+    )
+    trainer._prompt_batches = functools.partial(GRPOTrainer._prompt_batches, trainer)
+
+    source = GRPOTrainer._build_rollout_server(trainer, device_config, lambda: dataset)
+    num_shards = grpo_distributed.resolve_batch_layout().num_shards
+    assert num_shards == (2 if enable_ddp else 1)
+    assert source._batch_prompts == trainer._prompt_batches(dataset, tokenizer, num_shards)[2]
 
 
 def test_async_rollout_server_walks_prompts_with_the_newest_weights(monkeypatch):
