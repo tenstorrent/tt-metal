@@ -136,6 +136,27 @@ void kernel_main() {
                 0u,    // ignore
                 1u});  // increment 1
     }
+    // With alternating routes the data reaches a device over both the primary and the alternate route (on an even
+    // ring the opposite device gets this kernel's packets one way and the other kernel's the other way), and fabric
+    // keeps packets in order only along one route. So the completion increment also goes out on the alternate route,
+    // after that route's last data; the reader waits for both (done_wait_value).
+    uint8_t sem_route_id_alt = 0;
+    if constexpr (enable_fabric && load_balance_across_alt_routes) {
+        sem_route_id_alt = PacketHeaderPool::allocate_header_n(num_connections);
+        uint8_t starts_alt[1] = {1};
+
+        fabric_api::fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            fabric_connection,
+            sem_route_id_alt,
+#ifndef FABRIC_2D
+            starts_alt,
+#endif
+            ranges_alt,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                0u,    // ignore
+                1u});  // increment 1
+    }
 
     // Initialization barrier:
     // In some cases we don't have a guarantee that the output tensor has been allocated
@@ -238,6 +259,12 @@ void kernel_main() {
             fabric_connection,
             sem_route_id,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 0});
+        if constexpr (load_balance_across_alt_routes) {
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_connection,
+                sem_route_id_alt,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 0});
+        }
     }
 
     if constexpr (enable_fabric) {
