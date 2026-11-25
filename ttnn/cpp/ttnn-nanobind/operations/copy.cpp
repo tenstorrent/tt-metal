@@ -30,7 +30,7 @@ void bind_global_typecast(nb::module_& mod) {
             memory_config (Optional[ttnn.MemoryConfig]): Memory configuration of the output. Defaults to the input memory configuration. May differ from it (interleaved, sharded, DRAM, L1). Ignored for host tensors.
             output_tensor (Optional[ttnn.Tensor]): Preallocated tensor to store the output.
             sub_core_grids (Optional[ttnn.CoreRangeSet]): Cores to run the operation on.
-            output_layout (Optional[ttnn.Layout]): Layout of the output. Defaults to the input layout, or to the layout of output_tensor when given; the two must match.
+            output_layout (Optional[ttnn.Layout]): Layout of the output. Defaults to the input layout. A preallocated output_tensor must have this layout.
 
         Returns:
             ttnn.Tensor: The tensor with the given data type, layout and memory configuration.
@@ -56,9 +56,9 @@ void bind_global_typecast(nb::module_& mod) {
                 -  ND Sharded tensors are not supported.
                 -  Narrowing to UINT8 or INT8 truncates towards zero and wraps modulo 256; it does not saturate.
                 -  Widening from INT8 sign-extends to INT32 and UINT32, but clamps negatives to 0 for UINT16.
-                -  If preallocated output tensor is used, it must match the input tensor's shape and layout.
+                -  If preallocated output tensor is used, it must match the input tensor's shape and the output layout (output_layout, or the input layout when not given).
                 -  BFLOAT8_B and BFLOAT4_B outputs require TILE output layout.
-                -  A layout change does not support a preallocated output tensor or sub_core_grids.
+                -  With a layout change, sub_core_grids is supported only when the op runs in one pass (32x32 tiles, full-row row-major pages, aligned block width); otherwise it raises.
         )doc";
 
     ttnn::bind_function<"typecast">(

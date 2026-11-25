@@ -186,18 +186,58 @@ def test_typecast_bfp_row_major_output_rejected(device, expect_error, input_layo
         ttnn.typecast(input_tensor, output_dtype, output_layout=RM)
 
 
-def test_typecast_layout_change_rejects_preallocated_output(device, expect_error):
+# The layout changes only through output_layout; a preallocated output in another layout is rejected.
+def test_typecast_preallocated_output_layout_without_output_layout_rejected(device, expect_error):
     input_tensor = _to_device(_values((1, 1, 32, 32)), ttnn.float32, TILE, device, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = _to_device(_values((1, 1, 32, 32)), ttnn.int32, RM, device, ttnn.DRAM_MEMORY_CONFIG)
-    with expect_error(RuntimeError, "preallocated output"):
+    with expect_error(RuntimeError, "must match the output layout"):
         ttnn.typecast(input_tensor, ttnn.int32, output_tensor=output_tensor)
 
 
-def test_typecast_layout_change_rejects_sub_core_grids(device, expect_error):
-    input_tensor = _to_device(_values((1, 1, 32, 32)), ttnn.float32, TILE, device, ttnn.DRAM_MEMORY_CONFIG)
-    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    with expect_error(RuntimeError, "sub_core_grids"):
-        ttnn.typecast(input_tensor, ttnn.int32, sub_core_grids=sub_core_grids, output_layout=RM)
+# "dram" runs in one pass; a width-sharded row-major side goes through separate ops and a copy.
+@pytest.mark.parametrize("row_major_memory", ["dram", "width"])
+@pytest.mark.parametrize("input_layout, output_layout", [(TILE, RM), (RM, TILE)], ids=["tile_to_rm", "rm_to_tile"])
+def test_typecast_layout_change_preallocated_output(device, input_layout, output_layout, row_major_memory):
+    values = _values(SHARDED_SHAPE)
+    input_memory = _memory_config(row_major_memory) if input_layout == RM else ttnn.DRAM_MEMORY_CONFIG
+    output_memory = _memory_config(row_major_memory) if output_layout == RM else ttnn.DRAM_MEMORY_CONFIG
+    input_tensor = _to_device(values, ttnn.bfloat16, input_layout, device, input_memory)
+    output_tensor = _to_device(
+        torch.zeros(SHARDED_SHAPE, dtype=torch.int32), ttnn.float32, output_layout, device, output_memory
+    )
+    output = ttnn.typecast(input_tensor, ttnn.float32, output_tensor=output_tensor, output_layout=output_layout)
+    assert output.buffer_address() == output_tensor.buffer_address()
+    _check(output_tensor, values, ttnn.float32, output_layout, output_memory)
+
+
+@pytest.mark.parametrize("input_layout, output_layout", [(TILE, RM), (RM, TILE)], ids=["tile_to_rm", "rm_to_tile"])
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype", [(ttnn.bfloat16, ttnn.float32), (ttnn.int32, ttnn.uint16)], ids=str
+)
+def test_typecast_layout_change_sub_core_grids(device, input_dtype, output_dtype, input_layout, output_layout):
+    sub_core_grids = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2)),
+            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 2)),
+        }
+    )
+    values = _values((1, 2, 32 * 10 + 5, 64))
+    input_tensor = _to_device(values, input_dtype, input_layout, device, ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.typecast(input_tensor, output_dtype, sub_core_grids=sub_core_grids, output_layout=output_layout)
+    _check(output, values, output_dtype, output_layout, ttnn.DRAM_MEMORY_CONFIG)
+
+
+def test_typecast_layout_change_sub_core_grids_without_one_pass_rejected(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        _values((1, 1, 32, 64)).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=TILE,
+        device=device,
+        tile=ttnn.Tile((16, 32)),
+    )
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    with expect_error(RuntimeError, "sub_core_grids only when it runs in one pass"):
+        ttnn.typecast(input_tensor, ttnn.float32, sub_core_grids=sub_core_grids, output_layout=RM)
 
 
 LAYOUT_DIRECTIONS = [(TILE, RM), (RM, TILE)]
@@ -294,5 +334,5 @@ def test_typecast_tiny_tile_to_rm(device):
 def test_typecast_output_layout_and_output_tensor_mismatch_rejected(device, expect_error):
     input_tensor = _to_device(_values((1, 1, 32, 32)), ttnn.float32, TILE, device, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = _to_device(_values((1, 1, 32, 32)), ttnn.int32, TILE, device, ttnn.DRAM_MEMORY_CONFIG)
-    with expect_error(RuntimeError, "layout should match"):
+    with expect_error(RuntimeError, "must match the output layout"):
         ttnn.typecast(input_tensor, ttnn.int32, output_tensor=output_tensor, output_layout=RM)

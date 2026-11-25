@@ -122,13 +122,24 @@ Tensor typecast_layout_change(
     const Tensor& input_tensor,
     const DataType& output_dtype,
     const Layout& output_layout,
-    const MemoryConfig& output_memory_config) {
-    const auto output_spec = TensorSpec(
-        input_tensor.logical_shape(), tt::tt_metal::TensorLayout(output_dtype, output_layout, output_memory_config));
-    if (ttnn::prim::can_fuse_typecast_layout_change(input_tensor, output_spec, std::nullopt)) {
+    const MemoryConfig& output_memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const auto output_spec = optional_output_tensor.has_value()
+                                 ? optional_output_tensor->tensor_spec()
+                                 : TensorSpec(
+                                       input_tensor.logical_shape(),
+                                       tt::tt_metal::TensorLayout(output_dtype, output_layout, output_memory_config));
+    if (ttnn::prim::can_fuse_typecast_layout_change(input_tensor, output_spec)) {
         return typecast_on_device(
-            input_tensor, output_dtype, output_memory_config, std::nullopt, std::nullopt, output_layout);
+            input_tensor, output_dtype, output_memory_config, optional_output_tensor, sub_core_grids, output_layout);
     }
+    // tilize / untilize take no sub_core_grids.
+    TT_FATAL(
+        !sub_core_grids.has_value(),
+        "Typecast with a layout change supports sub_core_grids only when it runs in one pass; input {} -> output {}",
+        input_tensor.tensor_spec(),
+        output_spec);
     if (output_layout == Layout::TILE) {
         const auto tilize_dtype = tilizable_dtype(input_tensor.dtype());
         const auto tilize_input =
@@ -136,10 +147,14 @@ Tensor typecast_layout_change(
                 ? input_tensor
                 : typecast_device(input_tensor, tilize_dtype, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, std::nullopt);
         const auto tiled = ttnn::to_layout(tilize_input, Layout::TILE, std::nullopt, ttnn::DRAM_MEMORY_CONFIG);
-        return typecast_device(tiled, output_dtype, output_memory_config, std::nullopt, std::nullopt);
+        return typecast_device(tiled, output_dtype, output_memory_config, optional_output_tensor, std::nullopt);
     }
     const auto cast = typecast_device(input_tensor, output_dtype, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, std::nullopt);
-    return ttnn::to_layout(cast, Layout::ROW_MAJOR, std::nullopt, output_memory_config);
+    if (!optional_output_tensor.has_value()) {
+        return ttnn::to_layout(cast, Layout::ROW_MAJOR, std::nullopt, output_memory_config);
+    }
+    const auto untiled = ttnn::to_layout(cast, Layout::ROW_MAJOR, std::nullopt, ttnn::DRAM_MEMORY_CONFIG);
+    return ttnn::to_memory_config(untiled, output_memory_config, std::nullopt, optional_output_tensor);
 }
 
 Tensor typecast_host(const Tensor& input_tensor, const DataType& output_dtype, const Layout& output_layout) {
@@ -161,11 +176,13 @@ inline Tensor typecast_impl(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<Layout>& output_layout_arg = std::nullopt) {
-    const Layout output_layout = optional_output_tensor.has_value() ? optional_output_tensor->layout()
-                                                                    : output_layout_arg.value_or(input_tensor.layout());
+    // The layout changes only on request; a preallocated output in another layout is an error, not a retile.
+    const auto output_layout = output_layout_arg.value_or(input_tensor.layout());
     TT_FATAL(
-        !output_layout_arg.has_value() || output_layout_arg.value() == output_layout,
-        "If both output layout and output tensor provided layout should match");
+        !optional_output_tensor.has_value() || optional_output_tensor->layout() == output_layout,
+        "Preallocated output tensor layout {} must match the output layout {}; pass output_layout to change layout",
+        optional_output_tensor.has_value() ? optional_output_tensor->layout() : output_layout,
+        output_layout);
     TT_FATAL(
         !(output_layout == Layout::ROW_MAJOR && is_block_float(output_dtype)),
         "Typecast to {} requires TILE output layout",
@@ -188,11 +205,8 @@ inline Tensor typecast_impl(
                                           ? optional_output_tensor.value().memory_config()
                                           : memory_config.value_or(input_tensor.memory_config());
     if (output_layout != input_tensor.layout()) {
-        TT_FATAL(
-            !optional_output_tensor.has_value(),
-            "Typecast with a layout change does not support a preallocated output tensor");
-        TT_FATAL(!sub_core_grids.has_value(), "Typecast with a layout change does not support sub_core_grids");
-        return typecast_layout_change(input_tensor, output_dtype, output_layout, output_memory_config);
+        return typecast_layout_change(
+            input_tensor, output_dtype, output_layout, output_memory_config, optional_output_tensor, sub_core_grids);
     }
     return typecast_device(input_tensor, output_dtype, output_memory_config, optional_output_tensor, sub_core_grids);
 }

@@ -16,9 +16,6 @@ struct TypecastLayoutChangeProgramFactory {
 };
 
 // Whether the fused factory handles this input / output pair; callers fall back to separate ops otherwise.
-bool can_fuse_typecast_layout_change(
-    const Tensor& input,
-    const tt::tt_metal::TensorSpec& output_spec,
-    const std::optional<CoreRangeSet>& sub_core_grids);
+bool can_fuse_typecast_layout_change(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
 
 }  // namespace ttnn::prim

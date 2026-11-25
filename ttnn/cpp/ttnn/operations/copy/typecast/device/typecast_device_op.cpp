@@ -125,11 +125,19 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         args.output_dtype);
 
     if (args.output_layout.value_or(input_tensor.layout()) != input_tensor.layout()) {
+        if (preallocated_output_tensor.has_value()) {
+            const auto& output = preallocated_output_tensor.value();
+            TT_FATAL(
+                output.logical_shape() == input_tensor.logical_shape() && output.layout() == args.output_layout &&
+                    output.dtype() == args.output_dtype,
+                "Typecast preallocated output must be {} {} with shape {}, got {}",
+                args.output_dtype,
+                args.output_layout.value(),
+                input_tensor.logical_shape(),
+                output.tensor_spec());
+        }
         TT_FATAL(
-            !preallocated_output_tensor.has_value(),
-            "Typecast with a layout change does not support a preallocated output tensor");
-        TT_FATAL(
-            can_fuse_typecast_layout_change(input_tensor, compute_output_specs(args, tensor_args), args.sub_core_grids),
+            can_fuse_typecast_layout_change(input_tensor, compute_output_specs(args, tensor_args)),
             "Typecast cannot change layout from {} to {} for input {} in one pass",
             input_tensor.layout(),
             args.output_layout.value(),

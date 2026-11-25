@@ -108,9 +108,8 @@ BlockGeometry block_geometry(const ttnn::Shape& shape, DataType row_major_dtype,
 
 }  // namespace layout_change
 
-bool can_fuse_typecast_layout_change(
-    const Tensor& input, const TensorSpec& output_spec, const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (sub_core_grids.has_value() || input.layout() == output_spec.layout()) {
+bool can_fuse_typecast_layout_change(const Tensor& input, const TensorSpec& output_spec) {
+    if (input.layout() == output_spec.layout()) {
         return false;
     }
     const auto& shape = input.logical_shape();
@@ -160,7 +159,9 @@ ttnn::device_operation::ProgramArtifacts TypecastLayoutChangeProgramFactory::cre
 
     const auto* device = input.device();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_group_1, num_blocks_group_2] =
-        split_work_to_cores(device->compute_with_storage_grid_size(), geometry.num_blocks);
+        args.sub_core_grids.has_value()
+            ? split_work_to_cores(args.sub_core_grids.value(), geometry.num_blocks)
+            : split_work_to_cores(device->compute_with_storage_grid_size(), geometry.num_blocks);
     (void)num_cores;
 
     const DFBSpecName IN_DFB{"in"};
