@@ -162,6 +162,20 @@ constexpr bool kHubRes = get_named_compile_time_arg_val("hub_res") != 0;
 // slots: the streamers count parities 2 / 3 in a second gather word (named arg sem_gather2)
 constexpr uint32_t kSlots = get_named_compile_time_arg_val("hub_slots");
 constexpr uint32_t sem_gather2 = get_named_compile_time_arg_val("sem_gather2");
+// O-1f (named arg fabric_ring, RESIDENT_FABRIC_RING with FABRIC_1D_RING): the four chips are a ring (each one's two
+// neighbours), so a packet reaches its peers both ways — packets alternate between n / 2 hops forward + (n - 1) / 2
+// backward and the reverse, each peer still getting every packet once: a link direction carries 1.5 slots a sub-round
+// instead of the line's 3 at its end links. (Line: forward to the chips after this one, backward to those before.)
+constexpr bool kRing = get_named_compile_time_arg_val("fabric_ring") != 0;
+// (the hop scheme of data packet p: with two link sets alternating on p & 1, on p >> 1 so each set carries both)
+FORCE_INLINE uint32_t alt_of(uint32_t p) { return links > 1 ? (p >> 1) & 1 : p & 1; }
+FORCE_INLINE uint8_t hops_of(uint32_t dir, uint32_t alt) {
+    if constexpr (kRing) {
+        return static_cast<uint8_t>((dir == 0) == (alt == 0) ? num_chips / 2 : (num_chips - 1) / 2);
+    } else {
+        return static_cast<uint8_t>(dir == 0 ? num_chips - 1 - chip : chip);
+    }
+}
 constexpr uint32_t kTokX0 = get_named_compile_time_arg_val("tok_x0");
 static_assert(!kHubRes || (kHubBfp8 && groups > 1), "the hub residual: row groups with bfp8 partials");
 static_assert(kSlots == 2 || (kSlots == 4 && groups > 1), "two slots, or four with row groups");
@@ -409,8 +423,7 @@ void kernel_main() {
             const uint64_t sem = get_noc_addr(my_x[0], my_y[0], ccl_sem_addr[par]);
             for (uint32_t dir = 0; dir < 2; dir++) {
                 volatile PACKET_HEADER_TYPE* h = allocate();
-                h->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
-                    1, static_cast<uint8_t>(dir == 0 ? num_chips - 1 - chip : chip)});
+                h->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, hops_of(dir, alt_of(p))});
                 h->to_noc_fused_unicast_write_atomic_inc(
                     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst, sem, 1, true}, bytes);
                 hdr[par][p][dir] = h;
@@ -426,8 +439,7 @@ void kernel_main() {
             const uint64_t dst = get_noc_addr(my_x[0], my_y[0], cand_addr + chip * cand_bytes + off);
             for (uint32_t dir = 0; dir < 2; dir++) {
                 volatile PACKET_HEADER_TYPE* h = allocate();
-                h->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
-                    1, static_cast<uint8_t>(dir == 0 ? num_chips - 1 - chip : chip)});
+                h->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, hops_of(dir, p & 1)});
                 h->to_noc_fused_unicast_write_atomic_inc(
                     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst, sem, 1, true}, bytes);
                 cand_hdr[p][dir] = h;
@@ -441,8 +453,7 @@ void kernel_main() {
             const uint64_t sem = get_noc_addr(my_x[0], my_y[0], free_sem_addr[par]);
             for (uint32_t dir = 0; dir < 2; dir++) {
                 volatile PACKET_HEADER_TYPE* h = allocate();
-                h->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
-                    1, static_cast<uint8_t>(dir == 0 ? num_chips - 1 - chip : chip)});
+                h->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, hops_of(dir, 0)});
                 h->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem, 1, true});
                 free_hdr[par][dir] = h;
             }
@@ -572,10 +583,10 @@ void kernel_main() {
                 const uint32_t bytes =
                     (p + 1) * packet_bytes <= slot_bytes ? packet_bytes : slot_bytes - p * packet_bytes;
                 auto& f = links > 1 && (p & 1) ? fabric1 : fabric;
-                if (f.has_forward_connection()) {
+                if (f.has_forward_connection() && hops_of(0, alt_of(p)) > 0) {
                     perform_payload_send(f.get_forward_connection(), src, bytes, hdr[par][p][0]);
                 }
-                if (f.has_backward_connection()) {
+                if (f.has_backward_connection() && hops_of(1, alt_of(p)) > 0) {
                     perform_payload_send(f.get_backward_connection(), src, bytes, hdr[par][p][1]);
                 }
             }
@@ -727,10 +738,10 @@ void kernel_main() {
                 const uint32_t off = p * packet_bytes;
                 const uint32_t bytes = off + packet_bytes <= cand_bytes ? packet_bytes : cand_bytes - off;
                 const uint32_t src = cand_addr + chip * cand_bytes + off;
-                if (fabric.has_forward_connection()) {
+                if (fabric.has_forward_connection() && hops_of(0, p & 1) > 0) {
                     perform_payload_send(fabric.get_forward_connection(), src, bytes, cand_hdr[p][0]);
                 }
-                if (fabric.has_backward_connection()) {
+                if (fabric.has_backward_connection() && hops_of(1, p & 1) > 0) {
                     perform_payload_send(fabric.get_backward_connection(), src, bytes, cand_hdr[p][1]);
                 }
             }

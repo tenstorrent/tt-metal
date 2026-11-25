@@ -93,7 +93,9 @@ def log(msg):
 
 
 def open_mesh(trace_region=134217728, **kw):
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    # (O-1f: RESIDENT_FABRIC_RING=1 opens the chips' ring for the hubs' routing, model.py FABRIC_RING)
+    ring = os.environ.get("RESIDENT_FABRIC_RING", "0") == "1"
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING if ring else ttnn.FabricConfig.FABRIC_1D)
     return ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=trace_region, **kw)
 
 

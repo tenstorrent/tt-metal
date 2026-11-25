@@ -19,6 +19,7 @@ usage: python -m qwen36_resident.tests.e0_bringup random [--layers 4] [--steps 4
 import argparse
 import copy
 import faulthandler
+import os
 import sys
 import json
 import time
@@ -34,7 +35,9 @@ PREFILL_CHUNKS = (128, 256, 512, 1024)
 
 
 def open_mesh(trace_region=134217728):
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    # (O-1f: RESIDENT_FABRIC_RING=1 opens the chips' ring for the hubs' routing, model.py FABRIC_RING)
+    ring = os.environ.get("RESIDENT_FABRIC_RING", "0") == "1"
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING if ring else ttnn.FabricConfig.FABRIC_1D)
     return ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=trace_region)
 
 

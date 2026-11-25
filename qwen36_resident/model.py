@@ -159,6 +159,9 @@ HUB_SLOTS = int(os.environ.get("RESIDENT_HUB_SLOTS", "2"))
 SEM_GATHER2 = 14  # (O-1d: the second gather word, streamers + hub — not attention cores, which use 14 for O-2)
 # O-2b (default on): the leader's q pass prep staged over the previous pass's users (attn_common.hpp kLeadStaged)
 ATTN_STAGED = os.environ.get("RESIDENT_ATTN_STAGED", "1") == "1"
+# O-1f (experimental, default off): the hubs route over the chips' ring (FABRIC_1D_RING, mlp_hub.cpp kRing) — the
+# mesh must be opened with that fabric config (tests/e0_bringup.py open_mesh reads the same variable)
+FABRIC_RING = os.environ.get("RESIDENT_FABRIC_RING", "0") == "1"
 KV_ROW = (HD // TILE) * TILE_BYTES[K_DT]  # one position tile of a K cache page (bf8; bfp4 with K_BFP4)
 # Strata S0 step 1 (RESIDENT_KV_V_BFP4, default off): the V caches / pool in bfp4 tiles, K stays bf8 (V tolerates 4-bit
 # mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
@@ -1238,10 +1241,10 @@ class ResidentModel:
         if n > 1 and HUB_LINKS > 1:
             node = lambda c: mesh.get_fabric_node_id(ttnn.MeshCoordinate(0, c))  # noqa: E731
             trained = min(
-                len(ttnn.get_forwarding_link_indices(node(c), node(c + s)))
+                len(ttnn.get_forwarding_link_indices(node(c), node((c + s) % n)))
                 for c in range(n)
                 for s in (1, -1)
-                if 0 <= c + s < n
+                if 0 <= c + s < n or (FABRIC_RING and n > 2)
             )
             self.hub_links = max(1, min(HUB_LINKS, trained))
         logger.info(f"resident hub all-reduce: {self.hub_links} fabric link(s) per neighbour")
@@ -1805,6 +1808,7 @@ class ResidentModel:
                 ("hub_bfp8", int(HUB_BFP8 and self.groups > 1)),  # (O-1c: bfp8 hub partials)
                 ("hub_res", int(self.hub_res)),  # (O-1c accuracy: the hub adds the residual, mlp_hub.cpp kHubRes)
                 ("hub_slots", self.hub_slots),  # (O-1d, mlp_hub.cpp kSlots)
+                ("fabric_ring", int(FABRIC_RING)),  # (O-1f, mlp_hub.cpp kRing)
                 ("sem_gather2", SEM_GATHER2),
                 ("tok_x0", TOK_X0),
                 ("attn_pipe", int(self.attn_pipe)),  # (attn_common.hpp kAttnPipe, O-2)
@@ -2179,7 +2183,8 @@ class ResidentModel:
                 self._cb_top = max(getattr(self, "_cb_top", 0), cb_extent(cbs))  # (TraceL1Guard)
                 args = program.kernels[3].runtime_args[hub.x][hub.y]
                 for link in range(self.hub_links):  # (mlp_hub.cpp links: a (fwd, bwd) set per link)
-                    for nb in (chip + 1, chip - 1):
+                    # (O-1f ring: the ends' wrap-around neighbours too)
+                    for nb in ((chip + 1) % n, (chip - 1) % n) if FABRIC_RING and n > 2 else (chip + 1, chip - 1):
                         if 0 <= nb < n:
                             me = mesh.get_fabric_node_id(coord)
                             args.append(1)
