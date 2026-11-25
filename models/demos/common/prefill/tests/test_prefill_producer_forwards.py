@@ -19,6 +19,7 @@ from models.demos.common.prefill.prefill_chunk import (
     PrefillChunk,
     decode_forward_metadata,
     decode_media_refs,
+    metadata_size_bytes,
     pad_chunks,
     validate_chunks,
 )
@@ -271,6 +272,16 @@ def test_payload_refuses_overlapping_media(env, monkeypatch, expect_error):
         producer._forward_payload([producer.ChunkPush(0, 0, 0, C, C)], lambda slot_id: list(range(C)))
 
 
+@pytest.mark.parametrize("forward_chunks", [1, 2])
+def test_media_metadata_keeps_its_size_without_images(env, monkeypatch, forward_chunks):
+    """With media on, a forward with no image and the shutdown sentinel are as long as the runner's H2D metadata."""
+    env(forward_chunks=forward_chunks)
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(3 * C, 10)])  # past this request's prompt
+    _, _, metadata = producer._forward_payload([producer.ChunkPush(0, 0, 0, C, C)], lambda slot_id: list(range(C)))
+    assert len(metadata) == len(producer._shutdown_payload()[2]) == metadata_size_bytes(forward_chunks, 2)
+
+
 def test_payload_skips_media_past_the_prompt(env, monkeypatch):
     env()
     monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
@@ -392,7 +403,15 @@ def test_packed_respects_max_requests(env, interleave):
 
 
 def test_import_config_defers_budget_check(monkeypatch, expect_error):
-    for name in ("SP_FACTOR", "CHUNK_SIZE", "MAX_SEQ_LEN", "FORWARD_CHUNKS", "H2D_METADATA_SIZE_BYTES"):
+    for name in (
+        "SP_FACTOR",
+        "CHUNK_SIZE",
+        "MAX_SEQ_LEN",
+        "FORWARD_CHUNKS",
+        "H2D_METADATA_SIZE_BYTES",
+        "MEDIA",
+        "MEDIA_MAX_REFS",
+    ):
         monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reloads below
     monkeypatch.delenv("PREFILL_CHUNK_SIZE", raising=False)
     monkeypatch.setenv("PREFILL_FORWARD_TOKENS_BUDGET", str(8 * C))
