@@ -65,6 +65,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -1555,7 +1556,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryRegion) {
         /*map_to_noc=*/true);
     ASSERT_TRUE(pinned_shared);
     auto& cq = mesh_device_->mesh_command_queue();
-    for (auto coord : coord_range) {
+    for (const auto& coord : coord_range) {
         auto clear_transfer = distributed::ShardDataTransfer{coord}
                                   .host_data(static_cast<void*>(zeros.data()))
                                   .region(BufferRegion(0, bytes_per_device));
@@ -1566,7 +1567,16 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryRegion) {
                 .host_data(static_cast<void*>(reinterpret_cast<uint8_t*>(src->data()) + region.offset))
                 .region(region);
         tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_shared);
+        // The copy path puts the payload in the issue queue during the call; the pinned path writes only commands.
+        // (lock_may_block() can't tell them apart: the barrier event is dropped if the write has already completed.)
+        auto& sysmem = mesh_device_->impl().get_device(coord)->sysmem_manager();
+        const auto cq_id = static_cast<uint8_t>(cq.id());
+        const uint32_t issue_queue_size = sysmem.get_issue_queue_size(cq_id);
+        const uint32_t issue_wr_ptr_before = sysmem.get_issue_queue_write_ptr(cq_id);
         cq.enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/false);
+        const uint32_t issue_bytes =
+            (sysmem.get_issue_queue_write_ptr(cq_id) + issue_queue_size - issue_wr_ptr_before) % issue_queue_size;
+        EXPECT_LT(issue_bytes, region.size) << "shard " << coord << ": the write went through the issue queue";
 
         // Read back the whole shard through the hugepage.
         std::fill(dst.begin(), dst.end(), 0);
@@ -1578,8 +1588,6 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryRegion) {
             std::distance(expected.begin(), std::mismatch(expected.begin(), expected.end(), dst.begin()).first));
         EXPECT_EQ(first_mismatch, expected.size()) << "shard " << coord << ": word " << first_mismatch << " is "
                                                    << dst[first_mismatch] << ", expected " << expected[first_mismatch];
-        // Pinned memory should have been used, so locking may block.
-        EXPECT_TRUE(pinned_shared->lock_may_block());
     }
 }
 
