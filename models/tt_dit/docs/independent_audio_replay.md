@@ -92,14 +92,20 @@ A trace bakes the addresses of the intermediates its ops allocate and free durin
 capture, and rewrites them on every replay. Freed, those addresses went back to
 the DRAM free list, so a buffer a later job allocated (a served ref2va clip after a
 warm capture, for example) could land on one and be overwritten by the next audio
-replay. The vocoder, mel decoder and BWE tracers now pass
-`hold_capture_frees=True`: `ttnn.set_trace_capture_hold` is set around
+replay. The vocoder, mel decoder and BWE tracers resolve `hold_capture_frees`
+on the instance (`self.hold_capture_frees`, default off); H3's audio decoder sets
+it on its vocoder. With it on, `ttnn.set_trace_capture_hold` is set around
 `begin_trace_capture`, the allocator keeps every DRAM range freed during that
 capture reserved, and `release_trace` returns them. Cost: the capture's DRAM
 intermediates without reuse between them, held for the trace's lifetime
 (`Tracer.capture_hold_bytes`, per bank). L1 is not held (L1 tensors do not live
 across a replay call). With the hold, a warm-captured audio trace is safe for later
 jobs of any shape, so ltx-server's H3 ref2va warm may capture it.
+
+LTX keeps the hold off (task #6623). On cs04's 2x4 mesh the held mel, vocoder and
+BWE intermediates left about 10 MB of DRAM per bank, and the LTX 6 s 1080p cold
+warm-up ran out of memory in the Gemma warm-up after the audio capture pass
+(`bank_manager.cpp:437`). LTX runs as it did before task #6000.
 
 ## CPU regression checks
 

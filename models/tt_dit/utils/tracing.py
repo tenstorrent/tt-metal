@@ -699,7 +699,7 @@ def traced_function(
     inject_mesh_device: bool = False,
     prep_run: bool = True,
     clone_prep_inputs: bool = True,
-    hold_capture_frees: bool = False,
+    hold_capture_frees: bool | Callable[..., bool] = False,
 ) -> Any:
     """Decorator that adds optional tracing to any function or method via the ``Tracer`` class.
 
@@ -789,8 +789,18 @@ def traced_function(
             function. Mutually exclusive with ``device=``.
         prep_run: Forwarded to ``Tracer.__init__``.
         clone_prep_inputs: Forwarded to ``Tracer.__init__``.
-        hold_capture_frees: Forwarded to ``Tracer.__init__``.
+        hold_capture_frees: Forwarded to ``Tracer.__init__``. A callable is resolved on the bound
+            context when the tracer is made (e.g. ``lambda self: self.hold_capture_frees``), so a
+            module can opt in per instance; it needs the context-bound path.
     """
+
+    def _resolve_hold(context: Any) -> bool:
+        if not callable(hold_capture_frees):
+            return bool(hold_capture_frees)
+        if context is None:
+            msg = "@traced_function: a callable hold_capture_frees needs a bound context (self)"
+            raise TypeError(msg)
+        return bool(hold_capture_frees(context))
 
     def _resolve_device(context: Any) -> ttnn.MeshDevice:
         if device is None:
@@ -913,7 +923,7 @@ def traced_function(
                         device=mesh_device_val,
                         prep_run=prep_run,
                         clone_prep_inputs=clone_prep_inputs,
-                        hold_capture_frees=hold_capture_frees,
+                        hold_capture_frees=_resolve_hold(None),
                     )
                 return _tracers_auto[key](*bound.args, **bound.kwargs, **tracer_call_kwargs)
 
@@ -932,7 +942,7 @@ def traced_function(
                         device=_resolve_device(context),
                         prep_run=prep_run,
                         clone_prep_inputs=clone_prep_inputs,
-                        hold_capture_frees=hold_capture_frees,
+                        hold_capture_frees=_resolve_hold(context),
                     )
                 return store[store_key](*rest, **kwargs)
 

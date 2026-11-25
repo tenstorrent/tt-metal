@@ -144,6 +144,9 @@ class MiniMaxH3AudioDecoder(Module):
             act_mode=act_mode,
             polyphase_ups=polyphase_ups,
         )
+        # The H3 ref2va warm captures this trace, then serves later jobs: hold the DRAM the
+        # capture frees so their buffers cannot land on its intermediates (tasks #6000, #6623).
+        self.decoder.hold_capture_frees = True
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:
         """``(B, 32, T)`` -> ``(B, 2048, T)`` through ``dec_in_proj`` on device.
