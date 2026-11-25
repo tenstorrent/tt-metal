@@ -42,7 +42,7 @@ TRACE_REGION_SIZE = 8 * 1024 * 1024
 CI_SUBSET = {
     "test_keep_all_matches_dense[r1024k256]",
     "test_keep_all_matches_dense[r1024k256-one_head]",
-    "test_random_density[r1024k256short-0.2]",
+    "test_random_density[r1024k128short-0.2]",
     "test_ragged_shards[r1184k256-0.2]",
     "test_kept_partial_blocks[r1184ln_off-kept_only]",
     "test_lofi[r1024k256-bf8-pooled]",
@@ -633,13 +633,14 @@ def _check_vs_dense_floor(tag, r, density):
     assert p_ref > p_floor - DENSE_FLOOR_MARGIN, f"{tag}: pcc vs reference {p_ref:.5f}, dense floor {p_floor:.5f}"
 
 
-# rows 512: few pieces per head; 1024: about two Q blocks per core, cores straddling heads; k 256 / 512: 4 / 8
-# blocks per piece; a logical_n below S * rows: a short last shard.
+# rows 512: few pieces per head; 1024: about two Q blocks per core, cores straddling heads; k 128 / 256 / 512: 2 / 4 /
+# 8 blocks per piece; a logical_n below S * rows: a short last shard. k 128 splits the pooled entries into several
+# chunks, each small enough for the reader's per-chunk bias table.
 ALIGNED = {
     "r512k512": Geometry(512, 512 * MESH_CONFIG.sp_size, 512),
     "r1024k256": Geometry(1024, 1024 * MESH_CONFIG.sp_size, 256),
     "r1024k512": Geometry(1024, 1024 * MESH_CONFIG.sp_size, 512),
-    "r1024k256short": Geometry(1024, 1024 * MESH_CONFIG.sp_size - 512, 256),
+    "r1024k128short": Geometry(1024, 1024 * MESH_CONFIG.sp_size - 512, 128),
 }
 # Shards ending in a partial block (32 tokens), and a logical_n off a block boundary: those blocks are pooled by
 # design even with every full block kept, so these are judged against the reference.
