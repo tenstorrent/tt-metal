@@ -442,6 +442,7 @@ class ttMLA:
         sparse_mla_overlap_profile: Optional[str] = None,
         tp_shard_kv: Optional[bool] = None,
         use_fused_rmsnorm: bool = False,
+        sparse_kv_push: bool = True,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -794,11 +795,17 @@ class ttMLA:
         # Shared layers (fed another layer's top-k) receive only the KV rows they reference, pushed by their owners
         # (sparse_kv_push.py), on meshes the push can route and caches whose blocks it fits; elsewhere they gather the
         # whole prefix.
+        # sparse_kv_push=False makes them gather on any mesh. Which is faster depends on how many distinct rows the
+        # top-k needs: the push sends only those, but one unicast copy per chip that needs a row, while the gather moves
+        # the whole prefix once per link (512K GLM-5.3 shared layer: push 1.84 vs gather 4.03 ms when the top-k shares
+        # 2208 rows per chip; 8.32 vs 3.80 ms when it needs 238K). Every layer of a stage must use the same setting.
         self._push = None
         # One chip's rows of a chunk: the cache's block-cyclic block.
         push_stripe_chunk = self.active_seq_len_local // self.tp_factor
-        if self._sparse_kv_gather_buffer is not None and sparse_kv_push_supported(
-            mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2]
+        if (
+            sparse_kv_push
+            and self._sparse_kv_gather_buffer is not None
+            and sparse_kv_push_supported(mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2])
         ):
             dense = self._sparse_kv_gather_buffer
             self._push = self.tt_ccl.get_sparse_kv_push_planner(self.ccl_num_links)
