@@ -193,6 +193,11 @@ void bind_flat_routed_expert(nb::module_& mod) {
             layout (FlatLayoutOptions): the layout / program choices; must match the plan the weights were laid out
                 with.
             output (ttnn.Tensor, optional): a preallocated y.
+            y_quant (int): quantized y rows (moe_block/common/kernels/quantized_row.hpp): 0 bf16 (y_row_major's), 1 fp8
+                (e4m3 x a power-of-two scale), 2 int8 (sign-magnitude x a power-of-two scale, read as Bfp8_b). y is
+                then [rows, H + 16 x down cores] uint8 ROW_MAJOR: the values, then a 16-byte cell of exponent bytes
+                (one per 16 values) per down core. Implies y_row_major and down_fp32.
+            y_quant_block (int): values a scale block: 32, 64 or 96, or 0 (the down compute's pass width: 96 for GLM).
 
         Returns:
             ttnn.Tensor: y [rows, H] bfp8 TILE (bf16 ROW_MAJOR with y_row_major), written at the active experts'
@@ -217,7 +222,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("down_fp32") = false,
         nb::arg("math_fidelity") = 0,
         nb::arg("layout") = FlatLayoutOptions{},
-        nb::arg("output") = nb::none());
+        nb::arg("output") = nb::none(),
+        nb::arg("y_quant") = 0,
+        nb::arg("y_quant_block") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::flat_routed_expert

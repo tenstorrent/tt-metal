@@ -26,7 +26,7 @@
 #include "schedule_meta.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "api/debug/kernel_profiler.hpp"
-#include "y_fp8_quant.hpp"
+#include "y_quant.hpp"
 
 #ifdef TRISC_PACK
 #include "sfpi.h"
@@ -52,6 +52,7 @@ constexpr uint32_t weight_cb = tt::CBIndex::c_1;
 constexpr uint32_t h_cb = tt::CBIndex::c_2;
 constexpr uint32_t schedule_cb = tt::CBIndex::c_6;
 constexpr uint32_t out_cb = tt::CBIndex::c_16;
+constexpr uint32_t cells_cb = tt::CBIndex::c_17;  // (quantized y: each row tile's 32 rows' cells)
 
 constexpr uint32_t row_tiles = flat_options::row_tiles_per_sub_block;
 constexpr uint32_t k_tiles = flat_options::intermediate_tiles;
@@ -68,8 +69,8 @@ constexpr uint32_t dest_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
 constexpr bool reads_per_load = flat_options::down_weights_per_load;
 // FP8_Y_PLAN.md M0 / M1 experiments (the host's TT_FLAT_EXP_* env): dummy SFPU sweeps over the packer's half a pass
 constexpr uint32_t pack_dummy = get_named_compile_time_arg_val("down_pack_dummy");
-// (perf only: the fp8 quantize on the pack thread, its scales into a scratch array; y is not meaningful): 1: 1 x pass
-// width blocks, 2: 1 x 32 blocks
+// (perf only: the y quantize on the pack thread, its exponent bytes into a scratch array; y is not meaningful): 1 / 2:
+// fp8 1 x pass width / 1 x 32 blocks, 3 / 4: int8 1 x pass width / 1 x 32 blocks
 constexpr uint32_t pack_quant = get_named_compile_time_arg_val("down_pack_quant");
 static_assert(columns <= 16 && k_tiles % k_tiles_per_block == 0 && k_tiles % in0_block_k_tiles == 0);
 static_assert(ring_blocks >= blocks_per_expert);
@@ -106,17 +107,33 @@ FORCE_INLINE uint32_t weight_block_in_region(uint32_t block, uint32_t ring_slot)
            block_tiles;
 }
 
+// quantized y (flat_options::y_quant, y_quant.hpp): each pass quantized on the PACK thread into the UInt8 out CB, with
+// a spare DEST tile for the scales (a pass at most dest_tiles - 1 wide); the out CB's rows y_row_stride_tiles apart
+constexpr auto y_format = static_cast<quantized_row::Format>(flat_options::y_quant);
+constexpr bool quantized_y = y_format != quantized_row::Format::Bf16;
+
 template <bool row_major_y>
 void compute_schedule() {
     // y columns per pass (DST holds dest_tiles outputs; the K loop runs once per pass over the same h and weights).
     // Row-major y: pack_untilize places pass c's columns at c x the pass width, so every pass has the same width.
-    constexpr uint32_t pass_columns =
-        row_major_y ? largest_divisor(columns, dest_tiles) : (columns < dest_tiles ? columns : dest_tiles);
+    constexpr uint32_t pass_columns = row_major_y ? largest_divisor(columns, quantized_y ? dest_tiles - 1 : dest_tiles)
+                                                  : (columns < dest_tiles ? columns : dest_tiles);
     static_assert(!row_major_y || columns % pass_columns == 0);
+    // the out CB's row stride (tiles) and pages a row tile
+    constexpr uint32_t row_stride = quantized_y ? flat_options::y_row_stride_tiles : columns;
+    constexpr uint32_t quant_block_tiles =
+        flat_options::y_quant_block_tiles ? flat_options::y_quant_block_tiles : pass_columns;
+    static_assert(
+        !quantized_y || (row_major_y && row_stride >= columns && row_stride % pass_columns == 0 &&
+                         pass_columns % quant_block_tiles == 0 && 2 * columns <= quantized_row::kCellBytes),
+        "quantized y: the host's stride / block / cell sizes");
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(h_cb, weight_cb, out_cb);
-    if constexpr (pack_quant != 0) {
-        y_fp8::init();
+    if constexpr (quantized_y) {
+        y_quant::init();
+    }
+    if constexpr (pack_quant != 0 && !quantized_y) {
+        y_quant::init();
     }
     if constexpr (pack_dummy > 0) {
         PACK((SFPU_UNARY_INIT(unused)));
@@ -124,7 +141,7 @@ void compute_schedule() {
     }
     matmul_block_init(h_cb, weight_cb, false, pass_columns, 1, in0_block_k_tiles);
     if constexpr (row_major_y) {
-        pack_untilize_dest_init<pass_columns, columns>(out_cb);
+        pack_untilize_dest_init<pass_columns, row_stride>(out_cb);
     }
     // The schedule page (schedule_meta.hpp, from down_core_writer.cpp)
     cb_wait_front(schedule_cb, 1);
@@ -154,8 +171,19 @@ void compute_schedule() {
             cb_reserve_back(out_cb, row_tiles * columns);
         }
         for (uint32_t row = 0; row < rows; ++row) {
+            uint32_t cells = 0;  // (quantized y: this row tile's cells, L1)
             if constexpr (row_major_y) {
-                cb_reserve_back(out_cb, columns);
+                cb_reserve_back(out_cb, row_stride);
+            }
+            if constexpr (quantized_y) {
+                cb_reserve_back(cells_cb, 1);
+                PACK((cells = get_local_cb_interface(cells_cb).fifo_wr_ptr << 4));
+                PACK(({  // (the cells' spare bytes: 0)
+                    volatile uint32_t* c = reinterpret_cast<volatile uint32_t*>(cells);
+                    for (uint32_t i = 0; i < 32 * quantized_row::kCellBytes / 4; ++i) {
+                        c[i] = 0;
+                    }
+                }));
             }
             for (uint32_t first_column = 0; first_column < columns; first_column += pass_columns) {
                 const uint32_t width = columns - first_column < pass_columns ? columns - first_column : pass_columns;
@@ -199,11 +227,18 @@ void compute_schedule() {
                 tile_regs_commit();
                 tile_regs_wait();
 #ifdef TRISC_PACK
-                if constexpr (pack_quant != 0) {
+                if constexpr (quantized_y) {
+                    y_quant::quantize_pass<y_format, pass_columns, quant_block_tiles>(
+                        cells, quantized_row::kCellBytes, first_column / pass_columns);
+                }
+                if constexpr (pack_quant != 0 && !quantized_y) {
                     DeviceZoneScopedN("DN-QUANT");
-                    static uint32_t scratch_scales[32 * 8];
-                    y_fp8::quantize_block<pass_columns, pack_quant == 2 ? 1 : pass_columns>(
-                        reinterpret_cast<uint32_t>(scratch_scales), 8);
+                    static uint32_t scratch_cells[32 * 4];
+                    y_quant::quantize_pass<
+                        pack_quant <= 2 ? quantized_row::Format::Fp8E4m3 : quantized_row::Format::Int8,
+                        pass_columns,
+                        pack_quant % 2 == 0 ? 1 : pass_columns>(
+                        reinterpret_cast<uint32_t>(scratch_cells), 16, first_column / pass_columns);
                 }
                 if constexpr (pack_dummy > 0) {
                     DeviceZoneScopedN("DN-DUMMY");
@@ -218,7 +253,7 @@ void compute_schedule() {
                 }
 #endif
                 if constexpr (row_major_y) {
-                    pack_untilize_dest<pass_columns, columns>(out_cb, 1, first_column / pass_columns);
+                    pack_untilize_dest<pass_columns, row_stride>(out_cb, 1, first_column / pass_columns);
                 } else {
                     for (uint32_t column = 0; column < width; ++column) {
                         // [row tiles x columns], row tile major
@@ -228,7 +263,10 @@ void compute_schedule() {
                 tile_regs_release();
             }
             if constexpr (row_major_y) {
-                cb_push_back(out_cb, columns);
+                cb_push_back(out_cb, row_stride);
+            }
+            if constexpr (quantized_y) {
+                cb_push_back(cells_cb, 1);
             }
         }
         cb_pop_front(h_cb, h_tiles);

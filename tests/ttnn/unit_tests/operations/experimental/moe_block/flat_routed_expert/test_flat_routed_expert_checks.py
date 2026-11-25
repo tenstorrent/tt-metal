@@ -305,3 +305,115 @@ def test_flat_expert_perf(device, case):
     op.close()
     baseline = FLAT_US.get(case.id) if machine() == "BLACKHOLE_GALAXY" else None
     check_perf(f"flat expert {case.id}", us, baseline, case.perf_margin, where=f'FLAT_US["{case.id}"]')
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Quantized y (y_quant: moe_block/common/kernels/quantized_row.hpp) - the GLM cases
+# ---------------------------------------------------------------------------------------------------------------------
+
+_qspec = importlib.util.spec_from_file_location("quantized_row_golden", HERE.parent / "quantized_row_golden.py")
+quantized_row_golden = importlib.util.module_from_spec(_qspec)
+_qspec.loader.exec_module(quantized_row_golden)
+
+QUANT_FORMATS = {"fp8": 1, "int8": 2}  # y_quant (quantized_row::Format)
+QUANT_CASES = [c for c in CASES if c.model == "glm53" and c.chunk == 5120 and c.routing in ("uniform", "zipf", "edges")]
+QUANT_VARIANTS = [
+    pytest.param("fp8", 0, id="fp8-1x96"),
+    pytest.param("fp8", 32, id="fp8-1x32"),
+    pytest.param("int8", 0, id="int8-1x96"),
+    pytest.param("int8", 32, id="int8-1x32"),
+]
+# relative RMS error of the dequantized y vs the op's own bf16 y on the same inputs (the quantization's alone):
+# measured on randn-like rows, e4m3 ~2.7%, int8 1x32 ~0.8% / 1x96 ~0.9% (moe_block/quantized_row_golden.py)
+QUANT_REL_ERR = {"fp8": 0.035, "int8": 0.0125}
+QUANT_PCC = {"fp8": 0.985, "int8": PCC}
+
+
+def _dequantize(yq, H, producers, fmt):
+    """y [rows, H + 16 P] uint8 (values, then a 16-byte cell a down core) -> fp32 [rows, H]."""
+    yq = yq.to(torch.uint8)
+    codes, cells = yq[:, :H], yq[:, H:].reshape(yq.shape[0], producers, 16)
+    e16 = cells[:, :, : H // producers // 16].reshape(yq.shape[0], -1).int()  # one byte a 16 values
+    if fmt == "fp8":
+        vals, bias = codes.view(torch.float8_e4m3fn).float(), 127
+    else:
+        vals, bias = ((codes & 0x7F).int() * (1 - 2 * (codes >> 7).int())).float(), 133
+    return vals * torch.pow(2.0, (e16 - bias).float()).repeat_interleave(16, dim=1)
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("fmt, block", QUANT_VARIANTS)
+@pytest.mark.parametrize("case", _params(QUANT_CASES))
+def test_flat_expert_quant_accuracy(device, case, fmt, block):
+    """The dequantized y against torch (PCC) and against the op's bf16 row-major y on the same inputs."""
+    _skip_unless_supported(device)
+    md = cases.MODELS[case.model]
+    H = md["H"]
+    op, args, (x, spans), wsets = _setup(case, device)
+    y_bf16 = ttnn.to_torch(op(*args, y_row_major=True, down_fp32=True)).float()
+    yq = ttnn.to_torch(op(*args, y_quant=QUANT_FORMATS[fmt], y_quant_block=block))
+    producers = (yq.shape[-1] - H) // 16
+    assert yq.shape[-1] == H + 16 * producers and producers > 0, yq.shape
+    y = _dequantize(yq, H, producers, fmt)
+    q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()  # noqa: E731
+    wq = [tuple(q(w) for w in ws) for ws in wsets]
+    worst, err, ref_norm = 1.0, 0.0, 0.0
+    for e, (o, c) in enumerate(spans):
+        if not c:
+            continue
+        xe = x[o : o + c].to(torch.bfloat16).float()
+        wg, wu, wd = wq[e % cases.N_W]
+        ref = weights_py.act_ref(xe @ wg, xe @ wu, md["act"]) @ wd
+        got = y[o : o + c]
+        assert torch.isfinite(got).all(), f"{case.id}: expert {e} has non-finite outputs"
+        ok, pcc = comp_pcc(ref.reshape(c, -1), got.reshape(c, -1), QUANT_PCC[fmt])
+        worst = min(worst, float(pcc)) if isinstance(pcc, float) else worst
+        assert ok, f"{case.id} {fmt}: expert {e} ({c} rows at {o}): pcc {pcc}"
+        err += float((got - y_bf16[o : o + c]).pow(2).sum())
+        ref_norm += float(y_bf16[o : o + c].pow(2).sum())
+    rel = (err / ref_norm) ** 0.5
+    logger.info(
+        f"QUANT ACCURACY {case.id} {fmt} 1x{block or 96}: worst expert pcc {worst:.5f}, rel err vs bf16 y {rel:.4f}"
+    )
+    assert rel <= QUANT_REL_ERR[fmt], f"{case.id} {fmt}: relative error vs the op's bf16 y {rel:.4f}"
+    op.close()
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("fmt, block", QUANT_VARIANTS)
+@pytest.mark.parametrize("case", _params(QUANT_CASES[:1]))
+def test_flat_expert_quant_determinism(device, case, fmt, block):
+    _skip_unless_supported(device)
+    op, args, (x, spans), _ = _setup(case, device)
+    det = DeterminismMarker(device)
+    tiles = [(o, o + c) for o, c in spans if c]  # (the routed rows: the rest of y is never written)
+    for _ in range(CALLS):
+        y = op(*args, y_quant=QUANT_FORMATS[fmt], y_quant_block=block)
+        det.add({f"r{a}": ttnn.slice(y, [a, 0], [b, y.shape[-1]]) for a, b in tiles})
+        ttnn.deallocate(y)
+    det.assert_identical(f"flat expert {case.id} {fmt}")
+    op.close()
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("fmt, block", [pytest.param(None, 0, id="bf16-row-major")] + QUANT_VARIANTS)
+@pytest.mark.parametrize("case", _params([c for c in QUANT_CASES if c.routing == "uniform"]))
+def test_flat_expert_quant_perf(device, case, fmt, block):
+    """Device time with quantized y against the bf16 row-major y (down_fp32) it replaces: logged."""
+    _skip_unless_supported(device)
+    op, args, _, _ = _setup(case, device)
+    kw = (
+        dict(y_row_major=True, down_fp32=True) if fmt is None else dict(y_quant=QUANT_FORMATS[fmt], y_quant_block=block)
+    )
+    ttnn.deallocate(op(*args, **kw))
+
+    def run():
+        for _ in range(PERF_RUNS):
+            ttnn.deallocate(op(*args, **kw))
+
+    t = op_device_times(device, run, FLAT_OPS)["flat_routed_expert"][-PERF_RUNS:]
+    logger.info(f"QUANT PERF {case.id} {fmt or 'bf16'} 1x{block or 96}: median {median_us(t):.1f} us")
+    op.close()

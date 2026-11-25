@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flat_routed_expert_plan.hpp"
+#include "ttnn/operations/experimental/moe_block/common/kernels/quantized_row.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -739,6 +740,11 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
         it = cache.emplace(key, std::move(plan)).first;
     }
     return it->second;
+}
+
+uint32_t flat_y_width(const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& plan) {
+    return cfg.y_quant ? cfg.hidden + quantized_row::kCellBytes * static_cast<uint32_t>(plan.down_cores.size())
+                       : cfg.hidden;
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::flat_routed_expert

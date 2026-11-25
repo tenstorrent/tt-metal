@@ -159,6 +159,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
 
 // The plan for a mesh device and config, cached for the process (keyed by the mesh device's id and shape and the
 // config fields the plan depends on): what the program factory, the weight layout and the done words use.
+// y's row width (elements: bf16 / bfp8 values; quantized y, cfg.y_quant: bytes - the values, then a 16-byte cell per
+// down core, common/kernels/quantized_row.hpp)
+uint32_t flat_y_width(const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& plan);
+
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg);
 

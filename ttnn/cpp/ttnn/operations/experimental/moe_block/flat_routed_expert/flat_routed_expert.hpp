@@ -47,8 +47,10 @@ ttnn::Tensor create_flat_routed_expert_done_words(
 
 // Flat spatially pipelined routed experts. Token counts and regions are read on device, so one cached program serves
 // every routing. Weights come in the plan's per-core bank layout (flat_routed_expert_weights.py); done_words from
-// create_flat_routed_expert_done_words. Returns y [rows, H] (bfp8 TILE; bf16 ROW_MAJOR with y_row_major), written at
-// the active experts' rows only.
+// create_flat_routed_expert_done_words. Returns y [rows, H] (bfp8 TILE; bf16 ROW_MAJOR with y_row_major; with y_quant
+// (a quantized_row::Format: 1 fp8 e4m3, 2 int8) [rows, H + 16 x down cores] uint8 ROW_MAJOR, quantized_row.hpp's row,
+// scale blocks of y_quant_block values (32, or 0: the down compute's pass width)), written at the active experts' rows
+// only.
 ttnn::Tensor flat_routed_expert(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& expert_token_counts,
@@ -67,7 +69,9 @@ ttnn::Tensor flat_routed_expert(
     bool down_fp32 = false,
     uint32_t math_fidelity = 0,
     const FlatLayoutOptions& layout = {},
-    const std::optional<ttnn::Tensor>& output = std::nullopt);
+    const std::optional<ttnn::Tensor>& output = std::nullopt,
+    uint32_t y_quant = 0,
+    uint32_t y_quant_block = 0);
 
 // What a caller composing the flat expert into its own program (flat_program.hpp) takes from the MoE block's
 // resources: the plan and the persistent done words and relay words (holding the x-ready word).

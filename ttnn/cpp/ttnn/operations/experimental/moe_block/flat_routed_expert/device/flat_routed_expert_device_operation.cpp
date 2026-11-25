@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flat_routed_expert_device_operation.hpp"
+#include "flat_routed_expert_plan.hpp"
 
 #include "ttnn/device_operation.hpp"
 
@@ -57,15 +58,18 @@ void FlatRoutedExpertDeviceOperation::validate_on_program_cache_miss(
     }
     const uint32_t rows =
         t.token_index ? t.token_index->logical_shape()[-1] : t.x.logical_shape()[-2] / (cfg.hidden / xw);
-    const bool out_ok = cfg.y_row_major
-                            ? t.output.layout() == Layout::ROW_MAJOR && t.output.dtype() == DataType::BFLOAT16
-                            : t.output.layout() == Layout::TILE &&
-                                  t.output.dtype() == DataType::BFLOAT8_B;
+    const DataType y_dtype =
+        cfg.y_quant ? DataType::UINT8 : (cfg.y_row_major ? DataType::BFLOAT16 : DataType::BFLOAT8_B);
+    const uint32_t y_width = flat_y_width(cfg, *flat_routed_expert_plan(*t.x.device(), cfg));
+    const bool out_ok =
+        t.output.layout() == (cfg.y_row_major ? Layout::ROW_MAJOR : Layout::TILE) && t.output.dtype() == y_dtype;
     TT_FATAL(
         out_ok && dram_interleaved(t.output) && t.output.logical_shape()[-2] == rows &&
-            t.output.logical_shape()[-1] == cfg.hidden,
-        "flat_routed_expert: output must be a {} DRAM tensor with the flat (dispatch buffer / token_index) rows",
-        cfg.y_row_major ? "row-major bf16" : "bfp8 TILE");
+            t.output.logical_shape()[-1] == y_width,
+        "flat_routed_expert: output must be a {} [rows, {}] DRAM tensor with the flat (dispatch buffer / token_index) "
+        "rows",
+        cfg.y_quant ? "row-major uint8 (quantized rows)" : (cfg.y_row_major ? "row-major bf16" : "bfp8 TILE"),
+        y_width);
 }
 
 void FlatRoutedExpertDeviceOperation::validate_on_program_cache_hit(

@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The row-major y writer (flat_options::y_row_major). y is [rows, H] bf16 row major, one page (H * 2 bytes) per flat
-// row. The down compute pack-untilizes each row tile of its [row tiles x columns] block and pushes it as `columns`
-// pages (32 rows x columns * 32 bf16, row after row); the writer sends each token row's columns * 64 bytes to
-// y[row, first column * 32 ..], skipping rows at or past the entry's token count. Up to y_row_major_rows row tiles (the
-// out CB's capacity) are in flight, each on its own write transaction id; they retire in order once their id is
-// flushed. A sub-block is complete after its row tiles that hold tokens (the count the compute uses). The caller resets
-// the write transaction id to 0 before the kernel exits.
+// row - or, quantized (flat_options::y_quant), [rows, quantized_row::row_bytes] bytes: the H values (a byte each),
+// then a 16-byte cell per down core (its exponent bytes, from the compute's cells CB c_17), each down core writing its
+// values and its cell (common/kernels/quantized_row.hpp). The down compute pack-untilizes each row tile of its [row
+// tiles x columns] block and pushes it as `columns` pages (32 rows x columns * 32 bf16, row after row); the writer
+// sends each token row's columns * 64 bytes to y[row, first column * 32 ..], skipping rows at or past the entry's token
+// count. Up to y_row_major_rows row tiles (the out CB's capacity) are in flight, each on its own write transaction id;
+// they retire in order once their id is flushed. A sub-block is complete after its row tiles that hold tokens (the
+// count the compute uses). The caller resets the write transaction id to 0 before the kernel exits.
 //
 // Running with the combine (flat_options::hands_y_to_combine), y is not written to DRAM: each token row goes straight
 // into a landing slot of its destination combine core (CombineHandoff below).
@@ -21,6 +23,7 @@
 #include "flat_accessors.hpp"
 #include "flat_options.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/quantized_row.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/routed_experts_combine/device/kernels/dataflow/combine_formats.hpp"
 
 // The y writer's L1 hand-off to the combine (routed_experts_combine with the flat expert's program). Each token row's
@@ -132,8 +135,21 @@ template <
     uint32_t in_flight = flat_options::y_row_major_rows,
     bool hands_off = flat_options::hands_y_to_combine>
 struct RowMajorYWriter {
-    static constexpr uint32_t segment_bytes = columns * 64;     // one token row of this core's columns
-    static constexpr uint32_t row_tile_bytes = columns * 2048;  // one row tile in the out CB
+    static constexpr auto format = static_cast<quantized_row::Format>(flat_options::y_quant);
+    static constexpr bool quantized = quantized_row::is_quantized(format);
+    static constexpr uint32_t value_bytes = quantized_row::value_bytes(format);
+    static constexpr uint32_t segment_bytes = columns * 32 * value_bytes;  // one token row of this core's columns
+    // the out CB: a row tile's pages (quantized: the row stride, padded) and the rows' stride
+    static constexpr uint32_t row_tile_pages = quantized ? flat_options::y_row_stride_tiles : columns;
+    static constexpr uint32_t row_stride_bytes = row_tile_pages * 32 * value_bytes;
+    static constexpr uint32_t row_tile_bytes = row_tile_pages * 1024 * value_bytes;  // one row tile in the out CB
+    // a y row: the values (H), then (quantized) the down cores' cells; the trailer (L1 hand-off) after them
+    static constexpr uint32_t values_bytes = hidden_tiles * 32 * value_bytes;
+    static constexpr uint32_t row_bytes =
+        quantized ? quantized_row::row_bytes(format, hidden_tiles * 32, flat_options::y_quant_producers) : values_bytes;
+    static constexpr uint32_t cells_cb = tt::CBIndex::c_17;
+    static constexpr uint32_t cells_page_bytes = 32 * quantized_row::kCellBytes;
+    static_assert(!quantized || flat_options::y_row_stride_tiles >= columns);
     static constexpr uint32_t first_trid = 8;
     // The y writes' unicast VC: not the default write VC (1), which the weight forwarding, the h chain and the read
     // requests share; a y write queued behind them there stalls this core's NIU, and through its L1 reads the down
@@ -144,7 +160,9 @@ struct RowMajorYWriter {
 
     decltype(TensorAccessor(flat_acc::y, 0u, 0u)) y;
     uint32_t column_offset;
-    uint32_t base = 0;  // the out CB's start (its read pointer before anything is consumed)
+    uint32_t cell_offset;     // (quantized) this core's cell in a row: after the values, a cell per down core
+    uint32_t base = 0;        // the out CB's start (its read pointer before anything is consumed)
+    uint32_t cells_base = 0;  // (quantized) the cells CB's start
     // the issue cursor (entry, sub-block, row tile) and the in-order retire cursor
     uint32_t issue_entry = 0, issue_sub_block = 0, issue_row_tile = 0, issued = 0;
     uint32_t retire_entry = 0, retire_sub_block = 0, retire_row_tile = 0, retired = 0;
@@ -152,9 +170,13 @@ struct RowMajorYWriter {
     combine_handoff::State<hands_off, in_flight> handoff;
 
     RowMajorYWriter(uint32_t y_address, uint32_t first_column) :
-        y(TensorAccessor(flat_acc::y, y_address, hidden_tiles * 64)),
-        column_offset(first_column * 64),
+        y(TensorAccessor(flat_acc::y, y_address, row_bytes)),
+        column_offset(first_column * 32 * value_bytes),
+        cell_offset(values_bytes + (first_column / columns) * quantized_row::kCellBytes),
         base(get_read_ptr(out_cb)) {
+        if constexpr (quantized) {
+            cells_base = get_read_ptr(cells_cb);
+        }
         if constexpr (hands_off) {
             handoff.init();
         }
@@ -175,7 +197,8 @@ struct RowMajorYWriter {
     bool issue(const ExpertSchedule& schedule) {
         auto tile_ready = [&]() {
             return issued - retired < in_flight &&
-                   cb_pages_available_at_front(out_cb, (issued - retired + 1) * columns);
+                   cb_pages_available_at_front(out_cb, (issued - retired + 1) * row_tile_pages) &&
+                   (!quantized || cb_pages_available_at_front(cells_cb, issued - retired + 1));
         };
         if constexpr (hands_off) {  // (a tile partly handed off is ready)
             if (handoff.units_issued - handoff.units_retired == in_flight ||
@@ -186,12 +209,13 @@ struct RowMajorYWriter {
             return false;
         }
         const uint32_t source = base + (issued % in_flight) * row_tile_bytes;
+        const uint32_t cells = cells_base + (issued % in_flight) * cells_page_bytes;
         const uint32_t entry_row = (issue_sub_block * kSubBlockRowTiles + issue_row_tile) * 32;
         const uint32_t tokens_left = schedule.tokens[issue_entry] - entry_row;
         const uint32_t rows = tokens_left < 32 ? tokens_left : 32;
         const uint32_t first_row = schedule.first_row[issue_entry] + entry_row;
         if constexpr (hands_off) {
-            const UnitIssued unit = issue_handoff_unit(source, first_row, rows);
+            const UnitIssued unit = issue_handoff_unit(source, cells, first_row, rows);
             if (unit == UnitIssued::None) {
                 return false;
             }
@@ -202,13 +226,23 @@ struct RowMajorYWriter {
             const uint32_t trid = first_trid + issued % in_flight;
             for (uint32_t row = 0; row < rows; ++row) {
                 noc_async_write_one_packet_with_trid(
-                    source + row * segment_bytes,
+                    source + row * row_stride_bytes,
                     y.get_noc_addr(first_row + row, column_offset, y_noc),
                     segment_bytes,
                     trid,
                     write_cmd_buf,
                     y_noc,
                     y_vc);
+                if constexpr (quantized) {  // the row's cell
+                    noc_async_write_one_packet_with_trid(
+                        cells + row * quantized_row::kCellBytes,
+                        y.get_noc_addr(first_row + row, cell_offset, y_noc),
+                        quantized_row::kCellBytes,
+                        trid,
+                        write_cmd_buf,
+                        y_noc,
+                        y_vc);
+                }
             }
         }
         ++issued;
@@ -254,7 +288,10 @@ struct RowMajorYWriter {
                 return 0;
             }
         }
-        cb_pop_front(out_cb, columns);
+        cb_pop_front(out_cb, row_tile_pages);
+        if constexpr (quantized) {
+            cb_pop_front(cells_cb, 1);
+        }
         ++retired;
         if (++retire_row_tile == row_tiles(schedule, retire_entry, retire_sub_block)) {
             retire_row_tile = 0;
@@ -272,7 +309,7 @@ private:
     enum class UnitIssued { None, PartOfTile, WholeTile };
 
     // The L1 hand-off of the current row tile's next unit: its next rows while their destinations have granted slots.
-    UnitIssued issue_handoff_unit(uint32_t source, uint32_t first_row, uint32_t rows) {
+    UnitIssued issue_handoff_unit(uint32_t source, [[maybe_unused]] uint32_t cells, uint32_t first_row, uint32_t rows) {
         namespace fmt = combine_formats;
         using namespace combine_handoff;
         auto& state = handoff;
@@ -337,17 +374,27 @@ private:
                 state.dest_first_slot[d] + (state.rows_issued[d] % state.dest_slots[d]) * state.slot_stride;
             ++state.rows_issued[d];
             noc_async_write_one_packet_with_trid(
-                source + row * segment_bytes,
+                source + row * row_stride_bytes,
                 get_noc_addr(state.dest_x[d], state.dest_y[d], slot + column_offset, y_noc),
                 segment_bytes,
                 trid,
                 write_cmd_buf,
                 y_noc,
                 y_vc);
-            if (column_offset == 0) {  // its trailer, staged above, after the row's H bf16
+            if constexpr (quantized) {  // the row's cell
+                noc_async_write_one_packet_with_trid(
+                    cells + row * quantized_row::kCellBytes,
+                    get_noc_addr(state.dest_x[d], state.dest_y[d], slot + cell_offset, y_noc),
+                    quantized_row::kCellBytes,
+                    trid,
+                    write_cmd_buf,
+                    y_noc,
+                    y_vc);
+            }
+            if (column_offset == 0) {  // its trailer, staged above, after the row (its values and cells)
                 noc_async_write_one_packet_with_trid(
                     stage + row * fmt::kTrailerBytes,
-                    get_noc_addr(state.dest_x[d], state.dest_y[d], slot + hidden_tiles * 64, y_noc),
+                    get_noc_addr(state.dest_x[d], state.dest_y[d], slot + row_bytes, y_noc),
                     fmt::kTrailerBytes,
                     trid,
                     write_cmd_buf,
