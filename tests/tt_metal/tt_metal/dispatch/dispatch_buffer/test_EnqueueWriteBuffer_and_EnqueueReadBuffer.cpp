@@ -1715,8 +1715,20 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteShardedSubBufferFor
     const uint32_t max_buffer_size = 152;
     const std::vector<ShardedSubBufferStressTestConfig>& configs =
         local_test_functions::generate_sharded_sub_buffer_test_configs(max_buffer_size);
+    // ~250k configs. A simulator runs every 127th config of each buffer and page size; 127 is prime, so the sample
+    // still covers every core grid, layout and orientation.
+    const size_t config_stride = MetalContext::instance().rtoptions().get_simulator_enabled() ? 127 : 1;
     for (const auto& mesh_device : devices_) {
-        for (const ShardedSubBufferStressTestConfig& config : configs) {
+        size_t index_in_sizes = 0;
+        for (size_t config_idx = 0; config_idx < configs.size(); config_idx++) {
+            const ShardedSubBufferStressTestConfig& config = configs[config_idx];
+            if (config_idx > 0 && (config.buffer_size != configs[config_idx - 1].buffer_size ||
+                                   config.page_size != configs[config_idx - 1].page_size)) {
+                index_in_sizes = 0;
+            }
+            if (index_in_sizes++ % config_stride != 0) {
+                continue;
+            }
             log_debug(
                 tt::LogTest,
                 "buffer_size: {} page_size: {} region_offset: {} region_size: {} shard_shape: [{}, {}] "
