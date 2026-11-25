@@ -15,6 +15,7 @@
 #include "dev_mem_map.h"
 #include "hostdev/eth_link.h"
 #include "internal/risc_attribs.h"
+#include "internal/tt-2xx/quasar/cce_noc.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 
 namespace internal_::cce_eth {
@@ -40,9 +41,6 @@ constexpr uint64_t kHsioLocalBase = 0x20000000;
 constexpr uint64_t kHsioTileStride = 0x4000000;
 constexpr uint64_t kHsioCceSramOffset = 0x2800000;
 
-// CCE-local PF_CTRL_TILE_ID, a strap: bit 0 is the CCE, bits 3:1 the HSIO tile.
-constexpr uintptr_t kPfCtrlTileIdAddr = 0x03200008;
-
 // What halt() posts to the router postcode word (fabric_postcode_ptr in tunneling.h, which includes this header).
 enum class HaltCode : uint32_t {
     RemoteRegMisaligned = 0xCCEEF001,    // detail: the address
@@ -60,15 +58,10 @@ enum class HaltCode : uint32_t {
     }
 }
 
-FORCE_INLINE uint32_t pf_ctrl_tile_id() { return *reinterpret_cast<const volatile uint32_t*>(kPfCtrlTileIdAddr); }
-
-// HSIO tile of this CCE, from PF_CTRL_TILE_ID (an MMIO read).
-FORCE_INLINE uint32_t hsio_tile() { return (pf_ctrl_tile_id() >> 1) & 0x7; }
-
 // The Ethernet-link slot at MEM_IERISC_FABRIC_ETH_LINK_BASE, an EthLink (hostdev/eth_link.h). The host
 // (RiscFirmwareInitializer) writes it before launch on every linked Quasar Ethernet core, from the cluster's link
-// table; when that table has no peer for the core, valid stays 0. This CCE's own tile comes from hsio_tile(), not from
-// the slot.
+// table; when that table has no peer for the core, valid stays 0. This CCE's own tile comes from KeraunosSpaRoutes, not
+// from the slot.
 static_assert(sizeof(EthLink) == MEM_IERISC_FABRIC_ETH_LINK_SIZE);
 
 // The slot, once the host has written it. Without the valid word the peer tile is stale and a send would land in
@@ -113,7 +106,7 @@ FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32
     // A core store to the source must reach SRAM before the copy reads it.
     asm volatile("fence" ::: "memory");
     setup_send(q_num, dest);
-    set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src));
+    set_src_cmdbuf<kCmdBuf>(sram_local_addr(experimental::keraunos::my_hsio(), src));
     set_len_cmdbuf<kCmdBuf>(num_bytes);
     setup_max_bytes_in_packet_cmdbuf<kCmdBuf>(kMaxBytesInPacket);
     setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{.snoop = snoop});
