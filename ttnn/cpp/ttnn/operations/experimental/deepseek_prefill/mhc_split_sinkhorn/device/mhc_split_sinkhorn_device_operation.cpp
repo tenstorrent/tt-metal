@@ -4,7 +4,7 @@
 
 #include "mhc_split_sinkhorn_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <cstdlib>
 
 namespace ttnn::experimental::prim {

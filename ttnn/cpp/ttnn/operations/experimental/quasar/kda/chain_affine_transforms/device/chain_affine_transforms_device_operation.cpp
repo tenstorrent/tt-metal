@@ -5,8 +5,8 @@
 
 #include <array>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/kda/factory/kda_factory_utils.hpp"

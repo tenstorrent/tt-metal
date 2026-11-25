@@ -8,8 +8,8 @@
 #include <gtest/gtest.h>
 
 #include <optional>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"

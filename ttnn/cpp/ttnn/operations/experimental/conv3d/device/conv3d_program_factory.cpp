@@ -7,17 +7,17 @@
 #include "conv3d_device_operation_types.hpp"
 #include "kernels/conv3d_gather_tuning.hpp"
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
 #include <array>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <hostdevcommon/common_values.hpp>
 
 namespace ttnn::experimental::prim {

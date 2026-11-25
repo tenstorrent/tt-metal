@@ -8,9 +8,9 @@
 #include <span>
 #include <utility>
 
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/float8.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor.hpp"

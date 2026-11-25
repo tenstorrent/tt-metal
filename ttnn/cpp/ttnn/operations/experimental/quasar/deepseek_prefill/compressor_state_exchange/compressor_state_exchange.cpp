@@ -10,7 +10,7 @@
 
 #include "device/compressor_state_select.hpp"
 #include "tt-metalium/experimental/fabric/fabric.hpp"
-#include "tt-metalium/mesh_device.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/point_to_point/point_to_point.hpp"

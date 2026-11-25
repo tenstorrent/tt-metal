@@ -6,11 +6,11 @@
 #include <gtest/gtest.h>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <cstdint>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include "mesh_device.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {

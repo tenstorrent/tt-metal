@@ -4,11 +4,12 @@
 
 #include <bit>
 #include <array>
+#include <cmath>
 #include <numbers>
 #include <utility>
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -30,7 +31,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <cstdint>
 
 namespace ttnn {
@@ -1140,19 +1141,37 @@ std::vector<Tensor> celu_bw(
     return grad_tensor;
 }
 
+// rpow: y = exponent ** input, i.e. the float parameter is the base, not the exponent
+// of input. See _golden_function_rpow in ttnn/ttnn/operations/unary.py and the kernel
+// comment in ckernel_sfpu_rpow.h.
+// bw (rpow) = grad * ln(exponent) * exponent ** input
+// This mirrors exp2_bw below, which is the same derivative with the base fixed at 2.
 std::vector<Tensor> rpow_bw(
     const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    float t_nan = std::nanf("");
-    Tensor grad_result = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_mem_config);
-    if (exponent != 0.0) {
-        grad_result = ttnn::multiply(
-            grad,
-            ttnn::multiply(pow(input, exponent - 1, output_mem_config), exponent, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config);
-        grad_result = ttnn::where(ltz(input, output_mem_config), t_nan, grad_result, output_mem_config);
+    if (exponent < 0.0f) {
+        // A negative base is only defined on integer inputs, so exponent ** input has no
+        // derivative with respect to input: torch.pow(-2.0, x).backward() is NaN for every x.
+        Tensor grad_result =
+            ttnn::full_like(input, std::nanf(""), input.dtype(), input.layout(), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(grad_result);
+        return grad_tensor;
     }
+    if (exponent == 0.0f) {
+        // 0 ** input is 0 above zero and +inf below it, so the derivative is 0 above zero
+        // and -inf below it. ltz is false for NaN, so a NaN input lands in the 0 arm; the
+        // last where gives it NaN, as torch does. It runs after the multiply so the NaN
+        // does not depend on the multiply propagating it.
+        Tensor deriv = ttnn::where(
+            ttnn::ltz(input, output_mem_config), -std::numeric_limits<float>::infinity(), 0.0f, output_mem_config);
+        Tensor grad_result = ttnn::multiply(grad, deriv, std::nullopt, output_mem_config);
+        grad_result = ttnn::where(ttnn::isnan(input, output_mem_config), std::nanf(""), grad_result, output_mem_config);
+        grad_tensor.emplace_back(grad_result);
+        return grad_tensor;
+    }
+    Tensor rpow_result = ttnn::rpow(input, exponent, output_mem_config);
+    rpow_result = ttnn::multiply(rpow_result, std::log(exponent), std::nullopt, output_mem_config);
+    Tensor grad_result = ttnn::multiply(grad, rpow_result, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -1687,6 +1706,17 @@ std::vector<Tensor> cosh_bw(
 // #         )
 std::vector<Tensor> logiteps_bw(
     const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves at the
+    // fitted scalar values; every other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config) && std::bit_cast<uint32_t>(eps) == 0x00000000u) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::LOGITEPS_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     const float low = eps < 0.0f ? 0.0f : eps;
     const float high = 1.0f - low;
@@ -1947,21 +1977,22 @@ std::vector<Tensor> digamma_bw(
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
     Tensor grad_a = ttnn::multiply(grad, ttnn::polygamma(input, 1, output_mem_config), std::nullopt, output_mem_config);
+    Tensor input_is_zero = ttnn::eqz(input, output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_nan,
         grad_a,
         output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
         -t_inf,
         grad_a,
         output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_inf,
         grad_a,
         output_mem_config);
@@ -1989,15 +2020,16 @@ std::vector<Tensor> polygamma_bw(
         t_nan,
         grad_a,
         output_mem_config);
+    Tensor input_is_zero = ttnn::eqz(input, output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
         (-std::numeric_limits<float>::infinity() * pos_neg),
         grad_a,
         output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
         (std::numeric_limits<float>::infinity() * pos_neg),
         grad_a,
         output_mem_config);

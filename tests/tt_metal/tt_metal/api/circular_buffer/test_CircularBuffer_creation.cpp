@@ -3,29 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <map>
 #include <memory>
 #include <utility>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
 #include "circular_buffer_test_utils.hpp"
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 #include <gmock/gmock.h>
 #include "gtest/gtest.h"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
