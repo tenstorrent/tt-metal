@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from conftest import skip_for_wormhole
+from conftest import blackhole_only
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
@@ -20,7 +20,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
 
 
 @pytest.mark.perf
-@skip_for_wormhole
+@blackhole_only
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],

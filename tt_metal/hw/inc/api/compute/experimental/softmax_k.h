@@ -30,9 +30,9 @@ ALWI void softmax_k_init(uint32_t icb) {
 
 template <int k = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softmax_k(uint32_t icb) {
-    // NOTE: the implementation handles at most 16 lanes, and the odd-tail mask computes 1u << (k - 1), so k
-    // outside [1, 16] is not supported. Callers validate this today (blaze's softmax_k op asserts the same
-    // range), and it is deliberately not static_assert'd here to keep this a copy of blaze's header.
+    // NOTE: k is the number of valid columns of the 16-wide row.
+    // Columns >= k are padding: their input is ignored and their output is 0.0.
+
     // Unpack row0 to srcB
     UNPACK((llk_unpack_A<BroadcastType::SCALAR, false, EltwiseBinaryReuseDestType::NONE, false>(icb, 0)));
 

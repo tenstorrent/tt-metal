@@ -6278,16 +6278,15 @@ def round_to_dest_width(
 class SoftmaxKGolden:
     """Golden for the softmax_k SFPU entry (experimental/ckernel_sfpu_softmax_k.h).
 
-    Per-row softmax over the 16 columns of face 0's first row band, with the row
+    Per-row softmax over the first k columns of face 0's first row band, with the row
     maximum supplied by the caller instead of being reduced on the fly:
 
         out[r][c] = exp(x[r][c] - m[r]) / sum_{c' < k} exp(x[r][c'] - m[r])   c < k
+
         out[r][c] = 0                                                        c >= k
 
-    Columns >= k have to be exactly 0.0 in the input: the kernel takes a condition
-    code from |even-column value| before subtracting the max and only re-enables all
-    lanes after the exponential, so those lanes stay 0 and are then multiplied by the
-    reciprocal. Rows outside the processed band come back untouched.
+    Columns >= k are padding: their input is ignored and their output is 0.0. Rows
+    outside the processed band come back untouched.
 
     The kernel round-trips through Dest three times -- x - max, exp(), and the
     normalized result -- so the golden quantizes at each of those stores to the width
@@ -6295,7 +6294,7 @@ class SoftmaxKGolden:
     SFP_STOCH_RND(RND_EVEN, FP32_TO_FP16B) they do before their own store.
     """
 
-    def __call__(self, input_tile, logits, k, dest_acc, rows=4, face_dim=16):
+    def __call__(self, input_tile, logits, k, dest_acc, rows=4):
         golden = input_tile.to(torch.float32).clone()
 
         def stored(values):
@@ -6308,7 +6307,7 @@ class SoftmaxKGolden:
             shifted = stored(logits[row] - logits[row].max())
             exponentials = round_to_dest_width(torch.exp(shifted), dest_acc)
             golden[row, :k] = stored(exponentials / exponentials.sum())
-            golden[row, k:face_dim] = 0.0
+            golden[row, k:FACE_DIM] = 0.0
         return golden
 
 

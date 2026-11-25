@@ -10,25 +10,14 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
-#include "ckernel_sfpu_binary_bcast.h"
 #include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_reduce.h"
 #include "lltt.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_load_config.h"
 
 namespace ckernel
 {
 namespace sfpu
 {
-
-// ckernel_sfpu_binary_bcast.h (included above) used to define these; #49682 moved that header to
-// LTILEID-derived lane masks and dropped them. Values carried over verbatim. SFPCONFIG target index used
-// with an immediate mask to force LReg[11] = 1.0 on specific SFPU instances (= specific "SFPU columns"
-// within each 8-lane group) and 0.0 on the others. Bit N of the mask corresponds to SFPU instance N; the
-// low 8 bits control the 8 SFPU columns.
-constexpr std::uint32_t SFPCONFIG_TARGET_LREG11  = 11;
-constexpr std::uint32_t SFPCONFIG_MOD_SET_LREG11 = 8;
 
 template <bool is_fp32_dest_acc_en>
 inline void _init_softmax_k_()
@@ -36,43 +25,128 @@ inline void _init_softmax_k_()
     sfpu::exp_init<false, 0x3F800000, true, is_fp32_dest_acc_en>();
 }
 
-// For odd k, the final valid even lane predicates its paired odd tail lane.
-// Clear that extra exponential before it contributes to the row sum.
-template <int k>
-inline void _zero_paired_odd_tail_lane_()
+// lreg = 2 * (L % 8) in lane L: the DEST column an address-0 SFPLOAD puts in that lane.
+//
+// Lane L of an SFPLOAD at address 0 is DEST column 2*(L%8) and at address 2 column 2*(L%8)+1 (SFPLOAD.md), for a
+// 16-bit and a 32-bit DEST alike, and LTILEID (LReg[15]) holds 2*L in lane L, so its low four bits are 2*(L%8).
+template <std::uint32_t lreg>
+inline void _even_column_index_()
 {
-    if constexpr ((k & 1) && k < 16)
+    // SFPSHFT Mod1 bits (SFPSHFT.md): shift by Imm12 instead of by LReg[VC]; with it, shift LReg[VC] into VD.
+    constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM        = 1;
+    constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM_USE_VC = 4;
+    // Imm12 is signed (negative shifts right) and is masked to its 12 bits: -28 << 12 would carry into the opcode.
+    constexpr std::uint32_t shift_left_28  = 28;
+    constexpr std::uint32_t shift_right_28 = (-28) & 0xFFF;
+    // Shift LTILEID's low four bits to the top, then logically back down.
+    TTI_SFPSHFT(shift_left_28, p_sfpu::LTILEID, lreg, SFPSHFT_MOD1_ARG_IMM | SFPSHFT_MOD1_ARG_IMM_USE_VC);
+    TTI_SFPSHFT(shift_right_28, 0 /*lreg_c*/, lreg, SFPSHFT_MOD1_ARG_IMM);
+}
+
+// LREG0 = the sum of the k valid columns of each row, in every lane of that row. On entry LREG0 holds the even
+// columns and LREG1 the odd columns (SFPLOAD at addresses 0 and 2). Clobbers LREG1 to LREG3; leaves every lane
+// enabled.
+template <int k>
+inline void _row_sum_across_lanes_()
+{
+    constexpr int face_c_dim = static_cast<int>(FACE_C_DIM);
+
+    // 1. Pair add.
+    if constexpr (k == face_c_dim)
     {
-        constexpr std::uint32_t all_instances_mask = 0x5555;
-        constexpr std::uint32_t tail_instance_mask = 1u << (k - 1);
+        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*instr_mod1*/);
+        TTI_SFPNOP; // the next SFPSHFT2 reads LREG0
+    }
+    else if constexpr (k % 2 == 0)
+    {
+        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*instr_mod1*/);
+        _even_column_index_<p_sfpu::LREG2>();
+        // Both columns of instance L%8 are padding iff 2*(L%8) - k >= 0.
+        TTI_SFPIADD((-k) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_GTE0);
+        TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*instr_mod1*/);
+        TTI_SFPENCC(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
+    }
+    else
+    {
+        _even_column_index_<p_sfpu::LREG2>();
+        // Odd column 2*(L%8)+1 is padding iff 2*(L%8) - (k - 1) >= 0.
+        TTI_SFPIADD((-(k - 1)) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_GTE0);
+        TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG1, 0 /*instr_mod1*/);
+        if constexpr (k < face_c_dim - 1)
+        {
+            // Even column 2*(L%8) is padding iff 2*(L%8) - k >= 0 (k = 15 leaves no even padding).
+            TTI_SFPIADD((-k) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_GTE0);
+            TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*instr_mod1*/);
+        }
+        TTI_SFPENCC(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
+        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*instr_mod1*/);
+        TTI_SFPNOP; // the next SFPSHFT2 reads LREG0
+    }
 
-        // Mark only the SFPU instance containing odd tail lane k.
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
-        TTI_SFPCONFIG(all_instances_mask, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3F80);
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
-        TTI_SFPCONFIG(tail_instance_mask, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
+    // 2. Butterfly sum. Each lane result is bit identical.
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*instr_mod1*/);
+    TTI_SFPNOP; // the next SFPSHFT2 reads LREG0
 
-        TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 2);
-        TTI_SFPSETCC(0, p_sfpu::LREG11, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 2);
-        TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*instr_mod1*/);
+    TTI_SFPNOP; // the next SFPSHFT2 reads LREG0
 
-        _restore_lconst_neg1_();
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*instr_mod1*/);
+}
+
+// Zero the padding columns (>= k) of the normalized result before it is stored: LREG1 holds the even columns and
+// LREG2 the odd columns, LREG4 the even column index from _even_column_index_. The odd lane is padding when
+// 2*(L%8) >= k - 1 and the even lane when 2*(L%8) >= k; the second set is inside the first, so the even test is
+// nested. Clobbers LREG3; leaves every lane enabled.
+template <int k>
+inline void _zero_padding_columns_of_output_()
+{
+    constexpr int face_c_dim = static_cast<int>(FACE_C_DIM);
+    if constexpr (k < face_c_dim)
+    {
+        TTI_SFPIADD((-(k - 1)) & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_GTE0);
+        TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG2, 0 /*instr_mod1*/);
+        if constexpr (k < face_c_dim - 1)
+        {
+            TTI_SFPIADD((-k) & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_GTE0);
+            TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG1, 0 /*instr_mod1*/);
+        }
+        TTI_SFPENCC(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
     }
 }
 
+/**
+ * @brief Per-row softmax over the first k columns of face 0's first row band (DEST rows 0-3).
+ *
+ * Reads x from DEST rows 0-3 (columns 0-15) and max(x) per row, pre-broadcast across the row, from DEST rows 8-11.
+ * Writes out[r][c] = exp(x[r][c] - m[r]) / sum_{c' < k} exp(x[r][c'] - m[r]) back over rows 0-3 for c < k.
+ *
+ * Padding (columns k..15 of rows 0-3):
+ * - Input: Ignored.
+ * - Output: 0.0.
+ *
+ * DEST rows 8-11 (the maxima) and every row outside 0-3 / 8-11 are left unchanged.
+ *
+ * @tparam k: number of valid columns per row, 1..16 (enforced by static_assert).
+ * @tparam is_fp32_dest_acc_en: DEST width; selects the bf16 or the fp32 exponential.
+ * @note Run @ref _init_softmax_k_ first. Call with VectorMode::RC_custom: the kernel addresses DEST itself.
+ * @note Every SFPU lane must be enabled on entry (lane flags all set, as SFPU kernels leave them). The kernel leaves
+ *       every lane enabled. No general-purpose LREG survives the call.
+ */
 template <int k, bool is_fp32_dest_acc_en>
 inline void _softmax_k_()
 {
+    static_assert(k >= 1 && k <= static_cast<int>(FACE_C_DIM), "softmax_k: k must be in 1..16");
+
     // LREG0 = x - max(x)
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 2);
-    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
-    TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 1);
-
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 8);
     TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG0, 0);
     TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_neg1, p_sfpu::LREG1, p_sfpu::LREG1, 0);
@@ -80,7 +154,7 @@ inline void _softmax_k_()
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 2);
 
-    // //LREG0 = exp(x - max(x))
+    // exp(x - max(x)) over every lane, padding included (its value is discarded below)
     sfpu::calculate_exponential<
         false,
         is_fp32_dest_acc_en,
@@ -89,48 +163,17 @@ inline void _softmax_k_()
         true   // clamp negatives
         >();
 
-    TTI_SFPENCC(0, 0, 0, 0);
     math::clear_dst_reg_addr();
-    _zero_paired_odd_tail_lane_<k>();
 
-    // LREG0 = sum(exp(x - max(x)))
+    // LREG0 = sum over the k valid columns of exp(x - max(x)), in every column of its row.
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 2);
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    TTI_SFPLOADI(p_sfpu::LREG4, 0, 0);
-    TTI_SFPNOP;
-    sfpu::horizontal_reduce();
-
-    // Broadcast the column-0 sum across all eight SFPU columns. LREG_MASK is
-    // all ones in SFPU col 0 and zero elsewhere, so one SFPAND zeroes the
-    // discarded cols 1..7 bitwise (a multiply would make an Inf/NaN there NaN).
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);
-    _build_lane_mask_col0_();
-    TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-    TTI_SFPAND(0, LREG_MASK, p_sfpu::LREG0, 0);
-
-    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG2, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-
-    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG2, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPSHFT2(0, p_sfpu::LREG2, p_sfpu::LREG2, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-
-    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG2, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPSHFT2(0, p_sfpu::LREG2, p_sfpu::LREG2, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPSHFT2(0, p_sfpu::LREG2, p_sfpu::LREG2, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPSHFT2(0, p_sfpu::LREG2, p_sfpu::LREG2, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
+    _row_sum_across_lanes_<k>();
+    if constexpr (k < static_cast<int>(FACE_C_DIM))
+    {
+        // For the output mask below; also fills the SFPADD latency before SFPARECIP reads LREG0.
+        _even_column_index_<p_sfpu::LREG4>();
+    }
 
     // LREG0 = 1 / sum(exp(x - max(x))).
     TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPARECIP_MOD1_RECIP);
@@ -140,11 +183,12 @@ inline void _softmax_k_()
     TTI_SFPSWAP(0, p_sfpu::LCONST_1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
 
-    // Normalize both column groups and write the completed softmax to row 0.
+    // Normalize both column groups, zero the padding columns and write the completed softmax to rows 0-3.
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 2);
     TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
     TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+    _zero_padding_columns_of_output_<k>();
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
     TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 2);
 }
