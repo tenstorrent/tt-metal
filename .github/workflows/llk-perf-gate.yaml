@@ -453,3 +453,53 @@ jobs:
       measure_result: ${{ needs.nightly-measure.result }}
       fail_on_regression: false
     secrets: inherit
+
+  merge-gate-cover-images:
+    if: >-
+      github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch'
+      && inputs.baseline_run_id == '' && inputs.perf_run_id == '' && inputs.placement_run_id == '')
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  # The merge gate measures only perf/merge_gate_nodes_<arch>.txt. This fails when the suite has a
+  # compile key, axis value or production config the list misses, and uploads the refreshed list.
+  merge-gate-cover:
+    name: "Nightly: the merge gate's node list covers the ${{ matrix.arch }} suite"
+    needs: [merge-gate-cover-images]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [blackhole, wormhole]
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 45
+    container:
+      image: ${{ needs.merge-gate-cover-images.outputs.llk-ci-tag }}
+      options: "--rm"
+    env:
+      CHIP_ARCH: ${{ matrix.arch }}
+      SPEED_OF_LIGHT: "false"
+      PIPELINE: merge_baseline
+      LLK_PERF_RUN_TYPES: L1_TO_L1
+      TT_LLK_DISABLE_ASSERTS: "1"
+    steps:
+      - name: Checkout code
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
+        timeout-minutes: 20
+      - name: Check the node list
+        timeout-minutes: 20
+        working-directory: tt_metal/tt-llk
+        run: |
+          (cd tests && ./setup_testing_env.sh)
+          export LLK_PERF_COVER_MAP="$RUNNER_TEMP/cover/map"
+          mkdir -p "$LLK_PERF_COVER_MAP"
+          LLK_PERF_PHASE=compile LLK_PERF_COMPILE_WORKERS="$(nproc)" "./tests/run_llk_perf_${CHIP_ARCH}.sh" 1 1
+          python3 perf/merge_gate_cover.py --map "$LLK_PERF_COVER_MAP" --arch "$CHIP_ARCH" \
+            --prod perf/merge_gate_prod_configs.json --list "perf/merge_gate_nodes_${CHIP_ARCH}.txt" \
+            --out "$RUNNER_TEMP/cover/merge_gate_nodes_${CHIP_ARCH}.txt"
+      - name: Upload the refreshed list
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: merge-gate-nodes-${{ matrix.arch }}
+          path: ${{ runner.temp }}/cover/merge_gate_nodes_${{ matrix.arch }}.txt
+          if-no-files-found: ignore

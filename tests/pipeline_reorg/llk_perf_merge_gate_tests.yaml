@@ -2,6 +2,9 @@
 # llk-perf-impl sets SPEED_OF_LIGHT and LLK_PERF_RUN_TYPES from its inputs; this
 # list only decides the legs. The merge gate measures the queue head and uploads
 # it as the merge baseline, so the baseline and the gate always share these legs.
+# The gate measures only the tests in perf/merge_gate_nodes_<arch>.txt: every compile key of the full
+# suite, every value of every axis per compile key, and every harvested production config
+# (perf/merge_gate_cover.py, checked nightly). The nightly and the llk-perf-gate PR label measure all.
 # 15 min is the gate ceiling per leg. Wormhole runs in 3. Blackhole runs in 4, so stage 2 has time
 # after stage 1 in the same leg.
 
@@ -11,7 +14,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 3
+    LLK_PERF_NODE_LIST=perf/merge_gate_nodes_wormhole.txt ./tests/run_llk_perf_wormhole.sh {split_group} 3
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -29,7 +32,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 3
+    LLK_PERF_NODE_LIST=perf/merge_gate_nodes_wormhole.txt ./tests/run_llk_perf_wormhole.sh {split_group} 3
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -47,7 +50,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 3
+    LLK_PERF_NODE_LIST=perf/merge_gate_nodes_wormhole.txt ./tests/run_llk_perf_wormhole.sh {split_group} 3
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -65,7 +68,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 4
+    LLK_PERF_NODE_LIST=perf/merge_gate_nodes_blackhole.txt ./tests/run_llk_perf_blackhole.sh {split_group} 4
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -83,7 +86,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 4
+    LLK_PERF_NODE_LIST=perf/merge_gate_nodes_blackhole.txt ./tests/run_llk_perf_blackhole.sh {split_group} 4
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -101,7 +104,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 4
+    LLK_PERF_NODE_LIST=perf/merge_gate_nodes_blackhole.txt ./tests/run_llk_perf_blackhole.sh {split_group} 4
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -119,7 +122,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 4
+    LLK_PERF_NODE_LIST=perf/merge_gate_nodes_blackhole.txt ./tests/run_llk_perf_blackhole.sh {split_group} 4
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15

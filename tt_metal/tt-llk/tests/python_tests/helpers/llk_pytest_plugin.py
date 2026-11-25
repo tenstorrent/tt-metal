@@ -941,7 +941,11 @@ def pytest_collection_modifyitems(config, items):
     _split_by_cost(config, items)
     _restore_test_order(config, items)
 
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+    if (
+        TestConfig.BUILD_MODE == BuildMode.PRODUCE
+        and not TestConfig.SPEED_OF_LIGHT
+        and not os.environ.get("LLK_PERF_COVER_MAP")
+    ):
         _collapse_runtime_only_variants(config, items)
 
     return result
