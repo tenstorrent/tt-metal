@@ -8,6 +8,7 @@ import ttnn
 
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import tilize_with_zero_padding
 from tests.ttnn.utils_for_testing import assert_equal
+from tt_py_test_utils_common.utility_functions import is_quasar
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     check_readable,
     docstring_dtype_conversion_params,
@@ -74,9 +75,12 @@ def test_tilize_with_zero_padding_docstring_supported_inputs(input_shape, dtype,
 
     The data must come back unchanged. For inputs of rank 2 or more, the padded shape must be the input's padded shape
     with the last two dimensions rounded up to multiples of 32, and the padding must hold zeros. BFLOAT16 inputs leave out NaN, as the
-    docstring requires, and compare zeros by value.
+    docstring requires, and compare zeros by value. An input that the docstring's Quasar rule leaves out is an xfail on
+    Quasar, without running.
     """
     check_readable(dtype, layout, buffer_type)
+    if is_quasar() and dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+        pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 inputs on Quasar")
     memory_config = interleaved_memory_config(buffer_type)
     input_tensor = ttnn.from_torch(
         full_range_input(input_shape, dtype, nan=dtype != ttnn.bfloat16),
@@ -110,8 +114,11 @@ def test_tilize_with_zero_padding_docstring_supported_inputs(input_shape, dtype,
 )
 def test_tilize_with_zero_padding_docstring_dtype_conversions(input_dtype, output_dtype, device):
     """Runs each output dtype the ttnn.tilize_with_zero_padding docstring lists for an input of another dtype, with values that both
-    dtypes hold exactly and no NaN. Zeros are compared by value."""
+    dtypes hold exactly and no NaN. Zeros are compared by value. An output that the docstring's Quasar rule leaves out
+    is an xfail on Quasar, without running."""
     check_readable(input_dtype, output_dtype)
+    if is_quasar() and output_dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+        pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 outputs on Quasar")
     shape = (2, 3, 50, 70)
     input_tensor = ttnn.from_torch(
         convertible_input(shape, input_dtype, output_dtype),

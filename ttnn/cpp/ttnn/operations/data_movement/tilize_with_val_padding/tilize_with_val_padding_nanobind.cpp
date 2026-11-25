@@ -51,7 +51,8 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
                    * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
                      - ROW_MAJOR
 
-                ``BFLOAT16`` input values must not be NaN.
+                ``BFLOAT16`` input values must not be NaN. On Quasar, the input must be a ``BFLOAT16``, ``FLOAT32`` or
+                ``INT32`` tensor, and the output must be ``BFLOAT16``, ``FLOAT32`` or ``INT32``.
 
                 On Blackhole, a ``FP8_E4M3`` ROW_MAJOR input is also supported. Its output defaults to ``FLOAT32``, and a
                 ``dtype`` must be a floating-point type other than ``FP8_E4M3``. The last dimension of `output_tensor_shape`
@@ -115,7 +116,8 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
                    * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
                      - ROW_MAJOR
 
-                ``BFLOAT16`` input values must not be NaN.
+                ``BFLOAT16`` input values must not be NaN. On Quasar, the input must be a ``BFLOAT16``, ``FLOAT32`` or
+                ``INT32`` tensor, and the output must be ``BFLOAT16``, ``FLOAT32`` or ``INT32``.
 
             Memory Support:
                 - Interleaved: DRAM and L1

@@ -24,7 +24,7 @@ from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils imp
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
-from tt_py_test_utils_common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole, is_quasar
 
 torch.manual_seed(0)
 
@@ -1272,8 +1272,11 @@ def test_tilize_with_val_padding_docstring_supported_inputs(
 
     The output shapes follow the docstring's output_tensor_shape rules. The data must come back unchanged and the
     padding must hold pad_value. BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value.
+    An input that the docstring's Quasar rule leaves out is an xfail on Quasar, without running.
     """
     check_readable(dtype, layout, buffer_type)
+    if is_quasar() and dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+        pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 inputs on Quasar")
     memory_config = interleaved_memory_config(buffer_type)
     pad_value = _DOCSTRING_PAD_VALUES[dtype]
     input_tensor = ttnn.from_torch(
@@ -1347,8 +1350,11 @@ def test_tilize_with_val_padding_returns_host_tile_input(module_name, entry):
 )
 def test_tilize_with_val_padding_docstring_dtype_conversions(input_dtype, output_dtype, device):
     """Runs each output dtype the ttnn.tilize_with_val_padding docstring lists for an input of another dtype, with values that both
-    dtypes hold exactly and no NaN. Zeros are compared by value."""
+    dtypes hold exactly and no NaN. Zeros are compared by value. An output that the docstring's Quasar rule leaves out
+    is an xfail on Quasar, without running."""
     check_readable(input_dtype, output_dtype)
+    if is_quasar() and output_dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+        pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 outputs on Quasar")
     shape = (2, 3, 50, 70)
     input_tensor = ttnn.from_torch(
         convertible_input(shape, input_dtype, output_dtype),
