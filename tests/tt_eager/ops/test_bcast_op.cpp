@@ -5,7 +5,7 @@
 #include <cerrno>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <ttnn/operations/functions.hpp>
 #include <array>
 #include <cstring>
@@ -14,10 +14,10 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/vocabulary/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"

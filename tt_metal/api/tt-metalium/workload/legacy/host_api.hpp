@@ -11,15 +11,15 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/runtime_args_data.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/workload/legacy/runtime_args_data.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 /** @file */
 

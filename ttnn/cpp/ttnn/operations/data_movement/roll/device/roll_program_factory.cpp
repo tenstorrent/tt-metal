@@ -11,10 +11,10 @@
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 // Why ROW_MAJOR sharded roll needs a dedicated kernel instead of the slice + concat composite
 // used for interleaved roll:

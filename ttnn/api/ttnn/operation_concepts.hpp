@@ -11,9 +11,9 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/graph_tracking.hpp>
-#include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <cstdint>

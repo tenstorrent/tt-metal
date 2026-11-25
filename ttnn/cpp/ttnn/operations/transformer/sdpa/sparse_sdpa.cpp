@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/transformer/sdpa/sparse_sdpa.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <cmath>
 
 namespace ttnn::transformer {

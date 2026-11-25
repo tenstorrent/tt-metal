@@ -9,9 +9,9 @@
 #include "hybrid_routed_expert_ffn_types.hpp"
 #include "hybrid_overlap_program_factory.hpp"
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::quasar::deepseek_prefill::hybrid_routed_expert_ffn {

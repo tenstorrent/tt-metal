@@ -16,11 +16,11 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "impl/context/metal_context.hpp"

@@ -14,14 +14,14 @@
 #include <variant>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/workload/legacy/runtime_args_data.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt_stl/fmt.hpp>
 #include "impl/sram_arena/sram_arena_impl.hpp"
 #include "impl/kernels/kernel.hpp"

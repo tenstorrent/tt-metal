@@ -7,7 +7,7 @@
 #include <internal/l1_ecc_halt.hpp>
 #include "impl/context/metal_env_impl.hpp"
 #include "system_memory_manager.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -18,9 +18,9 @@
 #include <string>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "dispatch_settings.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "memcpy.hpp"
 #include "allocator/allocator.hpp"
 #include "command_queue_common.hpp"

@@ -6,7 +6,7 @@
 
 #include <cstddef>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 namespace tt::tt_metal {
 

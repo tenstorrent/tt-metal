@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::detail;

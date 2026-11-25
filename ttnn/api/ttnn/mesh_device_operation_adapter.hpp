@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/run_args/validation_mode.hpp>

@@ -158,9 +158,9 @@ train:
   pr_gate:
     bh_p150b_civ2: 10
   unit:
-    bh_p100: 105
+    bh_p100: 145
     bh_p150b_civ2: 90
-    bh_quietbox_2: 50
+    bh_quietbox_2: 55
     bh_galaxy: 20
   perf:
     bh_p100: 180
@@ -297,8 +297,10 @@ runtime:
     bh_loudbox: 20
     cpu_medium: 3
   perf:
-    wh_n300_civ2: 65
-    bh_p150_perf: 50
+    wh_n300_civ2: 35
+    wh_n300_perf: 35
+    bh_p150_perf: 35
+    bh_p150_perf_high_core_count: 20
     bh_p150b_civ2_viommu: 10
   perf_profiler:
     wh_n300_civ2: 5
@@ -337,6 +339,7 @@ llk:
     bh_p150b_civ2: 1200
   # Stage 2 of the LLK perf gate (llk-perf-gate.yaml): runs only when stage 1 finds a regression.
   perf_placement:
+    wh_n150_civ2: 60
     bh_p150b_civ2: 60
   bit_exact:
     wh_n150_civ2: 90
@@ -391,7 +394,7 @@ models:
     wh_n300: 6
     bh_p150: 35
     bh_p300: 42
-    bh_quietbox_2: 191
+    bh_quietbox_2: 197  # +6 for the gpt-oss-20b batched DFlash test
   e2e_tier3:
     wh_llmbox_perf: 200
     wh_galaxy_perf: 55
@@ -409,7 +412,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 502
     bh_galaxy: 75
-    bh_sc1: 370
+    bh_sc1: 410
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
@@ -418,7 +421,7 @@ models:
     wh_n300: 30
     wh_galaxy_perf: 85
     bh_p150: 53
-    bh_quietbox_2: 60
+    bh_quietbox_2: 65
   unit_tier3:
     wh_llmbox: 90
     wh_galaxy: 80
