@@ -32,10 +32,24 @@ What the plugin's calls do here:
 
 Weights: the run mode's decode cache (modes.py; ``$INKLING_MODE``, ``$INKLING_CACHE``). The tt config's
 ``"optimizations": "performance"`` picks fast mode.
+
+Chunked prefill (opt-in, ``INKLING_VLLM_PREFILL=<tokens>``, Inkling2ForCausalLM only): a new prompt of at least
+that many tokens runs through tt/prefill_model.py in chunks instead of token by token. The process keeps the one
+(PF-layout) decode cache: the prefill rebuilds each layer's plain expert tensors on the card for the layer's expert
+step (tt/pf_tiles.py). The decode's L1 weight staging and the prefill's programs do not fit together: the decode
+traces are released before the prefill, and the reply's first six steps run eagerly and capture them again
+(Generator.begin_live). It needs
+- DRAM: about 1.05 GiB for the prefill's own tensors, 2 GiB of room for a layer's rebuilt experts and 0.26 GiB per
+  1024 tokens of a pass, so a ``--max-model-len`` below the largest: passes of 8192 tokens up to about 70K, of
+  4096 up to about 124K, of 2048 up to about 155K (`_prefill_chunk` picks, or says how much DRAM is short);
+- L1: a 48 KB kernel-config ring, ``"worker_l1_size": 1411136`` (the prefill's largest program leaves 57 KB of
+  L1 free under the 56 KB ring, and the decode modules keep 58 KB), and decode without the expert prefetch, whose
+  L1 ring is not given back when the traces are released: decode is about 0.3 ms a token slower in this mode.
 """
 
 from __future__ import annotations
 
+import gc
 import os
 import time
 
@@ -69,7 +83,10 @@ class Inkling2ForCausalLM:
             raise ValueError(f"the served config has {vocab} tokens, the model {VOCAB_REAL}")
         self.device, self.max_ctx, self.vocab, self.vocab_real = device, max_ctx, vocab, VOCAB_REAL
         want = tt_device.DEFAULT_L1_BASE + (tt_device.RING_KB << 10)
-        if ttnn._ttnn.device.GetAllocatorBaseAddress(device, ttnn.BufferType.L1) != want:
+        ring = ttnn._ttnn.device.GetAllocatorBaseAddress(device, ttnn.BufferType.L1) - tt_device.DEFAULT_L1_BASE
+        if ring != want - tt_device.DEFAULT_L1_BASE and not (
+            os.environ.get("INKLING_VLLM_PREFILL") and ring == 48 << 10
+        ):
             logger.warning(
                 f'decode runs slower without the bigger kernel-config ring: set "worker_l1_size": '
                 f'{tt_device.worker_l1_size()} in --additional-config\'s "tt" (tt/device.py)'
@@ -84,6 +101,8 @@ class Inkling2ForCausalLM:
         self._out = None  # output dict of the last step run
         self._pos_ready = None  # position whose inputs are already written
         self._t = [0, 0.0, 0.0, None]  # decode steps of the request, s inside them, s between them, last exit
+        self._pf_logits = None  # last-position logits of a chunked prefill, until the first decode step
+        self.pf = self._prefill_init(cache)  # tt/prefill_model.Inkling2Prefill, or None (before any capture)
         self._rng, self._seeded = torch.Generator(), False  # the adapter's sampler: one stream per request
 
     def _load(self, cache):
@@ -91,11 +110,61 @@ class Inkling2ForCausalLM:
 
         return Inkling2Model(self.device, root=cache, max_ctx=self.max_ctx, log=lambda s: None)
 
+    # DRAM a chunked prefill needs in a decode process, GiB (a p100a's allocator, measured): its own tensors; free
+    # room it must find before a layer's expert rebuild (the rebuilt BFP8 tensors with the pieces of the last one
+    # take 1.43, in blocks of up to 0.36 that a fragmented pool does not have below about 2.0 free); its working
+    # set per 1024 tokens of a pass. PF_CHUNKS: tokens per pass, the first that fits. PF_ONE: a prompt of up to this
+    # many tokens goes in one pass when the largest chunk fits (every pass rebuilds each layer's experts).
+    PF_GIB = (1.05, 2.0, 0.26)
+    PF_CHUNKS = (8192, 4096, 2048)
+    PF_ONE = 8448
+
+    def _prefill_chunk(self):
+        """(tokens per prefill pass that fit in the DRAM free now or None, GiB left over for that pass or short)."""
+        v = ttnn.get_memory_view(self.device, ttnn.BufferType.DRAM)
+        room = v.num_banks * v.total_bytes_free_per_bank / 2**30 - self.PF_GIB[0] - self.PF_GIB[1]
+        chunk = next((c for c in self.PF_CHUNKS if self.PF_GIB[2] * c / 1024 <= room), None)
+        return chunk, room - self.PF_GIB[2] * (chunk or self.PF_CHUNKS[-1]) / 1024
+
+    def _prefill_init(self, cache):
+        """The chunked prefill for prompts of at least $INKLING_VLLM_PREFILL tokens (unset or 0: off)."""
+        self.pf_min = int(os.environ.get("INKLING_VLLM_PREFILL") or 0)
+        if not self.pf_min:
+            return None
+        from models.demos.inkling2_mini.tt import device as tt_device
+        from models.demos.inkling2_mini.tt.prefill_model import Inkling2Prefill
+
+        why = None
+        base = ttnn._ttnn.device.GetAllocatorBaseAddress(self.device, ttnn.BufferType.L1)
+        if type(self) is not Inkling2ForCausalLM:
+            why = "the speculative class feeds prompts token by token"
+        elif base > tt_device.DEFAULT_L1_BASE + (48 << 10):
+            why = f'its programs need "worker_l1_size": {tt_device.worker_l1_size(48)} (a 48 KB ring) or more L1'
+        chunk, spare = self._prefill_chunk()
+        if why is None and chunk is None:
+            why = (
+                f"{-spare:.2f} GiB of DRAM short at --max-model-len {self.max_ctx} (a smaller context frees 19,584 B "
+                "per token)"
+            )
+        if why is not None:
+            logger.warning(f"chunked prefill off: {why}")
+            return None
+        t0 = time.time()
+        self.pf_chunk = chunk  # tokens per pass; the prefill is built for one pass of PF_ONE when that fits too
+        one = spare >= self.PF_GIB[2] * (self.PF_ONE - chunk) / 1024 > 0
+        pf = Inkling2Prefill(self.model, root=cache, chunk=-(-self.PF_ONE // 1024) * 1024 if one else chunk)
+        logger.info(
+            f"chunked prefill on for prompts of {self.pf_min}+ tokens: passes of {chunk}"
+            f"{f', one pass up to {self.PF_ONE}' if one else ''}; built in {time.time() - t0:.0f} s"
+        )
+        return pf
+
     def _make_gen(self):
         """(the generator with its traces captured, the output dicts of its step traces)."""
         from models.demos.inkling2_mini.tt.generator import Generator
 
-        gen = Generator(self.model)
+        # with the chunked prefill: no expert prefetch (release() does not give its L1 ring back)
+        gen = Generator(self.model, experts=False if self.pf is not None else None)
         gen.capture()
         return gen, gen.out
 
@@ -148,10 +217,11 @@ class Inkling2ForCausalLM:
             a = b
         return out
 
-    def _capture_tail(self, lg):
+    def _capture_tail(self, lg, check=True):
         """Trace: TILE logits -> fp32 rows (800 KB to read instead of the 25 MB padded TILE tensor). Checked once
-        against the full TILE read; None if no piece count fits or the rows are not bit-equal."""
-        for k in self.TAIL_PIECES:
+        against the full TILE read; None if no piece count fits or the rows are not bit-equal. check=False (in
+        the middle of a sequence: no step may run): the piece count found before, unchecked."""
+        for k in self.TAIL_PIECES if check else (self.tail_pieces,):
             tid = ttnn.begin_trace_capture(self.device, cq_id=0)
             try:
                 rows = self._rows(lg, k)
@@ -160,6 +230,9 @@ class Inkling2ForCausalLM:
                 ttnn.release_trace(self.device, tid)
                 continue
             ttnn.end_trace_capture(self.device, tid, cq_id=0)
+            if not check:
+                self.rows = rows
+                return tid
             self.gen.decode(0, 0)
             ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
             want = ttnn.to_torch(lg).float().reshape(-1)
@@ -183,6 +256,7 @@ class Inkling2ForCausalLM:
                 for t in self._rows(lg, k):
                     ttnn.deallocate(t)
         self.gen, outs = self._make_gen()
+        self._lg = lg
         if tail and all(o["logits"].buffer_address() == lg.buffer_address() for o in outs):
             self.tail = self._capture_tail(lg)
         self._after_tail(lg)
@@ -209,6 +283,8 @@ class Inkling2ForCausalLM:
             self.tail = None
         self.gen.release()
         self.gen = None
+        if self.pf is not None:
+            self.pf.release_traces()
 
     # ------------------------------------------------------------ one step
     def _step(self, token, pos):
@@ -217,6 +293,9 @@ class Inkling2ForCausalLM:
         from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
 
         m, ph = self.model, pos % FusedShortConv.PHASES
+        if self.gen.live:  # after a chunked prefill: the generator runs the step and captures it (tt/generator.py)
+            self._out, self._pos_ready = self.gen.step_live(token, pos), None
+            return
         m.phase = ph
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(torch.tensor([[token]], dtype=torch.int32), dtype=ttnn.uint32), m.tokens
@@ -267,8 +346,9 @@ class Inkling2ForCausalLM:
     def _output(self, sampling_params):
         """The last step's result as vLLM wants it: fp32 logits [1, 1, vocab] for its host sampler, or, when the
         plugin picked device sampling, the token [1, 1]: the head's argmax (greedy), else the adapter's draw."""
+        pf_logits = self._pf_logits  # after a chunked prefill: its last position, not a step's output
         if sampling_params is None:
-            lg = self._logits()
+            lg = self._logits() if pf_logits is None else pf_logits
             if self.vocab == self.vocab_real:
                 return lg.reshape(1, 1, -1)
             out = torch.full((1, 1, self.vocab), float("-inf"))  # the config's padded vocabulary
@@ -276,9 +356,12 @@ class Inkling2ForCausalLM:
             return out
         t = float(sampling_params.temperature[0])
         if t < 1e-5:
+            if pf_logits is not None:
+                return pf_logits.argmax().reshape(1, 1).to(torch.int32)
             return ttnn.to_torch(self._out["token"]).reshape(1, 1).to(torch.int32)
         self._seed(sampling_params)
-        token = self._sample(self._logits(), t, int(sampling_params.top_k[0]), float(sampling_params.top_p[0]))
+        lg = self._logits() if pf_logits is None else pf_logits
+        token = self._sample(lg, t, int(sampling_params.top_k[0]), float(sampling_params.top_p[0]))
         return torch.tensor([[token]], dtype=torch.int32)
 
     def _seed(self, sampling_params):
@@ -312,14 +395,45 @@ class Inkling2ForCausalLM:
             self._reset()
             k = 0
         last = self._request_log()
-        t0, self._seeded = time.perf_counter(), False
-        for i in range(k, n):
-            self._step(ids[i], i)
+        t0, self._seeded, self._pf_logits = time.perf_counter(), False, None
+        how = "fed"
+        if self.pf is not None and k == 0 and self.pf_min <= n <= self.max_ctx - 8:
+            how = self._prefill_chunked(ids)
+        else:
+            for i in range(k, n):
+                self._step(ids[i], i)
         out = self._output(sampling_params)
         self.fed = ids
         dt = time.perf_counter() - t0
-        logger.info(f"prompt {n} tokens, {k} already on the card, {n - k} fed in {dt:.2f} s{last}")
+        logger.info(f"prompt {n} tokens, {k} already on the card, {n - k} {how} in {dt:.2f} s{last}")
         return out
+
+    def _prefill_chunked(self, ids):
+        """The whole prompt through the chunked prefill, which hands its state to the decode step. The decode's
+        L1 weight staging gives way to it: the traces are released before it, and afterwards the staging goes in
+        again and the traces are captured from the reply's own first steps (Generator.begin_live), which run
+        eagerly: no step runs on the card but the sequence's."""
+        t0 = time.perf_counter()
+        if self.tail is not None:  # (its row tensors go too; captured again below)
+            ttnn.release_trace(self.device, self.tail)
+            for t in self.rows:
+                ttnn.deallocate(t)
+        self.gen.release()
+        gc.collect()  # (the staging's L1 goes with its last reference)
+        t1 = time.perf_counter()
+        self.pf.n_rebuilt = 0
+        one = len(ids) <= self.PF_ONE and self.pf.chunk > self.pf_chunk
+        self._pf_logits = self.pf.prefill(ids, chunk=self.pf.chunk if one else self.pf_chunk)[0].float()
+        t2 = time.perf_counter()
+        self.gen.begin_live()
+        if self.tail is not None:
+            self.tail = self._capture_tail(self._lg, check=False)
+        self._out, self._pos_ready = None, None
+        return (
+            f"prefilled in chunks (traces released {t1 - t0:.2f} s, prefill {t2 - t1:.2f} s with "
+            f"{self.pf.n_rebuilt} expert rebuilds, {len(self.pf._traces)} chunk traces kept, dropped "
+            f"{self.pf.n_dropped} times; the next steps capture the decode traces again)"
+        )
 
     def _request_log(self):
         """What the request before did (and its counters start over)."""
@@ -341,6 +455,7 @@ class Inkling2ForCausalLM:
         if t[3] is not None:
             t[2] += t0 - t[3]
         fed, self.fed = self.fed, []
+        self._pf_logits = None
         self._step(token, pos)
         out = self._output(sampling_params)
         fed.append(token)
