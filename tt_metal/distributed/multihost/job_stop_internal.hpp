@@ -4,24 +4,17 @@
 
 #pragma once
 
-// The parts of the job stop (distributed_termination.cpp) that only a context implementation uses.
+// The one part of a rank's exit (distributed_termination.cpp) that only a context implementation uses.
 
 namespace tt::tt_metal::distributed::multihost::job_stop {
 
-// What the stop watchdog calls when a rank is still running TT_METAL_STOP_TIMEOUT_S after its stop began: the MPI
-// context sets MPI_Abort here. Without one the watchdog ends this process alone.
-void set_force_abort(void (*force_abort)(int exit_code));
+// Whether this rank runs inside tt-run-rank (TT_RUN_RANK_FD set): the wrapper then ends the job for a rank that
+// fails; without one, the launcher's own abort is the only way to end the job.
+bool in_rank_wrapper();
 
-// Whether this process was started by a launcher that can stop the job (PMIx job control).
-bool launcher_reachable();
-
-// MPI reported a failed peer (MPI_ERR_PROC_FAILED): this rank's exit fence is then bounded short, since the dead
-// rank's stand-in may never reach it.
-void note_peer_failed();
-
-// One line to the tt-run-rank wrapper this rank runs in (TT_RUN_RANK_FD), when there is one: "context" once the
-// distributed context exists (the wrapper then stands in for this rank at the exit fence if it dies), "stopped" when
-// this rank left a stopping job itself.
-void tell_rank_wrapper(const char* word);
+// Whether the stop signal (SIGTERM) itself has reached this rank. A peer's failure can reach an MPI wait (ULFM's
+// MPI_ERR_PROC_FAILED) a few ms before the wrapper's SIGTERM does; the wait gives the signal that long to arrive, so
+// the rank leaves as a stopped rank and not as a second failure.
+bool stop_signal_seen();
 
 }  // namespace tt::tt_metal::distributed::multihost::job_stop

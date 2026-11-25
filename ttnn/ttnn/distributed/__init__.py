@@ -15,6 +15,7 @@ from .distributed import (
     ConcatMeshToTensor,
     ConcatMesh2dToTensor,
     open_mesh_device,
+    init_distributed_context,
     close_mesh_device,
     get_num_pcie_devices,
     get_num_devices,

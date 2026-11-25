@@ -71,6 +71,15 @@ def closed(r, ranks=(0, 1)) -> None:
         ), f"rank {rank} did not close its mesh; it ended at {r.reached.get(rank)!r}\n{r.log[-3000:]}"
 
 
+def tore_down(r, ranks=(0, 1), reason: str = "SIGTERM") -> None:
+    """Every listed rank went through teardown on the way out (the rank's own line): for now it says so and exits
+    without closing its mesh; the close comes with the later teardown step."""
+    for rank in ranks:
+        m = re.search(rf"\[rank {rank}\] teardown initiated: (.*?); exiting with code (\d+)", r.log)
+        assert m, f"rank {rank} did not go through teardown; it ended at {r.reached.get(rank)!r}\n{r.log[-3000:]}"
+        assert reason in m.group(1), f"rank {rank} tore down for {m.group(1)!r}, expected {reason!r}"
+
+
 def stopped_by(r, rank: int, reason: str, code: int) -> None:
     """Rank ``rank`` stopped the job for ``reason``: its wrapper printed the stop line, every other rank was sent SIGTERM
     and exited within the grace (nothing forced), and tt-run names the rank and returns its code."""
@@ -88,7 +97,7 @@ def stopped_at_ttrun(r, sig: int) -> None:
     assert r.exit == 128 + sig, f"expected {128 + sig}: {r}"
     assert "sent SIGTERM to all ranks" in r.log and f"outcome=stopped exit={128 + sig}" in r.log, r.log[-3000:]
     assert "job forced down" not in r.log, r.log[-3000:]
-    closed(r)
+    tore_down(r)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -108,7 +117,7 @@ def test_dead_peer_barrier():
     r = run_case("dead_peer_barrier", {"PROBE_COLL": "barrier_dead_peer"}, DEADLINE_END)
     ended(r)
     stopped_by(r, 1, "was killed by signal 9 (SIGKILL)", 137)
-    closed(r, ranks=(0,))
+    tore_down(r, ranks=(0,))
     clean(r)
 
 
@@ -117,7 +126,7 @@ def test_dead_peer_recv():
     r = run_case("dead_peer_recv", {"PROBE_COLL": "recv_dead_peer"}, DEADLINE_END)
     ended(r)
     stopped_by(r, 1, "was killed by signal 9 (SIGKILL)", 137)
-    closed(r, ranks=(0,))
+    tore_down(r, ranks=(0,))
     clean(r)
 
 
@@ -144,7 +153,7 @@ def test_job_timeout():
     ended(r)
     assert r.exit == 241, str(r)
     _both_ranks_were_in_the_collective(r)
-    closed(r)  # the --job-timeout is graceful: both ranks leave the collective on SIGTERM and close their mesh
+    tore_down(r)  # the --job-timeout is graceful: both ranks leave the collective on SIGTERM and close their mesh
     assert "the job reached its --job-timeout of 60 s: sent SIGTERM to all ranks" in r.log, r.log[-3000:]
     assert "outcome=stopped exit=241" in r.log and "job forced down" not in r.log, r.log[-3000:]
     clean(r)
@@ -161,7 +170,7 @@ def test_prte_timeout():
     ended(r)
     assert r.exit == 241, str(r)
     _both_ranks_were_in_the_collective(r)
-    closed(r)
+    tore_down(r)
     assert "PRRTE --timeout from --mpi-args" in r.log and "outcome=forced exit=241" in r.log, r.log[-3000:]
     clean(r)
 
@@ -182,8 +191,8 @@ def test_exit_nofinalize():
         "exit_nofinalize_after_open", {"PROBE_SCENARIO": "exit_nofinalize", "PROBE_PHASE": "after_open"}, DEADLINE_END
     )
     ended(r)
-    stopped_by(r, 1, "exited with code 1 without stopping the job", 1)
-    closed(r, ranks=(0,))
+    stopped_by(r, 1, "exited with code 1", 1)
+    tore_down(r, ranks=(0,))
     clean(r)
 
 
@@ -203,7 +212,8 @@ def test_invalid_rank_uncaught_stops_the_job():
     ended(r)
     stopped_by(r, 0, "Python exception RuntimeError: MPI_Irecv", 1)
     assert "MPI_ERR_RANK" in r.log, r.log[-3000:]
-    closed(r)
+    tore_down(r, ranks=(1,))
+    tore_down(r, ranks=(0,), reason="Python exception RuntimeError")
     clean(r)
 
 
@@ -215,7 +225,8 @@ def test_raise_while_peer_in_split():
     ended(r)
     stopped_by(r, 1, "Python exception RuntimeError: injected failure while the peers are in split", 1)
     reached(r, 0, "coll_split_enter")
-    closed(r)
+    tore_down(r, ranks=(0,))
+    tore_down(r, ranks=(1,), reason="Python exception")
     clean(r)
 
 
@@ -237,23 +248,24 @@ def test_raise_after_open():
     waiting on rank 0. tt-run returns 1 naming rank 1 and the exception."""
     r = run_case("raise_after_open", {"PROBE_SCENARIO": "raise", "PROBE_PHASE": "after_open"}, DEADLINE_END)
     ended(r)
-    stopped_by(r, 1, "Python exception RuntimeError: injected failure at after_open (closing the mesh)", 1)
-    closed(r)
+    stopped_by(r, 1, "Python exception RuntimeError: injected failure at after_open", 1)
+    tore_down(r, ranks=(0,))
+    tore_down(r, ranks=(1,), reason="Python exception")
     clean(r)
 
 
 def test_bad_shape():
     """Rank 1 asks for a mesh the descriptor cannot hold: the shape check in open is a TT_FATAL (a C++ exception,
     raised in Python as RuntimeError, its message several lines long) on every rank. The job is stopped with code 1,
-    and tt-run reads the one-line [tt-stop] line and names the rank, not prterun's banner."""
+    and tt-run reads the wrapper's one-line stop line and names the rank, not prterun's banner."""
     r = run_case("bad_shape_rank1", {"PROBE_MESH_SHAPE_VICTIM": "9x9"}, DEADLINE_END)
     ended(r)
     m = re.search(
-        r"\[tt-stop\] rank (\d+) on \S+ \(pid \d+\): (?:uncaught )?Python exception RuntimeError: TT_FATAL.*"
-        r"ranks disagree on the requested mesh shape.*; stopping the job \(exit 1\)",
+        r"\[rank (\d+)\] Python exception RuntimeError: TT_FATAL.*"
+        r"ranks disagree on the requested mesh shape.* \(on \S+, pid \d+\); stopping the job \(exit 1\)",
         r.log,
     )
-    assert m, f"no one-line [tt-stop] line for the TT_FATAL\n{r.log[-3000:]}"
+    assert m, f"no one-line stop line for the TT_FATAL\n{r.log[-3000:]}"
     assert r.exit == 1 and f"origin=rank {m.group(1)} on" in r.log and "outcome=failed exit=1" in r.log, str(r)
     assert "the launcher then killed the other ranks" not in r.log and "job forced down" not in r.log, r.log[-3000:]
     clean(r)
@@ -293,7 +305,7 @@ def test_sigkill_before_init():
     """Rank 1 is SIGKILLed before the context exists: its wrapper stops the job, rank 0 leaves MPI_Init's wait."""
     r = run_case("sigkill_before_init", {"PROBE_SCENARIO": "sigkill", "PROBE_PHASE": "before_init"}, DEADLINE_HANG)
     ended(r)
-    assert r.exit == 137 and "[tt-stop] rank 1 on" in r.log, str(r)
+    assert r.exit == 137 and "[rank 1] " in r.log, str(r)
     clean(r)
 
 
@@ -382,9 +394,10 @@ def rank_saw(r, rank: int, marker: str) -> None:
     ), f"rank {rank} never printed {marker!r}; it ended at {r.reached.get(rank)!r}\n{r.log[-3000:]}"
 
 
-def test_survivor_closes_ulfm():
-    """Opt-in ULFM so the death is delivered as an error (the only mode in which the survivor runs on); rank 1 killed
-    with the mesh open, rank 0 records the error and goes on to close: its close must complete."""
+def test_survivor_tears_down_ulfm():
+    """Opt-in ULFM so the death is delivered as an error; rank 1 killed with the mesh open. Rank 0's wait sees the
+    error, gives the dead rank's wrapper's SIGTERM its few ms to arrive and leaves as a stopped rank: through
+    teardown, not as a second failure. (The survivor's own close is the later teardown step.)"""
     r = run_case(
         "survivor_close_ulfm",
         # Under ULFM recovery the launcher does not end the job when ranks exit, so the dead rank's wrapper stands in
@@ -398,7 +411,7 @@ def test_survivor_closes_ulfm():
         DEADLINE_HANG,
         cmd=legacy_cmd("--with-ft ulfm"),
     )
-    rank_saw(r, 0, "close_done")
+    tore_down(r, ranks=(0,))
     ended(r)
     clean(r)
 
@@ -604,8 +617,9 @@ def test_sigint_one_rank():
     the mesh close it unwinds through), so the peer leaves its collective and closes."""
     r = run_case("sigint_one_rank", {"PROBE_SCENARIO": "sigint", "PROBE_PHASE": "after_open"}, DEADLINE_END)
     ended(r)
-    stopped_by(r, 1, "Python exception KeyboardInterrupt (closing the mesh)", 130)
-    closed(r)
+    stopped_by(r, 1, "Python exception KeyboardInterrupt", 130)
+    tore_down(r, ranks=(0,))
+    tore_down(r, ranks=(1,), reason="Python exception")
     clean(r)
 
 
@@ -732,8 +746,9 @@ def test_exit1_stops_the_job():
     rank closes and leaves together; tt-run returns 1 naming rank 1."""
     r = run_case("exit1_after_open", {"PROBE_SCENARIO": "exit1", "PROBE_PHASE": "after_open"}, DEADLINE_END)
     ended(r)
-    stopped_by(r, 1, "sys.exit(1)", 1)
-    closed(r)
+    stopped_by(r, 1, "Python exception SystemExit: 1", 1)
+    tore_down(r, ranks=(0,))
+    tore_down(r, ranks=(1,), reason="Python exception")
     clean(r)
 
 
@@ -755,8 +770,9 @@ def test_early_exit0_hangs_peer():
 
 
 def test_sigterm_runs_close():
-    """SIGTERM reaches rank 1 alone from outside the launcher (kill <pid>, scancel of one task). P28: the rank sends
-    it on to the whole job, every rank leaves its wait, closes its mesh and exits; tt-run returns 143 naming rank 1."""
+    """SIGTERM reaches rank 1 alone from outside the launcher (kill <pid>, scancel of one task). P28: rank 1 closes
+    and exits 143; its wrapper saw no stop, so it reports the exit as a failure and stops the job: every rank leaves
+    its wait, closes its mesh and exits; tt-run returns 143 naming rank 1."""
     r = run_case(
         "sigterm_one_rank",
         {"PROBE_COLL": "barrier_slow", "PROBE_SLOW_S": "8"},
@@ -766,8 +782,8 @@ def test_sigterm_runs_close():
     )
     fault_delivered(r)
     ended(r)
-    stopped_by(r, 1, "received SIGTERM from pid", 143)
-    closed(r)
+    stopped_by(r, 1, "exited with code 143", 143)  # a SIGTERM its wrapper did not deliver: reported as a failure
+    tore_down(r)
     clean(r)
 
 
@@ -791,7 +807,7 @@ def test_segfault_stops_the_job():
     r = run_case("segv_after_open", {"PROBE_SCENARIO": "segv", "PROBE_PHASE": "after_open"}, DEADLINE_END)
     ended(r)
     stopped_by(r, 1, "was killed by signal 11 (SIGSEGV)", 139)
-    closed(r, ranks=(0,))
+    tore_down(r, ranks=(0,))
     clean(r)
 
 
@@ -800,16 +816,7 @@ def test_sigkill_with_mesh_open_stops_the_job():
     r = run_case("sigkill_after_open", {"PROBE_SCENARIO": "sigkill", "PROBE_PHASE": "after_open"}, DEADLINE_END)
     ended(r)
     stopped_by(r, 1, "was killed by signal 9 (SIGKILL)", 137)
-    closed(r, ranks=(0,))
-    clean(r)
-
-
-def test_thread_exception_stops_the_job():
-    """An uncaught exception in a worker thread of rank 1 (threading.excepthook): the job is stopped with code 1."""
-    r = run_case("thread_raise", {"PROBE_SCENARIO": "thread_raise", "PROBE_PHASE": "after_open"}, DEADLINE_END)
-    ended(r)
-    stopped_by(r, 1, "uncaught Python exception in thread worker RuntimeError: worker failed", 1)
-    closed(r)
+    tore_down(r, ranks=(0,))
     clean(r)
 
 
@@ -821,7 +828,7 @@ def test_clean_exit_waits_for_a_slow_rank():
     ended(r)
     assert r.exit == 0 and "outcome=clean exit=0" in r.log, str(r)
     assert r.wall_s >= 15, f"the job ended before the slow rank finished: {r}"
-    for bad in ("[tt-stop]", "sent SIGTERM", "job forced down", "a leak", "still running"):
+    for bad in ("stopping the job", "sent SIGTERM", "job forced down", "a leak", "still running"):
         assert bad not in r.log, f"{bad!r} on a clean job\n{r.log[-3000:]}"
     assert any("[probe r=0 " in line and "main_exit" in line for line in r.log.splitlines()), r.log[-3000:]
     clean(r)
@@ -829,8 +836,10 @@ def test_clean_exit_waits_for_a_slow_rank():
 
 @pytest.mark.parametrize("how", ["second_ctrl_c", "grace_expired"])
 def test_stuck_rank_is_forced(how):
-    """Ctrl-C while rank 1 is stuck and does not react to SIGTERM (a device wait): rank 0 closes, then tt-run forces
-    the job, on a second Ctrl-C or when the stop grace expires, says the devices may need a reset, and returns 130."""
+    """Ctrl-C while rank 1 is stuck and does not react to SIGTERM (a device wait): rank 0 closes, then the job is
+    forced: on a second Ctrl-C by tt-run (the launcher kills every rank), or when the stop grace expires by rank 1's
+    own wrapper (its --stop-grace is 2 s below tt-run's, so it fires first: SIGKILL to rank 1, the devices-may-need-a-
+    reset line, and prterun ends the job). tt-run returns 130 either way."""
     env = {"PROBE_SCENARIO": "ignore_sigterm", "PROBE_PHASE": "after_open", "PROBE_COLL": "barrier"}
     if how == "grace_expired":
         env["TT_RUN_STOP_GRACE_S"] = "6"
@@ -846,10 +855,14 @@ def test_stuck_rank_is_forced(how):
     fault_delivered(r)
     ended(r)
     assert r.exit == 130, str(r)
-    why = "second SIGINT" if how == "second_ctrl_c" else "ranks did not exit within 6 s"
-    assert f"job forced down" in r.log and why in r.log and "tt-smi -r" in r.log, r.log[-3000:]
-    assert "outcome=forced exit=130" in r.log, r.log[-3000:]
-    closed(r, ranks=(0,))
+    if how == "second_ctrl_c":
+        assert "job forced down" in r.log and "second SIGINT" in r.log and "tt-smi -r" in r.log, r.log[-3000:]
+        assert "outcome=forced exit=130" in r.log, r.log[-3000:]
+    else:
+        assert re.search(r"\[rank 1\] did not exit within its stop grace of \d+ s: forced", r.log), r.log[-3000:]
+        assert "tt-smi -r" in r.log and "job forced down" not in r.log, r.log[-3000:]
+        assert "outcome=stopped exit=130" in r.log, r.log[-3000:]
+    tore_down(r, ranks=(0,))
     clean(r)
 
 
@@ -876,7 +889,8 @@ def test_uncaught_cxx_exception_stops_the_job():
     r = run_case("cxx_throw", {"PROBE_SCENARIO": "cxx_throw", "PROBE_PHASE": "after_open"}, DEADLINE_END)
     ended(r)
     stopped_by(r, 1, "uncaught C++ exception: injected C++ failure", 1)
-    closed(r, ranks=(0,))
+    tore_down(r, ranks=(0,))
+    tore_down(r, ranks=(1,), reason="uncaught C++ exception")
     clean(r)
 
 
@@ -901,7 +915,7 @@ def test_ctrl_z_pauses_and_resumes_the_job():
     clean(r)
 
 
-def test_ttrun_killed_ranks_close_their_mesh():
+def test_ttrun_killed_ranks_tear_down():
     """tt-run is SIGKILLed while the ranks sit in a deadlocked collective: its guard (tt-run-rank --guard) stops the
     job, SIGTERM to every rank, and every rank leaves its wait and closes its mesh, as for a Ctrl-C at tt-run."""
     r = run_case(
@@ -917,5 +931,5 @@ def test_ttrun_killed_ranks_close_their_mesh():
     ended(r)
     assert "[tt-run guard] sent SIGTERM to all ranks" in r.log, r.log[-3000:]
     assert "job forced down" not in r.log, r.log[-3000:]
-    closed(r)
+    tore_down(r)
     clean(r)

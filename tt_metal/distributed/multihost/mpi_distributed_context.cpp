@@ -163,13 +163,6 @@ inline void check_size_fits_int(std::size_t n) {
 
 inline void mpi_check(int error_code, const char* call_text) {
     if (error_code != MPI_SUCCESS) {
-#ifdef MPIX_ERR_PROC_FAILED
-        int error_class = error_code;
-        MPI_Error_class(error_code, &error_class);
-        if (error_class == MPIX_ERR_PROC_FAILED) {
-            job_stop::note_peer_failed();  // bounds this rank's exit fence: the dead peer may never reach it
-        }
-#endif
         int rank = 0;
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
         // throw with the textual form of the call
@@ -426,6 +419,30 @@ static void poll_pause(std::chrono::steady_clock::time_point start, int& pause_u
     pause_us = std::min(pause_us * 2, kMaxPauseUs);
 }
 
+// Another rank exited and the job goes on (tt-run-rank --on-peer-exit notify): the wait it was part of cannot
+// complete, so the caller gets the peer's exit as an exception and decides.
+static PeerExitError peer_exit_error(MPI_Comm comm, const char* what) {
+    int rank = 0;
+    MPI_Comm_rank(comm, &rank);
+    const auto exits = DistributedContext::peer_exits();
+    const DistributedContext::PeerExit last = exits.empty() ? DistributedContext::PeerExit{} : exits.back();
+    return PeerExitError(
+        Rank{rank},
+        last.rank,
+        last.exit_code,
+        "[MPIContext] rank " + std::to_string(rank) + ": " + what + " abandoned, " + last.describe());
+}
+
+static bool peer_failed_error(int rc) {
+    int error_class = MPI_SUCCESS;
+    MPI_Error_class(rc, &error_class);
+#if OMPI_HAS_ULFM
+    return error_class == MPIX_ERR_PROC_FAILED || error_class == MPIX_ERR_PROC_FAILED_PENDING;
+#else
+    return false;
+#endif
+}
+
 // Drive a non-blocking request to completion by polling it, so a wait can always be left. A blocking MPI call never
 // returns on a signal, so every wait in this context is one of these.
 //  - SIGTERM (the job is stopping, see distributed_termination.cpp): the wait throws at once, no clock involved, and
@@ -441,7 +458,19 @@ static void wait_or_abort(
     int pause_us = 20;
     for (;;) {
         int flag = 0;
-        MPI_CHECK(MPI_Test(&req, &flag, status != nullptr ? status : MPI_STATUS_IGNORE));
+        const int rc = MPI_Test(&req, &flag, status != nullptr ? status : MPI_STATUS_IGNORE);
+        if (rc != MPI_SUCCESS && peer_failed_error(rc) && job_stop::in_rank_wrapper()) {
+            // A peer died (ULFM). Its wrapper is stopping the job; give that SIGTERM the few ms it needs to arrive,
+            // so this rank leaves as a stopped rank below and not as a second failure.
+            for (int i = 0; i < 200 && !job_stop::stop_signal_seen(); ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            if (!job_stop::stop_signal_seen()) {
+                mpi_check(rc, "MPI_Test");  // no stop came: this rank's own failure, for its wrapper or MPI_Abort
+            }
+        } else {
+            mpi_check(rc, "MPI_Test");
+        }
         if (flag != 0) {
             return;
         }
@@ -455,6 +484,13 @@ static void wait_or_abort(
             throw std::runtime_error(
                 "[MPIContext] rank " + std::to_string(rank) + ": " + what + " abandoned, the job is stopping");
         }
+        if (DistributedContext::peer_exited()) {
+            if (point_to_point) {
+                MPI_Cancel(&req);
+                MPI_Request_free(&req);
+            }
+            throw peer_exit_error(comm, what);
+        }
         const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         if (timeout > 0.0 && elapsed >= timeout) {
             if (point_to_point) {
@@ -464,9 +500,7 @@ static void wait_or_abort(
             const std::string reason = std::string(what) +
                                        " did not complete within TT_METAL_OPERATION_TIMEOUT_SECONDS=" +
                                        std::to_string(static_cast<int>(timeout)) + " s (a peer is wedged or gone)";
-            if (!DistributedContext::request_job_stop(1, reason)) {
-                MPI_Abort(comm, 1);
-            }
+            DistributedContext::fail_rank(1, reason);  // this rank fails; its wrapper ends the job
             TT_THROW("MPIContext: {} timed out after {} s (a peer did not arrive)", what, timeout);
         }
         poll_pause(start, pause_us);
@@ -636,10 +670,10 @@ inline void init_env(int& argc, char**& argv) {
         }
 
         // The exit of the process. on_exit, not atexit: it sees the exit code, so a rank that exits non-zero (a
-        // C++ exit(1), main returning 1, a Python sys.exit(3) or uncaught exception, which end in exit too) stops
-        // the job before it leaves: the other ranks get SIGTERM, close their devices, and every rank leaves
-        // together (DistributedContext::leave_stopped_job). A rank whose job is stopping skips MPI_Finalize, which
-        // fences on every rank and would hang on peers still in their collectives (P1). A clean exit finalizes.
+        // C++ exit(1), main returning 1, a Python sys.exit(3) or uncaught exception, which end in exit too) leaves
+        // as a failed rank (DistributedContext::leave_job): no MPI_Finalize, which fences on every rank and would
+        // hang on peers still in their collectives (P1), and its tt-run-rank wrapper ends the job. A rank told to
+        // stop leaves the same way. A clean exit finalizes.
         // Teardown plan P27: a rank that exits 0 while its peers are still in a collective waits in MPI_Finalize
         // until the job ends; that fence is not bounded, since a rank cannot tell a peer that is still working
         // from one that is stuck. P24: the helpers this rank forked are ended first, on every path.
@@ -649,12 +683,13 @@ inline void init_env(int& argc, char**& argv) {
                     end_own_process_group();
                 }
                 if (g_launched && g_world_size > 1) {
-                    if (status != 0 && !DistributedContext::is_terminating() &&
-                        !DistributedContext::request_job_stop(status, "exited with code " + std::to_string(status))) {
-                        MPI_Abort(MPI_COMM_WORLD, status);  // no launcher to ask: the old way, every rank killed
+                    if (status != 0 && !DistributedContext::is_terminating()) {
+                        const std::string reason = "exited with code " + std::to_string(status);
+                        DistributedContext::fail_rank(status, reason);
+                        DistributedContext::teardown(reason);
                     }
                     if (DistributedContext::is_terminating()) {
-                        DistributedContext::leave_stopped_job();
+                        DistributedContext::teardown("SIGTERM");
                     }
                 }
                 MPI_Finalize();
@@ -662,8 +697,8 @@ inline void init_env(int& argc, char**& argv) {
             nullptr);
 
         // Teardown plan P1: a C++ rank that leaves through an uncaught exception (a TT_FATAL becomes one) must not
-        // let its peers hang in a barrier: it stops the job and leaves with them (exit 1, or 128 + SIGTERM when the
-        // exception is a wait the stop abandoned). MPI_Abort only when the launcher cannot be asked.
+        // let its peers hang in a barrier: it leaves as a failed rank (exit 1, or 128 + SIGTERM when the exception
+        // is a wait the stop abandoned) and its wrapper ends the job; MPI_Abort only without a wrapper.
         // Teardown plan P8: never std::abort(): SIGABRT writes a core dump, and the whole job would wait for it.
         std::set_terminate([] {
             std::string what = "unknown exception";
@@ -685,9 +720,14 @@ inline void init_env(int& argc, char**& argv) {
                 if (g_launched) {
                     end_own_process_group();  // P24, the abort path
                 }
-                if (g_launched && (DistributedContext::is_terminating() ||
-                                   DistributedContext::request_job_stop(1, "uncaught C++ exception: " + what))) {
-                    DistributedContext::leave_stopped_job();
+                if (g_launched) {
+                    const bool stopping = DistributedContext::is_terminating();
+                    if (!stopping) {
+                        DistributedContext::fail_rank(1, "uncaught C++ exception: " + what);
+                    }
+                    if (job_stop::in_rank_wrapper()) {
+                        DistributedContext::teardown(stopping ? "SIGTERM" : "uncaught C++ exception: " + what);
+                    }
                 }
                 MPI_Abort(MPI_COMM_WORLD, 1);
             }
@@ -724,11 +764,9 @@ void MPIContext::create(int argc, char** argv) {
     const int job_world_size = static_cast<int>(*parent->size());
     g_world_size = job_world_size;
     if (g_launched && job_world_size > 1) {
-        // A launched rank of a real job leaves on SIGTERM through its waits and the exit above, and stops the job
-        // itself when it fails (distributed_termination.cpp). The watchdog's last resort is MPI_Abort.
-        job_stop::set_force_abort([](int code) { MPI_Abort(MPI_COMM_WORLD, code); });
+        // A launched rank of a real job leaves on SIGTERM through its waits and the exit above, and leaves as a
+        // failed rank when it fails (distributed_termination.cpp); its tt-run-rank wrapper ends the job.
         DistributedContext::install_termination_handler();
-        job_stop::tell_rank_wrapper("context");
     }
 
     g_mpi_launcher_env_layout = parse_launcher_env_layout_from_env(job_world_size);
@@ -1138,8 +1176,15 @@ static int run_leaveable(MPI_Comm comm, const char* what, const std::function<in
     int pause_us = 20;
     for (;;) {
         if (state->done.load(std::memory_order_acquire)) {
-            out = state->out;
-            return state->rc;
+            if (state->rc != MPI_SUCCESS && peer_failed_error(state->rc) && job_stop::in_rank_wrapper()) {
+                for (int i = 0; i < 200 && !job_stop::stop_signal_seen(); ++i) {  // as in wait_or_abort
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+            }
+            if (!(state->rc != MPI_SUCCESS && DistributedContext::is_terminating())) {
+                out = state->out;
+                return state->rc;
+            }  // else: the stop is here, leave as a stopped rank below
         }
         if (DistributedContext::is_terminating()) {
             int rank = 0;
@@ -1147,14 +1192,15 @@ static int run_leaveable(MPI_Comm comm, const char* what, const std::function<in
             throw std::runtime_error(
                 "[MPIContext] rank " + std::to_string(rank) + ": " + what + " abandoned, the job is stopping");
         }
+        if (DistributedContext::peer_exited()) {
+            throw peer_exit_error(comm, what);
+        }
         const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         if (timeout > 0.0 && elapsed >= timeout) {
             const std::string reason = std::string(what) +
                                        " did not complete within TT_METAL_OPERATION_TIMEOUT_SECONDS=" +
                                        std::to_string(static_cast<int>(timeout)) + " s (a peer is wedged or gone)";
-            if (!DistributedContext::request_job_stop(1, reason)) {
-                MPI_Abort(comm, 1);
-            }
+            DistributedContext::fail_rank(1, reason);  // this rank fails; its wrapper ends the job
             TT_THROW("MPIContext: {} timed out after {} s (a peer did not arrive)", what, timeout);
         }
         poll_pause(start, pause_us);
@@ -1224,10 +1270,14 @@ void MPIContext::abort(int error_code) const {
         // its private session directory. Exit normally with the code instead, so MPI_Finalize and the cleanup run.
         std::exit(error_code);
     }
-    // Stop the job rather than kill it: the other ranks get SIGTERM and close their devices, then every rank leaves
-    // together with this code. MPI_Abort (every rank killed where it stands) only when the launcher cannot be asked.
-    if (g_launched && DistributedContext::request_job_stop(error_code, "abort(" + std::to_string(error_code) + ")")) {
-        DistributedContext::leave_stopped_job();
+    // Leave as a failed rank: this rank exits with the code and its wrapper ends the job, so the other ranks get
+    // SIGTERM and close their devices. MPI_Abort (every rank killed where it stands) only without a wrapper.
+    if (g_launched) {
+        const std::string reason = "abort(" + std::to_string(error_code) + ")";
+        DistributedContext::fail_rank(error_code, reason);
+        if (job_stop::in_rank_wrapper()) {
+            DistributedContext::teardown(reason);
+        }
     }
     MPI_Abort(comm_, error_code);
 }

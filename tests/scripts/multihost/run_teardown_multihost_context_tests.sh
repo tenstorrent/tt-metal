@@ -5,7 +5,7 @@
 # (sanity_probe.py: ttnn, the DistributedContext, a mesh on the mock dual galaxy, no device) through tt-run, rank 0
 # on the first host and rank 1 on the second, and checks every way a job ends (the table in
 # tests/tt_metal/distributed/multiprocess/teardown_sanity/README.md): the job's exit code, the rank tt-run names,
-# that every rank still alive closed its mesh (close_done), and that nothing is left on any host.
+# that every rank still alive went through teardown (its "teardown initiated" line), and that nothing is left on any host.
 #
 # Usage: run_teardown_multihost_context_tests.sh --hosts h1,h2[,...]
 # Remote commands go over ssh (the SC4 lane), or srun --overlap with TEARDOWN_REMOTE=srun inside a Slurm allocation
@@ -95,32 +95,32 @@ leftovers() {
   echo "$n"
 }
 
-# check <name> <exit code> <ranks that must have closed, e.g. "0 1"> [stop line regex] [extra log regex]
+# check <name> <exit code> <ranks that must have torn down, e.g. "0 1"> [stop line regex] [extra log regex]
 check() {
   local name="$1" want="$2" closed="$3" stop="${4:-}" extra="${5:-}" why="" left
   [ "$RC" -eq "$want" ] || why="exit $RC, expected $want"
   for r in $closed; do
-    grep -aq "probe r=$r [^]]*\] close_done" "$LOG" || why="${why:+$why; }rank $r did not close its mesh"
+    grep -aq "\[rank $r\] teardown initiated: " "$LOG" || why="${why:+$why; }rank $r did not go through teardown"
   done
-  if [ -n "$stop" ] && ! grep -aqE "\[tt-stop\] rank $stop" "$LOG"; then why="${why:+$why; }no [tt-stop] line 'rank $stop'"; fi
+  if [ -n "$stop" ] && ! grep -aqE "\[rank $stop\] .*stopping the job" "$LOG"; then why="${why:+$why; }no stop line 'rank $stop'"; fi
   if [ -n "$extra" ] && ! grep -aqE "$extra" "$LOG"; then why="${why:+$why; }log lacks /$extra/"; fi
   left=$(leftovers)
   [ "$left" -eq 0 ] || why="${why:+$why; }$left probe rank(s) left on the hosts"
   if [ -z "$why" ]; then
-    echo "PASS  $name  (exit $RC; closed: ${closed:-none}; nothing left)"
+    echo "PASS  $name  (exit $RC; tore down: ${closed:-none}; nothing left)"
   else
     echo "::error::FAIL  $name  ($why)"; FAIL=1
-    grep -aE "\[tt-stop\]|\[tt-run\]|close_|Error" "$LOG" | tail -20 | sed 's/^/    /'
+    grep -aE "stopping the job|teardown initiated|\[tt-run\]|Error" "$LOG" | tail -20 | sed 's/^/    /'
     for h in "$H0" "$H1"; do remote_sh "$h" "pkill -9 -f 'sanity_prob[e].py'" >/dev/null 2>&1 || true; done
   fi
-  grep -aE "\[tt-stop\] rank|job end:" "$LOG" | sed -E 's/^.*(\[tt-stop\]|\[tt-run\] job end)/\1/' | sed 's/^/      /'
+  grep -aE "stopping the job|job end:" "$LOG" | sed -E 's/^.*(\[rank [0-9]+\]|\[tt-run\] job end)/\1/' | sed 's/^/      /'
   rm -f "$LOG"
 }
 
 echo "=== rank 0 on $H0, rank 1 on $H1; tt-run=$TTRUN"
 
 run clean -
-check "clean" 0 "0 1" "" "outcome=clean exit=0"
+check "clean" 0 "" "" "outcome=clean exit=0"
 
 run ctrl_c INT PROBE_COLL=send_no_recv
 check "ctrl_c_at_ttrun" 130 "0 1" "" "outcome=stopped exit=130"
@@ -129,10 +129,10 @@ run sigterm_ttrun TERM PROBE_COLL=send_no_recv
 check "sigterm_at_ttrun" 143 "0 1" "" "outcome=stopped exit=143"
 
 run sigterm_remote_rank rank1:TERM PROBE_COLL=barrier_slow PROBE_SLOW_S=60
-check "sigterm_to_remote_rank" 143 "0 1" "1 on $H1 .*received SIGTERM from pid"
+check "sigterm_to_remote_rank" 143 "0 1" "1 on $H1 .*exited with code 143"
 
 run exit1_remote - PROBE_SCENARIO=exit1
-check "sys_exit_1_on_remote_rank" 1 "0 1" "1 on $H1 .*sys.exit\(1\)"
+check "sys_exit_1_on_remote_rank" 1 "0 1" "1 on $H1 .*Python exception SystemExit: 1"
 
 run raise_remote - PROBE_SCENARIO=raise
 check "exception_on_remote_rank" 1 "0 1" "1 on $H1 .*Python exception RuntimeError"

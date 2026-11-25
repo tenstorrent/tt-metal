@@ -12,7 +12,6 @@ call returned.
 Env (all optional):
   PROBE_SCENARIO   clean | raise | exit_nofinalize | sigkill | segv | abort | use_before_init | sigint | fork_helper
                    segv: SIGSEGV to this rank (a crash; tt-run-rank stops the job in its place)
-                   thread_raise: an uncaught exception in a worker thread, the main thread goes on to the collective
                    cxx_throw: an uncaught C++ exception (std::runtime_error) on this rank, as a C++ TT_FATAL escapes
                    ignore_sigterm: this rank ignores SIGTERM from here on (a rank stuck in a device wait)
                    slow_exit: this rank works PROBE_SLOW_S more after the final barrier, the others exit 0 first
@@ -120,10 +119,6 @@ def do_fault() -> None:
         os.kill(os.getpid(), signal.SIGKILL)
     if SCENARIO == "segv":
         os.kill(os.getpid(), signal.SIGSEGV)
-    if SCENARIO == "thread_raise":
-        t = threading.Thread(target=lambda: (_ for _ in ()).throw(RuntimeError("worker failed")), name="worker")
-        t.start()
-        t.join()
     if SCENARIO == "cxx_throw":
         throw_uncaught_cxx_exception("injected C++ failure")
     if SCENARIO == "ignore_sigterm":
@@ -175,7 +170,6 @@ def maybe_fault(phase: str) -> None:
             "fork_helper",
             "exit1",
             "exit0",
-            "thread_raise",
             "cxx_throw",
             "ignore_sigterm",
         )

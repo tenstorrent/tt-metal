@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
 #include <cstddef>
@@ -123,6 +124,24 @@ public:
     ~DistributedException() override = default;
 };
 
+/// Thrown by a context wait when another rank exited and the job goes on (tt-run-rank --on-peer-exit notify).
+class PeerExitError : public DistributedException {
+public:
+    PeerExitError(Rank rank, int peer_rank, int peer_code, std::string msg) :
+        rank_(rank), peer_rank_(peer_rank), peer_code_(peer_code), message_(std::move(msg)) {}
+    Rank rank() const noexcept override { return rank_; }
+    int error_code() const noexcept override { return peer_code_; }
+    const std::string& message() const noexcept override { return message_; }
+    const std::string& error_string() const noexcept override { return message_; }
+    int peer_rank() const noexcept { return peer_rank_; }
+
+private:
+    Rank rank_;
+    int peer_rank_;
+    int peer_code_;
+    std::string message_;
+};
+
 struct Status {
     Rank source = Rank(0);
     Tag tag = Tag(0);
@@ -158,27 +177,36 @@ public:
     /// Returns the sub-context communicator (after an optional MPI_Comm_split via TT_RUN_SUBCONTEXT_ID).
     static const ContextPtr& get_current_world();
 
-    /// A rank that is ending on a signal (the launcher's SIGTERM, a Ctrl-C at tt-run) marks itself terminating
-    /// before it unwinds, so the close of its devices does not fence on peers that are still in their own
-    /// collectives; the device close itself still runs. Sticky for the life of the process.
+    /// A rank that is ending on a signal (the launcher's SIGTERM, a Ctrl-C at tt-run) is marked terminating: every
+    /// context wait polls the flag and throws. Sticky for the life of the process.
     static void mark_terminating();
     static bool is_terminating();
     /// Installs the SIGTERM handler of a launched rank: it marks the process terminating and chains to the handler
-    /// that was there (Python's, which raises SystemExit at the next bytecode). The default disposition is not
-    /// re-raised: the context's waits watch the flag and throw, so the rank unwinds, closes its devices and leaves
-    /// through stop_job's exit. A SIGTERM that did not come from the launcher (kill or scancel of this one pid) is
-    /// sent on to every rank of the job. Re-installs over a handler set after it; a no-op under a simulator.
+    /// that was there (Python's). The default disposition is not re-raised: the context's waits watch the flag and
+    /// throw. Re-installs over a handler set after it; a no-op under a simulator.
     static void install_termination_handler();
-    /// Stops the whole job because of this rank: prints one "[tt-stop] rank R on HOST (pid P): <reason>; stopping
-    /// the job (exit CODE)" line (tt-run reads it to name the rank and return CODE), marks this rank terminating and
-    /// sends SIGTERM to every rank of the job through the launcher (PMIx job control), so they close their devices.
-    /// Only the first call acts. Returns false when there is no launcher to ask (no PMIx, or not launched).
-    static bool request_job_stop(int exit_code, const std::string& reason);
-    /// The exit of a rank whose job is stopping: waits (bounded by TT_METAL_STOP_TIMEOUT_S) until every rank has
-    /// reached this point, so no rank's exit makes the launcher kill a peer that is still closing, then ends the
-    /// process with the stop's exit code (the requested code, or 128 + SIGTERM on a rank that was told to stop).
-    /// MPI_Finalize is skipped: it is collective and the peers are not all in it.
-    [[noreturn]] static void leave_stopped_job();
+    /// This rank failed: marks it terminating, so every later wait throws, and tells its tt-run-rank wrapper why
+    /// ("failed <code> <reason>" on TT_RUN_RANK_FD). The wrapper reports the failure, stops the job and holds the
+    /// exits; the rank itself never signals its peers. Only the first call acts; returns false after that.
+    static bool fail_rank(int exit_code, const std::string& reason);
+    /// The one place a rank goes to leave a job that is stopping (a SIGTERM reached it). For now it only says so on
+    /// stderr and exits through leave_job; closing the devices and the grace come later.
+    [[noreturn]] static void teardown(const std::string& reason);
+    /// The exit of a launched rank that is not clean: ends the process with the rank's code (its failure's, else
+    /// 128 + SIGTERM). MPI_Finalize is skipped: it is collective and the peers are not all in it.
+    [[noreturn]] static void leave_job();
+    /// Another rank of the job exited and the job goes on (tt-run-rank --on-peer-exit notify): the wrapper wrote an
+    /// "exit <rank> <code> <signal> <reason>" line on TT_RUN_RANK_EVENTS_FD and sent SIGUSR1. The handler only sets
+    /// a flag; every context wait then throws PeerExitError, and peer_exits() lists every exit seen so far.
+    struct PeerExit {
+        int rank = -1;
+        int exit_code = 0;
+        int signal = 0;
+        std::string reason;
+        std::string describe() const;
+    };
+    static bool peer_exited();
+    static std::vector<PeerExit> peer_exits();
     /// Returns the unsplit world communicator (MPI_COMM_WORLD). rank() and size() on this handle
     /// are global launcher ranks. Identical to get_current_world() when MPI is disabled or no split occurred.
     static ContextPtr get_world_context();
@@ -237,11 +265,7 @@ public:
         ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
 
     virtual void reduce(
-        ttsl::Span<std::byte> send_buf,
-        ttsl::Span<std::byte> recv_buf,
-        ReduceOp op,
-        DType dtype,
-        Rank root) const = 0;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root) const = 0;
 
     virtual void reduce_scatter(
         ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;

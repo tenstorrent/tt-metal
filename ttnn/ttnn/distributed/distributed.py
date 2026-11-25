@@ -3,13 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import os
+import signal
 import sys
 import functools
 
 from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union, List
 
 import ttnn
-
 
 MeshDevice = ttnn._ttnn.multi_device.MeshDevice
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
@@ -674,7 +675,7 @@ def open_mesh_device(
     """
     # Fetch the matmul config model if it was turned on but isn't there yet (ttnn/ttnn/matmul_model/__init__.py)
     ttnn.matmul_model.download_if_enabled()
-    return ttnn._ttnn.multi_device.open_mesh_device(
+    mesh_device = ttnn._ttnn.multi_device.open_mesh_device(
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,
         num_command_queues=num_command_queues,
@@ -684,29 +685,92 @@ def open_mesh_device(
         physical_device_ids=physical_device_ids,
         worker_l1_size=worker_l1_size,
     )
+    _install_rank_hooks()  # the open created the world if nothing had
+    return mesh_device
 
 
 def close_mesh_device(mesh_device):
     """
     close_mesh_device(multi_device: ttnn.Multi) -> None:
 
-    Close the device and remove it from the device cache.
-
-    In a distributed job, a close that runs while an exception is unwinding (a ``with`` block or ``finally`` on the
-    way out of an error) first stops the job: every other rank gets SIGTERM and closes its own devices. Otherwise this
-    rank's close would wait for peers that are still in their collectives, and the error would never reach them.
+    Close the device and remove it from the device cache. In a job with peers, a close reached with an exception in
+    flight (the ``with`` / ``finally`` of a failing rank) goes to teardown instead (``_fail``).
     """
     exc = sys.exc_info()[1]
     if exc is not None and not (isinstance(exc, SystemExit) and exc.code in (0, None)):
-        if isinstance(exc, SystemExit):
-            code = exc.code if isinstance(exc.code, int) else 1
-        else:
-            code = 130 if isinstance(exc, KeyboardInterrupt) else 1
-        text = " ".join(str(exc).split("backtrace:")[0].split())[:400]  # one line: tt-run reads the stop per line
-        ttnn._ttnn.multi_device.request_job_stop(
-            code, f"Python exception {type(exc).__name__}{': ' + text if text else ''} (closing the mesh)"
-        )
+        _fail(exc)
     return ttnn._ttnn.multi_device.close_mesh_device(mesh_device)
+
+
+_rank_pid = None  # the process that installed the rank hooks; a forked child inherits them and must not act
+
+
+def _teardown(reason):
+    """The one place a Python rank goes to leave a job that is stopping or that it failed. For now: say so on
+    stderr and exit (143, or this rank's own failure code); closing the mesh comes later."""
+    ttnn._ttnn.multi_device.teardown(reason)
+
+
+def _fail(exc):
+    """This rank failed in Python (an exception unwinding into the mesh close, a KeyboardInterrupt, a sys.exit(n),
+    or an uncaught exception): tell its tt-run-rank wrapper why, so it stops the job, then go to teardown."""
+    if os.getpid() != _rank_pid:
+        return
+    if isinstance(exc, SystemExit):
+        code = exc.code if isinstance(exc.code, int) else 1
+    else:
+        code = 130 if isinstance(exc, KeyboardInterrupt) else 1
+    text = " ".join(str(exc).split("backtrace:")[0].split())[:400]  # the wrapper reads one line
+    reason = f"Python exception {type(exc).__name__}{': ' + text if text else ''}"
+    ttnn._ttnn.multi_device.fail_rank(code, reason)
+    _teardown(reason)
+
+
+def _install_rank_hooks():
+    """
+    Once per rank of a job with peers. The context's C-level handlers only set a flag that its waits poll; Python
+    code sees nothing until these run in the main thread at the next bytecode. Every way out goes to ``_teardown``:
+
+    - SIGTERM, the job is stopping: ``_teardown("SIGTERM")``.
+    - SIGINT (Ctrl-C to this rank): Python's own ``KeyboardInterrupt`` unwinds into ``close_mesh_device`` or the
+      excepthook, which go through ``_fail``.
+    - a Python failure (an exception, ``sys.exit(n)``): the same two places.
+    - SIGUSR1, a peer exited and the job goes on (``tt-run-rank --on-peer-exit notify``): ``ttnn.PeerExitError``.
+    A handler the program installed itself wins; a signal that lands inside a C++ call is delivered when it returns.
+    """
+    global _rank_pid
+    if _rank_pid is not None or os.getenv("TT_METAL_SIMULATOR") or int(ttnn._ttnn.multi_device.get_size()) < 2:
+        return
+    _rank_pid = os.getpid()
+    previous_excepthook = sys.excepthook
+
+    def excepthook(etype, value, tb):
+        previous_excepthook(etype, value, tb)
+        _fail(value)
+
+    sys.excepthook = excepthook
+
+    def on_sigterm(signum, frame):
+        if os.getpid() == _rank_pid:
+            _teardown("SIGTERM")
+
+    def on_sigusr1(signum, frame):
+        exits = ttnn._ttnn.multi_device.peer_exits()
+        if os.getpid() == _rank_pid and exits and sys.exc_info()[0] is None:
+            e = exits[-1]
+            raise ttnn.PeerExitError(f"rank {e['rank']} exited with code {e['exit_code']}: {e['reason']}")
+
+    if signal.getsignal(signal.SIGTERM) is signal.SIG_DFL:
+        signal.signal(signal.SIGTERM, on_sigterm)
+    if os.getenv("TT_RUN_RANK_EVENTS_FD") and signal.getsignal(signal.SIGUSR1) is signal.SIG_DFL:
+        signal.signal(signal.SIGUSR1, on_sigusr1)
+    ttnn._ttnn.multi_device.install_termination_handler()  # signal.signal replaced the C-level handlers: put them back on top
+
+
+def init_distributed_context():
+    """Create the distributed context (MPI_Init) and install the rank hooks."""
+    ttnn._ttnn.multi_device.init_distributed_context()
+    _install_rank_hooks()
 
 
 @contextlib.contextmanager
