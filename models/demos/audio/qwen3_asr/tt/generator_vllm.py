@@ -10,6 +10,7 @@ processors; these classes register them and serve the model through
 as upstream does with ``--hf-overrides '{"architectures": ["Qwen3ASRRealtimeGeneration"]}'``.
 ``Qwen3ASRForcedAlignerForTokenClassification`` serves Qwen3-ForcedAligner-0.6B as a
 pooling model (``runner="pooling"``, ``token_classify``), as upstream's class of that name.
+``Qwen3ForcedAlignerDiarizer`` serves the same aligner and adds pyannote speaker data per request.
 """
 import torch
 from huggingface_hub import snapshot_download
@@ -23,11 +24,13 @@ from vllm.model_executor.models.qwen3_asr import Qwen3ASRMultiModalProcessor, Qw
 from vllm.model_executor.models.qwen3_asr_realtime import Qwen3ASRRealtimeGeneration as _UpstreamQwen3ASRRealtime
 from vllm.model_executor.models.qwen3_asr_realtime import Qwen3ASRRealtimeMultiModalProcessor
 from vllm.multimodal import MULTIMODAL_REGISTRY
+from vllm.multimodal.inputs import MultiModalFieldConfig
 
 from models.demos.audio.qwen3_asr.demo.transcribe import find_text_decoder
 from models.demos.audio.qwen3_asr.tt.audio_encoder import MAX_MEL_FRAMES, MEL_FRAMES_PER_SECOND
 from models.demos.audio.qwen3_asr.tt.forced_aligner import Qwen3ForcedAligner
 from models.demos.audio.qwen3_asr.tt.generator import Qwen3ASRGenerator, split_audio_features
+from models.experimental.pyannote.tt.diarizer import TtDiarizer
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
@@ -175,4 +178,91 @@ class Qwen3ASRForcedAlignerForTokenClassification(Qwen3ForcedAligner, SupportsMu
             flens = audio_feature_lengths[i] if audio_feature_lengths is not None else None
             (mel,) = split_audio_features(feats, flens)
             out.append(self.token_logits(tokens[i, :n], mel))
+        return out
+
+
+# vLLM caches the HF processor per mm_processor_kwargs value, so this takes only two values.
+DIARIZE_KWARG = "diarize_context_samples"
+
+
+class Qwen3ForcedAlignerDiarizerMultiModalProcessor(Qwen3ASRMultiModalProcessor):
+    """With ``mm_processor_kwargs={"diarize_context_samples": n}``, the audio item is a chunk followed
+    by n samples of context (0 for the last chunk): the aligner's features come from the chunk only,
+    and the whole waveform goes to the diarizer as ``diarize_waveform``."""
+
+    def _call_hf_processor(self, hf_data, hf_kwargs):
+        hf_kwargs = dict(hf_kwargs)
+        context_samples = hf_kwargs.pop(DIARIZE_KWARG, None)
+        audios = hf_data.get("audio")
+        if context_samples is None or not audios:
+            return super()._call_hf_processor(hf_data, hf_kwargs)
+        if len(audios) != 1:
+            raise ValueError(f"diarization takes one audio item per request, got {len(audios)}")
+        (audio,) = audios
+        chunk_samples = len(audio) - int(context_samples)
+        out = super()._call_hf_processor(dict(hf_data, audio=[audio[:chunk_samples]]), hf_kwargs)
+        out["diarize_waveform"] = torch.as_tensor(audio, dtype=torch.float32)[None]
+        out["diarize_chunk_samples"] = torch.tensor([chunk_samples])
+        return out
+
+    def _get_mm_fields_config(self, hf_inputs, hf_processor_mm_kwargs):
+        fields = dict(super()._get_mm_fields_config(hf_inputs, hf_processor_mm_kwargs))
+        for key in ("diarize_waveform", "diarize_chunk_samples"):
+            if key in hf_inputs:
+                fields[key] = MultiModalFieldConfig.batched("audio", keep_on_cpu=True)
+        return fields
+
+
+class _SpeakerDataPooler:
+    """The aligner's token_classify pooler; a request with speaker data gets
+    ``{"logits": <pooler output>, "diar.<name>": tensor}`` instead of the bare logits."""
+
+    def __init__(self, pooler, pending):
+        self._pooler, self._pending = pooler, pending
+
+    def __getattr__(self, name):
+        return getattr(self._pooler, name)
+
+    def __call__(self, hidden_states, pooling_metadata):
+        outputs = self._pooler(hidden_states=hidden_states, pooling_metadata=pooling_metadata)
+        if len(self._pending) != len(outputs):
+            raise RuntimeError(f"{len(self._pending)} speaker results for {len(outputs)} pooled requests")
+        speakers = [self._pending.pop(0) for _ in outputs]
+        return [
+            out if data is None else {"logits": out, **{f"diar.{k}": torch.from_numpy(v) for k, v in data.items()}}
+            for out, data in zip(outputs, speakers)
+        ]
+
+
+@default_pooling_type(tok_pooling_type="ALL")
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3ForcedAlignerDiarizerMultiModalProcessor, info=Qwen3ASRProcessingInfo, dummy_inputs=Qwen3ASRDummyInputsBuilder
+)
+class Qwen3ForcedAlignerDiarizer(Qwen3ASRForcedAlignerForTokenClassification):
+    """Qwen3-ForcedAligner-0.6B word timestamps and, for requests that carry ``diarize_waveform``,
+    pyannote segmentation (host) and WeSpeaker embeddings (on the aligner's device) per 10 s window.
+    Clustering across a request's chunks is left to the caller
+    (models.experimental.pyannote.reference.diarization.diarize)."""
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, mesh_device, *args, **kwargs):
+        model = super().initialize_vllm_model(hf_config, mesh_device, *args, **kwargs)
+        model.diarizer = TtDiarizer(mesh_device)
+        model.diarizer.warmup()
+        # The runner calls prefill_forward once per request, then the pooler on all of them in order.
+        model._speaker_data = []
+        model.pooler = _SpeakerDataPooler(model.pooler, model._speaker_data)
+        return model
+
+    def prefill_forward(self, tokens, prompt_lens=None, diarize_waveform=None, diarize_chunk_samples=None, **kwargs):
+        out = super().prefill_forward(tokens, prompt_lens=prompt_lens, **kwargs)
+        for i in range(len(out)):
+            wav = diarize_waveform[i] if diarize_waveform is not None else None
+            if wav is None or wav[0] is None:
+                self._speaker_data.append(None)
+                continue
+            (wav,), (chunk_samples,) = wav, diarize_chunk_samples[i]
+            wav, chunk_samples = wav.reshape(-1), int(chunk_samples)
+            # The last chunk has no context after it; its windows end with pyannote's padded window.
+            self._speaker_data.append(self.diarizer(wav, chunk_samples if wav.numel() > chunk_samples else None))
         return out
