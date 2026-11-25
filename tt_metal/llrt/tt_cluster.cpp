@@ -7,8 +7,8 @@
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/hal/tt-2xx/quasar/qa_emulator_models.hpp"

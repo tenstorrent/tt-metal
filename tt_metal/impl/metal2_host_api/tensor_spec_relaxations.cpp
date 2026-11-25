@@ -9,9 +9,9 @@
 #include <tuple>
 #include <utility>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal {

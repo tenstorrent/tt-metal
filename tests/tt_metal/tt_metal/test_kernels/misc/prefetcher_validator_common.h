@@ -106,10 +106,11 @@ FORCE_INLINE uint32_t l1_word(uint32_t base_addr, uint32_t word_index) {
 
 // Index of the first word where the delivered block differs from the expected one, or kNoMismatch
 // when they match. Word-strided so a mismatch reports where it starts rather than just that it
-// happened.
-FORCE_INLINE uint32_t first_mismatching_word(uint32_t received_addr, uint32_t expected_addr, uint32_t page_bytes) {
+// happened. With a word_stride above 1 it compares only every word_stride'th word, from word 0.
+FORCE_INLINE uint32_t
+first_mismatching_word(uint32_t received_addr, uint32_t expected_addr, uint32_t page_bytes, uint32_t word_stride = 1) {
     const uint32_t words = page_bytes / sizeof(uint32_t);
-    for (uint32_t w = 0; w < words; ++w) {
+    for (uint32_t w = 0; w < words; w += word_stride) {
         if (l1_word(received_addr, w) != l1_word(expected_addr, w)) {
             return w;
         }
@@ -150,11 +151,15 @@ FORCE_INLINE uint32_t l1_word(const CoreLocalMem<T, A>& base, uint32_t word_inde
 
 template <typename T1, typename A1, typename T2, typename A2>
 FORCE_INLINE uint32_t first_mismatching_word(
-    const CoreLocalMem<T1, A1>& received, const CoreLocalMem<T2, A2>& expected, uint32_t page_bytes) {
+    const CoreLocalMem<T1, A1>& received,
+    const CoreLocalMem<T2, A2>& expected,
+    uint32_t page_bytes,
+    uint32_t word_stride = 1) {
     return first_mismatching_word(
         static_cast<uint32_t>(local_mem::detail::AddressAccess::address(received)),
         static_cast<uint32_t>(local_mem::detail::AddressAccess::address(expected)),
-        page_bytes);
+        page_bytes,
+        word_stride);
 }
 
 }  // namespace prefetcher_validator

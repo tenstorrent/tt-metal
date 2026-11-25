@@ -5,7 +5,7 @@
 #include <internal/cluster.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "impl/context/metal_env_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"

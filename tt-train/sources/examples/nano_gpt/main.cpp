@@ -6,8 +6,9 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <tt-metalium/discovery/cluster.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/observability/memory_reporter.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"

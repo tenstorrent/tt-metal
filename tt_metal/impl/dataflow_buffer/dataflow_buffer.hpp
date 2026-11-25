@@ -8,9 +8,9 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 
 #include "tt_metal/hw/inc/api/dataflow/dfb_access.h"
 

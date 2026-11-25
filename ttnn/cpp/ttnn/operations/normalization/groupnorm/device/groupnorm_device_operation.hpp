@@ -11,7 +11,7 @@
 
 #include "groupnorm_device_operation_types.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
