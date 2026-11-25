@@ -14,26 +14,28 @@
 
 **Code audited at:** `977421c3a1c` on `iwrosz/isin_metal2.0` (recipe tip `c41f7f4ef0a` + `origin/main` `a1ce48e3fe8`). **Readiness sheet:** fresh fetch taken by the orchestrating session at 2026-11-03 13:06 UTC (28 columns, 477 data rows). It has exactly one row for this op.
 
+**Reconciled 2026-11-25.** The readiness-sheet owner fixed row 191, and the orchestrating session fetched it live on 2026-11-25. The code was re-checked at `233a155fba1` (the audit commit `3dcd984bc80` merged with `origin/main` `86f63a50136`). The only change in the op since the audit is the `tt-metalium` header-path move (#67012), which touches include lines only, so every `file:line` below still holds. The TTNN factory gate is now GREEN, and the brief is issued.
+
 ## Status summary
 
 | Field | Value |
 |---|---|
 | **Op directory** | `ttnn/cpp/ttnn/operations/experimental/isin` |
-| **Overall** | **RED**: the readiness sheet is stale for this op ("spreadsheet is broken", routed to the readiness-sheet owner). Every gate that depends on the op's code clears. |
+| **Overall** | **GREEN**. Every gate clears. The sheet row that held the 2026-11-03 RED was reconciled on 2026-11-25. |
 | **DOps / Factories** | `IsInDeviceOperation` → `IsInProgramFactory` |
 | *Prereqs* — Device 2.0 (every kernel used) | **Yes.** `isin_reader.cpp`, `isin_writer.cpp` and `isin_common.hpp` are all on `Noc` / `CircularBuffer` / `TensorAccessor`. Two judgment calls are recorded, neither counted as a violation: `get_dataformat(cb)` used as a template argument (`isin_reader.cpp:91`), and 4 raw L1 casts on wrapper-supplied pointers. See Gate detail and Question 2. |
 | *Prereqs* — Cross-op escapes | **Ok.** No include resolves outside `tt_metal/*`. Both kernels are op-owned and bound only by this factory. |
 | *Feature Support* — overall | **GREEN** (all three Appendix A entries N/A) |
 | *Feature Support* — Variadic-CTA | **Ok.** No CTA varargs: fixed CTA indices 3–11 plus chained `TensorAccessorArgs`. Appendix A has no such entry today (Recipe note 2). |
-| *TTNN Readiness* — `Is able to port?` (the gate) | Sheet: `yes (with PD step)` → **RED**. Attributed to a **spreadsheet-broken** conflict on `Concept`: the PD step the cell asks for is already done. Routed to the readiness-sheet owner. |
-| *TTNN Readiness* — Concept (current) | Code: **`descriptor`** (since `d67dde5ad66`, #57541, 2026-09-29). Sheet: `legacy device-op` (**stale**). |
+| *TTNN Readiness* — `Is able to port?` (the gate) | **Yes.** Row 191 as fetched 2026-11-25 reads `yes`. (On 2026-11-03 it read `yes (with PD step)`, a spreadsheet-broken conflict on `Concept`, since fixed by the sheet owner.) |
+| *TTNN Readiness* — Concept (current) | **`descriptor`**. Code and sheet agree (code since `d67dde5ad66`, #57541, 2026-09-29; sheet since the 2026-11-25 reconciliation). |
 | *TTNN Readiness* — Execution Model | `SPMD` (not mesh-shaped, so `Secretly SPMD Workload?` is N/A) |
 | *TTNN Readiness* — Custom hash | No — default hash. Sheet `no` / backdoor `no`; matches the code. |
 | *TTNN Readiness* — `get_dynamic_runtime_args` | No (matches) |
-| *TTNN Readiness* — `override_runtime_arguments` | No in code. The sheet shows `n/a` because the column is "PD only" and the row is classed legacy, so it follows from the stale `Concept`. |
+| *TTNN Readiness* — `override_runtime_arguments` | No. Code and sheet (`no`) agree. |
 | *TTNN Readiness* — Pybind `create_descriptor` | No (matches) |
 | *TTNN Readiness* — Op-owned tensors | No (matches) |
-| *TTNN Readiness* — Target concept | `ProgramSpecFactoryConcept` (the sheet's `Porting Target`). Consistent with the code; re-read it after the row is reconciled. |
+| *TTNN Readiness* — Target concept | `ProgramSpecFactoryConcept` (the sheet's `Porting Target`, re-read 2026-11-25). |
 | *Port work* — Offset base pointer | none |
 | *Port work* — Tensor bindings (per binding) | `elements` Case 1 · `test_elements` Case 1 · `output` Case 1. All three are `Buffer*`-binding RTAs today. |
 | *TTNN Readiness* — TensorParameter relaxation | `none` (clears) |
@@ -42,30 +44,28 @@
 
 ## Result
 
-**RED → blocked on the TTNN factory concept gate, routed to the readiness-sheet owner.** The sheet still classifies `IsInProgramFactory` as `legacy device-op`, so its derived `Is able to port?` cell reads `yes (with PD step)`. The code contradicts it: `d67dde5ad66` ("[ttnn] Describe experimental isin with ProgramDescriptor (#57541)", 2026-09-29, already on `origin/main`) migrated the factory to `ProgramDescriptor`. That is a primary-column conflict. Per the recipe, the sheet is therefore broken for this op, and the gate holds until its owner reconciles the row. **`RED at op level; no portable subset`**: the op has a single factory.
+**GREEN → brief issued** (`METAL2_PORT_BRIEF.md`). Every gate clears: TTNN factory concept ✓ · Device 2.0 ✓ · Feature compatibility ✓ (all N/A) · Offset base pointers ✓ · TensorAccessor 3rd arg ✓ (3 sites, Class 2, drop).
 
-Every gate that depends on the op's code clears: Device 2.0 ✓ · Feature compatibility ✓ (all N/A) · Offset base pointers ✓ · TensorAccessor 3rd arg ✓ (3 sites, Class 2, drop). All of the sheet's other cross-checked columns match the code.
-
-**Path forward:** reconcile the row by setting `Concept` → `descriptor` and `Override runtime args method?` → `no`, then let the derived cells recompute. If `Is able to port?` then reads `yes`, the op needs **no code change** before the port. A re-audit only has to confirm the row and check that the code hasn't moved; it can then issue the brief from this report's *Port-work summary*, *Heads-ups* and *TTNN ProgramFactory* sections. If the cell reads `no` instead, route it per the recipe's blocking table.
-
-**Scoping:** the blocker clears off the op's code, through a sheet edit. Per the Red-outcome exception (*a RED that clears without touching the op's code: run them anyway*), all seven informational subjects were run in full and none were skipped. I did **not** apply the legacy-API short-circuit. Its premise, that the op is still on the imperative API and needs a PD port, is contradicted by the code, and following it would send finished work to the PD-migration track (Recipe note 1).
-
-No `METAL2_PORT_BRIEF.md` is issued because the verdict is RED.
+*History.* On 2026-11-03 this audit was **RED**, and the only blocker was the TTNN factory concept gate. The sheet still classed `IsInProgramFactory` as `legacy device-op`, so `Is able to port?` read `yes (with PD step)`, even though `d67dde5ad66` (#57541, 2026-09-29) had already moved the factory to `ProgramDescriptor`. That primary-column conflict was routed to the readiness-sheet owner, who reconciled row 191. The 2026-11-25 live fetch reads `Concept` = `descriptor`, `Op Classification` = `PD Op (pointer-patching)`, `Is able to port?` = `yes`, `Porting Target` = `ProgramSpecFactoryConcept`, and `TensorParameter relaxation` = `none`. The op's code didn't change across the reconciliation (header-path move only), so the informational subjects run on 2026-11-03 stand as written.
 
 ## Gate detail
 
-### TTNN factory concept (`Is able to port?`) — RED (spreadsheet broken)
+### TTNN factory concept (`Is able to port?`) — GREEN (reconciled 2026-11-25)
 
-Sheet row, cells verbatim: `Op` = `experimental/isin` · `Device operation` = `IsInDeviceOperation` · `Factory (variant)` = `IsInProgramFactory` · `Concept` = `legacy device-op` · `Op Classification` = `Legacy Op` · `Is able to port?` = `yes (with PD step)` · `Porting Target` = `ProgramSpecFactoryConcept` · `Execution Model` = `SPMD` · `TensorParameter relaxation` = `none` · `Known op issues` = *(blank)* · `Diego validation` = `yes`.
+**Current (2026-11-25 live fetch, row 191), cells verbatim:** `Op` = `experimental/isin` · `Device operation` = `IsInDeviceOperation` · `Factory (variant)` = `IsInProgramFactory` · `Concept` = `descriptor` · `Op Classification` = `PD Op (pointer-patching)` · `Execution Model` = `SPMD` · `Porting Target` = `ProgramSpecFactoryConcept` · `Custom hash` = `no` · `Backdoor custom hash` = `no` · `Runtime-args update (get_dynamic_runtime_args)` = `no` · `Override runtime args method?` = `no` · `Pybind descriptor` = `no` · `Smuggled pointer` = `no` · `Known op issues` = *(blank)* · `Diego validation` = `yes` · `Is able to port?` = `yes` · `TensorParameter relaxation` = `none` · `Op-owned tensors?` = `no`.
+
+Every primary column now matches the code (evidence in the table below). The cross-column invariants hold, no blocking column fires, and the factory set is one-to-one. **`Is able to port?` == `yes` → the gate clears.**
+
+**Superseded (2026-11-03 fetch), kept for the record.** Sheet row, cells verbatim: `Op` = `experimental/isin` · `Device operation` = `IsInDeviceOperation` · `Factory (variant)` = `IsInProgramFactory` · `Concept` = `legacy device-op` · `Op Classification` = `Legacy Op` · `Is able to port?` = `yes (with PD step)` · `Porting Target` = `ProgramSpecFactoryConcept` · `Execution Model` = `SPMD` · `TensorParameter relaxation` = `none` · `Known op issues` = *(blank)* · `Diego validation` = `yes`.
 
 Cross-check of the primary columns against the code:
 
 | Column | Sheet | Code | Evidence |
 |---|---|---|---|
-| `Concept` | `legacy device-op` | **`descriptor` — CONFLICT** | The only hook is `static ProgramDescriptor create_descriptor(const IsinParams&, const IsinInputs&, Tensor&)` (`device/isin_program_factory.hpp:13`; body at `isin_program_factory.cpp:42-155`). It takes no `MeshCoordinate` parameter, and there is no `create_workload_descriptor` and no `cached_program_t` / `create` / `override_runtime_arguments`. The factory satisfies `ProgramDescriptorFactoryConcept` (`ttnn/api/ttnn/operation_concepts.hpp:73-74`), not the legacy `ProgramFactoryConcept` (`:26-33`). `d67dde5ad66` deleted the legacy `create()` and `override_runtime_arguments()`. |
+| `Concept` | `legacy device-op` (11-03) → `descriptor` (11-25) | **`descriptor`**: conflict on 11-03, resolved 11-25 | The only hook is `static ProgramDescriptor create_descriptor(const IsinParams&, const IsinInputs&, Tensor&)` (`device/isin_program_factory.hpp:13`; body at `isin_program_factory.cpp:42-155`). It takes no `MeshCoordinate` parameter, and there is no `create_workload_descriptor` and no `cached_program_t` / `create` / `override_runtime_arguments`. The factory satisfies `ProgramDescriptorFactoryConcept` (`ttnn/api/ttnn/operation_concepts.hpp:73-74`), not the legacy `ProgramFactoryConcept` (`:26-33`). `d67dde5ad66` deleted the legacy `create()` and `override_runtime_arguments()`. |
 | `Custom hash` / `Backdoor custom hash` | `no` / `no` | none | `IsInDeviceOperation` has no `compute_program_hash` (`isin_device_operation.hpp:12-23`). `IsinParams` / `IsinInputs` have no `attribute_values` / `to_hash` (`isin_device_operation_types.hpp:13-23`). |
 | `Runtime-args update (get_dynamic_runtime_args)` | `no` | none | Not on the device-op (`isin_device_operation.hpp:12-23`). |
-| `Override runtime args method? (PD only)` | `n/a` | none (`no`) | Removed in `d67dde5ad66`. Its only job was refreshing the three buffer addresses, which the `Buffer*` bindings now do. The `n/a` follows from the stale `Concept`, so fix the two cells together. |
+| `Override runtime args method? (PD only)` | `n/a` (11-03) → `no` (11-25) | none (`no`) | Removed in `d67dde5ad66`. Its only job was refreshing the three buffer addresses, which the `Buffer*` bindings now do. The `n/a` follows from the stale `Concept`, so fix the two cells together. |
 | `Pybind descriptor` | `no` | none | `isin_nanobind.cpp:36-45` binds only the free function, via `bind_function`. There is no `nb::class_` and no `create_descriptor` binding. |
 | `Op-owned tensors?` | `no` | none | `descriptor` concept with no `buffers`. |
 | `Secretly SPMD Workload?` / `Why secretly SPMD?` | blank | N/A | Not a mesh-shaped concept. |
@@ -73,7 +73,7 @@ Cross-check of the primary columns against the code:
 
 The cross-column invariants hold (`get_dynamic_runtime_args` = `no`; `Op-owned tensors?` = `no`). `Smuggled pointer` = `no` also agrees with the code: the address RTAs are `Buffer*` bindings (see *Tensor bindings*).
 
-**Attribution:** `Is able to port?` = `yes (with PD step)` and `Op Classification` = `Legacy Op` both follow from the stale `Concept`. None of the blocking columns fires (`get_dynamic_runtime_args`, smuggled pointer, `Known op issues`, relaxation). **Route:** the readiness-sheet owner (Diego, per `ttnn_op_porting_readiness.md`), to reconcile the row. The row carries `Diego validation` = `yes`; presumably it was validated before the 2026-09-29 migration landed.
+**Attribution (11-03):** `Is able to port?` = `yes (with PD step)` and `Op Classification` = `Legacy Op` both followed from the stale `Concept`. None of the blocking columns fires (`get_dynamic_runtime_args`, smuggled pointer, `Known op issues`, relaxation). **Route:** the readiness-sheet owner (Diego, per `ttnn_op_porting_readiness.md`), to reconcile the row. The row carries `Diego validation` = `yes`; presumably it was validated before the 2026-09-29 migration landed.
 
 ### Device 2.0 (every kernel used) — GREEN
 
@@ -192,7 +192,7 @@ This is not Class 1. The values are compile-time (CTA-derived), and the relaxati
 None. The op uses the default reflection-based hash over `operation_attributes` + `tensor_args` (`ttnn/api/ttnn/device_operation.hpp:83-87`).
 
 ### Stop signals
-None on the TTNN-integration side. The overall RED comes from the stale readiness row, not from a missing framework capability.
+None.
 
 **Device-op-class edits the port forces:** none. There is no pybound `create_descriptor`, no pybind-only factory parameter, and this is not a direct-descriptor op (it has a `program_factory_t`).
 
@@ -232,7 +232,7 @@ The sheet-derived facts and their code evidence are in the cross-check table und
 
 ## Questions for the user
 
-1. **Reconciling the readiness sheet:** the `experimental/isin` row still reads `Concept` = `legacy device-op` and `Is able to port?` = `yes (with PD step)`, but the factory has been `descriptor` since `d67dde5ad66` (#57541, 2026-09-29). Can you raise this with Diego (the sheet owner), or update the row yourself if you have edit access? Once `Is able to port?` reads `yes`, I expect a quick re-audit to clear and issue the brief, because the code-side subjects in this report are complete.
+1. **Reconciling the readiness sheet** *(resolved 2026-11-25: the row now reads `descriptor` / `yes`)*: the `experimental/isin` row still reads `Concept` = `legacy device-op` and `Is able to port?` = `yes (with PD step)`, but the factory has been `descriptor` since `d67dde5ad66` (#57541, 2026-09-29). Can you raise this with Diego (the sheet owner), or update the row yourself if you have edit access? Once `Is able to port?` reads `yes`, I expect a quick re-audit to clear and issue the brief, because the code-side subjects in this report are complete.
 2. **Do raw L1 casts fall under Device 2.0?** You authored the Device 2.0 migration of these kernels (#49334). Does the Device 2.0 track treat `reinterpret_cast<volatile tt_l1_ptr T*>` over `CircularBuffer::get_*_ptr()` as compliant? I assumed yes; the reasons are under *Gate detail → Device 2.0*. If adopting `CoreLocalMem<T>` is part of compliance, the Device 2.0 gate becomes an isolated, op-code-side RED on `isin_reader.cpp:28-34` and `:63-64`.
 
 ## Recipe notes
