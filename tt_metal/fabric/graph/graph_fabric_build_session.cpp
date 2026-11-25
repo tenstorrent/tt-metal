@@ -114,10 +114,10 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
         }
         const auto open_ports = ports_from_perimeter(perimeter_);
         ports.insert(ports.end(), open_ports.begin(), open_ports.end());
-        std::vector<experimental::InterDomainPort> api_ports;
+        std::vector<internal::InterDomainPort> api_ports;
         api_ports.reserve(perimeter_.size());
         for (const auto& p : perimeter_) {
-            api_ports.push_back(experimental::InterDomainPort{
+            api_ports.push_back(internal::InterDomainPort{
                 .node = p.node,
                 .eth_chan = p.eth_chan,
                 .direction = *p.direction,

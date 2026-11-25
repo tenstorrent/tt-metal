@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/fabric/inter_domain.hpp>
+#include <internal/inter_domain.hpp>
 
 #include <thread>
 
@@ -19,7 +19,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 
-namespace tt::tt_fabric::experimental {
+namespace tt::tt_fabric::internal {
 
 namespace {
 
@@ -234,4 +234,4 @@ void append_inter_domain_connection_rt_args(
     append_worker_to_fabric_edm_sender_rt_args(port.eth_chan, teardown, buffer_index, rt_args);
 }
 
-}  // namespace tt::tt_fabric::experimental
+}  // namespace tt::tt_fabric::internal

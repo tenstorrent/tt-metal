@@ -28,7 +28,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/experimental/fabric/inter_domain.hpp>
+#include <internal/inter_domain.hpp>
 
 #include <internal/cluster.hpp>
 
@@ -41,7 +41,7 @@ namespace tt::tt_fabric::inter_domain_test {
 namespace {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_fabric::experimental;
+using namespace tt::tt_fabric::internal;
 namespace fs = std::filesystem;
 
 constexpr uint32_t kNumPackets = 64;

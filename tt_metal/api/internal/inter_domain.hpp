@@ -4,8 +4,6 @@
 
 #pragma once
 
-// EXPERIMENTAL: TT_METAL_FABRIC_INTER_DOMAIN=1 to enable.
-
 #include <chrono>
 #include <cstdint>
 #include <vector>
@@ -20,7 +18,7 @@ namespace tt::tt_metal::distributed {
 class MeshDevice;
 }  // namespace tt::tt_metal::distributed
 
-namespace tt::tt_fabric::experimental {
+namespace tt::tt_fabric::internal {
 
 struct InterDomainPort {
     FabricNodeId node{MeshId{0}, 0};
@@ -73,4 +71,4 @@ void append_inter_domain_connection_rt_args(
     const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& rt_args);
 
-}  // namespace tt::tt_fabric::experimental
+}  // namespace tt::tt_fabric::internal

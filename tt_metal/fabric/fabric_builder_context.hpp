@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/fabric/inter_domain.hpp>
+#include <internal/inter_domain.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
@@ -197,10 +197,10 @@ public:
     }
 
     // ============ Inter-domain ============
-    void set_inter_domain_ports(std::vector<experimental::InterDomainPort> ports) {
+    void set_inter_domain_ports(std::vector<internal::InterDomainPort> ports) {
         inter_domain_ports_ = std::move(ports);
     }
-    const std::vector<experimental::InterDomainPort>& get_inter_domain_ports() const { return inter_domain_ports_; }
+    const std::vector<internal::InterDomainPort>& get_inter_domain_ports() const { return inter_domain_ports_; }
 
     // ============ Diagnostic Buffer Map ============
     /** Returns the diagnostic buffer locations for all routers.
@@ -270,7 +270,7 @@ private:
 
     RouterChannelLayouts router_channel_layouts_;
 
-    std::vector<experimental::InterDomainPort> inter_domain_ports_;
+    std::vector<internal::InterDomainPort> inter_domain_ports_;
 
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(
