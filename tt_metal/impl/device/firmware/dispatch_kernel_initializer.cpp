@@ -99,8 +99,10 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    // Mock and emulated devices have no dispatch firmware to tear down
-    if (cluster_.is_mock_or_emulated()) {
+    // Mock and emulated devices have no dispatch firmware to tear down, and a host-only context launched none
+    if (cluster_.is_mock_or_emulated() || descriptor_->metal_context().host_only()) {
+        devices_.clear();
+        initialized_ = false;
         init_done.erase(key);
         return;
     }
@@ -179,7 +181,7 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
 void DispatchKernelInitializer::init_device_command_queues() {
     // Initialize device-side command queues (parallelized per MMIO device).
 
-    if (cluster_.is_mock_or_emulated()) {
+    if (cluster_.is_mock_or_emulated() || descriptor_->metal_context().host_only()) {
         return;
     }
 

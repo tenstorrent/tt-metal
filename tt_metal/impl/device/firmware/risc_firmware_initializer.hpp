@@ -122,6 +122,8 @@ private:
     std::unordered_map<tt::ChipId, std::vector<uint32_t>> tensor_prefetcher_signal_noc_xy_;
 
     bool initialized_ = false;
+    // Whether run_launch_phase reset and launched the cores; teardown stops them only then.
+    bool launched_ = false;
 };
 
 }  // namespace tt::tt_metal

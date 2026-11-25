@@ -238,6 +238,8 @@ public:
     // Set when a Tensix BRISC is found with a halt record. Until the next init, halt checks throw at once and device
     // close skips dispatch teardown.
     bool l1_ecc_halt_detected() const { return l1_ecc_halt_detected_.load(std::memory_order_acquire); }
+    // Whether this context was set up on the host only, inside a dry pass (experimental/dry_run.hpp).
+    bool host_only() const { return host_only_; }
     void set_l1_ecc_halt_detected(bool detected) { l1_ecc_halt_detected_.store(detected, std::memory_order_release); }
 
 private:
@@ -266,6 +268,8 @@ private:
 
     bool initialized_ = false;
     bool force_reinit_ = false;
+    // Initialized inside a dry pass without touching the chip (experimental/dry_run.hpp, host-only devices).
+    bool host_only_ = false;
 
     uint8_t num_hw_cqs_ = 0;
     BankMapping l1_bank_remap_;

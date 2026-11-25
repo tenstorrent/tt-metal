@@ -165,7 +165,8 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
         futures.emplace_back(detail::async([this, refs, jit_device_config, &metal_context, &build_env_manager]() {
             tt::ChipId device_id = refs.device_id;
             // Clear L1/DRAM if requested - skip for mock devices (no memory), but do for emulated (memory-backed)
-            if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+            const bool host_only = metal_context.host_only();
+            if (cluster_.get_target_device_type() != tt::TargetDevice::Mock && !host_only) {
                 if (rtoptions_.get_clear_l1()) {
                     clear_l1_state(device_id);
                 }
@@ -173,7 +174,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                     clear_dram_state(device_id);
                 }
             }
-            [[maybe_unused]] int ai_clk = cluster_.get_device_aiclk(device_id);
+            [[maybe_unused]] int ai_clk = host_only ? 0 : cluster_.get_device_aiclk(device_id);
             log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
             generate_device_bank_to_noc_tables(
                 device_id,
@@ -212,7 +213,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             if (!skip_fw_build) {
                 build_env_manager.build_firmware(device_id);
             }
-            if (!cluster_.is_mock_or_emulated()) {
+            if (!cluster_.is_mock_or_emulated() && !host_only) {
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                 // activated. This is required since ethernet cores context switch between application and routing
                 // firmware. If ERISC application firmware is activated before the launch messages are cleared, it
@@ -232,7 +233,9 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
     // Launch FW on each device sequentially, since a multithreaded launch leads to initialization hangs.
     // See https://github.com/tenstorrent/tt-metal/issues/35701
     ZoneScopedN("Resets and FW Launch");
-    if (!cluster_.is_mock_or_emulated()) {
+    // A host-only context (dry pass) resets and launches nothing; its teardown then has nothing to stop.
+    launched_ = !cluster_.is_mock_or_emulated() && !descriptor_->metal_context().host_only();
+    if (launched_) {
         terminate_active_ethernet_cores_on_all_chips();
 
         for (tt::ChipId device_id : device_ids) {
@@ -295,7 +298,7 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
 void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*init_done*/) {
     auto all_devices = cluster_.all_chip_ids();
 
-    if (!cluster_.is_mock_or_emulated()) {
+    if (launched_) {
         // Teardown runs from ~MetalContext and from the atexit handler, both of which cannot let an
         // exception escape (a throw from a noexcept destructor is std::terminate). When a device has
         // already failed (for example a PCIe MMIO timeout during init), asserting its cores throws

@@ -72,6 +72,19 @@ void set_pass(bool in_dry_pass);
 bool in_pass();
 
 /**
+ * Host-only devices (prototype). A device opened inside a dry pass builds all its host state (allocator, dispatch
+ * core layout, build environment, kernels to compile) but does not reset, load or launch anything on the chip, and
+ * closing it sends nothing either. While such a device context is the current one the dry run is active throughout,
+ * fixtures included, and any chip read or write that is still attempted throws: blocked_chip_accesses() counts them.
+ * The first open outside the pass re-initializes the context for real.
+ */
+bool host_only();
+void set_host_only(bool on);
+/** Called by the cluster before every chip read or write. Throws while host_only(). */
+void chip_access(const char* what);
+size_t blocked_chip_accesses();
+
+/**
  * Thrown in a dry run in place of constructing a Program or MeshWorkload from a ProgramSpec. Such an object is
  * compiled when it is constructed; a dry run queues its kernel builds and lets no uncompiled one come to exist.
  */

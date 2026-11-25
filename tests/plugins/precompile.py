@@ -270,7 +270,8 @@ def pytest_runtestloop(session):
         f"\nPRECOMPILE: on ({why}). Dry pass over {len(items)} tests took {time.monotonic() - start:.1f} s "
         f"({_STATE['bodies']} bodies, {_STATE['ended_early']} ended early, {_STATE['timed_out']} timed out; "
         f"{_STATE['body_seconds']:.1f} s in bodies). Kernels: {present} already present, "
-        f"{_kernels_in_cache() - present} built so far; queued builds go on behind the real pass.",
+        f"{_kernels_in_cache() - present} built so far; queued builds go on behind the real pass. "
+        f"Chip accesses attempted in the dry pass: {ttnn._ttnn.device.BlockedChipAccesses()}.",
         flush=True,
     )
     return None  # pytest's own loop now runs the real pass

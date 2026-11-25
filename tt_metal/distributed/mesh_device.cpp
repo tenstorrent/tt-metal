@@ -1159,7 +1159,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
     // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
-        if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock &&
+            !experimental::dry_run::host_only()) {
             ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
         }
 
@@ -1938,7 +1939,7 @@ bool MeshDeviceImpl::initialize_impl(
 }
 
 void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
-    if (realtime_profiler_) {
+    if (realtime_profiler_ || experimental::dry_run::host_only()) {
         return;
     }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);

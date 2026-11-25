@@ -369,7 +369,7 @@ void FDMeshCommandQueue::wait_for_outstanding_reads(std::unique_lock<std::mutex>
 
 void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
-        this->get_target_device_type() == tt::TargetDevice::Emule) {
+        this->get_target_device_type() == tt::TargetDevice::Emule || experimental::dry_run::host_only()) {
         return;
     }
 
@@ -1346,6 +1346,10 @@ void FDMeshCommandQueue::reset_worker_state(
     }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
+    if (experimental::dry_run::host_only()) {
+        // No dispatcher is running on a host-only device: the host side is updated, nothing is sent.
+        return;
+    }
     in_use_ = true;
     const auto devices = mesh_device_->impl().get_devices();
     auto cached =

@@ -5,6 +5,7 @@
 #include <optional>
 #include <tt_stl/fmt.hpp>
 #include "tt_cluster.hpp"
+#include <tt-metalium/experimental/dry_run.hpp>
 #include "llrt/rtoptions.hpp"
 
 #include <tt-metalium/core_coord.hpp>
@@ -418,7 +419,10 @@ void Cluster::apply_tdp_limit_override() {
     }
 }
 
-void Cluster::assert_risc_reset() { this->driver_->assert_risc_reset(); }
+void Cluster::assert_risc_reset() {
+    tt_metal::experimental::dry_run::chip_access("assert_risc_reset");
+    this->driver_->assert_risc_reset();
+}
 
 void Cluster::assign_mem_channels_to_devices(
     ChipId mmio_device_id, const std::unordered_set<ChipId>& controlled_device_ids) {
@@ -830,6 +834,7 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(ChipId chi
 }
 
 int Cluster::get_device_aiclk(const ChipId& chip_id) const {
+    tt_metal::experimental::dry_run::chip_access("get_device_aiclk");
     // Functional ttsim (.so) clock queries are unreliable; RTL sim uses a directory path and
     // metal/umd unit tests expect a non-zero AICLK (see test_dram_kernels, watcher tests).
     if (this->target_type_ == TargetDevice::Simulator && rtoptions_.get_simulator_enabled() &&
@@ -872,12 +877,14 @@ std::optional<int> Cluster::get_physical_slot(ChipId chip) const {
 
 void Cluster::deassert_risc_reset_at_core(
     const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start) const {
+    tt_metal::experimental::dry_run::chip_access("deassert_risc_reset_at_core");
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
     this->driver_->deassert_risc_reset(core.chip, core_coord, soft_resets, staggered_start);
 }
 
 void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const {
+    tt_metal::experimental::dry_run::chip_access("assert_risc_reset_at_core");
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
     this->driver_->assert_risc_reset(core.chip, core_coord, soft_resets);
@@ -890,6 +897,7 @@ void Cluster::write_dram_vec(
     int dram_view,
     uint64_t addr,
     std::optional<tt::umd::IoOrdering> ordering) const {
+    tt_metal::experimental::dry_run::chip_access("write_dram_vec");
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
         dram_view < desc_to_use.get_num_dram_views(),
@@ -904,6 +912,7 @@ void Cluster::write_dram_vec(
 }
 
 void Cluster::read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
+    tt_metal::experimental::dry_run::chip_access("read_dram_vec");
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
         dram_view < desc_to_use.get_num_dram_views(),
@@ -951,6 +960,7 @@ void Cluster::write_core(
     tt_cxy_pair core,
     uint64_t addr,
     std::optional<tt::umd::IoOrdering> ordering) const {
+    tt_metal::experimental::dry_run::chip_access("write_core");
     if (sz_in_bytes == 0) {
         return;  // nothing to write
     }
@@ -987,6 +997,7 @@ void Cluster::write_core(
 }
 
 void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    tt_metal::experimental::dry_run::chip_access("read_core");
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
@@ -1015,6 +1026,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
 }
 
 void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    tt_metal::experimental::dry_run::chip_access("write_core_immediate");
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
@@ -1051,11 +1063,13 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
 }
 
 void Cluster::read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    tt_metal::experimental::dry_run::chip_access("read_core");
     data.resize((size_in_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t));
     read_core(data.data(), size_in_bytes, core, addr);
 }
 
 void Cluster::write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const {
+    tt_metal::experimental::dry_run::chip_access("write_reg");
     const unsigned int size_in_bytes = sizeof(uint32_t);
     int chip_id = target.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
@@ -1083,6 +1097,7 @@ void Cluster::write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64
 }
 
 void Cluster::read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const {
+    tt_metal::experimental::dry_run::chip_access("read_reg");
     const unsigned int size_in_bytes = sizeof(uint32_t);
     int chip_id = target.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
@@ -1204,6 +1219,7 @@ std::optional<tt::umd::SemVer> Cluster::get_ethernet_firmware_version() const {
 // (default ordering is posted) This barrier is intended to prevent races caused by out of order writes, specifically to
 // ensure metadata and data to compute on are committed before launching kernels
 void Cluster::dram_barrier(ChipId chip_id) const {
+    tt_metal::experimental::dry_run::chip_access("dram_barrier");
     TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
     std::unordered_set<uint32_t> dram_channels;
     for (uint32_t channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
@@ -1217,12 +1233,14 @@ void Cluster::dram_barrier(ChipId chip_id) const {
 // ordering is posted) This barrier is intended to prevent races caused by out of order writes, specifically to ensure
 // binaries, metadata, and data to compute on are committed before launching kernels
 void Cluster::l1_barrier(ChipId chip_id) const {
+    tt_metal::experimental::dry_run::chip_access("l1_barrier");
     TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
     // Sets and resets L1 barrier of all tensix cores and ethernet cores
     this->driver_->l1_membar(chip_id);
 }
 
 void Cluster::l1_barrier(ChipId chip_id, const std::set<tt::tt_metal::CoreCoord>& virtual_cores) const {
+    tt_metal::experimental::dry_run::chip_access("l1_barrier");
     // UMD treats an empty set as every core on the chip.
     if (virtual_cores.empty()) {
         return;

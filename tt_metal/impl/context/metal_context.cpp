@@ -12,6 +12,7 @@
 
 #include <tracy/Tracy.hpp>
 
+#include <tt-metalium/experimental/dry_run.hpp>
 #include "metal_context.hpp"
 #include "simulator_termination.hpp"
 #include "context_types.hpp"
@@ -161,6 +162,18 @@ void MetalContext::initialize(
         dispatch_core_config.get_dispatch_core_type(),
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
 
+    // Inside a dry pass the context is set up on the host only. Runs that watch or profile the device, and fabric
+    // opens that launch routers, keep the real open.
+    const bool host_only =
+        experimental::dry_run::in_pass() && !get_cluster().is_mock_or_emulated() && !rtoptions().get_watcher_enabled() &&
+        !rtoptions().get_profiler_enabled() && !rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint) &&
+        !(tt_fabric::is_tt_fabric_config(get_fabric_config()) &&
+          has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC));
+    if (host_only != host_only_) {
+        // A context that was never launched cannot serve a real open, and the other way round.
+        force_reinit_ = true;
+    }
+
     if (initialized_) {
         if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
@@ -191,6 +204,8 @@ void MetalContext::initialize(
             }
         }
     }
+    host_only_ = host_only;
+    experimental::dry_run::set_host_only(host_only);
     // run_launch_phase below releases any BRISC still halted and zeroes every halt record.
     set_l1_ecc_halt_detected(false);
 
@@ -288,7 +303,7 @@ void MetalContext::initialize(
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
-        !get_cluster().is_mock_or_emulated()) {
+        !get_cluster().is_mock_or_emulated() && !host_only_) {
         // Only Wormhole non-Galaxy clusters reach remote chips through UMD ethernet gateways.
         if (tt_fabric::is_tt_fabric_config(get_fabric_config()) && get_cluster().arch() == tt::ARCH::WORMHOLE_B0 &&
             !get_cluster().is_galaxy_cluster()) {
@@ -309,7 +324,7 @@ void MetalContext::initialize(
     if (dprint_server_) {
         dprint_server_->attach_devices();
     }
-    if (watcher_server_) {
+    if (watcher_server_ && !host_only_) {
         watcher_server_->init_devices();
     }
 
@@ -317,7 +332,7 @@ void MetalContext::initialize(
 
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
-    if (watcher_server_) {
+    if (watcher_server_ && !host_only_) {
         watcher_server_->attach_devices();
     }
 }
@@ -362,7 +377,7 @@ void MetalContext::teardown() {
         dprint_server_.reset();
     }
 
-    if (!get_cluster().is_mock_or_emulated()) {
+    if (!get_cluster().is_mock_or_emulated() && !host_only_) {
         watcher_server_->detach_devices();
     }
     watcher_server_.reset();

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/experimental/dry_run.hpp>
 #include "topology.hpp"
 
 #include "device/device_manager.hpp"
@@ -796,6 +797,10 @@ void DispatchTopology::create_cq_program(Device* device) {
 
 void DispatchTopology::compile_cq_programs() {
     command_queue_compile_group_->compile_all(/*force_slow_dispatch=*/true);
+    if (experimental::dry_run::host_only()) {
+        // The dispatch kernels' builds are queued (the dry run is active); nothing is laid out or written.
+        return;
+    }
 
     command_queue_compile_group_->finalize_offsets();
 

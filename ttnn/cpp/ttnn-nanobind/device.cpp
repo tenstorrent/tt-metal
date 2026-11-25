@@ -454,6 +454,10 @@ void device_module(nb::module_& m_device) {
         )doc");
     m_device.def("EndDryRun", &tt::tt_metal::experimental::dry_run::end, "End the dry run started by BeginDryRun.");
     m_device.def(
+        "BlockedChipAccesses",
+        &tt::tt_metal::experimental::dry_run::blocked_chip_accesses,
+        "How many chip reads and writes were attempted, and blocked, on host-only devices in dry passes.");
+    m_device.def(
         "SetDryPass",
         &tt::tt_metal::experimental::dry_run::set_pass,
         "Mark the start (True) and end (False) of a pass of dry runs, device opens between them included.");
