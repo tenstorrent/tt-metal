@@ -452,11 +452,9 @@ def rule(l, kind, u, findings, stage, lines):
         )
     gone = re.search(r"^LINK FAIL .*: (?:warm rerun )?no tt-kmd node on (.*): not opened$", l)
     if gone:  # the pair was not started: a chip is missing from tt-kmd, so the link itself was not judged
-        who = " and on ".join(
-            f"the chip of {x} (tray {t})" if (t := tray_asic(x)[0]) else f"the chip {x}"
-            for x in re.findall(BDF, gone.group(1))
-        )
-        return f"link not tested: no tt-kmd node on {who}: the chip is off the PCIe bus or its driver node is gone, so the link was not judged -> next: glx_reset and recount; if the chip is still missing, power cycle the box, then the PCIe path (slot, retimer) and the board of its tray"
+        bs = re.findall(BDF, gone.group(1))
+        who = " and on ".join(f"the chip of {x} (tray {t})" if (t := tray_asic(x)[0]) else f"the chip {x}" for x in bs)
+        return f"link not tested: no tt-kmd node on {who}: the chip is off the PCIe bus or its driver node is gone, so the link was not judged -> next: {gone_next(bs)}"
     if kind == "link" or re.match(r"(ETH|LINK|PINPOINT LINK) FAIL|C[34] FAIL mesh placement", l):
         if warn:  # rc 143/137 is the pair job killed at its time limit, not a link fault
             rc = re.search(r"pair run failed, rc (\d+)", l)
@@ -1212,11 +1210,11 @@ def link(v, m):
         what = f"Ethernet link below bandwidth ({bw.group(1)} Gbps per link each way)"
     elif w or "data mismatch" in m[6]:
         what = "wrong data over an Ethernet link" + (f" ({w.group(1)} words wrong)" if w else "")
-    elif "not opened" in m[6]:  # a chip missing from tt-kmd: its PCIe path is the fault, not the cable
-        gone = re.findall(BDF, m[6])
-        what = f"Ethernet link not opened (no tt-kmd node on {' and '.join(chip(b) for b in gone) or 'a chip'})"
+    # a chip missing from tt-kmd: its PCIe path is the fault, not the cable
+    elif "not opened" in m[6] and (gone := re.findall(BDF, m[6])):
+        what = f"Ethernet link not opened (no tt-kmd node on {' and '.join(chip(b) for b in gone)})"
         v.lfam = "PCIe"
-        do = f"glx_reset and recount; if still missing, power cycle the box; then the PCIe path (slot, retimer) and {board(gone[0]) if gone else 'the tray boards'}"
+        do = gone_next(gone)
     else:
         what = f"Ethernet link test error ({m[6]})"
     v.fault(("link", x, y), what, where, do)
@@ -1421,6 +1419,15 @@ HEAD = re.compile(r"^(FAIL|INCOMPLETE|PASS|KNOWN-DROP) tray ([1-4])\b(.*)$")
 WHY = re.compile(r"^    (.*?) \| .*\| cause: (.*?) -> next: (.*)$")
 UNKNOWN = "unknown: see the FAIL lines above"
 LOSS = ("the PCIe path (slot, retimer) of {b} on tray {u}, then the tray {u} board", "the tray {u} board carrying {b}")
+
+
+def gone_next(bs):  # the next step for chips with no tt-kmd node; item() keeps the part after "; then "
+    return (
+        "glx_reset and recount; if still missing, power cycle the box; then the PCIe path (slot, retimer) of "
+        f"{' and '.join(bs)}, then {' and '.join(dict.fromkeys(board(b) for b in bs))}"
+    )
+
+
 # (cause pattern, repair template); first match wins. {u} tray, {b} chip BDF(s), {p} part, {x} chip-side ETH speed.
 # None: no repair (a warning or not a fault). Order: power, software/firmware, links, PCIe, chip.
 RULES = [
@@ -1440,7 +1447,7 @@ RULES = [
         None,
     ),
     (r"which fails all its C5 pairs: that chip", "the tray {t} board carrying {c} (all its links fail)"),
-    (r"^link not tested: no tt-kmd node", "the PCIe path (slot, retimer) of {c}, then the tray {t} board"),
+    (r"^link not tested: no tt-kmd node", "GONE"),
     (
         r"^in-box link down or bad.*retimer speed not readable",
         "check the retimer speed setting (expected {x}) of link {p}, then the tray-to-tray connection, then the tray boards",
@@ -1529,6 +1536,8 @@ def item(u, part, cause, nxt, commit, kind=None):
             return ""
         bs = bdfs(part, u) or bdfs(nxt, u) or bdfs(cause, u)
         b = " ".join(bs) if bs else f"a chip of tray {u}"
+        if tpl == "GONE":
+            return nxt.split("; then ")[-1]
         if tpl == "CONFIG":
             m = re.search(r"expected (x\d+G)", cause)
             return f"set the retimers of link {part} to {m.group(1) if m else 'x200G'} and rerun, before any cabling or board step"

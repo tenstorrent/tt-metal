@@ -419,14 +419,40 @@ def test_link_failures_get_their_own_verdicts(tmp_path):
 
 def test_not_opened_link_names_the_missing_chip_not_the_cable(tmp_path):
     """A link whose chip has no tt-kmd node was never tested: the repair is that chip's PCIe path, not a cable."""
-    for i, why in enumerate(
-        ["no tt-kmd node on c1:00.0: not opened", "warm rerun no tt-kmd node on c1:00.0: not opened"]
-    ):
-        _, out = faults(tmp_path, f"n{i}", [f"LINK FAIL 0000:c1:00.0 (tray 3) e16 <-> 0000:c2:00.0 (tray 3) e0: {why}"])
+    cases = [
+        (
+            "no tt-kmd node on c1:00.0: not opened",
+            "tray 3 ASIC 1 / c1:00.0",
+            "the PCIe path (slot, retimer) of c1:00.0, then the tray 3 board",
+        ),
+        (
+            "warm rerun no tt-kmd node on c1:00.0: not opened",
+            "tray 3 ASIC 1 / c1:00.0",
+            "the PCIe path (slot, retimer) of c1:00.0, then the tray 3 board",
+        ),
+        (
+            "no tt-kmd node on c1:00.0 and c2:00.0: not opened",
+            "tray 3 ASIC 1 / c1:00.0 and tray 3 ASIC 2 / c2:00.0",
+            "the PCIe path (slot, retimer) of c1:00.0 and c2:00.0, then the tray 3 board",
+        ),
+        (
+            "no tt-kmd node on 41:00.0 and c1:00.0: not opened",
+            "tray 2 ASIC 1 / 41:00.0 and tray 3 ASIC 1 / c1:00.0",
+            "the PCIe path (slot, retimer) of 41:00.0 and c1:00.0, then the tray 2 board and the tray 3 board",
+        ),
+        (
+            "no tt-kmd node on aa:00.0: not opened",
+            "aa:00.0",
+            "the PCIe path (slot, retimer) of aa:00.0, then the board",
+        ),
+    ]
+    for i, (why, named, repair) in enumerate(cases):
+        peer = "0000:aa:00.0" if "aa:00.0" in why else "0000:c1:00.0"
+        _, out = faults(tmp_path, f"n{i}", [f"LINK FAIL {peer} (tray 3) e16 <-> 0000:c2:00.0 (tray 3) e0: {why}"])
         text = "\n".join(out)
-        assert "no tt-kmd node on tray 3 ASIC 1 / c1:00.0" in text, text
+        assert any(f"Ethernet link not opened (no tt-kmd node on {named})" in x for x in out if "Fault" in x), text
         assert "Family PCIe" in text, text
-        assert "Repair recommendation: the PCIe path (slot, retimer) of c1:00.0, then the tray 3 board" in text, text
+        assert f"Repair recommendation: {repair}" in text, text
         assert not re.search(
             r"reseat|cable", "\n".join(l for l in out if l.startswith(("Repair", "  Fault", "    tray")))
         ), text

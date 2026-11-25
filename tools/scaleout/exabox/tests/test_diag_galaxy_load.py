@@ -1196,6 +1196,15 @@ class TestLinks(unittest.TestCase):
         self.assertEqual([e["a"]["tray"] for e in data["link_ends"]], [1, 1])
         self.assertEqual(data["link_ends"], [e for f in data["failed"] for e in f["ends"]])
 
+    def test_not_opened_pair_names_only_the_chips_without_a_tt_kmd_node(self):
+        for live, gone in ((["0000:02:00.0"], "01:00.0"), ([], "01:00.0 and 02:00.0")):
+            with tempfile.TemporaryDirectory() as d:
+                for b in live:
+                    (Path(d) / "bus/pci/devices" / b / "tenstorrent/tenstorrent!0").mkdir(parents=True)
+                phase = Phase(name="links")
+                self.assertTrue(links.pair_test(phase, Path(d), "pair", 1, self._disc(), sys_root=d))
+            self.assertEqual(phase.checks[0].data["failed"][0]["why"], f"no tt-kmd node on {gone}: not opened")
+
     def test_sweep_reset_says_why_it_skips(self):
         self.assertEqual(self._sweep_reset(), "")
         self.assertEqual(self._sweep_reset(reset_fails=True), "reset failed")
