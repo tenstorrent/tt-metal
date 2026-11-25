@@ -614,6 +614,12 @@ The steps below are the whole setup on a machine that has no tt-metal checkout. 
    ```
    This leaves `tt_llk_harness-0.0.1-py3-none-any.whl` and `requirements.txt`. A suite names the version it was written against; `latest` is for trying the newest. In a workflow of another repository, the job needs `packages: read`, logs in with its own `GITHUB_TOKEN`, and the package has to list that repository under "Manage Actions access" in its settings.
 
+   To see which versions there are, list the tags; the newest release is also `latest`:
+   ```bash
+   oras repo tags ghcr.io/tenstorrent/tt-metal/tt-llk-harness
+   ```
+   A tag that is three numbers is a release. A tag such as `0.0.1-202611251036.g821e363e4ea0` is a development build somebody published from a branch (see [Releasing the harness](#releasing-the-harness)): pull it the same way, by that tag. Its wheel is `tt_llk_harness-0.0.1+202611251036.g821e363e4ea0-py3-none-any.whl`, and the `pip install` line below takes it unchanged. The summary of the workflow run that published a wheel names its tag.
+
 2. Install it into the suite's environment:
    ```bash
    pip install -c requirements.txt tt_llk_harness-*.whl
@@ -661,7 +667,7 @@ The workflow can also be run by hand (Actions, **LLK harness release**, "Run wor
 | `main`, `publish` on | the release of the number `VERSION` has on `main`, exactly as the merge would have made it. This is how a release that failed after the merge is run again once the cause is fixed: no version number is spent. A number that is published already is still refused. |
 | another branch, `publish` on | a development build, for trying a wheel, or the publish path itself, before a merge. Its version is `X.Y.Z+<commit time>.g<commit>` and its tag is that with `-` for the `+` (a tag cannot hold one): `oras pull ghcr.io/tenstorrent/tt-metal/tt-llk-harness:0.0.1-202611251200.g0123456789ab`. It never moves `latest` and never takes a release's tag. |
 
-Two things are set up once, by an organisation admin. The `llk-harness-release` environment, which the publish job names, decides which branches may publish: with deployments from `main` only, development builds from other branches are refused there; required reviewers make every publish wait for an approval. And the package's settings decide its visibility (private) and who may read it: teams, and the repositories whose workflows download it. The publish job refuses to push to a package it finds public, and fails if it finds it public after the push.
+Two things are set up once, by an organisation admin. The `llk-harness-release` environment, which the publish job names, decides which branches may publish: with deployments from `main` only, development builds from other branches are refused there; required reviewers make every publish wait for an approval. And the package's settings decide its visibility (private) and who may read it: teams, and the repositories whose workflows download it. A package a workflow of this repository creates starts **public**, so an admin has to set it to private once, right after the first publish creates it. The publish job refuses to push to a package it finds public, and fails if it finds it public after the push, so until then nothing more is published.
 
 #### What the wheel holds
 
