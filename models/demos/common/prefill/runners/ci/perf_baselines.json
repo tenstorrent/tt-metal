@@ -515,7 +515,7 @@
             "chunk_time_ms": 202
           },
           "@1M": {
-            "throughput_tok_s": 33277,
+            "throughput_tok_s": 36549,
             "ttft_s": 23.89,
             "chunk_time_ms": 210
           }

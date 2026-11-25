@@ -165,7 +165,9 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None, chunks_p
         return list(zip(labels, picked))
 
     out = ["==================== perf metrics (measured request, warmup excluded) ===================="]
-    out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size})")
+    cpf = max(1, chunks_per_forward)
+    packing = f"packed, {cpf} chunks per forward" if cpf > 1 else "unpacked, one chunk per forward"
+    out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size}; {packing})")
     out.append("labels are tokens prefilled through that chunk, in units of 1024 (M past 1Mi); probes snap to chunks")
     out.append("all times are the producer's clock: first layer ack -> last layer ack of a chunk")
     if whole_chunk_acks:
@@ -184,23 +186,28 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None, chunks_p
             out.append(f"  ttft       {lbl:>14} (chunk {d:>3}): {rec['ttft_s'][lbl]:>12.3f} s")
 
     out.append(f"throughput = tokens / wall time across up to {_TPUT_WINDOW} chunk retires centred on the probe")
-    cpf = max(1, chunks_per_forward)
     if cpf > 1:
-        out.append(f"  ({cpf} chunks per forward: the window widens to whole forwards, which retire together)")
-    # A packed forward retires all its chunks at once, so only the last chunk of each forward (or the
-    # request's last chunk, which closes a short final forward) marks a point where the rate is known.
-    forward_ends = [i for i in range(n) if (i + 1) % cpf == 0 or i == n - 1]
+        out.append("  (a packed forward's chunks retire together: windows span full forwards; a short final one is left out)")
+    # A packed forward retires all its chunks at once, so only the last chunk of a forward marks a point
+    # where the rate is known. A short final forward (n % cpf chunks) is padded to a full one and runs at
+    # nearly a full forward's cost, so its rate is padding waste, not depth: windows stop at the last full
+    # forward, and use the short one only when it is the whole request.
+    forward_ends = [i for i in range(cpf - 1, n, cpf)] or [n - 1]
     for lbl, d in probes((0, 50000, max_seq // 2, max_seq)):
         # The rate is the retire cadence. A chunk's own latency covers every stage at once and so
         # carries no information about how many chunks are in flight; only the interval between
         # retires does. The window absorbs one slow chunk while staying short enough that the
         # attention cost, which grows with depth, barely drifts across it.
         lo, hi = max(0, d - _TPUT_WINDOW // 2), min(n - 1, d + _TPUT_WINDOW // 2)
-        # Widen to forward ends: credit exactly the chunks retired in (end[lo], end[hi]]. Otherwise a
+        # Snap to full-forward ends: credit exactly the chunks retired in (end[lo], end[hi]]. Otherwise a
         # window edge inside a forward counts chunks that retired at the window's start, e.g. 4 chunks
         # against the time of a 2-chunk tail forward. One chunk per forward leaves lo and hi as they are.
         lo = max((i for i in forward_ends if i <= lo), default=forward_ends[0])
-        hi = min(i for i in forward_ends if i >= hi)
+        hi = min((i for i in forward_ends if i >= hi), default=forward_ends[-1])
+        if hi <= lo:  # both ends on one forward end (the first, or the last full one): take a neighbour
+            later = [i for i in forward_ends if i > lo]
+            earlier = [i for i in forward_ends if i < lo]
+            lo, hi = (lo, later[0]) if later else ((earlier[-1], lo) if earlier else (lo, hi))
         if hi - lo < 1 or end[hi] <= end[lo]:
             out.append(f"  throughput {lbl:>14} (chunk {d:>3}): {'-':>12}")
             continue

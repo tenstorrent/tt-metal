@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+import pytest
 
 
 # GQA rows from both slots must report their per-layer minima, while MLA/index columns remain intact.
@@ -40,34 +41,53 @@ def test_metrics_sidecar_splits_the_config_suffix_with_its_layout(tmp_path, monk
         assert (rec["model"], rec["config"]) == (model, config)
 
 
-def _packed_spans(num_chunks, chunks_per_forward, forward_s, first_s=0.0):
-    # Every chunk of a packed forward retires at the forward's end; a short final forward costs its share.
-    spans, t = [], first_s
+def _packed_spans(num_chunks, chunks_per_forward, forward_s, tail_s):
+    # Every chunk of a packed forward retires at the forward's end. A short final forward is padded to a
+    # full one, so it costs tail_s (near forward_s), not its share of forward_s.
+    spans, t = [], 0.0
     for start in range(0, num_chunks, chunks_per_forward):
         size = min(chunks_per_forward, num_chunks - start)
-        begin, t = t, t + forward_s * size / chunks_per_forward
+        begin, t = t, t + (forward_s if size == chunks_per_forward else tail_s)
         spans += [(begin, t, 24)] * size
     return spans
 
 
-# A packed forward's chunks retire together. The throughput window must span whole forwards, or a tail
-# probe credits chunks that retired at the window's start against a short final forward's time.
-def test_packed_throughput_windows_span_whole_forwards():
+# A packed forward's chunks retire together. The throughput window must span full forwards: an edge inside
+# a forward credits chunks that retired at the window's start, and a padded short final forward reports
+# padding waste rather than the rate at depth.
+@pytest.mark.parametrize("cpf", [2, 4, 8])
+def test_packed_throughput_windows_span_full_forwards(cpf):
     from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics
 
-    chunk, cpf, forward_s = 2560, 4, 0.2
+    chunk, forward_s = 2560, 0.2
     rate = cpf * chunk / forward_s
-    spans = _packed_spans(410, cpf, forward_s)  # 102 full forwards and a 2-chunk tail
+    spans = _packed_spans(410, cpf, forward_s, tail_s=0.9 * forward_s)  # 410 % 4 == 2, % 8 == 2: a short tail
     probes = {0, 19, 39, 100, 204, 409}
 
     _, rec = _perf_metrics(spans, chunk, 2, probes, chunks_per_forward=cpf)
     assert rec["chunks_per_forward"] == cpf
+    assert list(rec["throughput_tok_s"]) == ["@2k", "@50k", "@100k", "@252k", "@512k", "@1M"]
     for label, tput in rec["throughput_tok_s"].items():
         assert abs(tput - rate) / rate < 1e-9, (label, tput)
 
-    # One chunk per forward assumed: the tail credits 4 chunks to the 2-chunk final forward, twice the rate.
-    _, rec = _perf_metrics(spans, chunk, 2, probes)
-    assert abs(rec["throughput_tok_s"]["@1M"] / rate - 2.0) < 1e-9
+
+def test_packed_throughput_without_forward_grouping_overcounts_the_tail():
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics
+
+    # The pre-fix window at chunk 409 (405..409) credits 4 chunks to the 2-chunk final forward's time.
+    spans = _packed_spans(410, 4, 0.2, tail_s=0.2)
+    _, rec = _perf_metrics(spans, 2560, 2, {409})
+    assert abs(rec["throughput_tok_s"]["@1M"] / (4 * 2560 / 0.2) - 1.0) < 1e-9
+    _, rec = _perf_metrics(_packed_spans(410, 4, 0.2, tail_s=0.1), 2560, 2, {409})
+    assert abs(rec["throughput_tok_s"]["@1M"] / (4 * 2560 / 0.2) - 2.0) < 1e-9
+
+
+def test_packed_request_of_one_forward_reports_no_rate():
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics
+
+    for n in (3, 4, 6):  # one short forward, one full forward, one full and one short
+        _, rec = _perf_metrics(_packed_spans(n, 4, 0.2, tail_s=0.2), 2560, 1, {0, n - 1}, chunks_per_forward=4)
+        assert rec["throughput_tok_s"] == {}, n
 
 
 def test_one_chunk_per_forward_window_is_unchanged():
