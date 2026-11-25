@@ -24,7 +24,11 @@
 # variant'), never a FAIL: corruption is one chip's own; so is a word that equals the code of a kernel ELF found at that
 # place in the chip's own read (another program variant, e.g. li a4,9 for li a3,0). The cores at one key vote word by
 # word. A strong majority (>= max(3, 75 %) of the chips read) sets the expected word; a chip whose
-# word differs is re-read, and only a word that reads back the same wrong value again is a CODE FAIL.
+# word differs is re-read, and only a word that reads back the same wrong value again is a CODE FAIL. A confirmed
+# kernel-window word that differs from the majority in more than one bit is INFO 'kernel variant' when that core's read
+# already shows another kernel's code, or when the same (got, majority) pair is confirmed on 2+ cores of the chip; one
+# flipped bit stays a FAIL. Limits: CODE FAIL lines print after the walk (a killed walk prints none), and the 2+ cores
+# rule sees only the cores read in the same budgeted run.
 # A word with no strong majority is INFO; a word that changes on re-read is volatile (INFO); a read that
 # times out skips that chip (WARN), never a FAIL. With --elf-dir, the executable sections of <risc>.elf are compared
 # word by word too. --region replaces the derived windows (raw, for tests and manual reads). Reads only: nothing is
@@ -629,6 +633,7 @@ def run(
         "chips": len(devices),
     }
     dead = set()
+    pend = []  # confirmed words, judged after the walk: the same (got, majority) on 2+ cores of a chip is a variant
     done = rdone = 0
     stop = None  # region of the core the budget stopped in (resumed there next run)
     for i in range(T):
@@ -709,11 +714,13 @@ def run(
                         )
                         if kept
                     }
+            variant = set()  # chips whose read of this core already shows another kernel's code
             if code is not None and dev_words:  # the chip's own read holds another kernel's code there: a variant
                 for c in list(dev_words):
                     own = locate(reads[c][:nw], kcode)
                     kept = [b for b in dev_words[c] if b[1] not in own.get((b[0] - base) // 4, ())]
                     if len(kept) < len(dev_words[c]):
+                        variant.add(c)
                         res["info"]["kernel variant"] += len(dev_words[c]) - len(kept)
                         b = next(b for b in dev_words[c] if b not in kept)
                         out(
@@ -742,30 +749,56 @@ def run(
                     continue
                 conf = [b for b in bad if (b[0] - base) // 4 < len(again) and again[(b[0] - base) // 4] == b[1]]
                 res["info"]["volatile"] += len(bad) - len(conf)
+                if c in variant:  # a variant kernel's own word (not one flipped bit) in a core that holds variant code
+                    own = [b for b in conf if b[3] == "majority" and (b[1] ^ b[2]).bit_count() > 1]
+                    res["info"]["kernel variant"] += len(own)
+                    conf = [b for b in conf if b not in own]
                 if conf:
-                    a, g, e, how = conf[0]
-                    msg = (
-                        f"CODE FAIL {name[c]} core {at(c)} {risc} {rname} addr {a:#x} words {len(conf)} "
-                        f"(got {g:#010x}, {how} {e:#010x})"
-                    )
-                    res["fail"].append(
-                        {
-                            "bdf": bdf[c] or f"chip{c}",
-                            "tray": tray_of(bdf[c]),
-                            "core": at(c),
-                            "risc": risc,
-                            "region": rname,
-                            "addr": a,
-                            "words": len(conf),
-                            "got": g,
-                            "expected": e,
-                            "by": how,
-                        }
-                    )
-                    out(msg)
+                    pend.append((c, at(c), risc, rname, conf))
         if stop is not None:
             break
         done += 1
+    pairs = {}  # (chip, got, majority) -> the cores of that chip with the same wrong word
+    for c, at_c, _, _, conf in pend:
+        for a, g, e, how in conf:
+            pairs.setdefault((c, g, e), set()).add(at_c)
+    for c, at_c, risc, rname, conf in pend:
+        # in the kernel window, the same several-bit word on 2+ cores of one chip is another kernel build; one flipped bit stays a fault
+        same = [
+            b
+            for b in conf
+            if rname == "kernel" and b[3] == "majority" and (b[1] ^ b[2]).bit_count() > 1 and len(pairs[(c, b[1], b[2])]) > 1
+        ]
+        if same:
+            res["info"]["kernel variant"] += len(same)
+            a, g, e, how = same[0]
+            out(
+                f"CODE INFO {name[c]} core {at_c} {risc} {rname} addr {a:#x} got {g:#010x}, majority {e:#010x}: "
+                f"the same word on 2+ cores of this chip, a kernel variant, not a fault"
+            )
+            conf = [b for b in conf if b not in same]
+            if not conf:
+                continue
+        a, g, e, how = conf[0]
+        msg = (
+            f"CODE FAIL {name[c]} core {at_c} {risc} {rname} addr {a:#x} words {len(conf)} "
+            f"(got {g:#010x}, {how} {e:#010x})"
+        )
+        res["fail"].append(
+            {
+                "bdf": bdf[c] or f"chip{c}",
+                "tray": tray_of(bdf[c]),
+                "core": at_c,
+                "risc": risc,
+                "region": rname,
+                "addr": a,
+                "words": len(conf),
+                "got": g,
+                "expected": e,
+                "by": how,
+            }
+        )
+        out(msg)
     res["cores_done"], res["regions_done"] = done, rdone
     stop_region = stop or 0
     nxt = (start + done) % max(T, 1)
