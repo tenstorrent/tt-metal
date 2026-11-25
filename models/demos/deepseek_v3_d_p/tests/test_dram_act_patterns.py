@@ -869,7 +869,15 @@ class Driver:
         self.seed += 2
         for r in self.runs:
             c = self.cfg["ctrls"][0]
-            specs = [(READ, 1, [(r.space.fit(0x4000000 + s * r.space.rb), c)]) for s in range(r.slots)]
+            tgts = [r.space.fit(0x8000000 + s * r.space.rb) for s in range(r.slots)]
+            srcs = [a ^ 1 << 26 for a in tgts]
+            assert all(r.space.ok(a) for a in srcs), f"chip {r.chip} self-test sources {srcs[0]:#x}.. outside buffer"
+            # The decode names the lowest bit whose partner matches, and the planted bytes also sit at tgt ^ 64
+            # (the next part of the same slot). A source with no unique pattern, e.g. constant DRAM, then decodes
+            # as bit 6, so the sources get a pattern of their own first.
+            r.run([(READ, 1, [(a, c)]) for a in srcs], FILL, self.seed, 1)
+            r.read(self.seed)
+            specs = [(READ, 1, [(a, c)]) for a in tgts]
             r.run(specs, FILL, self.seed, 1, 0, (0, 26, 0xFF000000))
             r.read(self.seed)
             r.run(specs, READ, self.seed, 1)
