@@ -44,6 +44,12 @@ from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_du
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
 
+# Largest concat-heads output (bytes per chip) kept in L1 for o_proj.
+_CONCAT_L1_MAX_BYTES = 4 << 20
+# Tile storage per element (block formats include their shared exponents).
+_BYTES_PER_ELEMENT = {ttnn.bfloat16: 2, ttnn.bfloat8_b: 1088 / 1024, ttnn.bfloat4_b: 576 / 1024, ttnn.float32: 4}
+
+
 class ttMLA:
     MLA_WEIGHT_NAMES = [
         "q_a_layernorm",
@@ -2081,7 +2087,10 @@ class ttMLA:
         The gate multiply sits after nlp_concat_heads so g needs no head split, and cannot move before
         wkv_b2: it acts in v_head_dim space, and g*(attn @ W_b2) != (g*attn) @ W_b2.
         """
-        v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # The concat is o_proj's input: in L1 when small (GLM-5.3: 2.8 MiB per chip), 12 -> 6.6 us, same values.
+        concat_bytes = math.prod(attn_out.shape) * _BYTES_PER_ELEMENT.get(attn_out.dtype, 4)
+        concat_mem = ttnn.L1_MEMORY_CONFIG if concat_bytes <= _CONCAT_L1_MAX_BYTES else ttnn.DRAM_MEMORY_CONFIG
+        v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=concat_mem)
         if self._use_gate:
             assert hidden_states is not None, "gated MLA needs hidden_states to compute g_proj"
             g = self._output_gate(hidden_states, seq_len_local)
