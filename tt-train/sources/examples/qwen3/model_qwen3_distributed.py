@@ -17,8 +17,7 @@ TP strategy (Megatron-LM / C++ DistributedLlama):
                           vectors.  No weight all-gather; only hidden-dim
                           communication.  Shares the ColumnParallel LM-head
                           weight (see DistributedQwen3Model).
-  - Norms (QK, layer, final): Replicated (the QK norms see only each device's
-                          heads, so their grads are summed across TP)
+  - Norms (QK, layer, final): Replicated
   - LM head:             Always ColumnParallel with vocab-sharded output
                           (paired with vocab_parallel_cross_entropy_loss)
                           in both tied and untied modes
@@ -264,13 +263,6 @@ class DistributedQwen3Attention(AbstractModuleBase):
 
         self.rope_params = rope_params
 
-    def _qk_norm(self, norm, heads):
-        """``norm`` over this device's heads. Its weight is replicated, but each device normalizes only its own heads,
-        so the weight's gradient here is a partial sum over the local heads; ``broadcast`` is the identity forward
-        and all-reduces the gradient across TP backward, leaving every device the full gradient (#65654)."""
-        weight = ttml.ops.distributed.broadcast(norm.weight.tensor, self.shard_dim)
-        return ttml.ops.rmsnorm.rmsnorm(heads, weight, norm.eps)
-
     def forward(
         self,
         hidden_states,
@@ -288,8 +280,8 @@ class DistributedQwen3Attention(AbstractModuleBase):
         ) = ttml.ops.multi_head_utils.grouped_heads_creation(q, kvs, self.num_local_heads, self.num_local_kv_heads)
 
         # Per-head QK-Norm, before RoPE (matches HF Qwen3 ordering). V is left unnormed.
-        query_heads = self._qk_norm(self.q_norm, query_heads)
-        key_heads = self._qk_norm(self.k_norm, key_heads)
+        query_heads = self.q_norm(query_heads)
+        key_heads = self.k_norm(key_heads)
 
         query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, position_offset)
         key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, position_offset)
