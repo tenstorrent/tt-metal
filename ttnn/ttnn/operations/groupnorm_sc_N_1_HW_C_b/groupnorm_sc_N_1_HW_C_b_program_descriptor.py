@@ -13,6 +13,13 @@ Host-side planning:
   * residency: K_alloc = min(B_max, K_max) resident chunks (or the TUNING_OVERRIDES value,
     clamped to [0, K_max]); the input ring adds the streaming depth iff B_max > K_alloc.
 
+L1 BLOCK_SHARDED input (Refinement 1, even shards): a core's shard is its block. The unit is one image's
+grid column (grid columns split C, grid rows split N*HW, cpi = gy / N shards per image); the gather goes up
+the column to its root (shard row 0 of the image) and the stats mcast comes back down in ColumnMajor groups.
+TILE: the input ring is the shard (two views, K = B), the output tiles are the output shard. RM: k = lcm(sw,
+32) / sw consecutive sticks form one virtual row of W = lcm(sw, 32) / 32 tiles (lane v holds channel v mod sw),
+compute tilizes chunks from the shard into the resident ring and untilizes the result into the output shard.
+
 Every block knob (gx, chunk_ht, K, buffer depths, max_cores) is defined once here and flows into
 CB sizes and kernel args.
 """
@@ -46,6 +53,7 @@ MCAST_FIRST_SEMAPHORE_ID = 1
 # CB indices (semantic names; see op_design.md "Circular Buffers")
 # ---------------------------------------------------------------------------
 CB_INPUT_RM = 0
+CB_OUTPUT_RM = 1  # sharded RM: untilized output, backed on the output shard
 CB_INPUT_TILES = 2  # input ring, pass-1 view (alias group A)
 CB_INPUT_KEEP = 3  # input ring, pass-2 view (alias group A)
 CB_X_SQUARED = 4
@@ -135,18 +143,21 @@ def staging_bytes(*, W, map_period, is_rm, n_affine):
     return _align_up(max(pilot, affine), 64)
 
 
-def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map_period=None):
-    """Per-core L1 footprint of every CB (l1_ledger.md "Per-core footprint")."""
+def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map_period=None, sharded=False):
+    """Per-core static L1 footprint of every CB (l1_ledger.md "Per-core footprint"). Sharded: the input
+    sticks (RM) / the input ring (TILE) and the output (RM sticks / TILE tiles) are the shards, not static CBs."""
     hg, hb = int(has_gamma), int(has_beta)
     map_period = W * 32 if map_period is None else map_period
+    tile_shard = sharded and not is_rm
     bf16_pages = (
-        (D_RM * T if is_rm else 0)
-        + input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm)
+        (D_RM * T if is_rm and not sharded else 0)
+        + (0 if tile_shard else input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm))
         + 1  # reduce scaler
         + R  # ones tiles
         + W * (2 + hg + hb)  # map, pilot rows, gamma rows, beta rows
     )
-    group_b = group_b_bytes(T)
+    # Sharded TILE: x^2 alone (its group-B partner, the output tiles, is the output shard).
+    group_b = F32_TILE_BYTES * T if tile_shard else group_b_bytes(T)
     # 3W: alias groups E (sum acc / chan scale) and C' (sumsq acc / chan work / chan shift), the sum seed.
     # 2R + 7: gathered partials, group D (2), stats out (2), group stats (2), group shift (1).
     f32_bytes = group_b + F32_TILE_BYTES * (3 * W + 2 * R + 7)
@@ -200,6 +211,9 @@ class GroupNormPlan:
     l1_budget: int
     footprint: int
     work: list = field(default_factory=list)
+    sharded: bool = False
+    map_period: int = 0  # channels per slice (lane v holds channel v mod map_period)
+    shard_grid: object = None  # sharded: the shard grid (ttnn.CoreRangeSet)
 
 
 def _evaluate_gx(gx, *, N, Ht, S, span_tiles, gps, P, chunk_target, is_rm, has_gamma, has_beta, l1_budget):
@@ -319,6 +333,8 @@ def _distribute(plan_fields, grid_x):
 def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta):
     """Build the blocking plan; NotImplementedError when no feasible column-slice count exists."""
     tuning = _tuning()
+    if input_tensor.is_sharded():
+        return _plan_sharded(input_tensor, num_groups, has_gamma=has_gamma, has_beta=has_beta, tuning=tuning)
     N, _, HW, C = tuple(input_tensor.shape)
     G = num_groups
     Ht, Wt = HW // 32, C // 32
@@ -406,8 +422,129 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta):
         footprint=footprint_bytes(
             W=W, T=T, R=R, K_alloc=K_alloc, stream=stream, is_rm=is_rm, has_gamma=has_gamma, has_beta=has_beta
         ),
+        map_period=W * 32,
     )
     plan.work = _distribute(fields, grid.x)
+    return plan
+
+
+def _plan_sharded(input_tensor, num_groups, *, has_gamma, has_beta, tuning):
+    """Blocking plan of an L1 BLOCK_SHARDED input: one block per core, the core's own shard."""
+    mem = input_tensor.memory_config()
+    spec = mem.shard_spec
+    N, _, HW, C = tuple(input_tensor.shape)
+    G = num_groups
+    Cg = C // G
+    sh, sw = int(spec.shape[0]), int(spec.shape[1])
+    bbox = spec.grid.bounding_box()
+    x0, y0 = bbox.start.x, bbox.start.y
+    gx, gy = bbox.end.x - x0 + 1, bbox.end.y - y0 + 1
+    is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    def refuse(why):
+        raise NotImplementedError(f"groupnorm_sc_N_1_HW_C_b: block-sharded input: {why}")
+
+    if mem.buffer_type != ttnn.BufferType.L1:
+        refuse("only L1 shards are supported")
+    if spec.orientation != ttnn.ShardOrientation.ROW_MAJOR or spec.grid.num_cores() != gx * gy:
+        refuse("the shard grid must be one ROW_MAJOR rectangle")
+    if sh * gy != N * HW or sw * gx != C:
+        refuse(f"shard {sh}x{sw} on a {gx}x{gy} grid is not an even split (ragged shards: Refinement 3)")
+    if HW % sh != 0:
+        refuse(f"shard height {sh} straddles images (HW={HW})")
+    if sw % Cg != 0:
+        refuse(f"shard width {sw} splits a group (C/G={Cg})")
+    G_core = sw // Cg
+    if G_core > MAX_GROUP_LANES:
+        refuse(f"{G_core} groups per core column exceed one tile row of group lanes")
+    if is_rm:
+        L = _lcm(sw, 32)
+        k, W = L // sw, L // 32
+    else:
+        k, W = 1, sw // 32
+    if sh % (32 * k) != 0:
+        refuse(f"shard height {sh} is not a whole number of {k}-stick tile rows")
+    rows_core = sh // (32 * k)
+    cpi = HW // sh
+    R = _ceil_div(cpi, 32)
+
+    chunk_target = CHUNK_TILES_TARGET if tuning.get("chunk_tiles_target") is None else int(tuning["chunk_tiles_target"])
+    # A chunk is a whole number of the shard's tile rows (no ragged tail: the shard-backed FIFOs wrap exactly).
+    h = _largest_divisor_at_most(rows_core, max(1, max(1, chunk_target) // W))
+    T = h * W
+    B = rows_core // h
+
+    device = input_tensor.device()
+    grid = device.compute_with_storage_grid_size()
+    # The output shard is allocated after this plan, below the live L1 buffers the budget is measured against.
+    out_shard_bytes = _align_up(sh * sw * 2, 64)
+    l1_budget = l1_cb_budget(device) - out_shard_bytes
+    fp_kw = dict(W=W, T=T, R=R, is_rm=is_rm, has_gamma=has_gamma, has_beta=has_beta, map_period=sw, sharded=True)
+    if is_rm:
+        f_fixed = footprint_bytes(K_alloc=0, stream=True, **fp_kw)
+        K_max = (l1_budget - f_fixed) // (BF16_TILE_BYTES * T)
+        if K_max < 0:
+            refuse(f"the static CBs ({f_fixed} B) exceed the L1 left beside the shards ({l1_budget} B)")
+        override = tuning.get("max_resident_chunks")
+        K_alloc = min(B, K_max) if override is None else max(0, min(int(override), K_max, B))
+    else:
+        K_max = K_alloc = B  # the shard itself is the resident ring
+    stream = B > K_alloc
+    footprint = footprint_bytes(K_alloc=K_alloc, stream=stream, **fp_kw)
+    if footprint > l1_budget:
+        refuse(f"the static CBs ({footprint} B) exceed the L1 left beside the shards ({l1_budget} B)")
+
+    plan = GroupNormPlan(
+        N=N,
+        HW=HW,
+        C=C,
+        G=G,
+        Ht=HW // 32,
+        Wt=C // 32,
+        Cg=Cg,
+        span_tiles=0,
+        gps=0,
+        S=gx,
+        gx=gx,
+        W=W,
+        G_core=G_core,
+        U=N * gx,
+        P=gx * gy,
+        cpi=cpi,
+        h=h,
+        T=T,
+        R=R,
+        rows_core_max=rows_core,
+        B_max=B,
+        K_max=K_max,
+        K_alloc=K_alloc,
+        stream=stream,
+        is_rm=is_rm,
+        has_gamma=has_gamma,
+        has_beta=has_beta,
+        grid_x=grid.x,
+        grid_y=grid.y,
+        l1_budget=l1_budget,
+        footprint=footprint,
+        sharded=True,
+        map_period=sw,
+        shard_grid=spec.grid,
+    )
+    for y in range(gy):
+        n, slot = divmod(y, cpi)
+        for x in range(gx):
+            plan.work.append(
+                CoreWork(
+                    core=ttnn.CoreCoord(x0 + x, y0 + y),
+                    unit_start=n * gx + x,
+                    num_blocks=1,
+                    row_start=slot * rows_core,
+                    rows_core=rows_core,
+                    is_root=int(slot == 0),
+                    slot=slot,
+                    root=ttnn.CoreCoord(x0 + x, y0 + n * cpi),
+                )
+            )
     return plan
 
 
@@ -447,32 +584,51 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     bf16 = ttnn.bfloat16
     f32 = ttnn.float32
 
-    num_used = len(plan.work)
-    cores = _used_core_range_set(num_used, plan.grid_x)
-    map_period = W * 32
+    sharded = plan.sharded
+    cores = plan.shard_grid if sharded else _used_core_range_set(len(plan.work), plan.grid_x)
+    map_period = plan.map_period
+
+    def shard_cb(tensor, formats):
+        # Zero-copy: the CB is the core's own shard (no NoC traffic); the views are tile-sized pages over it.
+        d = ttnn.cb_descriptor_from_sharded_tensor(formats[0][0], tensor)
+        d.format_descriptors = [
+            ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page) for idx, fmt, page in formats
+        ]
+        return d
 
     # ---------------- Circular buffers ----------------
     cbs = []
     if is_rm:
-        cbs.append(_cb(D_RM * T * BF16_TILE_BYTES, cores, [(CB_INPUT_RM, bf16, BF16_TILE_BYTES)]))
+        if sharded:
+            cbs.append(shard_cb(input_tensor, [(CB_INPUT_RM, bf16, BF16_TILE_BYTES)]))
+            cbs.append(shard_cb(output_tensor, [(CB_OUTPUT_RM, bf16, BF16_TILE_BYTES)]))
+        else:
+            cbs.append(_cb(D_RM * T * BF16_TILE_BYTES, cores, [(CB_INPUT_RM, bf16, BF16_TILE_BYTES)]))
     # Alias group A: the input ring, K_alloc resident chunks + the streaming depth, as two FIFO views pushed in
     # lockstep. Pass 1 pops every chunk from CB_INPUT_TILES; CB_INPUT_KEEP drops the streamed head in pass 1 and
-    # holds the resident tail (then the re-read head) for pass 2.
-    cbs.append(
-        _cb(
-            input_ring_pages(T=T, K_alloc=plan.K_alloc, stream=plan.stream, is_rm=is_rm) * BF16_TILE_BYTES,
-            cores,
-            [(CB_INPUT_TILES, bf16, BF16_TILE_BYTES), (CB_INPUT_KEEP, bf16, BF16_TILE_BYTES)],
+    # holds the resident tail (then the re-read head) for pass 2. Sharded TILE: the ring is the shard (K = B).
+    ring_views = [(CB_INPUT_TILES, bf16, BF16_TILE_BYTES), (CB_INPUT_KEEP, bf16, BF16_TILE_BYTES)]
+    if sharded and not is_rm:
+        cbs.append(shard_cb(input_tensor, ring_views))
+        # x^2 alone; the output tiles are the output shard.
+        cbs.append(_cb(F32_TILE_BYTES * T, cores, [(CB_X_SQUARED, f32, F32_TILE_BYTES)]))
+        cbs.append(shard_cb(output_tensor, [(CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)]))
+    else:
+        cbs.append(
+            _cb(
+                input_ring_pages(T=T, K_alloc=plan.K_alloc, stream=plan.stream, is_rm=is_rm) * BF16_TILE_BYTES,
+                cores,
+                ring_views,
+            )
         )
-    )
-    # Alias group B: x^2 (pass 1) / output (pass 2), disjoint lifetimes.
-    cbs.append(
-        _cb(
-            group_b_bytes(T),
-            cores,
-            [(CB_X_SQUARED, f32, F32_TILE_BYTES), (CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)],
+        # Alias group B: x^2 (pass 1) / output (pass 2), disjoint lifetimes.
+        cbs.append(
+            _cb(
+                group_b_bytes(T),
+                cores,
+                [(CB_X_SQUARED, f32, F32_TILE_BYTES), (CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)],
+            )
         )
-    )
     cbs.append(_cb(BF16_TILE_BYTES, cores, [(CB_REDUCE_SCALER, bf16, BF16_TILE_BYTES)]))
     # Alias group E: the Sigma x accumulator (UnpackToDestFp32, pass 1) / the FPU-readable chan_scale. The publish
     # copy reads accumulator tile i and packs chan tile i over it (in-place lockstep; every view returns to its
@@ -527,7 +683,8 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     gamma_addr = gamma.buffer_address() if gamma is not None else 0
     beta_addr = beta.buffer_address() if beta is not None else 0
 
-    reader_ct = [W, h, int(is_rm), hg, hb, R, plan.Cg, plan.Wt, plan.Ht, plan.gx, in_page_bytes, map_period, 0]
+    reader_ct = [W, h, int(is_rm), hg, hb, R, plan.Cg, plan.Wt, plan.Ht, plan.gx, in_page_bytes, map_period]
+    reader_ct.append(int(sharded))
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         (ttnn.TensorAccessorArgs(gamma) if gamma is not None else ttnn.TensorAccessorArgs()).get_compile_time_args()
@@ -538,12 +695,12 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
 
     exp_sbw = _largest_divisor_at_most(W, 4)  # expand matmul out_subblock_w (<= DEST_AUTO_LIMIT fp32 half-sync)
     out_cb_pages = group_b_bytes(T) // BF16_TILE_BYTES  # cb_output_tiles capacity (drain barrier)
-    compute_ct = [W, h, int(is_rm), hg, hb, R, exp_sbw, out_cb_pages]
+    compute_ct = [W, h, int(is_rm), hg, hb, R, exp_sbw, out_cb_pages, int(sharded)]
 
     # The writer is built once per role (IS_ROOT is compile-time): each binary carries only its own mcast pipe
     # (sender on unit roots, receiver elsewhere) and only the root's gather-wait / zero-fill code.
     def writer_ct(is_root):
-        ct = [W, h, R, plan.Wt, plan.Ht, plan.gx, out_page_bytes, int(is_root)]
+        ct = [W, h, R, plan.Wt, plan.Ht, plan.gx, out_page_bytes, int(is_root), int(is_rm), int(sharded)]
         ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
         return ct
 
@@ -626,15 +783,16 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     gather_sem = ttnn.SemaphoreDescriptor(id=GATHER_SEMAPHORE_ID, core_ranges=cores, initial_value=0)
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[gather_sem], cbs=cbs)
 
-    # Stats multicast: one channel over all used cores, groups of cpi consecutive (row-major) cores,
-    # sender = slot 0 (the unit root). cpi == 1 degenerates to the sender's local copy.
+    # Stats multicast: one channel over all used cores, groups of cpi consecutive cores, sender = slot 0 (the
+    # unit root). DRAM: units are row-major core runs; sharded: a unit is a grid-column segment (ColumnMajor).
+    # cpi == 1 degenerates to the sender's local copy.
     mcast = ttnn.Mcast(
         device,
         ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
         cores,
         plan.cpi,
         ttnn.McastFixedSenderConfig(sender_index=0),
-        ttnn.McastCoreOrder.RowMajor,
+        ttnn.McastCoreOrder.ColumnMajor if sharded else ttnn.McastCoreOrder.RowMajor,
     )
     mcast.attach(descriptor, "mcast", writer_kernels, MCAST_FIRST_SEMAPHORE_ID)
     descriptor.kernels = [reader_kernel, *writer_kernels, compute_kernel]

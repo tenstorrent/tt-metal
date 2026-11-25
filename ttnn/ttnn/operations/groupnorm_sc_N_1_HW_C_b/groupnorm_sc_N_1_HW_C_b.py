@@ -4,10 +4,14 @@
 """
 groupnorm_sc_N_1_HW_C_b — GroupNorm over an (N, 1, HW, C) channels-last activation.
 
-One `ttnn.generic_op` dispatch per call. Two-pass statistics (Σx, Σx² per channel) on a
-row-split, multi-core grid; per-core partials are collapsed to group lanes, gathered to a
-per-unit root, finalized to [rstd, mean], multicast back, expanded to per-channel
-a = rstd·γ and b' = mean·a − β, and applied as y = x·a − b'. Design: op_design.md.
+One `ttnn.generic_op` dispatch per call. Two-pass statistics (shifted moments Σ(x−k), Σx(x−k) per
+channel, k one sample per group) on a row-split, multi-core grid; per-core partials are collapsed to
+group lanes, gathered to a per-unit root, finalized to [rstd, mean], multicast back, expanded to
+per-channel a = rstd·γ and b' = mean·a − β, and applied as y = x·a − b'. Design: op_design.md.
+
+DRAM interleaved input -> DRAM interleaved TILE output. L1 BLOCK_SHARDED input -> an output with the
+input's layout and memory config (identical shard spec); the shards are consumed and produced in place
+by the kernels (zero-copy circular buffers).
 """
 
 from __future__ import annotations
@@ -84,7 +88,7 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0)
+# 2. SUPPORTED (Phase 0 + Refinement 1: L1 BLOCK_SHARDED, even shards, out of place)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -94,8 +98,8 @@ SUPPORTED = {
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
     "affine_dtype": [ttnn.bfloat16, "none"],
     "affine_layout": [ttnn.ROW_MAJOR_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
-    "shard_fit": ["none"],
+    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
+    "shard_fit": ["none", "even"],
     "in_place": [False],
 }
 
@@ -205,12 +209,13 @@ def groupnorm_sc_N_1_HW_C_b(input_tensor, num_groups, *, gamma=None, beta=None, 
     from .groupnorm_sc_N_1_HW_C_b_program_descriptor import create_program_descriptor
 
     device = input_tensor.device()
+    sharded = input_tensor.is_sharded()
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),
         input_tensor.dtype,
-        ttnn.TILE_LAYOUT,
+        input_tensor.layout if sharded else ttnn.TILE_LAYOUT,
         device,
-        ttnn.DRAM_MEMORY_CONFIG,
+        input_tensor.memory_config() if sharded else ttnn.DRAM_MEMORY_CONFIG,
     )
     program_descriptor = create_program_descriptor(plan, input_tensor, output_tensor, gamma=gamma, beta=beta, eps=eps)
     io_tensors = [input_tensor]

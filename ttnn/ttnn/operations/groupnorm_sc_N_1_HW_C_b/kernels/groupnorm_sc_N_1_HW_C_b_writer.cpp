@@ -11,6 +11,8 @@
 //              cb_stats_out into every unit core's cb_group_stats (McastArgs; cpi == 1 is a local copy).
 //   receiver : take the multicast into cb_group_stats.
 //   output   : pass-2 chunks (resident tail first, then the re-read head) -> DRAM via TensorAccessor.
+//              SHARDED: compute writes the output shard directly (zero-copy CB); the writer only drains the
+//              credits (RM: the head-skip credits compute pushes first, then every chunk).
 //
 // Unused gather rows (slots >= cpi in the last tile pair) are zeroed once with NoC zeros; senders never
 // touch them, so they stay zero across blocks.
@@ -24,6 +26,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 namespace {
+constexpr uint32_t cb_output_rm = 1;
 constexpr uint32_t cb_output_tiles = 5;
 constexpr uint32_t cb_local_partials = 15;
 constexpr uint32_t cb_gathered_partials = 16;
@@ -51,7 +54,9 @@ void kernel_main() {
     constexpr uint32_t GX = get_compile_time_arg_val(5);
     constexpr uint32_t OUT_PAGE_BYTES = get_compile_time_arg_val(6);
     constexpr bool IS_ROOT = get_compile_time_arg_val(7) != 0;  // one binary per role (unit root / member)
-    constexpr auto out_args = TensorAccessorArgs<8>();
+    constexpr bool IS_RM = get_compile_time_arg_val(8) != 0;
+    constexpr bool SHARDED = get_compile_time_arg_val(9) != 0;
+    constexpr auto out_args = TensorAccessorArgs<10>();
     constexpr auto mc = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
@@ -158,6 +163,15 @@ void kernel_main() {
         }
 
         // ---------------- output: pass-2 order (resident tail first, then the re-read head) ----------------
+        if constexpr (SHARDED) {
+            constexpr uint32_t cb_out = IS_RM ? cb_output_rm : cb_output_tiles;
+            const uint32_t credits = (IS_RM ? first_resident : 0) + num_chunks;
+            for (uint32_t c = 0; c < credits; ++c) {
+                cb_wait_front(cb_out, T);
+                cb_pop_front(cb_out, T);
+            }
+            continue;
+        }
         for (uint32_t jj = 0; jj < num_chunks; ++jj) {
             const uint32_t j = jj < K ? first_resident + jj : jj - K;
             const uint32_t row0 = row_start + j * CHUNK_HT;

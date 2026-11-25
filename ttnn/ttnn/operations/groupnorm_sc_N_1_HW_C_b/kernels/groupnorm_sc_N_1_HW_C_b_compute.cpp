@@ -29,6 +29,7 @@
 #include "api/compute/cb_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -41,6 +42,7 @@ using namespace compute_kernel_lib;
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
+constexpr uint32_t cb_output_rm = 1;  // sharded RM: the output shard (untilized rows)
 // The input ring: one allocation, two FIFO views pushed in lockstep (alias group A). Pass 1 consumes every
 // chunk through cb_input_tiles; cb_input_keep drops the streamed head chunks during pass 1 and holds the
 // resident tail for pass 2, followed by the re-read head - exactly the pass-2 order.
@@ -75,6 +77,10 @@ constexpr bool HAS_BETA = get_compile_time_arg_val(4) != 0;
 constexpr uint32_t R = get_compile_time_arg_val(5);
 constexpr uint32_t EXP_SBW = get_compile_time_arg_val(6);       // expand matmul out_subblock_w
 constexpr uint32_t OUT_CB_PAGES = get_compile_time_arg_val(7);  // cb_output_tiles capacity (alias group B)
+// The input / output are L1 shards backing their CBs (TILE: the input ring and cb_output_tiles; RM: cb_input_rm
+// and cb_output_rm). Sharded RM untilizes each normalized chunk into the output shard.
+constexpr bool SHARDED = get_compile_time_arg_val(8) != 0;
+constexpr bool UNTILIZE_OUT = SHARDED && IS_RM;
 constexpr uint32_t T = CHUNK_HT * W;
 
 // b' lives in cb_chan_work when beta is present (5e writes it back in place), else in cb_chan_shift.
@@ -417,6 +423,11 @@ void kernel_main() {
 
         // ---------------- normalize_block (pass 2): resident chunks first, then re-reads ----------------
         // cb_input_keep already fronts the resident tail; the re-read head lands behind it.
+        if constexpr (UNTILIZE_OUT) {
+            // The output shard is a FIFO in row order: skip the head region (re-read last), write the resident
+            // tail, then wrap to the head. The writer drains every credit.
+            push_pad(cb_output_rm, first_resident * T);
+        }
         for (uint32_t jj = 0; jj < num_chunks; ++jj) {
             const bool reread = jj >= K;
             const uint32_t j = reread ? jj - K : first_resident + jj;
@@ -427,6 +438,11 @@ void kernel_main() {
                 }
             }
             normalize_chunk(rows_valid);
+            if constexpr (UNTILIZE_OUT) {
+                DataflowBuffer out_tiles_dfb(cb_output_tiles);
+                DataflowBuffer out_rm_dfb(cb_output_rm);
+                untilize<W, cb_output_tiles, cb_output_rm>(out_tiles_dfb, out_rm_dfb, rows_valid);
+            }
             if (reread) {
                 skip_chunk(cb_input_tiles);  // the pass-1 view also carried the re-read
             }
