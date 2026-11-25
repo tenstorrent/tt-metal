@@ -23,8 +23,9 @@ tests pin that down device against device, so they need the TTNN weight cache bu
   (mid-slab) start. Every MoE layer's planner must count exactly the real rows' picks, and the
   real rows' output, KDA carries and KV must not depend on what the pad rows hold.
 * test_k3_packed_traced_matches_eager: the same schedule through TtKimiK3Runtime.prefill_forward with use_trace
-  (one capture, replayed per forward; each chunk position's slot and bounds read on
-  device) must leave the same KDA carries and KV as the eager packed forward.
+  (one capture per real-chunk count, each chunk position's slot and bounds read on device; a forward with an
+  empty tail replays the capture for its real chunks) must leave the same KDA carries and KV as the eager packed
+  forward.
 * test_k3_packed_pipeline_matches_one_rank: the model split over two pipeline ranks on one mesh, packed forwards
   handed rank to rank, must match one rank: bit-exact with the plain residual stream, at PIPELINE_PCC under AttnRes;
   traced must match eager on both ranks.

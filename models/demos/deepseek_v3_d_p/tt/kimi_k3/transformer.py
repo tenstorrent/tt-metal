@@ -368,6 +368,12 @@ class TtKimiK3Transformer(LightweightModule):
         self.mesh_device.clear_loaded_sub_device_manager()
         for layer in self.layers:
             layer.release_sub_device_managers()
+        # TtPrefillRuntime.release_trace lands here too: the traced empty tail's zero blocks go with the captures.
+        # Cleared in place, as every layer holds this dict.
+        zero_blocks = getattr(self, "_zero_blocks", {})
+        for zero in zero_blocks.values():
+            ttnn.deallocate(zero)
+        zero_blocks.clear()
 
     @property
     def inbound_planes(self) -> int:

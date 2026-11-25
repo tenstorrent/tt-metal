@@ -387,12 +387,18 @@ class TtKimiK3Block(LightweightModule):
         # output (same rows, dtype and layout, so the concat is uniform); validate_chunks guarantees one exists.
         # A traced forward with an empty tail (active_chunks) takes one persistent read-only zero block instead:
         # zeros_like writes from the host, which a capture refuses, and the warm pass of the same forward builds it.
+        # Looked up only when a position is empty, so a full forward's capture never reaches zeros_like.
         template = next(out for out in outs if out is not None)
         traced = ctxs[0].metadata is not None
-        zero = self._zero_block(template) if traced else None
+        zero = None
         for k in range(n):
             if outs[k] is None:
-                outs[k] = zero if traced else ttnn.zeros_like(template)
+                if not traced:
+                    outs[k] = ttnn.zeros_like(template)
+                    continue
+                if zero is None:
+                    zero = self._zero_block(template)
+                outs[k] = zero
         attn_out = outs[0] if n == 1 else ttnn.concat(outs, dim=2)
         if n > 1:
             for out in outs:

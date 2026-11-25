@@ -1337,7 +1337,7 @@ class TtPrefillRuntime:
     def _real_counts_with_empty_tail(self) -> list:
         """Real-chunk counts 1..F-1 that get a capture of their own besides the full one, for a traced packed forward
         of a model whose packed forward can skip empty positions (packed_trace_skips_empty_positions). Any other
-        model (e.g. Kimi-K3's) has one capture, in which empty positions run in the scratch slot."""
+        model has one capture, in which empty positions run in the scratch slot."""
         cfg = self.config
         if not (cfg.use_trace and cfg.forward_chunks > 1):
             return []

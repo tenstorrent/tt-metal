@@ -105,6 +105,26 @@ def _schedule(mesh_device):
     return lengths, forwards
 
 
+def _schedule4(mesh_device):
+    """(user lengths, forwards) at four chunks per forward, the production shape: forwards with 3, 1, 2 and 4 real
+    chunks, so every partial capture replays and one zero block fills up to three empty positions of a forward."""
+    C = stage_layout(mesh_device).chunk
+    lengths = [3 * C, C + 704, C + 896, 3 * C]
+    E = PrefillChunk(0, 0, 0)
+    forwards = [
+        [PrefillChunk(0, 0, C), PrefillChunk(1, 0, C), PrefillChunk(2, 0, C), E],
+        [PrefillChunk(0, C, 2 * C), E, E, E],
+        [PrefillChunk(3, 0, C), PrefillChunk(3, C, 2 * C), E, E],
+        [
+            PrefillChunk(0, 2 * C, 3 * C),
+            PrefillChunk(1, C, C + 704),
+            PrefillChunk(2, C, C + 896),
+            PrefillChunk(3, 2 * C, 3 * C),
+        ],
+    ]
+    return lengths, forwards
+
+
 def _streams(num_users, length):
     return [torch.tensor(token_ids(length, seed=100 + u)) for u in range(num_users)]
 
@@ -334,7 +354,7 @@ def test_k31_packed_forward_matches_one_chunk_forwards(mesh_device, device_param
     assert not failures, f"[packed] {len(failures)} mismatch(es):\n" + "\n".join(failures)
 
 
-def _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace):
+def _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace, forward_chunks=FORWARD_CHUNKS):
     layout = stage_layout(mesh_device)
     return TtPrefillRuntimeConfig(
         num_layers=n,
@@ -343,7 +363,7 @@ def _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace
         sp_axis=layout.sp_axis,
         tp_axis=layout.tp_axis,
         chunk_size=layout.chunk,
-        forward_tokens_budget=FORWARD_CHUNKS * layout.chunk,
+        forward_tokens_budget=forward_chunks * layout.chunk,
         num_users=num_users,
         num_links=1,
         topology=per_axis_topology(device_params["fabric_config"]),
@@ -363,7 +383,16 @@ def _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace
 
 
 def _runtime(
-    mesh_device, device_params, state_dict, first, n, total, num_users, use_trace, runtime_cls=TtKimiK3Runtime
+    mesh_device,
+    device_params,
+    state_dict,
+    first,
+    n,
+    total,
+    num_users,
+    use_trace,
+    runtime_cls=TtKimiK3Runtime,
+    forward_chunks=FORWARD_CHUNKS,
 ):
     """A K3.1 runtime over layers [first, first + n) of a ``total``-layer synthetic model, and its caches from the
     serving allocator (the index and KV caches with the traced scratch slot, the KDA slabs at num_users)."""
@@ -371,7 +400,7 @@ def _runtime(
         mesh_device,
         hf_config(),
         window(state_dict, first, n),
-        _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace),
+        _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace, forward_chunks),
     )
     params = run_params(
         mesh_device,
@@ -380,7 +409,7 @@ def _runtime(
         is_first_rank=first == 0,
         is_last_rank=first + n == total,
         num_users=num_users,
-        forward_chunks=FORWARD_CHUNKS,
+        forward_chunks=forward_chunks,
         use_trace=use_trace,
     )
     caches = KimiK31Adapter().allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config(), params=params)
@@ -415,7 +444,7 @@ def _count_replays(rt):
 
         controller.replay = wrapped
 
-    counting(rt._controller, FORWARD_CHUNKS)
+    counting(rt._controller, rt.config.forward_chunks)
     for real, controller in rt._controllers_by_real_count.items():
         counting(controller, real)
     return counts
@@ -432,8 +461,10 @@ def _expected_replays(forwards):
 def _assert_skip_captures(rt):
     """K3.1 declares packed_trace_skips_empty_positions: one capture per real-chunk count 1..F-1 beside the full one,
     none of which compiled a program (compile() warmed each)."""
+    full = rt.config.forward_chunks
     assert type(rt.model).packed_trace_skips_empty_positions
-    assert sorted(rt._controllers_by_real_count) == list(range(1, FORWARD_CHUNKS)), rt._controllers_by_real_count
+    assert sorted(rt._controllers_by_real_count) == list(range(1, full)), rt._controllers_by_real_count
+    assert sorted(rt.capture_new_programs) == list(range(1, full + 1)), f"captures: {rt.capture_new_programs}"
     assert all(n == 0 for n in rt.capture_new_programs.values()), f"captures compiled: {rt.capture_new_programs}"
 
 
@@ -443,16 +474,28 @@ def _assert_skip_captures(rt):
     placements(trace_region_size=TRACE_REGION_SIZE),
     indirect=["mesh_device", "device_params"],
 )
-def test_k31_packed_traced_matches_eager(mesh_device, device_params):
+@pytest.mark.parametrize("forward_chunks", [2, 4], ids=["2-chunks", "4-chunks"])
+def test_k31_packed_traced_matches_eager(mesh_device, device_params, forward_chunks):
     """Traced packed forwards (slots 0..3) must leave the KV, index cache and KDA carries the eager packed forward of
-    the same chunks on the same model leaves (slots 4..7), bit for bit."""
-    lengths, forwards = _schedule(mesh_device)
+    the same chunks on the same model leaves (slots 4..7), bit for bit. Four chunks per forward is the production
+    shape: every partial capture (1, 2 and 3 real chunks) replays."""
+    lengths, forwards = (_schedule if forward_chunks == 2 else _schedule4)(mesh_device)
     num_users = len(lengths)
     num_slots = 2 * num_users
     mesh_device.enable_program_cache()
     state_dict = synthetic_state_dict(0, NUM_LAYERS)
     streams = _streams(num_users, max(lengths))
-    rt, caches = _runtime(mesh_device, device_params, state_dict, 0, NUM_LAYERS, NUM_LAYERS, num_slots, True)
+    rt, caches = _runtime(
+        mesh_device,
+        device_params,
+        state_dict,
+        0,
+        NUM_LAYERS,
+        NUM_LAYERS,
+        num_slots,
+        True,
+        forward_chunks=forward_chunks,
+    )
     try:
         model = rt.model
         rt.compile(caches)
