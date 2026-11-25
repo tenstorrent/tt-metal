@@ -638,15 +638,28 @@ def _agmm_launch_config(K_local, grid, M_block, N_block, config_override=None):
     return cfg, num_links, o.get("num_workers_per_link", -(-grid_x // num_links))
 
 
+SDPA_PREFILL_EXP_APPROX_ENV = "QWEN36_SDPA_PREFILL_EXP_APPROX"
+
+
+def sdpa_prefill_exp_approx():
+    """exp_approx_mode of a default-config prefill SDPA: True unless QWEN36_SDPA_PREFILL_EXP_APPROX=0.
+
+    With fp32 dest accumulation, exp_approx_mode=False runs the accurate SFPU exponential, about 20x the SFPU cost per
+    QK tile. Single-chip chunked SDPA (3 Q heads, 1 KV head, head_dim 256, bfloat8_b K/V, 2048 rows at depth 131072):
+    63.7 -> 29.5 ms, PCC against fp32 0.99900 -> 0.99883. Decode and spec verify SDPAs do not come here and keep the
+    accurate exponential."""
+    return os.environ.get(SDPA_PREFILL_EXP_APPROX_ENV, "1") == "1"
+
+
 def prefill_sdpa_chunks(args, S, default_chunk, max_chunk=None):
     """(q_chunk, k_chunk, exp_approx_mode) for a prefill SDPA of S query rows.
 
-    (default_chunk, default_chunk, False) unless args.prefill_sdpa_config_fn is set: it is called as fn(S) and returns
-    (q_chunk, k_chunk, exp_approx). The chunks are then clamped to the tile-padded S and to max_chunk (the chunked SDPA
-    needs chunk_start_idx % chunk == 0 for both)."""
+    (default_chunk, default_chunk, sdpa_prefill_exp_approx()) unless args.prefill_sdpa_config_fn is set: it is called as
+    fn(S) and returns (q_chunk, k_chunk, exp_approx). The chunks are then clamped to the tile-padded S and to max_chunk
+    (the chunked SDPA needs chunk_start_idx % chunk == 0 for both)."""
     fn = getattr(args, "prefill_sdpa_config_fn", None)
     if fn is None:
-        return default_chunk, default_chunk, False
+        return default_chunk, default_chunk, sdpa_prefill_exp_approx()
     q_chunk, k_chunk, exp_approx = fn(S)
     cap = max(TILE_SIZE, -(-S // TILE_SIZE) * TILE_SIZE)
     if max_chunk is not None:
