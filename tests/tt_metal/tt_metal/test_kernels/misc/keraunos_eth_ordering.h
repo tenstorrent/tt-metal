@@ -4,7 +4,7 @@
 
 // SRAM layout and result blocks shared by the Keraunos Ethernet ordering kernels and their host test
 // (test_keraunos_eth_send.cpp). Every offset is relative to a base the host passes as runtime arg 0: a 64-byte-aligned
-// flat offset in CCE SRAM at or above MEM_IERISC_ROUTER_UNRESERVED_BASE, so the Ethernet-link slot below it stays
+// flat offset in CCE SRAM at or above MEM_AERISC_UNRESERVED_BASE, so the Ethernet-link slot below it stays
 // intact. Sender and receiver use the same base, because a send lands at the same offset in the peer's SRAM.
 
 #pragma once

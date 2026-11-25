@@ -119,7 +119,7 @@ protected:
         if (IsSkipped() || HasFatalFailure()) {
             return;
         }
-        base_ = (MEM_IERISC_ROUTER_UNRESERVED_BASE + 63) & ~63u;
+        base_ = (MEM_AERISC_UNRESERVED_BASE + 63) & ~63u;
         ASSERT_TRUE(base_ >= unreserved_ && base_ + kPayloadOffset + kMaxPayloadBytes <= MEM_IERISC_L1_SIZE)
             << fmt::format("Test base 0x{:x} does not fit the IDLE_ETH unreserved region", base_);
     }
