@@ -27,6 +27,21 @@ void end();
 
 bool active();
 
+/**
+ * No dry run for the lifetime of the object. Opening and closing a device must reach it also when a test does so
+ * inside its body: the device's own programs are built and launched for real.
+ */
+class Suspended {
+public:
+    Suspended();
+    ~Suspended();
+    Suspended(const Suspended&) = delete;
+    Suspended& operator=(const Suspended&) = delete;
+
+private:
+    int depth_;
+};
+
 /** A dry run for the lifetime of the object. */
 struct Scope {
     Scope() { begin(); }

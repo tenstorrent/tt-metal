@@ -26,6 +26,9 @@ void end() {
 
 bool active() { return depth.load(std::memory_order_acquire) > 0; }
 
+Suspended::Suspended() : depth_(depth.exchange(0, std::memory_order_acq_rel)) {}
+Suspended::~Suspended() { depth.fetch_add(depth_, std::memory_order_acq_rel); }
+
 size_t finish_queued_builds(bool drop_queued) { return wait_for_ahead_builds(drop_queued); }
 
 void set_pass(bool in_dry_pass) { pass.store(in_dry_pass, std::memory_order_release); }

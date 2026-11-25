@@ -5,6 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include <initializer_list>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/experimental/dry_run.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
 #include <mesh_device.hpp>
@@ -449,6 +450,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     const DispatchCoreConfig& dispatch_core_config,
     ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+    // A device opened inside a dry run (a test that opens its own mesh) is opened for real.
+    const experimental::dry_run::Suspended no_dry_run;
     auto& ctx = MetalContext::instance(context_id);
     const auto& mesh_graph = ctx.get_control_plane().get_mesh_graph();
     auto [scoped_devices, fabric_node_ids, mesh_shape] =
@@ -1147,6 +1150,8 @@ uint64_t MeshDeviceImpl::close_count() { return mesh_device_close_count.load(std
 
 bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     TTZoneScopedD(MISC);
+    // As for the open: a close inside a dry run reaches the device.
+    const experimental::dry_run::Suspended no_dry_run;
     mesh_device_close_count.fetch_add(1, std::memory_order_acq_rel);
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
