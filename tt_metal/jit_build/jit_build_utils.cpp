@@ -36,13 +36,13 @@
 namespace tt::jit_build::utils {
 
 namespace {
-thread_local bool idle_priority_commands = false;
+thread_local bool low_priority_commands = false;
 
-// The CPUs idle-priority commands may run on: the ones this process may use, minus one physical core (the first
-// allowed CPU and its sibling hardware threads). Idle priority alone still lets a compiler run on the sibling of the
+// The CPUs low-priority commands may run on: the ones this process may use, minus one physical core (the first
+// allowed CPU and its sibling hardware threads). Low priority alone still lets a compiler run on the sibling of the
 // CPU the test thread is on, where the two share one core; keeping the compilers off one whole core leaves it free.
 // Everything, when the process has a single core.
-const cpu_set_t& idle_command_cpus() {
+const cpu_set_t& low_priority_cpus() {
     static const cpu_set_t cpus = [] {
         cpu_set_t allowed;
         CPU_ZERO(&allowed);
@@ -74,15 +74,15 @@ const cpu_set_t& idle_command_cpus() {
 }
 }  // namespace
 
-IdlePriorityCommands::IdlePriorityCommands(bool on) : before_(idle_priority_commands) { idle_priority_commands = on; }
-IdlePriorityCommands::~IdlePriorityCommands() { idle_priority_commands = before_; }
-bool IdlePriorityCommands::active() { return idle_priority_commands; }
+LowPriorityCommands::LowPriorityCommands(bool on) : before_(low_priority_commands) { low_priority_commands = on; }
+LowPriorityCommands::~LowPriorityCommands() { low_priority_commands = before_; }
+bool LowPriorityCommands::active() { return low_priority_commands; }
 
 bool run_command(const std::string& cmd, const std::string& log_file, bool verbose) {
     TTZoneScopedD(JIT);
     TTZoneTextD(JIT, cmd.c_str(), cmd.length());
-    if (idle_priority_commands && !verbose) {
-        // system() cannot set the child's priority; exec_command() can, and appends to the log the same way.
+    if (low_priority_commands && !verbose) {
+        // system() cannot lower the child's priority; exec_command() can, and appends to the log the same way.
         return exec_command({"/bin/sh", "-c", cmd}, "", log_file);
     }
     int ret;
@@ -270,25 +270,23 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
 
     pid_t pid = 0;
     int spawn_ret = -1;
-    if (idle_priority_commands) {
-        posix_spawnattr_t attr;
-        posix_spawnattr_init(&attr);
-        const sched_param param{};
-        posix_spawnattr_setschedpolicy(&attr, SCHED_IDLE);
-        posix_spawnattr_setschedparam(&attr, &param);
-        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSCHEDULER);
+    if (low_priority_commands) {
+        // Started through nice(1): posix_spawn cannot lower a child's priority itself (glibc accepts only the normal
+        // and real-time policies in spawn attributes), and a thread that lowers its own cannot raise it back.
+        std::vector<const char*> nice_argv = {"nice", "-n", "19"};
+        nice_argv.insert(nice_argv.end(), argv.begin(), argv.end());
         // The child inherits this thread's CPUs, so the thread takes the restricted set for the spawn.
         cpu_set_t before;
         const bool restricted = sched_getaffinity(0, sizeof(before), &before) == 0 &&
-                                sched_setaffinity(0, sizeof(cpu_set_t), &idle_command_cpus()) == 0;
-        spawn_ret = posix_spawnp(&pid, argv[0], &file_actions, &attr, const_cast<char* const*>(argv.data()), ::environ);
+                                sched_setaffinity(0, sizeof(cpu_set_t), &low_priority_cpus()) == 0;
+        spawn_ret = posix_spawnp(
+            &pid, nice_argv[0], &file_actions, nullptr, const_cast<char* const*>(nice_argv.data()), ::environ);
         if (restricted) {
             sched_setaffinity(0, sizeof(before), &before);
         }
-        posix_spawnattr_destroy(&attr);
     }
     if (spawn_ret != 0) {
-        // Normal priority, also when the idle policy was refused.
+        // Normal priority, also when nice could not be started.
         spawn_ret =
             posix_spawnp(&pid, argv[0], &file_actions, nullptr, const_cast<char* const*>(argv.data()), ::environ);
     }

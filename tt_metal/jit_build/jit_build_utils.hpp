@@ -19,16 +19,16 @@ namespace tt::jit_build::utils {
 bool run_command(const std::string& cmd, const std::string& log_file, bool verbose);
 
 // For the lifetime of the object, the commands the calling thread starts through run_command() and exec_command()
-// run at idle priority (SCHED_IDLE) when |on| is set: they get the CPUs nothing else wants. Kernel builds queued by a
-// dry run use it, so that the compilers do not slow the thread that runs the tests.
-class IdlePriorityCommands {
+// run at the lowest priority (nice 19) and off one physical core when |on| is set. Kernel builds queued by a dry run
+// use it, so that the compilers do not slow the thread that runs the tests.
+class LowPriorityCommands {
 public:
-    explicit IdlePriorityCommands(bool on);
-    ~IdlePriorityCommands();
-    IdlePriorityCommands(const IdlePriorityCommands&) = delete;
-    IdlePriorityCommands& operator=(const IdlePriorityCommands&) = delete;
+    explicit LowPriorityCommands(bool on);
+    ~LowPriorityCommands();
+    LowPriorityCommands(const LowPriorityCommands&) = delete;
+    LowPriorityCommands& operator=(const LowPriorityCommands&) = delete;
 
-    // Whether the calling thread's commands run at idle priority now.
+    // Whether the calling thread's commands run at low priority now.
     static bool active();
 
 private:
