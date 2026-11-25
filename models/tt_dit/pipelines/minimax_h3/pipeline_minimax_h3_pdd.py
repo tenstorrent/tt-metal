@@ -55,6 +55,7 @@ class MiniMaxH3PDDPipeline(MiniMaxH3Pipeline):
             kwargs[name] = value
         self._pdd_transformer_dir = self.pdd_export_dir / self.pdd.transformer_component
         self._pdd_digest = _export_digest(self._pdd_transformer_dir)
+        logger.info(f"PDD export {self.pdd_export_dir} -> weight-cache digest {self._pdd_digest[:12]}")
         self._pdd_head_states = self.pdd.fused_head_states(self._read_widened_heads())
         self._pdd_heads: list[tuple[Linear, Linear]] | None = None
         super().__init__(task=task, **kwargs)
