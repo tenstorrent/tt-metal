@@ -50,6 +50,7 @@ nb::dict plan_dict(const FlatRoutedExpertPlan& p) {
     d["gate_up_weight_slots"] = p.gate_up_weight_slots;
     d["gate_up_pairs_per_core"] = p.gate_up_pairs_per_core;
     d["row_tiles_per_sub_block"] = p.row_tiles_per_sub_block;
+    d["x_ring_blocks"] = p.x_ring_blocks;
     d["column_groups_per_weight_slot"] = p.column_groups_per_weight_slot;
     d["units_per_core"] = p.units_per_core;
     d["gate_up_k_blocks"] = p.gate_up_k_blocks;
@@ -97,17 +98,22 @@ void bind_flat_routed_expert(nb::module_& mod) {
                 h buffers, then 2, then fewer sub-block rows).
             x_bf16 (bool): x in bf16 after the tilize (else bfp8, the default).
             h_bf16 (bool): h in bf16 after gate/up (else bfp8, the default).
+            x_ring_fill (bool): the gate/up cores' x ring grown into the arena's leftover L1 when it holds a whole
+                sub-block (default); off: a sub-block's worth (the combine, whose landing pool takes that L1).
     )doc")
         .def(
             "__init__",
-            [](FlatLayoutOptions* self, int32_t arena_bytes, bool x_bf16, bool h_bf16) {
-                new (self) FlatLayoutOptions{.arena_bytes = arena_bytes, .x_bf16 = x_bf16, .h_bf16 = h_bf16};
+            [](FlatLayoutOptions* self, int32_t arena_bytes, bool x_bf16, bool h_bf16, bool x_ring_fill) {
+                new (self) FlatLayoutOptions{
+                    .arena_bytes = arena_bytes, .x_bf16 = x_bf16, .h_bf16 = h_bf16, .x_ring_fill = x_ring_fill};
             },
             nb::kw_only(),
             nb::arg("arena_bytes") = -1,
             nb::arg("x_bf16") = false,
-            nb::arg("h_bf16") = false)
+            nb::arg("h_bf16") = false,
+            nb::arg("x_ring_fill") = true)
         .def_rw("arena_bytes", &FlatLayoutOptions::arena_bytes)
+        .def_rw("x_ring_fill", &FlatLayoutOptions::x_ring_fill)
         .def_rw("x_bf16", &FlatLayoutOptions::x_bf16)
         .def_rw("h_bf16", &FlatLayoutOptions::h_bf16)
         .def("key", &FlatLayoutOptions::key)
