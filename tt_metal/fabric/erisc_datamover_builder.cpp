@@ -1407,6 +1407,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             local_fabric_node_id,
             my_eth_channel);
         named_args["INTER_DOMAIN_SCATTER"] = 1;
+        if (const auto bit = fabric_context_.get_rtoptions().get_fabric_inter_domain_scatter_address_bit()) {
+            named_args["INTER_DOMAIN_SCATTER_ADDRESS_BIT"] = *bit + 1;  // 0: by destination chip
+        }
     }
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
