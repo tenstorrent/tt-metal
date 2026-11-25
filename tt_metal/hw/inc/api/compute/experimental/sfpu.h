@@ -3,16 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Quasar SFPU op types: SfpuOp<OP, REG, SOURCES...> names one op on one register file; its functions run it.
-// The tiles' SFPLOAD/SFPSTORE format is never passed: it comes from the sources at compile time. There is no
-// init call: the op initializes itself.
-//
-//   using ExpDest = SfpuOp<op::Exp<>, SfpuReg::Dest, dfb_id>;     // Dest tiles copied or unpacked from dfb_id
-//   ExpDest::tile(idst);                                          // in place, MATH thread
-//
-//   using ExpFpu = SfpuOp<op::Exp<>, SfpuReg::Dest, srca_id, srcb_id>;  // Dest tiles left by an FPU op
-//
-//   using ExpSrcs = SfpuOp<op::Exp<>, SfpuReg::SrcS, srcs_fmt>;   // SrcS register format
-//   ExpSrcs::tiles(in_addr, in_fmt, out_addr, out_fmt, n);        // L1 -> SrcS -> op -> L1, TRISC3
+// The tile format comes from SOURCES at compile time and the op initializes itself: no format or init arguments.
 
 #pragma once
 
@@ -80,9 +71,8 @@ constexpr sfpu::IntEncoding sfpu_dest_int_encoding_of() {
 template <typename OP_TYPE>
 inline constexpr char sfpu_op_key = 0;
 
-// Runs the init of OP_TYPE unless it was the last SFPU init on this thread. Ops share the SFPU configuration and
-// constant registers, so every SFPU init clears sfpu_init_owner: another SfpuOp or a *_tile_init() in between
-// makes this op initialize again.
+// Runs OP_TYPE::init() unless it was the last SFPU init on this thread. Every SFPU init clears sfpu_init_owner,
+// so another SfpuOp or a *_tile_init() in between makes this op initialize again.
 template <typename OP_TYPE>
 ALWI void sfpu_dest_op_init_once() {
     if (sfpu_init_owner != &sfpu_op_key<OP_TYPE>) {
@@ -115,19 +105,13 @@ struct SfpuOp {
 
 // clang-format off
 /**
- * OP on Dest, on the MATH thread. SOURCES are DFB ids, compile-time constants (convert a DFB binding token
- * first: constexpr uint32_t id = dfb::in;):
+ * OP on Dest, on the MATH thread. It initializes itself on its first tile() and again after any other SFPU init.
+ * SOURCES are compile-time DFB ids (constexpr uint32_t id = dfb::in;):
  *
  * | SOURCES            | The Dest tiles                                                                |
  * |--------------------|-------------------------------------------------------------------------------|
  * | DFB_ID             | Were copied or unpacked to Dest from this DFB (copy_tile)                     |
  * | SRCA_DFB, SRCB_DFB | Were left by an FPU op that read these DFBs into SrcA and SrcB, in that order |
- *
- * Int32 tiles from one DFB are two's complement (native Int32, copied or unpacked); Int32 tiles an FPU op left
- * are sign-magnitude. The op picks the matching math.
- *
- * An op that does not take tiles of the resulting format is a compile error. The op initializes itself on its
- * first tile(), and again when any other SFPU init (another SfpuOp or a *_tile_init()) ran in between.
  */
 // clang-format on
 template <typename OP, auto... DFB_IDS>
@@ -139,8 +123,7 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
 
     // clang-format off
     /**
-     * Run a one-input op on one Dest tile, in place. The DST register buffer must be in acquired state via
-     * *acquire_dst*. This call is blocking and is only available on the compute engine.
+     * Run a one-input op on one Dest tile, in place. DST must be acquired via *acquire_dst*.
      *
      * Return value: None
      *
@@ -160,9 +143,8 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
 
     // clang-format off
     /**
-     * Run a two-input op on two Dest tiles, writing a third (odst may equal idst0 or idst1). The DST register
-     * buffer must be in acquired state via *acquire_dst*. This call is blocking and is only available on the
-     * compute engine.
+     * Run a two-input op on two Dest tiles, writing a third (odst may equal idst0 or idst1). DST must be
+     * acquired via *acquire_dst*.
      *
      * Return value: None
      *
@@ -201,18 +183,16 @@ private:
  * | Template Parameter | Description                                         | Type       | Valid Range                        | Required |
  * |--------------------|-----------------------------------------------------|------------|------------------------------------|----------|
  * | SRCS_FMT           | Format in the SrcS register (unpack dst = pack src) | DataFormat | Float16, Float16_b, Float32, Int32 | True     |
- *
- * An op that does not take tiles of that format is a compile error.
  */
 // clang-format on
-// TODO: once SrcS is fed from DFBs, SOURCES becomes the DFB ids, as on Dest, and tiles() takes only the count. The
-// layout then comes from each DFB's L1 format (unpack_src_format), not from unpack_dst_format (SrcA/SrcB).
+// TODO(#63416): once SrcS is fed from DFBs, SOURCES becomes the DFB ids, as on Dest, and tiles() takes only the
+// count. The layout then comes from each DFB's L1 format (unpack_src_format), not from unpack_dst_format.
 template <typename OP, DataFormat SRCS_FMT>
 struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT> {
     // clang-format off
     /**
-     * Run a one-input op on num_tiles consecutive tiles: per tile, unpack L1 -> SrcS, the op over the tile's
-     * slices, pack SrcS -> L1. Programs the unpacker-2 and packer-1 descriptors and initializes the op first.
+     * Run a one-input op on num_tiles consecutive tiles. Programs the unpacker-2 and packer-1 descriptors and
+     * initializes the op first.
      *
      * Return value: None
      *

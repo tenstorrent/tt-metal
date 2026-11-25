@@ -162,9 +162,8 @@ inline constexpr bool unhandled_op = false;
 template <sfpi::DataLayout L>
 using layout_c = std::integral_constant<sfpi::DataLayout, L>;
 
-// Calls fn(layout_c<L>{}) with the explicit SFPLOAD/SFPSTORE layout of a float Dest. A 32-bit Dest is F32 whatever
-// the family; a 16-bit Dest follows the family's exponent width: F16a for Float16 and MxFp4_2x_A (5-bit), F16b for
-// Float16_b and MxFp4_2x_B (8-bit). Any other family has no explicit layout: HW-implied.
+// Calls fn(layout_c<L>{}) with the explicit SFPLOAD/SFPSTORE layout of a float Dest: F32 on a 32-bit Dest, else F16a or
+// F16b by the family's exponent width. A family with no explicit layout gets Default (HW-implied).
 template <bool EN_32BIT_DEST, typename Fn>
 inline void dispatch_dest_float_layout(const DataFormat family, Fn&& fn)
 {
@@ -191,9 +190,8 @@ inline void dispatch_dest_float_layout(const DataFormat family, Fn&& fn)
     }
 }
 
-// SFPU_COMPUTE_API_KERNELS (set by the test) sends exp and float ADD through calculate_exponential /
-// calculate_sfpu_binary, the kernels exp_tile / add_binary_tile call, which take the HW-implied (Default) Dest
-// format. Without it they go through the op types with an explicit layout.
+// SFPU_COMPUTE_API_KERNELS (set by the test) sends exp and float ADD through calculate_exponential / calculate_sfpu_binary,
+// the kernels exp_tile / add_binary_tile call (HW-implied Dest format). Without it they go through the op types.
 #ifdef SFPU_COMPUTE_API_KERNELS
 inline constexpr bool kComputeApiKernels = true;
 #else
