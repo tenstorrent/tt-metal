@@ -7,6 +7,7 @@ import json
 import os
 import random
 import subprocess
+import sys
 from datetime import datetime
 from functools import partial
 from operator import contains, eq, getitem
@@ -19,7 +20,6 @@ from loguru import logger
 
 from models.common.ci_failure import DeterministicFailure, record_deterministic_failure
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM, resolve_trace_region_size
-from models.ttt_compat.demo.trace_region_config import get_logical_sku, get_supported_trace_region_size
 from tests.scripts.common import run_process_and_get_result
 from tt_py_test_utils_common.device_params import get_updated_device_params
 
@@ -571,6 +571,8 @@ def mesh_device(request, silicon_arch_name, device_params):
     """
     import ttnn
 
+    from models.ttt_compat.demo.trace_region_config import get_logical_sku, get_supported_trace_region_size
+
     request.node.pci_ids = ttnn.get_pcie_device_ids()
 
     try:
@@ -899,24 +901,27 @@ def ensure_devices_tg():
 
 @pytest.fixture(autouse=True)
 def reset_default_device(request):
-    import ttnn
-
     # Skip applying the fixture logic for this test
     if "no_reset_default_device" in request.keywords:
         yield
         return
 
-    try:
-        device = ttnn.GetDefaultDevice()
-    except Exception:
-        logger.warning("Device handle is stale/crashed - setting saved device to None")
-        device = None
+    # A process that has not imported ttnn has no default device; leave ttnn unloaded for host-only tests.
+    ttnn = sys.modules.get("ttnn")
+    device = None
+    if ttnn is not None:
+        try:
+            device = ttnn.GetDefaultDevice()
+        except Exception:
+            logger.warning("Device handle is stale/crashed - setting saved device to None")
 
     yield
 
     if device is not None:
         ttnn.SetDefaultDevice(device)
     elif "device" in request.fixturenames:
+        import ttnn
+
         # if the test used a device, but there was no default device, we need to clear the default device
         ttnn.SetDefaultDevice(None)
 
@@ -983,13 +988,11 @@ ALL_ARCHS = set(
 
 
 def pytest_addoption(parser):
-    import ttnn
-
     parser.addoption(
         "--tt-arch",
         choices=[*ALL_ARCHS],
-        default=ttnn.get_arch_name(),
-        help="Target arch, ex. grayskull, wormhole_b0, blackhole",
+        default=None,
+        help="Target arch, ex. grayskull, wormhole_b0, blackhole; default: the arch of the devices present",
     )
     parser.addoption(
         "--pipeline-type",
@@ -1079,6 +1082,19 @@ def input_path(request):
     return request.config.getoption("--input-path")
 
 
+def _tt_arch(config):
+    """--tt-arch, or the arch of the devices present.
+
+    Detection enumerates the devices, so it runs only when a collected test requests
+    silicon_arch_name; host-only tests never touch the devices.
+    """
+    if config.option.tt_arch is None:
+        import ttnn
+
+        config.option.tt_arch = ttnn.get_arch_name()
+    return config.option.tt_arch
+
+
 def pytest_generate_tests(metafunc):
     """
     This is not a standard docstring.
@@ -1131,8 +1147,6 @@ def pytest_generate_tests(metafunc):
     any Python APIs.
     """
 
-    tt_arch = metafunc.config.getoption("--tt-arch")
-
     silicon_arch_specific_fixture_name_to_avail_archs = {
         "silicon_arch_grayskull": set(
             [
@@ -1164,10 +1178,6 @@ def pytest_generate_tests(metafunc):
         )
     )
 
-    available_archs = test_requested_silicon_archs if is_test_requesting_specific_silicon_archs else ALL_ARCHS
-    matches_user_requested_silicon_arch = partial(eq, tt_arch)
-    available_archs = tuple(filter(matches_user_requested_silicon_arch, available_archs))
-
     uses_silicon_arch = "silicon_arch_name" in metafunc.fixturenames
 
     # sanity
@@ -1177,6 +1187,9 @@ def pytest_generate_tests(metafunc):
         )
 
     if uses_silicon_arch:
+        available_archs = test_requested_silicon_archs if is_test_requesting_specific_silicon_archs else ALL_ARCHS
+        matches_user_requested_silicon_arch = partial(eq, _tt_arch(metafunc.config))
+        available_archs = tuple(filter(matches_user_requested_silicon_arch, available_archs))
         metafunc.parametrize("silicon_arch_name", available_archs, scope="session")
         for test_requested_silicon_arch_fixture in test_requested_silicon_arch_fixtures:
             # The values of these arch-specific fixtures should not be used in
@@ -1272,6 +1285,12 @@ def ttnn_graph_report(request):
     then delegates to ``ttnn.graph_report.run_pytest_graph_report_fixture`` for
     report_path validation, capture lifecycle, and import.
     """
+    # Before ttnn is imported, its config can only come from these variables (ttnn/core/config.cpp);
+    # without them it keeps enable_logging off, so a host-only test need not load ttnn here.
+    if sys.modules.get("ttnn") is None and not ({"TTNN_CONFIG_PATH", "TTNN_CONFIG_OVERRIDES"} & os.environ.keys()):
+        yield
+        return
+
     import ttnn
 
     if not getattr(ttnn.CONFIG, "enable_logging", False):
