@@ -70,20 +70,24 @@ For both training and evaluation, we encourage you to use the Python version of 
 More information on available configuration options can be found in the [configs directory](configs/README.md).
 
 ### Nightly only tests
-TT-Train nightly tests are all gtests whose names contain `NIGHTLY_` (see
-`tt-train/tests/model/nano_gpt_test.cpp`). They run only on Wormhole B0 when
-**both** are true:
+Most TT-Train nightly tests are gtests whose names contain `NIGHTLY_` (for
+example SDPA, MoE, and optimizer tests). They run in the Blackhole nightly legs
+via `--gtest_filter=*NIGHTLY_*` in `tests/pipeline_reorg/train_unit_tests.yaml`,
+with no Wormhole-specific gate.
+
+The nano_gpt nightly tests in `tt-train/tests/model/nano_gpt_test.cpp` are an
+exception: they run only on Wormhole B0 when **both** are true (currently
+disabled; see [issue #37337](https://github.com/tenstorrent/tt-metal/issues/37337)):
 
 - `is_nigthly_tt_train_tests_enabled` is set to `true` in `nano_gpt_test.cpp`
   (spelling matches the source constant)
 - `ENABLE_NIGHTLY_TT_TRAIN_TESTS` is set in the environment (for example
   `ENABLE_NIGHTLY_TT_TRAIN_TESTS=1`)
 
-If CI fails but local runs pass, confirm both conditions before changing
-expected values or thresholds. To run them in GitHub Actions, search for
-`Nightly tt-metal L2 tests` (tt-train jobs export `ENABLE_NIGHTLY_TT_TRAIN_TESTS=1`
-via `tests/pipeline_reorg/train_unit_tests.yaml`; the compile-time flag must
-still be enabled in code).
+If CI fails but local runs pass, confirm both conditions (for nano_gpt) or the
+gtest filter and SKU (for other `NIGHTLY_` tests) before changing expected values
+or thresholds. To run them in GitHub Actions, search for `Nightly tt-metal L2
+tests`.
 
 ### wandb support
 If you don't have an account to wandb (or don't want to use it), use `-w 0` argument or run `wandb offline` beforehand (creates `wandb/settings` file)
