@@ -156,3 +156,14 @@ def test_moreh_norm_backward_allocated_input_grad(device):
 
     passing, out = comp_allclose(expected_input_grad, ttnn.to_torch(tt_input_grad), rtol=0.06, atol=0.06)
     assert passing, out
+
+
+@pytest.mark.merge_gate
+def test_moreh_norm_rejects_other_output_dtype(device, expect_error):
+    # moreh_norm forwards its output to the final moreh_abs_pow, which writes in the input's dtype.
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 64, 1, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "must match the input dtype"):
+        ttnn.moreh_norm(x, 2.0, dim=3, keepdim=True, output=out)

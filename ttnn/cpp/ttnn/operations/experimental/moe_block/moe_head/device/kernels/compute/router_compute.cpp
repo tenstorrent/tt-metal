@@ -361,13 +361,18 @@ void process_row_block(const RouterComputeArgs& args) {
                 tile_regs_release();
             }
             cb_push_back(cb_best, 1);
+            PACK(({  // (drain the packer: the row builders read the best page and the scores with plain loads)
+                TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
+                ckernel::tensix_sync();
+            }));
             const uint32_t done_words = args.done_words;
             PACK(({  // (the last best pair packed: the joint rows can go - BRISC and NCRISC told)
                 *reinterpret_cast<volatile uint32_t*>(done_words + router_done_words::kTopKDone) = 1;
                 *reinterpret_cast<volatile uint32_t*>(done_words + router_done_words::kNcriscTopKDone) = 1;
             }));
             {  // the joint rows' last two shares (tokens 16 .. 23 the MATH thread, 24 .. 31 the PACK thread; soft
-               // float): the cb_best page is in L1 once PACK passed its push - PACK tells MATH (math_sync_address)
+               // float): the cb_best page is in L1 once PACK has drained the packer (above) - PACK tells MATH
+               // (math_sync_address)
                 const uint32_t best_page_l1 = args.best_page_l1, rows_l1 = args.rows_l1;
                 // (my block of cb_logits: the scores)
                 const uint32_t scores_l1 = args.logits_l1 + router_tp_position * router_score_stride;
