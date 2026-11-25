@@ -195,7 +195,8 @@ def prepare_gpt_oss_generator_args(
 # are kept out of CI because runner availability is limited and we only want
 # the canonical prefill_128 sanity to run on every push. Local / release
 # invocations can still target them explicitly with -k.
-@pytest.mark.timeout(7200)
+# DEMO_TIMEOUT_S overrides the 2 h limit, for slow targets such as the Quasar emulator.
+@pytest.mark.timeout(int(os.getenv("DEMO_TIMEOUT_S", "7200")))
 @pytest.mark.parametrize(
     "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci",
     [
@@ -512,6 +513,17 @@ def test_gpt_oss_demo(
                 f"{max_generated_tokens} to keep the capture readable"
             )
             max_generated_tokens = _CAPTURE_MAX_GENERATED_TOKENS
+
+    # DEMO_MAX_TOKENS overrides the number of generated tokens, for slow targets such as the Quasar emulator.
+    if os.getenv("DEMO_MAX_TOKENS"):
+        max_generated_tokens = int(os.getenv("DEMO_MAX_TOKENS"))
+        logger.info(f"DEMO_MAX_TOKENS: generating {max_generated_tokens} tokens")
+    # DEMO_NO_PROGRAM_CACHE=1 builds every op's program again on each call. On the Quasar emulator models, DRAM
+    # above the 64 MiB each channel stores wraps around, so host-built tables that a cached program keeps in DRAM
+    # (e.g. the tiled reshape's page map) get overwritten before the next cache hit reuses them.
+    if os.getenv("DEMO_NO_PROGRAM_CACHE") == "1":
+        mesh_device.disable_and_clear_program_cache()
+        logger.info("DEMO_NO_PROGRAM_CACHE: program cache disabled")
 
     mesh_shape = tuple(mesh_device.shape)
     test_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
@@ -845,18 +857,25 @@ def test_gpt_oss_demo(
 
         else:
             # Standard sequential prefill (batch_size < num_rows)
-            logger.info("Starting prefill warmup...")
-            profiler.start(f"compile_prefill", iteration=batch_idx)
-            generator.prefill_forward_text(
-                input_tokens_prefill_pt[:1],
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                enable_trace=enable_prefill_trace,
-                warmup_prefill=warmup_prefill,
-            )
-            profiler.end(f"compile_prefill", iteration=batch_idx)
-            logger.info("Finished prefill warmup")
+            # DEMO_SKIP_COMPILE_PREFILL=1 skips the compile-only prefill, for slow targets such as the Quasar emulator.
+            # The reported prefill time then includes kernel compile time.
+            if os.environ.get("DEMO_SKIP_COMPILE_PREFILL", "0") != "1":
+                logger.info("Starting prefill warmup...")
+                profiler.start(f"compile_prefill", iteration=batch_idx)
+                generator.prefill_forward_text(
+                    input_tokens_prefill_pt[:1],
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    enable_trace=enable_prefill_trace,
+                    warmup_prefill=warmup_prefill,
+                )
+                profiler.end(f"compile_prefill", iteration=batch_idx)
+                logger.info("Finished prefill warmup")
+            else:
+                logger.info("Skipping compile-only prefill (DEMO_SKIP_COMPILE_PREFILL=1)")
+                profiler.start(f"compile_prefill", iteration=batch_idx)
+                profiler.end(f"compile_prefill", iteration=batch_idx)
 
             logger.info(f"Starting prefill...")
             profiler.start(f"inference_prefill", iteration=batch_idx)

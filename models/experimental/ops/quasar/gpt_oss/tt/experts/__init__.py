@@ -107,11 +107,16 @@ class Experts:
         for i in range(prefill_ep):
             sparsity[:, :, i, i * tokens_per_ep : (i + 1) * tokens_per_ep] = torch.ones(1, 1, 1, tokens_per_ep)
 
+        # The mask lives in L1, not DRAM. It is created once and read by every prefill sparse_matmul, whose kernels
+        # loop exactly nnz times. On the Quasar emulator models DRAM above the 64 MiB each channel stores wraps
+        # around, so later DRAM writes can overwrite a DRAM copy; its nonzero count then no longer matches nnz and
+        # the kernels deadlock. The mask is 1 x num_experts bfloat16 values.
         return ttnn.from_torch(
             sparsity,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 dims=(-2, None) if prefill_ep > 1 else (None, None),
                 mesh_shape=self.mesh_device.shape,
