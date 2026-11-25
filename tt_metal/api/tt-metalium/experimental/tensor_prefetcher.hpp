@@ -132,9 +132,11 @@ struct TensorPrefetcherInput {
     // each receiver's (bank, slab index) to its global position accordingly. For the standard
     // ring matmul, rotation[r] = r reproduces the natural topology order. The matmul must be
     // built to consume in the matching order, else it deadlocks. The host is responsible for
-    // supplying a rotation consistent with the consumer's ring topology.
+    // supplying a rotation consistent with the consumer's ring topology. CCE senders deliver batched
+    // tensors only, so it must be empty there.
     std::vector<uint32_t> rotation;
-    // Grouped weights only. Unset streams every group in ascending order.
+    // Grouped weights only. Unset streams every group in ascending order. CCE senders deliver
+    // ungrouped tensors only, so it must be unset there.
     std::optional<TensorPrefetcherGroupSelector> group_selector = std::nullopt;
 };
 
@@ -193,7 +195,11 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //   - a K-row-major tensor (legacy WIDTH_SHARDED, one shard per bank sliced across that bank's
 //     receivers) needs one sender per bank, i.e. pipes created with support_multi_receiver_shards.
 //     One receiver per bank is the exception: a bank's whole shard is then that receiver's slab, so
-//     such a weight is read as receiver-contiguous (the two layouts name the same bytes).
+//     such a weight is read as receiver-contiguous (the two layouts name the same bytes);
+//   - CCE senders take pipes from a ReceiverCoreType::Dram space only, and every other
+//     sender takes worker-receiver pipes only;
+//   - on CCE senders every tensor is receiver-contiguous and ungrouped, with no rotation and no group
+//     selector.
 //
 // A tensor's per-receiver block size need not equal the pipes' `entry_size` nor divide the ring --
 // the sender re-grids its write cursor per tensor, and any trailing remainder of the ring is a gap
@@ -235,7 +241,8 @@ inline constexpr uint32_t kTensorPrefetcherNumSignals = 8;
 // ttnn.experimental.signal_tensor_prefetcher is an op that does only that. The address is the same on
 // every device of the mesh, so one program signals them all. It stays valid until StopTensorPrefetcher.
 //
-// Preconditions (TT_FATAL): a prefetcher is active on `mesh_device`, and signal_id is in range.
+// Preconditions (TT_FATAL): a prefetcher is active on `mesh_device`, signal_id is in range, and the senders
+// are not CCEs, which keep no op signal slots.
 uint32_t GetTensorPrefetcherSignalAddress(distributed::MeshDevice& mesh_device, uint32_t signal_id);
 
 // Queue a wait on op signal `signal_id`. On each device of the mesh, the prefetcher processes no request
@@ -253,8 +260,9 @@ uint32_t GetTensorPrefetcherSignalAddress(distributed::MeshDevice& mesh_device, 
 // every replay, and each replay waits for one further signal rather than the count seen at capture, so
 // a trace that also captures the signaling op releases its own wait on every run.
 //
-// Preconditions (TT_FATAL): a prefetcher is active on `mesh_device`, signal_id is in range, and
-// `trace_capture_cq`, if given, belongs to `mesh_device`.
+// Preconditions (TT_FATAL): a prefetcher is active on `mesh_device`, signal_id is in range,
+// `trace_capture_cq`, if given, belongs to `mesh_device`, and the senders are not CCEs, which wait on
+// CQ fence slots only.
 void QueueTensorPrefetcherWaitForSignal(
     distributed::MeshDevice& mesh_device,
     uint32_t signal_id,
