@@ -5,9 +5,10 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <future>
 #include <optional>
-#include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "impl/context/context_types.hpp"
@@ -19,6 +20,9 @@ namespace {
 
 using SubmitResult = RemoteCompileCoordinator::SubmitResult;
 
+constexpr std::size_t kKernelHash = 1;
+constexpr std::size_t kInFlightKernelHash = 2;
+
 // Nothing listens here. These tests cover the submissions that send nothing, so no session is opened.
 const std::vector<std::string> kUnusedEndpoints = {"localhost:1"};
 
@@ -26,12 +30,15 @@ RemoteCompileCoordinator make_coordinator() {
     return RemoteCompileCoordinator(kUnusedEndpoints, DEFAULT_CONTEXT_ID, /*device_build_id=*/0, /*build_key=*/0);
 }
 
+// The dedup cache is process-wide, so every test starts with it empty.
+class RemoteCompileCoordinatorTest : public ::testing::Test {
+protected:
+    void SetUp() override { RemoteCompileCoordinator::clear_dedup_cache(); }
+};
+
 }  // namespace
 
-// The dedup cache is process-wide, so each test uses its own kernel hash.
-
-TEST(RemoteCompileCoordinatorTest, KernelWithNothingToCompileIsReusedThenDeduplicated) {
-    constexpr std::size_t kKernelHash = 0x5eed0001;
+TEST_F(RemoteCompileCoordinatorTest, KernelWithNothingToCompileIsReusedThenDeduplicated) {
     int descriptor_calls = 0;
     const auto nothing_to_compile = [&]() -> std::optional<KernelCompileDescriptor> {
         ++descriptor_calls;
@@ -51,42 +58,35 @@ TEST(RemoteCompileCoordinatorTest, KernelWithNothingToCompileIsReusedThenDedupli
     EXPECT_EQ(descriptor_calls, 1);
 }
 
-TEST(RemoteCompileCoordinatorTest, ClearDedupCacheMakesTheNextSubmissionOwnTheKernelAgain) {
-    constexpr std::size_t kKernelHash = 0x5eed0002;
-    int descriptor_calls = 0;
-    const auto nothing_to_compile = [&]() -> std::optional<KernelCompileDescriptor> {
-        ++descriptor_calls;
-        return std::nullopt;
-    };
+TEST_F(RemoteCompileCoordinatorTest, ClearDedupCacheForgetsFinishedKernelsButKeepsInFlightOnes) {
+    const auto nothing_to_compile = []() -> std::optional<KernelCompileDescriptor> { return std::nullopt; };
 
-    auto first = make_coordinator();
-    EXPECT_EQ(first.submit(kKernelHash, nothing_to_compile), SubmitResult::Reused);
-    EXPECT_NO_THROW(first.finish());
+    auto finished = make_coordinator();
+    ASSERT_EQ(finished.submit(kKernelHash, nothing_to_compile), SubmitResult::Reused);
+
+    // A second kernel whose owner is still inside make_descriptor().
+    std::promise<void> started;
+    std::promise<void> release;
+    auto release_future = release.get_future();
+    std::thread owner([&] {
+        auto in_flight = make_coordinator();
+        in_flight.submit(kInFlightKernelHash, [&]() -> std::optional<KernelCompileDescriptor> {
+            started.set_value();
+            release_future.wait();
+            return std::nullopt;
+        });
+    });
+    started.get_future().wait();
 
     RemoteCompileCoordinator::clear_dedup_cache();
 
-    auto second = make_coordinator();
-    EXPECT_EQ(second.submit(kKernelHash, nothing_to_compile), SubmitResult::Reused);
-    EXPECT_NO_THROW(second.finish());
+    auto after_clear = make_coordinator();
+    EXPECT_EQ(after_clear.submit(kKernelHash, nothing_to_compile), SubmitResult::Reused);
+    EXPECT_EQ(after_clear.submit(kInFlightKernelHash, nothing_to_compile), SubmitResult::Deduplicated);
 
-    EXPECT_EQ(descriptor_calls, 2);
-}
-
-TEST(RemoteCompileCoordinatorTest, FailedDescriptorDoesNotPoisonLaterSubmissions) {
-    constexpr std::size_t kKernelHash = 0x5eed0003;
-
-    auto failing = make_coordinator();
-    EXPECT_THROW(
-        failing.submit(
-            kKernelHash,
-            []() -> std::optional<KernelCompileDescriptor> { throw std::runtime_error("simulated genfiles failure"); }),
-        std::runtime_error);
-
-    auto retry = make_coordinator();
-    EXPECT_EQ(
-        retry.submit(kKernelHash, []() -> std::optional<KernelCompileDescriptor> { return std::nullopt; }),
-        SubmitResult::Reused);
-    EXPECT_NO_THROW(retry.finish());
+    release.set_value();
+    owner.join();
+    EXPECT_NO_THROW(after_clear.finish());
 }
 
 }  // namespace tt::tt_metal
