@@ -36,18 +36,25 @@ inline void _gmg_enable_index_tracking()
     TTI_SFPCONFIG(0x4 /*imm16_math*/, 0xF /*config_dest*/, 1 /*instr_mod1*/);
 }
 
-// LREG14 (Prgm2) seed of sfpu_reciprocal_init's round_to_bf16=false set. The gate's broadcast SFPCONFIGs clobber
-// LREG14 only, so the normalization tails re-program just this seed.
-constexpr std::uint32_t gmg_recip_seed_prgm2_bits = __builtin_bit_cast(std::uint32_t, RECIPROCAL_SEED_K2);
+// SFPCONFIG copies LREG0 into a programmable-constant register, so the 32-bit seed goes through LREG0 in two halves.
+template <std::uint32_t prgm_lreg, std::uint32_t bits>
+inline void _gmg_set_prgm_from_lreg0()
+{
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, bits & 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, bits >> 16);
+    TTI_SFPCONFIG(0, prgm_lreg, 0);
+}
 
 // Normalization-tail prologue shared by top8 and finalize_ungrouped: clear LaneConfig, sum the top-8 scores
-// (scores+0/+4, column 0) and leave the sum in LREG0 after a bf16-truncating round trip through interm, and re-set
-// LREG14 to RECIPROCAL_SEED_K2. After the transpose the sum is reduced into LREG4/6 so LREG0 (SFPCONFIG's source)
-// is free to carry the seed in the ADD latency slots. ENABLE_DEST_INDEX makes SFPADD writes to LREG4-7 unsupported
-// (erratum TEN-2932, SFPCONFIG.md LaneConfig), so LaneConfig is cleared before the transpose, one instruction ahead
-// of the first such write.
-inline void _gmg_tail_sum_to_lreg0_reseed_prgm2()
+// (scores+0/+4, column 0), leave the sum in LREG0 after a bf16-truncating round trip through interm, and program
+// the reciprocal seeds (LREG12-14, sfpu_reciprocal_init's round_to_bf16=false values). The gate broadcasts through
+// LREG14, so the seeds are set here rather than in the op init; run-only callers never pay for them. After the
+// transpose the sum is reduced into LREG4/6, so LREG0 (SFPCONFIG's source) can carry the first seed while the ADDs
+// are in flight. ENABLE_DEST_INDEX makes SFPADD writes to LREG4-7 unsupported (erratum TEN-2932, SFPCONFIG.md
+// LaneConfig), so LaneConfig is cleared before the transpose, one instruction ahead of the first such write.
+inline void _gmg_tail_sum_to_lreg0_set_recip_seeds()
 {
+    constexpr auto seed_k0_bits = __builtin_bit_cast(std::uint32_t, RECIPROCAL_SEED_K0);
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
@@ -55,12 +62,14 @@ inline void _gmg_tail_sum_to_lreg0_reseed_prgm2()
     TTI_SFPTRANSP(0, 0, 0, 0);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG4, 0);
     TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG6, 0);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, gmg_recip_seed_prgm2_bits & 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, seed_k0_bits & 0xFFFF);
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG4, 0);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, gmg_recip_seed_prgm2_bits >> 16);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, seed_k0_bits >> 16);
     // The 16-bit Dst store truncates the sum to bf16; the normalization's results depend on it.
     TTI_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_3, interm_offset + 0);
-    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    _gmg_set_prgm_from_lreg0<p_sfpu::LREG13, __builtin_bit_cast(std::uint32_t, RECIPROCAL_SEED_K1)>();
+    _gmg_set_prgm_from_lreg0<p_sfpu::LREG14, __builtin_bit_cast(std::uint32_t, RECIPROCAL_SEED_K2)>();
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
 }
 
@@ -406,8 +415,6 @@ inline void _gmg_merge4_runs_raw()
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 4);
 }
 
-// Requires _init_generalized_moe_gate_topk to have programmed LREG12/13 with no SFPU op writing them since; the
-// tail re-sets only LREG14.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool do_extra_scale = false>
 inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale = 0x3f800000)
 {
@@ -415,7 +422,7 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, s
     _gmg_merge4_runs_raw<is_fp32_dest_acc_en, 0>();
 
     // ---- normalization tail: 1/(sum+eps)*scale, broadcast-multiply the top-8 scores ----
-    _gmg_tail_sum_to_lreg0_reseed_prgm2();
+    _gmg_tail_sum_to_lreg0_set_recip_seeds();
 
     // Calculate 1 / (sum + eps) * scale
     sfpi::vFloat l0          = sfpi::l_reg[sfpi::LRegs::LReg0];
@@ -670,8 +677,6 @@ inline void _gmg_merge16_to_run()
  *       the two input runs at columns {0,2} and {4,6}; resets Dst RWC again internally before the softmax /
  *       normalize tails. Clobbers LREG0-7 (and LREG14). TERMINAL variant — it normalizes and writes the
  *       output; @ref _gmg_merge16_to_run is the non-normalizing run-producing variant.
- * @pre _init_generalized_moe_gate_topk has programmed the reciprocal seeds LREG12/13 and no SFPU op has written
- *      them since; the tail re-sets only LREG14.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t topk = 8, bool output_softmax = false>
 inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uint32_t scale)
@@ -778,7 +783,7 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
     }
 
     // ---- normalization tail (same as _generalized_moe_gate_top8) ----
-    _gmg_tail_sum_to_lreg0_reseed_prgm2();
+    _gmg_tail_sum_to_lreg0_set_recip_seeds();
     sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value          = Converter::as_float(eps);
     l0                              = l0 + eps_value;
@@ -799,10 +804,10 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _init_generalized_moe_gate_topk()
 {
-    // Program the reciprocal seeds (LREG12-14) once per op. The gate broadcasts through LREG14 (SFPCONFIG), which
-    // clobbers only that one seed, so top8 / finalize_ungrouped re-set just LREG14 ahead of their normalization
-    // tail.
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    // Intentional no-op: reciprocal is initialized inside top8 / finalize_ungrouped (not here). The gate
+    // uses reg 14 to broadcast, which would clobber the reciprocal constants if they were initialized ahead
+    // of time, so both WH and BH set them up within those fns. Kept (empty) because the topk_init wrapper
+    // chain calls it on both arches.
 }
 
 } // namespace sfpu
