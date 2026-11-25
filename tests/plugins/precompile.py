@@ -151,8 +151,13 @@ def _kernels_in_cache():
 def _open_fabric_without_routers(ttnn):
     """Replace ttnn.set_fabric_config for the dry pass: a mesh opens without starting the fabric routers, so the open
     does not wait for them to sync. Nothing is dispatched in a dry run, so they would have no work. Returns the real
-    function. A call that names a manager mode other than DEFAULT is passed through unchanged."""
+    function. A call that names a manager mode other than DEFAULT is passed through unchanged.
+
+    Not with the watcher on: it checks the kernel on every core, and the fabric cores of a mesh opened this way still
+    hold what the previous run left there."""
     real = ttnn.set_fabric_config
+    if os.environ.get("TT_METAL_WATCHER"):
+        return real
     default, enabled = ttnn.FabricManagerMode.DEFAULT, ttnn.FabricManagerMode.ENABLED
     position = 5  # set_fabric_config(config, reliability_mode, num_planes, tensix, udm, manager, router)
 
