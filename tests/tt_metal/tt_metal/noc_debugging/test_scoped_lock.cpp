@@ -76,7 +76,7 @@ struct LockerWriterResult {
 struct LockerWriterKernel {
     std::string source;
     NamedRuntimeArgs runtime_args;
-    KernelSpec::CompilerOptions::Defines defines{};
+    KernelSpec::CompilerOptions::Defines defines;
 };
 
 // Runs locker on core (0,0) against writer on core (1,0) on the first device. The locker also gets the writer's NOC
