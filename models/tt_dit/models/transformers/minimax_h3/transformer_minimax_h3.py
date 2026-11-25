@@ -799,6 +799,15 @@ class MiniMaxH3Transformer3DModel(Module):
         for temb, _ in tembs:
             ttnn.deallocate(temb)
 
+    def set_sol_request(self, request: tuple[int, int, int] | None, *, tau: float = 1.0) -> None:
+        """Run every block's ring attention through Sol-Attn for this request shape, or (None) dense again.
+
+        See `MiniMaxH3Attention.set_sol_request`. Captured `run_blocks` traces reference the pre-pass buffers this
+        replaces, so the caller releases them first whenever the request changes.
+        """
+        for block in self.transformer_blocks:
+            block.attn.set_sol_request(request, tau=tau)
+
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
         run_blocks = type(self).run_blocks

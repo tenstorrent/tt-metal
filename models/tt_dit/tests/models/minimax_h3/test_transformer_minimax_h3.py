@@ -892,6 +892,108 @@ def test_minimax_h3_attention(
     assert torch.equal(run(4 * seq_len), tt_out), "kv_gather_capacity changed the attention output"
 
 
+@GALAXY_RING
+@pytest.mark.parametrize(
+    ("T", "H", "W", "logical_n", "sink_tokens"),
+    [
+        pytest.param(8, 96, 96, 18432, 640, id="s18432"),  # 2304 rows/device on 8 shards, padless
+        pytest.param(8, 96, 96, 17000, 640, id="s18432_cut"),  # the last shard part padding, as a real request is
+    ],
+)
+def test_minimax_h3_attention_sol(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    T: int,
+    H: int,
+    W: int,
+    logical_n: int,
+    sink_tokens: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    reset_seeds,
+) -> None:
+    """Sol-Attn (`set_sol_request`) vs the dense ring path on one attention layer: with every block kept
+    (tau -> -inf) it must match dense; at the serving tau it is compared to dense and the fp32 reference."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+
+    position_ids = _packed_position_ids(T, H, W)
+    seq_len = position_ids.shape[0]
+    rows = seq_len // sp_factor
+    assert rows % 64 == 0, f"{rows} rows/device must be whole 64-token blocks"
+
+    torch_model = TorchMiniMaxH3Attention(
+        hidden_size=HIDDEN_SIZE, heads=NUM_ATTENTION_HEADS, dim_head=ATTENTION_HEAD_DIM, qk_norm_eps=QK_NORM_EPS
+    ).to(torch.float32)
+    randomize_norm_weights(torch_model)
+    torch_model.eval()
+    rope_cos, rope_sin = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)(position_ids)
+    tt_rope_cos_t, tt_rope_sin_t = prepare_rope_tables(rope_cos, rope_sin, ATTENTION_HEAD_DIM)
+    spatial_input = torch.randn((1, seq_len, HIDDEN_SIZE), dtype=torch.float32)
+    spatial_input[:, logical_n:] = 0
+    with torch.no_grad():
+        torch_out = torch_model(
+            hidden_states=spatial_input[:, :logical_n],
+            rotary_emb=(rope_cos[:logical_n], rope_sin[:logical_n]),
+            attention_mask=None,
+        )
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
+        cfg_parallel=None,
+    )
+    tt_spatial = bf16_tensor_2dshard(
+        spatial_input.unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}
+    )
+    tt_rope_cos, tt_rope_sin = upload_rope(tt_rope_cos_t, tt_rope_sin_t, mesh_device=mesh_device, sp_axis=sp_axis)
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 3
+
+    tt_model = MiniMaxH3Attention(
+        hidden_size=HIDDEN_SIZE,
+        num_heads=NUM_ATTENTION_HEADS,
+        head_dim=ATTENTION_HEAD_DIM,
+        rotary_dim=rope_cos.shape[-1],
+        qk_norm_eps=QK_NORM_EPS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+    assert "_sol" not in dict(tt_model.named_children()), "the Sol pre-pass must not join the module tree"
+
+    def run(sol_tau):
+        tt_model.set_sol_request(None if sol_tau is None else (rows, logical_n, sink_tokens), tau=sol_tau or 1.0)
+        out = tt_model(
+            tt_spatial,
+            logical_n=logical_length_tensor(mesh_device, logical_n),
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+        )
+        out = ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape))
+        )
+        return out[:, :, :logical_n, :].squeeze(0)
+
+    dense = run(None)
+    assert_quality(torch_out, dense, pcc=0.995)
+    every_block = run(-1e30)
+    assert_quality(dense, every_block, pcc=0.999)
+    sol = run(float(os.environ.get("H3_SOL_TAU", "1.0")))
+    pcc_dense = assert_quality(dense, sol, pcc=0.98)
+    logger.info(f"Sol-Attn vs dense at logical {logical_n}, {rows} rows/device: {pcc_dense}")
+    assert_quality(torch_out, sol, pcc=0.98)
+    # Back to dense: the switch leaves no state behind.
+    assert torch.equal(run(None), dense), "turning Sol-Attn off did not restore the dense output"
+
+
 # ---- one transformer block ----
 
 

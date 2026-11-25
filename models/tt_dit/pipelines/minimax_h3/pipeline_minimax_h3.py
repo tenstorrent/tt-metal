@@ -827,6 +827,8 @@ class MiniMaxH3Pipeline:
         self._log_generation = True
         self._buckets: dict[int, _BucketState] = {}
         self._request_state = _BucketState()
+        # Sol-Attn request the transformer's ring attention is set up for (None: dense); see `_set_sol_attention`.
+        self._sol_key: tuple | None = None
         self._force_bucket: int | None = None
         self._force_pad_to: int | None = None
         self._force_prompt_pad: int | None = None
@@ -3413,6 +3415,32 @@ class MiniMaxH3Pipeline:
             return
         transformer.release_traces()
 
+    def _set_sol_attention(
+        self, transformer: MiniMaxH3Transformer3DModel, rung: int, logical_n: int, sink_tokens: int
+    ) -> None:
+        """Switch the ring attention between dense and Sol-Attn for this request (`H3_SOL_ATTN=1`, default off).
+
+        `H3_SOL_TAU` is the routing threshold (default 1.0). `sink_tokens` is the always-dense prefix: text,
+        condition and audio rows, everything in front of the target video. The sparse op compiles `logical_n` into
+        its kernels, so each new packed length pays a compile, and the pre-pass buffers change with it: a change of
+        request releases the denoise traces and marks every bucket cold, so the gen runs eager and recaptures.
+        """
+        sol = None
+        if os.environ.get("H3_SOL_ATTN", "0") == "1" and not self.dynamic_length:
+            tau = float(os.environ.get("H3_SOL_TAU", "1.0"))
+            sol = (rung // self.sp_factor, logical_n, sink_tokens, tau)
+        if sol == self._sol_key:
+            return
+        self._release_denoise_traces()
+        for state in (*self._buckets.values(), self._request_state):
+            state.warm = False
+        transformer.set_sol_request(None if sol is None else sol[:3], tau=1.0 if sol is None else sol[3])
+        self._sol_key = sol
+        self._log(
+            "attention: dense ring" if sol is None else
+            f"attention: Sol-Attn (tau {sol[3]}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
+        )
+
     def _denoise(
         self,
         transformer: MiniMaxH3Transformer3DModel,
@@ -3488,6 +3516,7 @@ class MiniMaxH3Pipeline:
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
         state = self._buckets.setdefault(rung, _BucketState()) if self.bucket_denoise else self._request_state
+        self._set_sol_attention(transformer, rung, layout.sequence_length, l_len + num_cond + num_cond_audio + a_target)
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             if os.environ.get(_RECAPTURE_KEEPS_AUDIO_ENV, "1") == "0":

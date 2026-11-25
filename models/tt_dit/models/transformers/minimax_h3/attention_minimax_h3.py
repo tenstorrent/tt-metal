@@ -22,11 +22,17 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor, math_fidelity_from_env
 from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
+from .sol_prepass import BLOCK as SOL_BLOCK
+from .sol_prepass import SolGeometry, SolPrepass
 
 # Ring SDPA chunk pair of the dynamic-length path per device compute grid and length class, one program each.
 # Blackhole 4x8, measured per block: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
 # Wormhole 4x8: (256, 512) in both classes, one program; the fastest pair at 13664 rows/device and within 0.4 % of
 # it at 4736.
+# Sol-Attn's sparse ring SDPA K/V piece: a multiple of the 64-token block, 256 is the production pick at 5, 10 and 15 s
+# (test_sparse_ring_sdpa.py test_production_*).
+SOL_K_CHUNK = 256
+
 DYNAMIC_RING_SDPA_CHUNKS: dict[tuple[int, int], dict[str, tuple[int, int]]] = {
     BLACKHOLE_COMPUTE_GRID: {"short": (320, 384), "long": (256, 512)},
     WORMHOLE_COMPUTE_GRID: {"short": (256, 512), "long": (256, 512)},
@@ -275,6 +281,83 @@ class MiniMaxH3Attention(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=False,
         )
+
+        # Sol-Attn (block-sparse ring attention, opt-in per request through `set_sol_request`). The pre-pass is kept
+        # in a plain dict, not as a child Module, so the weight cache and state dict never see it.
+        self.sdpa_scale = 1.0 / math.sqrt(head_dim)
+        self._sol: dict = {"prepass": None, "request": None}
+        self._sol_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
+            q_chunk_size=SOL_BLOCK,
+            k_chunk_size=SOL_K_CHUNK,
+            exp_approx_mode=False,
+            matmul_math_fidelity=self.sdpa_matmul_fidelity,
+        )
+
+    def set_sol_request(self, request: tuple[int, int, int] | None, *, tau: float = 1.0) -> None:
+        """Route this request's ring attention through Sol-Attn, or (None) through the dense ring op.
+
+        `request` is (rows per device, logical_n, sink_tokens): the padded per-device length the forward will see,
+        the logical packed length and the length of the always-dense prefix (text and audio rows in front of the
+        video). The pre-pass constants are uploaded here, outside any trace; a captured trace stays valid only while
+        the request and tau stay the same, so the caller releases its traces when either changes.
+        """
+        if request is None or not self.use_ring or self.dynamic_length:
+            self._sol["request"] = None
+            return
+        rows, logical_n, sink_tokens = request
+        prepass = self._sol["prepass"]
+        if prepass is None or prepass.tau != float(tau):
+            if prepass is not None:
+                prepass._release_state()
+            prepass = SolPrepass(
+                mesh_device=self.mesh_device,
+                ccl_manager=self.ccl_manager,
+                sp_axis=self.sp_mesh_axis,
+                tau=tau,
+            )
+            self._sol["prepass"] = prepass
+        geo = SolGeometry(shards=self.parallel_config.sequence_parallel.factor, rows=rows, logical_n=logical_n)
+        prepass.prepare(geo, sink_tokens, self.sdpa_scale)
+        prepass.reset_mask_reuse()
+        self._sol["request"] = (rows, logical_n)
+
+    def _sol_attention(self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor) -> ttnn.Tensor:
+        """Sol-Attn: the routing pre-pass picks the exact (Q block, K block) pairs, the sparse ring op computes them
+        and folds the rest in through the pooled K/V correction."""
+        _rows, logical_n = self._sol["request"]
+        routed = self._sol["prepass"](q_BHNE, k_BHNE, v_BHNE, scale=self.sdpa_scale)
+        out = ttnn.transformer.sparse_ring_sdpa(
+            q_BHNE,
+            k_BHNE,
+            v_BHNE,
+            routed["block_mask"],
+            routed["pooled_k"],
+            routed["pooled_v"],
+            persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
+            ),
+            persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
+            ),
+            logical_n=logical_n,
+            program_config=self._sol_program_config,
+            scale=self.sdpa_scale,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
+            num_links=self.ccl_manager.num_links,
+            cluster_axis=self.sp_mesh_axis,
+            mesh_device=self.mesh_device,
+            topology=self.ccl_manager.topology,
+            subdevice_id=self.ccl_manager.ccl_sub_device_id,
+            ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
+            use_column_major_ccl=True,
+            block_size=SOL_BLOCK,
+        )
+        for name in ("block_mask", "pooled_k", "pooled_v"):
+            ttnn.deallocate(routed[name])
+        return out
 
     # ------------------------------------------------------------------ weights
 
@@ -603,8 +686,12 @@ class MiniMaxH3Attention(Module):
 
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
-        exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
-        if exp_program_config is not None:
+        sol_request = self._sol["request"]
+        use_sol = self.use_ring and sol_request is not None and sol_request[0] == q_BHNE.shape[2]
+        exp_program_config = None if use_sol else self._exp_sdpa_program_config(q_BHNE.shape[2])
+        if use_sol:
+            spatial_BHNE = self._sol_attention(q_BHNE, k_BHNE, v_BHNE)
+        elif exp_program_config is not None:
             spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,
