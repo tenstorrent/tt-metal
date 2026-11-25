@@ -846,33 +846,35 @@ _BEHAVIOR_LOGPROB = -0.5
 _BASE_LR = 1.0
 
 
-def _run_train_loop_on_host(monkeypatch, num_batches=1):
+def _host_scored_batch(version=0, rollouts_dropped=0):
+    """A scored batch of 2 prompts x 2 generations, as _run_train_loop_on_host trains on."""
+    rollout = RolloutBatch(
+        weight_version=version,
+        prompts=[[1, 2], [1, 2], [3, 4], [3, 4]],
+        completions=[[7], [7], [7], [7]],
+        logprobs=np.full((4, _HOST_GRPO_CONFIG["max_completion_length"]), _BEHAVIOR_LOGPROB, dtype=np.float32),
+    )
+    return ScoredRolloutBatch(
+        rollout, np.array(_REWARDS, dtype=np.float32), {}, _GENERATE_TIME_S, 0.0, rollouts_dropped
+    )
+
+
+def _run_train_loop_on_host(monkeypatch, num_batches=1, source=None, **config_overrides):
     """Run ``GRPOTrainer.train()`` on host fakes: ``num_batches`` scored batches of 2 prompts x 2 generations,
     ``num_iterations=2``, a checkpoint every step. The fake scheduler halves the LR each step."""
     from ttml.trainers import GRPOMonitor
-    from ttml.trainers.grpo_trainer.rollout_batch_source import ScoredRolloutBatch
 
     run = SimpleNamespace(
         clock=0.0, batches_drawn=0, events=[], pi_old=[], saved_lrs=[], metrics_by_step={}, update_weights_steps=[]
     )
     monkeypatch.setattr(grpo_trainer_module, "time", SimpleNamespace(perf_counter=lambda: run.clock))
 
-    max_len = _HOST_GRPO_CONFIG["max_completion_length"]
-    rollout = RolloutBatch(
-        weight_version=0,
-        prompts=[[1, 2], [1, 2], [3, 4], [3, 4]],
-        completions=[[7], [7], [7], [7]],
-        logprobs=np.full((4, max_len), _BEHAVIOR_LOGPROB, dtype=np.float32),
-    )
-
     class _Source(RolloutBatchSource):
         def __iter__(self):
             run.batches_drawn += 1
             for _ in range(num_batches):
                 run.clock += _GENERATE_TIME_S
-                yield ScoredRolloutBatch(
-                    rollout, np.array(_REWARDS, dtype=np.float32), {}, _GENERATE_TIME_S, 0.0, _ROLLOUTS_DROPPED
-                )
+                yield _host_scored_batch(rollouts_dropped=_ROLLOUTS_DROPPED)
 
         def update_weights(self, model, step):
             run.update_weights_steps.append(step)
@@ -911,7 +913,15 @@ def _run_train_loop_on_host(monkeypatch, num_batches=1):
         run.saved_lrs.append(kwargs["learning_rate"])
         run.clock += _SAVE_CHECKPOINT_TIME_S
 
-    cfg = GRPOConfig(**{**_HOST_GRPO_CONFIG, "num_iterations": 2, "checkpointing": True, "checkpoint_interval": 1})
+    cfg = GRPOConfig(
+        **{
+            **_HOST_GRPO_CONFIG,
+            "num_iterations": 2,
+            "checkpointing": True,
+            "checkpoint_interval": 1,
+            **config_overrides,
+        }
+    )
     optimizer, monitor = _Optimizer(), _Monitor(cfg)
 
     def fake_build_policy(self, transformer_config, device_config, dataset_func):
@@ -925,7 +935,7 @@ def _run_train_loop_on_host(monkeypatch, num_batches=1):
         self._monitor_cb = monitor
         self._completions_per_microbatch = 4
         self._num_generation_batches = num_batches
-        self.rollout_batch_source = _Source()
+        self.rollout_batch_source = source or _Source()
 
     monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config, device_config: None)
     monkeypatch.setattr(grpo_trainer_module, "is_rollout_rank", lambda config: False)
@@ -1563,22 +1573,26 @@ def _scored_batch(version):
     )
 
 
-def test_rollout_queue_loopback(monkeypatch):
+def test_rollout_queue_loopback(monkeypatch, thread_errors):
     queues = collections.defaultdict(queue.Queue)
     monkeypatch.setattr(rollout_queue, "duplicate_distributed_context", lambda: _LoopbackContext(queues))
-    monkeypatch.setattr(rollout_queue, "exit_on_error", contextlib.nullcontext)
     producer = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=2)
     consumer = RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=2)
     producer.connect()
     consumer.connect()
 
     sent = [_scored_batch(version) for version in range(3)]
-    for scored in sent:
-        producer.push(scored)
-    producer.close()
-    received = [consumer.pop() for _ in sent]
-    assert consumer.pop() is None
-    consumer.close()
+    received = []
+
+    def send_all():
+        for scored in sent:
+            producer.push(scored)
+        producer.close()
+
+    assert _finishes(send_all)
+    assert _finishes(lambda: received.extend(consumer.pop() for _ in range(len(sent) + 1)))
+    assert received.pop() is None
+    assert _finishes(consumer.close)
 
     for got, want in zip(received, sent):
         assert got.rollout.weight_version == want.rollout.weight_version
@@ -1734,7 +1748,7 @@ def test_threaded_weight_bridge_receiver_locks_trace_capture_until_close(monkeyp
     assert ttnn.end_trace_capture is threaded_weight_bridge._end_trace_capture
 
 
-def test_threaded_weight_bridge_receiver_waits_for_the_cq0_reads_before_the_next_writes(monkeypatch):
+def test_threaded_weight_bridge_receiver_waits_for_the_cq0_reads_before_the_next_writes(monkeypatch, thread_errors):
     calls = []
     monkeypatch.setattr(ttnn, "begin_trace_capture", threaded_weight_bridge._begin_trace_capture)
     monkeypatch.setattr(ttnn, "end_trace_capture", threaded_weight_bridge._end_trace_capture)
@@ -1743,7 +1757,6 @@ def test_threaded_weight_bridge_receiver_waits_for_the_cq0_reads_before_the_next
     monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, pad, cq_id: calls.append(("write", cq_id)))
     monkeypatch.setattr(ttnn, "record_event", lambda mesh, cq_id: calls.append(("record", cq_id)) or f"E{cq_id}")
     monkeypatch.setattr(ttnn, "wait_for_event", lambda cq_id, event: calls.append(("wait", cq_id, event)))
-    monkeypatch.setattr(threaded_weight_bridge, "exit_on_error", contextlib.nullcontext)
     queues = collections.defaultdict(queue.Queue)
     monkeypatch.setattr(threaded_weight_bridge, "duplicate_distributed_context", lambda: _LoopbackContext(queues))
     trainer = _LoopbackContext(queues)
@@ -1753,19 +1766,22 @@ def test_threaded_weight_bridge_receiver_waits_for_the_cq0_reads_before_the_next
     def send(blob, len_tag, body_tag):
         send_frame(trainer.send, blob, TTT_RANK, len_tag, body_tag)
 
-    entry = {"key": "w", "shape": [1], "dtype": "BFLOAT16", "layout": "TILE"}
-    for version in (1, 2):
-        manifest = json.dumps({"weight_version": version, "entries": [entry]}).encode()
-        send(manifest, threaded_weight_bridge._TAG_MANIFEST_LEN, threaded_weight_bridge._TAG_MANIFEST_BODY)
-        send(
-            _torch_save_bytes(torch.zeros(1)),
-            threaded_weight_bridge._TAG_WEIGHT_LEN,
-            threaded_weight_bridge._TAG_WEIGHT_BODY,
-        )
-        with receiver.receive_weights(block=True) as (got, _):
-            assert got == version
-    send(b"", threaded_weight_bridge._TAG_MANIFEST_LEN, threaded_weight_bridge._TAG_MANIFEST_BODY)
-    receiver.close()
+    def receive_two_versions():
+        entry = {"key": "w", "shape": [1], "dtype": "BFLOAT16", "layout": "TILE"}
+        for version in (1, 2):
+            manifest = json.dumps({"weight_version": version, "entries": [entry]}).encode()
+            send(manifest, threaded_weight_bridge._TAG_MANIFEST_LEN, threaded_weight_bridge._TAG_MANIFEST_BODY)
+            send(
+                _torch_save_bytes(torch.zeros(1)),
+                threaded_weight_bridge._TAG_WEIGHT_LEN,
+                threaded_weight_bridge._TAG_WEIGHT_BODY,
+            )
+            with receiver.receive_weights(block=True) as (got, _):
+                assert got == version
+        send(b"", threaded_weight_bridge._TAG_MANIFEST_LEN, threaded_weight_bridge._TAG_MANIFEST_BODY)
+
+    assert _finishes(receive_two_versions)
+    assert _finishes(receiver.close)
 
     one_version = [("write", 1), ("record", 1), ("wait", 0, "E1"), ("record", 0)]
     assert calls == one_version + [("wait", 1, "E0")] + one_version
@@ -1981,6 +1997,24 @@ def _finishes(fn, timeout_s=10.0):
     return not thread.is_alive()
 
 
+@pytest.fixture
+def thread_errors(monkeypatch):
+    """exit_on_error of the remote rollout modules records what a thread raised; the test fails if one did."""
+    errors = []
+
+    @contextlib.contextmanager
+    def record_errors():
+        try:
+            yield
+        except BaseException as e:
+            errors.append(e)
+
+    for module in (async_rollout, rollout_queue, threaded_weight_bridge):
+        monkeypatch.setattr(module, "exit_on_error", record_errors)
+    yield errors
+    assert not errors, f"a transport thread raised: {errors!r}"
+
+
 def _patch_host_ttnn(monkeypatch):
     """ttnn calls of the ThreadedWeightBridge on _HostPads; returns the pads that ttnn.deallocate got."""
     deallocated = []
@@ -2001,9 +2035,8 @@ def _patch_host_ttnn(monkeypatch):
     return deallocated
 
 
-def test_threaded_weight_bridge_sender_close_deallocates_the_pads(monkeypatch):
+def test_threaded_weight_bridge_sender_close_deallocates_the_pads(monkeypatch, thread_errors):
     deallocated = _patch_host_ttnn(monkeypatch)
-    monkeypatch.setattr(threaded_weight_bridge, "exit_on_error", contextlib.nullcontext)
     queues = collections.defaultdict(queue.Queue)
     monkeypatch.setattr(threaded_weight_bridge, "duplicate_distributed_context", lambda: _LoopbackContext(queues))
     sender = threaded_weight_bridge.ThreadedWeightBridge.sender(peer_rank=TTT_RANK, mesh_device="mesh")
@@ -2015,23 +2048,12 @@ def test_threaded_weight_bridge_sender_close_deallocates_the_pads(monkeypatch):
 
 
 @pytest.fixture(params=[1, 3], ids=["capacity1", "capacity3"])
-def async_rollout_over_blocking_sends(request, monkeypatch):
+def async_rollout_over_blocking_sends(request, monkeypatch, thread_errors):
     """The real AsyncRolloutClient and AsyncRolloutServer over blocking sends; the server serves in a thread.
 
     Returns (client, sampler, server thread) once both local rollout queues are full of version-0 batches.
     """
     _patch_host_ttnn(monkeypatch)
-    thread_errors = []
-
-    @contextlib.contextmanager
-    def record_errors():
-        try:
-            yield
-        except BaseException as e:
-            thread_errors.append(e)
-
-    for module in (async_rollout, rollout_queue, threaded_weight_bridge):
-        monkeypatch.setattr(module, "exit_on_error", record_errors)
     bridge_queues, rollout_queues = collections.defaultdict(queue.Queue), collections.defaultdict(queue.Queue)
     monkeypatch.setattr(
         threaded_weight_bridge, "duplicate_distributed_context", lambda: _BlockingSendContext(bridge_queues)
@@ -2154,8 +2176,8 @@ def test_async_remote_source_trains_every_batch_over_a_full_rollout_queue(
 class _FakeAsyncClient:
     """pop() returns batches generated at the scripted versions, then None; records the pushed versions."""
 
-    def __init__(self, versions):
-        self._batches = [_scored_batch(version) for version in versions]
+    def __init__(self, versions, make_batch=_scored_batch):
+        self._batches = [make_batch(version) for version in versions]
         self.pushed = []
 
     def pop(self):
@@ -2168,12 +2190,12 @@ class _FakeAsyncClient:
         pass
 
 
-def _async_source(monkeypatch, client, num_batches, max_staleness, weight_sync_every=1):
+def _async_source(monkeypatch, client, num_batches, max_staleness, weight_sync_every=1, batch_prompts=1):
     monkeypatch.setattr(grpo_ttml_model, "weights_ref_hf_dict", lambda model: {})
     return AsyncRemoteRolloutBatchSource(
         client=client,
         num_batches=num_batches,
-        batch_prompts=1,
+        batch_prompts=batch_prompts,
         num_generations=2,
         max_completion_length=4,
         weight_sync_every=weight_sync_every,
@@ -2181,43 +2203,41 @@ def _async_source(monkeypatch, client, num_batches, max_staleness, weight_sync_e
     )
 
 
-def _drive_async_source(source, steps_per_batch, num_batches):
-    """Push version 0, then consume every batch and push the step reached except after the last batch, as
-    GRPOTrainer._train_policy does."""
-    update_weights_durations = [source.update_weights(None, 0)]
-    consumed = []
-    for batch_index, scored in enumerate(source, start=1):
-        consumed.append((scored.rollout.weight_version, scored.rollouts_dropped))
-        if batch_index < num_batches:
-            update_weights_durations.append(source.update_weights(None, batch_index * steps_per_batch))
-    return consumed, update_weights_durations
+_ASYNC_HOST_CONFIG = dict(
+    rollout_backend="ttt_remote_async",
+    remote_rollout=RemoteRolloutConfig(mesh_shape=[1, 1], max_batch_size=4, max_seq_len=64),
+)
+
+
+def _staleness_and_drops(run):
+    return [(m["rollout_staleness_max"], m["rollouts_dropped"]) for m in run.metrics_by_step.values()]
 
 
 def test_async_remote_source_drops_stale_rollouts(monkeypatch):
-    client = _FakeAsyncClient([0, 0, 1, 1, 2])
-    source = _async_source(monkeypatch, client, num_batches=3, max_staleness=0)
+    client = _FakeAsyncClient([0, 0, 1, 1, 2], make_batch=_host_scored_batch)
+    source = _async_source(monkeypatch, client, num_batches=3, max_staleness=0, batch_prompts=2)
 
-    consumed, update_weights_durations = _drive_async_source(source, steps_per_batch=1, num_batches=3)
-    assert consumed == [(0, 0), (1, 1), (2, 1)]
+    run = _run_train_loop_on_host(monkeypatch, num_batches=3, source=source, **_ASYNC_HOST_CONFIG, num_iterations=1)
+    assert _staleness_and_drops(run) == [(0, 0), (0, 1), (0, 1)]
     assert client.pushed == [0, 1, 2]
-    assert all(duration_s >= 0.0 for duration_s in update_weights_durations)
 
 
 def test_async_remote_source_counts_staleness_in_optimizer_steps(monkeypatch):
-    client = _FakeAsyncClient([0, 0, 2, 4])
-    source = _async_source(monkeypatch, client, num_batches=3, max_staleness=1)
+    client = _FakeAsyncClient([0, 0, 2, 4], make_batch=_host_scored_batch)
+    source = _async_source(monkeypatch, client, num_batches=3, max_staleness=1, weight_sync_every=2, batch_prompts=2)
 
-    consumed, update_weights_durations = _drive_async_source(source, steps_per_batch=2, num_batches=3)
-    assert consumed == [(0, 0), (2, 1), (4, 0)]
+    run = _run_train_loop_on_host(
+        monkeypatch, num_batches=3, source=source, **_ASYNC_HOST_CONFIG, weight_sync_every=2, max_staleness=1
+    )
+    assert _staleness_and_drops(run) == [(0, 0), (1, 0), (0, 1), (1, 0), (0, 0), (1, 0)]
     assert client.pushed == [0, 2, 4]
-    assert all(duration_s >= 0.0 for duration_s in update_weights_durations)
 
 
 def test_async_remote_source_update_weights_returns_zero_when_sync_not_due(monkeypatch):
     client = _FakeAsyncClient([0])
     source = _async_source(monkeypatch, client, num_batches=1, max_staleness=0, weight_sync_every=3)
 
-    assert source.update_weights(None, 0) >= 0.0
+    source.update_weights(None, 0)
     assert source.update_weights(None, 1) == 0.0
     assert client.pushed == [0]
 
