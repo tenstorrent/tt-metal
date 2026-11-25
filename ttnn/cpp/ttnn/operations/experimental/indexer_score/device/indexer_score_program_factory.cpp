@@ -10,13 +10,12 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>  // tt::tile_size, GetCommonRuntimeArgs
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-logger/tt-logger.hpp>         // log_info: per-program schedule/mcast summary
+#include <tt-logger/tt-logger.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
