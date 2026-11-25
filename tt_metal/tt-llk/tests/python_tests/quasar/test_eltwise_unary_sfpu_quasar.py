@@ -146,7 +146,7 @@ COMP_OPS = [
 
 # Ops that sweep the comp format set (float + integer formats) and build on the comp stimuli.
 # Signbit is a pure sign-bit test: it differs from an IEEE `< 0` at -0.0 and negative NaN, and from
-# Quasar's less_than_zero (itself a bit-31 test with a magnitude-nonzero guard) only at -0.0. The
+# Quasar's less_than_zero (a sign test that excludes -0 via v > neg_zero) only at -0.0. The
 # comp stimuli seed +/-0.0 at a single datum and keep UInt16 below bit 15, so signbit adds its own
 # per-face seeds on top of them (see prepare_signbit_inputs).
 COMP_FORMAT_OPS = COMP_OPS + [MathOperation.Signbit]
@@ -722,6 +722,20 @@ _SIGNED_NAN_BITS = {
 # every consecutive FACE_ELEMS-element chunk of the flat input lands in its own face.
 FACE_ELEMS = MAX_FACE_R_DIM * FACE_C_DIM
 
+# Where a run of planted edge patterns starts in its face: lane _EDGE_RUN_FIRST_LANE of the first
+# row, then one row and one lane further in each following face.
+_EDGE_RUN_FIRST_LANE = 8
+_EDGE_RUN_FACE_STEP = FACE_C_DIM + 1
+
+
+def _edge_run_start(base: int, face: int) -> int:
+    """
+    Flat index at which face *face*, whose first element is *base*, gets its run of edge patterns.
+
+    The step repeats every four faces, which keeps the run inside its face for any tile count.
+    """
+    return base + _EDGE_RUN_FIRST_LANE + _EDGE_RUN_FACE_STEP * (face % 4)
+
 
 def prepare_signbit_inputs(
     src_A: torch.Tensor,
@@ -866,7 +880,7 @@ def prepare_heaviside_inputs(
         for i, pattern in enumerate(patterns):
             # Two's-complement spelling, so the write goes through the signed integer view.
             signed = pattern - (1 << width) if pattern >> (width - 1) else pattern
-            bits[base + 8 + 17 * (face % 4) + i] = signed
+            bits[_edge_run_start(base, face) + i] = signed
     return flat.reshape(values.shape)
 
 
@@ -988,7 +1002,7 @@ def prepare_float_class_inputs(
     flat = values.flatten().clone()
     bits = flat.view(int_dtype)
     for face, base in enumerate(range(0, flat.numel(), FACE_ELEMS)):
-        _write_raw_bits(bits, base + 8 + 17 * (face % 4), patterns, width)
+        _write_raw_bits(bits, _edge_run_start(base, face), patterns, width)
         pass_start = base + _FLOAT_CLASS_NON_FINITE_PASS * _SFPU_PASS_ELEMS
         _write_raw_bits(bits, pass_start, (non_finite * 4)[:_SFPU_PASS_ELEMS], width)
     return flat.reshape(values.shape)
@@ -1043,7 +1057,7 @@ def prepare_zero_comp_edge_inputs(
     flat = values.flatten().clone()
     bits = flat.view(int_dtype)
     for face, base in enumerate(range(0, flat.numel(), FACE_ELEMS)):
-        _write_raw_bits(bits, base + 8 + 17 * (face % 4), patterns, width)
+        _write_raw_bits(bits, _edge_run_start(base, face), patterns, width)
     return flat.reshape(values.shape)
 
 
@@ -1153,7 +1167,7 @@ def prepare_inverse_trig_edge_inputs(
     sign_bit = 1 << (width - 1)
     signed_patterns = [p | sign for p in patterns for sign in (0, sign_bit)]
     for face, base in enumerate(range(0, flat.numel(), FACE_ELEMS)):
-        _write_raw_bits(bits, base + 8 + 17 * (face % 4), signed_patterns, width)
+        _write_raw_bits(bits, _edge_run_start(base, face), signed_patterns, width)
     return flat.reshape(src_A.shape)
 
 
