@@ -135,7 +135,7 @@ def _golden_and_trace(tmp_path, metadata: dict | None = None):
         state["recurrent"] = states[i][None]
         payload = {"start": 4 * i, "end": 4 * i + 4, "output": output[4 * i : 4 * i + 4], "state": state}
         torch.save(payload, golden / f"segment_{i:06d}.pt")
-    manifest = {"tokens": 8, "segment": 4, "token_ids_sha256": token_ids_sha256(token_ids)}
+    manifest = {"rows": 8, "segment": 4, "token_ids_sha256": token_ids_sha256(token_ids)}
     manifest["segments"] = [{"start": 0, "end": 4}, {"start": 4, "end": 8}]
     (golden / MANIFEST).write_text(json.dumps(manifest))
     save_file({"o": (output / 2).bfloat16()}, trace / "kda" / "kda_output_layer_0.safetensors")

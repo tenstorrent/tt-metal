@@ -8,20 +8,21 @@ segments. After each segment the run atomically writes that segment's output row
 and any window can be read back with the exact state before it. The run never opens a device: device tests only
 load a prepared golden, so the CPU work never holds the device.
 
-``manifest.json`` is the golden's only metadata: what produced it (identity, provenance of each run session),
-which segments are complete and how long each took, and, once complete, the token floor for per-token NRMSE.
-Example (Kimi-K3 ``layers.0`` on the code tokens of a vLLM trace)::
+``manifest.json`` is the golden's only metadata, in the long-context golden registry's format
+(``tests/accuracy/golden_registry.py``; the golden's id is its directory name): what produced it (producer,
+identity, provenance of each run session), the prompt (``token_ids.pt``), which segments are complete and how long
+each took, the products, and, once complete, the token floor for per-token NRMSE. Example (Kimi-K3 ``layers.0``
+on the code tokens of a vLLM trace, written straight into the registry as golden ``k3-l0-kda-fp64-1m``)::
 
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kda.long_context_golden \\
-        --checkpoint $KIMI_K3_CKPT --tokens /path/to/vllm/trace --count 1044480 --out /path/to/golden
+        --checkpoint $KIMI_K3_CKPT --tokens /path/to/vllm/trace --count 1044480 \\
+        --out /mnt/weka/model-cache/scratch/accuracy-goldens/k3-l0-kda-fp64-1m
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import os
 import platform
 import subprocess
 import time
@@ -33,28 +34,28 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
+from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import (
+    MANIFEST,
+    Golden,
+    make_golden_dir,
+    manifest_problems,
+    open_golden,
+    product_schema,
+    publish,
+    token_ids_sha256,
+    write_manifest,
+    write_token_ids,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 
-MANIFEST = "manifest.json"
+PRODUCER = "models.demos.deepseek_v3_d_p.tests.kda.long_context_golden"
+PRODUCER_VERSION = 1
+# Kimi-K3 layers.0 over the first 1,044,480 code tokens of the k3_4_layers_moe_kda_io vLLM trace.
+K3_LAYER0_GOLDEN = "k3-l0-kda-fp64-1m"
 
 
 def _segment_path(run_dir: Path, index: int) -> Path:
     return run_dir / f"segment_{index:06d}.pt"
-
-
-def _atomic_save(payload: object, path: Path) -> None:
-    temporary = path.with_suffix(f".{os.getpid()}.tmp")
-    try:
-        torch.save(payload, temporary)
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _write_manifest(run_dir: Path, manifest: dict) -> None:
-    temporary = run_dir / f"{MANIFEST}.{os.getpid()}.tmp"
-    temporary.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
-    temporary.replace(run_dir / MANIFEST)
 
 
 def _provenance() -> dict:
@@ -71,10 +72,6 @@ def _provenance() -> dict:
         "cpu_capability": torch.backends.cpu.get_cpu_capability(),
         "machine": platform.machine(),
     }
-
-
-def token_ids_sha256(token_ids: Sequence[int]) -> str:
-    return hashlib.sha256(torch.as_tensor(token_ids, dtype=torch.int64).numpy().tobytes()).hexdigest()
 
 
 def run_golden(
@@ -96,11 +93,14 @@ def run_golden(
     uninterrupted one. Each run session's provenance is recorded with the segment it started from.
     """
     run_dir = Path(run_dir)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    make_golden_dir(run_dir)
     expected = {
+        "golden_id": run_dir.name,
+        "producer": PRODUCER,
+        "producer_version": PRODUCER_VERSION,
         "identity": identity,
         "config": asdict(config),
-        "tokens": len(token_ids),
+        "rows": len(token_ids),
         "token_ids_sha256": token_ids_sha256(token_ids),
         "segment": segment,
         "dtype": str(dtype),
@@ -113,13 +113,14 @@ def run_golden(
         if mismatched:
             raise ValueError(f"{run_dir} holds a different run; mismatched fields: {mismatched}")
     else:
+        write_token_ids(run_dir, token_ids)
         manifest = {**expected, "sessions": [], "segments": []}
 
     segments = -(-len(token_ids) // segment)
     done = len(manifest["segments"])
     if done < segments:
         manifest["sessions"].append({"first_segment": done, **_provenance()})
-        _write_manifest(run_dir, manifest)
+        write_manifest(run_dir, manifest)
     state = None
     if done:
         state = KDAReferenceState(**torch.load(_segment_path(run_dir, done - 1), weights_only=True)["state"])
@@ -129,12 +130,16 @@ def run_golden(
         start, end = index * segment, min((index + 1) * segment, len(token_ids))
         began = time.perf_counter()
         output, state = kda_forward_reference(layer_input(token_ids[start:end]), weights, config, state, dtype=dtype)
-        _atomic_save(
-            {"start": start, "end": end, "output": output[0], "state": vars(state)}, _segment_path(run_dir, index)
-        )
+        payload = {"start": start, "end": end, "output": output[0], "state": vars(state)}
+        publish(lambda path: torch.save(payload, path), _segment_path(run_dir, index))
+        if "products" not in manifest:
+            manifest["products"] = {
+                "output": product_schema("row", output[0]),
+                **{f"state.{name}": product_schema("segment_end", t) for name, t in vars(state).items()},
+            }
         seconds = time.perf_counter() - began
         manifest["segments"].append({"start": start, "end": end, "seconds": seconds})
-        _write_manifest(run_dir, manifest)
+        write_manifest(run_dir, manifest)
         print(f"segment {index + 1}/{segments} tokens [{start}, {end}) {seconds:.2f} s", flush=True)
 
     if "token_floor" not in manifest:
@@ -146,8 +151,25 @@ def run_golden(
                 ]
             )
         )
-        _write_manifest(run_dir, manifest)
+        write_manifest(run_dir, manifest)
+    problems = manifest_problems(run_dir.name, manifest)
+    if problems:
+        raise ValueError(f"the golden in {run_dir} breaks the registry contract: {problems}")
     return manifest
+
+
+def open_k3_layer0_golden() -> Golden:
+    """The registered Kimi-K3 ``layers.0`` golden, checked to be this producer's, on the first-layer input."""
+    from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT
+
+    golden = open_golden(K3_LAYER0_GOLDEN)
+    golden.require(
+        producer=PRODUCER,
+        producer_version=PRODUCER_VERSION,
+        identity={"model": "Kimi-K3", "layer": "model.layers.0", "input": FIRST_LAYER_INPUT},
+        products=["output", "state.recurrent"],
+    )
+    return golden
 
 
 def load_window(run_dir: Path, start: int, end: int) -> tuple[torch.Tensor, KDAReferenceState | None]:

@@ -1,16 +1,25 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The resumable long golden on a tiny configuration. CPU only."""
+"""The resumable long golden on a tiny configuration, and the registered Kimi-K3 golden the device test reads.
+CPU only."""
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import torch
 
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import GOLDEN_DIR_MODE, GOLDEN_FILE_MODE, open_golden
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, load_window, run_golden
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
+    MANIFEST,
+    load_window,
+    open_k3_layer0_golden,
+    run_golden,
+)
 
 TOKENS = list(range(10))
 SEGMENT = 4  # segments [0, 4), [4, 8), [8, 10): the last one is partial
@@ -41,7 +50,7 @@ def make_run(run_dir: Path, *, fail_after: int | None = None, identity: str = "t
             config=config,
             segment=SEGMENT,
             dtype=torch.float64,
-            identity={"name": identity},
+            identity={"model": identity, "token_source": "a random table", "weights_sha256": "random"},
         )
 
     return run, table, weights, config
@@ -109,3 +118,53 @@ def test_manifest_records_provenance_and_the_whole_golden_token_floor(tmp_path: 
     assert manifest["token_floor"] == golden_floor(load_window(tmp_path, 0, 10)[0].norm(dim=-1))
     assert manifest == json.loads((tmp_path / MANIFEST).read_text())
     assert {"code_revision", "torch", "cpu_capability", "machine"} <= set(manifest["sessions"][0])
+
+    # The complete golden is a registry golden: found by its directory name, with its prompt and products.
+    golden = open_golden(tmp_path.name, root=tmp_path.parent)
+    assert golden.token_ids().tolist() == TOKENS
+    assert golden.manifest["products"]["output"]["shape"] == [load_window(tmp_path, 0, 1)[0].shape[-1]]
+    assert golden.manifest["products"]["state.recurrent"]["kind"] == "segment_end"
+
+
+def test_golden_files_are_readable_by_other_users_whatever_the_umask(tmp_path: Path) -> None:
+    run, *_ = make_run(tmp_path / "golden")
+    previous = os.umask(0o077)
+    try:
+        run()
+    finally:
+        os.umask(previous)
+    golden = tmp_path / "golden"
+    assert stat.S_IMODE(golden.stat().st_mode) == GOLDEN_DIR_MODE
+    modes = {path.name: stat.S_IMODE(path.stat().st_mode) for path in golden.iterdir()}
+    assert sorted(modes) == [MANIFEST, *(f"segment_{i:06d}.pt" for i in range(3)), "token_ids.pt"]
+    assert set(modes.values()) == {GOLDEN_FILE_MODE}
+
+
+def _readable_by_anyone(path: Path) -> bool:
+    """Mode bits alone, so the check does not depend on who runs it: every directory from ``/`` down is
+    world-traversable and the file is world-readable."""
+    path = path.resolve()
+    directories_traversable = all(parent.stat().st_mode & stat.S_IXOTH for parent in path.parents)
+    return directories_traversable and bool(path.stat().st_mode & stat.S_IROTH)
+
+
+def test_registered_k3_layer0_golden_serves_the_device_test() -> None:
+    """The golden ``layer/test_golden_accuracy_long_context.py`` gates on is registered, complete, and has its token
+    ids, token floor and every segment file, so a broken golden fails here before a device run (reads only metadata
+    and the 8 MB token ids)."""
+    golden = open_k3_layer0_golden()
+    assert golden.rows == 1044480
+    assert golden.token_ids().shape == (golden.rows,)
+    assert 0 < golden.manifest["token_floor"] < float("inf")
+    assert "input_weights_sha256" in golden.identity
+    segments = range(len(golden.manifest["segments"]))
+    missing = [i for i in segments if not (golden.path / f"segment_{i:06d}.pt").is_file()]
+    assert not missing, f"segment files missing: {missing[:10]}"
+    # CI reads the golden as another user than its producer.
+    files = [
+        golden.path / MANIFEST,
+        golden.path / "token_ids.pt",
+        *(golden.path / f"segment_{i:06d}.pt" for i in segments),
+    ]
+    unreadable = [str(path) for path in files if not _readable_by_anyone(path)]
+    assert not unreadable, f"not readable by other users: {unreadable[:10]}"

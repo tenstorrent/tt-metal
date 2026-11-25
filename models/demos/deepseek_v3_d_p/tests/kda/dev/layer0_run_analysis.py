@@ -305,7 +305,7 @@ def from_trace(trace: Path, golden: Path, out: Path) -> None:
                 f"{trace}: {output.get_shape()[0]} output rows and {snapshots} snapshots every {every} tokens "
                 f"do not cover [0, {tokens}) inside the {available} golden tokens"
             )
-        if token_ids_sha256(load_trace_token_ids(trace, manifest["tokens"])) != manifest["token_ids_sha256"]:
+        if token_ids_sha256(load_trace_token_ids(trace, manifest["rows"])) != manifest["token_ids_sha256"]:
             raise ValueError(f"{trace} does not hold the golden's tokens")
         out.mkdir(parents=True, exist_ok=False)
         writer = RunWriter(out, tokens, snapshots, states.get_shape()[1])

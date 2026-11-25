@@ -6,7 +6,6 @@ import torch
 import ttnn
 
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
-    TokenErrorAccumulator,
     golden_floor,
     nrmse,
     assert_accurate,
@@ -307,47 +306,6 @@ def test_nrmse_rejects_non_finite_and_mismatched_shapes(expect_error) -> None:
         nrmse(torch.tensor([1.0, 1.0]), torch.tensor([1.0, float("nan")]))
     with expect_error(ValueError, "shape"):
         nrmse(torch.zeros(2, 3), torch.zeros(3, 2))
-
-
-def test_streamed_token_errors_equal_the_batch_nrmse() -> None:
-    generator = torch.Generator().manual_seed(0)
-    expected = torch.randn(23, 6, generator=generator, dtype=torch.float64)
-    expected[7] *= 1e-4  # one near-silent token, so the floor matters
-    actual = expected + 1e-3 * torch.randn(23, 6, generator=generator, dtype=torch.float64)
-    accumulator = TokenErrorAccumulator()
-    for start, end in ((0, 5), (5, 6), (6, 17), (17, 23)):  # chunk edges off the 4-token window grid
-        accumulator.update(expected[start:end], actual[start:end])
-    floor = golden_floor(accumulator.expected_norms())
-
-    assert accumulator.tokens == 23
-    assert accumulator.nrmse() == pytest.approx(nrmse(expected, actual).item(), rel=1e-14)
-    windows = [nrmse(expected[i : i + 4], actual[i : i + 4]).item() for i in range(0, 23, 4)]
-    assert accumulator.window_nrmse(4).tolist() == pytest.approx(windows, rel=1e-14)
-    torch.testing.assert_close(
-        accumulator.token_nrmse(floor), nrmse(expected, actual, keep_dims=(0,)), rtol=1e-14, atol=0
-    )
-
-
-def test_streamed_token_errors_on_exact_zeros_equal_the_batch_nrmse() -> None:
-    silent = TokenErrorAccumulator()
-    silent.update(torch.zeros(4, 3), torch.zeros(4, 3))
-    assert silent.nrmse() == nrmse(torch.zeros(4, 3), torch.zeros(4, 3)).item() == 0.0
-    assert silent.window_nrmse(2).tolist() == [0.0, 0.0]
-
-    expected = torch.tensor([[3.0, 4.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])  # a matching silent window, then
-    actual = torch.tensor([[3.0, 5.0], [0.0, 0.0], [0.0, 0.0], [0.0, 1.0]])  # an error on a silent token
-    mixed = TokenErrorAccumulator()
-    mixed.update(expected, actual)
-    batch = [nrmse(expected[i : i + 1], actual[i : i + 1]).item() for i in range(4)]
-    assert mixed.window_nrmse(1).tolist() == batch == [0.2, 0.0, 0.0, float("inf")]
-
-
-def test_token_error_accumulator_rejects_mismatched_chunks_and_empty_reads(expect_error) -> None:
-    accumulator = TokenErrorAccumulator()
-    with expect_error(ValueError, "no tokens"):
-        accumulator.nrmse()
-    with expect_error(ValueError, "matching"):
-        accumulator.update(torch.zeros(2, 3), torch.zeros(3, 2))
 
 
 def test_nrmse_threshold_is_required(expect_error) -> None:

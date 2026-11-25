@@ -149,7 +149,7 @@ def test_kimi_k3_layer0_dev_run(mesh_device: ttnn.MeshDevice, tensor_parallel_ax
     identity = manifest["identity"]
     assert kda_state_dict_sha256(weights) == identity["weights_sha256"], "the golden used other weights"
     assert identity["input"] == FIRST_LAYER_INPUT, f"the golden's input is {identity['input']!r}"
-    token_ids = load_trace_token_ids(resolve_trace_dir(env["KDA_TRACE_DIR"]))[: manifest["tokens"]]
+    token_ids = load_trace_token_ids(resolve_trace_dir(env["KDA_TRACE_DIR"]))[: manifest["rows"]]
     assert token_ids_sha256(token_ids) == manifest["token_ids_sha256"], "the golden used other tokens"
     build = FirstLayerInput(checkpoint)
     if "input_weights_sha256" in identity:
