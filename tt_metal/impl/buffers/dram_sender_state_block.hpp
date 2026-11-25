@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // "Sender state block" a DRAM sender holds in DRISC L1 for a set of DRAM-core receivers (Quasar
-// CCEs): a PrefetcherPipe carved from a PrefetcherPipeL1Source::DramReceiverZone space. The carve
+// CCEs): a PrefetcherPipe carved from a ReceiverCoreType::Dram space. The carve
 // pre-initializes one block per sender core so the long-running Tensor prefetcher kernel can switch
 // between several such targets across successive requests, resuming each one's ring-buffer write
 // pointer (fifo_wr_ptr) where the previous request to it left off.

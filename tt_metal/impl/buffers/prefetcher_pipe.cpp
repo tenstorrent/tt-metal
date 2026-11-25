@@ -171,7 +171,7 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     // Quasar reserves lane slots up front; the active count (default 1) is raised per pipe by the
     // first multi-thread receiver bind. WH/BH stay single-lane, and so do DRAM receivers.
     credit_lane_capacity_(
-        device.arch() == tt::ARCH::QUASAR && config_.l1_source != PrefetcherPipeL1Source::DramReceiverZone
+        device.arch() == tt::ARCH::QUASAR && config_.receiver_core_type != ReceiverCoreType::Dram
             ? PREFETCHER_PIPE_MAX_CREDIT_LANES
             : 1u) {
     TT_FATAL(config_.buffer_type == BufferType::L1, "PrefetcherPipeSpace: buffer_type must be BufferType::L1");
@@ -182,13 +182,14 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
         "PrefetcherPipeSpace: ring_size {} must be a multiple of L1_ALIGNMENT {}",
         config_.ring_size,
         l1_alignment);
-    // Receivers are always worker cores drawn from receiver_domain, so a space with no receiver
-    // domain could never carve a pipe, and a pipe never has more receivers than the domain holds.
+    // Receivers are always drawn from receiver_domain (worker cores, or DRAM cores with
+    // ReceiverCoreType::Dram), so a space with no receiver domain could never carve a pipe, and a pipe never has more
+    // receivers than the domain holds.
     // Bounding the per-pipe maximum by the domain also keeps the config-page layout arithmetic
     // (receivers x lanes x slot bytes) far from 32-bit overflow.
     TT_FATAL(
         config_.receiver_domain.num_cores() > 0,
-        "PrefetcherPipeSpace: receiver_domain is empty; every pipe needs at least one worker receiver");
+        "PrefetcherPipeSpace: receiver_domain is empty; every pipe needs at least one receiver");
     TT_FATAL(config_.max_receivers_per_pipe >= 1, "PrefetcherPipeSpace: max_receivers_per_pipe must be >= 1");
     TT_FATAL(
         config_.max_receivers_per_pipe <= config_.receiver_domain.num_cores(),
@@ -199,7 +200,11 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     TT_FATAL(
         config_.sender_cores.num_cores() > 0 || config_.num_dram_senders > 0,
         "PrefetcherPipeSpace: provide worker sender_cores, num_dram_senders, or both");
-    if (config_.l1_source == PrefetcherPipeL1Source::Default) {
+    if (has_dram_receivers()) {
+        TT_FATAL(
+            config_.l1_source == PrefetcherPipeL1Source::Default,
+            "PrefetcherPipeSpace: a space with DRAM receivers takes no worker L1; leave l1_source Default");
+    } else if (config_.l1_source == PrefetcherPipeL1Source::Default) {
         config_.l1_source =
             config_.num_dram_senders > 0 ? PrefetcherPipeL1Source::Allocator : PrefetcherPipeL1Source::PersistentArena;
     }
@@ -212,13 +217,13 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     if (has_dram_receivers()) {
         TT_FATAL(
             config_.sender_cores.num_cores() == 0 && config_.num_dram_senders > 0,
-            "PrefetcherPipeSpace: a PrefetcherPipeL1Source::DramReceiverZone space has DRAM senders only; set "
-            "num_dram_senders and leave sender_cores empty");
+            "PrefetcherPipeSpace: a space with DRAM receivers has DRAM senders only; set num_dram_senders and leave "
+            "sender_cores empty");
         TT_FATAL(
             device.impl().dram_sender_placement() == DramSenderPlacement::DramCore &&
                 device.impl().drisc_l1_arena().receiver_zone_size() > 0,
-            "PrefetcherPipeSpace: PrefetcherPipeL1Source::DramReceiverZone needs DRAM cores with a DRISC L1 receiver "
-            "zone (Quasar CCEs)");
+            "PrefetcherPipeSpace: ReceiverCoreType::Dram needs DRAM cores with a DRISC L1 receiver zone (Quasar "
+            "CCEs)");
         TT_FATAL(
             config_.ring_size % kDramReceiverCreditUnitBytes == 0,
             "PrefetcherPipeSpace: DRAM-receiver ring_size {} B must be a non-zero multiple of the {} B credit unit",
@@ -238,8 +243,8 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
         layout_ = PrefetcherPipeConfigPageLayout{.page_size = kDramReceiverConfigPageBytes};
         return;
     }
-    // Worker-only public surface: sender_cores / receiver_domain are logical worker coordinates,
-    // which the persistent arena and the L1 allocator validate against the worker grid.
+    // Worker receivers: sender_cores / receiver_domain are logical worker coordinates, which the
+    // persistent arena and the L1 allocator validate against the worker grid.
     layout_ =
         compute_prefetcher_pipe_config_page_layout(config_.max_receivers_per_pipe, credit_lane_capacity_, l1_alignment);
 }
@@ -287,19 +292,21 @@ PrefetcherPipeSpaceImpl::~PrefetcherPipeSpaceImpl() {
 
 PrefetcherPipeSpaceL1::PrefetcherPipeSpaceL1(
     distributed::MeshCommandQueue& mesh_cq,
+    ReceiverCoreType receiver_core_type,
     PrefetcherPipeL1Source source,
     const CoreRangeSet& cores,
     uint32_t ring_size,
     uint32_t config_page_size) :
     device_(mesh_cq.device()), cq_id_(static_cast<uint8_t>(mesh_cq.id())) {
+    const bool dram_receivers = receiver_core_type == ReceiverCoreType::Dram;
     TT_FATAL(
-        source != PrefetcherPipeL1Source::Default,
+        dram_receivers || source != PrefetcherPipeL1Source::Default,
         "PrefetcherPipeSpaceL1 requires a resolved L1 source (internal error)");
     try {
-        if (source == PrefetcherPipeL1Source::PersistentArena) {
-            allocate_from_arena(cores, ring_size, config_page_size);
-        } else if (source == PrefetcherPipeL1Source::DramReceiverZone) {
+        if (dram_receivers) {
             allocate_from_receiver_zone(ring_size, config_page_size);
+        } else if (source == PrefetcherPipeL1Source::PersistentArena) {
+            allocate_from_arena(cores, ring_size, config_page_size);
         } else {
             allocate_from_allocator(cores, ring_size, config_page_size);
         }
@@ -770,7 +777,8 @@ PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_sender_pipe(
         dram_sender_allocations_.at(sender),
         recv_index_base,
         tensor_prefetcher_factory_id,
-        tensor_prefetcher_factory_num_pipes));
+        tensor_prefetcher_factory_num_pipes,
+        corerange_to_cores(receivers, /*max_cores=*/std::nullopt, /*row_wise=*/true)));
 }
 
 PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_receiver_pipe(
@@ -829,7 +837,7 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     uint32_t recv_index_base,
     uint64_t tensor_prefetcher_factory_id,
     uint32_t tensor_prefetcher_factory_num_pipes,
-    std::vector<CoreCoord> dram_receiver_table) :
+    std::vector<CoreCoord> receiver_table) :
     space_(&space),
     identity_(PrefetcherPipeIdentity{next_prefetcher_pipe_identity.fetch_add(1, std::memory_order_relaxed)}),
     sender_core_(dram_sender),
@@ -841,11 +849,8 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     tensor_prefetcher_factory_id_(tensor_prefetcher_factory_id),
     tensor_prefetcher_factory_num_pipes_(tensor_prefetcher_factory_num_pipes),
     drisc_config_page_(std::move(drisc_config_page)),
-    dram_receiver_table_(std::move(dram_receiver_table)) {
+    dram_sender_receiver_table_(std::move(receiver_table)) {
     TT_FATAL(drisc_config_page_ != nullptr, "DRAM-sender PrefetcherPipe requires reserved DRISC L1");
-    TT_FATAL(
-        space_->has_dram_receivers() == !dram_receiver_table_.empty(),
-        "A PrefetcherPipe takes an ordered receiver table exactly when its receivers are DRAM cores");
     space_->validate_dram_carve(sender_core_, receiver_cores_);
     space_->claim(receiver_cores_, *this);
     space_->claimed_dram_senders_.insert(sender_core_);
@@ -942,12 +947,12 @@ void PrefetcherPipeImpl::build_config_pages() {
     }
 }
 
-std::vector<CoreCoord> PrefetcherPipeImpl::dram_sender_receiver_table() const {
-    if (!dram_receiver_table_.empty()) {
-        return dram_receiver_table_;
-    }
-    return corerange_to_cores(receiver_cores_, /*max_cores=*/std::nullopt, /*row_wise=*/true);
+uint32_t PrefetcherPipeImpl::credit_reset_offset() const {
+    TT_FATAL(!space().has_dram_receivers(), "A PrefetcherPipe with DRAM receivers has no credit reset range");
+    return space().layout().sent_offset;
 }
+
+uint32_t PrefetcherPipeImpl::credit_reset_size() const { return space().config_page_size() - credit_reset_offset(); }
 
 void PrefetcherPipeImpl::build_dram_sender_config_pages() {
     // A DRAM sender credits one lane per receiver, but its pages keep the space's lane stride, which is
@@ -960,7 +965,7 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
     const uint32_t l1_alignment = l1_alignment_for(space_->get_device());
     const uint32_t credit_lane_capacity = space_->credit_lane_capacity();
     const auto& layout = space_->layout();
-    const auto receivers = dram_sender_receiver_table();
+    const std::vector<CoreCoord>& receivers = dram_sender_receiver_table_;
     const uint32_t num_receivers = static_cast<uint32_t>(receivers.size());
     const PrefetcherPipePageCommon common{
         .layout = layout,
@@ -1154,7 +1159,10 @@ std::vector<PrefetcherPipe> PrefetcherPipeSpace::create_pipes(
     return pimpl_->create_pipes(pipes, num_credit_lanes);
 }
 
-PrefetcherPipeL1Source PrefetcherPipeSpace::l1_source() const { return pimpl_->l1_source(); }
+PrefetcherPipeL1Source PrefetcherPipeSpace::l1_source() const {
+    TT_FATAL(!pimpl_->has_dram_receivers(), "A PrefetcherPipeSpace with DRAM receivers takes no worker L1");
+    return pimpl_->l1_source();
+}
 
 PrefetcherPipeSpace CreatePrefetcherPipeSpace(
     distributed::MeshCommandQueue& mesh_cq, const PrefetcherPipeSpaceConfig& config) {
@@ -1172,13 +1180,19 @@ std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
         impls.push_back(std::make_unique<PrefetcherPipeSpaceImpl>(device, config));
     }
 
-    // The spaces share one address per allocation, so they need one source and no core in common.
+    // The spaces share one address per allocation, so they need one receiver kind, one source and no core in common.
+    const bool dram_receivers = impls.front()->has_dram_receivers();
     const PrefetcherPipeL1Source source = impls.front()->l1_source();
     CoreRangeSet cores;
     uint32_t ring_size = 0;
     uint32_t config_page_size = 0;
     for (size_t i = 0; i < impls.size(); ++i) {
         const PrefetcherPipeSpaceImpl& impl = *impls[i];
+        TT_FATAL(
+            impl.has_dram_receivers() == dram_receivers,
+            "CreatePrefetcherPipeSpaces: config {} has a different receiver_core_type than config 0; spaces that "
+            "share L1 must have one kind of receiver",
+            i);
         TT_FATAL(
             impl.l1_source() == source,
             "CreatePrefetcherPipeSpaces: config {} resolves to a different PrefetcherPipeL1Source than config 0; "
@@ -1195,7 +1209,13 @@ std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
         config_page_size = std::max(config_page_size, impl.config_page_size());
     }
 
-    auto l1 = std::make_shared<PrefetcherPipeSpaceL1>(mesh_cq, source, cores, ring_size, config_page_size);
+    auto l1 = std::make_shared<PrefetcherPipeSpaceL1>(
+        mesh_cq,
+        dram_receivers ? ReceiverCoreType::Dram : ReceiverCoreType::Worker,
+        source,
+        cores,
+        ring_size,
+        config_page_size);
     std::vector<PrefetcherPipeSpace> spaces;
     spaces.reserve(impls.size());
     for (auto& impl : impls) {

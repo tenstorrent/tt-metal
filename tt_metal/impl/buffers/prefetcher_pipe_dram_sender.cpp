@@ -33,7 +33,7 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     TT_FATAL(!bank_to_receivers.empty(), "CreatePrefetcherPipesForTensorPrefetcher requires at least one DRAM bank");
     const auto* mesh_device = space.get_device();
     TT_FATAL(mesh_device != nullptr, "CreatePrefetcherPipesForTensorPrefetcher requires a live space");
-    if (space.l1_source() == PrefetcherPipeL1Source::DramReceiverZone) {
+    if (space.impl().has_dram_receivers()) {
         TT_THROW(
             "This space's receivers are DRAM cores: pass each bank's receiver CCEs as ordered DRAM-logical coords to "
             "the CreatePrefetcherPipesForTensorPrefetcher overload that takes bank_to_dram_receivers");

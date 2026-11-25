@@ -147,7 +147,7 @@ private:
     std::unique_ptr<PrefetcherPipeImpl> pimpl_;
 };
 
-// Which L1 a PrefetcherPipeSpace takes its data ring and config pages from.
+// Which worker L1 a PrefetcherPipeSpace takes its data ring and config pages from.
 enum class PrefetcherPipeL1Source : uint8_t {
     // Allocator for a space with DRAM senders, PersistentArena for a worker-only space.
     Default,
@@ -160,12 +160,16 @@ enum class PrefetcherPipeL1Source : uint8_t {
     // taken on every worker core, not only the space's. Config pages are written through the
     // command queue the space was created on, so they land after the work already enqueued on it.
     Allocator,
-    // The DRISC L1 receiver zone, for a space whose receivers are DRAM cores (Quasar CCEs) rather
-    // than worker cores. One range holds each receiver's config page and then its ring, at one
-    // offset on every DRAM core; the host writes the pages directly. Such a space has no worker
-    // senders, and its pipes come from the DRAM-receiver overload of
-    // CreatePrefetcherPipesForTensorPrefetcher. Never chosen by Default.
-    DramReceiverZone,
+};
+
+// The kind of core a PrefetcherPipeSpace's receivers are.
+enum class ReceiverCoreType : uint8_t {
+    Worker = 0,
+    // DRAM cores (Quasar CCEs), named by DRAM-logical coordinate. Each receiver's config page and then
+    // its ring sit in one range of the DRISC L1 receiver zone, at one offset on every DRAM core; the host
+    // writes the pages directly. Such a space has no worker senders and takes no worker L1, and its pipes
+    // come from the DRAM-receiver overload of CreatePrefetcherPipesForTensorPrefetcher.
+    Dram = 1,
 };
 
 /**
@@ -182,16 +186,18 @@ struct PrefetcherPipeSpaceConfig {
     // Capacity for DRAM-sender endpoints (0 = worker-only space). Names no cores; exact DRAM
     // sender cores are selected and reserved by the tensor-prefetcher factory before carving.
     uint32_t num_dram_senders = 0;
-    // Worker cores that may act as pipe receivers. Non-empty: every pipe has at least one receiver.
-    // With PrefetcherPipeL1Source::DramReceiverZone these are DRAM-logical coords instead.
+    // Cores of `receiver_core_type` that may act as pipe receivers. Non-empty: every pipe has at least one
+    // receiver.
     CoreRangeSet receiver_domain;
+    ReceiverCoreType receiver_core_type = ReceiverCoreType::Worker;
     // Per-core data ring size in bytes, shared by every pipe carved here. Multiple of L1 alignment.
     uint32_t ring_size = 0;
     // Largest receiver count of any pipe carved here; sizes every core's config page. In
     // [1, receiver_domain.num_cores()].
     uint32_t max_receivers_per_pipe = 0;
     BufferType buffer_type = BufferType::L1;
-    // A space with DRAM senders must use PrefetcherPipeL1Source::Allocator (Default resolves to it).
+    // A space with DRAM senders must use PrefetcherPipeL1Source::Allocator (Default resolves to it). A
+    // space with DRAM receivers takes no worker L1 and must leave this Default.
     PrefetcherPipeL1Source l1_source = PrefetcherPipeL1Source::Default;
 };
 
@@ -309,8 +315,8 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards = false);
 
-// Quasar form, whose receivers are DRAM cores (CCEs) rather than worker cores. `space` must use
-// PrefetcherPipeL1Source::DramReceiverZone. Each bank's sender is its DRAM view's CCE;
+// Quasar form, whose receivers are DRAM cores (CCEs) rather than worker cores. `space` must have
+// ReceiverCoreType::Dram receivers. Each bank's sender is its DRAM view's CCE;
 // `bank_to_dram_receivers` names each bank's receivers as DRAM-logical coords, in the order of that
 // sender's receiver table and slab indices. Every receiver must be a different CCE from every other
 // receiver and from every sender, counting two logical coords that name one CCE as the same. Each

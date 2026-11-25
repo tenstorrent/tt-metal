@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // PrefetcherPipes whose receivers are DRAM cores (Quasar CCEs) rather than worker cores: the factory
-// that carves them from a PrefetcherPipeL1Source::DramReceiverZone space, and the pages a carve
+// that carves them from a ReceiverCoreType::Dram space, and the pages a carve
 // writes. Layouts are in dram_receiver_config_page.hpp and dram_sender_state_block.hpp.
 
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -92,10 +92,10 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
         !bank_to_dram_receivers.empty(), "CreatePrefetcherPipesForTensorPrefetcher requires at least one DRAM bank");
     const distributed::MeshDevice* mesh_device = space.get_device();
     TT_FATAL(mesh_device != nullptr, "CreatePrefetcherPipesForTensorPrefetcher requires a live space");
-    if (space.l1_source() != PrefetcherPipeL1Source::DramReceiverZone) {
+    if (!space.impl().has_dram_receivers()) {
         TT_THROW(
-            "DRAM receivers are Quasar CCEs and need a PrefetcherPipeL1Source::DramReceiverZone space; for worker "
-            "receivers pass a CoreRangeSet per bank");
+            "DRAM receivers are Quasar CCEs and need a space whose receiver_core_type is ReceiverCoreType::Dram; for "
+            "worker receivers pass a CoreRangeSet per bank");
     }
     const std::vector<::tt::tt_metal::Device*> devices = mesh_device->impl().get_devices();
     TT_FATAL(!devices.empty(), "Cannot carve DRAM-receiver PrefetcherPipes for a mesh with no local devices");
@@ -132,7 +132,7 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
 void PrefetcherPipeImpl::build_dram_receiver_config_pages() {
     const distributed::MeshDevice* mesh_device = space_->get_device();
     const Cluster& cluster = mesh_device->impl().metal_env().get_cluster();
-    const std::vector<CoreCoord>& receivers = dram_receiver_table_;
+    const std::vector<CoreCoord>& receivers = dram_sender_receiver_table_;
     const uint32_t num_receivers = static_cast<uint32_t>(receivers.size());
     const uint32_t max_receivers = space_->max_receivers_per_pipe();
     const uint32_t buffer_address = space_->buffer_address();

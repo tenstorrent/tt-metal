@@ -89,9 +89,9 @@ private:
             experimental::PrefetcherPipeSpaceConfig{
                 .num_dram_senders = static_cast<uint32_t>(bank_to_dram_receivers.size()),
                 .receiver_domain = CoreRangeSet(ttsl::Span<const CoreCoord>(domain_cores)),
+                .receiver_core_type = experimental::ReceiverCoreType::Dram,
                 .ring_size = size,
-                .max_receivers_per_pipe = std::min(max_receivers, static_cast<uint32_t>(domain_cores.size())),
-                .l1_source = experimental::PrefetcherPipeL1Source::DramReceiverZone});
+                .max_receivers_per_pipe = std::min(max_receivers, static_cast<uint32_t>(domain_cores.size()))});
     }
 
     experimental::PrefetcherPipeSpace space_;
