@@ -799,6 +799,10 @@ public:
 
     bool benchmark_enabled() const override { return benchmark_enabled_; }
 
+    bool delivers_to_dram_receivers() const override { return false; }
+
+    bool serves_op_signals() const override { return true; }
+
     void require_receivers_off_senders(
         const MeshDevice& /*mesh_device*/,
         const std::vector<IDevice*>& /*devices*/,
@@ -1135,7 +1139,6 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     uint32_t total_receivers = 0;
     std::optional<uint64_t> factory_id;
     uint32_t factory_num_pipes = 0;
-    const bool cce_senders = uses_cce_senders();
 
     for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
         const experimental::PrefetcherPipe& pipe = prefetcher_pipes[p];
@@ -1155,17 +1158,6 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
             "sender. Build them with CreatePrefetcherPipesForTensorPrefetcher.",
             p,
             bank_id);
-        // A CCE sender reads a DRAM-receiver pipe's sender state and every other sender a worker-receiver
-        // pipe's; handed the other kind, it would read the wrong layout.
-        TT_FATAL(
-            pipe.impl().space().has_dram_receivers() == cce_senders,
-            "QueueTensorPrefetcherRequest: pipe {} (bank {}) has {} receivers, but this prefetcher's senders {}. Build "
-            "the pipes from a PrefetcherPipeSpace whose l1_source is {}.",
-            p,
-            bank_id,
-            pipe.impl().space().has_dram_receivers() ? "DRAM-core" : "worker",
-            cce_senders ? "are CCEs, which deliver only to DRAM receivers" : "deliver only to worker receivers",
-            cce_senders ? "DramReceiverZone" : "not DramReceiverZone");
 
         const uint32_t ring_size = pipe.ring_size();
         if (!factory_id.has_value()) {
@@ -1203,8 +1195,9 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
         target.config_page_addr_per_sender.push_back(
             static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
         target.config_page_alloc_per_sender.emplace_back(experimental::sender_state_drisc_l1_allocation(pipe));
-        // One factory call's pipes share a space, so they share its receiver zone range.
-        if (pipe.impl().space().has_dram_receivers()) {
+        // One factory call's pipes share a space, so they share its receiver kind and receiver zone range.
+        target.has_dram_receivers = pipe.impl().space().has_dram_receivers();
+        if (target.has_dram_receivers) {
             target.receiver_alloc = pipe.impl().space().receiver_zone_allocation();
         }
     }
@@ -1689,6 +1682,7 @@ std::vector<std::shared_ptr<const TensorPrefetcherManager::Request>> TensorPrefe
     const RequestTarget& target,
     ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors) {
+    require_deliverable_receivers(target);
     const std::vector<uint32_t> target_sender_indices = sender_indices_for_target(target);
     if (backend_ != nullptr) {
         backend_->require_receivers_off_senders(*mesh_device_, devices_, sender_logical_cores_, target.mapping);
@@ -1992,8 +1986,8 @@ uint32_t TensorPrefetcherManager::signal_address(uint32_t signal_id) {
     validate_signal_id(signal_id, "GetTensorPrefetcherSignalAddress");
     // The control block holds the CQ fence slots only: op signal slot 0's address is its ring meta.
     TT_FATAL(
-        !uses_cce_senders(),
-        "GetTensorPrefetcherSignalAddress: the {} CCE senders keep no op signal slots, so op signal {} has no address",
+        serves_op_signals(),
+        "GetTensorPrefetcherSignalAddress: the {} senders keep no op signal slots, so op signal {} has no address",
         mesh_device_->arch(),
         signal_id);
     return signal_slot_addr(op_signal_slot_index(signal_id));
@@ -2005,8 +1999,8 @@ void TensorPrefetcherManager::queue_wait_for_signal(uint32_t signal_id, MeshComm
     validate_signal_id(signal_id, "QueueTensorPrefetcherWaitForSignal");
     validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherWaitForSignal");
     TT_FATAL(
-        !uses_cce_senders(),
-        "QueueTensorPrefetcherWaitForSignal: the {} CCE senders wait on CQ fence slots only, not on op signal {}",
+        serves_op_signals(),
+        "QueueTensorPrefetcherWaitForSignal: the {} senders wait on CQ fence slots only, not on op signal {}",
         mesh_device_->arch(),
         signal_id);
 
@@ -2399,8 +2393,19 @@ void TensorPrefetcherManager::worker_loop_request_ring() {
     }
 }
 
-bool TensorPrefetcherManager::uses_cce_senders() const {
-    return mesh_device_->arch() == tt::ARCH::QUASAR && !on_dispatch_engine();
+bool TensorPrefetcherManager::serves_op_signals() const { return backend_ == nullptr || backend_->serves_op_signals(); }
+
+void TensorPrefetcherManager::require_deliverable_receivers(const RequestTarget& target) const {
+    const bool delivers_to_dram_receivers = backend_ != nullptr && backend_->delivers_to_dram_receivers();
+    // The senders read a DRAM-receiver pipe's sender state differently from a worker-receiver pipe's; handed the
+    // other kind, they would read the wrong layout.
+    TT_FATAL(
+        target.has_dram_receivers == delivers_to_dram_receivers,
+        "QueueTensorPrefetcherRequest: the pipes have {} receivers, but this prefetcher's senders deliver only to {} "
+        "receivers. Build the pipes from a PrefetcherPipeSpace whose receiver_core_type is {}.",
+        target.has_dram_receivers ? "DRAM-core" : "worker",
+        delivers_to_dram_receivers ? "DRAM-core" : "worker",
+        delivers_to_dram_receivers ? "Dram" : "Worker");
 }
 
 void TensorPrefetcherManager::stop() {
@@ -2555,6 +2560,7 @@ void TensorPrefetcherManagerTestAccess::register_drain_target(
     const TensorPrefetcherManager::RequestTarget target = manager.target_for(prefetcher_pipes);
     const std::lock_guard<std::mutex> lock = manager.lock_api_function_();
     TT_FATAL(manager.active_, "register_drain_target called before StartTensorPrefetcher");
+    manager.require_deliverable_receivers(target);
     const std::vector<uint32_t> target_sender_indices = manager.sender_indices_for_target(target);
     if (manager.backend_ != nullptr) {
         manager.backend_->require_receivers_off_senders(

@@ -609,6 +609,10 @@ public:
 
     bool benchmark_enabled() const override { return false; }
 
+    bool delivers_to_dram_receivers() const override { return true; }
+
+    bool serves_op_signals() const override { return false; }
+
     // A CCE runs one launch at a time, so a receiver on a provisioned sender CCE could never run.
     void require_receivers_off_senders(
         const MeshDevice& mesh_device,

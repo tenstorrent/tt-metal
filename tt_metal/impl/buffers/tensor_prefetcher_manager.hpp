@@ -231,6 +231,8 @@ private:
         // A range besides the config page ranges that the senders write data and credits into, which stop must hold
         // with them while it drains them. Empty for worker receivers.
         std::weak_ptr<DriscL1Allocation> receiver_alloc;
+        // Whether the receivers are DRAM cores rather than workers.
+        bool has_dram_receivers = false;
         // Bank-local slab index of each sender's first receiver, in mapping order: local receiver
         // r of sender s reads slab recv_index_base_per_sender[s] + r. Stamped into every layout
         // slot of that sender's page.
@@ -252,8 +254,11 @@ private:
     // The host worker for CCE senders: one request at a time into each sender's TL1 request ring through
     // transport_, dropping pages to a sender that has exited or that the transport gave up on.
     void worker_loop_request_ring();
-    // Whether the senders are Quasar CCEs on their own DRAM cores. Quasar's dispatch-engine senders are not CCEs.
-    bool uses_cce_senders() const;
+    // Whether the senders keep op signal slots. The caller holds the API lock and has checked active_.
+    bool serves_op_signals() const;
+    // Throws unless the senders deliver to the target's kind of receiver. The caller holds the API lock and has
+    // checked active_.
+    void require_deliverable_receivers(const RequestTarget& target) const;
     // The body of enqueue_cq_signal_and_wait. The caller holds the API lock and has checked active_.
     void enqueue_cq_signal_and_wait_locked(
         MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);

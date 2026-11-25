@@ -127,6 +127,12 @@ public:
     // Whether start() times the session for the benchmark tuner.
     virtual bool benchmark_enabled() const = 0;
 
+    // Whether these senders deliver to DRAM-core receivers; otherwise they deliver to worker receivers.
+    virtual bool delivers_to_dram_receivers() const = 0;
+
+    // Whether these senders keep op signal slots besides the CQ fence slots.
+    virtual bool serves_op_signals() const = 0;
+
     // Throws unless the receivers in `mapping` can run while the provisioned senders do.
     virtual void require_receivers_off_senders(
         const MeshDevice& mesh_device,
