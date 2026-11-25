@@ -1383,11 +1383,9 @@ def test_eltwise_unary_sfpu_identity_int32():
 
 
 # Unary eq/ne on Int32 compare the two's-complement Dest word against an integer scalar through
-# calculate_comp_unary_int. INT_MIN is the word that used to go wrong: the kernel's former
-# SignMagToTwosComp load plus software sign-magnitude conversion cancelled on every other word
-# but turned 0x80000000 into 0, so eq(INT_MIN, 0) read 1 and eq(INT_MIN, INT_MIN) read 0. The
-# scalars are the fixed 5 the other sweeps use, the two INT_MIN cases, and both ends of the range.
-# Inputs: both int32 extremes, the scalar with its neighbours, zero, small values of both signs.
+# calculate_comp_unary_int. INT_MIN is the edge a sign-magnitude load would lose. Scalars: the
+# fixed 5 the other sweeps use, 0 and INT_MIN, and both ends of the range. Inputs: both int32
+# extremes, the scalar with its neighbours, zero, small values of both signs.
 _UNARY_COMP_INT_SCALARS = [5, 0, -(2**31), -1, 2**31 - 1]
 
 

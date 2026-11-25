@@ -469,12 +469,9 @@ class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
 
 @dataclass
 class SFPU_UNARY_COMP_INT_SCALAR(TemplateParameter):
-    """Integer scalar for unary_eq / unary_ne on Int32 (metal calculate_comp_unary_int).
+    """Signed scalar for Int32 unary_eq / unary_ne, emitted as its two's-complement pattern.
 
-    Emitted as a macro on the same ``#ifdef`` arrangement as :class:`SFPU_RELU_MIN_INT_THRESHOLD`:
-    sfpu_operations.h is shared by every unary test and only the int32 compare test sets this,
-    so the rest keep its fixed 5. Takes a *signed* int and emits its two's-complement pattern,
-    which the header static_casts back to int.
+    Unset keeps sfpu_operations.h's fixed 5, as with :class:`SFPU_RELU_MIN_INT_THRESHOLD`.
     """
 
     scalar: int = 5
