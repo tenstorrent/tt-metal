@@ -313,7 +313,7 @@ class FlatRoutedExpert:
         down_fp32=False,
         math_fidelity=0,
         output=None,
-        y_quant=0,
+        y_quant=None,
         y_quant_block=0,
     ):
         """x: the row-major bf16 dispatch buffer [rows, H]; counts / regions: the routing's [1, n_global] uint32
@@ -337,7 +337,7 @@ class FlatRoutedExpert:
             math_fidelity=math_fidelity,
             layout=self.layout,
             output=output,
-            y_quant=y_quant,
+            y_quant=moe_block_utils.RoutedRowFormat.Bf16 if y_quant is None else y_quant,
             y_quant_block=y_quant_block,
         )
 

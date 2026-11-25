@@ -73,6 +73,7 @@ nb::dict plan_dict(const MeshPlan& plan) {
 void bind_config(nb::module_& mod) {
     export_enum<ExpertActivationKind>(mod, "ExpertActivationKind");
     export_enum<RouterScoreFunc>(mod, "RouterScoreFunc");
+    export_enum<quantized_row::Format>(mod, "RoutedRowFormat");
 
     nb::class_<ExpertActivation> act(mod, "ExpertActivation", "act(gate) * up of an expert.");
     def_kwargs_init(act);

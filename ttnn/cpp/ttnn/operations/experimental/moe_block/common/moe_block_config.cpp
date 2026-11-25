@@ -149,7 +149,6 @@ uint32_t routed_activation_code(const ExpertActivation& act) {
 uint32_t MoEBlockConfig::snap_step_bits() const { return moe_block::snap_step_bits(combine_snap); }
 
 void MoEBlockConfig::check() const {
-    TT_FATAL(routed_y_quant <= 2, "moe_block: routed_y_quant {}: 0 bf16, 1 fp8 e4m3, 2 int8", routed_y_quant);
     TT_FATAL(
         routed_y_quant_block == 0 || routed_y_quant_block == 32 || routed_y_quant_block == 64 ||
             routed_y_quant_block == 96,

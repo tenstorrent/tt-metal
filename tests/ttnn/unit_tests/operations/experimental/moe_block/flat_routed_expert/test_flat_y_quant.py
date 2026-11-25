@@ -25,7 +25,8 @@ _spec.loader.exec_module(golden)
 TILE = 32
 COLUMNS = 6  # tiles a row tile (GLM's down core)
 PASS = 3  # tiles a pass
-FORMATS = {"fp8": 1, "int8": 2}  # quantized_row::Format
+_RowFormat = ttnn._ttnn.operations.experimental.moe_block.RoutedRowFormat
+FORMATS = {"fp8": _RowFormat.Fp8E4m3.value, "int8": _RowFormat.Int8.value}  # quantized_row::Format (kernel arg)
 KERNELS = "tests/ttnn/unit_tests/operations/experimental/moe_block/flat_routed_expert/kernels"
 
 

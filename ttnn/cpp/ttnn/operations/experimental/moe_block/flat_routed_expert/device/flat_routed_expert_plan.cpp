@@ -941,7 +941,7 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
 }
 
 uint32_t flat_y_width(const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& plan) {
-    return cfg.y_quant ? cfg.hidden + quantized_row::kCellBytes * static_cast<uint32_t>(plan.down_cores.size())
+    return quantized_row::is_quantized(cfg.y_quant) ? cfg.hidden + quantized_row::kCellBytes * static_cast<uint32_t>(plan.down_cores.size())
                        : cfg.hidden;
 }
 

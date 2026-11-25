@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdlib>
 #include <map>
 #include <string>
 
@@ -288,9 +287,9 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["x_ring_blocks"] = p.x_ring_blocks;
     options["y_row_major"] = cfg.y_row_major ? 1 : 0;
     options["y_row_major_rows"] = 0;  // (the down kernels': their column width's)
-    options["y_quant"] = cfg.y_quant;
+    options["y_quant"] = static_cast<uint32_t>(cfg.y_quant);
     options["y_quant_block_tiles"] = cfg.y_quant_block / 32;  // (0: the pass width)
-    options["y_quant_producers"] = cfg.y_quant ? ND : 0;
+    options["y_quant_producers"] = quantized_row::is_quantized(cfg.y_quant) ? ND : 0;
     options["y_row_stride_tiles"] = 0;  // (the down kernels': their column width's)
     options["down_core_count"] = ND;
     options["h_arrived_sem"] = HARR;
@@ -420,7 +419,7 @@ FlatProgramHandles add_flat_routed_expert_program(
     // 2 KB margin is kept), at most 2 MT (a virtual expert ahead) and 8 (the writers' transaction ids 8..15)
     // quantized y (cfg.y_quant): a pass of the down compute is at most 3 fp32 tiles (half sync: 4, one spare for the
     // scales), the out CB's rows padded by a pass when it is odd (y_quant.hpp), and a cells CB (512 B a row tile)
-    const bool yq = cfg.y_quant != 0;
+    const bool yq = quantized_row::is_quantized(cfg.y_quant);
     auto largest_divisor = [](uint32_t value, uint32_t cap) {
         for (uint32_t divisor = std::min(cap, value); divisor > 1; --divisor) {
             if (value % divisor == 0) {
@@ -669,24 +668,8 @@ FlatProgramHandles add_flat_routed_expert_program(
                 writer_options(down_options, w_widx),
                 {{"down_weight_cb", 1}, {"weight_tile_bytes", w_tile}, {"down_weight_reads_per_barrier", DW_BATCH}}));
         program.kernels[kr].common_runtime_args = gu_xy;  // (the gate/up cores' xy: the same on every down core)
-        // FP8_Y_PLAN.md M0 / M1 experiments (env, not in the program hash: one setting a process):
-        // TT_FLAT_EXP_DOWN_HALF_SYNC=1 runs the fp32 down compute in half sync; TT_FLAT_EXP_DOWN_PACK_DUMMY=N runs N
-        // dummy SFPU sweeps over the packer's half a pass
-        auto exp_env = [](const char* name) {
-            const char* v = std::getenv(name);
-            return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
-        };
         // (quantized y: half sync - the quantize of a pass on the PACK thread overlaps the next pass's matmul)
-        const bool down_full_sync = cfg.down_fp32 && !yq && exp_env("TT_FLAT_EXP_DOWN_HALF_SYNC") == 0;
-        const auto kc =
-            cp("down_compute.cpp",
-               cores,
-               with_added(
-                   down_options,
-                   {{"down_pack_dummy", exp_env("TT_FLAT_EXP_DOWN_PACK_DUMMY")},
-                    {"down_pack_quant", exp_env("TT_FLAT_EXP_DOWN_PACK_QUANT")}}),
-               cfg.down_fp32,
-               down_full_sync);
+        const auto kc = cp("down_compute.cpp", cores, down_options, cfg.down_fp32, cfg.down_fp32 && !yq);
         for (uint32_t d : ds) {
             const CoreCoord dc = p.down_cores[d];
             const uint32_t pred =

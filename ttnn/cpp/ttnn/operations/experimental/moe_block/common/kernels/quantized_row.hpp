@@ -35,6 +35,7 @@
 
 namespace quantized_row {
 
+// (host: MoEBlockConfig.routed_y_quant, flat_routed_expert's y_quant; Python: moe_block.RoutedRowFormat)
 enum class Format : uint32_t {
     Bf16 = 0,
     Fp8E4m3 = 1,

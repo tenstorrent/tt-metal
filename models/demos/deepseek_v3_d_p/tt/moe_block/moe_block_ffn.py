@@ -99,27 +99,25 @@ class MoEBlockFfnOptions:
         block's ops run on the transposed mesh (MoEBlockConfig.sp_axis).
     routed_y_quant: the routed experts' output rows on the combine's wire (MoEBlockConfig.routed_y_quant,
         moe_block/common/kernels/quantized_row.hpp): "bf16" (today's), "fp8" (e4m3 x a power-of-two scale) or "int8"
-        (sign-magnitude x a power-of-two scale): half the bytes, quantized on the flat expert's down cores; None: the
-        env MOE_ROUTED_Y_QUANT if set, else bf16. routed_y_quant_block: values a scale block (32, 64, 96; 0 the flat
-        expert's down pass width, 96 for GLM-5.3); None: the env MOE_ROUTED_Y_QUANT_BLOCK if set, else 0."""
+        (sign-magnitude x a power-of-two scale): about half the bytes, quantized on the flat expert's down cores.
+        routed_y_quant_block: values a scale block (32, 64, 96; 0 the flat expert's down pass width, 96 for GLM-5.3)."""
 
     combine_snap: Optional[float] = None
     combine_landing: Optional[str] = None
     sp_axis: int = 0
-    routed_y_quant: Optional[str] = None
-    routed_y_quant_block: Optional[int] = None
+    routed_y_quant: str = "bf16"
+    routed_y_quant_block: int = 0
 
 
-ROUTED_Y_QUANT = {"bf16": 0, "fp8": 1, "int8": 2}  # MoEBlockConfig.routed_y_quant
+# MoEBlockFfnOptions.routed_y_quant -> MoEBlockConfig.routed_y_quant
+ROUTED_Y_QUANT = {"bf16": "Bf16", "fp8": "Fp8E4m3", "int8": "Int8"}
 
 
-def routed_y_quant_config(fmt: Optional[str] = None, block: Optional[int] = None):
-    """(MoEBlockConfig.routed_y_quant, routed_y_quant_block) from the options or the env (MOE_ROUTED_Y_QUANT,
-    MOE_ROUTED_Y_QUANT_BLOCK)."""
-    fmt = fmt if fmt is not None else os.environ.get("MOE_ROUTED_Y_QUANT", "bf16")
-    block = block if block is not None else int(os.environ.get("MOE_ROUTED_Y_QUANT_BLOCK", "0"))
+def routed_y_quant_config(fmt: str = "bf16", block: int = 0):
+    """(MoEBlockConfig.routed_y_quant, routed_y_quant_block) for a routed_y_quant name and scale block."""
     assert fmt in ROUTED_Y_QUANT, f"routed_y_quant {fmt!r}: one of {list(ROUTED_Y_QUANT)}"
-    return ROUTED_Y_QUANT[fmt], (block if fmt != "bf16" else 0)
+    rf = ttnn._ttnn.operations.experimental.moe_block.RoutedRowFormat
+    return getattr(rf, ROUTED_Y_QUANT[fmt]), (block if fmt != "bf16" else 0)
 
 
 @dataclass

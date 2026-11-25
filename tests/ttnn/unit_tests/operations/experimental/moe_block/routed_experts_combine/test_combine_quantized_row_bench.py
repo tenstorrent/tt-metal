@@ -35,7 +35,8 @@ _spec = importlib.util.spec_from_file_location("quantized_row_golden", HERE.pare
 qgolden = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(qgolden)
 
-FORMATS = {"bf16": 0, "fp8": 1, "int8": 2}  # quantized_row::Format
+_RowFormat = ttnn._ttnn.operations.experimental.moe_block.RoutedRowFormat
+FORMATS = {"bf16": _RowFormat.Bf16.value, "fp8": _RowFormat.Fp8E4m3.value, "int8": _RowFormat.Int8.value}  # (kernel arg)
 H = 6144
 ROW_TILES = H // 1024
 PRODUCERS = 32

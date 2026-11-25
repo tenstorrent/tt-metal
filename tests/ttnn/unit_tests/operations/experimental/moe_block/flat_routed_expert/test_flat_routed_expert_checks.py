@@ -315,7 +315,8 @@ _qspec = importlib.util.spec_from_file_location("quantized_row_golden", HERE.par
 quantized_row_golden = importlib.util.module_from_spec(_qspec)
 _qspec.loader.exec_module(quantized_row_golden)
 
-QUANT_FORMATS = {"fp8": 1, "int8": 2}  # y_quant (quantized_row::Format)
+_RowFormat = ttnn._ttnn.operations.experimental.moe_block.RoutedRowFormat
+QUANT_FORMATS = {"fp8": _RowFormat.Fp8E4m3, "int8": _RowFormat.Int8}  # y_quant
 QUANT_CASES = [c for c in CASES if c.model == "glm53" and c.chunk == 5120 and c.routing in ("uniform", "zipf", "edges")]
 QUANT_VARIANTS = [
     pytest.param("fp8", 0, id="fp8-1x96"),
