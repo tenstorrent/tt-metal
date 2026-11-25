@@ -135,8 +135,8 @@ constexpr float GELU_CDF_CORE_C9 = 8.1812159812e-05f;
 constexpr float GELU_CDF_CORE_C11 = -3.8082057209e-06f;
 constexpr float GELU_CDF_CORE_C13 = 7.9821413868e-08f;
 
-// x <= GELU_BF16_SAT gives 0 (torch.gelu BF16 saturation).
-constexpr float GELU_BF16_SAT = -5.54259443f;
+// 0xc0b15cef: first x where libm erff=-1.0; GELU(x) is 0 for x <= GELU_SAT.
+constexpr float GELU_SAT = -5.54259443f;
 
 // Degree-3 H-form correction polynomial for the exp-based region (-5.54259443, -3.125].
 // H(x) = ½·erfc(|x|/√2) ≈ exp(-x²/2) · corr_H(x), and GELU(x) = x · H(x).
@@ -153,7 +153,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
     sfpi::vFloat x2 = x * x;
 
-    v_if(x > sfpi::vConstFloatPrgm0) {  // GELU_BF16_SAT, loaded by gelu_init<false, false>
+    v_if(x > sfpi::vConstFloatPrgm0) {  // GELU_SAT, loaded by gelu_init<false, false>
         // Shared smooth H ≈ ½·erfc(|x|/√2) via Moroz exp_21f · corr_H.
         constexpr float NEG_HALF_ONE_LN2 = -0.72134752044f;  // -0.5 / ln(2)
         sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
@@ -226,7 +226,7 @@ void gelu_init() {
         // Hold three fp32 constants that calculate_gelu_piecewise would otherwise reload (two
         // SFPLOADI each) on every row. C9 stays inline: its SFPLOADIs fill the MAD latency slot
         // between the C13 and C9 Horner steps.
-        sfpi::vConstFloatPrgm0 = GELU_BF16_SAT;
+        sfpi::vConstFloatPrgm0 = GELU_SAT;
         sfpi::vConstFloatPrgm1 = GELU_CDF_CORE_C11;
         sfpi::vConstFloatPrgm2 = GELU_CDF_CORE_C13;
     }
@@ -310,7 +310,6 @@ inline void calculate_gelu() {
         // using the n16/d16 piecewise rational erf (MaxULP=1 vs FP64).
         // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
         constexpr float INV_SQRT2 = 0.7071067811865475f;
-        constexpr float GELU_SAT = -5.54259443f;  // 0xc0b15cef: first x where libm erff=-1.0
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat x = sfpi::dst_reg[0];
