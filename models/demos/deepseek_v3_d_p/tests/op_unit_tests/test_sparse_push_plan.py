@@ -30,8 +30,7 @@ def _layout(max_rows, sc):
 
 def _compact_reference(indices, num_devices, stripe_chunk, pages_per_packet, banks):
     """Host reference of the plan's index rewrite (indices [num_devices, rows, topk], SENTINEL masked). Owner o's run
-    starts at sum(round_up(count(o'), P * banks) for o' < o); its row k is at offset k % P of packet k / P, in bank
-    lane (k / P) % banks."""
+    starts at sum(round_up(count(o'), P * banks) for o' < o); its row k is at page run start + k."""
     unit = pages_per_packet * banks
     compact = np.full(indices.shape, SENTINEL, dtype=np.int64)
     for dest in range(num_devices):
@@ -46,9 +45,8 @@ def _compact_reference(indices, num_devices, stripe_chunk, pages_per_packet, ban
         bases = np.concatenate(([0], np.cumsum(-(-counts // unit) * unit)))
         starts = np.concatenate(([0], np.cumsum(counts)))
         k = np.arange(len(rows)) - np.repeat(starts[:-1], counts)
-        j, i = k // pages_per_packet, k % pages_per_packet
         slot_by_row = np.empty(len(rows), dtype=np.int64)
-        slot_by_row[order] = np.repeat(bases[:-1], counts) + (j % banks) + (j // banks) * unit + i * banks
+        slot_by_row[order] = np.repeat(bases[:-1], counts) + k
         lut = np.empty(rows[-1] + 1 if len(rows) else 0, dtype=np.int64)
         lut[rows] = slot_by_row
         compact[dest][valid] = lut[picked]

@@ -345,7 +345,7 @@ inline void rewrite(
     constexpr uint32_t kRewriteLanes = 4;
     auto page_of = [&](uint32_t row, uint32_t valid_row, uint32_t ro, uint32_t wr, uint32_t bits, uint32_t rb) {
         const uint32_t rank = ro + wr + __builtin_popcount(bits & ((1u << (valid_row % kRowsPerWord)) - 1u));
-        const uint32_t page = sparse_push::compact_page<pages_per_packet, banks>(rb, rank);
+        const uint32_t page = sparse_push::compact_page(rb, rank);
         return page | (static_cast<uint32_t>(row < max_rows) - 1u);  // the sentinel past the cache
     };
     uint32_t i = begin;
@@ -383,7 +383,7 @@ inline void rewrite(
         const uint32_t owner = block % num_devices;
         const uint32_t rank = range_offsets[(block / range_blocks) * owner_stride(num_devices) + owner] +
                               word_ranks[word] + __builtin_popcount(bitmap[word] & ((1u << (row % kRowsPerWord)) - 1u));
-        idx[i] = sparse_push::compact_page<pages_per_packet, banks>(run_bases[owner], rank);
+        idx[i] = sparse_push::compact_page(run_bases[owner], rank);
     }
 }
 

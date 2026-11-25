@@ -143,6 +143,12 @@ void kernel_main() {
                 cb_pop_front(kData, 1);
                 break;
             }
+            if (packet_rows == sparse_push::kSkipRows) {  // a unit slot with nothing to send
+                if (++in_flight == kBatch) {
+                    retire();
+                }
+                continue;
+            }
             const uint32_t data_l1 = get_read_ptr(kData) + in_flight * packet_bytes;
             const uint32_t bytes = packet_rows * page_bytes;
             if (requester == my_rank) {
