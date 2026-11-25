@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The production Tensor Prefetcher on Mimir CCEs: support preconditions (Support*), the DRAM-receiver GCB layout
-// (GcbLayout*), GCB traffic from a test sender without the manager (GcbSmoke*), lifecycle (Lifecycle*), delivery
+// The production Tensor Prefetcher on Mimir CCEs: support preconditions (Support*), the DRAM-receiver pipe set layout
+// (PipeLayout*), pipe set traffic from a test sender without the manager (PipeSmoke*), lifecycle (Lifecycle*), delivery
 // through the prefetcher (Prefetch*), recovery after a failure (PrefetchRecoversAfter*) and Queue rejections
 // (QueueRejects*).
 
@@ -57,7 +57,7 @@
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
 #include "tt_metal/tt_metal/dram/mimir_prefetcher_common.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
-#include "tt_metal/tt_metal/test_kernels/cce/cce_gcb_receiver_abi.h"
+#include "tt_metal/tt_metal/test_kernels/cce/cce_pipe_receiver_abi.h"
 
 namespace tt::tt_metal::mimir_test::prefetcher {
 
@@ -86,7 +86,7 @@ uint32_t cce_index_at(const metal_SocDescriptor& soc_desc, const CoreCoord& tran
     TT_THROW("Translated core {} is not one of the {} CCEs", translated_core.str(), num_cces);
 }
 
-uint32_t gcb_layout_sender_cce(IDevice* device, distributed::MeshDevice& mesh, uint32_t bank) {
+uint32_t pipe_layout_sender_cce(IDevice* device, distributed::MeshDevice& mesh, uint32_t bank) {
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const CoreCoord sender_logical = mesh.impl().dram_sender_logical_cores(device, bank).front();
     return cce_index_at(soc_desc, soc_desc.get_physical_dram_core_from_logical(sender_logical));
@@ -94,9 +94,9 @@ uint32_t gcb_layout_sender_cce(IDevice* device, distributed::MeshDevice& mesh, u
 
 std::optional<uint32_t> lifecycle_other_sender_bank(distributed::MeshDevice& mesh) {
     IDevice* device = mesh.get_devices().front();
-    const uint32_t bank_zero_sender_cce = gcb_layout_sender_cce(device, mesh, 0);
+    const uint32_t bank_zero_sender_cce = pipe_layout_sender_cce(device, mesh, 0);
     for (uint32_t bank = 1; bank < soc_desc_of(device).get_num_dram_views(); ++bank) {
-        if (gcb_layout_sender_cce(device, mesh, bank) != bank_zero_sender_cce) {
+        if (pipe_layout_sender_cce(device, mesh, bank) != bank_zero_sender_cce) {
             return bank;
         }
     }
@@ -175,7 +175,7 @@ TEST_F(MimirPrefetcher, SupportPreconditionsFailOnUninitializedSender) {
     distributed::MeshDevice& mesh = device_guard.mesh();
 
     IDevice* device = mesh.get_devices().front();
-    const uint32_t cce_index = gcb_layout_sender_cce(device, mesh, 0);
+    const uint32_t cce_index = pipe_layout_sender_cce(device, mesh, 0);
     ASSERT_EQ(read_go_signal(device, cce_index), dev_msgs::RUN_MSG_DONE) << "CCE " << cce_index;
 
     const ScopedInitGoSignal uninitialized_sender(device, cce_index);
@@ -188,41 +188,41 @@ TEST_F(MimirPrefetcher, SupportPreconditionsFailOnUninitializedSender) {
         << preconditions.reason;
 }
 
-inline constexpr uint32_t kGcbLayoutFifoBytes = 4 * kKiB;
-inline constexpr uint32_t kGcbLayoutFillPattern = 0xA5C3'0000;
+inline constexpr uint32_t kPipeLayoutFifoBytes = 4 * kKiB;
+inline constexpr uint32_t kPipeLayoutFillPattern = 0xA5C3'0000;
 
-// One sender bank of a GCB under test and its receivers, as CCE indices in receiver-table order.
-struct GcbLayoutSender {
+// One sender bank of a pipe set under test and its receivers, as CCE indices in receiver-table order.
+struct PipeLayoutSender {
     uint32_t bank;
     std::vector<uint32_t> receiver_cces;
 };
 
-uint32_t gcb_layout_word(const std::vector<uint32_t>& words, uint32_t byte_offset) {
+uint32_t pipe_layout_word(const std::vector<uint32_t>& words, uint32_t byte_offset) {
     return words.at(byte_offset / sizeof(uint32_t));
 }
 
 // Non-zero words, so a readback of zero proves the constructor wrote them.
-void fill_gcb_layout_pattern(IDevice* device, uint32_t cce_index, uint64_t tl1_offset, uint32_t size_bytes) {
+void fill_pipe_layout_pattern(IDevice* device, uint32_t cce_index, uint64_t tl1_offset, uint32_t size_bytes) {
     std::vector<uint32_t> pattern(size_bytes / sizeof(uint32_t));
     for (uint32_t word = 0; word < pattern.size(); ++word) {
-        pattern[word] = kGcbLayoutFillPattern | word;
+        pattern[word] = kPipeLayoutFillPattern | word;
     }
     write_cce_tl1(device, cce_index, tl1_offset, pattern);
 }
 
-uint32_t gcb_layout_max_receivers(const std::vector<GcbLayoutSender>& senders) {
+uint32_t pipe_layout_max_receivers(const std::vector<PipeLayoutSender>& senders) {
     uint32_t max_receivers = 0;
-    for (const GcbLayoutSender& sender : senders) {
+    for (const PipeLayoutSender& sender : senders) {
         max_receivers = std::max(max_receivers, static_cast<uint32_t>(sender.receiver_cces.size()));
     }
     return max_receivers;
 }
 
-// Fills the sender state and receiver config pages the GCB will take with a pattern, creates the GCB on a fresh
-// mesh, and checks every sender's state block and counters and every receiver's config page against
-// dram_receiver_config_page.hpp and dram_sender_state_block.hpp. Returns the GCB so a caller can keep it alive.
-DramReceiverGcb expect_dram_receiver_gcb_layout(
-    distributed::MeshDevice& mesh, const std::vector<GcbLayoutSender>& senders) {
+// Fills the sender state and receiver config pages the pipe set will take with a pattern, creates the pipe set on a
+// fresh mesh, and checks every sender's state block and counters and every receiver's config page against
+// dram_receiver_config_page.hpp and dram_sender_state_block.hpp. Returns the pipe set so a caller can keep it alive.
+DramReceiverPipeSet expect_dram_receiver_pipe_layout(
+    distributed::MeshDevice& mesh, const std::vector<PipeLayoutSender>& senders) {
     IDevice* device = mesh.get_devices().front();
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const DriscL1Arena& arena = mesh.impl().drisc_l1_arena();
@@ -234,31 +234,31 @@ DramReceiverGcb expect_dram_receiver_gcb_layout(
         arena.kernel_working_region_base(),
         unreserved_base + DriscL1Arena::kCceSenderStateZoneSize + DriscL1Arena::kCceReceiverZoneSize);
 
-    // The mesh is fresh, so this GCB takes the first range of each zone.
-    const uint32_t max_receivers = gcb_layout_max_receivers(senders);
+    // The mesh is fresh, so this pipe set takes the first range of each zone.
+    const uint32_t max_receivers = pipe_layout_max_receivers(senders);
     const uint32_t sender_region_bytes =
         dram_receiver_sender_counters_bytes(max_receivers) + dram_sender_state_block_size(max_receivers);
     std::vector<uint32_t> sender_cces;
     BankToDramReceivers bank_to_dram_receivers;
-    for (const GcbLayoutSender& sender : senders) {
-        sender_cces.push_back(gcb_layout_sender_cce(device, mesh, sender.bank));
-        fill_gcb_layout_pattern(device, sender_cces.back(), unreserved_base, sender_region_bytes);
+    for (const PipeLayoutSender& sender : senders) {
+        sender_cces.push_back(pipe_layout_sender_cce(device, mesh, sender.bank));
+        fill_pipe_layout_pattern(device, sender_cces.back(), unreserved_base, sender_region_bytes);
         std::vector<CoreCoord> receivers;
         for (const uint32_t receiver_cce : sender.receiver_cces) {
             receivers.push_back(logical_cce_core(soc_desc, receiver_cce));
-            fill_gcb_layout_pattern(device, receiver_cce, arena.receiver_zone_base(), kDramReceiverConfigPageBytes);
+            fill_pipe_layout_pattern(device, receiver_cce, arena.receiver_zone_base(), kDramReceiverConfigPageBytes);
         }
         bank_to_dram_receivers.emplace_back(sender.bank, std::move(receivers));
     }
-    DramReceiverGcb gcb = DramReceiverGcb(mesh, bank_to_dram_receivers, kGcbLayoutFifoBytes);
+    DramReceiverPipeSet pipe_set = DramReceiverPipeSet(mesh, bank_to_dram_receivers, kPipeLayoutFifoBytes);
 
-    const uint64_t pages_sent_base = gcb.pages_sent_drisc_l1_base();
-    const uint64_t state_base = gcb.sender_state_drisc_l1_base();
-    const uint64_t config_address = gcb.config_address();
-    const uint64_t buffer_address = gcb.buffer_address();
+    const uint64_t pages_sent_base = pipe_set.pages_sent_drisc_l1_base();
+    const uint64_t state_base = pipe_set.sender_state_drisc_l1_base();
+    const uint64_t config_address = pipe_set.config_address();
+    const uint64_t buffer_address = pipe_set.buffer_address();
     log_info(
         tt::LogTest,
-        "GcbLayout {} senders: counters 0x{:x}, state block 0x{:x}, config page 0x{:x}, FIFO 0x{:x}",
+        "PipeLayout {} senders: counters 0x{:x}, state block 0x{:x}, config page 0x{:x}, FIFO 0x{:x}",
         senders.size(),
         pages_sent_base,
         state_base,
@@ -272,7 +272,7 @@ DramReceiverGcb expect_dram_receiver_gcb_layout(
     for (const auto& [bank, receivers] : bank_to_dram_receivers) {
         expected_receivers_per_sender.push_back(receivers);
     }
-    EXPECT_EQ(gcb.receiver_logical_cores_per_sender(), expected_receivers_per_sender);
+    EXPECT_EQ(pipe_set.receiver_logical_cores_per_sender(), expected_receivers_per_sender);
 
     for (size_t sender_slot = 0; sender_slot < senders.size(); ++sender_slot) {
         const uint32_t sender_cce = sender_cces[sender_slot];
@@ -302,7 +302,7 @@ DramReceiverGcb expect_dram_receiver_gcb_layout(
         EXPECT_EQ(state_block.is_sender, 1u);
         EXPECT_EQ(state_block.num_receivers, num_receivers) << "sender CCE " << sender_cce;
         EXPECT_EQ(state_block.buffer_address, buffer_address);
-        EXPECT_EQ(state_block.fifo_size_per_receiver, kGcbLayoutFifoBytes);
+        EXPECT_EQ(state_block.fifo_size_per_receiver, kPipeLayoutFifoBytes);
         const size_t receiver_table_word = sizeof(DramSenderStateBlock) / sizeof(uint32_t);
         for (uint32_t receiver_slot = 0; receiver_slot < max_receivers; ++receiver_slot) {
             const uint32_t expected_cce = receiver_slot < num_receivers ? receiver_cces[receiver_slot] : 0u;
@@ -312,7 +312,7 @@ DramReceiverGcb expect_dram_receiver_gcb_layout(
                 << "sender CCE " << sender_cce << " receiver table slot " << receiver_slot;
         }
 
-        // The acked block follows this sender's own receiver count, not the GCB-wide maximum.
+        // The acked block follows this sender's own receiver count, not the pipe-set-wide maximum.
         const uint64_t pages_acked_base = pages_sent_base + dram_receiver_sender_pages_acked_offset(num_receivers);
         for (uint32_t receiver_slot = 0; receiver_slot < num_receivers; ++receiver_slot) {
             const uint32_t receiver_cce = receiver_cces[receiver_slot];
@@ -320,21 +320,21 @@ DramReceiverGcb expect_dram_receiver_gcb_layout(
                 read_cce_tl1(device, receiver_cce, config_address, kDramReceiverConfigPageBytes);
             std::vector<uint32_t> expected_page(page.size(), 0u);
             expected_page[kDramReceiverFifoStartAddrOffset / sizeof(uint32_t)] = buffer_address;
-            expected_page[kDramReceiverFifoSizeOffset / sizeof(uint32_t)] = kGcbLayoutFifoBytes;
+            expected_page[kDramReceiverFifoSizeOffset / sizeof(uint32_t)] = kPipeLayoutFifoBytes;
             expected_page[kDramReceiverSenderIndexOffset / sizeof(uint32_t)] = sender_cce;
             expected_page[kDramReceiverRemotePagesAckedAddrOffset / sizeof(uint32_t)] =
                 pages_acked_base + (receiver_slot * kDramReceiverCreditStrideBytes);
             expected_page[kDramReceiverFifoRdPtrOffset / sizeof(uint32_t)] = buffer_address;
             EXPECT_EQ(page, expected_page) << "receiver CCE " << receiver_cce;
-            EXPECT_EQ(gcb_layout_word(page, kDramReceiverCreditLineOffset), 0u) << "receiver CCE " << receiver_cce;
-            EXPECT_EQ(gcb_layout_word(page, kDramReceiverPagesAckedOffset), 0u) << "receiver CCE " << receiver_cce;
+            EXPECT_EQ(pipe_layout_word(page, kDramReceiverCreditLineOffset), 0u) << "receiver CCE " << receiver_cce;
+            EXPECT_EQ(pipe_layout_word(page, kDramReceiverPagesAckedOffset), 0u) << "receiver CCE " << receiver_cce;
         }
     }
-    return gcb;
+    return pipe_set;
 }
 
-// Checks that two live GCBs hold disjoint ranges in the sender-state zone and in the receiver zone.
-void expect_gcb_layout_ranges_disjoint(const DramReceiverGcb& first, const DramReceiverGcb& second) {
+// Checks that two live pipe sets hold disjoint ranges in the sender-state zone and in the receiver zone.
+void expect_pipe_layout_ranges_disjoint(const DramReceiverPipeSet& first, const DramReceiverPipeSet& second) {
     const std::shared_ptr<DriscL1Allocation> first_sender = first.sender_state_drisc_l1_allocation();
     const std::shared_ptr<DriscL1Allocation> second_sender = second.sender_state_drisc_l1_allocation();
     EXPECT_TRUE(
@@ -357,17 +357,17 @@ void expect_gcb_layout_ranges_disjoint(const DramReceiverGcb& first, const DramR
                second_receiver_end);
 }
 
-std::string gcb_layout_creation_error(
+std::string pipe_layout_creation_error(
     distributed::MeshDevice& mesh, const BankToDramReceivers& bank_to_dram_receivers) {
     try {
-        DramReceiverGcb(mesh, bank_to_dram_receivers, kGcbLayoutFifoBytes);
+        DramReceiverPipeSet(mesh, bank_to_dram_receivers, kPipeLayoutFifoBytes);
     } catch (const std::exception& error) {
         return error.what();
     }
     return "";
 }
 
-TEST_F(MimirPrefetcher, GcbLayoutLocalReceiver) {
+TEST_F(MimirPrefetcher, PipeLayoutLocalReceiver) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -375,18 +375,18 @@ TEST_F(MimirPrefetcher, GcbLayoutLocalReceiver) {
     distributed::MeshDevice& mesh = device_guard.mesh();
 
     IDevice* device = mesh.get_devices().front();
-    const uint32_t sender_cce = gcb_layout_sender_cce(device, mesh, 0);
+    const uint32_t sender_cce = pipe_layout_sender_cce(device, mesh, 0);
     const uint32_t local_receiver_cce = sibling_cce(sender_cce);
-    const DramReceiverGcb first_gcb =
-        expect_dram_receiver_gcb_layout(mesh, {{.bank = 0, .receiver_cces = {local_receiver_cce}}});
+    const DramReceiverPipeSet first_pipe_set =
+        expect_dram_receiver_pipe_layout(mesh, {{.bank = 0, .receiver_cces = {local_receiver_cce}}});
 
     const BankToDramReceivers bank_to_dram_receivers = {
         {0, {logical_cce_core(soc_desc_of(device), local_receiver_cce)}}};
-    const DramReceiverGcb second_gcb = DramReceiverGcb(mesh, bank_to_dram_receivers, kGcbLayoutFifoBytes);
-    expect_gcb_layout_ranges_disjoint(first_gcb, second_gcb);
+    const DramReceiverPipeSet second_pipe_set = DramReceiverPipeSet(mesh, bank_to_dram_receivers, kPipeLayoutFifoBytes);
+    expect_pipe_layout_ranges_disjoint(first_pipe_set, second_pipe_set);
 }
 
-TEST_F(MimirPrefetcher, GcbLayoutRemoteReceiver) {
+TEST_F(MimirPrefetcher, PipeLayoutRemoteReceiver) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -398,13 +398,13 @@ TEST_F(MimirPrefetcher, GcbLayoutRemoteReceiver) {
     distributed::MeshDevice& mesh = device_guard.mesh();
 
     // The remote receiver comes first, so the receiver table must keep this order, not sort it.
-    const uint32_t sender_cce = gcb_layout_sender_cce(mesh.get_devices().front(), mesh, 0);
+    const uint32_t sender_cce = pipe_layout_sender_cce(mesh.get_devices().front(), mesh, 0);
     const uint32_t remote_receiver_cce = next_mimir_cce(sender_cce);
     const uint32_t local_receiver_cce = sibling_cce(sender_cce);
-    expect_dram_receiver_gcb_layout(mesh, {{.bank = 0, .receiver_cces = {remote_receiver_cce, local_receiver_cce}}});
+    expect_dram_receiver_pipe_layout(mesh, {{.bank = 0, .receiver_cces = {remote_receiver_cce, local_receiver_cce}}});
 }
 
-TEST_F(MimirPrefetcher, GcbLayoutTwoSenders) {
+TEST_F(MimirPrefetcher, PipeLayoutTwoSenders) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -417,37 +417,37 @@ TEST_F(MimirPrefetcher, GcbLayoutTwoSenders) {
     distributed::MeshDevice& mesh = device_guard.mesh();
 
     IDevice* device = mesh.get_devices().front();
-    const uint32_t first_sender_cce = gcb_layout_sender_cce(device, mesh, 0);
+    const uint32_t first_sender_cce = pipe_layout_sender_cce(device, mesh, 0);
     uint32_t second_bank = 0;
     for (uint32_t bank = 1; bank < topology.num_views; ++bank) {
-        if (gcb_layout_sender_cce(device, mesh, bank) != first_sender_cce) {
+        if (pipe_layout_sender_cce(device, mesh, bank) != first_sender_cce) {
             second_bank = bank;
             break;
         }
     }
     ASSERT_NE(second_bank, 0u) << "no DRAM view has a sender CCE other than bank 0's";
-    const uint32_t second_sender_cce = gcb_layout_sender_cce(device, mesh, second_bank);
+    const uint32_t second_sender_cce = pipe_layout_sender_cce(device, mesh, second_bank);
     std::vector<uint32_t> receiver_cces;
     for (uint32_t cce_index = 0; cce_index < topology.num_cces && receiver_cces.size() < 2; ++cce_index) {
         if (cce_index != first_sender_cce && cce_index != second_sender_cce) {
             receiver_cces.push_back(cce_index);
         }
     }
-    // Equal receiver counts: four CCEs leave two receivers, and a receiver can serve only one sender of a GCB.
-    const std::vector<GcbLayoutSender> senders = {
+    // Equal receiver counts: four CCEs leave two receivers, and a receiver can serve only one sender of a pipe set.
+    const std::vector<PipeLayoutSender> senders = {
         {.bank = 0, .receiver_cces = {receiver_cces[0]}}, {.bank = second_bank, .receiver_cces = {receiver_cces[1]}}};
-    const DramReceiverGcb first_gcb = expect_dram_receiver_gcb_layout(mesh, senders);
+    const DramReceiverPipeSet first_pipe_set = expect_dram_receiver_pipe_layout(mesh, senders);
 
     BankToDramReceivers bank_to_dram_receivers;
-    for (const GcbLayoutSender& sender : senders) {
+    for (const PipeLayoutSender& sender : senders) {
         bank_to_dram_receivers.emplace_back(
             sender.bank, std::vector<CoreCoord>{logical_cce_core(soc_desc_of(device), sender.receiver_cces.front())});
     }
-    const DramReceiverGcb second_gcb = DramReceiverGcb(mesh, bank_to_dram_receivers, kGcbLayoutFifoBytes);
-    expect_gcb_layout_ranges_disjoint(first_gcb, second_gcb);
+    const DramReceiverPipeSet second_pipe_set = DramReceiverPipeSet(mesh, bank_to_dram_receivers, kPipeLayoutFifoBytes);
+    expect_pipe_layout_ranges_disjoint(first_pipe_set, second_pipe_set);
 }
 
-TEST_F(MimirPrefetcher, GcbLayoutRejectsConflictingReceivers) {
+TEST_F(MimirPrefetcher, PipeLayoutRejectsConflictingReceivers) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -484,41 +484,41 @@ TEST_F(MimirPrefetcher, GcbLayoutRejectsConflictingReceivers) {
     ASSERT_FALSE(sender_aliases.empty()) << "no other logical DRAM coord names the sender CCE";
     log_info(
         tt::LogTest,
-        "GcbLayout aliases {} and {}; sender {} alias {}",
+        "PipeLayout aliases {} and {}; sender {} alias {}",
         alias_pair[0].str(),
         alias_pair[1].str(),
         sender_logical.str(),
         sender_aliases.front().str());
 
-    const std::string alias_error = gcb_layout_creation_error(mesh, {{0, alias_pair}});
+    const std::string alias_error = pipe_layout_creation_error(mesh, {{0, alias_pair}});
     EXPECT_NE(alias_error.find("logical aliases"), std::string::npos) << alias_error;
 
-    const std::string sender_error = gcb_layout_creation_error(mesh, {{0, {alias_pair[0], sender_logical}}});
+    const std::string sender_error = pipe_layout_creation_error(mesh, {{0, {alias_pair[0], sender_logical}}});
     EXPECT_NE(sender_error.find("also this pipe set's sender"), std::string::npos) << sender_error;
 
     const std::string sender_alias_error =
-        gcb_layout_creation_error(mesh, {{0, {alias_pair[0], sender_aliases.front()}}});
+        pipe_layout_creation_error(mesh, {{0, {alias_pair[0], sender_aliases.front()}}});
     EXPECT_NE(sender_alias_error.find("also this pipe set's sender"), std::string::npos) << sender_alias_error;
 
-    const std::string duplicate_error = gcb_layout_creation_error(mesh, {{0, {alias_pair[0], alias_pair[0]}}});
+    const std::string duplicate_error = pipe_layout_creation_error(mesh, {{0, {alias_pair[0], alias_pair[0]}}});
     EXPECT_NE(duplicate_error.find("listed more than once"), std::string::npos) << duplicate_error;
 }
 
-namespace gcb_abi = cce_gcb_receiver_abi;
+namespace pipe_abi = cce_pipe_receiver_abi;
 
-const char* const kGcbSmokeSenderKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_gcb_smoke_sender.cpp";
-const char* const kGcbValidatorReceiverKernel =
-    "tests/tt_metal/tt_metal/test_kernels/cce/cce_gcb_validator_receiver.cpp";
+const char* const kPipeSmokeSenderKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_pipe_smoke_sender.cpp";
+const char* const kPipeValidatorReceiverKernel =
+    "tests/tt_metal/tt_metal/test_kernels/cce/cce_pipe_validator_receiver.cpp";
 
-inline constexpr uint32_t kGcbSmokeFifoBytes = 4 * kKiB;
+inline constexpr uint32_t kPipeSmokeFifoBytes = 4 * kKiB;
 // The bytes right after every receiver's FIFO, filled with a pattern before a run and checked with the FIFO state, so
 // a sender that writes past the FIFO end fails the test instead of landing in whatever the receiver zone holds next.
-inline constexpr uint32_t kGcbSmokeGuardBytes = 4 * gcb_abi::kLineBytes;
-inline constexpr uint32_t kGcbSmokeGuardPattern = 0x6A4D'0000;
-inline constexpr std::chrono::seconds kGcbSmokeHostWaitLimit{120};
-inline constexpr std::chrono::milliseconds kGcbSmokeHostPollInterval{50};
+inline constexpr uint32_t kPipeSmokeGuardBytes = 4 * pipe_abi::kLineBytes;
+inline constexpr uint32_t kPipeSmokeGuardPattern = 0x6A4D'0000;
+inline constexpr std::chrono::seconds kPipeSmokeHostWaitLimit{120};
+inline constexpr std::chrono::milliseconds kPipeSmokeHostPollInterval{50};
 
-struct GcbSmokeRequest {
+struct PipeSmokeRequest {
     uint32_t tensor_id = 0;
     uint32_t slab = 0;
     uint32_t page_bytes = 0;
@@ -526,15 +526,16 @@ struct GcbSmokeRequest {
 };
 
 // The credits a sender publishes for a schedule and where its write pointer ends, from the FIFO start. Mirrors the
-// page-aligned limit, wrap padding and resize padding of cce_remote_cb.h, so the host can check both ends' counters.
-struct GcbFifoEndState {
+// page-aligned limit, wrap padding and resize padding of cce_prefetcher_pipe.h, so the host can check both ends'
+// counters.
+struct PipeFifoEndState {
     uint32_t credit_units = 0;
     uint32_t fifo_offset = 0;
 };
 
-GcbFifoEndState expected_gcb_fifo_end_state(const std::vector<GcbSmokeRequest>& schedule, uint32_t fifo_bytes) {
-    GcbFifoEndState state;
-    for (const GcbSmokeRequest& request : schedule) {
+PipeFifoEndState expected_pipe_fifo_end_state(const std::vector<PipeSmokeRequest>& schedule, uint32_t fifo_bytes) {
+    PipeFifoEndState state;
+    for (const PipeSmokeRequest& request : schedule) {
         const uint32_t limit = fifo_bytes - (fifo_bytes % request.page_bytes);
         const uint32_t aligned_offset =
             ((state.fifo_offset + request.page_bytes - 1) / request.page_bytes) * request.page_bytes;
@@ -558,69 +559,69 @@ GcbFifoEndState expected_gcb_fifo_end_state(const std::vector<GcbSmokeRequest>& 
     return state;
 }
 
-uint32_t gcb_smoke_total_pages(const std::vector<GcbSmokeRequest>& schedule) {
+uint32_t pipe_smoke_total_pages(const std::vector<PipeSmokeRequest>& schedule) {
     uint32_t pages = 0;
-    for (const GcbSmokeRequest& request : schedule) {
+    for (const PipeSmokeRequest& request : schedule) {
         pages += request.num_pages;
     }
     return pages;
 }
 
-std::string gcb_status_string(const std::vector<uint32_t>& status) {
+std::string pipe_status_string(const std::vector<uint32_t>& status) {
     return fmt::format(
         "magic 0x{:08x} code {} requests {} pages {} mismatched words {} first mismatch request {} page {} word {} "
         "observed 0x{:08x} expected 0x{:08x} rechecked 0x{:08x}; waited on receiver {} sent {} acked {}",
-        status[gcb_abi::kStatusMagic],
-        status[gcb_abi::kStatusCode],
-        status[gcb_abi::kStatusRequestsDone],
-        status[gcb_abi::kStatusPagesDone],
-        status[gcb_abi::kStatusMismatchedWords],
-        status[gcb_abi::kStatusFirstMismatchRequest],
-        status[gcb_abi::kStatusFirstMismatchPage],
-        status[gcb_abi::kStatusFirstMismatchWord],
-        status[gcb_abi::kStatusObserved],
-        status[gcb_abi::kStatusExpected],
-        status[gcb_abi::kStatusRechecked],
-        status[gcb_abi::kStatusWaitReceiver],
-        status[gcb_abi::kStatusWaitPagesSent],
-        status[gcb_abi::kStatusWaitPagesAcked]);
+        status[pipe_abi::kStatusMagic],
+        status[pipe_abi::kStatusCode],
+        status[pipe_abi::kStatusRequestsDone],
+        status[pipe_abi::kStatusPagesDone],
+        status[pipe_abi::kStatusMismatchedWords],
+        status[pipe_abi::kStatusFirstMismatchRequest],
+        status[pipe_abi::kStatusFirstMismatchPage],
+        status[pipe_abi::kStatusFirstMismatchWord],
+        status[pipe_abi::kStatusObserved],
+        status[pipe_abi::kStatusExpected],
+        status[pipe_abi::kStatusRechecked],
+        status[pipe_abi::kStatusWaitReceiver],
+        status[pipe_abi::kStatusWaitPagesSent],
+        status[pipe_abi::kStatusWaitPagesAcked]);
 }
 
-// One DRAM-receiver GCB of `fifo_bytes` per receiver from `sender_bank`'s sender CCE to `receiver_cces` (in
-// receiver-table order), plus a kernel block (cce_gcb_receiver_abi.h) carved from the receiver zone at one offset on
+// One DRAM-receiver pipe set of `fifo_bytes` per receiver from `sender_bank`'s sender CCE to `receiver_cces` (in
+// receiver-table order), plus a kernel block (cce_pipe_receiver_abi.h) carved from the receiver zone at one offset on
 // every CCE. Declare it after the ScopedDevice and before any CceReceiverProgram.
-class GcbSmoke {
+class PipeSmoke {
 public:
-    GcbSmoke(
+    PipeSmoke(
         distributed::MeshDevice& mesh,
         uint32_t sender_bank,
         std::vector<uint32_t> receiver_cces,
-        uint32_t fifo_bytes = kGcbSmokeFifoBytes) :
+        uint32_t fifo_bytes = kPipeSmokeFifoBytes) :
         device_(mesh.get_devices().front()),
         sender_bank_(sender_bank),
-        sender_cce_(gcb_layout_sender_cce(device_, mesh, sender_bank_)),
+        sender_cce_(pipe_layout_sender_cce(device_, mesh, sender_bank_)),
         receiver_cces_(std::move(receiver_cces)),
         fifo_bytes_(fifo_bytes),
-        gcb_(create_gcb(mesh)),
-        guard_(mesh.impl().drisc_l1_arena().allocate_receiver(kGcbSmokeGuardBytes, gcb_abi::kLineBytes)),
-        block_(mesh.impl().drisc_l1_arena().allocate_receiver(gcb_abi::kBlockBytes, gcb_abi::kLineBytes)) {
+        pipe_set_(create_pipe_set(mesh)),
+        guard_(mesh.impl().drisc_l1_arena().allocate_receiver(kPipeSmokeGuardBytes, pipe_abi::kLineBytes)),
+        block_(mesh.impl().drisc_l1_arena().allocate_receiver(pipe_abi::kBlockBytes, pipe_abi::kLineBytes)) {
         TT_FATAL(
-            guard_->addr() == gcb_.buffer_address() + fifo_bytes_,
+            guard_->addr() == pipe_set_.buffer_address() + fifo_bytes_,
             "The FIFO guard landed at 0x{:x}, not at the FIFO end 0x{:x}",
             guard_->addr(),
-            gcb_.buffer_address() + fifo_bytes_);
+            pipe_set_.buffer_address() + fifo_bytes_);
         for (const uint32_t receiver_cce : receiver_cces_) {
             write_cce_tl1(device_, receiver_cce, guard_->addr(), guard_pattern());
         }
         reset_kernel_blocks();
         log_info(
             tt::LogTest,
-            "GcbSmoke sender CCE {} receivers {}: config page 0x{:x}, FIFO 0x{:x} +{} B, guard 0x{:x}, kernel block "
+            "PipeSmoke sender CCE {} receivers {}: config page 0x{:x}, FIFO 0x{:x} +{} B, guard 0x{:x}, kernel block "
             "0x{:x}",
             sender_cce_,
             fmt::join(receiver_cces_, ","),
-            gcb_.config_address(),
-            gcb_.buffer_address(),
+            pipe_set_.config_address(),
+            pipe_set_.buffer_address(),
             fifo_bytes_,
             guard_->addr(),
             block_->addr());
@@ -629,16 +630,16 @@ public:
     IDevice* device() const { return device_; }
     uint32_t fifo_bytes() const { return fifo_bytes_; }
     uint32_t receiver_cce(uint32_t slot) const { return receiver_cces_.at(slot); }
-    const DramReceiverGcb& gcb() const { return gcb_; }
+    const DramReceiverPipeSet& pipe_set() const { return pipe_set_; }
 
     // Zeroes the command and holding lines and poisons the status line on the sender and every receiver, so a status
     // read after the next run cannot see an earlier run's.
     void reset_kernel_blocks() const {
-        std::vector<uint32_t> block_words(gcb_abi::kBlockBytes / sizeof(uint32_t), 0);
+        std::vector<uint32_t> block_words(pipe_abi::kBlockBytes / sizeof(uint32_t), 0);
         std::fill(
-            block_words.begin() + (gcb_abi::kStatusLineOffset / sizeof(uint32_t)),
-            block_words.begin() + (gcb_abi::kHoldingLineOffset / sizeof(uint32_t)),
-            gcb_abi::kStatusPoison);
+            block_words.begin() + (pipe_abi::kStatusLineOffset / sizeof(uint32_t)),
+            block_words.begin() + (pipe_abi::kHoldingLineOffset / sizeof(uint32_t)),
+            pipe_abi::kStatusPoison);
         write_cce_tl1(device_, sender_cce_, block_->addr(), block_words);
         for (const uint32_t receiver_cce : receiver_cces_) {
             write_cce_tl1(device_, receiver_cce, block_->addr(), block_words);
@@ -653,16 +654,16 @@ public:
         uint32_t mode,
         uint32_t stall_pages,
         uint64_t budget_cycles,
-        const std::vector<GcbSmokeRequest>& schedule) const {
-        std::vector<GcbSmokeRequest> receiver_schedule = schedule;
-        for (GcbSmokeRequest& request : receiver_schedule) {
+        const std::vector<PipeSmokeRequest>& schedule) const {
+        std::vector<PipeSmokeRequest> receiver_schedule = schedule;
+        for (PipeSmokeRequest& request : receiver_schedule) {
             request.slab += slot;
         }
         return CceKernelLaunch{
             .cce_index = receiver_cces_.at(slot),
             .kernel_path = kernel_path,
             .runtime_args = kernel_args(
-                static_cast<uint32_t>(gcb_.config_address()),
+                static_cast<uint32_t>(pipe_set_.config_address()),
                 budget_cycles,
                 seed,
                 mode,
@@ -670,12 +671,12 @@ public:
                 receiver_schedule)};
     }
 
-    std::vector<uint32_t> run_sender(uint64_t budget_cycles, const std::vector<GcbSmokeRequest>& schedule) {
+    std::vector<uint32_t> run_sender(uint64_t budget_cycles, const std::vector<PipeSmokeRequest>& schedule) {
         const CceKernelLaunch sender{
             .cce_index = sender_cce_,
-            .kernel_path = kGcbSmokeSenderKernel,
+            .kernel_path = kPipeSmokeSenderKernel,
             .runtime_args = kernel_args(
-                static_cast<uint32_t>(gcb_.sender_state_drisc_l1_base()),
+                static_cast<uint32_t>(pipe_set_.sender_state_drisc_l1_base()),
                 budget_cycles,
                 mimir_test_seed(),
                 0,
@@ -684,26 +685,29 @@ public:
         std::unique_ptr<Program> program = launch_cce_program(device_, {sender});
         slow_dispatch::WaitProgramDone(*device_, *program);
         const std::vector<uint32_t> status = read_status(sender_cce_);
-        log_info(tt::LogTest, "GcbSmoke sender CCE {}: {}", sender_cce_, gcb_status_string(status));
+        log_info(tt::LogTest, "PipeSmoke sender CCE {}: {}", sender_cce_, pipe_status_string(status));
         return status;
     }
 
     std::vector<uint32_t> read_status(uint32_t cce_index) const {
         return read_cce_tl1(
-            device_, cce_index, block_->addr() + gcb_abi::kStatusLineOffset, gcb_abi::kStatusWords * sizeof(uint32_t));
+            device_,
+            cce_index,
+            block_->addr() + pipe_abi::kStatusLineOffset,
+            pipe_abi::kStatusWords * sizeof(uint32_t));
     }
 
     std::vector<uint32_t> read_receiver_status(uint32_t slot) const {
         const std::vector<uint32_t> status = read_status(receiver_cces_.at(slot));
-        log_info(tt::LogTest, "GcbSmoke receiver CCE {}: {}", receiver_cces_.at(slot), gcb_status_string(status));
+        log_info(tt::LogTest, "PipeSmoke receiver CCE {}: {}", receiver_cces_.at(slot), pipe_status_string(status));
         return status;
     }
 
     ::testing::AssertionResult wait_for_holding(uint32_t slot, uint32_t pages) const {
         const uint32_t receiver_cce = receiver_cces_.at(slot);
-        const uint64_t holding_address = block_->addr() + gcb_abi::kHoldingLineOffset;
+        const uint64_t holding_address = block_->addr() + pipe_abi::kHoldingLineOffset;
         const std::chrono::steady_clock::time_point deadline =
-            std::chrono::steady_clock::now() + kGcbSmokeHostWaitLimit;
+            std::chrono::steady_clock::now() + kPipeSmokeHostWaitLimit;
         uint32_t observed = read_cce_tl1(device_, receiver_cce, holding_address, sizeof(uint32_t)).front();
         while (observed != pages) {
             if (std::chrono::steady_clock::now() >= deadline) {
@@ -711,10 +715,10 @@ public:
                            "receiver CCE {} holds {} pages after {} s, expected {}",
                            receiver_cce,
                            observed,
-                           kGcbSmokeHostWaitLimit.count(),
+                           kPipeSmokeHostWaitLimit.count(),
                            pages);
             }
-            std::this_thread::sleep_for(kGcbSmokeHostPollInterval);
+            std::this_thread::sleep_for(kPipeSmokeHostPollInterval);
             observed = read_cce_tl1(device_, receiver_cce, holding_address, sizeof(uint32_t)).front();
         }
         return ::testing::AssertionSuccess();
@@ -724,8 +728,12 @@ public:
     // pages_sent slot and the receiver's credit line. The sender's wr_ptr stays where it is.
     void credit_from_host(uint32_t slot, uint32_t units) const {
         write_cce_tl1(
-            device_, sender_cce_, gcb_.pages_sent_drisc_l1_base() + (slot * kDramReceiverCreditStrideBytes), {units});
-        write_cce_tl1(device_, receiver_cces_.at(slot), gcb_.config_address() + kDramReceiverCreditLineOffset, {units});
+            device_,
+            sender_cce_,
+            pipe_set_.pages_sent_drisc_l1_base() + (slot * kDramReceiverCreditStrideBytes),
+            {units});
+        write_cce_tl1(
+            device_, receiver_cces_.at(slot), pipe_set_.config_address() + kDramReceiverCreditLineOffset, {units});
     }
 
     // Acks `units` on the sender's pages_acked slot for receiver `slot`, as the receiver's remote ack store would.
@@ -734,18 +742,19 @@ public:
         write_cce_tl1(
             device_,
             sender_cce_,
-            gcb_.pages_sent_drisc_l1_base() + dram_receiver_sender_pages_acked_offset(num_receivers) +
+            pipe_set_.pages_sent_drisc_l1_base() + dram_receiver_sender_pages_acked_offset(num_receivers) +
                 (slot * kDramReceiverCreditStrideBytes),
             {units});
     }
 
     // Both ends' counters and pointers once every page of `schedule` is credited, and `acked_units` of them acked.
-    void expect_fifo_state(uint32_t slot, const GcbFifoEndState& sent, uint32_t acked_units, uint32_t rd_offset) const {
+    void expect_fifo_state(
+        uint32_t slot, const PipeFifoEndState& sent, uint32_t acked_units, uint32_t rd_offset) const {
         const uint32_t receiver_cce = receiver_cces_.at(slot);
         const uint32_t num_receivers = static_cast<uint32_t>(receiver_cces_.size());
-        const uint64_t pages_sent_base = gcb_.pages_sent_drisc_l1_base();
-        const uint64_t state_base = gcb_.sender_state_drisc_l1_base();
-        const uint32_t fifo_start = static_cast<uint32_t>(gcb_.buffer_address());
+        const uint64_t pages_sent_base = pipe_set_.pages_sent_drisc_l1_base();
+        const uint64_t state_base = pipe_set_.sender_state_drisc_l1_base();
+        const uint32_t fifo_start = static_cast<uint32_t>(pipe_set_.buffer_address());
         EXPECT_EQ(
             read_tl1_word(sender_cce_, pages_sent_base + (slot * kDramReceiverCreditStrideBytes)), sent.credit_units)
             << "sender pages_sent for receiver CCE " << receiver_cce;
@@ -759,48 +768,48 @@ public:
         EXPECT_EQ(
             read_tl1_word(sender_cce_, state_base + offsetof(DramSenderStateBlock, fifo_wr_ptr)),
             fifo_start + sent.fifo_offset);
-        const uint64_t config_address = gcb_.config_address();
+        const uint64_t config_address = pipe_set_.config_address();
         EXPECT_EQ(read_tl1_word(receiver_cce, config_address + kDramReceiverCreditLineOffset), sent.credit_units)
             << "receiver CCE " << receiver_cce << " credit line";
         EXPECT_EQ(read_tl1_word(receiver_cce, config_address + kDramReceiverPagesAckedOffset), acked_units)
             << "receiver CCE " << receiver_cce << " pages_acked";
         EXPECT_EQ(read_tl1_word(receiver_cce, config_address + kDramReceiverFifoRdPtrOffset), fifo_start + rd_offset)
             << "receiver CCE " << receiver_cce << " fifo_rd_ptr";
-        EXPECT_EQ(read_cce_tl1(device_, receiver_cce, guard_->addr(), kGcbSmokeGuardBytes), guard_pattern())
+        EXPECT_EQ(read_cce_tl1(device_, receiver_cce, guard_->addr(), kPipeSmokeGuardBytes), guard_pattern())
             << "receiver CCE " << receiver_cce << ": a write landed past the FIFO end";
     }
 
 private:
-    DramReceiverGcb create_gcb(distributed::MeshDevice& mesh) const {
+    DramReceiverPipeSet create_pipe_set(distributed::MeshDevice& mesh) const {
         const metal_SocDescriptor& soc_desc = soc_desc_of(device_);
         std::vector<CoreCoord> receivers;
         for (const uint32_t receiver_cce : receiver_cces_) {
             receivers.push_back(logical_cce_core(soc_desc, receiver_cce));
         }
-        return DramReceiverGcb(mesh, BankToDramReceivers{{sender_bank_, receivers}}, fifo_bytes_);
+        return DramReceiverPipeSet(mesh, BankToDramReceivers{{sender_bank_, receivers}}, fifo_bytes_);
     }
 
     std::vector<uint32_t> kernel_args(
-        uint32_t gcb_address,
+        uint32_t pipe_address,
         uint64_t budget_cycles,
         uint32_t seed,
         uint32_t mode,
         uint32_t stall_pages,
-        const std::vector<GcbSmokeRequest>& schedule) const {
-        std::vector<uint32_t> args(gcb_abi::schedule_arg(schedule.size(), 0), 0);
-        args[gcb_abi::kArgGcbAddr] = gcb_address;
-        args[gcb_abi::kArgBlockAddr] = static_cast<uint32_t>(block_->addr());
-        args[gcb_abi::kArgBudgetLo] = static_cast<uint32_t>(budget_cycles);
-        args[gcb_abi::kArgBudgetHi] = static_cast<uint32_t>(budget_cycles >> 32);
-        args[gcb_abi::kArgSeed] = seed;
-        args[gcb_abi::kArgMode] = mode;
-        args[gcb_abi::kArgStallPages] = stall_pages;
-        args[gcb_abi::kArgNumRequests] = static_cast<uint32_t>(schedule.size());
+        const std::vector<PipeSmokeRequest>& schedule) const {
+        std::vector<uint32_t> args(pipe_abi::schedule_arg(schedule.size(), 0), 0);
+        args[pipe_abi::kArgPipeAddr] = pipe_address;
+        args[pipe_abi::kArgBlockAddr] = static_cast<uint32_t>(block_->addr());
+        args[pipe_abi::kArgBudgetLo] = static_cast<uint32_t>(budget_cycles);
+        args[pipe_abi::kArgBudgetHi] = static_cast<uint32_t>(budget_cycles >> 32);
+        args[pipe_abi::kArgSeed] = seed;
+        args[pipe_abi::kArgMode] = mode;
+        args[pipe_abi::kArgStallPages] = stall_pages;
+        args[pipe_abi::kArgNumRequests] = static_cast<uint32_t>(schedule.size());
         for (uint32_t request = 0; request < schedule.size(); ++request) {
-            args[gcb_abi::schedule_arg(request, gcb_abi::kRequestTensorId)] = schedule[request].tensor_id;
-            args[gcb_abi::schedule_arg(request, gcb_abi::kRequestSlab)] = schedule[request].slab;
-            args[gcb_abi::schedule_arg(request, gcb_abi::kRequestPageBytes)] = schedule[request].page_bytes;
-            args[gcb_abi::schedule_arg(request, gcb_abi::kRequestNumPages)] = schedule[request].num_pages;
+            args[pipe_abi::schedule_arg(request, pipe_abi::kRequestTensorId)] = schedule[request].tensor_id;
+            args[pipe_abi::schedule_arg(request, pipe_abi::kRequestSlab)] = schedule[request].slab;
+            args[pipe_abi::schedule_arg(request, pipe_abi::kRequestPageBytes)] = schedule[request].page_bytes;
+            args[pipe_abi::schedule_arg(request, pipe_abi::kRequestNumPages)] = schedule[request].num_pages;
         }
         return args;
     }
@@ -810,9 +819,9 @@ private:
     }
 
     static std::vector<uint32_t> guard_pattern() {
-        std::vector<uint32_t> pattern(kGcbSmokeGuardBytes / sizeof(uint32_t));
+        std::vector<uint32_t> pattern(kPipeSmokeGuardBytes / sizeof(uint32_t));
         for (uint32_t word = 0; word < pattern.size(); ++word) {
-            pattern[word] = kGcbSmokeGuardPattern | word;
+            pattern[word] = kPipeSmokeGuardPattern | word;
         }
         return pattern;
     }
@@ -822,30 +831,30 @@ private:
     uint32_t sender_cce_;
     std::vector<uint32_t> receiver_cces_;
     uint32_t fifo_bytes_;
-    DramReceiverGcb gcb_;
+    DramReceiverPipeSet pipe_set_;
     std::shared_ptr<DriscL1Allocation> guard_;
     std::shared_ptr<DriscL1Allocation> block_;
 };
 
-CceKernelLaunch validator_launch(const GcbSmoke& smoke, uint32_t slot, const std::vector<GcbSmokeRequest>& schedule) {
+CceKernelLaunch validator_launch(const PipeSmoke& smoke, uint32_t slot, const std::vector<PipeSmokeRequest>& schedule) {
     return smoke.receiver_launch(
-        slot, kGcbValidatorReceiverKernel, mimir_test_seed(), 0, 0, kGcbSmokeWaitBudgetCycles, schedule);
+        slot, kPipeValidatorReceiverKernel, mimir_test_seed(), 0, 0, kPipeSmokeWaitBudgetCycles, schedule);
 }
 
-void queue_tensor(distributed::MeshDevice& mesh, const GcbSmoke& smoke, const MeshTensor& tensor, uint32_t blocks) {
+void queue_tensor(distributed::MeshDevice& mesh, const PipeSmoke& smoke, const MeshTensor& tensor, uint32_t blocks) {
     experimental::QueueTensorPrefetcherRequest(
         mesh,
-        smoke.gcb().pipes(),
+        smoke.pipe_set().pipes(),
         std::nullopt,
         {experimental::TensorPrefetcherInput{.tensor = tensor, .block_count = blocks}});
 }
 
-uint32_t gcb_smoke_local_receiver(distributed::MeshDevice& mesh) {
-    const uint32_t sender_cce = gcb_layout_sender_cce(mesh.get_devices().front(), mesh, 0);
+uint32_t pipe_smoke_local_receiver(distributed::MeshDevice& mesh) {
+    const uint32_t sender_cce = pipe_layout_sender_cce(mesh.get_devices().front(), mesh, 0);
     return sibling_cce(sender_cce);
 }
 
-std::string gcb_smoke_d2d_skip_reason() {
+std::string pipe_smoke_d2d_skip_reason() {
     if (std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         return skip_reason;
     }
@@ -856,115 +865,115 @@ std::string gcb_smoke_d2d_skip_reason() {
 }
 
 // Drain N: the sender completes and every counter on both ends agrees.
-TEST_F(MimirPrefetcher, GcbSmokeDiscardDrain) {
+TEST_F(MimirPrefetcher, PipeSmokeDiscardDrain) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    GcbSmoke smoke(mesh, 0, {gcb_smoke_local_receiver(mesh)});
-    const std::vector<GcbSmokeRequest> schedule = {{.tensor_id = 1, .slab = 0, .page_bytes = 512, .num_pages = 20}};
+    PipeSmoke smoke(mesh, 0, {pipe_smoke_local_receiver(mesh)});
+    const std::vector<PipeSmokeRequest> schedule = {{.tensor_id = 1, .slab = 0, .page_bytes = 512, .num_pages = 20}};
     const uint32_t seed = mimir_test_seed();
     CceReceiverProgram receivers(
         smoke.device(),
         {smoke.receiver_launch(
-            0, kGcbDiscardReceiverKernel, seed, gcb_abi::kModeDrainCount, 0, kGcbSmokeWaitBudgetCycles, schedule)});
+            0, kPipeDiscardReceiverKernel, seed, pipe_abi::kModeDrainCount, 0, kPipeSmokeWaitBudgetCycles, schedule)});
 
-    const std::vector<uint32_t> sender_status = smoke.run_sender(kGcbSmokeWaitBudgetCycles, schedule);
+    const std::vector<uint32_t> sender_status = smoke.run_sender(kPipeSmokeWaitBudgetCycles, schedule);
     receivers.stop_and_wait();
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusPagesDone], gcb_smoke_total_pages(schedule));
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], gcb_smoke_total_pages(schedule));
-    const GcbFifoEndState end_state = expected_gcb_fifo_end_state(schedule, kGcbSmokeFifoBytes);
+    EXPECT_EQ(sender_status[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
+    EXPECT_EQ(sender_status[pipe_abi::kStatusPagesDone], pipe_smoke_total_pages(schedule));
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], pipe_smoke_total_pages(schedule));
+    const PipeFifoEndState end_state = expected_pipe_fifo_end_state(schedule, kPipeSmokeFifoBytes);
     smoke.expect_fifo_state(0, end_state, end_state.credit_units, end_state.fifo_offset);
 }
 
 // Runs the smoke sender into a validator receiver on `receiver_cce` and checks both statuses and the end state. The
 // validator recomputes the pages with `validator_seed`.
-void run_gcb_smoke_validation(
+void run_pipe_smoke_validation(
     distributed::MeshDevice& mesh,
     uint32_t receiver_cce,
-    const std::vector<GcbSmokeRequest>& schedule,
+    const std::vector<PipeSmokeRequest>& schedule,
     uint32_t validator_seed) {
-    GcbSmoke smoke(mesh, 0, {receiver_cce});
+    PipeSmoke smoke(mesh, 0, {receiver_cce});
     CceReceiverProgram receivers(
         smoke.device(),
         {smoke.receiver_launch(
-            0, kGcbValidatorReceiverKernel, validator_seed, 0, 0, kGcbSmokeWaitBudgetCycles, schedule)});
+            0, kPipeValidatorReceiverKernel, validator_seed, 0, 0, kPipeSmokeWaitBudgetCycles, schedule)});
 
-    const std::vector<uint32_t> sender_status = smoke.run_sender(kGcbSmokeWaitBudgetCycles, schedule);
+    const std::vector<uint32_t> sender_status = smoke.run_sender(kPipeSmokeWaitBudgetCycles, schedule);
     receivers.stop_and_wait();
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], gcb_smoke_total_pages(schedule));
+    EXPECT_EQ(sender_status[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], pipe_smoke_total_pages(schedule));
     if (validator_seed == mimir_test_seed()) {
-        EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
+        EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
     } else {
-        EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeMismatch);
-        EXPECT_GT(receiver_status[gcb_abi::kStatusMismatchedWords], 0u);
+        EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeMismatch);
+        EXPECT_GT(receiver_status[pipe_abi::kStatusMismatchedWords], 0u);
     }
-    const GcbFifoEndState end_state = expected_gcb_fifo_end_state(schedule, kGcbSmokeFifoBytes);
+    const PipeFifoEndState end_state = expected_pipe_fifo_end_state(schedule, kPipeSmokeFifoBytes);
     smoke.expect_fifo_state(0, end_state, end_state.credit_units, end_state.fifo_offset);
 }
 
-TEST_F(MimirPrefetcher, GcbSmokeValidatorLocal) {
+TEST_F(MimirPrefetcher, PipeSmokeValidatorLocal) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    run_gcb_smoke_validation(
+    run_pipe_smoke_validation(
         mesh,
-        gcb_smoke_local_receiver(mesh),
+        pipe_smoke_local_receiver(mesh),
         {{.tensor_id = 2, .slab = 0, .page_bytes = 1024, .num_pages = 12}},
         mimir_test_seed());
 }
 
 // The validator reports the mismatch and keeps acking, so the sender still completes.
-TEST_F(MimirPrefetcher, GcbSmokeValidatorWrongSeed) {
+TEST_F(MimirPrefetcher, PipeSmokeValidatorWrongSeed) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    run_gcb_smoke_validation(
+    run_pipe_smoke_validation(
         mesh,
-        gcb_smoke_local_receiver(mesh),
+        pipe_smoke_local_receiver(mesh),
         {{.tensor_id = 3, .slab = 0, .page_bytes = 256, .num_pages = 24}},
         mimir_test_seed() ^ 0x1u);
 }
 
-// Three page sizes in one GCB: 256 B pages leave wr_ptr at 1280, which 512 B pages pad to 1536; 384 B pages do not
+// Three page sizes in one pipe set: 256 B pages leave wr_ptr at 1280, which 512 B pages pad to 1536; 384 B pages do not
 // divide the 4 KiB FIFO, so every wrap also pads the 256 B past the page-aligned limit.
-TEST_F(MimirPrefetcher, GcbSmokeResize) {
+TEST_F(MimirPrefetcher, PipeSmokeResize) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    run_gcb_smoke_validation(
+    run_pipe_smoke_validation(
         mesh,
-        gcb_smoke_local_receiver(mesh),
+        pipe_smoke_local_receiver(mesh),
         {{.tensor_id = 4, .slab = 0, .page_bytes = 256, .num_pages = 5},
          {.tensor_id = 5, .slab = 0, .page_bytes = 512, .num_pages = 6},
          {.tensor_id = 6, .slab = 0, .page_bytes = 384, .num_pages = 12}},
         mimir_test_seed());
 }
 
-TEST_F(MimirPrefetcher, GcbSmokeValidatorD2d) {
+TEST_F(MimirPrefetcher, PipeSmokeValidatorD2d) {
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = gcb_smoke_d2d_skip_reason(); !skip_reason.empty()) {
+    if (const std::string skip_reason = pipe_smoke_d2d_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
-    const uint32_t sender_cce = gcb_layout_sender_cce(mesh.get_devices().front(), mesh, 0);
+    const uint32_t sender_cce = pipe_layout_sender_cce(mesh.get_devices().front(), mesh, 0);
     const uint32_t remote_receiver_cce = next_mimir_cce(sender_cce);
-    run_gcb_smoke_validation(
+    run_pipe_smoke_validation(
         mesh,
         remote_receiver_cce,
         {{.tensor_id = 7, .slab = 0, .page_bytes = 512, .num_pages = 16}},
@@ -972,186 +981,186 @@ TEST_F(MimirPrefetcher, GcbSmokeValidatorD2d) {
 }
 
 // The receiver drains every page the sender sends and keeps running until the host stops it.
-TEST_F(MimirPrefetcher, GcbSmokeDrainUntilStopped) {
+TEST_F(MimirPrefetcher, PipeSmokeDrainUntilStopped) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    GcbSmoke smoke(mesh, 0, {gcb_smoke_local_receiver(mesh)});
-    const std::vector<GcbSmokeRequest> schedule = {{.tensor_id = 8, .slab = 0, .page_bytes = 512, .num_pages = 12}};
+    PipeSmoke smoke(mesh, 0, {pipe_smoke_local_receiver(mesh)});
+    const std::vector<PipeSmokeRequest> schedule = {{.tensor_id = 8, .slab = 0, .page_bytes = 512, .num_pages = 12}};
     const uint32_t seed = mimir_test_seed();
     CceReceiverProgram receivers(
         smoke.device(),
         {smoke.receiver_launch(
             0,
-            kGcbDiscardReceiverKernel,
+            kPipeDiscardReceiverKernel,
             seed,
-            gcb_abi::kModeDrainUntilStopped,
+            pipe_abi::kModeDrainUntilStopped,
             0,
-            kGcbSmokeWaitBudgetCycles,
+            kPipeSmokeWaitBudgetCycles,
             schedule)});
 
-    const std::vector<uint32_t> sender_status = smoke.run_sender(kGcbSmokeWaitBudgetCycles, schedule);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
-    EXPECT_EQ(smoke.read_status(smoke.receiver_cce(0))[gcb_abi::kStatusMagic], gcb_abi::kStatusPoison)
+    const std::vector<uint32_t> sender_status = smoke.run_sender(kPipeSmokeWaitBudgetCycles, schedule);
+    EXPECT_EQ(sender_status[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
+    EXPECT_EQ(smoke.read_status(smoke.receiver_cce(0))[pipe_abi::kStatusMagic], pipe_abi::kStatusPoison)
         << "the receiver exited before the host stopped it";
     receivers.stop_and_wait();
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeStopped);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], gcb_smoke_total_pages(schedule));
-    const GcbFifoEndState end_state = expected_gcb_fifo_end_state(schedule, kGcbSmokeFifoBytes);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeStopped);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], pipe_smoke_total_pages(schedule));
+    const PipeFifoEndState end_state = expected_pipe_fifo_end_state(schedule, kPipeSmokeFifoBytes);
     smoke.expect_fifo_state(0, end_state, end_state.credit_units, end_state.fifo_offset);
 }
 
 // The receiver pops some pages, then holds a full FIFO, so the sender's free-space wait expires with CREDIT_TIMEOUT.
 // Released, the receiver exits without acking the held pages and without writing rd_ptr back: rd_ptr in TL1 stays at
 // the FIFO start although the kernel had moved it past the popped pages.
-TEST_F(MimirPrefetcher, GcbSmokeStallUntilReleased) {
+TEST_F(MimirPrefetcher, PipeSmokeStallUntilReleased) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    GcbSmoke smoke(mesh, 0, {gcb_smoke_local_receiver(mesh)});
+    PipeSmoke smoke(mesh, 0, {pipe_smoke_local_receiver(mesh)});
     constexpr uint32_t kPageBytes = 256;
     constexpr uint32_t kPoppedPages = 4;
-    constexpr uint32_t kFifoPages = kGcbSmokeFifoBytes / kPageBytes;
-    const std::vector<GcbSmokeRequest> popped_schedule = {
+    constexpr uint32_t kFifoPages = kPipeSmokeFifoBytes / kPageBytes;
+    const std::vector<PipeSmokeRequest> popped_schedule = {
         {.tensor_id = 9, .slab = 0, .page_bytes = kPageBytes, .num_pages = kPoppedPages}};
-    const std::vector<GcbSmokeRequest> credited_schedule = {
+    const std::vector<PipeSmokeRequest> credited_schedule = {
         {.tensor_id = 9, .slab = 0, .page_bytes = kPageBytes, .num_pages = kPoppedPages + kFifoPages}};
-    const std::vector<GcbSmokeRequest> sender_schedule = {
+    const std::vector<PipeSmokeRequest> sender_schedule = {
         {.tensor_id = 9, .slab = 0, .page_bytes = kPageBytes, .num_pages = kPoppedPages + kFifoPages + 8}};
     CceReceiverProgram receivers(
         smoke.device(),
         {smoke.receiver_launch(
             0,
-            kGcbDiscardReceiverKernel,
+            kPipeDiscardReceiverKernel,
             0,
-            gcb_abi::kModeStallUntilReleased,
+            pipe_abi::kModeStallUntilReleased,
             kFifoPages,
-            kGcbSmokeWaitBudgetCycles,
+            kPipeSmokeWaitBudgetCycles,
             popped_schedule)});
 
-    const GcbFifoEndState credited = expected_gcb_fifo_end_state(credited_schedule, kGcbSmokeFifoBytes);
-    const GcbFifoEndState popped = expected_gcb_fifo_end_state(popped_schedule, kGcbSmokeFifoBytes);
-    const std::vector<uint32_t> sender_status = smoke.run_sender(kGcbSmokeStallBudgetCycles, sender_schedule);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusCode], gcb_abi::kCodeCreditTimeout);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusPagesDone], kPoppedPages + kFifoPages);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusWaitReceiver], 0u);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusWaitPagesSent], credited.credit_units);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusWaitPagesAcked], popped.credit_units);
+    const PipeFifoEndState credited = expected_pipe_fifo_end_state(credited_schedule, kPipeSmokeFifoBytes);
+    const PipeFifoEndState popped = expected_pipe_fifo_end_state(popped_schedule, kPipeSmokeFifoBytes);
+    const std::vector<uint32_t> sender_status = smoke.run_sender(kPipeSmokeStallBudgetCycles, sender_schedule);
+    EXPECT_EQ(sender_status[pipe_abi::kStatusCode], pipe_abi::kCodeCreditTimeout);
+    EXPECT_EQ(sender_status[pipe_abi::kStatusPagesDone], kPoppedPages + kFifoPages);
+    EXPECT_EQ(sender_status[pipe_abi::kStatusWaitReceiver], 0u);
+    EXPECT_EQ(sender_status[pipe_abi::kStatusWaitPagesSent], credited.credit_units);
+    EXPECT_EQ(sender_status[pipe_abi::kStatusWaitPagesAcked], popped.credit_units);
     ASSERT_TRUE(smoke.wait_for_holding(0, kFifoPages));
     receivers.stop_and_wait();
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeReleased);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], kPoppedPages);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeReleased);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], kPoppedPages);
     ASSERT_NE(popped.fifo_offset, 0u);
     smoke.expect_fifo_state(0, credited, popped.credit_units, 0);
 }
 
 // The receiver holds everything the sender sent, so the sender's final barrier expires with DRAIN_TIMEOUT. Then the
 // host releases the receiver.
-TEST_F(MimirPrefetcher, GcbSmokeDrainTimeout) {
+TEST_F(MimirPrefetcher, PipeSmokeDrainTimeout) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    GcbSmoke smoke(mesh, 0, {gcb_smoke_local_receiver(mesh)});
+    PipeSmoke smoke(mesh, 0, {pipe_smoke_local_receiver(mesh)});
     constexpr uint32_t kPageBytes = 256;
     constexpr uint32_t kSentPages = 8;
-    const std::vector<GcbSmokeRequest> sender_schedule = {
+    const std::vector<PipeSmokeRequest> sender_schedule = {
         {.tensor_id = 13, .slab = 0, .page_bytes = kPageBytes, .num_pages = kSentPages}};
     CceReceiverProgram receivers(
         smoke.device(),
         {smoke.receiver_launch(
             0,
-            kGcbDiscardReceiverKernel,
+            kPipeDiscardReceiverKernel,
             0,
-            gcb_abi::kModeStallUntilReleased,
+            pipe_abi::kModeStallUntilReleased,
             kSentPages,
-            kGcbSmokeWaitBudgetCycles,
+            kPipeSmokeWaitBudgetCycles,
             {{.tensor_id = 13, .slab = 0, .page_bytes = kPageBytes, .num_pages = 0}})});
 
-    const std::vector<uint32_t> sender_status = smoke.run_sender(kGcbSmokeStallBudgetCycles, sender_schedule);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusCode], gcb_abi::kCodeDrainTimeout);
-    EXPECT_EQ(sender_status[gcb_abi::kStatusPagesDone], kSentPages);
+    const std::vector<uint32_t> sender_status = smoke.run_sender(kPipeSmokeStallBudgetCycles, sender_schedule);
+    EXPECT_EQ(sender_status[pipe_abi::kStatusCode], pipe_abi::kCodeDrainTimeout);
+    EXPECT_EQ(sender_status[pipe_abi::kStatusPagesDone], kSentPages);
     ASSERT_TRUE(smoke.wait_for_holding(0, kSentPages));
     receivers.stop_and_wait();
-    EXPECT_EQ(smoke.read_receiver_status(0)[gcb_abi::kStatusCode], gcb_abi::kCodeReleased);
-    smoke.expect_fifo_state(0, expected_gcb_fifo_end_state(sender_schedule, kGcbSmokeFifoBytes), 0, 0);
+    EXPECT_EQ(smoke.read_receiver_status(0)[pipe_abi::kStatusCode], pipe_abi::kCodeReleased);
+    smoke.expect_fifo_state(0, expected_pipe_fifo_end_state(sender_schedule, kPipeSmokeFifoBytes), 0, 0);
 }
 
 // No sender runs. The host credits a few pages, the receiver drains them, and its next front wait expires; it reports
 // CREDIT_TIMEOUT and writes rd_ptr back past the drained pages.
-TEST_F(MimirPrefetcher, GcbSmokeReceiverWaitTimeout) {
+TEST_F(MimirPrefetcher, PipeSmokeReceiverWaitTimeout) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    GcbSmoke smoke(mesh, 0, {gcb_smoke_local_receiver(mesh)});
+    PipeSmoke smoke(mesh, 0, {pipe_smoke_local_receiver(mesh)});
     constexpr uint32_t kPageBytes = 256;
     constexpr uint32_t kCreditedPages = 4;
-    const GcbFifoEndState credited = expected_gcb_fifo_end_state(
-        {{.tensor_id = 14, .slab = 0, .page_bytes = kPageBytes, .num_pages = kCreditedPages}}, kGcbSmokeFifoBytes);
+    const PipeFifoEndState credited = expected_pipe_fifo_end_state(
+        {{.tensor_id = 14, .slab = 0, .page_bytes = kPageBytes, .num_pages = kCreditedPages}}, kPipeSmokeFifoBytes);
     smoke.credit_from_host(0, credited.credit_units);
     CceReceiverProgram receivers(
         smoke.device(),
         {smoke.receiver_launch(
             0,
-            kGcbDiscardReceiverKernel,
+            kPipeDiscardReceiverKernel,
             0,
-            gcb_abi::kModeDrainCount,
+            pipe_abi::kModeDrainCount,
             0,
-            kGcbSmokeStallBudgetCycles,
+            kPipeSmokeStallBudgetCycles,
             {{.tensor_id = 14, .slab = 0, .page_bytes = kPageBytes, .num_pages = 2 * kCreditedPages}})});
 
     receivers.wait_for_exit();
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeCreditTimeout);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], kCreditedPages);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeCreditTimeout);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], kCreditedPages);
     smoke.expect_fifo_state(
         0, {.credit_units = credited.credit_units, .fifo_offset = 0}, credited.credit_units, credited.fifo_offset);
 }
 
-// Two sender and validator runs on one GCB: the second pair resumes from the wr_ptr and rd_ptr the first left in TL1,
-// and its 512 B pages pad from the first run's 1280 B to 1536 B.
-TEST_F(MimirPrefetcher, GcbSmokeRelaunchResumes) {
+// Two sender and validator runs on one pipe set: the second pair resumes from the wr_ptr and rd_ptr the first left in
+// TL1, and its 512 B pages pad from the first run's 1280 B to 1536 B.
+TEST_F(MimirPrefetcher, PipeSmokeRelaunchResumes) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    GcbSmoke smoke(mesh, 0, {gcb_smoke_local_receiver(mesh)});
-    const std::vector<GcbSmokeRequest> first_schedule = {
+    PipeSmoke smoke(mesh, 0, {pipe_smoke_local_receiver(mesh)});
+    const std::vector<PipeSmokeRequest> first_schedule = {
         {.tensor_id = 11, .slab = 0, .page_bytes = 256, .num_pages = 5}};
-    const std::vector<GcbSmokeRequest> second_schedule = {
+    const std::vector<PipeSmokeRequest> second_schedule = {
         {.tensor_id = 12, .slab = 0, .page_bytes = 512, .num_pages = 6}};
 
     CceReceiverProgram first_receivers(smoke.device(), {validator_launch(smoke, 0, first_schedule)});
-    EXPECT_EQ(smoke.run_sender(kGcbSmokeWaitBudgetCycles, first_schedule)[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
+    EXPECT_EQ(smoke.run_sender(kPipeSmokeWaitBudgetCycles, first_schedule)[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
     first_receivers.stop_and_wait();
-    EXPECT_EQ(smoke.read_receiver_status(0)[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
+    EXPECT_EQ(smoke.read_receiver_status(0)[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
 
     smoke.reset_kernel_blocks();
     CceReceiverProgram second_receivers(smoke.device(), {validator_launch(smoke, 0, second_schedule)});
-    EXPECT_EQ(smoke.run_sender(kGcbSmokeWaitBudgetCycles, second_schedule)[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
+    EXPECT_EQ(smoke.run_sender(kPipeSmokeWaitBudgetCycles, second_schedule)[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
     second_receivers.stop_and_wait();
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], gcb_smoke_total_pages(second_schedule));
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], pipe_smoke_total_pages(second_schedule));
 
-    std::vector<GcbSmokeRequest> both_schedules = first_schedule;
+    std::vector<PipeSmokeRequest> both_schedules = first_schedule;
     both_schedules.insert(both_schedules.end(), second_schedule.begin(), second_schedule.end());
-    const GcbFifoEndState end_state = expected_gcb_fifo_end_state(both_schedules, kGcbSmokeFifoBytes);
+    const PipeFifoEndState end_state = expected_pipe_fifo_end_state(both_schedules, kPipeSmokeFifoBytes);
     smoke.expect_fifo_state(0, end_state, end_state.credit_units, end_state.fifo_offset);
 }
 
 // The support preconditions check firmware presence, not idleness, so they stay ok while a receiver Program runs on
-// another bank's sender CCE. This test sits here because it needs GcbSmoke.
+// another bank's sender CCE. This test sits here because it needs PipeSmoke.
 TEST_F(MimirPrefetcher, SupportPreconditionsHoldWhileReceiverRuns) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -1161,14 +1170,20 @@ TEST_F(MimirPrefetcher, SupportPreconditionsHoldWhileReceiverRuns) {
     IDevice* device = mesh.get_devices().front();
     const std::optional<uint32_t> other_sender_bank = lifecycle_other_sender_bank(mesh);
     ASSERT_TRUE(other_sender_bank.has_value()) << "no DRAM view has a sender CCE other than bank 0's";
-    const uint32_t other_sender_cce = gcb_layout_sender_cce(device, mesh, *other_sender_bank);
+    const uint32_t other_sender_cce = pipe_layout_sender_cce(device, mesh, *other_sender_bank);
 
-    GcbSmoke smoke(mesh, 0, {other_sender_cce});
-    const std::vector<GcbSmokeRequest> schedule = {{.tensor_id = 10, .slab = 0, .page_bytes = 256, .num_pages = 0}};
+    PipeSmoke smoke(mesh, 0, {other_sender_cce});
+    const std::vector<PipeSmokeRequest> schedule = {{.tensor_id = 10, .slab = 0, .page_bytes = 256, .num_pages = 0}};
     CceReceiverProgram receivers(
         smoke.device(),
         {smoke.receiver_launch(
-            0, kGcbDiscardReceiverKernel, 0, gcb_abi::kModeDrainUntilStopped, 0, kGcbSmokeWaitBudgetCycles, schedule)});
+            0,
+            kPipeDiscardReceiverKernel,
+            0,
+            pipe_abi::kModeDrainUntilStopped,
+            0,
+            kPipeSmokeWaitBudgetCycles,
+            schedule)});
     EXPECT_EQ(read_go_signal(device, other_sender_cce), dev_msgs::RUN_MSG_GO) << "CCE " << other_sender_cce;
     const distributed::TensorPrefetcherPreconditions preconditions =
         distributed::TensorPrefetcherManagerTestAccess::preconditions(mesh);
@@ -1176,7 +1191,7 @@ TEST_F(MimirPrefetcher, SupportPreconditionsHoldWhileReceiverRuns) {
 
     receivers.stop_and_wait();
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeStopped);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeStopped);
 }
 
 CceSenderStatus lifecycle_sender_status(distributed::MeshDevice& mesh, uint32_t cce_index) {
@@ -1218,7 +1233,7 @@ inline constexpr uint32_t kLifecycleBadCommandWord = 0xFFFF'FFFF;
 std::vector<uint32_t> fill_lifecycle_control_block(distributed::MeshDevice& mesh, uint32_t cce_index) {
     std::vector<uint32_t> pattern(kCceSenderZeroedBytes / sizeof(uint32_t));
     for (uint32_t word = 0; word < pattern.size(); ++word) {
-        pattern[word] = kGcbLayoutFillPattern | word;
+        pattern[word] = kPipeLayoutFillPattern | word;
     }
     write_cce_tl1(mesh.get_devices().front(), cce_index, distributed::cce_sender_control_base(mesh), pattern);
     return pattern;
@@ -1281,7 +1296,7 @@ TEST_F(MimirPrefetcher, LifecycleStartStop) {
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
     IDevice* device = mesh.get_devices().front();
-    const uint32_t sender_cce = gcb_layout_sender_cce(device, mesh, 0);
+    const uint32_t sender_cce = pipe_layout_sender_cce(device, mesh, 0);
     log_info(
         tt::LogTest,
         "Lifecycle sender CCE {} control block 0x{:x}",
@@ -1306,7 +1321,7 @@ TEST_F(MimirPrefetcher, LifecycleStartStopTwice) {
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
     IDevice* device = mesh.get_devices().front();
-    const uint32_t sender_cce = gcb_layout_sender_cce(device, mesh, 0);
+    const uint32_t sender_cce = pipe_layout_sender_cce(device, mesh, 0);
     const uint32_t control_base = distributed::cce_sender_control_base(mesh);
 
     PrefetcherSession first_session(mesh, {0});
@@ -1345,23 +1360,23 @@ TEST_F(MimirPrefetcher, LifecycleBusySenderFailsStart) {
     if (!busy_bank.has_value()) {
         GTEST_SKIP();
     }
-    const uint32_t idle_sender_cce = gcb_layout_sender_cce(device, mesh, 0);
-    const uint32_t busy_sender_cce = gcb_layout_sender_cce(device, mesh, *busy_bank);
+    const uint32_t idle_sender_cce = pipe_layout_sender_cce(device, mesh, 0);
+    const uint32_t busy_sender_cce = pipe_layout_sender_cce(device, mesh, *busy_bank);
 
     const uint32_t control_base = distributed::cce_sender_control_base(mesh);
     const std::vector<uint32_t> pattern = fill_lifecycle_control_block(mesh, idle_sender_cce);
     fill_lifecycle_control_block(mesh, busy_sender_cce);
 
-    GcbSmoke smoke(mesh, 0, {busy_sender_cce});
+    PipeSmoke smoke(mesh, 0, {busy_sender_cce});
     CceReceiverProgram receivers(
         smoke.device(),
         {smoke.receiver_launch(
             0,
-            kGcbDiscardReceiverKernel,
+            kPipeDiscardReceiverKernel,
             0,
-            gcb_abi::kModeDrainUntilStopped,
+            pipe_abi::kModeDrainUntilStopped,
             0,
-            kGcbSmokeWaitBudgetCycles,
+            kPipeSmokeWaitBudgetCycles,
             {{.tensor_id = 15, .slab = 0, .page_bytes = 256, .num_pages = 0}})});
 
     const std::string start_error =
@@ -1376,10 +1391,10 @@ TEST_F(MimirPrefetcher, LifecycleBusySenderFailsStart) {
     }
 
     receivers.stop_and_wait();
-    EXPECT_EQ(smoke.read_receiver_status(0)[gcb_abi::kStatusCode], gcb_abi::kCodeStopped);
+    EXPECT_EQ(smoke.read_receiver_status(0)[pipe_abi::kStatusCode], pipe_abi::kCodeStopped);
 }
 
-// Bank 0's GCB delivers to the CCE that is the other provisioned bank's sender, so Queue fails before anything is
+// Bank 0's pipe set delivers to the CCE that is the other provisioned bank's sender, so Queue fails before anything is
 // queued. The tensor list is empty: the receiver check comes first, so no PREFETCH data is needed.
 TEST_F(MimirPrefetcher, LifecycleQueueRejectsReceiverOnSender) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
@@ -1392,18 +1407,19 @@ TEST_F(MimirPrefetcher, LifecycleQueueRejectsReceiverOnSender) {
     if (!other_bank.has_value()) {
         GTEST_SKIP();
     }
-    const uint32_t other_sender_cce = gcb_layout_sender_cce(device, mesh, *other_bank);
-    GcbSmoke smoke(mesh, 0, {other_sender_cce});
+    const uint32_t other_sender_cce = pipe_layout_sender_cce(device, mesh, *other_bank);
+    PipeSmoke smoke(mesh, 0, {other_sender_cce});
 
     PrefetcherSession session(mesh, {0, *other_bank});
-    const std::string queue_error = lifecycle_error(
-        [&mesh, &smoke]() { experimental::QueueTensorPrefetcherRequest(mesh, smoke.gcb().pipes(), std::nullopt, {}); });
+    const std::string queue_error = lifecycle_error([&mesh, &smoke]() {
+        experimental::QueueTensorPrefetcherRequest(mesh, smoke.pipe_set().pipes(), std::nullopt, {});
+    });
     log_info(tt::LogTest, "Lifecycle Queue to CCE {}: {}", other_sender_cce, queue_error);
     EXPECT_NE(queue_error.find(fmt::format("receiver CCE {} ", other_sender_cce)), std::string::npos) << queue_error;
     EXPECT_NE(queue_error.find("provisioned sender CCEs"), std::string::npos) << queue_error;
 
     session.stop();
-    expect_lifecycle_sender_stopped(mesh, gcb_layout_sender_cce(device, mesh, 0), 1);
+    expect_lifecycle_sender_stopped(mesh, pipe_layout_sender_cce(device, mesh, 0), 1);
     expect_lifecycle_sender_stopped(mesh, other_sender_cce, 1);
 }
 
@@ -1417,7 +1433,7 @@ TEST_F(MimirPrefetcher, LifecycleWaitCq) {
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    const uint32_t sender_cce = gcb_layout_sender_cce(mesh.get_devices().front(), mesh, 0);
+    const uint32_t sender_cce = pipe_layout_sender_cce(mesh.get_devices().front(), mesh, 0);
     distributed::MeshCommandQueue& command_queue = mesh.mesh_command_queue(0);
 
     // queue_cq_wait_without_signal waits on CQ 0.
@@ -1433,7 +1449,7 @@ TEST_F(MimirPrefetcher, LifecycleWaitCq) {
             return status.state != static_cast<uint32_t>(CceSenderState::NotStarted) &&
                    status.state != static_cast<uint32_t>(CceSenderState::Running);
         },
-        kGcbSmokeHostWaitLimit);
+        kPipeSmokeHostWaitLimit);
     ASSERT_EQ(waiting.state, static_cast<uint32_t>(CceSenderState::WaitingCq));
     const CceSenderStatus held = poll_sender_status(
         mesh,
@@ -1467,12 +1483,12 @@ TEST_F(MimirPrefetcher, LifecycleDrainAtStop) {
     }
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
-    GcbSmoke smoke(mesh, 0, {gcb_smoke_local_receiver(mesh)});
-    const uint32_t sender_cce = gcb_layout_sender_cce(smoke.device(), mesh, 0);
+    PipeSmoke smoke(mesh, 0, {pipe_smoke_local_receiver(mesh)});
+    const uint32_t sender_cce = pipe_layout_sender_cce(smoke.device(), mesh, 0);
     const uint32_t page_units = kLifecycleDrainPageBytes / kDramReceiverCreditUnitBytes;
     PrefetcherSession session(mesh, {0});
     distributed::TensorPrefetcherManagerTestAccess::register_drain_target(
-        mesh.impl().tensor_prefetcher(&mesh), smoke.gcb().pipes());
+        mesh.impl().tensor_prefetcher(&mesh), smoke.pipe_set().pipes());
     smoke.credit_from_host(0, page_units);
 
     std::string stop_error;
@@ -1493,7 +1509,7 @@ TEST_F(MimirPrefetcher, LifecycleDrainAtStop) {
             return status.state != static_cast<uint32_t>(CceSenderState::NotStarted) &&
                    status.state != static_cast<uint32_t>(CceSenderState::Running);
         },
-        kGcbSmokeHostWaitLimit);
+        kPipeSmokeHostWaitLimit);
     EXPECT_EQ(draining.state, static_cast<uint32_t>(CceSenderState::Draining));
     const CceSenderStatus held = poll_sender_status(
         mesh,
@@ -1510,7 +1526,7 @@ TEST_F(MimirPrefetcher, LifecycleDrainAtStop) {
 
 // PrefetchOnePagePerSession*: one PREFETCH route per test. A sender CCE streams one 4 KiB page of a tensor on its own
 // DRAM view into a validator receiver, then a second session in the same mesh streams another tensor's page into the
-// same GCB.
+// same pipe set.
 
 inline constexpr uint32_t kSessionsPerRoute = 2;
 // One PREFETCH page, then Stop's DRAIN and STOP.
@@ -1582,7 +1598,7 @@ MeshTensor write_single_bank_tensor(
     for (uint32_t slab = 0; slab < geometry.num_slabs; ++slab) {
         for (uint32_t word = 0; word < slab_words; ++word) {
             words[(slab * slab_words) + word] =
-                gcb_abi::gcb_page_word(seed, tensor_id, slab, word / block_words, word % block_words);
+                pipe_abi::pipe_page_word(seed, tensor_id, slab, word / block_words, word % block_words);
         }
     }
     DistributedHostBuffer host_buffer = DistributedHostBuffer::create(mesh.shape());
@@ -1607,18 +1623,18 @@ MeshTensor write_single_bank_tensor(
 
 // The validator schedule entry for slab 0 of a write_single_bank_tensor tensor; receiver_launch moves it to the
 // receiver's slab.
-GcbSmokeRequest slab_tensor_request(uint32_t tensor_id, const SlabTensorGeometry& geometry) {
+PipeSmokeRequest slab_tensor_request(uint32_t tensor_id, const SlabTensorGeometry& geometry) {
     return {.tensor_id = tensor_id, .slab = 0, .page_bytes = geometry.block_bytes(), .num_pages = geometry.blocks};
 }
 
 // A validator on receiver table slot `slot` of `smoke` that consumed `schedule`: OK, every page, and both ends'
 // counters and pointers where the schedule leaves them.
-void expect_validated_delivery(const GcbSmoke& smoke, uint32_t slot, const std::vector<GcbSmokeRequest>& schedule) {
+void expect_validated_delivery(const PipeSmoke& smoke, uint32_t slot, const std::vector<PipeSmokeRequest>& schedule) {
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(slot);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk) << "receiver CCE " << smoke.receiver_cce(slot);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], gcb_smoke_total_pages(schedule))
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeOk) << "receiver CCE " << smoke.receiver_cce(slot);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], pipe_smoke_total_pages(schedule))
         << "receiver CCE " << smoke.receiver_cce(slot);
-    const GcbFifoEndState end_state = expected_gcb_fifo_end_state(schedule, smoke.fifo_bytes());
+    const PipeFifoEndState end_state = expected_pipe_fifo_end_state(schedule, smoke.fifo_bytes());
     smoke.expect_fifo_state(slot, end_state, end_state.credit_units, end_state.fifo_offset);
 }
 
@@ -1637,12 +1653,12 @@ void run_one_page_per_session_route(uint32_t sender_cce, uint32_t receiver_cce) 
         tt::LogTest, "One-page-per-session route CCE {} (bank {}) -> CCE {}", sender_cce, *sender_bank, receiver_cce);
 
     std::vector<MeshTensor> tensors;
-    std::vector<GcbSmokeRequest> schedule;
+    std::vector<PipeSmokeRequest> schedule;
     for (uint32_t session_index = 0; session_index < kSessionsPerRoute; ++session_index) {
         tensors.push_back(write_single_bank_tensor(mesh, *sender_bank, session_index, {}));
         schedule.push_back({.tensor_id = session_index, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1});
     }
-    GcbSmoke smoke(mesh, *sender_bank, {receiver_cce});
+    PipeSmoke smoke(mesh, *sender_bank, {receiver_cce});
     CceReceiverProgram receivers(device, {validator_launch(smoke, 0, schedule)});
 
     for (uint32_t session_index = 0; session_index < kSessionsPerRoute; ++session_index) {
@@ -1688,10 +1704,10 @@ inline constexpr uint32_t kBlocksPerSlab = 2;
 inline constexpr uint32_t kFanOutTensorId = 40;
 inline constexpr uint32_t kTwoSendersFirstTensorId = 41;
 inline constexpr uint32_t kTwoSendersSecondTensorId = 42;
-// The hart of the second GCB's validator on a receiver CCE that serves two GCBs.
-inline constexpr uint32_t kSecondGcbReceiverHart = 1;
+// The hart of the second pipe set's validator on a receiver CCE that serves two pipe sets.
+inline constexpr uint32_t kSecondPipeReceiverHart = 1;
 
-// One GCB from `sender_cce` to every CCE of `receiver_cces`, each reading its own slab of one tensor.
+// One pipe set from `sender_cce` to every CCE of `receiver_cces`, each reading its own slab of one tensor.
 void run_fan_out(uint32_t sender_cce, const std::vector<uint32_t>& receiver_cces) {
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
@@ -1704,8 +1720,8 @@ void run_fan_out(uint32_t sender_cce, const std::vector<uint32_t>& receiver_cces
     const SlabTensorGeometry geometry{
         .num_slabs = static_cast<uint32_t>(receiver_cces.size()), .blocks = kBlocksPerSlab};
     const MeshTensor tensor = write_single_bank_tensor(mesh, *sender_bank, kFanOutTensorId, geometry);
-    const std::vector<GcbSmokeRequest> schedule = {slab_tensor_request(kFanOutTensorId, geometry)};
-    GcbSmoke smoke(mesh, *sender_bank, receiver_cces);
+    const std::vector<PipeSmokeRequest> schedule = {slab_tensor_request(kFanOutTensorId, geometry)};
+    PipeSmoke smoke(mesh, *sender_bank, receiver_cces);
     std::vector<CceKernelLaunch> launches;
     for (uint32_t slot = 0; slot < receiver_cces.size(); ++slot) {
         launches.push_back(validator_launch(smoke, slot, schedule));
@@ -1722,8 +1738,8 @@ void run_fan_out(uint32_t sender_cce, const std::vector<uint32_t>& receiver_cces
     }
 }
 
-// Two senders in one session, each with its own GCB to `receiver_cce`, deliver concurrently. The GCBs hold disjoint
-// windows of the receiver zone, and their validators run on two harts of the receiver CCE in one Program.
+// Two senders in one session, each with its own pipe set to `receiver_cce`, deliver concurrently. The pipe sets hold
+// disjoint windows of the receiver zone, and their validators run on two harts of the receiver CCE in one Program.
 void run_two_senders(uint32_t first_sender_cce, uint32_t second_sender_cce, uint32_t receiver_cce) {
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
@@ -1744,13 +1760,13 @@ void run_two_senders(uint32_t first_sender_cce, uint32_t second_sender_cce, uint
     const SlabTensorGeometry geometry{.blocks = kBlocksPerSlab};
     const MeshTensor first_tensor = write_single_bank_tensor(mesh, *first_bank, kTwoSendersFirstTensorId, geometry);
     const MeshTensor second_tensor = write_single_bank_tensor(mesh, *second_bank, kTwoSendersSecondTensorId, geometry);
-    const std::vector<GcbSmokeRequest> first_schedule = {slab_tensor_request(kTwoSendersFirstTensorId, geometry)};
-    const std::vector<GcbSmokeRequest> second_schedule = {slab_tensor_request(kTwoSendersSecondTensorId, geometry)};
-    GcbSmoke first_smoke(mesh, *first_bank, {receiver_cce});
-    GcbSmoke second_smoke(mesh, *second_bank, {receiver_cce});
-    expect_gcb_layout_ranges_disjoint(first_smoke.gcb(), second_smoke.gcb());
+    const std::vector<PipeSmokeRequest> first_schedule = {slab_tensor_request(kTwoSendersFirstTensorId, geometry)};
+    const std::vector<PipeSmokeRequest> second_schedule = {slab_tensor_request(kTwoSendersSecondTensorId, geometry)};
+    PipeSmoke first_smoke(mesh, *first_bank, {receiver_cce});
+    PipeSmoke second_smoke(mesh, *second_bank, {receiver_cce});
+    expect_pipe_layout_ranges_disjoint(first_smoke.pipe_set(), second_smoke.pipe_set());
     CceKernelLaunch second_launch = validator_launch(second_smoke, 0, second_schedule);
-    second_launch.hart = kSecondGcbReceiverHart;
+    second_launch.hart = kSecondPipeReceiverHart;
     CceReceiverProgram receivers(
         first_smoke.device(), {validator_launch(first_smoke, 0, first_schedule), second_launch});
     PrefetcherSession session(mesh, {*first_bank, *second_bank});
@@ -1789,11 +1805,11 @@ TEST_F(MimirPrefetcher, PrefetchTwoSenders02To3) {
     run_two_senders(0, 2, 3);
 }
 
-// Single-sender cases (MimirPrefetcherSingleGcb, MimirPrefetcherGcbSwitch and the fence test): what one sender
-// delivers, into one GCB or across a GCB switch, on the local route 0 -> 1 and the D2D route 0 -> 2. A tile is 4 KiB,
-// and the default stage ring's third is 4 KiB. Each case writes its tensors before any receiver runs and never rewrites
-// them. A repeated request gets its own tensor of the same geometry, so the validator checks bytes that request
-// delivered, not ones an earlier request left in the FIFO.
+// Single-sender cases (MimirPrefetcherSinglePipe, MimirPrefetcherPipeSwitch and the fence test): what one sender
+// delivers, into one pipe set or across a pipe set switch, on the local route 0 -> 1 and the D2D route 0 -> 2. A tile
+// is 4 KiB, and the default stage ring's third is 4 KiB. Each case writes its tensors before any receiver runs and
+// never rewrites them. A repeated request gets its own tensor of the same geometry, so the validator checks bytes that
+// request delivered, not ones an earlier request left in the FIFO.
 
 inline constexpr uint32_t kSenderCce = 0;
 inline constexpr uint32_t kLocalReceiverCce = 1;
@@ -1804,8 +1820,8 @@ struct CaseTensor {
     SlabTensorGeometry geometry;
 };
 
-struct SingleGcbCase {
-    uint32_t fifo_bytes = kGcbSmokeFifoBytes;
+struct SinglePipeCase {
+    uint32_t fifo_bytes = kPipeSmokeFifoBytes;
     uint32_t stage_ring_bytes = distributed::QuasarTensorPrefetcherConfig{}.stage_ring_bytes;
     std::vector<CaseTensor> tensors;
     // One entry per Queue call: positions in `tensors`, in order.
@@ -1824,7 +1840,7 @@ std::optional<uint32_t> sender_bank_for_route(distributed::MeshDevice& mesh, uin
 
 // Writes the case's tensors, makes each Queue call from kSenderCce in one session, and checks the validator on
 // `receiver_cce` saw every tensor in order.
-void run_single_gcb_case(uint32_t receiver_cce, const SingleGcbCase& test_case) {
+void run_single_pipe_case(uint32_t receiver_cce, const SinglePipeCase& test_case) {
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
     const std::optional<uint32_t> sender_bank = sender_bank_for_route(mesh, receiver_cce);
@@ -1842,23 +1858,23 @@ void run_single_gcb_case(uint32_t receiver_cce, const SingleGcbCase& test_case) 
     for (const CaseTensor& case_tensor : test_case.tensors) {
         tensors.push_back(write_single_bank_tensor(mesh, *sender_bank, case_tensor.tensor_id, case_tensor.geometry));
     }
-    std::vector<GcbSmokeRequest> schedule;
+    std::vector<PipeSmokeRequest> schedule;
     for (const std::vector<uint32_t>& queue_call : test_case.queue_calls) {
         for (const uint32_t position : queue_call) {
             const CaseTensor& case_tensor = test_case.tensors.at(position);
             schedule.push_back(slab_tensor_request(case_tensor.tensor_id, case_tensor.geometry));
         }
     }
-    GcbSmoke smoke(mesh, *sender_bank, {receiver_cce}, test_case.fifo_bytes);
+    PipeSmoke smoke(mesh, *sender_bank, {receiver_cce}, test_case.fifo_bytes);
     CceReceiverProgram receivers(smoke.device(), {validator_launch(smoke, 0, schedule)});
-    PrefetcherSession session(mesh, {*sender_bank}, kGcbSmokeWaitBudgetCycles, test_case.stage_ring_bytes);
+    PrefetcherSession session(mesh, {*sender_bank}, kPipeSmokeWaitBudgetCycles, test_case.stage_ring_bytes);
     for (const std::vector<uint32_t>& queue_call : test_case.queue_calls) {
         std::vector<experimental::TensorPrefetcherInput> inputs;
         for (const uint32_t position : queue_call) {
             inputs.push_back(experimental::TensorPrefetcherInput{
                 .tensor = tensors.at(position), .block_count = test_case.tensors.at(position).geometry.blocks});
         }
-        experimental::QueueTensorPrefetcherRequest(mesh, smoke.gcb().pipes(), std::nullopt, inputs);
+        experimental::QueueTensorPrefetcherRequest(mesh, smoke.pipe_set().pipes(), std::nullopt, inputs);
     }
     session.stop();
     expect_lifecycle_sender_stopped(mesh, kSenderCce, test_case.sender_requests);
@@ -1869,7 +1885,7 @@ void run_single_gcb_case(uint32_t receiver_cce, const SingleGcbCase& test_case) 
 
 // One 16 KiB block against a 12 KiB stage third: the fit ladder takes 2-tile (8 KiB) sub-chunks, which do not divide
 // the third, so each stage slot carries 8 KiB and the block passes through two slots.
-SingleGcbCase sub_chunk_case() {
+SinglePipeCase sub_chunk_case() {
     return {
         .fifo_bytes = 16 * kKiB,
         .stage_ring_bytes = 36 * kKiB,
@@ -1880,7 +1896,7 @@ SingleGcbCase sub_chunk_case() {
 
 // Four 4 KiB blocks against an 8 KiB stage third and a 16 KiB FIFO: one round moves all four blocks, two per stage
 // slot.
-SingleGcbCase below_stage_third_case() {
+SinglePipeCase below_stage_third_case() {
     return {
         .fifo_bytes = 16 * kKiB,
         .stage_ring_bytes = 24 * kKiB,
@@ -1891,7 +1907,7 @@ SingleGcbCase below_stage_third_case() {
 
 // Three 4 KiB blocks against an 8 KiB stage third and a 12 KiB FIFO: one 12 KiB round, an 8 KiB stage chunk and then a
 // 4 KiB tail chunk.
-SingleGcbCase partial_stage_chunk_case() {
+SinglePipeCase partial_stage_chunk_case() {
     return {
         .fifo_bytes = 12 * kKiB,
         .stage_ring_bytes = 24 * kKiB,
@@ -1901,7 +1917,7 @@ SingleGcbCase partial_stage_chunk_case() {
 }
 
 // One 8 KiB block against the default 4 KiB stage third: one-tile sub-chunks, two stage slots per block.
-SingleGcbCase above_stage_third_case() {
+SinglePipeCase above_stage_third_case() {
     return {
         .fifo_bytes = 8 * kKiB,
         .tensors = {{.tensor_id = 52, .geometry = {.block_tiles = 2}}},
@@ -1911,7 +1927,7 @@ SingleGcbCase above_stage_third_case() {
 
 // One Queue call with two tensors whose layouts differ (one block, then two). A page holds the 12 B header and one
 // 64 B layout slot with its 8 B entry, and the second slot does not fit, so the call becomes two PREFETCH pages.
-SingleGcbCase page_split_case() {
+SinglePipeCase page_split_case() {
     return {
         .tensors = {{.tensor_id = 53, .geometry = {}}, {.tensor_id = 54, .geometry = {.blocks = 2}}},
         .queue_calls = {{0, 1}},
@@ -1921,7 +1937,7 @@ SingleGcbCase page_split_case() {
 // Tensor A (4 KiB pages), tensor B (8 KiB pages), then a second tensor of A's geometry, as three requests into a
 // 16 KiB FIFO. B's resize pads wr_ptr from 4 KiB to 8 KiB on both ends, B wraps the FIFO, and the third request
 // resumes at the FIFO start.
-SingleGcbCase aba_case() {
+SinglePipeCase aba_case() {
     return {
         .fifo_bytes = 16 * kKiB,
         .tensors =
@@ -1936,7 +1952,7 @@ SingleGcbCase aba_case() {
 // not divide. The first 8 KiB request's resize wraps wr_ptr from 4 KiB to the start with 8 KiB of padding; every 8 KiB
 // page then ends at the 8 KiB page-aligned limit and wraps with the 4 KiB gap credited; the last request resizes back
 // with no padding.
-SingleGcbCase wrap_and_resize_case() {
+SinglePipeCase wrap_and_resize_case() {
     return {
         .fifo_bytes = 12 * kKiB,
         .tensors =
@@ -1948,55 +1964,55 @@ SingleGcbCase wrap_and_resize_case() {
         .sender_requests = 6};
 }
 
-struct SingleGcbParam {
+struct SinglePipeParam {
     const char* name;
-    SingleGcbCase (*make_case)();
+    SinglePipeCase (*make_case)();
     uint32_t receiver_cce;
 };
 
-class MimirPrefetcherSingleGcb : public MimirPrefetcher, public ::testing::WithParamInterface<SingleGcbParam> {};
+class MimirPrefetcherSinglePipe : public MimirPrefetcher, public ::testing::WithParamInterface<SinglePipeParam> {};
 
-TEST_P(MimirPrefetcherSingleGcb, Delivers) {
-    const SingleGcbParam param = GetParam();
+TEST_P(MimirPrefetcherSinglePipe, Delivers) {
+    const SinglePipeParam param = GetParam();
     if (param.receiver_cce == kD2dReceiverCce) {
         skip_unless_mimir_local_package();
     }
     MIMIR_ROUTE_GUARD({kSenderCce, param.receiver_cce});
-    run_single_gcb_case(param.receiver_cce, param.make_case());
+    run_single_pipe_case(param.receiver_cce, param.make_case());
 }
 
 // PageSplit is local only: the split happens in host serialization, before any page reaches the route.
 INSTANTIATE_TEST_SUITE_P(
     TensorPrefetcher,
-    MimirPrefetcherSingleGcb,
+    MimirPrefetcherSinglePipe,
     ::testing::Values(
-        SingleGcbParam{"SubChunkLocal0To1", sub_chunk_case, kLocalReceiverCce},
-        SingleGcbParam{"SubChunkD2d0To2", sub_chunk_case, kD2dReceiverCce},
-        SingleGcbParam{"BelowStageThirdLocal0To1", below_stage_third_case, kLocalReceiverCce},
-        SingleGcbParam{"BelowStageThirdD2d0To2", below_stage_third_case, kD2dReceiverCce},
-        SingleGcbParam{"PartialStageChunkLocal0To1", partial_stage_chunk_case, kLocalReceiverCce},
-        SingleGcbParam{"AboveStageThirdLocal0To1", above_stage_third_case, kLocalReceiverCce},
-        SingleGcbParam{"AboveStageThirdD2d0To2", above_stage_third_case, kD2dReceiverCce},
-        SingleGcbParam{"PageSplitLocal0To1", page_split_case, kLocalReceiverCce},
-        SingleGcbParam{"AbaLocal0To1", aba_case, kLocalReceiverCce},
-        SingleGcbParam{"AbaD2d0To2", aba_case, kD2dReceiverCce},
-        SingleGcbParam{"WrapAndResizeLocal0To1", wrap_and_resize_case, kLocalReceiverCce},
-        SingleGcbParam{"WrapAndResizeD2d0To2", wrap_and_resize_case, kD2dReceiverCce}),
-    [](const ::testing::TestParamInfo<SingleGcbParam>& info) { return std::string(info.param.name); });
+        SinglePipeParam{"SubChunkLocal0To1", sub_chunk_case, kLocalReceiverCce},
+        SinglePipeParam{"SubChunkD2d0To2", sub_chunk_case, kD2dReceiverCce},
+        SinglePipeParam{"BelowStageThirdLocal0To1", below_stage_third_case, kLocalReceiverCce},
+        SinglePipeParam{"BelowStageThirdD2d0To2", below_stage_third_case, kD2dReceiverCce},
+        SinglePipeParam{"PartialStageChunkLocal0To1", partial_stage_chunk_case, kLocalReceiverCce},
+        SinglePipeParam{"AboveStageThirdLocal0To1", above_stage_third_case, kLocalReceiverCce},
+        SinglePipeParam{"AboveStageThirdD2d0To2", above_stage_third_case, kD2dReceiverCce},
+        SinglePipeParam{"PageSplitLocal0To1", page_split_case, kLocalReceiverCce},
+        SinglePipeParam{"AbaLocal0To1", aba_case, kLocalReceiverCce},
+        SinglePipeParam{"AbaD2d0To2", aba_case, kD2dReceiverCce},
+        SinglePipeParam{"WrapAndResizeLocal0To1", wrap_and_resize_case, kLocalReceiverCce},
+        SinglePipeParam{"WrapAndResizeD2d0To2", wrap_and_resize_case, kD2dReceiverCce}),
+    [](const ::testing::TestParamInfo<SinglePipeParam>& info) { return std::string(info.param.name); });
 
-inline constexpr uint32_t kGcbSwitchFirstTensorId = 59;
-inline constexpr uint32_t kGcbSwitchSecondTensorId = 60;
-inline constexpr uint32_t kGcbSwitchThirdTensorId = 65;
-// Three pages of one tile. GCB1's first request leaves wr_ptr at 4 KiB for its second to resume from, and the second
-// ends at 8 KiB, not at the FIFO start, so a sender that never stores wr_ptr back fails the wr_ptr check.
-inline constexpr uint32_t kGcbSwitchFifoBytes = 12 * kKiB;
+inline constexpr uint32_t kPipeSwitchFirstTensorId = 59;
+inline constexpr uint32_t kPipeSwitchSecondTensorId = 60;
+inline constexpr uint32_t kPipeSwitchThirdTensorId = 65;
+// Three pages of one tile. Pipe set 1's first request leaves wr_ptr at 4 KiB for its second to resume from, and the
+// second ends at 8 KiB, not at the FIFO start, so a sender that never stores wr_ptr back fails the wr_ptr check.
+inline constexpr uint32_t kPipeSwitchFifoBytes = 12 * kKiB;
 inline constexpr uint32_t kFenceTensorId = 61;
 
-// GCB1, then GCB2, then GCB1 again, each with its own tensor, from kSenderCce. GCB1 delivers to `receiver_cce` and
-// GCB2 to `second_receiver_cce`; on one CCE the two validators run on two of its harts. GCB1's first request leaves
-// wr_ptr a third of the way through its FIFO, and the second resumes there from GCB1's state block. Stop's one DRAIN
-// page names both GCBs: three PREFETCH pages, the DRAIN and STOP.
-void run_gcb_switch(uint32_t receiver_cce, uint32_t second_receiver_cce) {
+// Pipe set 1, then pipe set 2, then pipe set 1 again, each with its own tensor, from kSenderCce. Pipe set 1 delivers to
+// `receiver_cce` and Pipe set 2 to `second_receiver_cce`; on one CCE the two validators run on two of its harts. Pipe
+// set 1's first request leaves wr_ptr a third of the way through its FIFO, and the second resumes there from pipe set
+// 1's state block. Stop's one DRAIN page names both pipe sets: three PREFETCH pages, the DRAIN and STOP.
+void run_pipe_switch(uint32_t receiver_cce, uint32_t second_receiver_cce) {
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
     const std::optional<uint32_t> sender_bank = sender_bank_for_route(mesh, receiver_cce);
@@ -2005,18 +2021,19 @@ void run_gcb_switch(uint32_t receiver_cce, uint32_t second_receiver_cce) {
         EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     }
     const SlabTensorGeometry geometry{};
-    const MeshTensor first_tensor = write_single_bank_tensor(mesh, *sender_bank, kGcbSwitchFirstTensorId, geometry);
-    const MeshTensor second_tensor = write_single_bank_tensor(mesh, *sender_bank, kGcbSwitchSecondTensorId, geometry);
-    const MeshTensor third_tensor = write_single_bank_tensor(mesh, *sender_bank, kGcbSwitchThirdTensorId, geometry);
-    const std::vector<GcbSmokeRequest> first_schedule = {
-        slab_tensor_request(kGcbSwitchFirstTensorId, geometry), slab_tensor_request(kGcbSwitchThirdTensorId, geometry)};
-    const std::vector<GcbSmokeRequest> second_schedule = {slab_tensor_request(kGcbSwitchSecondTensorId, geometry)};
-    GcbSmoke first_smoke(mesh, *sender_bank, {receiver_cce}, kGcbSwitchFifoBytes);
-    GcbSmoke second_smoke(mesh, *sender_bank, {second_receiver_cce}, kGcbSwitchFifoBytes);
-    expect_gcb_layout_ranges_disjoint(first_smoke.gcb(), second_smoke.gcb());
+    const MeshTensor first_tensor = write_single_bank_tensor(mesh, *sender_bank, kPipeSwitchFirstTensorId, geometry);
+    const MeshTensor second_tensor = write_single_bank_tensor(mesh, *sender_bank, kPipeSwitchSecondTensorId, geometry);
+    const MeshTensor third_tensor = write_single_bank_tensor(mesh, *sender_bank, kPipeSwitchThirdTensorId, geometry);
+    const std::vector<PipeSmokeRequest> first_schedule = {
+        slab_tensor_request(kPipeSwitchFirstTensorId, geometry),
+        slab_tensor_request(kPipeSwitchThirdTensorId, geometry)};
+    const std::vector<PipeSmokeRequest> second_schedule = {slab_tensor_request(kPipeSwitchSecondTensorId, geometry)};
+    PipeSmoke first_smoke(mesh, *sender_bank, {receiver_cce}, kPipeSwitchFifoBytes);
+    PipeSmoke second_smoke(mesh, *sender_bank, {second_receiver_cce}, kPipeSwitchFifoBytes);
+    expect_pipe_layout_ranges_disjoint(first_smoke.pipe_set(), second_smoke.pipe_set());
     CceKernelLaunch second_launch = validator_launch(second_smoke, 0, second_schedule);
     if (second_receiver_cce == receiver_cce) {
-        second_launch.hart = kSecondGcbReceiverHart;
+        second_launch.hart = kSecondPipeReceiverHart;
     }
     CceReceiverProgram receivers(
         first_smoke.device(), {validator_launch(first_smoke, 0, first_schedule), second_launch});
@@ -2032,16 +2049,16 @@ void run_gcb_switch(uint32_t receiver_cce, uint32_t second_receiver_cce) {
     expect_validated_delivery(second_smoke, 0, second_schedule);
 }
 
-struct GcbSwitchParam {
+struct PipeSwitchParam {
     const char* name;
     uint32_t receiver_cce;
     uint32_t second_receiver_cce;
 };
 
-class MimirPrefetcherGcbSwitch : public MimirPrefetcher, public ::testing::WithParamInterface<GcbSwitchParam> {};
+class MimirPrefetcherPipeSwitch : public MimirPrefetcher, public ::testing::WithParamInterface<PipeSwitchParam> {};
 
-TEST_P(MimirPrefetcherGcbSwitch, Delivers) {
-    const GcbSwitchParam param = GetParam();
+TEST_P(MimirPrefetcherPipeSwitch, Delivers) {
+    const PipeSwitchParam param = GetParam();
     if (param.receiver_cce == kD2dReceiverCce || param.second_receiver_cce == kD2dReceiverCce) {
         skip_unless_mimir_local_package();
     }
@@ -2050,19 +2067,19 @@ TEST_P(MimirPrefetcherGcbSwitch, Delivers) {
     } else {
         MIMIR_ROUTE_GUARD({kSenderCce, param.receiver_cce, param.second_receiver_cce});
     }
-    run_gcb_switch(param.receiver_cce, param.second_receiver_cce);
+    run_pipe_switch(param.receiver_cce, param.second_receiver_cce);
 }
 
-// ReceiverSwitch0To1Then2 is the same switch with GCB2 on another receiver CCE across D2D: CCE 1, then CCE 2, then back
-// to CCE 1.
+// ReceiverSwitch0To1Then2 is the same switch with pipe set 2 on another receiver CCE across D2D: CCE 1, then CCE 2,
+// then back to CCE 1.
 INSTANTIATE_TEST_SUITE_P(
     TensorPrefetcher,
-    MimirPrefetcherGcbSwitch,
+    MimirPrefetcherPipeSwitch,
     ::testing::Values(
-        GcbSwitchParam{"GcbSwitchLocal0To1", kLocalReceiverCce, kLocalReceiverCce},
-        GcbSwitchParam{"GcbSwitchD2d0To2", kD2dReceiverCce, kD2dReceiverCce},
-        GcbSwitchParam{"ReceiverSwitch0To1Then2", kLocalReceiverCce, kD2dReceiverCce}),
-    [](const ::testing::TestParamInfo<GcbSwitchParam>& info) { return std::string(info.param.name); });
+        PipeSwitchParam{"PipeSwitchLocal0To1", kLocalReceiverCce, kLocalReceiverCce},
+        PipeSwitchParam{"PipeSwitchD2d0To2", kD2dReceiverCce, kD2dReceiverCce},
+        PipeSwitchParam{"ReceiverSwitch0To1Then2", kLocalReceiverCce, kD2dReceiverCce}),
+    [](const ::testing::TestParamInfo<PipeSwitchParam>& info) { return std::string(info.param.name); });
 
 // The fence: a WAIT_SIGNAL for a value the CQ signal slot does not hold yet, queued through the manager's test hook,
 // then a PREFETCH. The sender waits in WAIT_SIGNAL and delivers nothing until the test writes the value into the slot.
@@ -2076,8 +2093,8 @@ TEST_F(MimirPrefetcher, PrefetchFenceHoldsDeliveryLocal0To1) {
     ASSERT_TRUE(sender_bank.has_value()) << "no DRAM view's prefetcher sender is CCE " << kSenderCce;
     const SlabTensorGeometry geometry{};
     const MeshTensor tensor = write_single_bank_tensor(mesh, *sender_bank, kFenceTensorId, geometry);
-    const std::vector<GcbSmokeRequest> schedule = {slab_tensor_request(kFenceTensorId, geometry)};
-    GcbSmoke smoke(mesh, *sender_bank, {kLocalReceiverCce});
+    const std::vector<PipeSmokeRequest> schedule = {slab_tensor_request(kFenceTensorId, geometry)};
+    PipeSmoke smoke(mesh, *sender_bank, {kLocalReceiverCce});
     CceReceiverProgram receivers(smoke.device(), {validator_launch(smoke, 0, schedule)});
     PrefetcherSession session(mesh, {*sender_bank});
 
@@ -2092,7 +2109,7 @@ TEST_F(MimirPrefetcher, PrefetchFenceHoldsDeliveryLocal0To1) {
             return status.request_index != 0 || (status.state != static_cast<uint32_t>(CceSenderState::NotStarted) &&
                                                  status.state != static_cast<uint32_t>(CceSenderState::Running));
         },
-        kGcbSmokeHostWaitLimit);
+        kPipeSmokeHostWaitLimit);
     ASSERT_EQ(waiting.state, static_cast<uint32_t>(CceSenderState::WaitingCq));
     const CceSenderStatus held = poll_sender_status(
         mesh,
@@ -2101,7 +2118,7 @@ TEST_F(MimirPrefetcher, PrefetchFenceHoldsDeliveryLocal0To1) {
         kSenderHoldTime);
     EXPECT_EQ(held.state, static_cast<uint32_t>(CceSenderState::WaitingCq));
     EXPECT_EQ(lifecycle_bytes_acked(mesh, kSenderCce), 0u);
-    EXPECT_EQ(smoke.read_status(smoke.receiver_cce(0))[gcb_abi::kStatusMagic], gcb_abi::kStatusPoison);
+    EXPECT_EQ(smoke.read_status(smoke.receiver_cce(0))[pipe_abi::kStatusMagic], pipe_abi::kStatusPoison);
     smoke.expect_fifo_state(0, {.credit_units = 0, .fifo_offset = 0}, 0, 0);
 
     log_info(tt::LogTest, "Fence: writing {} to CQ signal slot 0x{:x}", fence.value, fence.slot_address);
@@ -2114,41 +2131,42 @@ TEST_F(MimirPrefetcher, PrefetchFenceHoldsDeliveryLocal0To1) {
 
 // PrefetchRecoversAfter*: failures on D2D routes, either a MISMATCH the receiver reports while the sender stops OK, or
 // a CREDIT_TIMEOUT or DRAIN_TIMEOUT the sender reports. Each failure is torn down in this order: Stop, release the
-// receivers and wait for them, destroy the GCB. Then a fresh GCB, receivers and Start deliver one valid page. A session
-// whose sender should time out gets the stall budget, so the expiry takes seconds of host polling.
+// receivers and wait for them, destroy the pipe set. Then a fresh pipe set, receivers and Start deliver one valid page.
+// A session whose sender should time out gets the stall budget, so the expiry takes seconds of host polling.
 
 inline constexpr uint32_t kFailureTensorId = 20;
 inline constexpr uint32_t kRecoveryTensorId = 21;
-inline constexpr uint32_t kFifoOverflowPages = (kGcbSmokeFifoBytes / kUint32TilePageBytes) + 1;
+inline constexpr uint32_t kFifoOverflowPages = (kPipeSmokeFifoBytes / kUint32TilePageBytes) + 1;
 
 uint32_t one_tile_page_credit_units() {
-    return expected_gcb_fifo_end_state(
+    return expected_pipe_fifo_end_state(
                {{.tensor_id = kFailureTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1}},
-               kGcbSmokeFifoBytes)
+               kPipeSmokeFifoBytes)
         .credit_units;
 }
 
-CceKernelLaunch stalling_receiver_launch(const GcbSmoke& smoke) {
+CceKernelLaunch stalling_receiver_launch(const PipeSmoke& smoke) {
     return smoke.receiver_launch(
         0,
-        kGcbDiscardReceiverKernel,
+        kPipeDiscardReceiverKernel,
         0,
-        gcb_abi::kModeStallUntilReleased,
+        pipe_abi::kModeStallUntilReleased,
         1,
-        kGcbSmokeWaitBudgetCycles,
+        kPipeSmokeWaitBudgetCycles,
         {{.tensor_id = kFailureTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 0}});
 }
 
-// The recovery after a failure: a fresh GCB to `receiver_cce` with a validator, a fresh Start, and `tensor`'s one page.
+// The recovery after a failure: a fresh pipe set to `receiver_cce` with a validator, a fresh Start, and `tensor`'s one
+// page.
 void expect_recovery_delivers_one_page(
     distributed::MeshDevice& mesh,
     uint32_t sender_bank,
     uint32_t sender_cce,
     uint32_t receiver_cce,
     const MeshTensor& tensor) {
-    const std::vector<GcbSmokeRequest> schedule = {
+    const std::vector<PipeSmokeRequest> schedule = {
         {.tensor_id = kRecoveryTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1}};
-    GcbSmoke smoke(mesh, sender_bank, {receiver_cce});
+    PipeSmoke smoke(mesh, sender_bank, {receiver_cce});
     CceReceiverProgram receivers(smoke.device(), {validator_launch(smoke, 0, schedule)});
     PrefetcherSession session(mesh, {sender_bank});
     queue_tensor(mesh, smoke, tensor, 1);
@@ -2156,8 +2174,8 @@ void expect_recovery_delivers_one_page(
     expect_lifecycle_sender_stopped(mesh, sender_cce, kRequestsForOnePrefetch);
     receivers.stop_and_wait();
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], 1u);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], 1u);
 }
 
 // The validator recomputes the page with a wrong seed: it reports MISMATCH and keeps acking, so the sender stops OK.
@@ -2176,16 +2194,16 @@ TEST_F(MimirPrefetcher, PrefetchRecoversAfterMismatchD2d2To0) {
     const MeshTensor failure_tensor = write_single_bank_tensor(mesh, sender_bank, kFailureTensorId, {});
     const MeshTensor recovery_tensor = write_single_bank_tensor(mesh, sender_bank, kRecoveryTensorId, {});
     {
-        GcbSmoke smoke(mesh, sender_bank, {0});
+        PipeSmoke smoke(mesh, sender_bank, {0});
         CceReceiverProgram receivers(
             smoke.device(),
             {smoke.receiver_launch(
                 0,
-                kGcbValidatorReceiverKernel,
+                kPipeValidatorReceiverKernel,
                 seed ^ 0x1u,
                 0,
                 0,
-                kGcbSmokeWaitBudgetCycles,
+                kPipeSmokeWaitBudgetCycles,
                 {{.tensor_id = kFailureTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1}})});
         PrefetcherSession session(mesh, {sender_bank});
         queue_tensor(mesh, smoke, failure_tensor, 1);
@@ -2193,11 +2211,12 @@ TEST_F(MimirPrefetcher, PrefetchRecoversAfterMismatchD2d2To0) {
         expect_lifecycle_sender_stopped(mesh, 2, kRequestsForOnePrefetch);
         receivers.stop_and_wait();
         const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-        EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeMismatch);
-        EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], 1u);
-        EXPECT_EQ(receiver_status[gcb_abi::kStatusMismatchedWords], kUint32TileWords);
-        EXPECT_EQ(receiver_status[gcb_abi::kStatusFirstMismatchWord], 0u);
-        EXPECT_EQ(receiver_status[gcb_abi::kStatusObserved], gcb_abi::gcb_page_word(seed, kFailureTensorId, 0, 0, 0));
+        EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeMismatch);
+        EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], 1u);
+        EXPECT_EQ(receiver_status[pipe_abi::kStatusMismatchedWords], kUint32TileWords);
+        EXPECT_EQ(receiver_status[pipe_abi::kStatusFirstMismatchWord], 0u);
+        EXPECT_EQ(
+            receiver_status[pipe_abi::kStatusObserved], pipe_abi::pipe_page_word(seed, kFailureTensorId, 0, 0, 0));
     }
     expect_recovery_delivers_one_page(mesh, sender_bank, 2, 0, recovery_tensor);
 }
@@ -2220,11 +2239,11 @@ TEST_F(MimirPrefetcher, PrefetchRecoversAfterCreditTimeoutD2d1To3) {
         write_single_bank_tensor(mesh, sender_bank, kFailureTensorId, {.blocks = kFifoOverflowPages});
     const MeshTensor recovery_tensor = write_single_bank_tensor(mesh, sender_bank, kRecoveryTensorId, {});
     {
-        GcbSmoke smoke(mesh, sender_bank, {3});
+        PipeSmoke smoke(mesh, sender_bank, {3});
         CceReceiverProgram receivers(smoke.device(), {stalling_receiver_launch(smoke)});
-        PrefetcherSession session(mesh, {sender_bank}, kGcbSmokeStallBudgetCycles);
+        PrefetcherSession session(mesh, {sender_bank}, kPipeSmokeStallBudgetCycles);
         queue_tensor(mesh, smoke, failure_tensor, kFifoOverflowPages);
-        const CceSenderStatus failure = poll_sender_status(mesh, 1, sender_exited, kGcbSmokeHostWaitLimit);
+        const CceSenderStatus failure = poll_sender_status(mesh, 1, sender_exited, kPipeSmokeHostWaitLimit);
         EXPECT_EQ(failure.state, static_cast<uint32_t>(CceSenderState::Failed));
         EXPECT_EQ(failure.code, static_cast<uint32_t>(CceSenderStatusCode::CreditTimeout));
         EXPECT_EQ(failure.request_index, 0u);
@@ -2249,7 +2268,7 @@ TEST_F(MimirPrefetcher, PrefetchRecoversAfterCreditTimeoutD2d1To3) {
             read_cce_tl1(device, 1, ring_meta_address + offsetof(RingMeta, bytes_sent), sizeof(uint32_t)).front();
         EXPECT_EQ(bytes_sent - lifecycle_bytes_acked(mesh, 1), kCceRequestRingBytes);
         receivers.stop_and_wait();
-        EXPECT_EQ(smoke.read_receiver_status(0)[gcb_abi::kStatusCode], gcb_abi::kCodeReleased);
+        EXPECT_EQ(smoke.read_receiver_status(0)[pipe_abi::kStatusCode], pipe_abi::kCodeReleased);
     }
     expect_recovery_delivers_one_page(mesh, sender_bank, 1, 3, recovery_tensor);
 }
@@ -2268,9 +2287,9 @@ TEST_F(MimirPrefetcher, PrefetchRecoversAfterDrainTimeoutD2d1To3) {
     const MeshTensor failure_tensor = write_single_bank_tensor(mesh, sender_bank, kFailureTensorId, {});
     const MeshTensor recovery_tensor = write_single_bank_tensor(mesh, sender_bank, kRecoveryTensorId, {});
     {
-        GcbSmoke smoke(mesh, sender_bank, {3});
+        PipeSmoke smoke(mesh, sender_bank, {3});
         CceReceiverProgram receivers(smoke.device(), {stalling_receiver_launch(smoke)});
-        PrefetcherSession session(mesh, {sender_bank}, kGcbSmokeStallBudgetCycles);
+        PrefetcherSession session(mesh, {sender_bank}, kPipeSmokeStallBudgetCycles);
         queue_tensor(mesh, smoke, failure_tensor, 1);
         const std::string stop_error = lifecycle_error([&session]() { session.stop(); });
         EXPECT_NE(stop_error.find("ended Failed"), std::string::npos) << stop_error;
@@ -2279,12 +2298,12 @@ TEST_F(MimirPrefetcher, PrefetchRecoversAfterDrainTimeoutD2d1To3) {
         EXPECT_EQ(failure.state, static_cast<uint32_t>(CceSenderState::Failed));
         EXPECT_EQ(failure.code, static_cast<uint32_t>(CceSenderStatusCode::DrainTimeout));
         EXPECT_EQ(failure.request_index, 1u);
-        EXPECT_EQ(failure.target_state_addr, smoke.gcb().sender_state_drisc_l1_base());
+        EXPECT_EQ(failure.target_state_addr, smoke.pipe_set().sender_state_drisc_l1_base());
         EXPECT_EQ(failure.receiver, 0u);
         EXPECT_EQ(failure.sent, one_tile_page_credit_units());
         EXPECT_EQ(failure.acked, 0u);
         receivers.stop_and_wait();
-        EXPECT_EQ(smoke.read_receiver_status(0)[gcb_abi::kStatusCode], gcb_abi::kCodeReleased);
+        EXPECT_EQ(smoke.read_receiver_status(0)[pipe_abi::kStatusCode], pipe_abi::kCodeReleased);
     }
     expect_recovery_delivers_one_page(mesh, sender_bank, 1, 3, recovery_tensor);
 }
@@ -2295,17 +2314,17 @@ TEST_F(MimirPrefetcher, PrefetchRecoversAfterDrainTimeoutD2d1To3) {
 
 inline constexpr uint32_t kRejectTensorId = 30;
 
-// `queue_rejected_request` queues the case's request to the GCB and returns the error it throws.
+// `queue_rejected_request` queues the case's request to the pipe set and returns the error it throws.
 using RejectedQueue = std::function<std::string(
-    distributed::MeshDevice& mesh, const DramReceiverGcb& gcb, const MeshTensor& valid_tensor)>;
+    distributed::MeshDevice& mesh, const DramReceiverPipeSet& pipe_set, const MeshTensor& valid_tensor)>;
 
 void run_rejected_queue_case(const RejectedQueue& queue_rejected_request, const std::string& expected_error) {
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
     IDevice* device = mesh.get_devices().front();
-    const uint32_t sender_cce = gcb_layout_sender_cce(device, mesh, 0);
+    const uint32_t sender_cce = pipe_layout_sender_cce(device, mesh, 0);
     const MeshTensor valid_tensor = write_single_bank_tensor(mesh, 0, kRejectTensorId, {});
-    GcbSmoke smoke(mesh, 0, {gcb_smoke_local_receiver(mesh)});
+    PipeSmoke smoke(mesh, 0, {pipe_smoke_local_receiver(mesh)});
     CceReceiverProgram receivers(
         device,
         {validator_launch(
@@ -2314,7 +2333,7 @@ void run_rejected_queue_case(const RejectedQueue& queue_rejected_request, const 
             {{.tensor_id = kRejectTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1}})});
     PrefetcherSession session(mesh, {0});
 
-    const std::string queue_error = queue_rejected_request(mesh, smoke.gcb(), valid_tensor);
+    const std::string queue_error = queue_rejected_request(mesh, smoke.pipe_set(), valid_tensor);
     log_info(tt::LogTest, "QueueRejects Queue: {}", queue_error);
     EXPECT_NE(queue_error.find(expected_error), std::string::npos) << queue_error;
 
@@ -2323,8 +2342,8 @@ void run_rejected_queue_case(const RejectedQueue& queue_rejected_request, const 
     expect_lifecycle_sender_stopped(mesh, sender_cce, kRequestsForOnePrefetch);
     receivers.stop_and_wait();
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], 1u);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeOk);
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], 1u);
 }
 
 // An interleaved DRAM tensor has neither shard spec, so it resolves to the K-row-major layout.
@@ -2333,15 +2352,15 @@ TEST_F(MimirPrefetcher, QueueRejectsKRowMajorTensor) {
         GTEST_SKIP() << skip_reason;
     }
     run_rejected_queue_case(
-        [](distributed::MeshDevice& mesh, const DramReceiverGcb& gcb, const MeshTensor&) {
+        [](distributed::MeshDevice& mesh, const DramReceiverPipeSet& pipe_set, const MeshTensor&) {
             const MeshTensor interleaved_tensor = MeshTensor::allocate_on_device(
                 mesh,
                 TensorSpec(
                     Shape{32, 32}, TensorLayout(DataType::UINT32, Layout::TILE, MemoryConfig(BufferType::DRAM))));
-            return lifecycle_error([&mesh, &gcb, &interleaved_tensor]() {
+            return lifecycle_error([&mesh, &pipe_set, &interleaved_tensor]() {
                 experimental::QueueTensorPrefetcherRequest(
                     mesh,
-                    gcb.pipes(),
+                    pipe_set.pipes(),
                     std::nullopt,
                     {experimental::TensorPrefetcherInput{.tensor = interleaved_tensor, .block_count = 1}});
             });
@@ -2354,11 +2373,11 @@ TEST_F(MimirPrefetcher, QueueRejectsStreamingTensor) {
         GTEST_SKIP() << skip_reason;
     }
     run_rejected_queue_case(
-        [](distributed::MeshDevice& mesh, const DramReceiverGcb& gcb, const MeshTensor& valid_tensor) {
-            return lifecycle_error([&mesh, &gcb, &valid_tensor]() {
+        [](distributed::MeshDevice& mesh, const DramReceiverPipeSet& pipe_set, const MeshTensor& valid_tensor) {
+            return lifecycle_error([&mesh, &pipe_set, &valid_tensor]() {
                 experimental::QueueTensorPrefetcherRequest(
                     mesh,
-                    gcb.pipes(),
+                    pipe_set.pipes(),
                     std::nullopt,
                     {experimental::TensorPrefetcherInput{.tensor = valid_tensor, .block_count = 1, .rotation = {0}}});
             });
@@ -2375,12 +2394,12 @@ TEST_F(MimirPrefetcher, QueueRejectsRangePastTensor) {
         GTEST_SKIP();
     }
     run_rejected_queue_case(
-        [](distributed::MeshDevice& mesh, const DramReceiverGcb& gcb, const MeshTensor&) {
+        [](distributed::MeshDevice& mesh, const DramReceiverPipeSet& pipe_set, const MeshTensor&) {
             const MeshTensor other_bank_tensor = MeshTensor::allocate_on_device(mesh, single_bank_tensor_spec(1, {}));
-            return lifecycle_error([&mesh, &gcb, &other_bank_tensor]() {
+            return lifecycle_error([&mesh, &pipe_set, &other_bank_tensor]() {
                 experimental::QueueTensorPrefetcherRequest(
                     mesh,
-                    gcb.pipes(),
+                    pipe_set.pipes(),
                     std::nullopt,
                     {experimental::TensorPrefetcherInput{.tensor = other_bank_tensor, .block_count = 1}});
             });
@@ -2395,7 +2414,7 @@ TEST_F(MimirPrefetcher, QueueRejectsRangePastView) {
         GTEST_SKIP() << skip_reason;
     }
     run_rejected_queue_case(
-        [](distributed::MeshDevice& mesh, const DramReceiverGcb& gcb, const MeshTensor&) {
+        [](distributed::MeshDevice& mesh, const DramReceiverPipeSet& pipe_set, const MeshTensor&) {
             const TensorSpec spec = single_bank_tensor_spec(0, {});
             const DeviceAddr view_bytes = soc_desc_of(mesh.get_devices().front()).dram_view_size;
             std::shared_ptr<distributed::MeshBuffer> buffer = distributed::MeshBuffer::create(
@@ -2407,10 +2426,10 @@ TEST_F(MimirPrefetcher, QueueRejectsRangePastView) {
                 &mesh,
                 view_bytes - (kUint32TilePageBytes / 2));
             const MeshTensor past_view_tensor = MeshTensor::from_buffer(std::move(*buffer), spec);
-            return lifecycle_error([&mesh, &gcb, &past_view_tensor]() {
+            return lifecycle_error([&mesh, &pipe_set, &past_view_tensor]() {
                 experimental::QueueTensorPrefetcherRequest(
                     mesh,
-                    gcb.pipes(),
+                    pipe_set.pipes(),
                     std::nullopt,
                     {experimental::TensorPrefetcherInput{.tensor = past_view_tensor, .block_count = 1}});
             });

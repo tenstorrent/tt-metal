@@ -6,10 +6,10 @@
 // and takes request pages from its TL1 request ring (tensor_prefetcher_cce_abi.hpp), in order, acking
 // each on the ring's kernel line once it is handled:
 //   * STOP:     exit.
-//   * DRAIN:    for each listed GlobalCircularBuffer, wait until every receiver has acked everything this
+//   * DRAIN:    for each listed PrefetcherPipe target, wait until every receiver has acked everything this
 //               sender credited it.
 //   * WAIT_SIGNAL: wait until a CQ signal slot reaches the requested value (wrap-safe). An op signal slot is BadCmd.
-//   * PREFETCH: stream each listed tensor from this CCE's own DRAM view into a GlobalCircularBuffer's receivers,
+//   * PREFETCH: stream each listed tensor from this CCE's own DRAM view into a PrefetcherPipe's receivers,
 //               as the Blackhole sender's receiver-contiguous batched round does. A selector or a grouped tensor is
 //               BadLayout.
 // Waits are bounded by the wait budget, rdcycle cycles where 0 never expires. On an error the kernel
@@ -19,12 +19,12 @@
 
 #include "experimental/cce_gddr.h"
 #include "experimental/cce_hart.h"
-#include "experimental/cce_remote_cb.h"
+#include "experimental/cce_prefetcher_pipe.h"
 #include "tt_metal/impl/buffers/tensor_prefetcher_cce_abi.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
 
 namespace hart = experimental::cce_hart;
-namespace remote_cb = experimental::cce_remote_cb;
+namespace prefetcher_pipe = experimental::cce_prefetcher_pipe;
 
 using tt::tt_metal::CceSenderState;
 using tt::tt_metal::CceSenderStatus;
@@ -60,7 +60,7 @@ void publish_status(uint32_t status_addr, CceSenderState state, uint32_t request
     *hart::own_tl1_words(status_addr + offsetof(CceSenderStatus, state)) = static_cast<uint32_t>(state);
 }
 
-// DRAIN: the target words follow the header. A GlobalCircularBuffer's counters live in the sender state the
+// DRAIN: the target words follow the header. A target's counters live in the sender state the
 // word names, so they are read from there rather than from a request that may have moved on.
 RequestOutcome drain_targets(
     const TensorPrefetcherRequestHeader& header, const uint32_t* page_words, uint64_t budget_cycles) {
@@ -74,14 +74,14 @@ RequestOutcome drain_targets(
     for (uint32_t target = 0; target < num_targets; ++target) {
         const uint32_t target_word = target_words[target];
         outcome.target_state_addr = target_word;
-        const remote_cb::Sender sender = remote_cb::sender_init(target_word);
-        if (remote_cb::barrier_bounded(sender, budget_cycles) == remote_cb::WaitResult::Ready) {
+        const prefetcher_pipe::Sender sender = prefetcher_pipe::sender_init(target_word);
+        if (prefetcher_pipe::barrier_bounded(sender, budget_cycles) == prefetcher_pipe::WaitResult::Ready) {
             continue;
         }
         outcome.code = CceSenderStatusCode::DrainTimeout;
         for (uint32_t receiver = 0; receiver < sender.num_receivers; ++receiver) {
-            const uint32_t sent = remote_cb::receiver_pages_sent(sender, receiver);
-            const uint32_t acked = remote_cb::receiver_pages_acked(sender, receiver);
+            const uint32_t sent = prefetcher_pipe::receiver_pages_sent(sender, receiver);
+            const uint32_t acked = prefetcher_pipe::receiver_pages_acked(sender, receiver);
             if (acked != sent) {
                 outcome.receiver = receiver;
                 outcome.sent = sent;
@@ -135,7 +135,7 @@ struct PrefetchContext {
 // receiver `receiver`'s FIFO, `fifo_byte_offset` past wr_ptr. The credit that publishes them comes later.
 void deliver_chunk(
     const PrefetchContext& context,
-    const remote_cb::Sender& sender,
+    const prefetcher_pipe::Sender& sender,
     uint32_t receiver,
     uint64_t view_byte_offset,
     uint32_t stage_slot_addr,
@@ -150,7 +150,7 @@ void deliver_chunk(
     experimental::cce_gddr_read(
         context.mimir, context.view_offset + view_byte_offset, stage_slot_addr + MEM_L1_UNCACHED_BASE, num_words);
     experimental::cce_sram_write(
-        remote_cb::receiver_cce_index(sender, receiver),
+        prefetcher_pipe::receiver_cce_index(sender, receiver),
         sender.fifo_wr_ptr + fifo_byte_offset,
         stage_slot_addr + MEM_L1_UNCACHED_BASE,
         num_words);
@@ -167,30 +167,30 @@ void deliver_chunk(
 // all-zero-strobe beat. So the sender could not order a credit behind the data without loading the receiver's TL1
 // back, and a CCE kernel load of remote TL1 hung the emulator in the probes (iDMA case 3c).
 RequestOutcome deliver_tensor(
-    remote_cb::Sender& sender,
+    prefetcher_pipe::Sender& sender,
     const TensorPrefetcherEntry& entry,
     const TensorPrefetcherTensorLayout& layout,
     const PrefetchContext& context) {
     RequestOutcome outcome;
     const uint32_t page_bytes = layout.page_bytes_per_recv;
     const uint32_t chunk_bytes = layout.sub_chunk_bytes;
-    if (page_bytes == 0 || page_bytes % remote_cb::kCreditUnitBytes != 0 || chunk_bytes == 0 ||
+    if (page_bytes == 0 || page_bytes % prefetcher_pipe::kCreditUnitBytes != 0 || chunk_bytes == 0 ||
         chunk_bytes > context.stage_third || page_bytes % chunk_bytes != 0 || page_bytes > sender.fifo_size) {
         outcome.code = CceSenderStatusCode::BadLayout;
         return outcome;
     }
-    remote_cb::resize_sender(sender, page_bytes);
+    prefetcher_pipe::resize_sender(sender, page_bytes);
     const uint32_t stage_chunk_bytes = (context.stage_third / chunk_bytes) * chunk_bytes;
-    const uint32_t units_per_block = page_bytes / remote_cb::kCreditUnitBytes;
+    const uint32_t units_per_block = page_bytes / prefetcher_pipe::kCreditUnitBytes;
     uint32_t chunk_index = 0;
     uint32_t blocks_sent = 0;
     while (blocks_sent < layout.block_count) {
-        if (remote_cb::reserve_back_bounded(sender, page_bytes, context.budget_cycles) ==
-            remote_cb::WaitResult::Expired) {
+        if (prefetcher_pipe::reserve_back_bounded(sender, page_bytes, context.budget_cycles) ==
+            prefetcher_pipe::WaitResult::Expired) {
             outcome.code = CceSenderStatusCode::CreditTimeout;
             outcome.receiver = sender.slowest_receiver;
-            outcome.sent = remote_cb::receiver_pages_sent(sender, sender.slowest_receiver);
-            outcome.acked = remote_cb::receiver_pages_acked(sender, sender.slowest_receiver);
+            outcome.sent = prefetcher_pipe::receiver_pages_sent(sender, sender.slowest_receiver);
+            outcome.acked = prefetcher_pipe::receiver_pages_acked(sender, sender.slowest_receiver);
             return outcome;
         }
         uint32_t round_blocks = layout.target_per_visit_pages;
@@ -225,7 +225,7 @@ RequestOutcome deliver_tensor(
                 ++chunk_index;
             }
         }
-        remote_cb::finalize(sender, round_bytes);
+        prefetcher_pipe::finalize(sender, round_bytes);
         blocks_sent += round_blocks;
     }
     return outcome;
@@ -243,7 +243,7 @@ RequestOutcome prefetch_request(
         outcome.code = CceSenderStatusCode::BadCmd;
         return outcome;
     }
-    remote_cb::Sender sender = remote_cb::sender_init(header.prefetch.target_config_page_addr);
+    prefetcher_pipe::Sender sender = prefetcher_pipe::sender_init(header.prefetch.target_config_page_addr);
     for (uint32_t entry_index = 0; entry_index < num_entries; ++entry_index) {
         TensorPrefetcherEntry entry;
         __builtin_memcpy(
@@ -271,7 +271,7 @@ RequestOutcome prefetch_request(
             break;
         }
     }
-    remote_cb::store_sender_wr_ptr(sender);
+    prefetcher_pipe::store_sender_wr_ptr(sender);
     return outcome;
 }
 

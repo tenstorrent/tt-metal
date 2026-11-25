@@ -110,24 +110,24 @@ Rows 17 onward cover the Tensor Prefetcher on CCEs. They use the same environmen
 | 18 | `MimirPrefetcher.SupportPreconditionsFailOnUninitializedSender` | A sender CCE whose GO_MSG reads INIT fails the preconditions, naming that CCE | all |
 | 19 | `MimirPrefetcher.SupportStartStopSucceeds` | Start and Stop with no requests | all |
 | 20 | `MimirPrefetcher.SupportPreconditionsHoldWhileReceiverRuns` | Preconditions stay ok while a receiver Program runs on a sender CCE | all |
-| 21 | `MimirPrefetcher.GcbLayoutLocalReceiver` | DRAM-receiver GCB state block, config page and credit lines; same-Mimir receiver | all |
-| 22 | `MimirPrefetcher.GcbLayoutRemoteReceiver` | The same with a receiver on the other Mimir, receiver order kept | 2x only |
-| 23 | `MimirPrefetcher.GcbLayoutTwoSenders` | Two senders, one receiver each; a second such GCB takes disjoint ranges | 2x only |
-| 24 | `MimirPrefetcher.GcbLayoutRejectsConflictingReceivers` | Rejects aliased, sender-as-receiver and duplicate receivers | all |
-| 25 | `MimirPrefetcher.GcbSmokeDiscardDrain` | Test sender into a discarding receiver, without the manager; both ends' counters agree | all |
-| 26 | `MimirPrefetcher.GcbSmokeValidatorLocal` | Test sender into a validating receiver on the same Mimir | all |
-| 27 | `MimirPrefetcher.GcbSmokeValidatorWrongSeed` | The validator reports a mismatch for a wrong seed | all |
-| 28 | `MimirPrefetcher.GcbSmokeResize` | Three page sizes in one GCB, with resize and wrap padding | all |
-| 29 | `MimirPrefetcher.GcbSmokeValidatorD2d` | Validating receiver on the other Mimir | 2x only |
-| 30 | `MimirPrefetcher.GcbSmokeDrainUntilStopped` | Receiver drains until the host stops it | all |
-| 31 | `MimirPrefetcher.GcbSmokeStallUntilReleased` | The receiver holds a full FIFO, so the sender gives CREDIT_TIMEOUT; then the host releases it | all |
-| 32 | `MimirPrefetcher.GcbSmokeDrainTimeout` | The receiver holds every page, so the sender's final barrier gives DRAIN_TIMEOUT | all |
-| 33 | `MimirPrefetcher.GcbSmokeReceiverWaitTimeout` | No sender: the receiver drains host-credited pages, then its wait gives CREDIT_TIMEOUT | all |
-| 34 | `MimirPrefetcher.GcbSmokeRelaunchResumes` | A second sender and validator pair resumes from the pointers the first left in TL1 | all |
+| 21 | `MimirPrefetcher.PipeLayoutLocalReceiver` | DRAM-receiver pipe set state block, config page and credit lines; same-Mimir receiver | all |
+| 22 | `MimirPrefetcher.PipeLayoutRemoteReceiver` | The same with a receiver on the other Mimir, receiver order kept | 2x only |
+| 23 | `MimirPrefetcher.PipeLayoutTwoSenders` | Two senders, one receiver each; a second such pipe set takes disjoint ranges | 2x only |
+| 24 | `MimirPrefetcher.PipeLayoutRejectsConflictingReceivers` | Rejects aliased, sender-as-receiver and duplicate receivers | all |
+| 25 | `MimirPrefetcher.PipeSmokeDiscardDrain` | Test sender into a discarding receiver, without the manager; both ends' counters agree | all |
+| 26 | `MimirPrefetcher.PipeSmokeValidatorLocal` | Test sender into a validating receiver on the same Mimir | all |
+| 27 | `MimirPrefetcher.PipeSmokeValidatorWrongSeed` | The validator reports a mismatch for a wrong seed | all |
+| 28 | `MimirPrefetcher.PipeSmokeResize` | Three page sizes in one pipe set, with resize and wrap padding | all |
+| 29 | `MimirPrefetcher.PipeSmokeValidatorD2d` | Validating receiver on the other Mimir | 2x only |
+| 30 | `MimirPrefetcher.PipeSmokeDrainUntilStopped` | Receiver drains until the host stops it | all |
+| 31 | `MimirPrefetcher.PipeSmokeStallUntilReleased` | The receiver holds a full FIFO, so the sender gives CREDIT_TIMEOUT; then the host releases it | all |
+| 32 | `MimirPrefetcher.PipeSmokeDrainTimeout` | The receiver holds every page, so the sender's final barrier gives DRAIN_TIMEOUT | all |
+| 33 | `MimirPrefetcher.PipeSmokeReceiverWaitTimeout` | No sender: the receiver drains host-credited pages, then its wait gives CREDIT_TIMEOUT | all |
+| 34 | `MimirPrefetcher.PipeSmokeRelaunchResumes` | A second sender and validator pair resumes from the pointers the first left in TL1 | all |
 | 35 | `MimirPrefetcher.LifecycleStartStop` | Prefetcher Start and Stop; the sender reports Stopped | all |
 | 36 | `MimirPrefetcher.LifecycleStartStopTwice` | A second Start zeroes the control block the first session left; an unknown command left in ring slot 0 is never read | all |
 | 37 | `MimirPrefetcher.LifecycleBusySenderFailsStart` | Start fails on a sender CCE that runs a receiver Program, before it launches or zeroes anything | all |
-| 38 | `MimirPrefetcher.LifecycleQueueRejectsReceiverOnSender` | Queue rejects a GCB whose receiver is a sender CCE | all |
+| 38 | `MimirPrefetcher.LifecycleQueueRejectsReceiverOnSender` | Queue rejects a pipe set whose receiver is a sender CCE | all |
 | 39 | `MimirPrefetcher.LifecycleWaitCq` | A WAIT_SIGNAL holds the sender until the command queue writes its slot | all |
 | 40 | `MimirPrefetcher.LifecycleDrainAtStop` | Stop's DRAIN holds the sender until an unacked credit is acked, then STOP | all |
 | 41 | `MimirPrefetcher.PrefetchOnePagePerSessionLocal0To1` | One prefetch, CCE 0 to CCE 1, then Start, Queue and Stop again | all |
@@ -136,23 +136,23 @@ Rows 17 onward cover the Tensor Prefetcher on CCEs. They use the same environmen
 | 44 | `MimirPrefetcher.PrefetchOnePagePerSessionD2d3To1` | One prefetch, CCE 3 to CCE 1, one D2D hop | 2x only |
 | 45 | `MimirPrefetcher.PrefetchFanOut0To123` | Fan-out from CCE 0 to CCEs 1, 2 and 3 | 2x only |
 | 46 | `MimirPrefetcher.PrefetchFanOut3To012` | Fan-out from CCE 3 to CCEs 0, 1 and 2 | 2x only |
-| 47 | `MimirPrefetcher.PrefetchTwoSenders01To2` | Two senders, CCEs 0 and 1, into two GCBs on CCE 2 | 2x only |
-| 48 | `MimirPrefetcher.PrefetchTwoSenders02To3` | Two senders, CCEs 0 and 2, into two GCBs on CCE 3 | 2x only |
-| 49 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/SubChunkLocal0To1` | A block larger than a stage third, in sub-chunks through two stage slots | all |
-| 50 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/SubChunkD2d0To2` | The same across D2D | 2x only |
-| 51 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/BelowStageThirdLocal0To1` | Blocks smaller than a stage third, two per stage slot | all |
-| 52 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/BelowStageThirdD2d0To2` | The same across D2D | 2x only |
-| 53 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/PartialStageChunkLocal0To1` | A round that ends in a partial stage chunk | all |
-| 54 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AboveStageThirdLocal0To1` | A block above the default stage third, in one-tile sub-chunks | all |
-| 55 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AboveStageThirdD2d0To2` | The same across D2D | 2x only |
-| 56 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/PageSplitLocal0To1` | One Queue call split into two request pages; local only, since the split is on the host | all |
-| 57 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AbaLocal0To1` | Tensors A, B, A with different page sizes; resize and wrap | all |
-| 58 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AbaD2d0To2` | The same across D2D | 2x only |
-| 59 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/WrapAndResizeLocal0To1` | Resize padding and wraps in a FIFO the page size does not divide | all |
-| 60 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/WrapAndResizeD2d0To2` | The same across D2D | 2x only |
-| 61 | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/GcbSwitchLocal0To1` | GCB 1, then 2, then 1, resuming mid-FIFO | all |
-| 62 | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/GcbSwitchD2d0To2` | The same across D2D | 2x only |
-| 62a | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/ReceiverSwitch0To1Then2` | GCB 1 to CCE 1, then GCB 2 to CCE 2 across D2D, then GCB 1 again | 2x only |
+| 47 | `MimirPrefetcher.PrefetchTwoSenders01To2` | Two senders, CCEs 0 and 1, into two pipe sets on CCE 2 | 2x only |
+| 48 | `MimirPrefetcher.PrefetchTwoSenders02To3` | Two senders, CCEs 0 and 2, into two pipe sets on CCE 3 | 2x only |
+| 49 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/SubChunkLocal0To1` | A block larger than a stage third, in sub-chunks through two stage slots | all |
+| 50 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/SubChunkD2d0To2` | The same across D2D | 2x only |
+| 51 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/BelowStageThirdLocal0To1` | Blocks smaller than a stage third, two per stage slot | all |
+| 52 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/BelowStageThirdD2d0To2` | The same across D2D | 2x only |
+| 53 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/PartialStageChunkLocal0To1` | A round that ends in a partial stage chunk | all |
+| 54 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AboveStageThirdLocal0To1` | A block above the default stage third, in one-tile sub-chunks | all |
+| 55 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AboveStageThirdD2d0To2` | The same across D2D | 2x only |
+| 56 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/PageSplitLocal0To1` | One Queue call split into two request pages; local only, since the split is on the host | all |
+| 57 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AbaLocal0To1` | Tensors A, B, A with different page sizes; resize and wrap | all |
+| 58 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AbaD2d0To2` | The same across D2D | 2x only |
+| 59 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/WrapAndResizeLocal0To1` | Resize padding and wraps in a FIFO the page size does not divide | all |
+| 60 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/WrapAndResizeD2d0To2` | The same across D2D | 2x only |
+| 61 | `TensorPrefetcher/MimirPrefetcherPipeSwitch.Delivers/PipeSwitchLocal0To1` | pipe set 1, then 2, then 1, resuming mid-FIFO | all |
+| 62 | `TensorPrefetcher/MimirPrefetcherPipeSwitch.Delivers/PipeSwitchD2d0To2` | The same across D2D | 2x only |
+| 62a | `TensorPrefetcher/MimirPrefetcherPipeSwitch.Delivers/ReceiverSwitch0To1Then2` | pipe set 1 to CCE 1, then pipe set 2 to CCE 2 across D2D, then pipe set 1 again | 2x only |
 | 63 | `MimirPrefetcher.PrefetchFenceHoldsDeliveryLocal0To1` | A WAIT_SIGNAL fence holds delivery until the slot is written | all |
 | 64 | — | Removed on 2026-10-29: trace capture needs fast dispatch, and Mimir runs slow dispatch only | — |
 | 65 | `MimirPrefetcher.QueueRejectsKRowMajorTensor` | Queue rejects a K-row-major tensor | all |
@@ -592,17 +592,17 @@ Changes from the run order:
 | 18 | `MimirPrefetcher.SupportPreconditionsFailOnUninitializedSender` | pass | 4.5 s |
 | 19 | `MimirPrefetcher.SupportStartStopSucceeds` | pass | 6.7 s |
 | 20 | `MimirPrefetcher.SupportPreconditionsHoldWhileReceiverRuns` | pass | 6.0 s |
-| 21 | `MimirPrefetcher.GcbLayoutLocalReceiver` | pass | 4.8 s |
-| 24 | `MimirPrefetcher.GcbLayoutRejectsConflictingReceivers` | pass | 4.5 s |
-| 25 | `MimirPrefetcher.GcbSmokeDiscardDrain` | pass | 7.0 s |
-| 26 | `MimirPrefetcher.GcbSmokeValidatorLocal` | pass | 7.2 s |
-| 27 | `MimirPrefetcher.GcbSmokeValidatorWrongSeed` | pass | 6.8 s |
-| 28 | `MimirPrefetcher.GcbSmokeResize` | pass | 6.6 s |
-| 30 | `MimirPrefetcher.GcbSmokeDrainUntilStopped` | pass | 6.6 s |
-| 31 | `MimirPrefetcher.GcbSmokeStallUntilReleased` | pass | 9.0 s |
-| 32 | `MimirPrefetcher.GcbSmokeDrainTimeout` | pass | 8.8 s |
-| 33 | `MimirPrefetcher.GcbSmokeReceiverWaitTimeout` | pass | 8.2 s |
-| 34 | `MimirPrefetcher.GcbSmokeRelaunchResumes` | pass | 7.9 s |
+| 21 | `MimirPrefetcher.PipeLayoutLocalReceiver` | pass | 4.8 s |
+| 24 | `MimirPrefetcher.PipeLayoutRejectsConflictingReceivers` | pass | 4.5 s |
+| 25 | `MimirPrefetcher.PipeSmokeDiscardDrain` | pass | 7.0 s |
+| 26 | `MimirPrefetcher.PipeSmokeValidatorLocal` | pass | 7.2 s |
+| 27 | `MimirPrefetcher.PipeSmokeValidatorWrongSeed` | pass | 6.8 s |
+| 28 | `MimirPrefetcher.PipeSmokeResize` | pass | 6.6 s |
+| 30 | `MimirPrefetcher.PipeSmokeDrainUntilStopped` | pass | 6.6 s |
+| 31 | `MimirPrefetcher.PipeSmokeStallUntilReleased` | pass | 9.0 s |
+| 32 | `MimirPrefetcher.PipeSmokeDrainTimeout` | pass | 8.8 s |
+| 33 | `MimirPrefetcher.PipeSmokeReceiverWaitTimeout` | pass | 8.2 s |
+| 34 | `MimirPrefetcher.PipeSmokeRelaunchResumes` | pass | 7.9 s |
 | 35 | `MimirPrefetcher.LifecycleStartStop` | pass | 5.7 s |
 | 36 | `MimirPrefetcher.LifecycleStartStopTwice` | pass | 7.6 s |
 | 37 | `MimirPrefetcher.LifecycleBusySenderFailsStart` | pass | 6.1 s |
@@ -610,14 +610,14 @@ Changes from the run order:
 | 39 | `MimirPrefetcher.LifecycleWaitCq` | pass | 11 s |
 | 40 | `MimirPrefetcher.LifecycleDrainAtStop` | pass | 11 s |
 | 41 | `MimirPrefetcher.PrefetchOnePagePerSessionLocal0To1` | pass | 12 s |
-| 49 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/SubChunkLocal0To1` | pass | 14 s |
-| 51 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/BelowStageThirdLocal0To1` | pass | 13 s |
-| 53 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/PartialStageChunkLocal0To1` | pass | 13 s |
-| 54 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AboveStageThirdLocal0To1` | pass | 11 s |
-| 56 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/PageSplitLocal0To1` | pass | 12 s |
-| 57 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AbaLocal0To1` | pass | 14 s |
-| 59 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/WrapAndResizeLocal0To1` | pass | 18 s |
-| 61 | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/GcbSwitchLocal0To1` | pass | 13 s |
+| 49 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/SubChunkLocal0To1` | pass | 14 s |
+| 51 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/BelowStageThirdLocal0To1` | pass | 13 s |
+| 53 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/PartialStageChunkLocal0To1` | pass | 13 s |
+| 54 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AboveStageThirdLocal0To1` | pass | 11 s |
+| 56 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/PageSplitLocal0To1` | pass | 12 s |
+| 57 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AbaLocal0To1` | pass | 14 s |
+| 59 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/WrapAndResizeLocal0To1` | pass | 18 s |
+| 61 | `TensorPrefetcher/MimirPrefetcherPipeSwitch.Delivers/PipeSwitchLocal0To1` | pass | 13 s |
 | 63 | `MimirPrefetcher.PrefetchFenceHoldsDeliveryLocal0To1` | pass | 14 s |
 | 65 | `MimirPrefetcher.QueueRejectsKRowMajorTensor` | pass | 9.0 s |
 | 66 | `MimirPrefetcher.QueueRejectsStreamingTensor` | pass | 8.7 s |
@@ -1202,20 +1202,20 @@ Changes from the run order:
 | 18 | `MimirPrefetcher.SupportPreconditionsFailOnUninitializedSender` | pass | 24 s |
 | 19 | `MimirPrefetcher.SupportStartStopSucceeds` | pass | 30 s |
 | 20 | `MimirPrefetcher.SupportPreconditionsHoldWhileReceiverRuns` | pass | 29 s |
-| 21 | `MimirPrefetcher.GcbLayoutLocalReceiver` | pass | 26 s |
-| 22 | `MimirPrefetcher.GcbLayoutRemoteReceiver` | pass | 26 s |
-| 23 | `MimirPrefetcher.GcbLayoutTwoSenders` | pass | 28 s |
-| 24 | `MimirPrefetcher.GcbLayoutRejectsConflictingReceivers` | pass | 25 s |
-| 25 | `MimirPrefetcher.GcbSmokeDiscardDrain` | pass | 31 s |
-| 26 | `MimirPrefetcher.GcbSmokeValidatorLocal` | pass | 34 s |
-| 27 | `MimirPrefetcher.GcbSmokeValidatorWrongSeed` | pass | 34 s |
-| 28 | `MimirPrefetcher.GcbSmokeResize` | pass | 32 s |
-| 29 | `MimirPrefetcher.GcbSmokeValidatorD2d` | pass | 34 s |
-| 30 | `MimirPrefetcher.GcbSmokeDrainUntilStopped` | pass | 31 s |
-| 31 | `MimirPrefetcher.GcbSmokeStallUntilReleased` | pass | 49 s |
-| 32 | `MimirPrefetcher.GcbSmokeDrainTimeout` | pass | 49 s |
-| 33 | `MimirPrefetcher.GcbSmokeReceiverWaitTimeout` | pass | 45 s |
-| 34 | `MimirPrefetcher.GcbSmokeRelaunchResumes` | pass | 35 s |
+| 21 | `MimirPrefetcher.PipeLayoutLocalReceiver` | pass | 26 s |
+| 22 | `MimirPrefetcher.PipeLayoutRemoteReceiver` | pass | 26 s |
+| 23 | `MimirPrefetcher.PipeLayoutTwoSenders` | pass | 28 s |
+| 24 | `MimirPrefetcher.PipeLayoutRejectsConflictingReceivers` | pass | 25 s |
+| 25 | `MimirPrefetcher.PipeSmokeDiscardDrain` | pass | 31 s |
+| 26 | `MimirPrefetcher.PipeSmokeValidatorLocal` | pass | 34 s |
+| 27 | `MimirPrefetcher.PipeSmokeValidatorWrongSeed` | pass | 34 s |
+| 28 | `MimirPrefetcher.PipeSmokeResize` | pass | 32 s |
+| 29 | `MimirPrefetcher.PipeSmokeValidatorD2d` | pass | 34 s |
+| 30 | `MimirPrefetcher.PipeSmokeDrainUntilStopped` | pass | 31 s |
+| 31 | `MimirPrefetcher.PipeSmokeStallUntilReleased` | pass | 49 s |
+| 32 | `MimirPrefetcher.PipeSmokeDrainTimeout` | pass | 49 s |
+| 33 | `MimirPrefetcher.PipeSmokeReceiverWaitTimeout` | pass | 45 s |
+| 34 | `MimirPrefetcher.PipeSmokeRelaunchResumes` | pass | 35 s |
 | 35 | `MimirPrefetcher.LifecycleStartStop` | pass | 28 s |
 | 36 | `MimirPrefetcher.LifecycleStartStopTwice` | pass | 34 s |
 | 37 | `MimirPrefetcher.LifecycleBusySenderFailsStart` | pass | 28 s |
@@ -1230,21 +1230,21 @@ Changes from the run order:
 | 46 | `MimirPrefetcher.PrefetchFanOut3To012` | pass | 1 min 19 s |
 | 47 | `MimirPrefetcher.PrefetchTwoSenders01To2` | pass | 60 s |
 | 48 | `MimirPrefetcher.PrefetchTwoSenders02To3` | pass | 1 min 1 s |
-| 49 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/SubChunkLocal0To1` | pass | 1 min 21 s |
-| 50 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/SubChunkD2d0To2` | pass | 1 min 23 s |
-| 51 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/BelowStageThirdLocal0To1` | pass | 1 min 18 s |
-| 52 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/BelowStageThirdD2d0To2` | pass | 1 min 17 s |
-| 53 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/PartialStageChunkLocal0To1` | pass | 1 min 12 s |
-| 54 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AboveStageThirdLocal0To1` | pass | 56 s |
-| 55 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AboveStageThirdD2d0To2` | pass | 1 min 0 s |
-| 56 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/PageSplitLocal0To1` | pass | 1 min 3 s |
-| 57 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AbaLocal0To1` | pass | 1 min 25 s |
-| 58 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AbaD2d0To2` | pass | 1 min 19 s |
-| 59 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/WrapAndResizeLocal0To1` | pass | 1 min 38 s |
-| 60 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/WrapAndResizeD2d0To2` | pass | 1 min 33 s |
-| 61 | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/GcbSwitchLocal0To1` | pass | 1 min 1 s |
-| 62 | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/GcbSwitchD2d0To2` | pass | 1 min 2 s |
-| 62a | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/ReceiverSwitch0To1Then2` | pass | 1 min 3 s |
+| 49 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/SubChunkLocal0To1` | pass | 1 min 21 s |
+| 50 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/SubChunkD2d0To2` | pass | 1 min 23 s |
+| 51 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/BelowStageThirdLocal0To1` | pass | 1 min 18 s |
+| 52 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/BelowStageThirdD2d0To2` | pass | 1 min 17 s |
+| 53 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/PartialStageChunkLocal0To1` | pass | 1 min 12 s |
+| 54 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AboveStageThirdLocal0To1` | pass | 56 s |
+| 55 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AboveStageThirdD2d0To2` | pass | 1 min 0 s |
+| 56 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/PageSplitLocal0To1` | pass | 1 min 3 s |
+| 57 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AbaLocal0To1` | pass | 1 min 25 s |
+| 58 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AbaD2d0To2` | pass | 1 min 19 s |
+| 59 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/WrapAndResizeLocal0To1` | pass | 1 min 38 s |
+| 60 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/WrapAndResizeD2d0To2` | pass | 1 min 33 s |
+| 61 | `TensorPrefetcher/MimirPrefetcherPipeSwitch.Delivers/PipeSwitchLocal0To1` | pass | 1 min 1 s |
+| 62 | `TensorPrefetcher/MimirPrefetcherPipeSwitch.Delivers/PipeSwitchD2d0To2` | pass | 1 min 2 s |
+| 62a | `TensorPrefetcher/MimirPrefetcherPipeSwitch.Delivers/ReceiverSwitch0To1Then2` | pass | 1 min 3 s |
 | 63 | `MimirPrefetcher.PrefetchFenceHoldsDeliveryLocal0To1` | pass | 45 s |
 | 65 | `MimirPrefetcher.QueueRejectsKRowMajorTensor` | pass | 39 s |
 | 66 | `MimirPrefetcher.QueueRejectsStreamingTensor` | pass | 38 s |
@@ -1648,7 +1648,7 @@ Scope differences from 2026-11-04:
 - Only CCE 0 (and suites with no per-CCE variants) ran. The CCE 2 chain was queued and did not run; CCE 1 and CCE 3 were never queued.
 - `LocalDram/MimirLocalDram` (including `SizeAlignmentMatrix`), `RemoteDram/MimirRemoteDram` and `RemoteDram/MimirRemoteDramTrafficMatrix` were not queued.
 - Rows not listed in the table were not rerun.
-- Queued and not run: first chain, 101 cases: `CceCache/MimirCacheStress` (3), `CceKernelCompile/MimirCceTestKernelCompile` (5), `CceCache/MimirCacheScopedLock` (3), `CceAtomics/MimirAtomicProbe` (1), `CceAtomics/MimirAtomicLocal` (11), `CceAtomics/MimirAtomicItnControl` (1), `CceAtomics/MimirAccumProbe` (1), `CceAtomics/MimirAtomicIdmaAccum` (6), `IdmaTransactionId/MimirTridIdma` (13), `IdmaTransactionId/MimirTridReset` (1), `IdmaTransactionId/MimirTridConcurrent` (1), `MimirPrefetcher` (40), `TensorPrefetcher/MimirPrefetcherSingleGcb` (12), `TensorPrefetcher/MimirPrefetcherGcbSwitch` (3); second chain (CCE 2), 96 cases: `KernelLoad/MimirKernelLoad` (4), `DmSuitePort/MimirDmDramUnary` (1), `FirmwareLoad/MimirFwLaunch` (1), `MimirEmu/AllHartsRunDramKernel` (1), `LocalTl1/MimirLocalTl1` (2), `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs` (2), `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs` (2), `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment` (2), `CceCache/MimirCacheProbe` (2), `CceCache/MimirCacheOps` (5), `CceCache/MimirCacheSharedL2` (6), `CceCache/MimirCacheWriterProbe` (13), `CceCache/MimirCacheCoherence` (3), `CceCache/MimirCacheCoherenceRace` (8), `CceCache/MimirCacheStress` (3), `CceCache/MimirCacheScopedLock` (3), `CceAtomics/MimirAtomicProbe` (1), `CceAtomics/MimirAtomicLocal` (11), `CceAtomics/MimirAtomicItnControl` (1), `CceAtomics/MimirAccumProbe` (1), `CceAtomics/MimirAtomicIdmaAccum` (6), `IdmaTransactionId/MimirTridIdma` (13), `IdmaTransactionId/MimirTridRemote` (4), `IdmaTransactionId/MimirTridReset` (1).
+- Queued and not run: first chain, 101 cases: `CceCache/MimirCacheStress` (3), `CceKernelCompile/MimirCceTestKernelCompile` (5), `CceCache/MimirCacheScopedLock` (3), `CceAtomics/MimirAtomicProbe` (1), `CceAtomics/MimirAtomicLocal` (11), `CceAtomics/MimirAtomicItnControl` (1), `CceAtomics/MimirAccumProbe` (1), `CceAtomics/MimirAtomicIdmaAccum` (6), `IdmaTransactionId/MimirTridIdma` (13), `IdmaTransactionId/MimirTridReset` (1), `IdmaTransactionId/MimirTridConcurrent` (1), `MimirPrefetcher` (40), `TensorPrefetcher/MimirPrefetcherSinglePipe` (12), `TensorPrefetcher/MimirPrefetcherPipeSwitch` (3); second chain (CCE 2), 96 cases: `KernelLoad/MimirKernelLoad` (4), `DmSuitePort/MimirDmDramUnary` (1), `FirmwareLoad/MimirFwLaunch` (1), `MimirEmu/AllHartsRunDramKernel` (1), `LocalTl1/MimirLocalTl1` (2), `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs` (2), `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs` (2), `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment` (2), `CceCache/MimirCacheProbe` (2), `CceCache/MimirCacheOps` (5), `CceCache/MimirCacheSharedL2` (6), `CceCache/MimirCacheWriterProbe` (13), `CceCache/MimirCacheCoherence` (3), `CceCache/MimirCacheCoherenceRace` (8), `CceCache/MimirCacheStress` (3), `CceCache/MimirCacheScopedLock` (3), `CceAtomics/MimirAtomicProbe` (1), `CceAtomics/MimirAtomicLocal` (11), `CceAtomics/MimirAtomicItnControl` (1), `CceAtomics/MimirAccumProbe` (1), `CceAtomics/MimirAtomicIdmaAccum` (6), `IdmaTransactionId/MimirTridIdma` (13), `IdmaTransactionId/MimirTridRemote` (4), `IdmaTransactionId/MimirTridReset` (1).
 - The emulator restarted with bring-up at every other suite switch until 19:58 UTC and at every third suite switch from then on, always before the prefetcher rows and before row 81, and after any timeout or lost emulator.
 
 Final: 122 cases ran, 120 pass, 2 fail. Results that differ from 2026-11-04: `DmSuitePort/MimirDmCache.Op/L2InvalidateFreshRead` (pass, 2026-11-04: fail); `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg1` (fail, 2026-11-04: pass); `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg3` (pass, 2026-11-04: fail).
@@ -1899,17 +1899,17 @@ Results that differ from 2026-11-03: `MimirFwLoad.LoadAndReachInitDone` (fail, 2
 | 18 | `MimirPrefetcher.SupportPreconditionsFailOnUninitializedSender` | pass | 7.2 s |
 | 19 | `MimirPrefetcher.SupportStartStopSucceeds` | pass | 10 s |
 | 20 | `MimirPrefetcher.SupportPreconditionsHoldWhileReceiverRuns` | pass | 10 s |
-| 21 | `MimirPrefetcher.GcbLayoutLocalReceiver` | pass | 7.8 s |
-| 24 | `MimirPrefetcher.GcbLayoutRejectsConflictingReceivers` | pass | 6.9 s |
-| 25 | `MimirPrefetcher.GcbSmokeDiscardDrain` | pass | 11 s |
-| 26 | `MimirPrefetcher.GcbSmokeValidatorLocal` | pass | 11 s |
-| 27 | `MimirPrefetcher.GcbSmokeValidatorWrongSeed` | pass | 10 s |
-| 28 | `MimirPrefetcher.GcbSmokeResize` | pass | 10 s |
-| 30 | `MimirPrefetcher.GcbSmokeDrainUntilStopped` | pass | 11 s |
-| 31 | `MimirPrefetcher.GcbSmokeStallUntilReleased` | pass | 15 s |
-| 32 | `MimirPrefetcher.GcbSmokeDrainTimeout` | pass | 15 s |
-| 33 | `MimirPrefetcher.GcbSmokeReceiverWaitTimeout` | pass | 13 s |
-| 34 | `MimirPrefetcher.GcbSmokeRelaunchResumes` | pass | 13 s |
+| 21 | `MimirPrefetcher.PipeLayoutLocalReceiver` | pass | 7.8 s |
+| 24 | `MimirPrefetcher.PipeLayoutRejectsConflictingReceivers` | pass | 6.9 s |
+| 25 | `MimirPrefetcher.PipeSmokeDiscardDrain` | pass | 11 s |
+| 26 | `MimirPrefetcher.PipeSmokeValidatorLocal` | pass | 11 s |
+| 27 | `MimirPrefetcher.PipeSmokeValidatorWrongSeed` | pass | 10 s |
+| 28 | `MimirPrefetcher.PipeSmokeResize` | pass | 10 s |
+| 30 | `MimirPrefetcher.PipeSmokeDrainUntilStopped` | pass | 11 s |
+| 31 | `MimirPrefetcher.PipeSmokeStallUntilReleased` | pass | 15 s |
+| 32 | `MimirPrefetcher.PipeSmokeDrainTimeout` | pass | 15 s |
+| 33 | `MimirPrefetcher.PipeSmokeReceiverWaitTimeout` | pass | 13 s |
+| 34 | `MimirPrefetcher.PipeSmokeRelaunchResumes` | pass | 13 s |
 | 35 | `MimirPrefetcher.LifecycleStartStop` | pass | 9.1 s |
 | 36 | `MimirPrefetcher.LifecycleStartStopTwice` | pass | 13 s |
 | 37 | `MimirPrefetcher.LifecycleBusySenderFailsStart` | pass | 9.2 s |
@@ -1917,14 +1917,14 @@ Results that differ from 2026-11-03: `MimirFwLoad.LoadAndReachInitDone` (fail, 2
 | 39 | `MimirPrefetcher.LifecycleWaitCq` | pass | 14 s |
 | 40 | `MimirPrefetcher.LifecycleDrainAtStop` | pass | 14 s |
 | 41 | `MimirPrefetcher.PrefetchOnePagePerSessionLocal0To1` | fail: new (passed on 2026-11-03). The receiver on CCE 1 reported a data mismatch (code 4) on the second request: one word wrong, request 0 page 0 word 256 (byte 1024), read as `0x00000000` twice, expected `0x71de8c2c`. The rest of the page matched. It ran once. Located on 2026-11-24: the sender lost one store into its stage slot (see Lost stage-slot store in `PrefetchOnePagePerSessionLocal0To1`, 2026-11-24). | 20 s |
-| 49 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/SubChunkLocal0To1` | pass | 21 s |
-| 51 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/BelowStageThirdLocal0To1` | pass | 21 s |
-| 53 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/PartialStageChunkLocal0To1` | pass | 19 s |
-| 54 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AboveStageThirdLocal0To1` | pass | 17 s |
-| 56 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/PageSplitLocal0To1` | pass | 20 s |
-| 57 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AbaLocal0To1` | pass | 22 s |
-| 59 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/WrapAndResizeLocal0To1` | pass | 28 s |
-| 61 | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/GcbSwitchLocal0To1` | pass | 21 s |
+| 49 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/SubChunkLocal0To1` | pass | 21 s |
+| 51 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/BelowStageThirdLocal0To1` | pass | 21 s |
+| 53 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/PartialStageChunkLocal0To1` | pass | 19 s |
+| 54 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AboveStageThirdLocal0To1` | pass | 17 s |
+| 56 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/PageSplitLocal0To1` | pass | 20 s |
+| 57 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/AbaLocal0To1` | pass | 22 s |
+| 59 | `TensorPrefetcher/MimirPrefetcherSinglePipe.Delivers/WrapAndResizeLocal0To1` | pass | 28 s |
+| 61 | `TensorPrefetcher/MimirPrefetcherPipeSwitch.Delivers/PipeSwitchLocal0To1` | pass | 21 s |
 | 63 | `MimirPrefetcher.PrefetchFenceHoldsDeliveryLocal0To1` | pass | 19 s |
 | 65 | `MimirPrefetcher.QueueRejectsKRowMajorTensor` | pass | 13 s |
 | 66 | `MimirPrefetcher.QueueRejectsStreamingTensor` | pass | 14 s |

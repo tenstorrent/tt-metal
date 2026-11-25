@@ -5,7 +5,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/blaze_rt_arg.h
     inc/experimental/cce_gddr.h
     inc/experimental/cce_hart.h
-    inc/experimental/cce_remote_cb.h
+    inc/experimental/cce_prefetcher_pipe.h
     inc/api/alignment.h
     inc/api/buffer_types.hpp
     inc/api/compile_time_args.h

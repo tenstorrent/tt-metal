@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// GlobalCircularBuffer sender and receiver helpers for CCEs, whose receivers are other CCEs.
+// PrefetcherPipe sender and receiver helpers for CCEs, whose receivers are other CCEs.
 //
-// A CCE has no NoC, so these replace remote_circular_buffer.h's NoC paths with loads and stores: the
+// A CCE has no NoC, so these replace prefetcher_pipe.h's NoC paths with loads and stores: the
 // sender writes FIFO data and credits into each receiver's TL1 through cce_sram_address, the receiver
 // stores its acks into the sender's TL1 the same way, and each side reads words another agent wrote
 // through its own uncached alias. Data stores, then `fence w, w`, then an absolute credit store; FIFO
@@ -29,7 +29,7 @@
 #include "hostdev/dram_receiver_config_page.hpp"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 
-namespace experimental::cce_remote_cb {
+namespace experimental::cce_prefetcher_pipe {
 
 static_assert(REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == tt::tt_metal::kDramReceiverCreditUnitBytes);
 
@@ -175,7 +175,7 @@ resize_receiver_bounded(Receiver& receiver, uint32_t page_size, uint64_t budget_
     return WaitResult::Ready;
 }
 
-// Writes rd_ptr back to the config page, so the next kernel on this GCB resumes there.
+// Writes rd_ptr back to the config page, so the next kernel on this pipe set resumes there.
 FORCE_INLINE void store_receiver_rd_ptr(const Receiver& receiver) {
     *cce_hart::own_tl1_words(receiver.config_addr + tt::tt_metal::kDramReceiverFifoRdPtrOffset) = receiver.fifo_rd_ptr;
 }
@@ -330,12 +330,12 @@ FORCE_INLINE WaitResult barrier_bounded(const Sender& sender, uint64_t budget_cy
     return WaitResult::Ready;
 }
 
-// Writes wr_ptr back to the state block, so the next request to this GCB resumes there.
+// Writes wr_ptr back to the state block, so the next request to this pipe set resumes there.
 FORCE_INLINE void store_sender_wr_ptr(const Sender& sender) {
     *state_block_word(sender.state_addr, offsetof(tt::tt_metal::DramSenderStateBlock, fifo_wr_ptr)) =
         sender.fifo_wr_ptr;
 }
 
-}  // namespace experimental::cce_remote_cb
+}  // namespace experimental::cce_prefetcher_pipe
 
 #endif

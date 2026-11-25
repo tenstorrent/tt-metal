@@ -8,17 +8,17 @@
 
 #include "cce_test_status_abi.h"
 
-// Kernel ABI for the GlobalCircularBuffer test kernels: the smoke sender and the discard and validator
+// Kernel ABI for the PrefetcherPipe test kernels: the smoke sender and the discard and validator
 // receivers. The kernels, dram/mimir_prefetcher_common.hpp, dram/test_mimir_prefetcher.cpp and dram/test_mimir_trid.cpp
 // include it.
-namespace cce_gcb_receiver_abi {
+namespace cce_pipe_receiver_abi {
 
 using cce_test_status_abi::kLineBytes;
 
-// Runtime args, the same layout for every kernel. kArgGcbAddr is the GCB's config page on a receiver and its sender
-// state block on the sender. The budget is rdcycle cycles per wait, 0 = infinite. kArgSeed is unused by the discard
-// receiver; kArgMode and kArgStallPages are the discard receiver's only.
-inline constexpr uint32_t kArgGcbAddr = 0, kArgBlockAddr = 1, kArgBudgetLo = 2, kArgBudgetHi = 3, kArgSeed = 4,
+// Runtime args, the same layout for every kernel. kArgPipeAddr is the pipe set's config page on a receiver and its
+// sender state block on the sender. The budget is rdcycle cycles per wait, 0 = infinite. kArgSeed is unused by the
+// discard receiver; kArgMode and kArgStallPages are the discard receiver's only.
+inline constexpr uint32_t kArgPipeAddr = 0, kArgBlockAddr = 1, kArgBudgetLo = 2, kArgBudgetHi = 3, kArgSeed = 4,
                           kArgMode = 5, kArgStallPages = 6, kArgNumRequests = 7, kArgScheduleBase = 8;
 
 // One schedule entry per request, in order. The sender writes receiver r of its table slab `slab + r`; each
@@ -65,7 +65,7 @@ inline constexpr uint32_t kCodeOk = 1, kCodeCreditTimeout = 2, kCodeDrainTimeout
 
 // Word `word` of page `page` of a request. The sender writes it, the validator recomputes it, and the host can fill
 // DRAM with it.
-constexpr uint32_t gcb_page_word(uint32_t seed, uint32_t tensor_id, uint32_t slab, uint32_t page, uint32_t word) {
+constexpr uint32_t pipe_page_word(uint32_t seed, uint32_t tensor_id, uint32_t slab, uint32_t page, uint32_t word) {
     uint32_t value =
         seed ^ (tensor_id * 0x9E3779B9u) ^ (slab * 0x85EBCA6Bu) ^ (page * 0xC2B2AE35u) ^ (word * 0x27D4EB2Fu);
     value ^= value >> 16;
@@ -74,4 +74,4 @@ constexpr uint32_t gcb_page_word(uint32_t seed, uint32_t tensor_id, uint32_t sla
     return value;
 }
 
-}  // namespace cce_gcb_receiver_abi
+}  // namespace cce_pipe_receiver_abi

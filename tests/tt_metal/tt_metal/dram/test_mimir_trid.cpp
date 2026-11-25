@@ -53,7 +53,7 @@
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
 #include "tt_metal/tt_metal/dram/mimir_prefetcher_common.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
-#include "tt_metal/tt_metal/test_kernels/cce/cce_gcb_receiver_abi.h"
+#include "tt_metal/tt_metal/test_kernels/cce/cce_pipe_receiver_abi.h"
 #include "tt_metal/tt_metal/test_kernels/cce/cce_idma_copy_abi.h"
 
 namespace tt::tt_metal::mimir_test::trid {
@@ -1447,11 +1447,11 @@ TEST_P(MimirTridReset, NoStaleIdAfterReinit) {
 INSTANTIATE_TEST_SUITE_P(
     IdmaTransactionId, MimirTridReset, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
-namespace gcb_abi = cce_gcb_receiver_abi;
+namespace pipe_abi = cce_pipe_receiver_abi;
 
 using prefetcher::bank_with_sender_cce;
-using prefetcher::DramReceiverGcb;
-using prefetcher::kGcbDiscardReceiverKernel;
+using prefetcher::DramReceiverPipeSet;
+using prefetcher::kPipeDiscardReceiverKernel;
 using prefetcher::kUint32TilePageBytes;
 using prefetcher::kUint32TileWords;
 using prefetcher::PrefetcherSession;
@@ -1541,32 +1541,34 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
     log_info(tt::LogTest, "trid {}", label);
 
     const MeshTensor tensor = write_prefetch_tensor(*mesh, *sender_bank);
-    const DramReceiverGcb gcb = DramReceiverGcb(
+    const DramReceiverPipeSet pipe_set = DramReceiverPipeSet(
         *mesh,
         std::vector<std::pair<uint32_t, std::vector<CoreCoord>>>{
             {*sender_bank, {logical_cce_core(soc, route.receiver_cce)}}},
         kUint32TilePageBytes);
     const std::shared_ptr<DriscL1Allocation> receiver_block =
-        mesh->impl().drisc_l1_arena().allocate_receiver(gcb_abi::kBlockBytes, gcb_abi::kLineBytes);
-    std::vector<uint32_t> block_words(gcb_abi::kBlockBytes / sizeof(uint32_t), 0);
+        mesh->impl().drisc_l1_arena().allocate_receiver(pipe_abi::kBlockBytes, pipe_abi::kLineBytes);
+    std::vector<uint32_t> block_words(pipe_abi::kBlockBytes / sizeof(uint32_t), 0);
     std::fill(
-        block_words.begin() + gcb_abi::kStatusLineOffset / sizeof(uint32_t),
-        block_words.begin() + gcb_abi::kHoldingLineOffset / sizeof(uint32_t),
-        gcb_abi::kStatusPoison);
+        block_words.begin() + pipe_abi::kStatusLineOffset / sizeof(uint32_t),
+        block_words.begin() + pipe_abi::kHoldingLineOffset / sizeof(uint32_t),
+        pipe_abi::kStatusPoison);
     write_cce_tl1(device, route.receiver_cce, receiver_block->addr(), block_words);
-    std::vector<uint32_t> receiver_args(gcb_abi::schedule_arg(1, 0), 0);
-    receiver_args[gcb_abi::kArgGcbAddr] = static_cast<uint32_t>(gcb.config_address());
-    receiver_args[gcb_abi::kArgBlockAddr] = static_cast<uint32_t>(receiver_block->addr());
-    receiver_args[gcb_abi::kArgBudgetLo] = static_cast<uint32_t>(kConcurrentBudgetCycles);
-    receiver_args[gcb_abi::kArgBudgetHi] = static_cast<uint32_t>(kConcurrentBudgetCycles >> 32);
-    receiver_args[gcb_abi::kArgMode] = gcb_abi::kModeDrainUntilStopped;
-    receiver_args[gcb_abi::kArgNumRequests] = 1;
-    receiver_args[gcb_abi::schedule_arg(0, gcb_abi::kRequestPageBytes)] = kUint32TilePageBytes;
-    receiver_args[gcb_abi::schedule_arg(0, gcb_abi::kRequestNumPages)] = kPrefetchTiles;
+    std::vector<uint32_t> receiver_args(pipe_abi::schedule_arg(1, 0), 0);
+    receiver_args[pipe_abi::kArgPipeAddr] = static_cast<uint32_t>(pipe_set.config_address());
+    receiver_args[pipe_abi::kArgBlockAddr] = static_cast<uint32_t>(receiver_block->addr());
+    receiver_args[pipe_abi::kArgBudgetLo] = static_cast<uint32_t>(kConcurrentBudgetCycles);
+    receiver_args[pipe_abi::kArgBudgetHi] = static_cast<uint32_t>(kConcurrentBudgetCycles >> 32);
+    receiver_args[pipe_abi::kArgMode] = pipe_abi::kModeDrainUntilStopped;
+    receiver_args[pipe_abi::kArgNumRequests] = 1;
+    receiver_args[pipe_abi::schedule_arg(0, pipe_abi::kRequestPageBytes)] = kUint32TilePageBytes;
+    receiver_args[pipe_abi::schedule_arg(0, pipe_abi::kRequestNumPages)] = kPrefetchTiles;
     prefetcher::CceReceiverProgram receivers(
         device,
         {CceKernelLaunch{
-            .cce_index = route.receiver_cce, .kernel_path = kGcbDiscardReceiverKernel, .runtime_args = receiver_args}});
+            .cce_index = route.receiver_cce,
+            .kernel_path = kPipeDiscardReceiverKernel,
+            .runtime_args = receiver_args}});
 
     TridScenario scenario(soc, "WithPrefetcher_stream", route.stream_cce, kTridHart, 0xE0);
     scenario.add(
@@ -1596,7 +1598,7 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
     add_cce_kernels(device, stream_program, stream_launch);
     launch_on_idle_cces(device, stream_program, stream_launch);
 
-    const uint64_t pages_sent_address = gcb.pages_sent_drisc_l1_base();
+    const uint64_t pages_sent_address = pipe_set.pages_sent_drisc_l1_base();
     const auto pages_sent = [device, &route, pages_sent_address] {
         return read_cce_tl1(device, route.sender_cce, pages_sent_address, sizeof(uint32_t)).front();
     };
@@ -1612,7 +1614,7 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
     }
     experimental::QueueTensorPrefetcherRequest(
         *mesh,
-        gcb.pipes(),
+        pipe_set.pipes(),
         std::nullopt,
         {experimental::TensorPrefetcherInput{.tensor = tensor, .block_count = kPrefetchTiles}});
     // pages_sent counts kDramReceiverCreditUnitBytes units.
@@ -1668,10 +1670,10 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
     const std::vector<uint32_t> receiver_status = read_cce_tl1(
         device,
         route.receiver_cce,
-        receiver_block->addr() + gcb_abi::kStatusLineOffset,
-        gcb_abi::kStatusWords * sizeof(uint32_t));
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeStopped) << label << ": receiver";
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], kPrefetchTiles) << label << ": receiver pages";
+        receiver_block->addr() + pipe_abi::kStatusLineOffset,
+        pipe_abi::kStatusWords * sizeof(uint32_t));
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusCode], pipe_abi::kCodeStopped) << label << ": receiver";
+    EXPECT_EQ(receiver_status[pipe_abi::kStatusPagesDone], kPrefetchTiles) << label << ": receiver pages";
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -57,10 +57,10 @@ private:
 //                                                 to DRAM-sender state
 //                                                 (PrefetcherPipe sender config
 //                                                 pages, and the sender state of
-//                                                 GCBs whose receivers are DRAM
+//                                                 pipe sets whose receivers are DRAM
 //                                                 cores).
 //   [receiver_zone_base(), + receiver_zone_size())    — Quasar only: receiver config
-//                                                 pages and FIFOs of GCBs whose
+//                                                 pages and FIFOs of pipe sets whose
 //                                                 receivers are DRAM cores.
 //   [kernel_working_region_base(), END)               — kernel working region for any
 //                                                 long-lived DRISC kernel that
@@ -123,7 +123,7 @@ public:
     std::shared_ptr<DriscL1Allocation> allocate(uint32_t size, uint32_t alignment);
 
     // Allocate `size` bytes at one offset in the receiver zone, reserved on every DRAM core, for a
-    // GCB whose receivers are DRAM cores. Not keyed by logical core: two logical coords can name one
+    // pipe set whose receivers are DRAM cores. Not keyed by logical core: two logical coords can name one
     // core. TT_FATAL when the arch has no receiver zone or on invalid alignment; TT_THROW on zone full.
     std::shared_ptr<DriscL1Allocation> allocate_receiver(uint32_t size, uint32_t alignment);
 

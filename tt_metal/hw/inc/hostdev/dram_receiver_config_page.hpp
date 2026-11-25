@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// TL1 layout of a DRAM-sender GlobalCircularBuffer whose receivers are DRAM cores (Quasar CCEs):
+// TL1 layout of a DRAM-sender PrefetcherPipe whose receivers are DRAM cores (Quasar CCEs):
 // each receiver's config page, and the per-receiver credit counters in the sender's state.
 //
 // A CCE cannot invalidate its L1 cache, so every word one agent writes and another polls sits alone

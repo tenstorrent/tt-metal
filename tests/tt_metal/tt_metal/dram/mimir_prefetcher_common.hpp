@@ -32,18 +32,19 @@
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
-#include "tt_metal/tt_metal/test_kernels/cce/cce_gcb_receiver_abi.h"
+#include "tt_metal/tt_metal/test_kernels/cce/cce_pipe_receiver_abi.h"
 
 namespace tt::tt_metal::mimir_test::prefetcher {
 
 using BankToDramReceivers = std::vector<std::pair<uint32_t, std::vector<CoreCoord>>>;
 
-// One DRAM-receiver GCB: a PrefetcherPipeL1Source::DramReceiverZone space of `size` bytes per receiver and the
+// One DRAM-receiver pipe set: a ReceiverCoreType::Dram space of `size` bytes per receiver and the
 // pipes CreatePrefetcherPipesForTensorPrefetcher carves from it, one per bank. The space is sized for exactly
-// these pipes, so a second DramReceiverGcb over the same CCEs takes its own ranges in both DRISC L1 zones.
-class DramReceiverGcb {
+// these pipes, so a second DramReceiverPipeSet over the same CCEs takes its own ranges in both DRISC L1 zones.
+class DramReceiverPipeSet {
 public:
-    DramReceiverGcb(distributed::MeshDevice& mesh, const BankToDramReceivers& bank_to_dram_receivers, uint32_t size) :
+    DramReceiverPipeSet(
+        distributed::MeshDevice& mesh, const BankToDramReceivers& bank_to_dram_receivers, uint32_t size) :
         space_(create_space(mesh, bank_to_dram_receivers, size)),
         pipes_(experimental::CreatePrefetcherPipesForTensorPrefetcher(space_, bank_to_dram_receivers)) {}
 
@@ -96,8 +97,8 @@ private:
     std::vector<experimental::PrefetcherPipe> pipes_;
 };
 
-inline constexpr const char* kGcbDiscardReceiverKernel =
-    "tests/tt_metal/tt_metal/test_kernels/cce/cce_gcb_discard_receiver.cpp";
+inline constexpr const char* kPipeDiscardReceiverKernel =
+    "tests/tt_metal/tt_metal/test_kernels/cce/cce_pipe_discard_receiver.cpp";
 inline constexpr uint32_t kUint32TileWords = tt::constants::TILE_HW;
 inline constexpr uint32_t kUint32TilePageBytes = kUint32TileWords * sizeof(uint32_t);
 
@@ -105,8 +106,8 @@ inline constexpr uint32_t kUint32TilePageBytes = kUint32TileWords * sizeof(uint3
 // it and ~90 cycles/s while the host is idle, so these count host activity rather than wall time. The wait budget
 // bounds waits that should succeed (~200 s of polling, under TT_METAL_OPERATION_TIMEOUT_SECONDS=600); the stall budget
 // is the sender's in the stall case (~12 s of polling), which must expire while the receiver holds its credits.
-inline constexpr uint64_t kGcbSmokeWaitBudgetCycles = 1ull << 24;
-inline constexpr uint64_t kGcbSmokeStallBudgetCycles = 1ull << 20;
+inline constexpr uint64_t kPipeSmokeWaitBudgetCycles = 1ull << 24;
+inline constexpr uint64_t kPipeSmokeStallBudgetCycles = 1ull << 20;
 
 // The DRAM bank whose prefetcher sender is CCE `cce_index`, if any.
 inline std::optional<uint32_t> bank_with_sender_cce(distributed::MeshDevice& mesh, uint32_t cce_index) {
@@ -130,7 +131,7 @@ public:
     PrefetcherSession(
         distributed::MeshDevice& mesh,
         std::vector<uint32_t> sender_banks,
-        uint64_t wait_budget_cycles = kGcbSmokeWaitBudgetCycles,
+        uint64_t wait_budget_cycles = kPipeSmokeWaitBudgetCycles,
         uint32_t stage_ring_bytes = distributed::QuasarTensorPrefetcherConfig{}.stage_ring_bytes) :
         mesh_(mesh) {
         distributed::start_tensor_prefetcher(
@@ -161,17 +162,17 @@ private:
     distributed::MeshDevice& mesh_;
     bool active_ = false;
 };
-// Receiver kernels (cce_gcb_receiver_abi.h) running as their own Program while the test drives a sender. Declare it
-// after the GlobalCircularBuffer it serves, so it stops before the GCB is freed. Launch zeroes each receiver's command
-// line, so a STOP left by an earlier Program cannot end this one. stop_and_wait() writes kCommandStop to each command
-// line, which ends a receiver's page wait and releases a stalling one, then waits for the Program. A throw from either
-// step is reported, not propagated.
+// Receiver kernels (cce_pipe_receiver_abi.h) running as their own Program while the test drives a sender. Declare it
+// after the DramReceiverPipeSet it serves, so it stops before the pipe set is freed. Launch zeroes each receiver's
+// command line, so a STOP left by an earlier Program cannot end this one. stop_and_wait() writes kCommandStop to each
+// command line, which ends a receiver's page wait and releases a stalling one, then waits for the Program. A throw from
+// either step is reported, not propagated.
 class CceReceiverProgram {
 public:
     CceReceiverProgram(IDevice* device, std::vector<CceKernelLaunch> receivers) :
         device_(device), receivers_(std::move(receivers)) {
         for (const CceKernelLaunch& receiver : receivers_) {
-            write_cce_tl1(device_, receiver.cce_index, command_address(receiver), {cce_gcb_receiver_abi::kCommandRun});
+            write_cce_tl1(device_, receiver.cce_index, command_address(receiver), {cce_pipe_receiver_abi::kCommandRun});
         }
         program_ = launch_cce_program(device_, receivers_);
     }
@@ -186,7 +187,7 @@ public:
         for (const CceKernelLaunch& receiver : receivers_) {
             try {
                 write_cce_tl1(
-                    device_, receiver.cce_index, command_address(receiver), {cce_gcb_receiver_abi::kCommandStop});
+                    device_, receiver.cce_index, command_address(receiver), {cce_pipe_receiver_abi::kCommandStop});
             } catch (const std::exception& error) {
                 ADD_FAILURE() << fmt::format("CCE {}: stop write threw: {}", receiver.cce_index, error.what());
             }
@@ -209,7 +210,8 @@ public:
 
 private:
     static uint64_t command_address(const CceKernelLaunch& receiver) {
-        return receiver.runtime_args.at(cce_gcb_receiver_abi::kArgBlockAddr) + cce_gcb_receiver_abi::kCommandLineOffset;
+        return receiver.runtime_args.at(cce_pipe_receiver_abi::kArgBlockAddr) +
+               cce_pipe_receiver_abi::kCommandLineOffset;
     }
 
     IDevice* device_;
