@@ -16,6 +16,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <random>
 #include <string>
@@ -36,6 +37,41 @@ namespace tt::jit_build::utils {
 
 namespace {
 thread_local bool idle_priority_commands = false;
+
+// The CPUs idle-priority commands may run on: the ones this process may use, minus one physical core (the first
+// allowed CPU and its sibling hardware threads). Idle priority alone still lets a compiler run on the sibling of the
+// CPU the test thread is on, where the two share one core; keeping the compilers off one whole core leaves it free.
+// Everything, when the process has a single core.
+const cpu_set_t& idle_command_cpus() {
+    static const cpu_set_t cpus = [] {
+        cpu_set_t allowed;
+        CPU_ZERO(&allowed);
+        if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) {
+            return allowed;
+        }
+        int first = 0;
+        while (first < CPU_SETSIZE && !CPU_ISSET(first, &allowed)) {
+            first++;
+        }
+        cpu_set_t rest = allowed;
+        std::ifstream siblings(fmt::format("/sys/devices/system/cpu/cpu{}/topology/thread_siblings_list", first));
+        std::string list;
+        std::getline(siblings, list);  // "0-1" or "0,8"
+        std::replace(list.begin(), list.end(), ',', ' ');
+        std::istringstream ranges(list);
+        for (std::string range; ranges >> range;) {
+            const auto dash = range.find('-');
+            const int low = std::stoi(range.substr(0, dash));
+            const int high = dash == std::string::npos ? low : std::stoi(range.substr(dash + 1));
+            for (int cpu = low; cpu <= high && cpu < CPU_SETSIZE; cpu++) {
+                CPU_CLR(cpu, &rest);
+            }
+        }
+        CPU_CLR(first, &rest);
+        return CPU_COUNT(&rest) > 0 ? rest : allowed;
+    }();
+    return cpus;
+}
 }  // namespace
 
 IdlePriorityCommands::IdlePriorityCommands(bool on) : before_(idle_priority_commands) { idle_priority_commands = on; }
@@ -241,7 +277,14 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
         posix_spawnattr_setschedpolicy(&attr, SCHED_IDLE);
         posix_spawnattr_setschedparam(&attr, &param);
         posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSCHEDULER);
+        // The child inherits this thread's CPUs, so the thread takes the restricted set for the spawn.
+        cpu_set_t before;
+        const bool restricted = sched_getaffinity(0, sizeof(before), &before) == 0 &&
+                                sched_setaffinity(0, sizeof(cpu_set_t), &idle_command_cpus()) == 0;
         spawn_ret = posix_spawnp(&pid, argv[0], &file_actions, &attr, const_cast<char* const*>(argv.data()), ::environ);
+        if (restricted) {
+            sched_setaffinity(0, sizeof(before), &before);
+        }
         posix_spawnattr_destroy(&attr);
     }
     if (spawn_ret != 0) {
