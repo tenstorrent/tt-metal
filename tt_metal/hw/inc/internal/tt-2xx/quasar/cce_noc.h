@@ -37,7 +37,7 @@ enum class Fault : uint32_t {
 
 constexpr overlay::CmdBuf kCmdBuf = overlay::CMDBUF_0;
 constexpr uint32_t kTrid = overlay::CMDBUF_DEF_TRID;
-// chippy's write request VC (cmdbuf_accel.h CMDBUF_WR_REQ_VC), which selects the iDMA backend; overlay's is 1.
+// The write request VC that selects the iDMA backend; overlay's is 1.
 constexpr uint32_t kReqVc = 2;
 constexpr uint32_t kRespVc = overlay::CMDBUF_WR_RESP_VC;
 
@@ -144,8 +144,8 @@ FORCE_INLINE uintptr_t cpu_addr(uint64_t noc_addr) {
                : dma_addr(target);
 }
 
-// Issues one iDMA copy of @p len bytes between two iDMA addresses, programming the whole command buffer as chippy's
-// perform_dma_transfer() does, and returns once the buffer has taken it. Completion is copies_done(). The source must
+// Issues one iDMA copy of @p len bytes between two iDMA addresses, programming the whole command buffer, and returns
+// once the buffer has taken it. Completion is copies_done(). The source must
 // already be in SRAM: the copy reads SRAM, not this hart's cache.
 FORCE_INLINE void copy(uint64_t src, uint64_t dst, uint32_t len) {
     overlay::reset_cmdbuf<kCmdBuf>();

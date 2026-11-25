@@ -44,7 +44,7 @@ constexpr uint8_t kInlineSrcProtocol = 4;
 constexpr uint32_t kInlineValueBits = 52;
 
 // Keraunos local address of an HSIO tile's CCE SRAM: base + tile * stride + offset. The command buffer takes this
-// view for the source, and for the destination on an Ethernet link (chippy metal compat). The Keraunos-E100
+// view for the source, and for the destination on an Ethernet link. The Keraunos-E100
 // spec (v1.0.9, ch. 12) says a CCE issues Grendel system addresses and the HSIO remap translates them; the two have not
 // been reconciled.
 constexpr uint64_t kHsioLocalBase = 0x20000000;
@@ -260,7 +260,7 @@ FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val, bool s
     set_axi_opt_1_cmdbuf<kCmdBuf>(kInlineSrcProtocol, axi_opt_1.f.decouple_aw);
     setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{.snoop = snoop});
     issue_cmdbuf<kCmdBuf>();
-    // Puts the copy protocol back, as chippy compat's cce_eth_send_counter does.
+    // Puts the copy protocol back.
     set_axi_opt_1_cmdbuf<kCmdBuf>(0, axi_opt_1.f.decouple_aw);
 }
 
