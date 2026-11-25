@@ -45,7 +45,7 @@ def test_block_cache_check_forwards_the_output_gate(monkeypatch, tmp_path, model
     caller that passes no config at all."""
     seen = {}
 
-    def _spy(cache_path, prefix, has_indexer=False, has_output_gate=False):
+    def _spy(cache_path, prefix, has_indexer=False, has_output_gate=False, kv_only=False):
         seen["has_output_gate"] = has_output_gate
         return False  # short-circuit: this test is about the argument, not the files
 

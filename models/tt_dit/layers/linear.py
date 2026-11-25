@@ -402,6 +402,7 @@ class ColParallelLinear(Module):
                 raise ValueError(msg)
 
         x = maybe_cast_activation(x, self.activation_dtype)
+        fabric_keeps_dtype = dtype is None or dtype == x.get_dtype()
         if self.pin_output_bf16:
             dtype = resolve_output_dtype(dtype, x)
 
@@ -438,6 +439,7 @@ class ColParallelLinear(Module):
                 and has_unit_batch
                 and addcmul_a is None
                 and persistent_buffer_rows is None
+                and fabric_keeps_dtype
             ):
                 return self._forward_fabric_agmm(
                     x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype, use_persistent_buffer

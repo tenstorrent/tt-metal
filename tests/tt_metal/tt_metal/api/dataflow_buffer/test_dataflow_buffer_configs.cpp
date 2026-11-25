@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -1449,6 +1450,49 @@ TEST_F(UnitMeshFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
     EXPECT_EQ(dfb->producer_txn_descriptor.num_entries_to_process_threshold, threshold_before * 2);
 }
 
+// Max bytes per NoC packet on this device. Quasar's overlay splits a NoC transaction into packets of at most this
+// size, and the per-transaction-id tiles-to-process counter that raises the implicit-sync ISR counts one per packet,
+// so the host programs the ISR threshold in packets.
+static uint32_t noc_max_bytes_in_packet(distributed::MeshDevice& mesh_device) {
+    return MetalContext::instance(mesh_device.impl().get_context_id()).hal().get_noc_max_bytes_in_packet();
+}
+
+// entry_size override on a finalized DFB recomputes the implicit-sync threshold for the new NoC packets per entry,
+// preserving the TC assignment and transaction ids; shrinking back to one packet restores the original threshold.
+TEST_F(UnitMeshFixture, DFBReentryEntrySizeOverrideRecomputesPacketThreshold) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB transaction IDs / tile counters require Quasar";
+    }
+    const NodeCoord node{0, 0};
+    ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
+    Program program(this->device(), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    ASSERT_TRUE(dfb->config.enable_producer_implicit_sync);
+    const uint32_t entry_size_before = dfb->config.entry_size;
+    const uint32_t packet_bytes = noc_max_bytes_in_packet(this->device());
+    ASSERT_LE(entry_size_before, packet_bytes);  // one packet per entry before the override
+    const dfb_txn_id_descriptor_t before = dfb->producer_txn_descriptor;
+    ASSERT_GT(before.num_txn_ids, 0u);
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 2 * packet_bytes});
+    ASSERT_NO_THROW(program.set_program_run_args(params));
+    {
+        const dfb_txn_id_descriptor_t& after = dfb->producer_txn_descriptor;
+        EXPECT_EQ(after.num_txn_ids, before.num_txn_ids);
+        EXPECT_TRUE(std::equal(before.txn_ids, before.txn_ids + before.num_txn_ids, after.txn_ids));
+        EXPECT_EQ(after.num_entries_to_process_threshold, before.num_entries_to_process_threshold * 2);
+        EXPECT_EQ(after.num_entries_per_txn_id, before.num_entries_per_txn_id);
+        EXPECT_EQ(after.num_entries_per_txn_id_per_tc, before.num_entries_per_txn_id_per_tc);
+    }
+
+    params.dfb_run_overrides.back().entry_size = entry_size_before;
+    ASSERT_NO_THROW(program.set_program_run_args(params));
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_entries_to_process_threshold, before.num_entries_to_process_threshold);
+}
+
 // On re-entry the txn-id count is preserved, so a num_entries override that breaks the preserved divisor
 // is rejected up front with an actionable message.
 TEST_F(UnitMeshFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
@@ -2112,6 +2156,99 @@ TEST_F(UnitMeshFixture, B4_CachedThreshold_Config_2_0) {
         const auto& d = dfbs[0];
         EXPECT_EQ(d->producer_txn_descriptor.num_entries_to_process_threshold, 9u);
         EXPECT_EQ(d->consumer_txn_descriptor.num_entries_to_process_threshold, 27u);
+    }
+}
+
+// B4 with multi-packet entries: the cached threshold counts NoC packets, so it is B4's value times the packets per
+// entry (a partial trailing packet counts). Credits (num_entries_per_txn_id) and the txn-id count stay in entries.
+TEST_F(UnitMeshFixture, B4_CachedThreshold_CountsNocPackets_Config_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Implicit sync (and therefore threshold caching) is Quasar-only";
+    }
+    using namespace m2_config_test_helpers;
+    const uint32_t packet_bytes = noc_max_bytes_in_packet(this->device());
+    ASSERT_GT(packet_bytes, 1024u);
+
+    struct Case {
+        uint32_t entry_size;
+        uint32_t packets_per_entry;
+    };
+    const std::vector<Case> cases = {
+        {packet_bytes, 1},         // exactly one packet
+        {packet_bytes + 1024, 2},  // a partial trailing packet still counts
+        {4 * packet_bytes, 4},
+    };
+
+    // 1S(DM)x1S(DM), num_entries=16, 2 txn ids: producer/consumer threshold = 8 transactions.
+    for (const Case& c : cases) {
+        SCOPED_TRACE("1Sx1S DM-DM, entry_size=" + std::to_string(c.entry_size));
+        M2ConfigDFBParams p{
+            .producer_type = M2PorCType::DM,
+            .consumer_type = M2PorCType::DM,
+            .num_producers = 1,
+            .num_consumers = 1,
+            .entry_size = c.entry_size,
+            .num_entries = 16,
+            .implicit_sync = true,
+        };
+        Program program = build_single_dfb_program_2_0(this->device(), p);
+        program.impl().finalize_dataflow_buffer_configs();
+        auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
+        ASSERT_EQ(dfbs.size(), 1u);
+        const auto& d = dfbs[0];
+        ASSERT_EQ(d->producer_txn_descriptor.num_txn_ids, 2u);
+        ASSERT_EQ(d->consumer_txn_descriptor.num_txn_ids, 2u);
+        EXPECT_EQ(d->producer_txn_descriptor.num_entries_to_process_threshold, 8u * c.packets_per_entry);
+        EXPECT_EQ(d->consumer_txn_descriptor.num_entries_to_process_threshold, 8u * c.packets_per_entry);
+        EXPECT_EQ(d->producer_txn_descriptor.num_entries_per_txn_id, 8u);
+        EXPECT_EQ(d->consumer_txn_descriptor.num_entries_per_txn_id, 8u);
+    }
+}
+
+// BLOCKED sides move a whole block per NoC transaction, so the packets come from the block's bytes,
+// ceil(block_size * entry_size / packet), not block_size times the packets of one entry.
+// 1B(DM)x1B(DM), block 4, num_entries=16, 2 txn ids: 8 entries = 2 transactions per txn id.
+TEST_F(UnitMeshFixture, B4_CachedThreshold_BlockedCountsPacketsPerBlock_Config_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Implicit sync (and therefore threshold caching) is Quasar-only";
+    }
+    using namespace m2_config_test_helpers;
+    const uint32_t packet_bytes = noc_max_bytes_in_packet(this->device());
+    ASSERT_EQ(packet_bytes % 4u, 0u);
+
+    struct Case {
+        uint32_t entry_size;
+        uint32_t packets_per_block;
+    };
+    const std::vector<Case> cases = {
+        {packet_bytes / 4, 1},      // exactly one packet per block
+        {3 * packet_bytes / 8, 2},  // 1.5 packets per block; one entry is under a packet (per-entry count: 4)
+        {4 * packet_bytes, 16},     // a block past the NoC max burst, 16 packets
+    };
+    for (const Case& c : cases) {
+        SCOPED_TRACE("1Bx1B DM-DM blk4, entry_size=" + std::to_string(c.entry_size));
+        M2ConfigDFBParams p{
+            .producer_type = M2PorCType::DM,
+            .consumer_type = M2PorCType::DM,
+            .num_producers = 1,
+            .num_consumers = 1,
+            .entry_size = c.entry_size,
+            .num_entries = 16,
+            .pap = DFBAccessPattern::BLOCKED,
+            .cap = DFBAccessPattern::BLOCKED,
+            .implicit_sync = true,
+            .block_size = 4,
+        };
+        Program program = build_single_dfb_program_2_0(this->device(), p);
+        program.impl().finalize_dataflow_buffer_configs();
+        auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
+        ASSERT_EQ(dfbs.size(), 1u);
+        const auto& d = dfbs[0];
+        for (const dfb_txn_id_descriptor_t* desc : {&d->producer_txn_descriptor, &d->consumer_txn_descriptor}) {
+            ASSERT_EQ(desc->num_txn_ids, 2u);
+            EXPECT_EQ(desc->num_entries_to_process_threshold, 2u * c.packets_per_block);
+            EXPECT_EQ(desc->num_entries_per_txn_id, 8u);
+        }
     }
 }
 
