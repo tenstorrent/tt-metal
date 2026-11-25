@@ -29,6 +29,14 @@ Per step from the host (in place, DRAM or L1 tensors the programs name): the 8 t
 (position + 1; 0 for an idle row: nothing is selected, its attention is the sink alone). An idle row still runs
 through every program on token 0 and its output is dropped.
 
+Behind the prefill stack (``stores=``): the two stores are the prefill stack's own cache tensors (its packed latent rows
+and its index keys have this layout: slot = user x layers + layer, the same stripe), not allocated or zeroed here. A row
+whose slots the prefill stack filled with a prompt of N tokens is taken over with ``adopt_row(row, N - 1)`` and its
+first step feeds the LAST PROMPT TOKEN at position N - 1 (tt/prefill_bridge.py "What a prefill hands over": the step
+rewrites row N - 1 and gives the first new token). The prefill stack's pack cuts the latent values toward zero where
+this model's own append rounds, so such a model is built with ``append="truncate", latent_scale=1.0430`` (every row of a
+context then has the same bias and the one scalar in the weights answers it) until the stack's pack rounds.
+
 The RoPE pairing is the process's (HY4_ROPE_PAIRING, reference/attention.py rope_pairing): this checkpoint's is
 "interleaved", and the constructor refuses any other (the weight streams, the tables and the stored rows' order all
 follow it).
@@ -124,6 +132,8 @@ class DecodeModel:
         check_every=64,
         slow_pass_s=1.0,
         mlp_split="tp32",
+        latent_scale=None,
+        stores=None,
     ):
         """layers: the checkpoint's first ``layers`` layers with the model's head (78: the model; fewer: the cut
         models the reference's goldens are recorded for). max_positions: rounded up to frames of 8,192.
@@ -138,7 +148,12 @@ class DecodeModel:
         mf_dm_L6_rw_tr), so it is not read after every pass. A stuck program raises by the operation timeout.
         mlp_split: the MoE layers' expert layout (Stack(mlp_split=)): "tp32", or "tp8g4" (a mesh column owns 64
         routed experts, 1/8 of each on each of its 8 chips); the prepared streams of that split must be on disk
-        (fused/model/convert.py --split). Layer 0's dense FFN is tp32 either way."""
+        (fused/model/convert.py --split). Layer 0's dense FFN is tp32 either way.
+        stores: (latent rows, index keys), two device tensors in this model's layout that someone else allocated and
+        filled (the prefill stack's caches for 8 users of max_positions positions); nothing is zeroed. Rows are
+        taken over with adopt_row.
+        latent_scale: AttnLayer(latent_scale=): the scalar for rows a truncating pack wrote; only with
+        append="truncate" (the rows this model appends are then cut the same way)."""
         assert (
             rope_pairing() == "interleaved"
         ), "this checkpoint's RoPE pairing is interleaved: HY4_ROPE_PAIRING=interleaved"
@@ -158,7 +173,7 @@ class DecodeModel:
             fidelity=fidelity,
             moe_fidelity=moe_fidelity,
             wait_limit=wait_limit,
-            attn_kwargs=dict(append=append),
+            attn_kwargs=dict(append=append, **({} if latent_scale is None else {"latent_scale": float(latent_scale)})),
             mlp_split=mlp_split,
         )
         # the two stores (allocated here, zeroed after every L1 tensor of the step exists)
@@ -166,8 +181,19 @@ class DecodeModel:
             "latent", self.layers, kv_frames.LATENT.width, kv_frames.LATENT.shard_bytes, kv_frames.LATENT.row_stride
         )
         idx = kv_frames.Kind("index", len(self.full), kv_frames.INDEX.width, kv_frames.INDEX.shard_bytes, 0)
-        self.kv = kv_device.allocate(mesh_device, kv_frames.Geometry.contiguous(lat, self.frames), ROWS)
-        self.keys = kv_device.allocate(mesh_device, kv_frames.Geometry.contiguous(idx, self.frames), ROWS)
+        self.own_stores = stores is None
+        if self.own_stores:
+            self.kv = kv_device.allocate(mesh_device, kv_frames.Geometry.contiguous(lat, self.frames), ROWS)
+            self.keys = kv_device.allocate(mesh_device, kv_frames.Geometry.contiguous(idx, self.frames), ROWS)
+        else:
+            self.kv, self.keys = stores
+            for tensor, kind in ((self.kv, lat), (self.keys, idx)):
+                geometry = kv_frames.Geometry.contiguous(kind, self.frames)
+                assert tuple(tensor.shape) == geometry.tensor_shape(ROWS), (
+                    f"the {kind.name} store handed in is {tuple(tensor.shape)}; {ROWS} rows of {self.max_positions} "
+                    f"positions over {kind.layers} layers are {geometry.tensor_shape(ROWS)}"
+                )
+                kv_device.check_layout(tensor, geometry, ROWS)
         st.set_indexer(self.keys, len(self.full))
         self._load()
         self.cfg = SL.SparseMlaConfig(rows_per_slot=self.frames * kv_frames.FRAME_ROWS, num_layers=self.layers)
@@ -182,7 +208,7 @@ class DecodeModel:
         self.ids_in, self.ids_out = EF.id_tensor(mesh_device), EF.id_tensor(mesh_device)
         self.kept = EF.logits_tensor(mesh_device) if keep_logits else None
         ttnn.synchronize_device(mesh_device)
-        if zero:
+        if zero and self.own_stores:
             zero_fill(self.kv)
             zero_fill(self.keys)
             ttnn.synchronize_device(mesh_device)
@@ -194,7 +220,8 @@ class DecodeModel:
         self._last = None
         logger.info(
             f"HY4_MF DecodeModel: {self.layers} layers ({len(self.full)} full-indexer: {self.full[:6]}{'...' if len(self.full) > 6 else ''}), "
-            f"{self.max_positions} positions a row ({self.frames} frames), append {append}, experts {mlp_split}, built in {time.perf_counter() - t0:.0f} s; "
+            f"{self.max_positions} positions a row ({self.frames} frames), append {append}"
+            f"{'' if latent_scale is None else f', latent_scale {latent_scale}'}, stores {'its own' if self.own_stores else 'handed in'}, experts {mlp_split}, built in {time.perf_counter() - t0:.0f} s; "
             f"L1 tensors {st.l1_bytes()} B per core"
         )
 
@@ -251,6 +278,14 @@ class DecodeModel:
         anything of that step reads them)."""
         assert 0 <= row < ROWS and 0 <= int(keep) <= self._next[row], (row, keep, self._next[row])
         self._next[row] = int(keep)
+
+    def adopt_row(self, row: int, position: int) -> None:
+        """Row ``row``'s slots hold positions [0, position) written by someone else (the prefill stack, into the
+        stores this model was built on): its next position is ``position``. Nothing is written or checked: what the
+        slots hold is the caller's word."""
+        assert not self.own_stores, "adopt_row: a model built on stores=(the prefill stack's caches)"
+        assert 0 <= row < ROWS and 0 <= int(position) < self.max_positions, (row, position, self.max_positions)
+        self._next[row] = int(position)
 
     def step(self, tokens, positions, want_logits: bool = False):
         """One pass. tokens[r] None: row r is idle. An active row r runs token tokens[r] at position positions[r]
