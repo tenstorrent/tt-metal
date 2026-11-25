@@ -9,9 +9,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 #include "ttnn/operations/experimental/quasar/matmul/device/matmul_device_operation_types.hpp"
 

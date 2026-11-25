@@ -7,8 +7,8 @@
 #include <limits>
 #include <optional>
 
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor.hpp"

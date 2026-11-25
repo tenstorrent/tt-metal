@@ -15,7 +15,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "ttnn/command_list.hpp"
 #include "ttnn/common/queue_id.hpp"

@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/mesh_device.hpp>  // q.device()->get_view().shape() for block-cyclic sp derivation
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>  // q.device()->get_view().shape() for block-cyclic sp derivation
 
 #include "kernels/indexer_score_work_split.hpp"  // banded grid mapping (banded_core_count)
 #include "indexer_score_host_common.hpp"         // program::ring_size_for (shared with the fused factory)

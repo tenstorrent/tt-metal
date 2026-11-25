@@ -4,7 +4,7 @@
 
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include "socket_peer_descriptor_generated.h"
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {

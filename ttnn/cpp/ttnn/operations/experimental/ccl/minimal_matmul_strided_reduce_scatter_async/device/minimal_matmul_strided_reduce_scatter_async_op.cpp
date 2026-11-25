@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"

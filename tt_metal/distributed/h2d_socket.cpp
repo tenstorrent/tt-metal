@@ -7,7 +7,7 @@
 #include <internal/mesh_device.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include <internal/l1_ecc_halt.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include <tt-metalium/experimental/sockets/named_shm.hpp>
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
@@ -26,7 +26,7 @@
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"  // emule::pump_device
 #endif
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-umd/io_window/io_window.hpp>
