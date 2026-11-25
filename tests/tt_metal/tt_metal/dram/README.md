@@ -37,7 +37,7 @@ TT_METAL_OPERATION_TIMEOUT_SECONDS=600 timeout 3600 ./build/test/tt_metal/mimir_
 
 ## Descriptors
 
-Descriptors are in `tt_metal/third_party/umd/tests/soc_descs/`:
+Descriptors are in `tt_metal/third_party/umd/descriptors/soc_descs/`:
 - `mimir_1x1.yaml`
 - `mimir_2x_package.yaml`
 
