@@ -2533,7 +2533,7 @@ class ttMLA:
             return dense
         return self._push.push_buffer(parity, dense, **self._push_geometry)
 
-    def _sparse_push_plan(self, indices, kv_actual_isl, metadata):
+    def _sparse_push_plan(self, indices, kv_actual_isl, metadata, defer_gather=False):
         """The push plan for `indices`; the planner caches it across the layers that reuse them."""
         return self._push.plan(
             indices,
@@ -2542,6 +2542,7 @@ class ttMLA:
             max_rows=self._sparse_kv_gather_buffer.shape[2],
             chunk_start=kv_actual_isl or 0,
             chunk_start_tensor=metadata[1] if metadata is not None else None,
+            defer_gather=defer_gather,
         )
 
     def _other_push_parity(self, parity):
@@ -2596,7 +2597,8 @@ class ttMLA:
         if target_layer_idx >= self.layer_num:
             raise ValueError(f"layer {self.layer_idx} pre-sends for cache layer {target_layer_idx} of {self.layer_num}")
         indices = own_indices if next_step.indices is None else next_step.indices
-        plan = self._sparse_push_plan(indices, next_step.kv_actual_isl, next_step.metadata)
+        # A new plan's table gather waits to run beside attention (see _beside_prefetch).
+        plan = self._sparse_push_plan(indices, next_step.kv_actual_isl, next_step.metadata, defer_gather=True)
         self._push.prefetched[self.layer_idx + next_step.layer_offset] = (plan, parity)
         self._push.pushes[SparseKvPushPart.PREFIX.name] += 1
         storage = kvpe_cache.storage
@@ -2605,20 +2607,36 @@ class ttMLA:
             storage, self._cache_batch_idx(next_step.cache_user_id, target_layer_idx), next_step.metadata
         )
         _, push_grid = self._push_prefetch_grids
-        return lambda: ttnn.experimental.sparse_kv_push(
-            storage,
-            output_tensor=output,
-            table=plan.table,
-            stripe_chunk=plan.stripe_chunk,
-            max_rows=plan.max_rows,
-            part=SparseKvPushPart.PREFIX,
-            num_links=self._push.prefetch_links,
-            sp_axis=self.sp_axis,
-            **slot,
-            ready_semaphore=self._push.ready_semaphore,
-            done_semaphore=self._push.done_semaphore,
-            core_grid=push_grid,
-        )
+
+        def push():
+            ttnn.experimental.sparse_kv_push(
+                storage,
+                output_tensor=output,
+                table=plan.table,
+                stripe_chunk=plan.stripe_chunk,
+                max_rows=plan.max_rows,
+                part=SparseKvPushPart.PREFIX,
+                num_links=self._push.prefetch_links,
+                sp_axis=self.sp_axis,
+                **slot,
+                ready_semaphore=self._push.ready_semaphore,
+                done_semaphore=self._push.done_semaphore,
+                core_grid=push_grid,
+            )
+
+        def prefetch(attention):
+            if plan.pending_gather is None:
+                push()  # first: it waits on its start fence with the other chips, attention needs no one
+                return attention()
+            # A new plan: its table gather, then attention, then the push. A program waits for its sub-device to
+            # finish the one before it, and the dispatcher waits with it: a push queued behind the gather would hold
+            # attention back until the gather is done.
+            plan.run_gather(subdevice_id=ttnn.SubDeviceId(1), sub_core_grids=push_grid)
+            out = attention()
+            push()
+            return out
+
+        return prefetch
 
     @contextlib.contextmanager
     def _sub_device_manager(self, manager_id):
@@ -2639,9 +2657,7 @@ class ttMLA:
     def _beside_prefetch(self, prefetch, attention):
         """Runs attention on sub-device 0 while prefetch pushes on sub-device 1; clearing the manager joins both."""
         with self._sub_device_manager(self._push_prefetch_manager):
-            # The push first: it waits on its start fence with the other chips, attention needs no one.
-            prefetch()
-            return attention()
+            return prefetch(attention)
 
     def _prepare_sparse_kv_prefix(
         self,

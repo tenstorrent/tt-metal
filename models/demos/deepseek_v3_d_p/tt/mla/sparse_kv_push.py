@@ -29,6 +29,14 @@ class SparseKvPushPlan:
     compact_indices: ttnn.Tensor
     stripe_chunk: int
     max_rows: int
+    # The tables' all-gather while deferred (plan(defer_gather=True)): run_gather() runs it, e.g. on a sub-device
+    # beside attention, since attention needs only compact_indices. None once run.
+    pending_gather: object = None
+
+    def run_gather(self, **gather_kwargs):
+        if self.pending_gather is not None:
+            gather, self.pending_gather = self.pending_gather, None
+            gather(**gather_kwargs)
 
 
 @dataclass(frozen=True)
@@ -206,10 +214,14 @@ class SparseKvPushPlanner:
         max_rows: int,
         chunk_start: int = 0,
         chunk_start_tensor: ttnn.Tensor | None = None,
+        defer_gather: bool = False,
     ) -> SparseKvPushPlan:
         """The plan for `indices`, cached across the layers that reuse them, one per chunk of a packed forward. On a
         traced replay the plan op reads the chunk start from chunk_start_tensor on device, so one cached plan serves
-        any chunk at that metadata slot; eagerly it takes chunk_start as a runtime arg."""
+        any chunk at that metadata slot; eagerly it takes chunk_start as a runtime arg.
+
+        defer_gather leaves a new plan's table gather pending (see SparseKvPushPlan.run_gather); without it, a pending
+        gather runs now."""
         # Keyed by buffer address: full layers rewrite the shared indices buffer in place and call invalidate(), as
         # does a pipeline stage's first layer, so an unchanged address means the same indices.
         start_key = chunk_start_tensor.buffer_address() if chunk_start_tensor is not None else chunk_start
@@ -220,6 +232,8 @@ class SparseKvPushPlanner:
                 len(self._plans), indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor
             )
             self._plans[key] = plan
+        if not defer_gather:
+            plan.run_gather()
         return plan
 
     def _build(self, slot, indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor):
@@ -244,10 +258,17 @@ class SparseKvPushPlanner:
                 ttnn.uint32,
                 ttnn.ROW_MAJOR_LAYOUT,
             )
-        ttnn.experimental.high_bw_all_gather(
-            table, dim=2, output_tensor=tables, cluster_axis=None, num_links=self.links
-        )
-        ttnn.deallocate(table)
+
+        def gather(**gather_kwargs):
+            ttnn.experimental.high_bw_all_gather(
+                table, dim=2, output_tensor=tables, cluster_axis=None, num_links=self.links, **gather_kwargs
+            )
+            ttnn.deallocate(table)
+
         return SparseKvPushPlan(
-            table=tables, compact_indices=compact_indices, stripe_chunk=stripe_chunk, max_rows=max_rows
+            table=tables,
+            compact_indices=compact_indices,
+            stripe_chunk=stripe_chunk,
+            max_rows=max_rows,
+            pending_gather=gather,
         )
