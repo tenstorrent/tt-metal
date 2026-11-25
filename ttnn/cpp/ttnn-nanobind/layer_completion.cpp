@@ -33,6 +33,7 @@ void bind_layer_completion_api(nb::module_& mod) {
     using tt::tt_metal::internal::LayerCompletionRouterConfig;
 
     mod.doc() = "Pipelined-prefill layer-completion ring/router.";
+    mod.attr("CHUNK_FAILED") = tt::tt_metal::internal::kLayerCompletionChunkFailed;
 
     nb::class_<LayerCompletionQueue>(mod, "LayerCompletionQueue")
         .def_static(
@@ -54,14 +55,18 @@ void bind_layer_completion_api(nb::module_& mod) {
                uint32_t pos_start,
                uint32_t pos_end,
                uint32_t layer_start,
-               uint32_t layer_end) {
+               uint32_t layer_end,
+               uint32_t flags) {
+                if (flags != 0u && flags != tt::tt_metal::internal::kLayerCompletionChunkFailed) {
+                    throw std::invalid_argument("flags must be 0 or CHUNK_FAILED, got " + std::to_string(flags));
+                }
                 return self.try_push(LayerCompletionMessage{
                     slot_id,
                     pos_start,
                     pos_end,
                     layer_start,
                     layer_end,
-                    0u,
+                    flags,
                     tt::tt_metal::internal::layer_completion_host_timestamp_ns()});
             },
             nb::arg("slot_id"),
@@ -69,7 +74,9 @@ void bind_layer_completion_api(nb::module_& mod) {
             nb::arg("pos_end"),
             nb::arg("layer_start"),
             nb::arg("layer_end"),
-            "Producer push, stamped with the host time. Returns False (no write) when the ring is full.")
+            nb::arg("flags") = 0u,
+            "Producer push, stamped with the host time. flags is 0 for a completion or CHUNK_FAILED. Returns False (no "
+            "write) when the ring is full.")
         .def(
             "try_pop",
             [](LayerCompletionQueue& self)
@@ -78,12 +85,27 @@ void bind_layer_completion_api(nb::module_& mod) {
                 if (!self.try_pop(m)) {
                     return std::nullopt;
                 }
+                if (m.flags != 0u) {
+                    throw std::runtime_error(
+                        "try_pop got a record with flags " + std::to_string(m.flags) + "; use try_pop_with_flags");
+                }
                 return std::make_tuple(
                     m.slot_id, m.pos_start, m.pos_end, m.layer_start, m.layer_end, m.host_timestamp_ns);
             },
             "Consumer pop. Returns (slot_id, pos_start, pos_end, layer_start, layer_end, host_timestamp_ns) or None "
-            "when "
-            "empty.")
+            "when empty. Raises on a flagged record, which only try_pop_with_flags returns.")
+        .def(
+            "try_pop_with_flags",
+            [](LayerCompletionQueue& self)
+                -> std::optional<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t>> {
+                LayerCompletionMessage m{};
+                if (!self.try_pop(m)) {
+                    return std::nullopt;
+                }
+                return std::make_tuple(
+                    m.slot_id, m.pos_start, m.pos_end, m.layer_start, m.layer_end, m.host_timestamp_ns, m.flags);
+            },
+            "try_pop with the record's flags appended (0 or CHUNK_FAILED).")
         .def("shutdown", &LayerCompletionQueue::shutdown, "Idempotent teardown. Owner unlinks; connector unmaps.")
         .def_prop_ro("shm_name", &LayerCompletionQueue::shm_name)
         .def_prop_ro("completions_per_chunk", &LayerCompletionQueue::completions_per_chunk);

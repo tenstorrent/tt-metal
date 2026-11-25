@@ -89,7 +89,16 @@ TEST(LayerCompletionRouter, MasterForwardsAsArrived) {
         EXPECT_EQ(out.pos_start, want);
     }
     EXPECT_EQ(out.layer_end - out.layer_start, 14u);
-    ASSERT_TRUE(wait_until([&] { return router->processed() == 4; }));
+
+    // A failed-chunk record is forwarded with its flag. Its flag must never equal the end-of-stream sentinel's.
+    LayerCompletionMessage failed = make_msg(9, 0, 0);
+    failed.flags = kLayerCompletionChunkFailed;
+    EXPECT_FALSE(is_layer_completion_sentinel(failed));
+    ASSERT_TRUE(producer->try_push(failed));
+    ASSERT_TRUE(wait_until([&] { return scheduler->try_pop(out); }));
+    EXPECT_EQ(out.pos_start, 9u);
+    EXPECT_EQ(out.flags, kLayerCompletionChunkFailed);
+    ASSERT_TRUE(wait_until([&] { return router->processed() == 5; }));
 
     producer->shutdown();
     scheduler->shutdown();
