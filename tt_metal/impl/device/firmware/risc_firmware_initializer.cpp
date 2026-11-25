@@ -59,6 +59,12 @@ bool quasar_device_has_ethernet_cores(const Cluster& cluster, ChipId device_id) 
     return cluster.arch() == ARCH::QUASAR && !cluster.get_soc_desc(device_id).logical_eth_core_to_chan_map.empty();
 }
 
+// A Quasar chip with Ethernet cores whose descriptor lists them as Keraunos cores (keraunos.cores).
+bool quasar_device_has_keraunos_cores(const Cluster& cluster, ChipId device_id) {
+    return quasar_device_has_ethernet_cores(cluster, device_id) &&
+           !cluster.get_soc_desc(device_id).get_arch_descriptor().get_keraunos().cores.empty();
+}
+
 tt::umd::RiscType dram_core_reset_riscs(ARCH arch) {
     // Harts only. RiscType::ALL also holds the CCE uncore and, on deassert, reprograms the DMRISC
     // remap. SMC firmware owns both on full Grendel, and chippy owns both on the Mimir-local path.
@@ -1574,8 +1580,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                     }
                 }
             }
-            if (quasar_ethernet &&
-                !cluster_.get_soc_desc(device_id).get_arch_descriptor().get_keraunos().cores.empty()) {
+            if (quasar_device_has_keraunos_cores(cluster_, device_id)) {
                 // A CCE resolves NOC addresses with KeraunosNocChannels and KeraunosSpaRoutes. An idle core has its
                 // routes from the block above; a linked core takes them here, at the same CCE-relative address.
                 const auto& soc_k = cluster_.get_soc_desc(device_id);
@@ -1869,8 +1874,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
-    const bool keraunos_ethernet =
-        has_quasar_ethernet && !cluster_.get_soc_desc(device_id).get_arch_descriptor().get_keraunos().cores.empty();
+    const bool keraunos_ethernet = quasar_device_has_keraunos_cores(cluster_, device_id);
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
