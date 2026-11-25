@@ -118,6 +118,8 @@ class Qwen3ForcedAligner:
             max_seq_len=max_seq_len,
             optimizations=lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
         )
+        # TT_CACHE_PATH may be shared with the ASR model, whose decoder weights differ.
+        args.model_cache_path = args.model_cache_path / args.model_name
         model = Qwen3ASRDecoder(
             args,
             ttnn.bfloat16,
