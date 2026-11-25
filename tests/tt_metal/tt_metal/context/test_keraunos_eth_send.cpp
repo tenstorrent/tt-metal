@@ -196,14 +196,20 @@ TEST_P(Ordering, Run) {
 
     const uint64_t ack_global = global_addr(*tx, at(kAckOffset));
 
+    // Both kernels reach the NOC through cce_noc.h.
+    std::map<std::string, std::string> sender_defines = variant.defines;
+    sender_defines.emplace("KERAUNOS_CCE_NOC", "1");
     Program program = CreateProgram();
     const KernelHandle sender = CreateKernel(
         program,
         kSenderKernel,
         tx->logical,
-        EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0, .defines = variant.defines});
+        EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0, .defines = sender_defines});
     const KernelHandle receiver = CreateKernel(
-        program, kReceiverKernel, rx->logical, EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0});
+        program,
+        kReceiverKernel,
+        rx->logical,
+        EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0, .defines = {{"KERAUNOS_CCE_NOC", "1"}}});
     SetRuntimeArgs(program, sender, tx->logical, {base, kIterations, kPayloadBytes, kTxq, kPolls});
     SetRuntimeArgs(
         program,

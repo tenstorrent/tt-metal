@@ -232,7 +232,8 @@ TEST_P(KeraunosCrossTileSemaphore, IncrementPeerCounter) {
             program,
             "tests/tt_metal/tt_fabric/keraunos/kernels/cross_tile_semaphore_increment.cpp",
             core.logical,
-            EthernetConfig{.eth_mode = eth_mode_of(core.type), .noc = NOC::NOC_0}));
+            EthernetConfig{
+                .eth_mode = eth_mode_of(core.type), .noc = NOC::NOC_0, .defines = {{"KERAUNOS_CCE_NOC", "1"}}}));
         // Final argument count before finalize_offsets sizes the runtime-arg region.
         SetRuntimeArgs(program, kernels.back(), core.logical, std::vector<uint32_t>(10, 0));
     }

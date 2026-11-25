@@ -231,7 +231,7 @@ public:
     }
 
     // A data-movement kernel on `worker`: DataMovementConfig on RISCV_0 for a Tensix core, EthernetConfig on DM0 of
-    // an idle Ethernet core.
+    // an idle Ethernet core, built with KERAUNOS_CCE_NOC so its NOC calls go through cce_noc.h.
     static tt_metal::KernelHandle create_fabric_test_worker_kernel(
         tt_metal::Program& program,
         const std::string& file_name,
@@ -239,6 +239,8 @@ public:
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines = {}) {
         if (worker.core_type == CoreType::ETH) {
+            std::map<std::string, std::string> eth_defines = defines;
+            eth_defines.emplace("KERAUNOS_CCE_NOC", "1");
             return tt_metal::CreateKernel(
                 program,
                 file_name,
@@ -248,7 +250,7 @@ public:
                     .noc = tt_metal::NOC::NOC_0,
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .compile_args = compile_args,
-                    .defines = defines});
+                    .defines = eth_defines});
         }
         return tt_metal::CreateKernel(
             program,
