@@ -79,6 +79,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 row_major_output (bool): write the output row-major, each row the concat_prefix channels then
                     the rotated ones (default False: TILE). Needs concat_prefix, a bfloat16 input rotated across its
                     whole width, and a prefix width that is a multiple of it.
+                sub_core_grids (ttnn.CoreRangeSet, optional): the cores to run on (e.g. a loaded sub-device's); the
+                    whole grid by default.
 
             Returns:
                 ttnn.Tensor: a rotary-embedded tensor, with concat_prefix channels first when supplied.
@@ -98,7 +100,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const std::optional<uint32_t>&,
                 uint32_t,
                 const std::optional<Tensor>&,
-                bool>(&rotary_embedding_indexed),
+                bool,
+                const std::optional<CoreRangeSet>&>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -111,7 +114,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("rotary_dim") = std::nullopt,
             nb::arg("rotary_offset") = 0,
             nb::arg("concat_prefix") = std::nullopt,
-            nb::arg("row_major_output") = false),
+            nb::arg("row_major_output") = false,
+            nb::arg("sub_core_grids") = std::nullopt),
         // Metadata form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -127,7 +131,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const std::optional<uint32_t>&,
                 uint32_t,
                 const std::optional<Tensor>&,
-                bool>(&rotary_embedding_indexed),
+                bool,
+                const std::optional<CoreRangeSet>&>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -140,7 +145,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("rotary_dim") = std::nullopt,
             nb::arg("rotary_offset") = 0,
             nb::arg("concat_prefix") = std::nullopt,
-            nb::arg("row_major_output") = false));
+            nb::arg("row_major_output") = false,
+            nb::arg("sub_core_grids") = std::nullopt));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::detail

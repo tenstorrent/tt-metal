@@ -30,6 +30,9 @@ struct NlpCreateHeadsDeviceOperation {
         // Interleaved input only: the row count is a runtime arg and one program serves every sequence
         // length of a given width and dtype. Ignored for sharded input. Default: one program per row count.
         bool runtime_rows = false;
+        // Interleaved input without runtime_rows only: the cores to split the work over (e.g. a loaded
+        // sub-device's); the whole worker grid if unset.
+        std::optional<CoreRangeSet> sub_core_grids;
     };
 
     struct tensor_args_t {
@@ -122,5 +125,6 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt,
     std::optional<uint32_t> q_head_split = std::nullopt,
-    bool runtime_rows = false);
+    bool runtime_rows = false,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn::prim

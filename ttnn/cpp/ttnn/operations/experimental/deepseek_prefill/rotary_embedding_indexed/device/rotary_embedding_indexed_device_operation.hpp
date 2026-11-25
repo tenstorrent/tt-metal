@@ -39,6 +39,8 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         // Write the output row-major (each row the prefix channels then the rotated ones), for a consumer that
         // reads rows, so no untilize follows. Needs concat_prefix and a rotary region covering the whole input.
         bool row_major_output = false;
+        // The cores to run on (e.g. a loaded sub-device's); the whole worker grid if unset.
+        std::optional<CoreRangeSet> sub_core_grids;
     };
 
     struct tensor_args_t {
@@ -126,6 +128,7 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
     const std::optional<ttnn::Tensor>& concat_prefix,
-    bool row_major_output = false);
+    bool row_major_output = false,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::prim

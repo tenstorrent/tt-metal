@@ -45,8 +45,7 @@ ttnn::Tensor to_heads(
 
 // Slices a contiguous run of head sections out of a row-major [B, S, TOT, D] view, on the
 // head dim (2), leaving dims 0, 1 and 3 whole.
-ttnn::Tensor slice_heads(
-    const ttnn::Tensor& row_major_heads, uint32_t begin_head, uint32_t num_heads) {
+ttnn::Tensor slice_heads(const ttnn::Tensor& row_major_heads, uint32_t begin_head, uint32_t num_heads) {
     const auto& shape = row_major_heads.logical_shape();
     return ttnn::slice(
         row_major_heads,
@@ -61,11 +60,7 @@ ttnn::Tensor slice_heads(
 ttnn::Tensor heads_view(const ttnn::Tensor& input_tensor, uint32_t num_heads, uint32_t head_dim) {
     return ttnn::reshape(
         input_tensor,
-        ttnn::Shape(
-            {input_tensor.logical_shape()[0],
-             input_tensor.logical_shape()[2],
-             num_heads,
-             head_dim}));
+        ttnn::Shape({input_tensor.logical_shape()[0], input_tensor.logical_shape()[2], num_heads, head_dim}));
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_subtile_head_dim(
@@ -92,17 +87,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_subtil
         // when tied, separate K and V sections otherwise.
         const uint32_t kv_sections = kv_tied ? 1 : 2;
         ttnn::Tensor kv_heads = heads_view(
-            ttnn::to_layout(input_tensor_kv.value(), ttnn::Layout::ROW_MAJOR),
-            kv_sections * num_kv_heads,
-            head_dim);
+            ttnn::to_layout(input_tensor_kv.value(), ttnn::Layout::ROW_MAJOR), kv_sections * num_kv_heads, head_dim);
         k_heads = slice_heads(kv_heads, 0, num_kv_heads);
         v_heads = kv_tied ? k_heads : slice_heads(kv_heads, num_kv_heads, num_kv_heads);
     } else {
         // Q, then K/V follow in the same tensor, so the view has to span the full fused
         // width and Q is the first num_q_heads sections of it. Using num_q_heads alone
         // here would describe B*S*num_q_heads*D elements for a B*S*(sections*D) tensor.
-        const uint32_t fused_sections = kv_tied ? num_q_heads + num_kv_heads
-                                                : num_q_heads + 2 * num_kv_heads;
+        const uint32_t fused_sections = kv_tied ? num_q_heads + num_kv_heads : num_q_heads + 2 * num_kv_heads;
         ttnn::Tensor fused_heads = heads_view(q_row_major, fused_sections, head_dim);
         q_heads = slice_heads(fused_heads, 0, num_q_heads);
         k_heads = slice_heads(fused_heads, num_q_heads, num_kv_heads);
@@ -136,8 +128,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads(
     // not fill the last tile leaves the logical width short of the padded one, and dividing the
     // padded width would derive a head_dim larger than the one the caller actually packed.
     const uint64_t q_logical_width = input_tensor_q.logical_shape()[3];
-    const uint64_t kv_logical_width =
-        input_tensor_kv.has_value() ? input_tensor_kv.value().logical_shape()[3] : 0;
+    const uint64_t kv_logical_width = input_tensor_kv.has_value() ? input_tensor_kv.value().logical_shape()[3] : 0;
     uint32_t head_dim;
     if (input_tensor_kv.has_value()) {
         TT_FATAL(num_kv_heads_val > 0, "num_kv_heads must be greater than 0 when a KV tensor is given");
@@ -252,7 +243,11 @@ std::tuple<Tensor, Tensor> nlp_create_q_heads_split(
     uint32_t num_heads,
     uint32_t split_head_dim,
     const std::optional<MemoryConfig>& memory_config,
-    const bool runtime_rows) {
+    const bool runtime_rows,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_FATAL(
+        !(runtime_rows && sub_core_grids.has_value()),
+        "nlp_create_q_heads_split: sub_core_grids needs runtime_rows=False");
     TT_FATAL(input.logical_shape().rank() == 4 && num_heads > 0, "Expected rank-4 input and nonzero head count");
     TT_FATAL(
         input.logical_shape()[3] == input.padded_shape()[3] && input.logical_shape()[3] % num_heads == 0,
@@ -268,7 +263,8 @@ std::tuple<Tensor, Tensor> nlp_create_q_heads_split(
         memory_config,
         std::nullopt,
         split_head_dim,
-        runtime_rows);
+        runtime_rows,
+        sub_core_grids);
     return {first, second};
 }
 

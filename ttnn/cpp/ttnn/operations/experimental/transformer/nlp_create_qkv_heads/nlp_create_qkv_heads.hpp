@@ -28,6 +28,7 @@ std::tuple<Tensor, Tensor> nlp_create_q_heads_split(
     uint32_t num_heads,
     uint32_t split_head_dim,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    bool runtime_rows = false);
+    bool runtime_rows = false,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::experimental

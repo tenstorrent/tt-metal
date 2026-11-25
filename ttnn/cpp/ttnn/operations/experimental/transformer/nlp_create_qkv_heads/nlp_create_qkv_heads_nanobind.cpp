@@ -22,14 +22,16 @@ void bind_nlp_create_qkv_heads(nb::module_& mod) {
         mod,
         "Create Q heads and return two contiguous channel regions. Interleaved TILE input; split and head width must "
         "be tile aligned. ``runtime_rows=True`` takes the row count at runtime, so one program serves every "
-        "sequence length of a given width and dtype.",
+        "sequence length of a given width and dtype. ``sub_core_grids`` (interleaved input, no runtime_rows) splits "
+        "the work over those cores instead of the whole grid.",
         &ttnn::experimental::nlp_create_q_heads_split,
         nb::arg("input").noconvert(),
         nb::kw_only(),
         nb::arg("num_heads").noconvert(),
         nb::arg("split_head_dim").noconvert(),
         nb::arg("memory_config").noconvert() = nb::none(),
-        nb::arg("runtime_rows").noconvert() = false);
+        nb::arg("runtime_rows").noconvert() = false,
+        nb::arg("sub_core_grids") = nb::none());
     ttnn::bind_function<"nlp_create_qkv_heads", "ttnn.experimental.">(
         mod,
         R"doc(

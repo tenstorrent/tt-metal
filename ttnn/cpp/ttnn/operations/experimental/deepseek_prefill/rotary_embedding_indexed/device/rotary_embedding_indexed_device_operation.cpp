@@ -395,6 +395,7 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
         args.compute_kernel_config,
         args.output_mem_config,
         args.row_major_output,
+        args.sub_core_grids,
         tensor_args.input.tensor_spec(),
         tensor_args.cos.tensor_spec(),
         tensor_args.sin.tensor_spec(),
@@ -469,13 +470,14 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    const CoreRangeSet all_cores =
+        args.sub_core_grids.value_or(CoreRangeSet(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})));
 
     const uint32_t num_input_tiles = 2 * head_dim_t;
     const uint32_t num_output_tiles = num_input_tiles;
 
     const bool row_major = true;
-    const uint32_t num_cores = num_cores_x * num_cores_y;
+    const uint32_t num_cores = all_cores.num_cores();
     const uint32_t batch_parallel_factor = std::min(batch, num_cores);
     const uint32_t seq_parallel_factor = std::min(num_cores / batch_parallel_factor, seq_len_t);
     const uint32_t head_parallel_factor = std::min(n_heads, num_cores / (batch_parallel_factor * seq_parallel_factor));
@@ -750,7 +752,8 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     }
 
     // ------------------------------------------------------------------ per-node runtime args
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    const auto cores = args.sub_core_grids.has_value() ? corerange_to_cores(all_cores, num_cores, row_major)
+                                                       : grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     struct CoreArgs {
         uint32_t start_batch = 0;
@@ -953,7 +956,8 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
     const std::optional<ttnn::Tensor>& concat_prefix,
-    bool row_major_output) {
+    bool row_major_output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::
         RotaryEmbeddingIndexedDeviceOperation;
 
@@ -979,6 +983,7 @@ ttnn::Tensor rotary_embedding_indexed(
         .output_mem_config = out_mem_config,
         .compute_kernel_config = kernel_config_val,
         .row_major_output = row_major_output,
+        .sub_core_grids = sub_core_grids,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input = input,
