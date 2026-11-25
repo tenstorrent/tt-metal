@@ -410,7 +410,12 @@ void kernel_main() {
         wait_workers(kRewritten);
         if (core_idx == 0) {
             const uint32_t* totals = misc + kMiscTotals;
-            const uint32_t split_block = has_split ? misc[kMiscSplit] / stripe_chunk : active_blocks;
+            // The split: the block holding the chunk start, moved REST_LOOKBACK_BLOCKS earlier (its rows are all written,
+            // so either part may send them).
+            const uint32_t chunk_block = misc[kMiscSplit] / stripe_chunk;
+            const uint32_t split_block =
+                !has_split ? active_blocks
+                           : (chunk_block > REST_LOOKBACK_BLOCKS ? chunk_block - REST_LOOKBACK_BLOCKS : 0);
             using namespace sparse_push::plan_table;
             for (uint32_t owner = 0; owner < num_devices; ++owner) {
                 table_image[kOwnerOff + owner] = totals[owner];

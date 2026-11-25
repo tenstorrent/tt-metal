@@ -34,7 +34,8 @@ constexpr uint32_t kWordMagic = 0;
 constexpr uint32_t kWordNumDevices = 1;
 constexpr uint32_t kWordStripeChunk = 2;
 constexpr uint32_t kWordActiveBlocks = 3;  // blocks the plan wrote; later bitmap words are stale
-constexpr uint32_t kWordSplitBlock = 4;    // the block holding the chunk start; the prefix is the blocks before it
+constexpr uint32_t kWordSplitBlock = 4;    // first block of the rest part (the chunk start's, or rest_lookback_blocks
+                                           // before it); the prefix is the blocks before it
 constexpr uint32_t kWordPagesPerPacket = 5;
 constexpr uint32_t kWordBanks = 6;
 constexpr uint32_t kWordHasSplit = 7;  // built with a chunk start; without one, every row is in the prefix

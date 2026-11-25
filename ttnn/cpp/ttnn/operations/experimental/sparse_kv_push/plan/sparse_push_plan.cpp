@@ -15,9 +15,10 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t page_bytes,
     std::optional<uint32_t> chunk_start,
     const std::optional<Tensor>& chunk_start_tensor,
-    const std::optional<tt::tt_metal::CoreRange>& core_range) {
+    const std::optional<tt::tt_metal::CoreRange>& core_range,
+    uint32_t rest_lookback_blocks) {
     return ttnn::prim::sparse_push_plan(
-        indices, stripe_chunk, max_rows, page_bytes, chunk_start, chunk_start_tensor, core_range);
+        indices, stripe_chunk, max_rows, page_bytes, chunk_start, chunk_start_tensor, core_range, rest_lookback_blocks);
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push

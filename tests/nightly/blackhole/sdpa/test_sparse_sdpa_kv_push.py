@@ -252,13 +252,15 @@ def _segmented_traced_us(mesh_device, fn, n=20):
 
 # Per layer: the most each production step may take at the 1M request on one Galaxy (traced, us): the slowest of four
 # bh_sc1_high_power CI runs (42014201179, 42014216524, 42026848687, 42026865528) plus 5%, rounded up.
+# The prefix / rest ceilings follow the planner's rest_lookback_blocks (4 chunks): measured on one Galaxy (mean of 3)
+# x ~1.09, the margin of the other ceilings.
 _GLM_PUSH_PERF_CEILING_US = {
     14: {
         "plan": 224,
         "table gather": 83,
         "push all rows": 448,
-        "push prefix, push grid": 450,
-        "push rest": 116,
+        "push prefix, push grid": 385,
+        "push rest": 170,
         "attention, full grid": 961,
         "attention + prefix push on sub-devices": 936,
     },
@@ -266,10 +268,10 @@ _GLM_PUSH_PERF_CEILING_US = {
         "plan": 234,
         "table gather": 83,
         "push all rows": 1642,
-        "push prefix, push grid": 1572,
-        "push rest": 120,
+        "push prefix, push grid": 1390,
+        "push rest": 310,
         "attention, full grid": 908,
-        "attention + prefix push on sub-devices": 1657,
+        "attention + prefix push on sub-devices": 1515,
     },
 }
 
@@ -332,6 +334,7 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
         max_rows=cache_tokens,
         page_bytes=page_bytes,
         chunk_start_tensor=start,
+        rest_lookback_blocks=planner.rest_lookback_blocks,
     )
     table, compact_idx = ttnn.experimental.sparse_push_plan(indices, **plan_kw)
     tables = ttnn.from_torch(

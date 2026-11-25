@@ -20,6 +20,8 @@ struct SparsePushPlanParams {
     std::optional<uint32_t> chunk_start;
     // The cores the plan runs on (one rectangle); the whole worker grid if unset.
     std::optional<tt::tt_metal::CoreRange> core_range;
+    // Blocks before the chunk start's block that go to the rest part instead of the prefix.
+    uint32_t rest_lookback_blocks = 0;
 };
 
 struct SparsePushPlanInputs {

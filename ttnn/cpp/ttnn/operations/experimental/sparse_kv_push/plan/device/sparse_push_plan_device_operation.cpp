@@ -106,7 +106,8 @@ ttsl::hash::hash_t SparsePushPlanDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     // A host chunk start is a runtime arg: only whether there is one, and in which form, shapes the program.
     return tt::tt_metal::operation::hash_operation<SparsePushPlanDeviceOperation>(
-        attrs.stripe_chunk, attrs.max_rows, attrs.page_bytes, attrs.chunk_start.has_value(), attrs.core_range, args);
+        attrs.stripe_chunk, attrs.max_rows, attrs.page_bytes, attrs.chunk_start.has_value(), attrs.core_range,
+        attrs.rest_lookback_blocks, args);
 }
 
 SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation::compute_output_specs(
@@ -145,7 +146,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t page_bytes,
     std::optional<uint32_t> chunk_start,
     const std::optional<Tensor>& chunk_start_tensor,
-    const std::optional<tt::tt_metal::CoreRange>& core_range) {
+    const std::optional<tt::tt_metal::CoreRange>& core_range,
+    uint32_t rest_lookback_blocks) {
     using Op = ttnn::operations::experimental::sparse_kv_push::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
@@ -153,7 +155,8 @@ std::vector<Tensor> sparse_push_plan(
             .max_rows = max_rows,
             .page_bytes = page_bytes,
             .chunk_start = chunk_start,
-            .core_range = core_range},
+            .core_range = core_range,
+            .rest_lookback_blocks = rest_lookback_blocks},
         Op::tensor_args_t{.indices = indices, .chunk_start_tensor = chunk_start_tensor});
 }
 

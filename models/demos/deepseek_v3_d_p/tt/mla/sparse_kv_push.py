@@ -21,6 +21,7 @@ SparseKvPushPart = ttnn.experimental.SparseKvPushPart
 
 # Cores the push needs per fabric link, for laying out its grid beside sparse_sdpa.
 PUSH_CORES_PER_LINK = ttnn.experimental.SPARSE_KV_PUSH_CORES_PER_LINK
+REST_LOOKBACK_CHUNKS = 4
 
 
 @dataclass
@@ -106,6 +107,11 @@ class SparseKvPushPlanner:
         # thing in the layer (512K GLM-5.3 shared layer with random index keys: 13.0 ms on one link, 8.3 on two),
         # while the cores a second link takes cost attention almost nothing (it is DRAM bound).
         self.prefetch_links = links
+        # Blocks before the chunk's that the rest push sends instead of the prefix push: REST_LOOKBACK_CHUNKS chunks (a
+        # chunk is one block per chip). The rest push has slack beside the q stem while the prefix push beside attention
+        # does not when the top-k needs many rows (real GLM-5.3 top-k at a 1M prompt, layer 62: prefix 1448 -> 1275 us,
+        # rest 106 -> 281 us, still under the ~300 us q stem); recent blocks hold many of them.
+        self.rest_lookback_blocks = REST_LOOKBACK_CHUNKS * mesh_device.get_num_devices()
         grid = mesh_device.compute_with_storage_grid_size()
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
@@ -261,6 +267,7 @@ class SparseKvPushPlanner:
             chunk_start=None if chunk_start_tensor is not None else chunk_start,
             chunk_start_tensor=chunk_start_tensor,
             core_range=core_grid.ranges()[0] if core_grid is not None else None,
+            rest_lookback_blocks=self.rest_lookback_blocks,
         )
         self.builds += 1
         gathered_rows = table.shape[2] * n

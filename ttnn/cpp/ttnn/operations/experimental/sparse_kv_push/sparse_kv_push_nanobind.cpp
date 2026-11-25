@@ -127,6 +127,9 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
                     row, read on device. Mutually exclusive with ``chunk_start``.
                 core_range: Optional rectangle of worker cores to run on, e.g. a sub-device's grid; the whole grid
                     by default. It needs at least max_rows / 16384 cores.
+                rest_lookback_blocks: Blocks before the one holding the chunk start that go to ``REST`` instead
+                    of ``PREFIX`` (0 by default). Their rows are written, so either part may send them; a larger
+                    rest part shortens the prefix push where the rest push has slack beside other work.
 
             Returns:
                 List[ttnn.Tensor]: ``[table, compact_indices]``: the plan table (uint32 [1, 1, pages, 1024]) to
@@ -140,7 +143,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("page_bytes"),
         nb::arg("chunk_start") = nb::none(),
         nb::arg("chunk_start_tensor") = nb::none(),
-        nb::arg("core_range") = nb::none());
+        nb::arg("core_range") = nb::none(),
+        nb::arg("rest_lookback_blocks") = 0);
 
     ttnn::bind_function<"sparse_kv_push", "ttnn.experimental.">(
         mod,

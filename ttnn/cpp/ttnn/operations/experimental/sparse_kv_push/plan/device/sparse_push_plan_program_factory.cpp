@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include "sparse_push_plan_program_factory.hpp"
 
 #include <algorithm>
@@ -150,6 +151,8 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
         std::move(ct),
         tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
+    // Core 0's driver writes the split into the table header (see SparsePushPlanParams::rest_lookback_blocks).
+    kernel.defines.emplace_back("REST_LOOKBACK_BLOCKS", std::to_string(attrs.rest_lookback_blocks));
 
     // Common runtime args: every core's NoC (x, y), core 0 first, then the multicast rectangle of all of them.
     std::vector<uint32_t> common;
