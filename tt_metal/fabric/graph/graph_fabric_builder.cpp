@@ -82,8 +82,7 @@ RouterGraphInputs GraphFabricBuilder::inputs_of(RouterIndex router) const {
                 }
             }
         }
-        vc2.translates =
-            in.inter_domain && fabric_context_.get_control_plane().get_mesh_graph().get_mesh_ids().size() > 1;
+        vc2.translates = in.inter_domain && domain.translates();
         in.vc2_domain = vc2;
     }
     if (g.routers[router].port.capability == EdgeCapability::INTRADOMAIN) {

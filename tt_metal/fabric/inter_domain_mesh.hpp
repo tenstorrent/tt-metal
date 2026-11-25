@@ -33,10 +33,13 @@ struct InterDomainMesh {
     MeshShape shape() const { return mesh_graph->get_mesh_shape(MeshId{0}); }
     // the domain direction of the link a -> b, if it is a domain edge
     std::optional<RoutingDirection> direction(const FabricNodeId& a, const FabricNodeId& b) const;
+    // a landing maps the workload's (mesh, chip) onto the domain's chip
+    bool translates() const;
 };
 
-// One mesh: the workload's own. Several: the squarest grid over all their chips that their physical links embed
-// (`physical`: every link between two of them, the workload's or not).
+// The squarest grid over the workload's chips: its one mesh if that is as square, else the first grid, squarest first,
+// that the workload's links embed, or failing those its physical links (`physical`: every link between two of its
+// chips, the workload's or not).
 InterDomainMesh make_inter_domain_mesh(const MeshGraph& workload, const std::vector<DomainLink>& physical = {});
 
 // The squarest grid over these chips that these links embed.

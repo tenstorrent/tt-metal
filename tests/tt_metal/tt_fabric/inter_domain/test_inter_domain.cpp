@@ -29,12 +29,14 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/fabric/inter_domain.hpp>
+#include <tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp>
 
 #include <internal/cluster.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::inter_domain_test {
@@ -71,11 +73,11 @@ struct RxInfo {
     uint32_t x = 0, y = 0, addr = 0;
     uint32_t mesh = 0, chip = 0;
 };
-// one process's side: its ports, its chips, and what it sent (from, to)
+// one process's side: its ports, its chips, and what it sent (from, the chip it landed on, to)
 struct Side {
     std::vector<PortInfo> ports;
     std::map<uint64_t, RxInfo> rx;
-    std::set<std::pair<uint64_t, uint64_t>> sent;
+    std::set<std::tuple<uint64_t, uint64_t, uint64_t>> sent;
 };
 
 void write_file(const fs::path& path, const std::string& text) {
@@ -102,8 +104,8 @@ std::string to_text(const Side& s) {
     for (const auto& [asic, r] : s.rx) {
         o << "rx " << asic << " " << r.x << " " << r.y << " " << r.addr << " " << r.mesh << " " << r.chip << "\n";
     }
-    for (const auto& [from, to] : s.sent) {
-        o << "sent " << from << " " << to << "\n";
+    for (const auto& [from, via, to] : s.sent) {
+        o << "sent " << from << " " << via << " " << to << "\n";
     }
     return o.str();
 }
@@ -123,9 +125,9 @@ void from_text(const fs::path& path, Side& s) {
             in >> asic >> r.x >> r.y >> r.addr >> r.mesh >> r.chip;
             s.rx[asic] = r;
         } else {
-            uint64_t from = 0, to = 0;
-            in >> from >> to;
-            s.sent.emplace(from, to);
+            uint64_t from = 0, via = 0, to = 0;
+            in >> from >> via >> to;
+            s.sent.emplace(from, via, to);
         }
     }
 }
@@ -139,10 +141,26 @@ uint32_t slot_of(const Side& domain, uint64_t asic) {
     return static_cast<uint32_t>(std::distance(domain.rx.begin(), domain.rx.find(asic)));
 }
 
+// Packets each of this process's routers sent, by (chip, eth channel).
+std::map<std::pair<FabricNodeId, chan_id_t>, uint64_t> packets_sent(
+    const distributed::MeshDevice& mesh, const std::map<uint64_t, FabricNodeId>& node_of) {
+    std::map<std::pair<FabricNodeId, chan_id_t>, uint64_t> sent;
+    for (const auto& [_, node] : node_of) {
+        for (const auto& sample : read_fabric_telemetry(mesh, node)) {
+            if (sample.snapshot.dynamic_info) {
+                sent[{node, sample.channel_id}] = sample.snapshot.dynamic_info->tx_bandwidth.packets_sent;
+            }
+        }
+    }
+    return sent;
+}
+
 // Each domain is one process per mesh of the MGD; processes meet through files in TT_INTER_DOMAIN_DIR. Each domain
-// sends to every chip of the other: from each exit chip over its cable (landing there, then VC2 across the peer's
-// domain), and from the exit chip's mesh behind it (VC0 to the exit chip, then the cable).
-TEST(InterDomain, Sanity) {
+// sends to every chip of the other from each exit chip over its cable, landing there, then VC2 across the peer's
+// domain. One send at a time, plus sends from the exit chip's mesh behind it (VC0 to the exit chip, then the cable); or
+// (all_at_once) every cable's sends together, then the packets each router sent checked against VC2's routes over the
+// domain's mesh (TT_METAL_FABRIC_TELEMETRY=1).
+void run(bool all_at_once) {
     const auto domain = env_u32("TT_INTER_DOMAIN_ID");
     const auto peer_domain = env_u32("TT_INTER_DOMAIN_PEER_ID");
     const char* dir_env = std::getenv("TT_INTER_DOMAIN_DIR");
@@ -238,6 +256,7 @@ TEST(InterDomain, Sanity) {
         }
     }
     ASSERT_FALSE(cables.empty() && !me.ports.empty()) << "no cable to domain " << *peer_domain;
+    const bool check_routes = all_at_once && MetalContext::instance().rtoptions().get_enable_fabric_telemetry();
 
     const uint32_t region = static_cast<uint32_t>(peer.rx.size()) * kBytes;
     const uint32_t rounds = env_u32("TT_INTER_DOMAIN_ROUNDS").value_or(2);
@@ -251,31 +270,52 @@ TEST(InterDomain, Sanity) {
         };
         for (const auto& [asic, dev] : device_of) {
             std::vector<uint32_t> zeros(region / 4, 0);
-            detail::WriteToDeviceL1(dev, kCore, me.rx.at(asic).addr, zeros);
+            tt::tt_metal::detail::WriteToDeviceL1(dev, kCore, me.rx.at(asic).addr, zeros);
         }
         step("ready");
 
         for (const auto& [_, cable] : cables) {
+            log_info(
+                tt::LogTest,
+                "domain {}: cable {} chan {} {} plane {} to asic {} chan {}",
+                *domain,
+                cable.port.node,
+                cable.port.eth_chan,
+                cable.port.direction,
+                cable.port.plane,
+                cable.peer.asic,
+                cable.peer.chan);
             connect_inter_domain(cable.port, *domain, cable.peer.md);
             EXPECT_EQ(get_inter_domain_state(cable.port), InterDomainState::SERVICE_TRAFFIC);
         }
+        const auto before = check_routes ? packets_sent(*mesh, node_of) : decltype(packets_sent(*mesh, node_of)){};
         step("connected");
 
+        // one worker per connection, sending to each of `to` in turn
         struct Send {
             uint64_t from;
-            uint64_t to;
+            uint64_t via;
+            std::vector<uint64_t> to;
             std::vector<RouteEntry> route;
-            std::function<void(Program&, std::vector<uint32_t>&)> connect;
+            std::function<void(Program&, const CoreCoord&, std::vector<uint32_t>&)> connect;
         };
         std::vector<Send> sends;
         for (const auto& [_, cable] : cables) {
             const auto [exit_chip, peer_chip] = cable.chips;
             const auto port = cable.port;
-            auto over_cable = [port](Program& program, std::vector<uint32_t>& args) {
-                append_inter_domain_connection_rt_args(port, program, kCore, args);
+            auto over_cable = [port](Program& program, const CoreCoord& core, std::vector<uint32_t>& args) {
+                append_inter_domain_connection_rt_args(port, program, core, args);
             };
+            std::vector<uint64_t> all;
             for (const auto& [to, _] : peer.rx) {
-                sends.push_back(Send{exit_chip, to, {}, over_cable});
+                all.push_back(to);
+            }
+            if (all_at_once) {
+                sends.push_back(Send{exit_chip, peer_chip, all, {}, over_cable});
+                continue;
+            }
+            for (uint64_t to : all) {
+                sends.push_back(Send{exit_chip, peer_chip, {to}, {}, over_cable});
             }
             const auto exit = node_of.at(exit_chip);
             for (const auto& [asic, dev] : device_of) {
@@ -294,83 +334,165 @@ TEST(InterDomain, Sanity) {
                 sends.push_back(Send{
                     asic,
                     peer_chip,
+                    {peer_chip},
                     route,
-                    [&mesh, from, exit, plane = port.plane](Program& program, std::vector<uint32_t>& args) {
-                        append_fabric_connection_rt_args(*mesh, from, exit, plane, program, kCore, args);
+                    [&mesh, from, exit, plane = port.plane](
+                        Program& program, const CoreCoord& core, std::vector<uint32_t>& args) {
+                        append_fabric_connection_rt_args(*mesh, from, exit, plane, program, core, args);
                     }});
             }
         }
         Side sent;
+        std::map<uint64_t, Program> programs;  // all at once: every chip's sends in one program, a core each
+        std::map<uint64_t, uint32_t> cores_used;
         for (auto& send : sends) {
             IDevice* dev = device_of.at(send.from);
             const uint32_t base = dev->allocator()->get_base_allocator_addr(HalMemType::L1);
+            const uint32_t k = all_at_once ? cores_used[send.from]++ : 0;
+            const auto grid = dev->compute_with_storage_grid_size();
+            const CoreCoord core{k % grid.x, k / grid.x};
             std::vector<uint32_t> data(kBytes / 4);
             for (uint32_t i = 0; i < data.size(); ++i) {
                 data[i] = pattern(*domain, send.from, round, i);
             }
-            detail::WriteToDeviceL1(dev, kCore, base + kSrcOffset, data);
-            Program program = CreateProgram();
+            tt::tt_metal::detail::WriteToDeviceL1(dev, core, base + kSrcOffset, data);
+            Program single = CreateProgram();
+            Program& program = all_at_once ? programs[send.from] : single;
             const auto kernel = CreateKernel(
                 program,
                 "tests/tt_metal/tt_fabric/inter_domain/kernels/inter_domain_sender.cpp",
-                kCore,
+                core,
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = NOC::RISCV_0_default,
                     .defines = {{"FABRIC_2D", "1"}}});
-            const auto& rx = peer.rx.at(send.to);
             std::vector<uint32_t> args = {
-                rx.x,
-                rx.y,
-                rx.addr + slot_of(mine_all, send.from) * kBytes,
                 base + kSrcOffset,
                 base + kHeaderOffset,
                 kNumPackets,
                 kPacketSize,
-                rx.mesh,
-                rx.chip,
                 static_cast<uint32_t>(send.route.size())};
             for (size_t b = 0; b < send.route.size(); b += kEntriesPerArg) {
                 uint32_t word = 0;
-                for (size_t k = 0; k < kEntriesPerArg && b + k < send.route.size(); ++k) {
-                    word |= uint32_t{send.route[b + k]} << (kEntryBits * k);
+                for (size_t e = 0; e < kEntriesPerArg && b + e < send.route.size(); ++e) {
+                    word |= uint32_t{send.route[b + e]} << (kEntryBits * e);
                 }
                 args.push_back(word);
             }
-            send.connect(program, args);
-            SetRuntimeArgs(program, kernel, kCore, args);
-            distributed::MeshWorkload workload;
-            workload.add_program(distributed::MeshCoordinateRange(coord_of.at(send.from)), std::move(program));
-            distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, true);
-            sent.sent.emplace(send.from, send.to);
+            args.push_back(static_cast<uint32_t>(send.to.size()));
+            for (uint64_t to : send.to) {
+                const auto& rx = peer.rx.at(to);
+                args.insert(
+                    args.end(), {rx.x, rx.y, rx.addr + slot_of(mine_all, send.from) * kBytes, rx.mesh, rx.chip});
+                sent.sent.emplace(send.from, send.via, to);
+            }
+            send.connect(program, core, args);
+            SetRuntimeArgs(program, kernel, core, args);
+            if (!all_at_once) {
+                distributed::MeshWorkload workload;
+                workload.add_program(distributed::MeshCoordinateRange(coord_of.at(send.from)), std::move(single));
+                distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, true);
+            }
         }
-        log_info(tt::LogTest, "domain {} mesh {} round {}: {} sends", *domain, my_mesh, round, sends.size());
+        if (all_at_once) {
+            distributed::MeshWorkload workload;
+            for (auto& [asic, program] : programs) {
+                workload.add_program(distributed::MeshCoordinateRange(coord_of.at(asic)), std::move(program));
+            }
+            distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, true);
+        }
+        log_info(tt::LogTest, "domain {} mesh {} round {}: {} sends", *domain, my_mesh, round, sent.sent.size());
         write_file(mine(std::to_string(round) + ".sent"), to_text(sent));
         const Side expected = gather(*peer_domain, std::to_string(round) + ".sent");
 
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        std::map<std::pair<uint64_t, uint64_t>, uint32_t> bad;
-        for (const auto& [from, to] : expected.sent) {
+        uint32_t checked = 0;
+        for (const auto& [from, via, to] : expected.sent) {
             if (!device_of.contains(to)) {
                 continue;
             }
+            uint32_t wrong = 0;
             while (true) {
                 std::vector<uint32_t> got;
-                detail::ReadFromDeviceL1(
+                tt::tt_metal::detail::ReadFromDeviceL1(
                     device_of.at(to), kCore, me.rx.at(to).addr + slot_of(peer, from) * kBytes, kBytes, got);
-                uint32_t wrong = 0;
+                wrong = 0;
                 for (uint32_t i = 0; i < kBytes / 4; ++i) {
                     wrong += got[i] != pattern(*peer_domain, from, round, i);
                 }
-                bad[std::pair(from, to)] = wrong;
                 if (wrong == 0 || std::chrono::steady_clock::now() > deadline) {
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            EXPECT_EQ(bad[std::pair(from, to)], 0u) << "round " << round << ": chip " << to << " from asic " << from;
+            ++checked;
+            EXPECT_EQ(wrong, 0u) << "round " << round << ": chip " << to << " from asic " << from;
         }
-        log_info(tt::LogTest, "domain {} mesh {} round {}: checked {} sends", *domain, my_mesh, round, bad.size());
+        log_info(tt::LogTest, "domain {} mesh {} round {}: checked {} sends", *domain, my_mesh, round, checked);
+
+        if (check_routes) {
+            // VC2 over the domain's mesh, Y then X from the landing chip: the packets each of this process's routers
+            // forwards to a neighbour in the domain, counted, against what each one sent
+            const auto& dm = control_plane.get_fabric_context().get_inter_domain_mesh();
+            const uint32_t cols = dm.shape()[1];
+            std::map<ChipId, FabricNodeId> at_domain_chip;
+            for (const auto& [node, chip] : dm.domain_chip) {
+                at_domain_chip.emplace(chip, node);
+            }
+            std::map<std::pair<FabricNodeId, FabricNodeId>, uint64_t> predicted;
+            uint32_t longest = 0;
+            for (const auto& [from, via, to] : expected.sent) {
+                const auto a = dm.domain_chip.at(control_plane.get_fabric_node_id_from_asic_id(via));
+                const auto b = dm.domain_chip.at(control_plane.get_fabric_node_id_from_asic_id(to));
+                int y = a / cols, x = a % cols;
+                const int dy = b / cols, dx = b % cols;
+                longest = std::max<uint32_t>(longest, std::abs(y - dy) + std::abs(x - dx));
+                while (y != dy || x != dx) {
+                    const int ny = y != dy ? y + (dy > y ? 1 : -1) : y;
+                    const int nx = y != dy ? x : x + (dx > x ? 1 : -1);
+                    predicted[{at_domain_chip.at(y * cols + x), at_domain_chip.at(ny * cols + nx)}] += kNumPackets;
+                    y = ny;
+                    x = nx;
+                }
+            }
+            const auto after = packets_sent(*mesh, node_of);
+            std::map<std::pair<FabricNodeId, FabricNodeId>, uint64_t> measured;
+            for (const auto& [key, count] : after) {
+                const auto& [node, chan] = key;
+                std::optional<FabricNodeId> peer_node;
+                if (const auto live = control_plane.try_get_connected_mesh_chip_chan_ids(node, chan)) {
+                    peer_node = live->first;
+                }
+                for (const auto& l : dm.vc2_links) {
+                    if (l.a == node && l.a_chan == chan) {
+                        peer_node = l.b;
+                    } else if (l.b == node && l.b_chan == chan) {
+                        peer_node = l.a;
+                    }
+                }
+                if (peer_node && dm.domain_chip.contains(*peer_node)) {
+                    const auto was = before.find(key);
+                    measured[{node, *peer_node}] += count - (was == before.end() ? 0 : was->second);
+                }
+            }
+            uint32_t links = 0;
+            for (const auto& [link, count] : measured) {
+                const auto it = predicted.find(link);
+                EXPECT_EQ(count, it == predicted.end() ? 0 : it->second)
+                    << "round " << round << ": " << link.first << " -> " << link.second;
+                ++links;
+            }
+            log_info(
+                tt::LogTest,
+                "domain {} mesh {} round {}: {} links match VC2's routes over the {}x{} domain, longest {} hops",
+                *domain,
+                my_mesh,
+                round,
+                links,
+                dm.shape()[0],
+                cols,
+                longest);
+        }
         step("received");
 
         for (const auto& [_, cable] : cables) {
@@ -382,6 +504,10 @@ TEST(InterDomain, Sanity) {
     mesh->close();
     SetFabricConfig(FabricConfig::DISABLED);
 }
+
+TEST(InterDomain, Sanity) { run(/*all_at_once=*/false); }
+
+TEST(InterDomain, AllAtOnce) { run(/*all_at_once=*/true); }
 
 }  // namespace
 }  // namespace tt::tt_fabric::inter_domain_test
