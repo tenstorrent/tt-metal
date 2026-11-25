@@ -19,11 +19,11 @@
 #include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
-#include "kernel_types.hpp"
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
 
 // This file contains shortcut helper functions to create minimal valid ProgramSpec
 // objects for unit tests. This cuts boilerplate in a unit testing context.

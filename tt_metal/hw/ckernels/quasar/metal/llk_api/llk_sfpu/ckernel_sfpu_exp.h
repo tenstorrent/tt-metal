@@ -213,10 +213,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 // Non-finite behaviour of this path:
-//   +NaN -> NaN    -NaN -> 0    +Inf -> +Inf    -Inf -> 0
-// -NaN diverges from Blackhole, which returns NaN for either sign: a negative-signed NaN drives i
-// negative, so the lane lands in the underflow arm. Derived from simulation of this routine, NOT
-// silicon-verified -- no Quasar target available.
+//   +-NaN -> NaN    +Inf -> +Inf    -Inf -> 0
 // unsafe = true drops the overflow/underflow guards, as the Blackhole template of the same name does;
 // only for callers that already bound the argument inside exp's finite range.
 //
@@ -285,8 +282,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
-// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN. As in base e
-// above, -NaN lands in the underflow arm (0). The only caller, logaddexp2, zeroes NaN gaps first.
+// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN. The only caller,
+// logaddexp2, zeroes NaN gaps first.
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
     return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
 }

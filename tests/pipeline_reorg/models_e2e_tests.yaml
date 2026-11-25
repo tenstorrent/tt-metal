@@ -949,6 +949,11 @@
     DFLASH_DRAFT_PATH=$(HF_HUB_OFFLINE=0 HF_HUB_CACHE=/tmp/dflash_hf python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download('z-lab/gpt-oss-20b-DFlash'))")
     export DFLASH_DRAFT_PATH
     pytest models/demos/gpt_oss/tests/test_dflash.py -k isl_1k
+    # Batched DFlash, 32 and 128 users (QuietBox 2; skips elsewhere): tokens vs the batch-32 decode, accepted tokens per round.
+    # Its dense expert weights are not in the shared cache (read-only): run on a job-local cache of links into it, so the
+    # cached files are read from there and only the missing ones are written locally.
+    GPT_OSS_JOB_CACHE=$(mktemp -d)/cache && cp -rs "${TT_CACHE_PATH:?}" "$GPT_OSS_JOB_CACHE"
+    TT_CACHE_PATH=$GPT_OSS_JOB_CACHE/ pytest models/demos/gpt_oss/tests/test_dflash_batched.py
   model: gpt-oss-20b
   model_family: GPT-OSS
   skus:
@@ -961,7 +966,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 26 # text_demo 7.2 min + DFlash test 9-12 min (measured: the weight load from the shared cache varies)
+      timeout: 32 # text_demo 7.2 min + DFlash test 9-12 min + batched DFlash ~3 min plus its model load (the load from the shared cache varies)
       tier: 2
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews

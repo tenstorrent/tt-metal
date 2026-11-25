@@ -18,7 +18,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-umd-workload/cluster.hpp>
 #include <vector>
 

@@ -22,10 +22,10 @@
 #include <thread>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/buffers/dram_sender_topology.hpp"

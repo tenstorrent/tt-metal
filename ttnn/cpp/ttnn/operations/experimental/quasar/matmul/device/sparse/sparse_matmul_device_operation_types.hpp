@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "tt-metalium/global_circular_buffer.hpp"
+#include "tt-metalium/memory/cross_program/global_circular_buffer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 

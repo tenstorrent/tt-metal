@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;

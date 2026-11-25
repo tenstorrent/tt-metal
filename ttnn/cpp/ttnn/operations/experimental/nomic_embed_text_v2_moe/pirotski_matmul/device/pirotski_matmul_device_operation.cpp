@@ -7,8 +7,8 @@
 #include <string_view>
 #include <tuple>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"

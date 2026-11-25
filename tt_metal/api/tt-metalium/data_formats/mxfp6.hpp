@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 #include <tt_stl/span.hpp>
 
 #include <cstdint>

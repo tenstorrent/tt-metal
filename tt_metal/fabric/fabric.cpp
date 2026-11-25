@@ -4,19 +4,19 @@
 
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include <optional>

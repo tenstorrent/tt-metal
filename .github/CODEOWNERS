@@ -195,6 +195,7 @@ tt_metal/impl/dispatch/kernels/*realtime_profiler* @mo-tenstorrent @yusufbashiTT
 tt_metal/impl/dispatch/kernels/REALTIME_PROFILER.md @mo-tenstorrent @yusufbashiTT @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp @mo-tenstorrent @yusufbashiTT @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/dispatch/realtime_profiler_tracy_handler.* @mo-tenstorrent @yusufbashiTT @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
+tt_metal/impl/drisc_service/ @tenstorrent/metalium-runtime-performance
 tt_metal/impl/emulation/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tt_metal/impl/event @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/experimental/blaze/ @esmalTT @cfjchu @azaytsev-epam @tenstorrent/metalium-runtime # blaze experimental impl
@@ -302,6 +303,7 @@ tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/sfpu/experimental/ @amahmudTT @fvr
 tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
 
 # metal tests
+tests/perf/ @anirudhsathiyaTT @tenstorrent/metalium-runtime-performance
 tests/tt_metal/distributed/ @tenstorrent/metalium-developers-metal-distributed @tenstorrent/metalium-runtime-performance
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-developers-infra
 tests/tt_metal/distributed/benchmark_mesh_fan_out.cpp @tenstorrent/metalium-developers-metal-distributed @tenstorrent/metalium-runtime-performance @ezaiakinTT
