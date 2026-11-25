@@ -1234,7 +1234,7 @@ std::string lifecycle_error(Action action) {
     return "did not throw";
 }
 
-// How long a test watches a sender held in WAIT_CQ or DRAIN. It is far longer than a sender whose wait is already
+// How long a test watches a sender held in WAIT_SIGNAL or DRAIN. It is far longer than a sender whose wait is already
 // satisfied takes to leave it, so a sender still held at the end is waiting as intended.
 inline constexpr std::chrono::seconds kSenderHoldTime{5};
 
@@ -1407,10 +1407,10 @@ TEST_F(MimirPrefetcher, LifecycleQueueRejectsReceiverOnSender) {
     expect_lifecycle_sender_stopped(mesh, other_sender_cce, 1);
 }
 
-// A WAIT_CQ for CQ 0's next value, queued without its write, holds the sender. WaitForCqOnTensorPrefetcher then writes
-// the value after it through the command queue's own path and queues a WAIT_CQ for that one, which releases both: the
-// sender reports the STOP as its third request, and CQ 0's slot holds 2. A WAIT_CQ that did not wait would leave the
-// sender Running during the hold; host and kernel disagreeing on the slot would end it in CQ_TIMEOUT.
+// A WAIT_SIGNAL for CQ 0's next value, queued without its write, holds the sender. WaitForCqOnTensorPrefetcher then
+// writes the value after it through the command queue's own path and queues a WAIT_SIGNAL for that one, which releases
+// both: the sender reports the STOP as its third request, and CQ 0's slot holds 2. A WAIT_SIGNAL that did not wait
+// would leave the sender Running during the hold; host and kernel disagreeing on the slot would end it in CQ_TIMEOUT.
 TEST_F(MimirPrefetcher, LifecycleWaitCq) {
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -1442,7 +1442,8 @@ TEST_F(MimirPrefetcher, LifecycleWaitCq) {
         kSenderHoldTime);
     EXPECT_EQ(held.state, static_cast<uint32_t>(CceSenderState::WaitingCq));
 
-    log_info(tt::LogTest, "Lifecycle WAIT_CQ held for value {}; signalling through the command queue", held_wait.value);
+    log_info(
+        tt::LogTest, "Lifecycle WAIT_SIGNAL held for value {}; signalling through the command queue", held_wait.value);
     experimental::WaitForCqOnTensorPrefetcher(command_queue, std::nullopt);
     session.stop();
     expect_lifecycle_sender_stopped(mesh, sender_cce, 3);
@@ -2063,10 +2064,10 @@ INSTANTIATE_TEST_SUITE_P(
         GcbSwitchParam{"ReceiverSwitch0To1Then2", kLocalReceiverCce, kD2dReceiverCce}),
     [](const ::testing::TestParamInfo<GcbSwitchParam>& info) { return std::string(info.param.name); });
 
-// The fence: a WAIT_CQ for a value the CQ signal slot does not hold yet, queued through the manager's test hook, then a
-// PREFETCH. The sender waits in WAIT_CQ and delivers nothing until the test writes the value into the slot. The session
-// has the success budget, so a CQ_TIMEOUT cannot end the wait while the test watches it. Local only: the wait is on the
-// sender, before anything crosses the route.
+// The fence: a WAIT_SIGNAL for a value the CQ signal slot does not hold yet, queued through the manager's test hook,
+// then a PREFETCH. The sender waits in WAIT_SIGNAL and delivers nothing until the test writes the value into the slot.
+// The session has the success budget, so a CQ_TIMEOUT cannot end the wait while the test watches it. Local only: the
+// wait is on the sender, before anything crosses the route.
 TEST_F(MimirPrefetcher, PrefetchFenceHoldsDeliveryLocal0To1) {
     MIMIR_ROUTE_GUARD({kSenderCce, kLocalReceiverCce});
     ScopedDevice device_guard;

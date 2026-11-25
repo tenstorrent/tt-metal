@@ -128,7 +128,7 @@ Rows 17 onward cover the Tensor Prefetcher on CCEs. They use the same environmen
 | 36 | `MimirPrefetcher.LifecycleStartStopTwice` | A second Start zeroes the control block the first session left; an unknown command left in ring slot 0 is never read | all |
 | 37 | `MimirPrefetcher.LifecycleBusySenderFailsStart` | Start fails on a sender CCE that runs a receiver Program, before it launches or zeroes anything | all |
 | 38 | `MimirPrefetcher.LifecycleQueueRejectsReceiverOnSender` | Queue rejects a GCB whose receiver is a sender CCE | all |
-| 39 | `MimirPrefetcher.LifecycleWaitCq` | A WAIT_CQ holds the sender until the command queue writes its slot | all |
+| 39 | `MimirPrefetcher.LifecycleWaitCq` | A WAIT_SIGNAL holds the sender until the command queue writes its slot | all |
 | 40 | `MimirPrefetcher.LifecycleDrainAtStop` | Stop's DRAIN holds the sender until an unacked credit is acked, then STOP | all |
 | 41 | `MimirPrefetcher.PrefetchOnePagePerSessionLocal0To1` | One prefetch, CCE 0 to CCE 1, then Start, Queue and Stop again | all |
 | 42 | `MimirPrefetcher.PrefetchOnePagePerSessionLocal3To2` | One prefetch, CCE 3 to CCE 2, on the second Mimir | 2x only |
@@ -153,7 +153,7 @@ Rows 17 onward cover the Tensor Prefetcher on CCEs. They use the same environmen
 | 61 | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/GcbSwitchLocal0To1` | GCB 1, then 2, then 1, resuming mid-FIFO | all |
 | 62 | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/GcbSwitchD2d0To2` | The same across D2D | 2x only |
 | 62a | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/ReceiverSwitch0To1Then2` | GCB 1 to CCE 1, then GCB 2 to CCE 2 across D2D, then GCB 1 again | 2x only |
-| 63 | `MimirPrefetcher.PrefetchFenceHoldsDeliveryLocal0To1` | A WAIT_CQ fence holds delivery until the slot is written | all |
+| 63 | `MimirPrefetcher.PrefetchFenceHoldsDeliveryLocal0To1` | A WAIT_SIGNAL fence holds delivery until the slot is written | all |
 | 64 | — | Removed on 2026-10-29: trace capture needs fast dispatch, and Mimir runs slow dispatch only | — |
 | 65 | `MimirPrefetcher.QueueRejectsKRowMajorTensor` | Queue rejects a K-row-major tensor | all |
 | 66 | `MimirPrefetcher.QueueRejectsStreamingTensor` | Queue rejects a streaming tensor | all |
