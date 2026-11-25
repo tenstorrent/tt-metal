@@ -192,8 +192,9 @@ card:
     - DFlash2 helps most on short and medium prompts. On long, hard-to-predict text the gain shrinks to about 1.3x over
       plain decoding; it stayed faster at every length measured (32K to 250K).
     - New in this release (2026-11-25): `batch`'s KV pool stores K in 4-bit block floats too (Hadamard-rotated, rounded
-      to nearest): 2,560,000 tokens (+43%; 9 users at the full 256K, 32 users at 80K each) at ~1% decode speed (32
-      users 531 vs 536 t/s aggregate) and +0.26% next-token NLL at 8K tokens vs 8-bit K and V.
+      to nearest): 2,560,000 tokens (+43%; 9 users at the full 256K, 32 users at 80K each) for ~1-2% of decode speed
+      (32 users 532 vs 536 t/s aggregate; one speculating user ~2%) and +0.26% next-token NLL at 8K tokens vs 8-bit K
+      and V.
     - 2026-11-24 (third): `batch` speculates for sampled requests too (temperature > 0 with the
       device's top-k: one user on natural chat at T 0.7 gets ~89 t/s/u vs 61, two ~78 vs 59, four ~63 vs 56); a
       request with its own seed decodes without speculation, so the same seed gives the same text. Greedy decoding
@@ -206,8 +207,8 @@ card:
     ### Which profile
     - One user, greedy (temperature 0): `single-user`.
     - Anything else (sampling, 2 to 32 users, logprobs, structured output): `batch`. Its greedy and sampled requests
-      speculate while a few users are live (one user on natural text gets about 91 t/s/u greedy, 89 sampled at
-      T 0.7; four about 61 / 63); more users, penalized or seeded requests get the plain decode (60 t/s/u for one user,
+      speculate while a few users are live (one user on natural text gets about 91 t/s/u greedy, 87 sampled at
+      T 0.7; four about 63 / 62); more users, penalized or seeded requests get the plain decode (60 t/s/u for one user,
       22 at 32).
     - If the time to the first token matters more than decode speed: `batch` with the TTFT-first option below.
 
@@ -273,18 +274,19 @@ card:
     allowed_token_ids or min_tokens — those are served on plain steps, as on a server that does not speculate. A
     sampled request's verify rows each draw with its own temperature / top-k / top-p at their positions, and a draft is
     accepted while the draw equals it, which keeps the sampled distribution (lossless for any draft). Greedy output can differ from a non-speculating decode at bf16 near-ties (the speculating and plain
-    builds sum in different orders; 4-bit V adds some): in the check below, 2 of 8 256-token answers at 8 users matched
-    the 1-user answers exactly and the others took an equally fluent different word after 86-424 characters.
+    builds sum in different orders, and a verify step attends to its own new rows before they are stored in 4 bits): in
+    the check below, the 8 256-token answers at 8 users each took an equally fluent different word than at 1 user after
+    88-223 characters (at 2 users, 7 of 8 matched exactly).
 
-    Served, natural-text prompts, 256 tokens (2026-11-24, this build; greedy, and sampled at T 0.7 / top-p 0.95 /
-    top-k 20; the plain decode for comparison):
+    Served, natural-text prompts, 256 tokens (2026-11-25, this build; greedy, and sampled at T 0.7 / top-p 0.95 /
+    top-k 20; the plain decode for comparison, 2026-11-24):
 
     | users | `batch` greedy t/s/u | `batch` sampled t/s/u | plain decode t/s/u |
     |---|---|---|---|
-    | 1 | 91 | 89 | 61 |
-    | 2 | 80 | 78 | 59 |
-    | 4 | 61 | 63 | 56 |
-    | 8 | 51 | 51 | 51 |
+    | 1 | 91 | 87 | 61 |
+    | 2 | 80 | 80 | 59 |
+    | 4 | 63 | 62 | 56 |
+    | 8 | 50 | 50 | 51 |
 
     ### Prefill and decode on `batch`, and the TTFT-first option
     A step on this engine either prefills or decodes, never both, so prefill time that runs while a user decodes is a
@@ -304,29 +306,31 @@ card:
     | `single-user` | 1 | 128 / 128 | 124.0 | 142.1 | 0.14 s |
     | `single-user` | 1 | 8192 / 128 | 73.5 | 175.2 | 1.02 s |
     | `single-user` | 1 | 32768 / 128 | 29.8 | 209.0 | 3.69 s |
-    | `batch` | 1 | 128 / 128 | 51.4 | 56.5 | 0.25 s |
-    | `batch` | 8 | 128 / 128 | 314.4 | 50.1 | 0.72 s |
-    | `batch` | 16 | 128 / 128 | 443.2 | 36.0 | 1.10 s |
-    | `batch` | 32 | 128 / 128 | 535.9 | 21.9 | 1.83 s |
-    | `batch` | 32 | 128 / 1024 | 661.7 | 21.4 | 1.81 s |
-    | `batch` | 32 | 2048 / 128 | 286.2 | 20.9 | 8.23 s |
-    | `batch` | 32 | 8192 / 1024 | 402.6 | 18.1 | 25.00 s |
-    | `batch` | 1 | 32768 / 128 | 18.0 | 51.6 | 4.63 s |
-    | `batch` | 1 | 250000 / 128 | 2.1 | 43.3 | 58.46 s |
-    | `batch`, greedy | 1 | 128 / 128 | 61.4 | 69.0 | 0.24 s |
-    | `batch`, greedy | 2 | 128 / 128 | 93.2 | 57.9 | 0.37 s |
-    | `batch`, greedy | 4 | 128 / 128 | 160.9 | 46.6 | 0.41 s |
-    | `batch`, greedy | 8 | 128 / 128 | 313.3 | 50.0 | 0.73 s |
-    | `batch`, greedy | 8 | 2048 / 128 | 194.0 | 48.4 | 2.65 s |
-    | `batch`, greedy | 1 | 8192 / 128 | 42.7 | 89.3 | 1.58 s |
-    | `batch`, greedy | 1 | 32768 / 128 | 21.0 | 85.6 | 4.60 s |
-    | `batch`, greedy | 1 | 250000 / 128 | 2.1 | 51.4 | 58.49 s |
+    | `batch` | 1 | 128 / 128 | 52.1 | 57.7 | 0.25 s |
+    | `batch` | 8 | 128 / 128 | 311.0 | 49.7 | 0.74 s |
+    | `batch` | 16 | 128 / 128 | 439.6 | 35.8 | 1.11 s |
+    | `batch` | 32 | 128 / 128 | 531.6 | 21.8 | 1.87 s |
+    | `batch` | 32 | 128 / 1024 | 655.6 | 21.3 | 1.90 s |
+    | `batch` | 32 | 2048 / 128 | 280.7 | 20.8 | 8.47 s |
+    | `batch` | 32 | 8192 / 1024 | 400.8 | 18.3 | 25.73 s |
+    | `batch` | 1 | 32768 / 128 | 17.8 | 50.3 | 4.66 s |
+    | `batch` | 1 | 250000 / 128 | 2.1 | 42.7 | 57.25 s |
+    | `batch`, greedy | 1 | 128 / 128 | 69.5 | 79.7 | 0.25 s |
+    | `batch`, greedy | 2 | 128 / 128 | 94.5 | 59.7 | 0.37 s |
+    | `batch`, greedy | 4 | 128 / 128 | 146.0 | 41.4 | 0.37 s |
+    | `batch`, greedy | 8 | 128 / 128 | 308.2 | 49.7 | 0.77 s |
+    | `batch`, greedy | 8 | 2048 / 128 | 192.1 | 48.3 | 2.70 s |
+    | `batch`, greedy | 1 | 8192 / 128 | 31.8 | 52.6 | 1.61 s |
+    | `batch`, greedy | 1 | 32768 / 128 | 21.3 | 93.0 | 4.65 s |
+    | `batch`, greedy | 1 | 250000 / 128 | 2.1 | 39.3 | 57.29 s |
 
     `batch` rows use the model's default sampling (temperature > 0), which now speculates where it pays too; the
     greedy rows run greedy. Both use random-token prompts, on which drafts are accepted much less than on natural text
     (see the table above): such requests are probed and then decoded plainly, which costs a few percent (1-user 128-token
-    rows 56.5 vs 60.5 t/s/u plain, the 32K sampled row 51.6 vs 57.6), and the long-context rows vary run to run with how
-    much of each request ends up speculating.
+    rows 57.7 vs 60.5 t/s/u plain, the 32K sampled row 50.3 vs 57.6), and the long-context rows vary run to run with how
+    much of each request ends up speculating. The greedy rows of one or two requests follow where each random-prompt
+    continuation goes, so they move a lot between builds whose numerics differ at all (the 8K row: 52.6 here, 89.3 in
+    the previous release; the 32K row 93.0 vs 85.6).
 
   performance: |
     | profile | ISL | OSL | concurrency | N | TTFT (ms) | prefill tok/s/u | decode tok/s/u | E2EL (s) |
@@ -335,24 +339,24 @@ card:
     | `single-user` | 8,192 | 128 | 1 | 2 | 1,015 | 8,070 | 175.2 | 1.7 |
     | `single-user` | 32,768 | 128 | 1 | 1 | 3,685 | 8,891 | 209.0 | 4.3 |
     | `single-user` | 131,072 | 128 | 1 | 1 | 21,710 | 6,037 | 93.9 | 23.1 |
-    | `batch` | 128 | 128 | 1 | 4 | 245 | 522 | 56.5 | 2.5 |
-    | `batch` | 128 | 128 | 8 | 32 | 722 | 177 | 50.1 | 3.3 |
-    | `batch` | 128 | 128 | 16 | 64 | 1,096 | 117 | 36.0 | 4.6 |
-    | `batch` | 128 | 128 | 32 | 128 | 1,834 | 70 | 21.9 | 7.6 |
-    | `batch` | 128 | 1,024 | 32 | 64 | 1,815 | 71 | 21.4 | 49.5 |
-    | `batch` | 2,048 | 128 | 32 | 64 | 8,232 | 249 | 20.9 | 14.3 |
-    | `batch` | 8,192 | 1,024 | 32 | 64 | 25,005 | 328 | 18.1 | 81.4 |
-    | `batch` | 32,768 | 128 | 1 | 1 | 4,632 | 7,074 | 51.6 | 7.1 |
-    | `batch` | 250,000 | 128 | 1 | 1 | 58,463 | 4,276 | 43.3 | 61.4 |
-    | `batch`, greedy | 128 | 128 | 1 | 4 | 244 | 525 | 69.0 | 2.1 |
-    | `batch`, greedy | 128 | 128 | 4 | 16 | 410 | 312 | 46.6 | 3.1 |
-    | `batch`, greedy | 128 | 128 | 8 | 32 | 730 | 175 | 50.0 | 3.3 |
-    | `batch`, greedy | 2,048 | 128 | 8 | 16 | 2,652 | 772 | 48.4 | 5.3 |
-    | `batch`, greedy | 8,192 | 128 | 1 | 2 | 1,575 | 5,201 | 89.3 | 3.0 |
-    | `batch`, greedy | 32,768 | 128 | 1 | 1 | 4,599 | 7,125 | 85.6 | 6.1 |
+    | `batch` | 128 | 128 | 1 | 4 | 253 | 506 | 57.7 | 2.5 |
+    | `batch` | 128 | 128 | 8 | 32 | 740 | 173 | 49.7 | 3.3 |
+    | `batch` | 128 | 128 | 16 | 64 | 1,114 | 115 | 35.8 | 4.7 |
+    | `batch` | 128 | 128 | 32 | 128 | 1,867 | 69 | 21.8 | 7.7 |
+    | `batch` | 128 | 1,024 | 32 | 64 | 1,900 | 67 | 21.3 | 50.0 |
+    | `batch` | 2,048 | 128 | 32 | 64 | 8,471 | 242 | 20.8 | 14.6 |
+    | `batch` | 8,192 | 1,024 | 32 | 64 | 25,733 | 318 | 18.3 | 81.8 |
+    | `batch` | 32,768 | 128 | 1 | 1 | 4,664 | 7,026 | 50.3 | 7.2 |
+    | `batch` | 250,000 | 128 | 1 | 1 | 57,247 | 4,367 | 42.7 | 60.2 |
+    | `batch`, greedy | 128 | 128 | 1 | 4 | 249 | 515 | 79.7 | 1.8 |
+    | `batch`, greedy | 128 | 128 | 4 | 16 | 368 | 348 | 41.4 | 3.4 |
+    | `batch`, greedy | 128 | 128 | 8 | 32 | 768 | 167 | 49.7 | 3.3 |
+    | `batch`, greedy | 2,048 | 128 | 8 | 16 | 2,699 | 759 | 48.3 | 5.3 |
+    | `batch`, greedy | 8,192 | 128 | 1 | 2 | 1,605 | 5,104 | 52.6 | 4.0 |
+    | `batch`, greedy | 32,768 | 128 | 1 | 1 | 4,652 | 7,044 | 93.0 | 6.0 |
 
     Means of `vllm bench serve` runs (random prompts, ignore_eos; `single-user` greedy) on a P300x2 with chip clocks
-    logged: `single-user` 2026-11-20 (median 1350 MHz), `batch` 2026-11-24 (median 1350 MHz, at most 68 °C; prefix
+    logged: `single-user` 2026-11-20 (median 1350 MHz), `batch` 2026-11-25 (median 1343-1350 MHz, at most 70 °C; prefix
     cache on, a different random prompt per row). `single-user` and the greedy `batch` rows follow how predictable the
     text is (DFlash2 acceptance), so they vary by prompt. Accuracy: teacher-forced on natural text, `batch`'s
     next-token NLL with V in 4-bit matched 8-bit V within noise (+0.02% at 8K tokens, -0.14% at 32K), K and V in 4-bit
