@@ -278,6 +278,9 @@ struct StaticBuiltBySiliconOpen {
 // A mock context created first registers the exit teardown before any silicon cluster opens. The teardown must still
 // run before the statics that the later silicon open constructs.
 TEST_F(MetalContextTest, ExitTeardownRunsBeforeStaticsBuiltBySiliconOpenAfterMock) {
+    if (std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") != nullptr) {
+        GTEST_SKIP() << "Needs a silicon or simulator cluster; the default MetalEnv is mock in this process";
+    }
     // A fresh image: the exit handlers are registered once per process, and a forked child of this multithreaded
     // process must not open silicon.
     const auto death_test_style = GTEST_FLAG_GET(death_test_style);

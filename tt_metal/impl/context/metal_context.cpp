@@ -66,11 +66,12 @@ std::array<std::atomic<MetalContext*>, MAX_CONTEXT_COUNT> g_instances{};
 std::atomic<MetalEnv*> g_default_env =
     nullptr;  // used for implicit creation of the default context -- legacy behaviour
 std::mutex g_instance_mutex;
+
+namespace {
+
 bool registered_handlers = false;
 // Whether the exit teardown was registered while a silicon cluster was open (see register_handlers_locked).
 bool teardown_registered_after_silicon_open = false;
-
-namespace {
 
 // Destroys every MetalContext still alive at exit. atexit handlers and static destructors run in reverse order of
 // registration and construction, so this runs before the destructors of statics that already exist now.
