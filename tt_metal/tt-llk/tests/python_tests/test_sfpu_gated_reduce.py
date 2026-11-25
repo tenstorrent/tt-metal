@@ -21,12 +21,13 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     GATED_REDUCE_PARAMS,
     GATED_REDUCE_SCALARS,
+    LOOP_FACTOR,
     TILE_COUNT,
     fp32_bits,
 )
@@ -43,7 +44,19 @@ FP32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
 
 
 def _run(
-    formats, dest_acc, gate, up, flags, rows=32, sync=DestSync.Half, rounding=False
+    formats,
+    dest_acc,
+    gate,
+    up,
+    flags,
+    rows=32,
+    sync=DestSync.Half,
+    rounding=False,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     generator = torch.Generator().manual_seed(3448)
     source = torch.empty((TILES, DATUMS)).uniform_(-8, 8, generator=generator)
@@ -87,29 +100,38 @@ def _run(
                 face_mask[2:] = True
             expected[index, active[index]] = result[active[index]].float()
 
-    config = TestConfig(
-        "sources/sfpu_gated_reduce_test.cpp",
-        formats,
-        templates=[GATED_REDUCE_PARAMS(gate, up, flags, rows), DEST_SYNC(sync)],
-        runtimes=[
-            TILE_COUNT(TILES),
-            GATED_REDUCE_SCALARS(*map(fp32_bits, (scale, out_scale, limit, alpha))),
-        ],
-        variant_stimuli=StimuliConfig(
-            source.flatten(),
-            formats.input_format,
-            torch.zeros(DATUMS, dtype=source.dtype),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=TILES,
-            tile_count_B=1,
-            tile_count_res=TILES,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_gated_reduce_test.cpp",
+            formats=formats,
+            templates=[GATED_REDUCE_PARAMS(gate, up, flags, rows), DEST_SYNC(sync)],
+            runtimes=[
+                LOOP_FACTOR(1),
+                TILE_COUNT(TILES),
+                GATED_REDUCE_SCALARS(*map(fp32_bits, (scale, out_scale, limit, alpha))),
+            ],
+            variant_stimuli=StimuliConfig(
+                source.flatten(),
+                formats.input_format,
+                torch.zeros(DATUMS, dtype=source.dtype),
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=TILES,
+                tile_count_B=1,
+                tile_count_res=TILES,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=formats.input_format.is_32_bit(),
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
     )
+    if is_perf:
+        return
     actual = (
-        result_tensor(config.run().result, formats.output_format)
+        result_tensor(outcome.result, formats.output_format)
         .float()
         .reshape_as(expected)
     )

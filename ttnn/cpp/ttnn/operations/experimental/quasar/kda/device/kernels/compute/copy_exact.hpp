@@ -25,7 +25,9 @@ FORCE_INLINE void copy_exact(DFBIn& in, DFBOut& out, DFBMore&... more) {
     copy_init(in_id);
     for (uint32_t tile = 0; tile < Count; ++tile) {
         tile_regs_acquire();
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(in_id, tile, 0);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out.get_id(), tile);

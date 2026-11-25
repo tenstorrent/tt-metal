@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce {
 

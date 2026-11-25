@@ -31,18 +31,18 @@
 #include <limits>
 #include <memory>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/cluster_noc_helpers.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
 
 using namespace tt::tt_metal;
@@ -594,12 +594,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         });
     }
 
-    // The plan page's 16-word header carries the shard's kept-block bits (one word per 32 blocks) plus the union
-    // piece bits (2 words) and the pooled flag.
-    TT_FATAL(
-        tt::div_up(mask_nb, 32u) + 3 <= 16,
-        "SparseRingSDPA: {} blocks per shard exceed the plan header (at most 416)",
-        mask_nb);
+    // The plan page's header carries the shard's kept-block bits (one word per 32 blocks) plus the union piece bits
+    // (2 words) and the pooled flag. A multiple of 16 words keeps the mask-row scratch after it 64 B aligned.
+    const uint32_t plan_header_words = tt::round_up(tt::div_up(mask_nb, 32u) + 3, 16u);
     // Group delivery: one producer per head group multicasts each piece. The K/V CBs hold 3 pieces with it (the
     // producer sends the next piece while members compute), 2 without.
     const bool group_mcast = use_head_chain;
@@ -1107,9 +1104,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         l.prev_out = tile_cb(out_im_tiles * slots, state_tile_size, state_df);
         l.recip_scratch = tile_cb(1, im_tile_size, im_df);  // 1-tile recip scratch for res_normalize_slot
         l.sum_in = tile_cb(statistics_tiles * slots, state_tile_size, state_df);
-        // Plan pages: a 16-word summary [kept-block words][union piece bits lo, hi][do_pooled], then the Q block's
-        // mask row. Two pages: compute reads one iteration's records while the reader fills the next.
-        l.sparse_plan = alloc(64 + mask_row_bytes, 2, tt::DataFormat::UInt32);
+        // Plan pages: a header [kept-block words][union piece bits lo, hi][do_pooled], then the Q block's mask row.
+        // Two pages: compute reads one iteration's records while the reader fills the next.
+        l.sparse_plan = alloc(plan_header_words * sizeof(uint32_t) + mask_row_bytes, 2, tt::DataFormat::UInt32);
         // One pooled chunk of bias tiles in flight; only with the pooled route.
         l.pooled_bias = pooled_route ? tile_cb(Sk_chunk_t, mask_tile_size, mask_df)
                                      : std::numeric_limits<uint32_t>::max();  // inactive
@@ -1137,10 +1134,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     };
 
     // Pass split. S = slots per pass: the largest count (at most kResidentMaxSlots, the core's block count and
-    // q_blocks_per_pass) whose CBs end below the lowest live L1 buffer. P passes split every core's blocks evenly, so
-    // each working core needs at least P blocks (no empty pass; group members stay in lockstep).
-    // The live L1 top is not in the program hash: a cached program keeps the S of the call that built it.
-    const uint64_t usable_l1 = ttnn::operations::core::available_program_l1_capacity(mesh_device);
+    // q_blocks_per_pass) whose CBs end kL1Headroom below the lowest live L1 buffer. P passes split every core's blocks
+    // evenly, so each working core needs at least P blocks (no empty pass; group members stay in lockstep).
+    // The live L1 top is not in the program hash: a cached program keeps the S of the call that built it and is
+    // relaunched under whatever L1 buffers were allocated since. The headroom leaves room for those; without it the
+    // 4x8 omni pipeline's CBs at rung 147712 ended 832 B above a later launch's lowest buffer.
+    constexpr uint32_t kL1Headroom = 4096;
+    const uint64_t available_l1 = ttnn::operations::core::available_program_l1_capacity(mesh_device);
+    const uint64_t usable_l1 = available_l1 > kL1Headroom ? available_l1 - kL1Headroom : 0;
     uint32_t max_slots = std::min(kResidentMaxSlots, max_q_per_core);
     if (args.q_blocks_per_pass.has_value()) {
         max_slots = std::min(max_slots, *args.q_blocks_per_pass);
@@ -1285,12 +1286,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t cb_sum_out = inactive_cb;
     const uint32_t cb_signal = inactive_cb;
     const uint32_t cb_kv_pad_derived = inactive_cb;
-    // All Q blocks' plan records go in one page per ring iteration, after the 16-word header and the shard slice
+    // All Q blocks' plan records go in one page per ring iteration, after the header and the shard slice
     // (mask_nb_pad words), when they fit in the page; otherwise each block gets its own page (plan_rec_base = 0).
     const uint32_t plan_rec_words = tt::div_up(mask_nb, 32u) + 3;
     const bool plan_fits_one_page =
-        (16 + mask_nb_pad + resident_slots * plan_rec_words) * sizeof(uint32_t) <= 64 + mask_row_bytes;
-    const uint32_t plan_rec_base = plan_fits_one_page ? 16 + mask_nb_pad : 0;
+        (plan_header_words + mask_nb_pad + resident_slots * plan_rec_words) * sizeof(uint32_t) <=
+        plan_header_words * sizeof(uint32_t) + mask_row_bytes;
+    const uint32_t plan_rec_base = plan_fits_one_page ? plan_header_words + mask_nb_pad : 0;
     {
         uint64_t cb_bytes = 0;
         for (const auto& cb : desc.cbs) {
@@ -1488,6 +1490,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"kv_cb_pages", kv_cb_pages},
         // Words of per-shard kept-block bits in each plan page (block b: word b/32, bit b%32).
         {"plan_block_words", tt::div_up(mask_nb, 32u)},
+        // Words of the plan page header, a multiple of 16 (see plan_header_words above).
+        {"plan_header_words", plan_header_words},
         // Group delivery by multicast (see group_mcast above).
         {"group_mcast", group_mcast ? 1u : 0u},
         // The one-page plan's record base word (0 = a page per block); see plan_rec_base above.

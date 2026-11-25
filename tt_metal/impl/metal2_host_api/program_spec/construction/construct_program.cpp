@@ -7,8 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "impl/context/metal_env_impl.hpp"

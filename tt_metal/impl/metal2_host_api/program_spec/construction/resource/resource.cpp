@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 

@@ -9,7 +9,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "slice_write_device_operation_types.hpp"
 #include "slice_write_rm_sharded_input_program_factory.hpp"

@@ -9,11 +9,11 @@
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include <tt_stl/overloaded.hpp>
