@@ -28,7 +28,6 @@
 #include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include "common/tt_backend_api_types.hpp"
-#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <llrt/tt_cluster.hpp>
 
