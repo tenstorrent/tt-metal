@@ -5,20 +5,20 @@
 // groupnorm_sc_N_1_HW_C_b compute.
 //
 // Per block (op_design.md "Block schedule"):
-//   accumulate_moments  : per chunk [RM: tilize] -> shifted-square chain (x - k)^2 -> reduce(x) & reduce((x-k)^2)
-//                         with Accumulate (UnpackToDestFp32 accumulators), then one copy into the FPU-readable chan
-//                         CBs that also applies the shift to the first moment: S1' = sum(x) - n_rows * k
+//   accumulate_moments  : per chunk [RM: tilize] -> chain x*(x - k) -> reduce(x) & reduce(x*(x - k)) with Accumulate
+//                         (UnpackToDestFp32 accumulators; the Sigma x one starts from the reader's exact -n*k seed,
+//                         so it ends at S1' = Sigma (x - k)), then one exact copy into the FPU-readable chan CBs
 //   collapse            : matmul(chan row [1 x W], map [W x 1]) -> 2 local partial tiles (row 0 = group lanes)
-//   combine (root)      : matmul(ones [1 x R], gathered [R x 2]) -> [S1', S2'] replicated rows;
-//                         finalize chain -> [rstd, mean'] (mean' = mean - k)
-//   expand              : matmul<transpose>(stats, map) -> per-channel rstd / mean' (rows replicated);
-//                         a = rstd*gamma, m = mean'*a, b' = m - beta
-//   normalize           : per chunk y = (x - k)*a - b' (BinaryFpu Sub + DestReuse Mul + DestReuse Sub), resident
-//                         chunks first
-// Shift k (cb_pilot_rows, row 0 per channel): one sample per group, x[image row 0, first channel of the group],
-// identical on every core of a unit, so the shifted sums combine with no correction. The variance is then
-// E[(x-k)^2] - E[x-k]^2, whose cancellation scales with (mean-k)^2 ~ var instead of mean^2, and pass 2 never
-// hands an operand of size |mean| to the 19-bit srcA/srcB registers: x - k is exact in DEST (Refinement 1).
+//   combine (root)      : matmul(ones [1 x R], gathered [R x 2]) -> [S1', T2] replicated rows;
+//                         finalize chain (+ the group shift k) -> [rstd, mean]
+//   expand              : matmul<transpose>(stats, map) -> per-channel rstd / mean (rows replicated);
+//                         a = rstd*gamma, m = mean*a, b' = m - beta
+//   normalize           : per chunk y = a*x - b', resident chunks first
+// Shift k (Refinement 1): one sample per group, x[image row 0, first channel of the group], identical on every
+// core of a unit, so the shifted sums combine with no correction. With mean' = S1'/n and T2 = Sigma x*(x - k),
+//   var = T2/n - mean'*(mean' + k) = E[(x - k)^2] - mean'^2,
+// whose cancellation scales with |k|*|mean - k| ~ |mean|*std instead of mean^2 (the one-pass E[x^2] - mean^2
+// it replaces), and the 19-bit srcA/srcB truncation hits moments of that reduced size.
 // Every helper keeps its default INPUT_AND_OUTPUT data-format reconfig; the one boot is the matmul
 // contract compute_kernel_hw_startup<SrcOrder::Reverse>.
 
@@ -35,7 +35,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 
 using namespace compute_kernel_lib;
@@ -64,7 +63,9 @@ constexpr uint32_t cb_ones_tiles = 17;
 constexpr uint32_t cb_group_sums = 18;
 constexpr uint32_t cb_stats_out = 19;
 constexpr uint32_t cb_group_stats = 20;
-constexpr uint32_t cb_pilot_rows = 22;  // shift k per channel (row 0), held for the block
+constexpr uint32_t cb_pilot_rows = 22;   // shift k per channel (row 0), held for pass 1
+constexpr uint32_t cb_sum_seed = 23;     // -n*k per channel (row 0), the Sigma x accumulator's start
+constexpr uint32_t cb_group_shift = 24;  // root: k per group lane, rows replicated
 
 constexpr uint32_t W = get_compile_time_arg_val(0);
 constexpr uint32_t CHUNK_HT = get_compile_time_arg_val(1);
@@ -115,7 +116,8 @@ ALWI void skip_chunk(uint32_t cb) {
 }
 
 // Pass-1 statistics of one chunk at the front of cb_input_tiles. Both moments accumulate into the
-// UnpackToDestFp32 accumulators (exact fp32 reload); publish_channel_moments() hands them to the FPU.
+// UnpackToDestFp32 accumulators (exact fp32 reload); chunk 0 of Sigma x reloads the -n*k seed instead, so the
+// accumulator ends at S1' = Sigma (x - k). publish_channel_moments() hands them to the FPU.
 ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
     constexpr uint32_t x_cb = cb_input_tiles;
     DataflowBuffer x_dfb(x_cb);
@@ -124,11 +126,13 @@ ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
     DataflowBuffer sum_acc_dfb(cb_sum_acc);
     DataflowBuffer sumsq_acc_dfb(cb_sumsq_acc);
     DataflowBuffer pilot_dfb(cb_pilot_rows);
+    DataflowBuffer seed_dfb(cb_sum_seed);
 
     cb_wait_front(x_cb, T);
 
-    // (x - k)^2 -> cb_x_squared (Float32), the sequential intermediate of the second reduce. x - k is exact
-    // in fp32 DEST (both bf16); the square is an fp32 SFPU multiply.
+    // x*(x - k) -> cb_x_squared (Float32), the sequential intermediate of the second reduce. x - k (fp32 DEST)
+    // re-enters the FPU through the bf16 srcB the pilot left: exact whenever k/2 <= x <= 2k (Sterbenz), the
+    // offset-heavy regime the shift exists for; elsewhere |x - k| ~ std and its rounding is ordinary noise.
     eltwise_chain(
         IterationShape::grid(rows_valid, W),
         BinaryFpu<
@@ -136,7 +140,10 @@ ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
             input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
             input(cb_pilot_rows, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row)>{
             x_dfb, pilot_dfb},
-        Square<>{},
+        DestReuseBinary<
+            BinaryFpuOp::Mul,
+            input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
+            DestReuseType::DEST_TO_SRCB>{x_dfb},
         PackTile<output(cb_x_squared)>{xsq_dfb});
     push_pad(cb_x_squared, T - rows_valid * W);
     cb_wait_front(cb_x_squared, T);
@@ -152,7 +159,12 @@ ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
         ReduceFp32Mode::Fast,
         ReduceAlgorithm::ReduceTile>(
-        x_dfb, scaler_dfb, sum_acc_dfb, shape, ReduceInputMemoryLayout::contiguous(), Accumulate(sum_acc_dfb, j));
+        x_dfb,
+        scaler_dfb,
+        sum_acc_dfb,
+        shape,
+        ReduceInputMemoryLayout::contiguous(),
+        Accumulate(j == 0 ? seed_dfb : sum_acc_dfb, j == 0 ? 1 : j));
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_COL,
@@ -170,33 +182,27 @@ ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
 }
 
 // Per-channel moments [1 x W] -> the FPU-readable chan CBs (matmul in0 of the collapse). CopyTile from an
-// UnpackToDestFp32 CB is exact; the first moment is shifted in fp32 here, S1' = sum(x) - n_rows * k (row 0;
-// the collapse reads row 0 only). One copy per block replaces a last-chunk variant of both reduces, which
-// would double the reduce instantiations (kernel text must fit the kernel-config ring).
-ALWI void publish_channel_moments(uint32_t n_rows_bits) {
+// UnpackToDestFp32 CB is exact. One copy per block replaces a last-chunk variant of both reduces, which would
+// double the reduce instantiations (kernel text must fit the kernel-config ring).
+ALWI void publish_channel_moments() {
     DataflowBuffer sum_acc_dfb(cb_sum_acc);
     DataflowBuffer sumsq_acc_dfb(cb_sumsq_acc);
-    DataflowBuffer pilot_dfb(cb_pilot_rows);
     DataflowBuffer chan_scale_dfb(cb_chan_scale);
     DataflowBuffer chan_work_dfb(cb_chan_work);
     eltwise_chain(
         IterationShape::tiles(W),
         CopyTile<input(cb_sum_acc), Dst::D0>{sum_acc_dfb},
-        CopyTile<input(cb_pilot_rows, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D1>{
-            pilot_dfb},
-        MulUnary<Dst::D1>{n_rows_bits},
-        SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        CopyTile<input(cb_sumsq_acc), Dst::D2>{sumsq_acc_dfb},
+        CopyTile<input(cb_sumsq_acc), Dst::D1>{sumsq_acc_dfb},
         PackTile<output(cb_chan_scale), Dst::D0>{chan_scale_dfb},
-        PackTile<output(cb_chan_work), Dst::D2>{chan_work_dfb});
+        PackTile<output(cb_chan_work), Dst::D1>{chan_work_dfb});
 }
 
-// Pass-2 normalize of the chunk at the front of cb_input_keep: y = (x - k)*a - b' (k, a, b' row-mapped, held
-// for the block).
+// Pass-2 normalize of the chunk at the front of cb_input_keep: y = a*x - b' (a, b' row-mapped, held for the
+// block). a is the srcA operand, so srcA keeps its 19-bit format when a*x re-enters through srcA (with x on
+// srcA, the DEST -> srcA move would truncate a*x to bf16).
 ALWI void normalize_chunk(uint32_t rows_valid) {
     constexpr uint32_t x_cb = cb_input_keep;
     DataflowBuffer x_dfb(x_cb);
-    DataflowBuffer pilot_dfb(cb_pilot_rows);
     DataflowBuffer scale_dfb(cb_chan_scale);
     DataflowBuffer bprime_dfb(cb_bprime);
     DataflowBuffer out_dfb(cb_output_tiles);
@@ -205,14 +211,9 @@ ALWI void normalize_chunk(uint32_t rows_valid) {
     eltwise_chain(
         IterationShape::grid(rows_valid, W),
         BinaryFpu<
-            BinaryFpuOp::Sub,
-            input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
-            input(cb_pilot_rows, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row)>{
-            x_dfb, pilot_dfb},
-        DestReuseBinary<
             BinaryFpuOp::Mul,
             input(cb_chan_scale, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
-            DestReuseType::DEST_TO_SRCB>{scale_dfb},
+            input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block)>{scale_dfb, x_dfb},
         DestReuseBinary<
             BinaryFpuOp::Sub,
             input(cb_bprime, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
@@ -246,7 +247,6 @@ void kernel_main() {
     const uint32_t is_root = get_arg_val<uint32_t>(arg++);
     const uint32_t inv_n_bits = get_arg_val<uint32_t>(arg++);
     const uint32_t eps_bits = get_arg_val<uint32_t>(arg++);
-    const uint32_t n_rows_bits = get_arg_val<uint32_t>(arg++);  // float(rows_core * 32): elements per lane
 
     CircularBuffer chan_scale_cb(cb_chan_scale);
     CircularBuffer chan_work_cb(cb_chan_work);
@@ -264,6 +264,7 @@ void kernel_main() {
     DataflowBuffer beta_dfb(cb_beta_rows);
     DataflowBuffer group_sums_dfb(cb_group_sums);
     DataflowBuffer stats_out_dfb(cb_stats_out);
+    DataflowBuffer group_shift_dfb(cb_group_shift);
 
     compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(cb_chan_scale, cb_group_map, cb_local_partials);
 
@@ -294,7 +295,8 @@ void kernel_main() {
                 skip_chunk(cb_input_keep);  // streamed head chunk: not held for pass 2
             }
         }
-        publish_channel_moments(n_rows_bits);
+        cb_pop_front(cb_pilot_rows, W);
+        publish_channel_moments();
 
         // ---------------- collapse_to_group_partials ----------------
         // [1 x W] per-channel row x [W x 1] map -> one tile; row 0 holds the G_core group lanes.
@@ -323,7 +325,8 @@ void kernel_main() {
                 InputPolicy::WaitAndPopPerKBlock>(
                 ones_cb, gathered_cb, group_sums_cb, group_sums_cb, MatmulBlockShape::of(1, 1, 1, 2, R, 1));
 
-            // Finalize: mean = S1/n, var = max(S2/n - mean^2, 0), rstd = rsqrt(var + eps) -> [rstd, mean].
+            // Finalize: mean' = S1'/n, mean = mean' + k, var = max(T2/n - mean'*mean, 0), rstd = rsqrt(var + eps)
+            // -> [rstd, mean].
             cb_wait_front(cb_group_sums, 2);
             cb_reserve_back(cb_stats_out, 2);
             eltwise_chain(
@@ -346,10 +349,12 @@ void kernel_main() {
                         DataFormatReconfig::Enabled,
                         TileAddressing::Offset),
                     Dst::D1>{group_sums_dfb, 1},
+                CopyTile<input(cb_group_shift), Dst::D2>{group_shift_dfb},
                 MulUnary<Dst::D0>{inv_n_bits},
                 MulUnary<Dst::D1>{inv_n_bits},
-                MulBinary<Dst::D0, Dst::D0, Dst::D2>{},
-                SubBinary<Dst::D1, Dst::D2, Dst::D1>{},
+                AddBinary<Dst::D2, Dst::D0, Dst::D2>{},
+                MulBinary<Dst::D0, Dst::D2, Dst::D0>{},
+                SubBinary<Dst::D1, Dst::D0, Dst::D1>{},
                 Relu<Dst::D1>{},
                 AddUnary<Dst::D1>{eps_bits},
                 Rsqrt<Approx::Exact, Dst::D1>{},
@@ -368,7 +373,7 @@ void kernel_main() {
                         PushPolicy::None,
                         DataFormatReconfig::Enabled,
                         TileAddressing::Offset),
-                    Dst::D0>{stats_out_dfb, 1});
+                    Dst::D2>{stats_out_dfb, 1});
             cb_push_back(cb_stats_out, 2);
             cb_pop_front(cb_group_sums, 2);
         }
@@ -392,7 +397,7 @@ void kernel_main() {
             matmul_with_map<true>(group_stats_cb, map_cb, chan_scale_cb, expand_shape);  // a = rstd_ch
             matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);   // mean_ch
         }
-        // m = mean'_ch * a -> cb_chan_shift (alias of cb_chan_work: tile i over tile i, in place).
+        // m = mean_ch * a -> cb_chan_shift (alias of cb_chan_work: tile i over tile i, in place).
         eltwise_chain(
             IterationShape::tiles(W),
             BinaryFpu<
@@ -428,6 +433,5 @@ void kernel_main() {
         }
         cb_pop_front(cb_chan_scale, W);
         cb_pop_front(cb_bprime, W);
-        cb_pop_front(cb_pilot_rows, W);
     }
 }

@@ -7,7 +7,9 @@
 // Once per kernel: reduce scaler (helper), group map (NoC zeros + 32 one-hot halfword stores per tile),
 // ones tiles on unit roots (one 64 B row by RISC-V, then NoC self-copies doubling to a tile).
 // Per block (one unit = image n, channel slice s, rows [row_start, row_start + rows_core)):
-//   pilot : image row 0 of the slice -> staging -> cb_pilot_rows (row 0: the shift k of each lane's group);
+//   pilot : image row 0 of the slice -> staging -> cb_pilot_rows (row 0: the shift k of each lane's group),
+//           cb_sum_seed (row 0: -n*k, exact, n = rows_core*32: the Sigma x accumulator starts there, so it ends at
+//           Sigma (x - k)) and, on the unit root, cb_group_shift (lane g = k of group g, rows replicated at step B);
 //           read together with chunk 0, so its latency hides under the first chunk's
 //   pass 1: chunks 0..B-1 -> the input ring (TILE: both views, lockstep) or cb_input_rm sticks (RM);
 //           compute keeps the last K chunks on the keep view
@@ -42,6 +44,8 @@ constexpr uint32_t cb_beta_rows = 14;
 constexpr uint32_t cb_ones_tiles = 17;
 constexpr uint32_t cb_affine_staging = 21;
 constexpr uint32_t cb_pilot_rows = 22;
+constexpr uint32_t cb_sum_seed = 23;
+constexpr uint32_t cb_group_shift = 24;
 
 constexpr uint32_t BF16_TILE_BYTES = 2048;
 constexpr uint32_t BF16_FACE_BYTES = 512;
@@ -51,8 +55,24 @@ constexpr uint32_t BF16_ONE_PAIR = 0x3F803F80;
 constexpr uint32_t TILE_SEGMENT_BYTES = 64;  // 32 bf16 channels of one stick
 constexpr uint32_t ALIGN = 64;               // DRAM read alignment (BH)
 
-// Halfword offset of tile-row-0 lane l (0..31) inside a bf16 tile: faces 0 / 1 hold lanes 0..15 / 16..31.
+// Element offset of tile-row-0 lane l (0..31) inside a tile: faces 0 / 1 hold lanes 0..15 / 16..31.
 FORCE_INLINE uint32_t row0_lane(uint32_t l) { return (l >> 4) * 256 + (l & 15); }
+
+// -(rows * 32 * k) as fp32 bits for a bf16 k, by integer arithmetic (no soft float): exact while the 8-bit
+// significand times rows fits 24 bits (rows < 2^16), truncated beyond. Zero / denormal k -> 0.
+FORCE_INLINE uint32_t neg_n_times_bf16(uint32_t k16, uint32_t rows) {
+    const uint32_t e = (k16 >> 7) & 0xFF;
+    if (e == 0) {
+        return 0;
+    }
+    const uint32_t p = ((k16 & 0x7F) | 0x80) * rows;  // value = p * 2^(e - 127 - 7 + 5)
+    uint32_t b = 7;                                   // msb of p (p >= 128)
+    while (b < 31 && (p >> (b + 1)) != 0) {
+        ++b;
+    }
+    const uint32_t m = (b <= 23 ? p << (23 - b) : p >> (b - 23)) & 0x7FFFFF;
+    return ((~k16 & 0x8000) << 16) | ((b + e - 2) << 23) | m;
+}
 }  // namespace
 
 void kernel_main() {
@@ -77,6 +97,7 @@ void kernel_main() {
     constexpr uint32_t HW = HT * 32;
     constexpr uint32_t C = WT_TOTAL * 32;
     constexpr uint32_t SLICE_BYTES = W * TILE_SEGMENT_BYTES;
+    constexpr uint32_t G_CORE = P / CG;  // group lanes of a slice
     constexpr uint32_t NUM_AFFINE = (HAS_GAMMA ? 1 : 0) + (HAS_BETA ? 1 : 0);
     // Per-tensor affine staging: the slice's P channels from a 64 B-aligned start.
     constexpr uint32_t AFFINE_STAGE_BYTES = ((P * 2 + ALIGN - 1) / ALIGN) * ALIGN + ALIGN;
@@ -140,6 +161,19 @@ void kernel_main() {
                         }
                     }
                     cb_push_back(cb_ones_tiles, R);
+
+                    // Group shift tile: row 0 (written at step 0) -> all 32 rows, as the finalize's stats are
+                    // row-replicated. NoC self-copies double rows inside faces 0 / 1, then faces 0-1 -> 2-3.
+                    const uint32_t gs = get_write_ptr(cb_group_shift);
+                    for (uint32_t len = 64; len < 1024; len <<= 1) {
+                        for (uint32_t f = 0; f < 2; ++f) {
+                            noc_async_read(get_noc_addr(gs + f * 1024), gs + f * 1024 + len, len);
+                        }
+                        noc_async_read_barrier();
+                    }
+                    noc_async_read(get_noc_addr(gs), gs + F32_TILE_BYTES / 2, F32_TILE_BYTES / 2);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_group_shift, 1);
                 }
 
                 // ---------------- Affine rows ----------------
@@ -244,16 +278,22 @@ void kernel_main() {
 
             if (step == 0) {
                 cb_reserve_back(cb_pilot_rows, W);
+                cb_reserve_back(cb_sum_seed, W);
+                if (is_root) {
+                    cb_reserve_back(cb_group_shift, 1);
+                }
                 if (blk == 0) {
                     // Once per kernel, in the shadow of the first chunk's reads. Group map M (W tiles): element
                     // (slice lane r, group lane l) = 1.0 iff slice lane r holds a channel of group lane l. Slices
-                    // start on group boundaries, so the map is block-invariant. Pilot rows 1..31 stay zero across
-                    // blocks (the W-page ring returns to its base).
+                    // start on group boundaries, so the map is block-invariant. Pilot / seed rows 1..31 stay zero
+                    // across blocks (the W-page rings return to their base).
                     DataflowBuffer map_dfb(cb_group_map);
                     DataflowBuffer pilot_dfb(cb_pilot_rows);
+                    DataflowBuffer seed_dfb(cb_sum_seed);
                     cb_reserve_back(cb_group_map, W);
                     noc.async_write_zeros(map_dfb, W * BF16_TILE_BYTES);
-                    noc.async_write_zeros(pilot_dfb, W * F32_TILE_BYTES);
+                    noc.async_write_zeros(pilot_dfb, W * BF16_TILE_BYTES);
+                    noc.async_write_zeros(seed_dfb, W * F32_TILE_BYTES);
                     noc.write_zeros_l1_barrier();
                     volatile tt_l1_ptr uint16_t* map =
                         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_group_map));
@@ -275,30 +315,45 @@ void kernel_main() {
             noc_async_read_barrier();
 
             if (step == 0) {
-                // ---------------- Pilot rows: lane v -> k = x[row 0, first channel of v's group] ----------------
-                // Float32 tiles (bf16 value << 16): as an FPU srcB operand the pilot leaves srcB in a 19-bit
-                // format, so compute's DEST -> srcB reuse that follows keeps x - k at full TF32 precision.
+                // ---------------- Shift rows: lane v -> k = x[row 0, first channel of v's group] ----------------
+                // cb_pilot_rows (bf16): k, the srcB operand of pass 1's x - k. cb_sum_seed (Float32, unpacked to
+                // DEST): -n*k, exact. cb_group_shift (root, Float32): k per group lane, 0 past G_CORE.
                 volatile tt_l1_ptr uint16_t* sv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging);
+                volatile tt_l1_ptr uint16_t* pv =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_pilot_rows));
                 volatile tt_l1_ptr uint32_t* dv =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_pilot_rows));
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_sum_seed));
                 // TILE staging holds rows 0-1 of faces 0/1 per tile: lane l < 16 at halfword l, else l + 16.
-                auto stage = [&](uint32_t c) {
-                    return static_cast<uint32_t>(sv[IS_RM ? c : (c >> 5) * 64 + (c & 31) + (c & 16)]) << 16;
+                auto stage = [&](uint32_t c) -> uint32_t {
+                    return sv[IS_RM ? c : (c >> 5) * 64 + (c & 31) + (c & 16)];
                 };
+                if (is_root) {
+                    volatile tt_l1_ptr uint32_t* gv =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_group_shift));
+                    for (uint32_t g = 0; g < 32; ++g) {
+                        gv[row0_lane(g)] = g < G_CORE ? stage(g * CG) << 16 : 0;
+                    }
+                }
                 uint32_t g0 = 0, in_group = 0, in_period = 0;
-                uint32_t k_bits = stage(0);
+                uint32_t k16 = stage(0);
+                uint32_t seed = neg_n_times_bf16(k16, rows_core);
                 for (uint32_t v = 0; v < W * 32; ++v) {
-                    dv[(v >> 5) * 1024 + row0_lane(v & 31)] = k_bits;
+                    const uint32_t off = (v >> 5) * 1024 + row0_lane(v & 31);
+                    pv[off] = k16;
+                    dv[off] = seed;
                     if (++in_period == P) {
                         in_period = in_group = g0 = 0;
-                        k_bits = stage(0);
                     } else if (++in_group == CG) {
                         in_group = 0;
                         g0 += CG;
-                        k_bits = stage(g0);
+                    } else {
+                        continue;
                     }
+                    k16 = stage(g0);
+                    seed = neg_n_times_bf16(k16, rows_core);
                 }
                 cb_push_back(cb_pilot_rows, W);
+                cb_push_back(cb_sum_seed, W);
             }
 
             if constexpr (IS_RM) {

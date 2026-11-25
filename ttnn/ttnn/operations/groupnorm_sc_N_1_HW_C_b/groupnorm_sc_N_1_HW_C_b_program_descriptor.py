@@ -66,7 +66,9 @@ CB_GROUP_SUMS = 18
 CB_STATS_OUT = 19
 CB_GROUP_STATS = 20
 CB_AFFINE_STAGING = 21  # reader-only staging: pilot row (step 0) / affine slices (step B), disjoint in time
-CB_PILOT_ROWS = 22  # shift k per channel (row 0), one per block
+CB_PILOT_ROWS = 22  # shift k per channel (row 0, bf16), one per block, held for pass 1
+CB_SUM_SEED = 23  # -n*k per channel (row 0, Float32 unpacked to DEST): the Sigma x accumulator's start
+CB_GROUP_SHIFT = 24  # unit root: k per group lane (Float32, rows replicated), read by the finalize
 
 NUM_CB_SLOTS = 64  # unpack_to_dest_mode vector length (covers WH 32 / BH 64)
 
@@ -142,11 +144,12 @@ def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map
         + input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm)
         + 1  # reduce scaler
         + R  # ones tiles
-        + W * (1 + hg + hb)  # map, gamma rows, beta rows
+        + W * (2 + hg + hb)  # map, pilot rows, gamma rows, beta rows
     )
     group_b = group_b_bytes(T)
-    # 3W: alias groups E (sum acc / chan scale) and C' (sumsq acc / chan work / chan shift), pilot rows.
-    f32_bytes = group_b + F32_TILE_BYTES * (3 * W + 2 * R + 6)
+    # 3W: alias groups E (sum acc / chan scale) and C' (sumsq acc / chan work / chan shift), the sum seed.
+    # 2R + 7: gathered partials, group D (2), stats out (2), group stats (2), group shift (1).
+    f32_bytes = group_b + F32_TILE_BYTES * (3 * W + 2 * R + 7)
     staging = staging_bytes(W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb)
     return BF16_TILE_BYTES * bf16_pages + f32_bytes + staging
 
@@ -208,6 +211,9 @@ def _evaluate_gx(gx, *, N, Ht, S, span_tiles, gps, P, chunk_target, is_rm, has_g
     cpi = min(P // U, Ht) if U < P else 1
     rows_core_max = _ceil_div(Ht, cpi)
     h = max(1, min(chunk_target // W, rows_core_max))
+    # Balance the chunks (no small ragged tail) and keep >= 2 per block so pass 1 overlaps its own read.
+    n_chunks = max(_ceil_div(rows_core_max, h), min(rows_core_max, 2))
+    h = _ceil_div(rows_core_max, n_chunks)
     T = h * W
     R = _ceil_div(cpi, 32)
     f_fixed = footprint_bytes(
@@ -492,7 +498,9 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         )
     )
     cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GROUP_MAP, bf16, BF16_TILE_BYTES)]))
-    cbs.append(_cb(W * F32_TILE_BYTES, cores, [(CB_PILOT_ROWS, f32, F32_TILE_BYTES)]))
+    cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_PILOT_ROWS, bf16, BF16_TILE_BYTES)]))
+    cbs.append(_cb(W * F32_TILE_BYTES, cores, [(CB_SUM_SEED, f32, F32_TILE_BYTES)]))
+    cbs.append(_cb(F32_TILE_BYTES, cores, [(CB_GROUP_SHIFT, f32, F32_TILE_BYTES)]))
     if hg:
         cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
     if hb:
@@ -564,8 +572,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             root_virt.x,
             root_virt.y,
         ]
-        n_rows_bits = _f32_bits(wk.rows_core * 32)  # elements per slice lane per block (shift correction)
-        compute_rt[x][y] = [wk.num_blocks, wk.rows_core, K_core, wk.is_root, inv_n_bits, eps_bits, n_rows_bits]
+        compute_rt[x][y] = [wk.num_blocks, wk.rows_core, K_core, wk.is_root, inv_n_bits, eps_bits]
         writer_cores[wk.is_root].append(wk.core)
         writer_rt[wk.is_root][x][y] = [
             output_tensor.buffer_address(),
@@ -605,7 +612,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         dst_full_sync_en=False,
     )
     unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CB_SLOTS
-    for idx in (CB_SUM_ACC, CB_SUMSQ_ACC, CB_GROUP_SUMS):
+    for idx in (CB_SUM_ACC, CB_SUMSQ_ACC, CB_GROUP_SUMS, CB_SUM_SEED, CB_GROUP_SHIFT):
         unpack_modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_config.unpack_to_dest_mode = unpack_modes
     compute_kernel = ttnn.KernelDescriptor(
