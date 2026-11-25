@@ -17,6 +17,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
 #include "jit_build/build_env_manager.hpp"
+#include "jit_build/jit_device_config.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -88,14 +89,14 @@ const CceFwManifest& build_cce_fw_manifest(MetalContext& context, ChipId chip) {
     }
 
     const Hal& hal = context.hal();
-    const ContextId context_id = context.get_context_id();
+    BuildEnvManager& build_env_manager = context.build_env_manager();
     const uint8_t num_hw_cqs = 1;
-    BuildEnvManager::get_instance(context_id).add_build_env(chip, num_hw_cqs, context_id);
-    BuildEnvManager::get_instance(context_id).build_firmware(chip);
+    build_env_manager.add_build_env(chip, create_jit_device_config(chip, num_hw_cqs, context), context.rtoptions());
+    build_env_manager.build_firmware(chip);
 
     const uint32_t dram_core_type_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
-    const std::string binary_path = BuildEnvManager::get_instance(context_id)
-                                        .get_firmware_binary_path(chip, dram_core_type_index, kDmProcessorClass, 0);
+    const std::string binary_path =
+        build_env_manager.get_firmware_binary_path(chip, dram_core_type_index, kDmProcessorClass, 0);
     const HalJitBuildConfig& jit_build_config = hal.get_jit_build_config(dram_core_type_index, kDmProcessorClass, 0);
 
     CceFwManifest manifest;

@@ -14,6 +14,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -23,6 +24,7 @@
 
 #include <fmt/format.h>
 
+#include "distributed/mesh_device_impl.hpp"
 #include "hostdev/cce_spa_routes.h"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
@@ -100,7 +102,7 @@ inline const metal_SocDescriptor& configured_soc_desc() {
         const char* path = selected_soc_desc_path();
         TT_FATAL(path != nullptr, "No package descriptor selected");
         auto arch = std::make_shared<tt::umd::SocArchDescriptor>(std::string(path));
-        return metal_SocDescriptor(tt::umd::SocDescriptor(std::move(arch)), tt::BoardType::UNKNOWN);
+        return metal_SocDescriptor(tt::umd::SocDescriptor(std::move(arch)), tt::BoardType::UNKNOWN, std::nullopt);
     }();
     return desc;
 }
@@ -213,7 +215,7 @@ inline std::shared_ptr<distributed::MeshDevice> open_unit_mesh() {
 }
 
 inline IDevice* physical_device(distributed::MeshDevice& mesh) {
-    return mesh.get_device(distributed::MeshCoordinate::zero_coordinate(mesh.shape().dims()));
+    return mesh.impl().get_device(distributed::MeshCoordinate::zero_coordinate(mesh.shape().dims()));
 }
 
 inline void LaunchProgram(distributed::MeshDevice& mesh, Program& program) {

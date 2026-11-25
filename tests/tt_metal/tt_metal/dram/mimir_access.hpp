@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/slow_dispatch.hpp"
@@ -391,7 +392,7 @@ public:
 
     distributed::MeshDevice& mesh() const { return *mesh_; }
     IDevice* device() const {
-        return mesh_->get_device(distributed::MeshCoordinate::zero_coordinate(mesh_->shape().dims()));
+        return mesh_->impl().get_device(distributed::MeshCoordinate::zero_coordinate(mesh_->shape().dims()));
     }
     void close() { closer_.close(); }
 

@@ -20,6 +20,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "tt-umd-utils/error.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"

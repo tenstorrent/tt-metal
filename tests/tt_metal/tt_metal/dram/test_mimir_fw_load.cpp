@@ -190,12 +190,11 @@ TEST(MimirFwLoad, LoadAndReachInitDone) {
         expect_cce_initialized(device, cce_index);
     }
 
-    const MetalContext& context = MetalContext::instance();
+    MetalContext& context = MetalContext::instance();
     const Hal& hal = context.hal();
     const uint32_t dram_core_type_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
-    const std::string binary_path =
-        BuildEnvManager::get_instance(context.get_context_id())
-            .get_firmware_binary_path(device->id(), dram_core_type_index, kDramDmProcessorClass, 0);
+    const std::string binary_path = context.build_env_manager().get_firmware_binary_path(
+        device->id(), dram_core_type_index, kDramDmProcessorClass, 0);
     const std::vector<CceFwSpan> spans = cce_fw_spans(binary_path);
     const uint64_t firmware_window_begin = cce_jit_build_config().fw_base_addr;
     const std::vector<CceFwSpan>::const_iterator text_span_iterator =
@@ -219,12 +218,11 @@ TEST(MimirFwLoad, ImageManifest) {
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
 
-    const MetalContext& context = MetalContext::instance();
+    MetalContext& context = MetalContext::instance();
     const Hal& hal = context.hal();
     const uint32_t dram_core_type_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
-    const std::string binary_path =
-        BuildEnvManager::get_instance(context.get_context_id())
-            .get_firmware_binary_path(device->id(), dram_core_type_index, kDramDmProcessorClass, 0);
+    const std::string binary_path = context.build_env_manager().get_firmware_binary_path(
+        device->id(), dram_core_type_index, kDramDmProcessorClass, 0);
     const HalJitBuildConfig& jit_build_config = cce_jit_build_config();
     const std::vector<CceFwSpan> spans = cce_fw_spans(binary_path);
     const uint64_t firmware_window_begin = jit_build_config.fw_base_addr;
