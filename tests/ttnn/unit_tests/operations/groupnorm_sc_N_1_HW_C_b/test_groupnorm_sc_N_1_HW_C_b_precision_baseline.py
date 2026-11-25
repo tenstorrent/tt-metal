@@ -50,11 +50,9 @@ CASES = [
         10.0,
         BF16_TOL,
         id="offset_mean10",
-        # Measured Phase 0: PCC 0.99972, rel-RMS 0.0273 (> 0.02). One-pass E[x^2] - mean^2 cancels at
-        # mean/std = 10, amplifying the TF32 truncation of x^2 / the channel sums in SrcA (x^2 reduce,
-        # collapse and sender-sum matmuls). Same math as golden test_sharded_offset_heavy[mean10], which
-        # activates with Refinement 1; that refinement owns the fix (op_requirements.md). Remove the mark then.
-        marks=pytest.mark.xfail(strict=True, reason="one-pass variance cancellation at mean/std=10 (Refinement 1)"),
+        # Phase 0 measured PCC 0.99972, rel-RMS 0.0273 (> 0.02): one-pass E[x^2] - mean^2 cancels at mean/std = 10,
+        # amplifying the TF32 truncation of x^2 / the channel sums in SrcA. Refinement 1 shifts both moments by a
+        # per-group pilot sample k (sum (x-k)^2 - (sum (x-k))^2 / n), so the cancellation scales with var.
     ),
 ]
 

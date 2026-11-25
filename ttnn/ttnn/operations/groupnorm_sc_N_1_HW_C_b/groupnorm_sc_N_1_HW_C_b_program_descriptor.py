@@ -65,7 +65,8 @@ CB_ONES_TILES = 17
 CB_GROUP_SUMS = 18
 CB_STATS_OUT = 19
 CB_GROUP_STATS = 20
-CB_AFFINE_STAGING = 21
+CB_AFFINE_STAGING = 21  # reader-only staging: pilot row (step 0) / affine slices (step B), disjoint in time
+CB_PILOT_ROWS = 22  # shift k per channel (row 0), one per block
 
 NUM_CB_SLOTS = 64  # unpack_to_dest_mode vector length (covers WH 32 / BH 64)
 
@@ -124,9 +125,18 @@ def group_b_bytes(T):
     return max(F32_TILE_BYTES * T, D_OUT * T * BF16_TILE_BYTES)
 
 
-def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta):
+def staging_bytes(*, W, map_period, is_rm, n_affine):
+    """Reader staging: the pilot row (TILE: rows 0-1 of faces 0/1 per tile; RM: the slice of stick 0) or the
+    n_affine gamma/beta slices (P channels from a 64 B-aligned start), whichever is larger."""
+    pilot = map_period * 2 if is_rm else W * 128
+    affine = n_affine * (_align_up(map_period * 2, 64) + 64)
+    return _align_up(max(pilot, affine), 64)
+
+
+def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map_period=None):
     """Per-core L1 footprint of every CB (l1_ledger.md "Per-core footprint")."""
     hg, hb = int(has_gamma), int(has_beta)
+    map_period = W * 32 if map_period is None else map_period
     bf16_pages = (
         (D_RM * T if is_rm else 0)
         + input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm)
@@ -135,8 +145,9 @@ def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta):
         + W * (1 + hg + hb)  # map, gamma rows, beta rows
     )
     group_b = group_b_bytes(T)
-    f32_bytes = group_b + F32_TILE_BYTES * (4 * W + 2 * R + 6)
-    staging = _align_up((hg + hb) * W * 64, 64)
+    # 3W: alias groups E (sum acc / chan scale) and C' (sumsq acc / chan work / chan shift), pilot rows.
+    f32_bytes = group_b + F32_TILE_BYTES * (3 * W + 2 * R + 6)
+    staging = staging_bytes(W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb)
     return BF16_TILE_BYTES * bf16_pages + f32_bytes + staging
 
 
@@ -432,6 +443,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
 
     num_used = len(plan.work)
     cores = _used_core_range_set(num_used, plan.grid_x)
+    map_period = W * 32
 
     # ---------------- Circular buffers ----------------
     cbs = []
@@ -456,18 +468,31 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         )
     )
     cbs.append(_cb(BF16_TILE_BYTES, cores, [(CB_REDUCE_SCALER, bf16, BF16_TILE_BYTES)]))
-    cbs.append(_cb(W * F32_TILE_BYTES, cores, [(CB_SUM_ACC, f32, F32_TILE_BYTES)]))
-    cbs.append(_cb(W * F32_TILE_BYTES, cores, [(CB_SUMSQ_ACC, f32, F32_TILE_BYTES)]))
-    cbs.append(_cb(W * F32_TILE_BYTES, cores, [(CB_CHAN_SCALE, f32, F32_TILE_BYTES)]))
-    # Alias group C: in-place lockstep hand-offs (5d/5e).
+    # Alias group E: the Sigma x accumulator (UnpackToDestFp32, pass 1) / the FPU-readable chan_scale. The publish
+    # copy reads accumulator tile i and packs chan tile i over it (in-place lockstep; every view returns to its
+    # base each block), so the accumulator costs no L1 of its own.
     cbs.append(
         _cb(
             W * F32_TILE_BYTES,
             cores,
-            [(CB_CHAN_WORK, f32, F32_TILE_BYTES), (CB_CHAN_SHIFT, f32, F32_TILE_BYTES)],
+            [(CB_SUM_ACC, f32, F32_TILE_BYTES), (CB_CHAN_SCALE, f32, F32_TILE_BYTES)],
+        )
+    )
+    # Alias group C: the Sigma (x-k)^2 accumulator / chan_work / chan_shift, in-place lockstep hand-offs
+    # (publish, 5d/5e).
+    cbs.append(
+        _cb(
+            W * F32_TILE_BYTES,
+            cores,
+            [
+                (CB_SUMSQ_ACC, f32, F32_TILE_BYTES),
+                (CB_CHAN_WORK, f32, F32_TILE_BYTES),
+                (CB_CHAN_SHIFT, f32, F32_TILE_BYTES),
+            ],
         )
     )
     cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GROUP_MAP, bf16, BF16_TILE_BYTES)]))
+    cbs.append(_cb(W * F32_TILE_BYTES, cores, [(CB_PILOT_ROWS, f32, F32_TILE_BYTES)]))
     if hg:
         cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
     if hb:
@@ -485,9 +510,8 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     cbs.append(_cb(R * BF16_TILE_BYTES, cores, [(CB_ONES_TILES, bf16, BF16_TILE_BYTES)]))
     cbs.append(_cb(2 * F32_TILE_BYTES, cores, [(CB_STATS_OUT, f32, F32_TILE_BYTES)]))
     cbs.append(_cb(2 * F32_TILE_BYTES, cores, [(CB_GROUP_STATS, f32, F32_TILE_BYTES)]))
-    staging_bytes = _align_up((hg + hb) * W * 64, 64)
-    if staging_bytes > 0:
-        cbs.append(_cb(staging_bytes, cores, [(CB_AFFINE_STAGING, bf16, staging_bytes)]))
+    stage = staging_bytes(W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb)
+    cbs.append(_cb(stage, cores, [(CB_AFFINE_STAGING, bf16, stage)]))
 
     # ---------------- Kernel args ----------------
     in_page_bytes = input_tensor.buffer_page_size()
@@ -495,7 +519,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     gamma_addr = gamma.buffer_address() if gamma is not None else 0
     beta_addr = beta.buffer_address() if beta is not None else 0
 
-    reader_ct = [W, h, int(is_rm), hg, hb, R, plan.Cg, plan.Wt, plan.Ht, plan.gx, in_page_bytes]
+    reader_ct = [W, h, int(is_rm), hg, hb, R, plan.Cg, plan.Wt, plan.Ht, plan.gx, in_page_bytes, map_period, 0]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         (ttnn.TensorAccessorArgs(gamma) if gamma is not None else ttnn.TensorAccessorArgs()).get_compile_time_args()
@@ -537,8 +561,11 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             wk.rows_core,
             K_core,
             wk.is_root,
+            root_virt.x,
+            root_virt.y,
         ]
-        compute_rt[x][y] = [wk.num_blocks, wk.rows_core, K_core, wk.is_root, inv_n_bits, eps_bits]
+        n_rows_bits = _f32_bits(wk.rows_core * 32)  # elements per slice lane per block (shift correction)
+        compute_rt[x][y] = [wk.num_blocks, wk.rows_core, K_core, wk.is_root, inv_n_bits, eps_bits, n_rows_bits]
         writer_cores[wk.is_root].append(wk.core)
         writer_rt[wk.is_root][x][y] = [
             output_tensor.buffer_address(),
