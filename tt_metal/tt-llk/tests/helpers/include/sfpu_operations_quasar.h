@@ -424,7 +424,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::power_iterative)
     {
-        power_init();
+        // What SFPU_UNARY_INIT(power) expands to in the Compute API's power_iterative_tile_init, so the bare init's dispatch to power_init is what runs.
+        ::ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::power>();
     }
     else if constexpr (OPERATION == SfpuType::log)
     {
@@ -1232,8 +1233,21 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::power_iterative)
     {
+#ifdef SFPU_POWER_ITERATIVE_EXPONENT
+        constexpr std::uint32_t POWER_ITERATIVE_EXPONENT = SFPU_POWER_ITERATIVE_EXPONENT;
+#else
+        constexpr std::uint32_t POWER_ITERATIVE_EXPONENT = 3u;
+#endif
+#ifdef SFPU_POWER_ITERATIVE_RUNTIME_EXPONENT
+        // Read back through a volatile, so the kernel cannot fold the exponent and takes the path a
+        // runtime exponent takes.
+        volatile std::uint32_t runtime_exponent = POWER_ITERATIVE_EXPONENT;
+        const std::uint32_t exponent            = runtime_exponent;
+#else
+        constexpr std::uint32_t exponent = POWER_ITERATIVE_EXPONENT;
+#endif
         SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_unary_power_iterative, (APPROX, ITERATIONS), dst_index, vector_mode, 3u /* exponent */);
+            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_unary_power_iterative, (APPROX, ITERATIONS), dst_index, vector_mode, exponent);
     }
     else if constexpr (OPERATION == SfpuType::log)
     {

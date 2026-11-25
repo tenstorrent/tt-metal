@@ -520,6 +520,30 @@ class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
 
 
 @dataclass
+class SFPU_POWER_ITERATIVE_EXPONENT(TemplateParameter):
+    """Exponent for power_iterative on Quasar, and whether the kernel sees it as a runtime value.
+
+    Macros for the same reason as :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations_quasar.h selects on
+    ``#ifdef``, and a test that does not set this keeps the constant exponent 3. ``runtime`` has the
+    harness read the exponent back through a volatile, which is how the kernel's runtime-exponent
+    path is reached.
+    """
+
+    exponent: int = 3
+    runtime: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if self.exponent < 0:
+            raise ValueError(
+                f"power_iterative takes a non-negative exponent, got {self.exponent}"
+            )
+        lines = [f"#define SFPU_POWER_ITERATIVE_EXPONENT {self.exponent}u"]
+        if self.runtime:
+            lines.append("#define SFPU_POWER_ITERATIVE_RUNTIME_EXPONENT 1")
+        return "\n".join(lines)
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
