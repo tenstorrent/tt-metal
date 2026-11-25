@@ -5,7 +5,10 @@
 
 Rank 0 opens a 2-CQ device through ttml and sends weight versions 0, 1 and 2, then closes the bridge. Rank 1 opens a
 2-CQ mesh, receives each version and checks its values, then checks that the peer closed. Runs under tt-run with
-world_size == 2; self-skips otherwise (see ``runner_weight_bridge.sh``).
+world_size == 2; self-skips otherwise. Run it on two P150 cards with:
+
+    $TT_METAL_HOME/tt-train/tests/python/remote_rollout/weight_bridge/runner_weight_bridge.sh --split split_1_1 \\
+        --test-file $TT_METAL_HOME/tt-train/tests/python/remote_rollout/weight_bridge/test_threaded_weight_bridge.py
 """
 
 from __future__ import annotations
