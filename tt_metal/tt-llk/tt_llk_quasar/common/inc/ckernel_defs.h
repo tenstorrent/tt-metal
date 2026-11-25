@@ -112,6 +112,17 @@ enum class BinaryOp : std::uint8_t
     MUL_SM_SHIFT23,
     GEGLU_TANH,
     MOE_GATE_SQRT_SOFTPLUS_ADD_BIAS,
+    // The 8-bit quantization.h entry points (quant_*_tile_init with UInt8 / Int8 output, the int8-input
+    // requant / dequant). QUANT / REQUANT / DEQUANT above are the Int32 ones. The names mirror the
+    // Blackhole ids.
+    QUANT_UINT8,
+    QUANT_INT8,
+    REQUANT_UINT8,
+    REQUANT_INT8,
+    REQUANT_INT8_IN,
+    REQUANT_INT8_IN_UINT8_OUT,
+    REQUANT_INT8_IN_INT8_OUT,
+    DEQUANT_INT8,
 };
 
 enum class DataLayout
