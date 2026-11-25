@@ -18,7 +18,7 @@ using namespace ckernel;
 
 namespace ckernel::packer {
 // An SDPA kernel with a CB at 24 or above (joint_sdpa's intermediates; the sdpa kernel uses 0-17): its reconfigure picks the
-// form by the last push (pack_sdpa_last_push).
+// form by its mask CB and its pushes (pack_sdpa_long_push).
 template <int dep>
 constexpr bool llk_pack_sdpa_joint() {
     bool high = false;
@@ -31,6 +31,12 @@ constexpr bool llk_pack_sdpa_joint() {
         mid = mid || pack_dst_format[i] != to_underlying(DataFormat::Invalid);
     }
     return llk_pack_sdpa_api<dep * 0 + 1>::value && high && !mid;
+}
+
+// joint_sdpa without its mask CB (c_3, made only when the joint length needs a mask): the full reconfigure everywhere.
+template <int dep>
+constexpr bool llk_pack_sdpa_joint_unmasked() {
+    return llk_pack_sdpa_joint<dep>() && pack_dst_format[3] == to_underlying(DataFormat::Invalid);
 }
 }  // namespace ckernel::packer
 
@@ -104,8 +110,12 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     SYNC_SIGNAL("SYNC-CB-PUSH", operand);
-    if constexpr (ckernel::packer::llk_pack_sdpa_joint<push_blocks * 0 + 1>()) {
-        ckernel::packer::pack_sdpa_last_push = num_tiles;
+    if constexpr (
+        ckernel::packer::llk_pack_sdpa_joint<push_blocks * 0 + 1>() &&
+        !ckernel::packer::llk_pack_sdpa_joint_unmasked<push_blocks * 0 + 1>()) {
+        if (num_tiles >= 8) {
+            ckernel::packer::pack_sdpa_long_push = true;
+        }
     }
     std::uint32_t output = operand;
 

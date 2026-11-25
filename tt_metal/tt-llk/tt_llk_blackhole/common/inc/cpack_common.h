@@ -345,8 +345,8 @@ constexpr std::uint8_t LLK_PACK_STATE_W       = 0x80;
 [[maybe_unused]] static std::uint32_t pack_pre_next = 0;
 // The last release drained the packer and no pack has run since the next section's wait: the push needs no stall of its own.
 [[maybe_unused]] static bool pack_push_drained = false;
-// SDPA kernels: tiles of the last push (llk_push_tiles), which picks the reconfigure form.
-[[maybe_unused]] static std::uint32_t pack_sdpa_last_push = 0;
+// joint_sdpa with its mask CB: a push of 8+ tiles happened (llk_push_tiles); its reconfigures take the full form from then on.
+[[maybe_unused]] static bool pack_sdpa_long_push = false;
 // SDPA kernels: tiles of the last reserve (llk_wait_for_free_tiles), the block now being packed.
 [[maybe_unused]] static std::uint32_t pack_sdpa_reserve = 0;
 constexpr std::uint32_t LLK_PACK_PRE_WRITTEN        = 0x80000000u;
