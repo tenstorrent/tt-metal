@@ -8,7 +8,10 @@
 #include <bit>
 #include <map>
 #include <string>
+#include <functional>
+#include <initializer_list>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -761,55 +764,91 @@ ProgramDescriptor AllGatherRmsNormProgramFactory::create_descriptor(
     return desc;
 }
 
-void AllGatherRmsNormProgramFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
+AllGatherRmsNormMeshWorkloadFactory::cached_mesh_workload_t AllGatherRmsNormMeshWorkloadFactory::create_mesh_workload(
+    const AllGatherRmsNormParams& attrs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const AllGatherRmsNormInputs& tensors,
+    Tensor& output) {
+    const uint32_t wlt = tt::div_up(tensors.input.logical_shape()[-1], tt::constants::TILE_WIDTH);
+    const auto out_page = static_cast<uint32_t>(output.buffer()->aligned_page_size());
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
+    for (const auto& coord : tensor_coords.coords()) {
+        Program program{AllGatherRmsNormProgramFactory::create_descriptor(attrs, tensors, output, coord)};
+        shared_variables_t sv{
+            .worker_common =
+                {std::ref(GetCommonRuntimeArgs(program, kernel::READER)),
+                 std::ref(GetCommonRuntimeArgs(program, kernel::WRITER)),
+                 std::ref(GetCommonRuntimeArgs(program, kernel::COMPUTE))},
+            .port_reader_common = std::ref(GetCommonRuntimeArgs(program, kernel::PORT_READER)),
+            .port_sender_common = std::ref(GetCommonRuntimeArgs(program, kernel::PORT_SENDER)),
+            // the own slice of the output shard: slot p = this chip's position along the cluster axis
+            .out_block_offset = coord[attrs.cluster_axis] * wlt * out_page,
+        };
+        for (const auto& circular_buffer : program.circular_buffers()) {
+            if (!circular_buffer->globally_allocated()) {
+                continue;
+            }
+            const auto& indices = circular_buffer->buffer_indices();
+            if (indices.contains(cb::X)) {
+                sv.x_cb = circular_buffer->id();
+            } else if (indices.contains(cb::X_STATS)) {
+                sv.x_stats_cb = circular_buffer->id();
+            } else if (indices.contains(cb::OUT_BLOCK)) {
+                sv.out_block_cb = circular_buffer->id();
+            }
+        }
+        const ttnn::MeshCoordinateRange range(coord);
+        workload.add_program(range, std::move(program));
+        shared.emplace(range, sv);
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared)};
+}
+
+void AllGatherRmsNormMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
     const AllGatherRmsNormParams& attrs,
     const AllGatherRmsNormInputs& tensors,
-    Tensor& output,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    Tensor& output) {
     // The key pins every compile-time arg, CB size and per-core arg; a hit rewrites the tensor addresses (worker
     // common X / DST / OUT / GAMMA / BETA, port common DST_ADDR), EPS_BITS (left out of the key) and the shard-backed
-    // CB addresses. Per-mesh global semaphore addresses stay as create_descriptor wrote them.
+    // CB addresses, the call's values read once. Per-mesh global semaphore addresses stay as create_descriptor wrote
+    // them. A program whose last completed write matches the call is left untouched.
     const Tensor& input = tensors.input;
     const bool is_ru = tensors.scratch.has_value() && input.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0;
-    const uint32_t dst_addr = is_ru ? tensors.scratch->buffer()->address() : output.buffer()->address();
-    const uint32_t in_addr = input.buffer()->address();
-    const uint32_t out_addr = output.buffer()->address();
-    const uint32_t g_addr = tensors.gamma.has_value() ? tensors.gamma->buffer()->address() : 0u;
-    const uint32_t b_addr = tensors.beta.has_value() ? tensors.beta->buffer()->address() : 0u;
-    const uint32_t eps_bits = agrn_f32_bits(attrs.epsilon);
-    auto put = [](RuntimeArgsData& args, uint32_t slot, uint32_t v) {
-        if (args[slot] != v) {
-            args[slot] = v;
-        }
-    };
-    for (const uint32_t kid : {kernel::READER, kernel::WRITER, kernel::COMPUTE}) {
-        auto& args = GetCommonRuntimeArgs(program, kid);
-        put(args, worker_common::X_ADDR, in_addr);
-        put(args, worker_common::DST_ADDR, dst_addr);
-        put(args, worker_common::OUT_ADDR, out_addr);
-        put(args, worker_common::GAMMA_ADDR, g_addr);
-        put(args, worker_common::BETA_ADDR, b_addr);
-        put(args, worker_common::EPS_BITS, eps_bits);
-    }
-    put(GetCommonRuntimeArgs(program, kernel::PORT_READER), port_reader_common::DST_ADDR, dst_addr);
-    put(GetCommonRuntimeArgs(program, kernel::PORT_SENDER), port_sender_common::DST_ADDR, dst_addr);
-
-    for (const auto& circular_buffer : program.circular_buffers()) {
-        if (!circular_buffer->globally_allocated()) {
+    const written_t call{
+        .in_addr = input.buffer()->address(),
+        .dst_addr = is_ru ? tensors.scratch->buffer()->address() : output.buffer()->address(),
+        .out_addr = output.buffer()->address(),
+        .gamma_addr = tensors.gamma.has_value() ? tensors.gamma->buffer()->address() : 0u,
+        .beta_addr = tensors.beta.has_value() ? tensors.beta->buffer()->address() : 0u,
+        .eps_bits = agrn_f32_bits(attrs.epsilon)};
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        auto& sv = cached_workload.shared_variables.at(range);
+        if (sv.last_written.has_value() && *sv.last_written == call) {
             continue;
         }
-        const auto& indices = circular_buffer->buffer_indices();
-        if (indices.contains(cb::X) || indices.contains(cb::X_STATS)) {
-            UpdateDynamicCircularBufferAddress(program, circular_buffer->id(), *input.buffer());
-        } else if (indices.contains(cb::OUT_BLOCK)) {
-            // the own slice of the output shard: slot p = this chip's position along the cluster axis
-            TT_FATAL(mesh_dispatch_coordinate.has_value(), "all_gather_rms_norm: one program per mesh coordinate");
-            const uint32_t p = (*mesh_dispatch_coordinate)[attrs.cluster_axis];
-            const uint32_t wlt = tt::div_up(input.logical_shape()[-1], tt::constants::TILE_WIDTH);
-            const auto out_page = static_cast<uint32_t>(output.buffer()->aligned_page_size());
-            UpdateDynamicCircularBufferAddress(program, circular_buffer->id(), *output.buffer(), p * wlt * out_page);
+        sv.last_written.reset();
+        for (auto& common : sv.worker_common) {
+            RuntimeArgsData& args = common.get();
+            args[worker_common::X_ADDR] = call.in_addr;
+            args[worker_common::DST_ADDR] = call.dst_addr;
+            args[worker_common::OUT_ADDR] = call.out_addr;
+            args[worker_common::GAMMA_ADDR] = call.gamma_addr;
+            args[worker_common::BETA_ADDR] = call.beta_addr;
+            args[worker_common::EPS_BITS] = call.eps_bits;
         }
+        sv.port_reader_common.get()[port_reader_common::DST_ADDR] = call.dst_addr;
+        sv.port_sender_common.get()[port_sender_common::DST_ADDR] = call.dst_addr;
+        for (const auto& input_cb : {sv.x_cb, sv.x_stats_cb}) {
+            if (input_cb.has_value()) {
+                UpdateDynamicCircularBufferAddress(program, *input_cb, *input.buffer());
+            }
+        }
+        if (sv.out_block_cb.has_value()) {
+            UpdateDynamicCircularBufferAddress(program, *sv.out_block_cb, *output.buffer(), sv.out_block_offset);
+        }
+        sv.last_written = call;
     }
 }
 

@@ -132,7 +132,7 @@ void check_support(const AllGatherRmsNormParams& attrs, const AllGatherRmsNormIn
 
 AllGatherRmsNormDeviceOperation::program_factory_t AllGatherRmsNormDeviceOperation::select_program_factory(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& /*tensor_args*/) {
-    return AllGatherRmsNormProgramFactory{};
+    return AllGatherRmsNormMeshWorkloadFactory{};
 }
 
 void AllGatherRmsNormDeviceOperation::validate_on_program_cache_miss(
