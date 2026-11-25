@@ -1888,7 +1888,7 @@ class MiniMaxH3Pipeline(PipelineAPIMixin):
         that `prepare_conv3d_weights` bakes into the cached bytes, exactly as `vae_wan2_1` does. The
         VAE is data-parallel with replicated weights, so its parallel config is the DP one.
         """
-        subfolder = self._vae.subfolder_for(module)
+        subfolder = self._vae.get_module_subfolder(module)
         blocking = conv3d_blocking_hash(module)
         return {
             "model_name": MODEL_NAME,

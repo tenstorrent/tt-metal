@@ -478,7 +478,7 @@ class MiniMaxH3Vae:
         variant = "_pxdenorm" if self.pixel_denorm is not None else ""
         return f"vae_decoder_t{num_frames}_h{height}_w{width}{variant}"
 
-    def subfolder_for(self, module) -> str:
+    def get_module_subfolder(self, module) -> str:
         """The weight-cache subfolder of ``module``, keyed by its shape."""
         return self._decoder_subfolder() if module is self.decoder else self._encoder_subfolder(module)
 
