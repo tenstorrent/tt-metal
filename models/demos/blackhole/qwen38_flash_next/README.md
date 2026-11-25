@@ -104,14 +104,14 @@ Measured on one 8-chip group of a Blackhole Galaxy (TP=8) with `demo/text_demo.p
 
 | Test id | Users | ISL | TTFT | Decode |
 |---|---|---|---|---|
-| `traced_128` | 1 | 128 | 0.20 s | 90.6 t/s/u (11.04 ms/token) |
-| `traced_32k` | 1 | 32k | 7.37 s | 80.0 t/s/u |
-| `traced_128k` | 1 | 128k | 36.2 s | 74.0 t/s/u |
-| `batched_128_b32` | 32 | 128 | 0.20 s/user | 25.7 t/s/u |
-| `batched_32k_b8` | 8 | 32k | 7.36 s/user | 43.8 t/s/u |
+| `traced_128` | 1 | 128 | 0.21 s | 89.6 t/s/u (11.17 ms/token) |
+| `traced_32k` | 1 | 32k | 7.37 s | 79.2 t/s/u |
+| `traced_128k` | 1 | 128k | 36.2 s | 74.5 t/s/u |
+| `batched_128_b32` | 32 | 128 | 0.21 s/user | 25.4 t/s/u |
+| `batched_32k_b8` | 8 | 32k | 7.37 s/user | 44.0 t/s/u |
 | `batched_32k_b8_mtp3` | 8 | 32k | 9.2 s/user | 43.8 t/s/u, 2.41 tokens/pass |
 
-Served through vLLM with MTP (one group, 8 concurrent users, GSM8K prompts), decode is about 64 tok/s/user.
+Served through vLLM with MTP (one group, 8 concurrent users, GSM8K prompts), decode is about 63 tok/s/user.
 The MTP gain depends on the text: the acceptance rate sets the tokens per pass.
 
 ## Serving (DP=4 with vLLM)
