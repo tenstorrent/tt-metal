@@ -15,10 +15,11 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <bit>
 #include <cstdint>
@@ -28,7 +29,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_program_artifacts(
     const LayerNormParams& operation_attributes,
@@ -172,13 +173,20 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     bool output_row_wise = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     CoreRangeSet all_storage_cores = output_shard_spec.grid;
-    std::vector<uint32_t> storage_core_noc_x;
-    std::vector<uint32_t> storage_core_noc_y;
-    std::vector<CoreCoord> storage_core_coords =
-        corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), output_row_wise);
-    for (auto core : storage_core_coords) {
-        storage_core_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
-        storage_core_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+    if (writes_back) {
+        // The writer names each storage core by the output shard it holds (ShardView): storage core i, in the
+        // shard grid's orientation order, must hold output shard i (at most one shard per core).
+        const std::vector<CoreCoord> storage_core_coords =
+            corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), output_row_wise);
+        const auto output_bds = output.tensor_spec().compute_buffer_sharding_args().buffer_distribution_spec();
+        TT_FATAL(
+            output_bds.has_value() && output_bds->num_shards() <= output_bds->cores().size() &&
+                output_bds->num_shards() <= storage_core_coords.size() &&
+                std::equal(
+                    storage_core_coords.begin(),
+                    storage_core_coords.begin() + output_bds->num_shards(),
+                    output_bds->cores().begin()),
+            "Sharded layernorm write-back needs output shard i on storage core i, at most one shard per core");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -198,7 +206,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     if (use_welford) {
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
         recip_tensor = tensor_args.recip_tensor;
-        reciprocal_dfb_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+        reciprocal_dfb_size_bytes = recip_tensor->mesh_buffer().aligned_size_per_bank();
     }
 
     // Compute buffer sizes using helper
@@ -328,6 +336,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
         // RMSNorm doesn't use Welford in this kernel path.
         .welford_fp32_alias = use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en,
+        .use_two_stage_reduce = grid.use_two_stage_reduce,
         .sizes = dfb_sizes,
         .reciprocal_dfb_size_bytes = reciprocal_dfb_size_bytes,
         // The column mask is one tile-row wide: block_wt tiles, holding only 1.0 or 0.0 in bfloat16.
@@ -403,8 +412,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .writes_back = writes_back,
         .num_distributed_devices = num_distributed_devices,
         .reader_noc = reader_noc,
-        .storage_core_noc_x = std::move(storage_core_noc_x),
-        .storage_core_noc_y = std::move(storage_core_noc_y),
         .num_storage_cores = (std::uint32_t)all_storage_cores.num_cores()};
 
     // The write-back segment block's length is measured per node while the run args are built, and

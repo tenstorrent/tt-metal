@@ -180,9 +180,18 @@ def _float(value):
         return None
 
 
+# tt-perf-report --csv headers.
+DEVICE_TIME = "Device Time [μs]"
+OP_TO_OP_GAP = "Op-to-Op Gap [μs]"
+
+
 def summarize_cell_csv(path, top_n=None):
     with open(path, newline="") as f:
-        rows = [r for r in csv.DictReader(f) if _float(r.get("Device Time")) is not None]
+        reader = csv.DictReader(f)
+        missing = [h for h in (DEVICE_TIME, OP_TO_OP_GAP) if h not in (reader.fieldnames or ())]
+        if missing:
+            raise ValueError(f"{path} has no {', '.join(missing)} column; did tt-perf-report rename its CSV headers?")
+        rows = [r for r in reader if _float(r.get(DEVICE_TIME)) is not None]
     # Rows are not in execution order; the lowest call count ran first and its gap precedes the replay.
     call_counts = [_float(r.get("Global Call Count")) for r in rows]
     if rows and None not in call_counts:
@@ -192,10 +201,10 @@ def summarize_cell_csv(path, top_n=None):
     kernel_us = gap_us = 0.0
     by_op = defaultdict(lambda: [0.0, 0])
     for i, row in enumerate(rows):
-        device_us = _float(row["Device Time"])
+        device_us = _float(row[DEVICE_TIME])
         kernel_us += device_us
         if i != leading:
-            gap_us += _float(row.get("Op-to-Op Gap")) or 0.0
+            gap_us += _float(row.get(OP_TO_OP_GAP)) or 0.0
         op = row.get("OP Code", "").strip().lstrip("'")
         by_op[op][0] += device_us
         by_op[op][1] += 1
@@ -279,7 +288,11 @@ def _report_manifest(m, ops_csv, fieldnames, rows, out_dir, top):
             print(f"{label}: signposts {c['start_signpost']}..{c['stop_signpost']} are not in {ops_csv.name}")
             continue
         ok = run_tt_perf_report(cell_ops_csv, c["start_signpost"], c["stop_signpost"], out_csv)
-        c["report"] = summarize_cell_csv(out_csv, top) if ok else None
+        try:
+            c["report"] = summarize_cell_csv(out_csv, top) if ok else None
+        except ValueError as e:
+            c["report"] = None
+            print(f"{label}: {e}")
         text_path = out_csv.with_suffix(".txt")
         if ok and text_path.exists():
             c["report_text"] = text_path.read_text()

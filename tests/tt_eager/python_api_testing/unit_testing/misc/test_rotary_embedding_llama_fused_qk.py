@@ -6,25 +6,25 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.experimental.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
 )
 
 
-@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
         (32, 1),
         (16, 1),
         (8, 1),
+        (6, 1),
         (1, 1),
     ),
     ids=(
         "decode_32",
         "decode_16",
         "decode_8",
+        "decode_6",
         "decode_1",
     ),
 )
@@ -59,18 +59,10 @@ def test_rotary_embedding_llama_fused_qk(
     # shift input/output tensor by creating very small tensor between loop
     inp = torch.randn(1, 1, 32, 32)
     test_tensor = (
-        ttnn.Tensor(
-            inp.reshape(-1).tolist(),
-            inp.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
+        ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
     )
 
 
-@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
@@ -117,14 +109,7 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.randn(1, 1, 32, 32)
         test_tensor = (
-            ttnn.Tensor(
-                inp.reshape(-1).tolist(),
-                inp.shape,
-                ttnn.bfloat16,
-                ttnn.ROW_MAJOR_LAYOUT,
-            )
-            .to(ttnn.TILE_LAYOUT)
-            .to(device)
+            ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
         )
 
         cache_tensors.append(test_tensor)

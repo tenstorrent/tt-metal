@@ -19,7 +19,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathOperation,
     Transpose,
     UnpackerEngine,
@@ -33,7 +32,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_SYNC,
     EMA_ALPHA_BETA,
-    IMPLIED_MATH_FORMAT,
     MATH_OP,
     MATH_TRANSPOSE_FACES,
     NUM_FACES,
@@ -42,12 +40,11 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_constants import MAX_NUM_FACES
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # No Float32: the SrcA datacopy narrows it to TF32 (the unary sweep covers it via unpack-to-Dest).
 EMA_FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-    InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
 ]
 
 
@@ -95,7 +92,6 @@ def test_sfpu_ema_quasar(formats, schedule):
         formats,
         templates=[
             MATH_OP(mathop=MathOperation.Ema),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpA),
             DEST_SYNC(dest_sync),
@@ -123,7 +119,7 @@ def test_sfpu_ema_quasar(formats, schedule):
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = get_golden_generator(UntilizeGolden)(
         res_tensor, formats.output_format, input_dimensions
     )

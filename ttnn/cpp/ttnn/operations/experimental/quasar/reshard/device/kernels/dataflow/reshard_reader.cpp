@@ -6,7 +6,7 @@
 //
 // Gathers strided page ranges from the input tensor (read on remote cores via UnicastEndpoint) into
 // the local output sharded buffer.
-//   - The input tensor base address comes from TensorAccessor(tensor::input).get_bank_base_address().
+//   - The input tensor base address comes from TransferAccess::bank_base(TensorAccessor(tensor::input)) (raw).
 //   - The local output buffer base L1 address comes from DataflowBuffer(dfb::shard_cb).get_write_ptr()
 //     (the DFB borrows the output tensor's buffer; it is used here purely as an address source).
 //
@@ -22,6 +22,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -34,7 +35,8 @@ void kernel_main() {
 
     uint32_t arg_index = num_x_cores + num_y_cores;
     TensorAccessor input(tensor::input);
-    const uint32_t input_shard_addr = input.get_bank_base_address();
+    // Raw: bank-relative base on remote L1/DRAM banks (no handle form yet).
+    const uint32_t input_shard_addr = tensor_accessor::detail::TransferAccess::bank_base(input);
     const uint32_t num_output_pages = get_vararg(arg_index++);
     const uint32_t num_ranges = get_vararg(arg_index++);
     const uint32_t output_page_offset = get_vararg(arg_index++);

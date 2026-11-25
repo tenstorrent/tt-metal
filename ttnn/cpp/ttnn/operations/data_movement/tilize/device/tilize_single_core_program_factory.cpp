@@ -8,15 +8,14 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -33,7 +32,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
     CoreRangeSet core_ranges{core};
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_data_format);
@@ -164,6 +163,11 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         ComputeHardwareConfig compute_cfg_gen2;
         compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
         compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from WH/BH
+        // Quasar unpacks Int32 only into DEST.
+        if (a.dtype() == DataType::INT32) {
+            compute_cfg_gen2.enable_32_bit_dest = true;
+            compute_cfg_gen2.unpack_modes.insert({INPUT_DFB, UnpackMode::UnpackToDest});
+        }
         compute_hw = compute_cfg_gen2;
     }
     KernelSpec compute{
@@ -223,7 +227,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs TilizeSingleCoreProgramFactory::override_runtime_arguments(
+ProgramRunArgs TilizeSingleCoreProgramFactory::override_runtime_arguments(
     const TilizeParams& /*operation_attributes*/,
     const TilizeInputs& tensor_args,
     Tensor& tensor_return_value,

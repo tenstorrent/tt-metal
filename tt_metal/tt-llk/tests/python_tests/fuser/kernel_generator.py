@@ -14,7 +14,7 @@ from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
 
 from .fuser_config import FuserConfig
-from .pipeline_plan import PlannedBlock, plan_pipeline
+from .pipeline_plan import PlannedBlock
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
@@ -151,10 +151,7 @@ class FusedKernelGenerator:
         self.sfpu_gen = SfpuKernelGenerator(self.config)
 
     def generate_all(self) -> Dict[str, str]:
-        plans = [
-            plan_pipeline(op, self.config.global_config.dest_acc.value)
-            for op in self.config.pipeline
-        ]
+        plans = self.config.pipeline_plans
         return {
             "unpack": self.unpack_gen.generate(plans),
             "math": self.math_gen.generate(plans),
@@ -181,7 +178,7 @@ class FusedKernelGenerator:
             )
 
         quasar_include = (
-            '#include "llk_bfd_alloc.h"\n#include "llk_sync.h"\n#include "quasar_test_common.h"\n'
+            '#include "ckernel_buf_desc.h"\n#include "llk_sync.h"\n#include "quasar_test_common.h"\n'
             if self.config.global_config.architecture == ChipArchitecture.QUASAR
             else '#include "operand.h"\n'
         )

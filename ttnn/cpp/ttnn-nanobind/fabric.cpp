@@ -13,6 +13,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/fabric.hpp>
@@ -20,6 +21,20 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace ttnn::fabric {
+
+namespace {
+
+tt::tt_fabric::FabricApiType parse_fabric_api_type(const std::string& api_type_str) {
+    if (api_type_str == "Linear") {
+        return tt::tt_fabric::FabricApiType::Linear;
+    }
+    if (api_type_str == "Mesh") {
+        return tt::tt_fabric::FabricApiType::Mesh;
+    }
+    throw std::invalid_argument("api_type must be 'Linear' or 'Mesh', got: " + api_type_str);
+}
+
+}  // namespace
 
 void bind_fabric_api(nb::module_& mod) {
     nb::class_<tt::tt_fabric::MeshId>(mod, "MeshId", R"(
@@ -64,8 +79,8 @@ void bind_fabric_api(nb::module_& mod) {
         .value("FABRIC_2D_TORUS_XY", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY)
         .value("FABRIC_2D_TORUS_X", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X)
         .value("FABRIC_2D_TORUS_Y", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y)
-        .value(
-            "CUSTOM", tt::tt_fabric::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
+        .value("CUSTOM", tt::tt_fabric::FabricConfig::CUSTOM)
+        .value("MGD_DEFAULT", tt::tt_fabric::FabricConfig::MGD_DEFAULT);
 
     nb::enum_<tt::tt_fabric::FabricType>(mod, "FabricType", nb::is_arithmetic())
         .value("MESH", tt::tt_fabric::FabricType::MESH)
@@ -142,14 +157,32 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "get_fabric_config",
-        &tt::tt_fabric::GetFabricConfig,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+            return tt::tt_fabric::GetFabricConfig(mesh_device);
+        },
+        nb::arg("mesh_device"),
+        R"(
+            Returns the fabric configuration in effect for ``mesh_device``.
+        )");
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    mod.def(
+        "get_fabric_config",
+        []() { return tt::tt_fabric::GetFabricConfig(); },
         R"(
             Returns the currently active global fabric configuration.
+
+            .. deprecated::
+                Pass ``mesh_device`` instead. This overload resolves the default context and will be
+                removed after 2026-12-31.
         )");
+#pragma GCC diagnostic pop
 
     mod.def(
         "setup_fabric_connection",
-        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
            uint32_t link_idx,
            tt::tt_metal::ProgramDescriptor& program_descriptor,
@@ -158,6 +191,7 @@ void bind_fabric_api(nb::module_& mod) {
             std::vector<uint32_t> fabric_args;
 
             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                mesh_device,
                 src_fabric_node_id,
                 dst_fabric_node_id,
                 link_idx,
@@ -168,6 +202,7 @@ void bind_fabric_api(nb::module_& mod) {
 
             return fabric_args;
         },
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_fabric_node_id"),
         nb::arg("link_idx"),
@@ -178,6 +213,7 @@ void bind_fabric_api(nb::module_& mod) {
             Sets up fabric connection: returns necessary runtime args and appends SemaphoreDescriptors to
             the given ProgramDescriptor
             Args:
+                mesh_device: The mesh device whose fabric the connection is resolved in
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_fabric_node_id: FabricNodeId of the destination chip
                 link_idx: Link index (0..n) to use between src and dst chips
@@ -188,7 +224,8 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "setup_routing_plane_connection",
-        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
            const std::vector<uint32_t>& connection_link_indices,
            tt::tt_metal::ProgramDescriptor& program_descriptor,
@@ -198,6 +235,7 @@ void bind_fabric_api(nb::module_& mod) {
 
             tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(kernel_idx);
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
+                mesh_device,
                 src_fabric_node_id,
                 dst_nodes,
                 connection_link_indices,
@@ -208,6 +246,7 @@ void bind_fabric_api(nb::module_& mod) {
 
             return fabric_args;
         },
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
@@ -219,6 +258,7 @@ void bind_fabric_api(nb::module_& mod) {
             SemaphoreDescriptors and defines to the given ProgramDescriptor.
             This API supports both 1D and 2D fabric routing.
             Args:
+                mesh_device: The mesh device whose fabric the connection is resolved in
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_nodes: List of FabricNodeIds of destination chips (one per route)
                 connection_link_indices: List of link indices (empty for auto-select, size 1 for all routes, or per-route)
@@ -229,21 +269,36 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "get_fabric_kernel_defines",
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device, const std::string& api_type_str) {
+            return tt::tt_metal::internal::get_fabric_kernel_defines(mesh_device, parse_fabric_api_type(api_type_str));
+        },
+        nb::arg("mesh_device"),
+        nb::arg("api_type") = "Linear",
+        R"(
+            Query the kernel defines required by the fabric configuration of ``mesh_device``.
+            Pure query — no PD mutation, no side effects. Safe to call before kernel compilation.
+
+            Args:
+                mesh_device: The mesh device whose fabric is queried.
+                api_type: Fabric API type ("Linear" or "Mesh"). Defaults to "Linear".
+
+            Returns:
+                List of (name, value) tuples, e.g. [("FABRIC_2D", "1"), ("API_TYPE_Linear", "1")].
+        )");
+
+    mod.def(
+        "get_fabric_kernel_defines",
         [](const std::string& api_type_str) {
-            tt::tt_fabric::FabricApiType api_type;
-            if (api_type_str == "Linear") {
-                api_type = tt::tt_fabric::FabricApiType::Linear;
-            } else if (api_type_str == "Mesh") {
-                api_type = tt::tt_fabric::FabricApiType::Mesh;
-            } else {
-                throw std::invalid_argument("api_type must be 'Linear' or 'Mesh', got: " + api_type_str);
-            }
-            return tt::tt_metal::internal::get_fabric_kernel_defines(api_type);
+            return tt::tt_metal::internal::get_fabric_kernel_defines(parse_fabric_api_type(api_type_str));
         },
         nb::arg("api_type") = "Linear",
         R"(
             Query the kernel defines required by the current fabric configuration.
             Pure query — no PD mutation, no side effects. Safe to call before kernel compilation.
+
+            .. deprecated::
+                Pass ``mesh_device`` as the first argument instead. This overload resolves the
+                default context and will be removed after 2026-12-31.
 
             Args:
                 api_type: Fabric API type ("Linear" or "Mesh"). Defaults to "Linear".
@@ -254,7 +309,8 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "fabric_connection_rt_args",
-        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
            const std::vector<uint32_t>& connection_link_indices,
            tt::tt_metal::ProgramDescriptor& program_descriptor,
@@ -264,6 +320,7 @@ void bind_fabric_api(nb::module_& mod) {
 
             tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(kernel_idx);
             tt::tt_metal::internal::append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::ProgramDescriptor>(
+                mesh_device,
                 src_fabric_node_id,
                 dst_nodes,
                 connection_link_indices,
@@ -274,6 +331,7 @@ void bind_fabric_api(nb::module_& mod) {
 
             return fabric_args;
         },
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
@@ -288,6 +346,7 @@ void bind_fabric_api(nb::module_& mod) {
             eager-compile model), and connection setup happens after compilation.
 
             Args:
+                mesh_device: The mesh device whose fabric the connections are resolved in
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_nodes: List of FabricNodeIds of destination chips (one per route)
                 connection_link_indices: List of link indices (empty for auto-select, size 1 for all routes, or per-route)
@@ -302,15 +361,36 @@ void bind_fabric_api(nb::module_& mod) {
     mod.def(
         "fabric_connection_rt_args_size",
         &tt::tt_metal::internal::fabric_connection_rt_args_size,
+        nb::arg("mesh_device"),
         nb::arg("num_connections"),
         R"(
             Return the number of runtime-argument words required for a fabric connection
-            block in the currently opened fabric context.
+            block in the fabric context of the given mesh device.
+
+            Args:
+                mesh_device: The mesh device whose fabric context is queried
+                num_connections: Number of connections in the block
         )");
 
     mod.def(
         "compute_fabric_connection_rt_args",
-        &tt::tt_metal::internal::compute_fabric_connection_rt_args,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+           const std::vector<uint32_t>& connection_link_indices,
+           const std::vector<uint32_t>& teardown_sem_args,
+           const std::vector<uint32_t>& buffer_index_sem_args,
+           bool sem_args_are_l1_addresses) {
+            return tt::tt_metal::internal::compute_fabric_connection_rt_args(
+                mesh_device,
+                src_fabric_node_id,
+                dst_nodes,
+                connection_link_indices,
+                teardown_sem_args,
+                buffer_index_sem_args,
+                sem_args_are_l1_addresses);
+        },
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
@@ -319,12 +399,54 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("sem_args_are_l1_addresses") = false,
         R"(
             Compute fabric connection RT args without any PD mutation.
-            Pure computation — resolves routing and assembles the flat RT args vector from
-            the caller's semaphore values. No PD needed.
+            Pure computation — resolves routing in ``mesh_device``'s context and assembles the flat
+            RT args vector from the caller's semaphore values. No PD needed.
 
             The two semaphore values are copied through verbatim; sem_args_are_l1_addresses
             says they are raw L1 addresses rather than program semaphore IDs, and must then
             be 16 B aligned.
+
+            Args:
+                mesh_device: The mesh device whose fabric is used
+                src_fabric_node_id: FabricNodeId of the source chip
+                dst_nodes: List of FabricNodeIds of destination chips
+                connection_link_indices: List of link indices (empty for auto-select)
+                teardown_sem_args: One per connection — IDs, or addresses when the flag is set
+                buffer_index_sem_args: One per connection — same interpretation
+                sem_args_are_l1_addresses: False (IDs, default) or True (L1 addresses)
+
+            Returns:
+                List of runtime args for RoutingPlaneConnectionManager::build_from_args().
+        )");
+
+    mod.def(
+        "compute_fabric_connection_rt_args",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+           const std::vector<uint32_t>& connection_link_indices,
+           const std::vector<uint32_t>& teardown_sem_args,
+           const std::vector<uint32_t>& buffer_index_sem_args,
+           bool sem_args_are_l1_addresses) {
+            return tt::tt_metal::internal::compute_fabric_connection_rt_args(
+                src_fabric_node_id,
+                dst_nodes,
+                connection_link_indices,
+                teardown_sem_args,
+                buffer_index_sem_args,
+                sem_args_are_l1_addresses);
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_nodes"),
+        nb::arg("connection_link_indices"),
+        nb::arg("teardown_sem_args"),
+        nb::arg("buffer_index_sem_args"),
+        nb::arg("sem_args_are_l1_addresses") = false,
+        R"(
+            Compute fabric connection RT args without any PD mutation, in the default context.
+
+            .. deprecated::
+                Pass ``mesh_device`` as the first argument instead. This overload resolves the
+                default context and will be removed after 2026-12-31.
 
             Args:
                 src_fabric_node_id: FabricNodeId of the source chip
@@ -373,6 +495,32 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "get_eth_forwarding_direction",
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) -> std::optional<int> {
+            auto dir = tt::tt_fabric::get_eth_forwarding_direction(mesh_device, src_fabric_node_id, dst_fabric_node_id);
+            if (!dir.has_value()) {
+                return std::nullopt;
+            }
+            return static_cast<int>(*dir);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        R"(
+            Query the ethernet forwarding direction a fabric packet would take from src to dst.
+
+            ``mesh_device`` selects the context the fabric is resolved in; src and dst do not have to
+            belong to it.
+
+            Returns the raw eth_chan_directions enum value (EAST=0, WEST=1, NORTH=2, SOUTH=3, Z=4),
+            or None if no route exists between the two chips. The returned int matches the
+            per-connection `tag` stored in RoutingPlaneConnectionManager, so it can be used by
+            callers to dedup fabric connections by direction.
+        )");
+
+    mod.def(
+        "get_eth_forwarding_direction",
         [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) -> std::optional<int> {
             auto dir = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
@@ -384,7 +532,12 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_fabric_node_id"),
         R"(
-            Query the ethernet forwarding direction a fabric packet would take from src to dst.
+            Query the ethernet forwarding direction a fabric packet would take from src to dst, in the
+            default context.
+
+            .. deprecated::
+                Pass ``mesh_device`` as the first argument instead. This overload resolves the
+                default context and will be removed after 2026-12-31.
 
             Returns the raw eth_chan_directions enum value (EAST=0, WEST=1, NORTH=2, SOUTH=3, Z=4),
             or None if no route exists between the two chips. The returned int matches the
@@ -395,12 +548,14 @@ void bind_fabric_api(nb::module_& mod) {
     mod.def(
         "get_forwarding_link_indices",
         &tt::tt_fabric::get_forwarding_link_indices,
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_fabric_node_id"),
         R"(
             Return the fabric link indices that can forward packets from src to dst.
 
-            The returned indices are valid inputs to setup_routing_plane_connection.
+            ``mesh_device`` selects the context the fabric is resolved in; src and dst do not have to
+            belong to it. The returned indices are valid inputs to setup_routing_plane_connection.
         )");
 
     mod.def(

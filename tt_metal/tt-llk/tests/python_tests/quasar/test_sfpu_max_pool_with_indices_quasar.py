@@ -15,7 +15,6 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import MaxPoolWithIndicesGolden, get_golden_generator
 from helpers.llk_params import (
     ApproximationMode,
-    ImpliedMathFormat,
     PerfRunType,
     UnpackerEngine,
     format_dict,
@@ -31,7 +30,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MAX_POOL_CHUNK,
     MAX_POOL_WITH_INDICES,
@@ -183,7 +181,7 @@ def _row0(result, row_major, data_format):
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=[
+    format_variant=[
         fmt_variant
         for fmt_variant in generate_quasar_sfpu_format_variants(
             None, input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
@@ -192,13 +190,13 @@ def _row0(result, row_major, data_format):
     ],
     variant=_VARIANTS,
 )
-def test_sfpu_max_pool_with_indices_quasar(formats_dest_acc, variant):
+def test_sfpu_max_pool_with_indices_quasar(format_variant, variant):
     """max_pool_with_indices over every layout / row-count / accumulate path, Float16_b and
     Float32, checking every tile the kernel writes."""
     build, chunk, (values_idx, indices_idx, checked_idx) = variant
     folds = build.accumulate and chunk > 0
 
-    formats = formats_dest_acc.formats
+    formats = format_variant.formats
     fmt = formats.input_format
     torch_format = format_dict[fmt]
 
@@ -235,7 +233,6 @@ def test_sfpu_max_pool_with_indices_quasar(formats_dest_acc, variant):
                     build.num_rows, build.row_major, build.accumulate
                 ),
                 APPROX_MODE(ApproximationMode.No),
-                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
                 UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
                 DEST_SYNC(),
             ],
@@ -260,10 +257,10 @@ def test_sfpu_max_pool_with_indices_quasar(formats_dest_acc, variant):
                 sfpu=True,
             ),
             "unpack_to_dest": True,
-            "dest_acc": formats_dest_acc.dest_acc,
+            "dest_acc": format_variant.dest_acc,
         },
     )
-    formats_dest_acc.apply_formats(configuration.formats_config)
+    format_variant.apply_formats(configuration.formats_config)
 
     result = configuration.run().result
     assert len(result) == MAX_TILE_ELEMENTS
@@ -285,7 +282,7 @@ def test_sfpu_max_pool_with_indices_quasar(formats_dest_acc, variant):
 
     desc = (
         f"{build}, chunk={chunk}, format={fmt}->{formats.output_format}, "
-        f"dest_acc={formats_dest_acc.dest_acc}, tiles=({values_idx}, {indices_idx}), "
+        f"dest_acc={format_variant.dest_acc}, tiles=({values_idx}, {indices_idx}), "
         f"checked={checked_idx}"
     )
     # The running-values tile sits at values_idx + 1 only when accumulating; otherwise TILE

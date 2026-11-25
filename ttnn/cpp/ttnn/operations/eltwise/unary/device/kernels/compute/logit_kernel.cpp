@@ -21,6 +21,10 @@ void kernel_main() {
     const uint32_t packed_scalar1 = get_arg(args::packed_scalar1);
     const uint32_t packed_scalar2 = get_arg(args::packed_scalar2);
 
+    DataflowBuffer dfb_in_obj(dfb::in);
+    DataflowBuffer dfb_tmp0_obj(dfb::tmp0);
+    DataflowBuffer dfb_out_obj(dfb::out);
+
     // The legacy kernel boots unpack from the input and pack for the final output once;
     // tmp0 has the same element format and is only an in-kernel handoff.
     compute_kernel_hw_startup(dfb::in, dfb::out);
@@ -33,28 +37,27 @@ void kernel_main() {
             ckl::CopyTile<
                 ckl::input(
                     dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::Dst::D0>{},
+                ckl::Dst::D0>{dfb_in_obj},
             ckl::Optional<kDoClamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
             ckl::PackTile<ckl::output(
-                dfb::tmp0,
-                ckl::ReservePolicy::PerTile,
-                ckl::PushPolicy::PerTile,
-                ckl::DataFormatReconfig::Disabled)>{});
+                dfb::tmp0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+                dfb_tmp0_obj});
 
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::CopyTile<
                 ckl::input(
                     dfb::tmp0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-                ckl::Dst::D0>{},
+                ckl::Dst::D0>{dfb_tmp0_obj},
             ckl::CopyTile<
                 ckl::input(
                     dfb::tmp0, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::Dst::D1>{},
+                ckl::Dst::D1>{dfb_tmp0_obj},
             ckl::RsubUnary<ckl::Dst::D0>{0x3F800000u},  // 1.0 - x
             ckl::DivBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
             ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
-                dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+                dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+                dfb_out_obj});
     }
 }

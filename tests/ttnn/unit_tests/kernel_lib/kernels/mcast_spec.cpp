@@ -3,6 +3,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
+#include "internal/local_mem/address_access.h"
 
 // Numeric IDs retain the legacy scope; native tokens preserve every supported scope.
 static_assert(std::is_same_v<decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<3>()), Semaphore<>>);
@@ -30,7 +31,8 @@ void kernel_main() {
     constexpr bool control = get_arg(args::control) != 0;
     const uint32_t seed = get_arg(args::seed);
     auto pad = Scratchpad<uint32_t>(scratch::pad);
-    const uint32_t src = pad.get_base_address();
+    // Raw address: the mcast helpers take uint32_t L1 addresses and the host checks the reported base.
+    const uint32_t src = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem()));
     const uint32_t dst = src + 64;
     auto words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
     Noc noc;

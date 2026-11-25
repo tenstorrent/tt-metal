@@ -26,6 +26,8 @@ struct HighBwAllGatherParams {
     // With no public cluster_axis, linearize the complete 2D mesh into a
     // direct-neighbor snake ring. cluster_axis is ignored in this mode.
     bool linearized_mesh_ring = false;
+    // Full-mesh mode only: mesh axis outermost in the gathered (stripe) order; 0 = row-major.
+    uint32_t full_mesh_outer_axis = 0;
 
     // Fabric setup info
     tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
@@ -33,12 +35,9 @@ struct HighBwAllGatherParams {
     std::array<uint32_t, 2> axis_num_devices{};
     uint32_t num_devices = 0;           // number of devices participating in the collective
     std::optional<uint32_t> num_links;  // Requested count; nullopt discovers available links on a miss.
-    uint32_t mesh_rows = 0;
-    uint32_t mesh_cols = 0;
     size_t packet_size = 0;
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
-    std::optional<CoreRangeSet> sub_core_grid;
     tt::tt_metal::SubDeviceManagerId subdevice_manager_id;
     CoreRangeSet resolved_worker_core_grid;
 

@@ -6,19 +6,16 @@
 #include <algorithm>
 #include <array>
 #include <set>
+#include "mcast_host_test_common.hpp"
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
-
-namespace ttnn::kernel_lib::host::test {
-// Shared independent test decoder; compact CT goldens pin its bit/field positions.
-dataflow_kernel_lib::mcast_wire::ArgumentMetadata emitted_metadata(const std::vector<uint32_t>& ct, uint32_t base);
-}  // namespace ttnn::kernel_lib::host::test
+#include "distributed/mesh_device_impl.hpp"
 
 namespace ttnn::kernel_lib::host::api_test {
 using tt::tt_metal::CoreCoord;
@@ -27,7 +24,7 @@ using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::NOC;
 namespace wire = dataflow_kernel_lib::mcast_wire;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 class McastFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastFixture> {};
 
@@ -54,7 +51,7 @@ KernelDescriptor emitted(const McastType& mcast, NOC noc = NOC::NOC_0) {
 
 void expect_pattern(
     const Mcast& channel,
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const std::vector<std::vector<CoreCoord>>& receivers,
     const std::vector<std::vector<CoreCoord>>& senders,
     const std::vector<std::vector<uint32_t>>& acks,
@@ -234,15 +231,18 @@ TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
     const auto snapshot = emitted(copy);
     EXPECT_EQ(snapshot.compile_time_args.at(1), 0u);
     EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).mcast.ack_count, UINT32_MAX);
-    tt::tt_metal::Program program;
-    copy.append_semaphores(program);
-    std::vector<uint32_t> ct, first_rt, second_rt;
-    copy.append_compile_time_args_to(ct);
-    copy.append_runtime_args_to(first_rt, {0, 0});
-    copy.append_runtime_args_to(second_rt, {3, 0});
-    EXPECT_EQ(test::emitted_metadata(ct, 0).mcast.ack_count, UINT32_MAX);
-    EXPECT_EQ(first_rt.at(2), 1u);  // Generic roles, phase, then per-sender ACK.
-    EXPECT_EQ(second_rt.at(2), 2u);
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
+    tt::tt_metal::DataMovementConfig kernel_config;
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> rt{{{0, 0}, {}}, {{3, 0}, {}}};
+    copy.attach(
+        program,
+        CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0}), CoreRange({3, 0}, {3, 0})}),
+        kernel_config,
+        "copy",
+        rt);
+    EXPECT_EQ(test::emitted_metadata(kernel_config.compile_args, 0).mcast.ack_count, UINT32_MAX);
+    EXPECT_EQ(rt.at(0).second.at(2), 1u);  // Generic roles, phase, then per-sender ACK.
+    EXPECT_EQ(rt.at(1).second.at(2), 2u);
 }
 
 TEST_F(McastFixture, DefaultEmptyAndDisabledHandshakes) {
@@ -363,8 +363,7 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     auto direct_ct = kernel.compile_time_args;
     channel.attach(descriptor, "channel", std::array{std::ref(kernel)}, 0);
     auto direct = channel;
-    tt::tt_metal::Program program;
-    direct.append_semaphores(program);
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
     const auto ct_offset = static_cast<uint32_t>(direct_ct.size());
     const auto rt_offset = static_cast<uint32_t>(
         std::max_element(direct_rt.begin(), direct_rt.end(), [](const auto& lhs, const auto& rhs) {
@@ -372,12 +371,13 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
         })->second.size());
     EXPECT_EQ(ct_offset, 1u);
     EXPECT_EQ(rt_offset, 2u);
-    direct.append_compile_time_args_to(direct_ct);
+    // The direct-Program adapter requires a uniform prefix, so pad as the descriptor adapter does.
     for (auto& [core, args] : direct_rt) {
         args.resize(rt_offset, 0u);
-        direct.append_runtime_args_to(args, core);
     }
-    EXPECT_EQ(direct_ct, kernel.compile_time_args);
+    tt::tt_metal::DataMovementConfig direct_config{.compile_args = direct_ct};
+    direct.attach(program, receivers, direct_config, "channel", direct_rt);
+    EXPECT_EQ(direct_config.compile_args, kernel.compile_time_args);
     EXPECT_EQ(direct_rt, kernel.runtime_args);
     EXPECT_EQ(kernel.runtime_args.front().second.at(1), 0u);
 
@@ -401,7 +401,7 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     channel.attach(spec, args, "channel", targets);
     EXPECT_EQ(spec.semaphores.size(), 2u);
     const auto& spec_kernel = spec.kernels.front();
-    const auto spec_ct_base = spec_kernel.compile_time_args.get("channel_mcast_ct_base").value();
+    const auto spec_ct_base = spec_kernel.compile_time_args.get("channel_mcast_ct_base").value().to_uint32();
     EXPECT_EQ(
         wire::decode_compile_time_metadata(
             spec_kernel.advanced_options.compile_time_varargs.data() + spec_ct_base, false)
@@ -547,8 +547,8 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
         .work_units = {{.name = "mixed", .kernels = {targets.front()}, .target_nodes = receivers}}};
     m2::ProgramRunArgs args;
     channel.attach(spec, args, "channel", targets);
-    auto workload = m2::MakeMeshWorkloadFromSpec(device, spec);
-    auto* physical = device.get_devices().front();
+    m2::distributed::MeshWorkload workload(device, spec);
+    auto* physical = device.impl().get_devices().front();
     for (uint32_t run = 0; run < 3; ++run) {
         auto invocation = args;
         const uint32_t seed = 73 + 101 * run;
@@ -562,7 +562,7 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
             tt::tt_metal::detail::WriteToDeviceL1(physical, core, report_addr, zero);
         }
         for (auto& [region, program] : workload.get_programs()) {
-            m2::SetProgramRunArgs(program, invocation);
+            program.set_program_run_args(invocation);
         }
         EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
         for (const auto& core : corerange_to_cores(receivers)) {

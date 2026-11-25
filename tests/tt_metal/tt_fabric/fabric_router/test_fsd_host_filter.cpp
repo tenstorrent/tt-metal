@@ -10,8 +10,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -74,6 +76,31 @@ FSD make_fsd(const std::vector<std::string>& hostnames) {
 ::tt::tt_metal::PhysicalSystemDescriptor descriptor_for(const std::vector<std::string>& hostnames) {
     return ::tt::tt_metal::PhysicalSystemDescriptor(build_physical_descriptor(make_fsd(hostnames)));
 }
+
+// Saves one environment variable on construction and puts it back on destruction, so a test that flips
+// it cannot leak its value into later tests in the same process, even when an assertion fails early.
+class ScopedEnv {
+public:
+    explicit ScopedEnv(const char* name) : name_(name) {
+        const char* value = std::getenv(name);
+        if (value != nullptr) {
+            saved_ = value;
+        }
+    }
+    ~ScopedEnv() {
+        if (saved_.has_value()) {
+            setenv(name_, saved_->c_str(), 1);
+        } else {
+            unsetenv(name_);
+        }
+    }
+    ScopedEnv(const ScopedEnv&) = delete;
+    ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+private:
+    const char* name_;
+    std::optional<std::string> saved_;
+};
 
 // A temp file holding an FSD textproto, so the path-taking API can be exercised.
 class FsdFile {
@@ -399,6 +426,72 @@ TEST(FsdChipsAbsentFromLive, TheMessageIsDeterministic) {
             }
         }
     }
+}
+
+// Under a visible-device allocation the job owns a chip subset of its hosts. The chips the factory
+// descriptor has beyond live are then outside the job, like a non-allocated host, and are filtered out
+// rather than fatal; the cable between them goes with them.
+TEST(FsdChipsAbsentFromLive, AVisibleDeviceAllocationFiltersTheChipsTheJobDoesNotOwn) {
+    const FsdFile file(make_fsd_with_extra_asic({"hosta", "hostb"}), "fhf_allocation.textproto");
+    const auto live = descriptor_for({"hosta", "hostb"});
+
+    const auto hosts = fsd_host_filter_from_live(file.path(), live);
+    FilterReport report;
+    const auto fsd = build_physical_descriptor_from_file(file.path(), hosts, &report, live_allocation(live));
+
+    EXPECT_NO_THROW(throw_on_fsd_chips_absent_from_live(fsd, live));
+    EXPECT_EQ(report.dropped_asic_count, 2u);
+    EXPECT_EQ(report.dropped_connection_count, 1u);
+    EXPECT_EQ(fsd.get_asic_descriptors().size(), live.get_asic_descriptors().size());
+    for (const auto& [node_id, unused_asic_id] : fsd.physical_node_to_asic_id()) {
+        (void)unused_asic_id;
+        EXPECT_TRUE(live.physical_node_to_asic_id().contains(node_id)) << node_id;
+    }
+}
+
+// The allocation filter is opt-in to a device subset, not a relaxation of the check: the same pair without
+// it is still fatal.
+TEST(FsdChipsAbsentFromLive, WithoutADeviceSubsetTheExtraChipsStayFatal) {
+    const FsdFile file(make_fsd_with_extra_asic({"hosta", "hostb"}), "fhf_no_allocation.textproto");
+    const auto live = descriptor_for({"hosta", "hostb"});
+
+    const auto hosts = fsd_host_filter_from_live(file.path(), live);
+    const auto fsd = build_physical_descriptor_from_file(file.path(), hosts);
+
+    EXPECT_THROW(throw_on_fsd_chips_absent_from_live(fsd, live), std::runtime_error);
+}
+
+// An empty allocation means no filter, so a caller that is not on a device subset can pass it through.
+TEST(FsdChipsAbsentFromLive, AnEmptyAllocationKeepsEveryChip) {
+    const FsdFile file(make_fsd_with_extra_asic({"hosta", "hostb"}), "fhf_empty_allocation.textproto");
+    const auto live = descriptor_for({"hosta", "hostb"});
+
+    FilterReport report;
+    const auto fsd = build_physical_descriptor_from_file(file.path(), {"hosta", "hostb"}, &report, {});
+
+    EXPECT_EQ(report.dropped_asic_count, 0u);
+    EXPECT_EQ(fsd.get_asic_descriptors().size(), live.get_asic_descriptors().size() + 2);
+}
+
+// The decision follows the environment: either variable marks a device subset, an empty one does not.
+TEST(FsdChipsAbsentFromLive, TheDeviceSubsetDecisionFollowsTheEnvironment) {
+    const auto& world = ::tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const ScopedEnv umd_guard("TT_VISIBLE_DEVICES");
+    const ScopedEnv metal_guard("TT_METAL_VISIBLE_DEVICES");
+
+    unsetenv("TT_VISIBLE_DEVICES");
+    unsetenv("TT_METAL_VISIBLE_DEVICES");
+    EXPECT_FALSE(agree_job_runs_on_device_subset(*world));
+
+    setenv("TT_VISIBLE_DEVICES", "", 1);
+    EXPECT_FALSE(agree_job_runs_on_device_subset(*world));
+
+    setenv("TT_VISIBLE_DEVICES", "0,1", 1);
+    EXPECT_TRUE(agree_job_runs_on_device_subset(*world));
+
+    unsetenv("TT_VISIBLE_DEVICES");
+    setenv("TT_METAL_VISIBLE_DEVICES", "0", 1);
+    EXPECT_TRUE(agree_job_runs_on_device_subset(*world));
 }
 
 // Host spelling does not decide whether a chip is present.

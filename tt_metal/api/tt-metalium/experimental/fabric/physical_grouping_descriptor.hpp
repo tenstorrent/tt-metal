@@ -524,6 +524,7 @@ private:
 
         bool relaxed = false;
         bool drop_host_cap = false;
+        bool soft_seams = false;  // seam softness the live session currently solves with (toggled in-session)
 
     private:
         SatPlacementEnumerationSession* owner_ = nullptr;

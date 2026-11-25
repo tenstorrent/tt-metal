@@ -31,6 +31,10 @@ KvChunkAddressTable import_from_protobuf_file(const std::string& path);
 // reads a chunk over a bare tt::umd::Cluster; chip selected
 // by ASIC unique_id, noc_addr = (dram_view << 32) | local_addr.
 std::vector<uint8_t> read_dram_umd(uint64_t unique_id, uint64_t noc_addr, uint32_t size_bytes);
+std::vector<uint8_t> read_dram_umd_batch(
+    const std::vector<uint64_t>& unique_ids,
+    const std::vector<uint64_t>& noc_addrs,
+    const std::vector<uint32_t>& sizes_bytes);
 }  // namespace tt::tt_metal::internal::disaggregation
 
 namespace ttnn::disaggregation {
@@ -71,6 +75,17 @@ void bind_disaggregation_api(nb::module_& mod) {
         .def_rw("size_bytes", &KvCacheLocation::size_bytes, "Size of the KV cache chunk in bytes.")
         .def_rw("device_group_index", &KvCacheLocation::device_group_index, "Index into the device group table.");
 
+    // KvChunkTensorType - Cached tensor kind (maps 1:1 onto a TemporalPolicy alternative)
+    nb::enum_<KvChunkTensorType>(mod, "KvChunkTensorType", R"(
+        What kind of cached tensor a config's chunks belong to.
+        Each value corresponds to one TemporalPolicy alternative.
+    )")
+        .value("Kv", KvChunkTensorType::Kv, "Dense: full KV / MLA latent over [0, prefix_len).")
+        .value(
+            "Snapshot",
+            KvChunkTensorType::Snapshot,
+            "None: fixed-size state keyed by the prefix_len it was snapshotted at (SSM / KDA state).");
+
     // KvChunkAddressTableConfig - Configuration struct
     nb::class_<KvChunkAddressTableConfig>(mod, "KvChunkAddressTableConfig", R"(
         Configuration for constructing a KvChunkAddressTable.
@@ -90,7 +105,11 @@ void bind_disaggregation_api(nb::module_& mod) {
         .def_rw(
             "chunk_size_bytes",
             &KvChunkAddressTableConfig::chunk_size_bytes,
-            "Physical size of one chunk in bytes. Default: 19584 (18 x 1088 bfp8 tiles)");
+            "Physical size of one chunk in bytes. Default: 19584 (18 x 1088 bfp8 tiles)")
+        .def_rw(
+            "tensor_type",
+            &KvChunkAddressTableConfig::tensor_type,
+            "Cached tensor kind for this config's chunks. Default: KvChunkTensorType.Kv");
 
     // ChunkCompression - per-config in-memory / on-wire representation
     nb::enum_<ChunkCompression>(mod, "ChunkCompression", R"(
@@ -489,7 +508,11 @@ void bind_disaggregation_api(nb::module_& mod) {
     mod.def(
         "read_dram_umd",
         [](uint64_t unique_id, uint64_t noc_addr, uint32_t size_bytes) {
-            auto buf = tt::tt_metal::internal::disaggregation::read_dram_umd(unique_id, noc_addr, size_bytes);
+            std::vector<uint8_t> buf;
+            {
+                nb::gil_scoped_release release;
+                buf = tt::tt_metal::internal::disaggregation::read_dram_umd(unique_id, noc_addr, size_bytes);
+            }
             return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
         },
         nb::arg("unique_id"),
@@ -500,6 +523,26 @@ void bind_disaggregation_api(nb::module_& mod) {
         server. Uses a bare tt::umd::Cluster, selecting the chip by ASIC unique_id and the DRAM
         view/offset from noc_addr = (dram_view << 32) | local_addr. Mirrors the migration worker's device_io
         read path.
+        )");
+    mod.def(
+        "read_dram_umd_batch",
+        [](const std::vector<uint64_t>& unique_ids,
+           const std::vector<uint64_t>& noc_addrs,
+           const std::vector<uint32_t>& sizes_bytes) {
+            std::vector<uint8_t> buf;
+            {
+                nb::gil_scoped_release release;
+                buf = tt::tt_metal::internal::disaggregation::read_dram_umd_batch(unique_ids, noc_addrs, sizes_bytes);
+            }
+            return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
+        },
+        nb::arg("unique_ids"),
+        nb::arg("noc_addrs"),
+        nb::arg("sizes_bytes"),
+        R"(
+        read_dram_umd over many chunks in one call, returned concatenated in input order. Chunks on
+        different chips are read concurrently and the GIL is released for the whole batch, so host-side
+        work (decode, PCC) can overlap it from another Python thread.
         )");
 }
 

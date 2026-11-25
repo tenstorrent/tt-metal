@@ -8,7 +8,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <utility>
 #include <vector>
 #include <string>
@@ -38,17 +38,34 @@ namespace tt::tt_metal::internal {
 // Exact 2D mesh shape is runtime routing metadata; configuration-wide header sizing and express
 // capacity are injected automatically when the kernel is created.
 std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
+
+// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
+std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
 
 // Number of runtime-argument words emitted for the given connection count in the
-// currently opened fabric context.
-size_t fabric_connection_rt_args_size(size_t num_connections);
+// fabric context of `mesh_device`.
+size_t fabric_connection_rt_args_size(const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t num_connections);
 
 // Compute fabric connection RT args without any PD mutation.
 // Pure computation — resolves routing + assembles RT args; the semaphore values are copied
 // through verbatim. sem_args_are_l1_addresses says they are raw L1 addresses rather than
 // program semaphore ids, which is checked here.
 // Returns flat vector matching RoutingPlaneConnectionManager::build_from_args() layout.
+std::vector<uint32_t> compute_fabric_connection_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    const std::vector<uint32_t>& teardown_sem_args,
+    const std::vector<uint32_t>& buffer_index_sem_args,
+    bool sem_args_are_l1_addresses = false);
+
+// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
@@ -62,6 +79,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 // (e.g., blaze eager-compile model). Allocates semaphores and computes RT args only.
 template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_rt_args_no_defines(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,

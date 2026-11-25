@@ -50,6 +50,13 @@ void validate_tensors(
     validate_input_with_dim(input, operation_attributes.dim);
 
     if (output.has_value()) {
+        // The program factory is chosen from the input dtype but sizes its buffers from the output dtype, so an
+        // output of another dtype would be read and written in the wrong format.
+        TT_FATAL(
+            output->dtype() == input.dtype(),
+            "moreh_sum output dtype ({}) must match the input dtype ({})",
+            output->dtype(),
+            input.dtype());
         validate_output_with_keepdim(input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
     }
 }

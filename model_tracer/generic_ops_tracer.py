@@ -43,6 +43,7 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 from model_tracer.mesh_metadata import infer_device_count, infer_mesh_shape
+from model_tracer.object_addresses import strip_object_addresses as _strip_object_addresses
 
 
 def get_base_dir():
@@ -584,21 +585,6 @@ def _sanitize_object_addresses(obj):
                 obj[i] = _strip_object_addresses(item)
             elif isinstance(item, (dict, list)):
                 _sanitize_object_addresses(item)
-
-
-_OBJECT_ADDR_RE = re.compile(r" at 0x[0-9a-fA-F]+")
-
-
-def _strip_object_addresses(value):
-    """Strip Python object memory addresses from a string value.
-
-    Converts e.g. '<ttnn._ttnn.global_semaphore.global_semaphore object at 0x782ac28d15f0>'
-    to '<ttnn._ttnn.global_semaphore.global_semaphore object>' so that
-    runtime pointer values don't affect deduplication or hashing.
-    """
-    if isinstance(value, str):
-        return _OBJECT_ADDR_RE.sub("", value)
-    return value
 
 
 _SHAPE_RE = re.compile(r"^Shape\(\[([0-9,\s]+)\]\)$")
@@ -1246,7 +1232,7 @@ def run_test_with_tracing(
         metadata["software_versions"] = software_versions
 
     # Check for HF_MODEL and LLAMA_DIR environment variables
-    if "models/tt_transformers/demo/simple_text_demo.py" in test_path:
+    if "models/ttt_compat/demo/simple_text_demo.py" in test_path:
         hf_model = os.environ.get("HF_MODEL")
         llama_dir = os.environ.get("LLAMA_DIR")
         if hf_model:
@@ -1744,9 +1730,9 @@ Examples (Import existing traces):
                     test_source = os.path.relpath(test_source, BASE_DIR)
 
                 # Check for HF_MODEL and LLAMA_DIR environment variables and append if set
-                # Only capture for models/tt_transformers/demo/simple_text_demo.py
+                # Only capture for models/ttt_compat/demo/simple_text_demo.py
                 # This helps identify which specific HuggingFace model or Llama directory was used
-                if "models/tt_transformers/demo/simple_text_demo.py" in test_source:
+                if "models/ttt_compat/demo/simple_text_demo.py" in test_source:
                     hf_model = os.environ.get("HF_MODEL")
                     llama_dir = os.environ.get("LLAMA_DIR")
 

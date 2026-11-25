@@ -1,0 +1,202 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+name: Cachew checkout
+description: Cache Git checkout and later dependency fetches, with immediate upstream fallback.
+inputs:
+  repository:
+    description: Repository in owner/name form.
+    default: ${{ github.repository }}
+  ref:
+    description: Branch, tag or SHA. Defaults to the event ref for this repository, otherwise the default branch.
+  token:
+    description: GitHub token used by checkout. Upstream receives it only to resolve branch and tag names.
+    default: ${{ github.token }}
+  ssh-key:
+    description: SSH private key. SSH checkout bypasses cachew.
+  ssh-known-hosts:
+    description: Additional SSH known_hosts entries.
+  ssh-strict:
+    description: Enable strict SSH host checking.
+    default: 'true'
+  ssh-user:
+    description: User for SSH transport.
+    default: 'git'
+  persist-credentials:
+    description: >-
+      Persist upstream credentials as actions/checkout does: a RUNNER_TEMP credentials file
+      included from the repository configuration. The runner deletes RUNNER_TEMP at job end;
+      a fallback actions/checkout also removes it in its post step.
+    default: 'true'
+  path:
+    description: Checkout directory relative to GITHUB_WORKSPACE.
+  clean:
+    description: Clean and reset an existing checkout before fetching.
+    default: 'true'
+  filter:
+    description: Partial-clone filter for the main repository, as in standard checkout. Cachew fetches the complete tip and the filtered history.
+  sparse-checkout:
+    description: Newline-separated sparse checkout patterns. Implies filter blob:none; with submodules, bypasses cachew.
+  sparse-checkout-cone-mode:
+    description: Use cone mode for sparse checkout.
+    default: 'true'
+  fetch-depth:
+    description: History depth. Zero fetches all branches, tags and history.
+    default: '1'
+  fetch-tags:
+    description: Fetch tags even with limited history depth.
+    default: 'false'
+  show-progress:
+    description: Show standard checkout fetch progress.
+    default: 'true'
+  lfs:
+    description: Download Git LFS objects. LFS checkout bypasses cachew.
+    default: 'false'
+  submodules:
+    description: false, true for direct submodules, or recursive.
+    default: 'false'
+  set-safe-directory:
+    description: Add the checkout path to the Git safe.directory configuration.
+    default: 'true'
+  github-server-url:
+    description: Upstream GitHub origin. Defaults to GITHUB_SERVER_URL.
+  cachew:
+    description: >-
+      auto (default) uses cachew only on self-hosted Linux runners and is a strict no-op
+      elsewhere: no probe, no token, no Git wrapper and no configuration change.
+      false always runs plain actions/checkout against upstream; if an earlier checkout
+      in the job already activated cachew, it stays active for later steps. true also
+      tries cachew on other Linux runners. A CACHEW_CHECKOUT=false environment variable
+      disables it too.
+    default: 'auto'
+  cachew-url:
+    description: >-
+      Cachew HTTPS origin, or auto to probe the trusted origins in trusted_caches.json and
+      use the first healthy one (only the runner's own cluster answers on the CI VLAN).
+    default: 'auto'
+  cachew-health-timeout:
+    description: 'Seconds to wait for each unauthenticated /_liveness probe.'
+    default: '2'
+  cachew-fetch-timeout:
+    description: 'Seconds without transfer progress before a cache fetch is abandoned for upstream.'
+    default: '120'
+outputs:
+  ref:
+    description: The branch, tag or SHA checked out, as actions/checkout reports it.
+    value: ${{ steps.cachew.outputs.checked-out == 'true' && steps.cachew.outputs.ref || steps.checkout.outputs.ref }}
+  commit:
+    description: The checked out commit SHA.
+    value: ${{ steps.cachew.outputs.checked-out == 'true' && steps.cachew.outputs.commit || steps.checkout.outputs.commit }}
+  cachew-configured:
+    description: Whether job-global caching is active for later dependency fetches.
+    value: ${{ steps.configure.outputs.configured || 'false' }}
+  cachew-checked-out:
+    description: Whether cachew produced the complete checkout, so actions/checkout did not run.
+    value: ${{ steps.cachew.outputs.checked-out || 'false' }}
+runs:
+  using: composite
+  steps:
+    # The gate is evaluated by the runner, before any process starts. On
+    # GitHub-hosted runners (no access to the CI VLAN) every cachew step is
+    # skipped and only the official checkout below runs, exactly as before.
+    # Once an earlier checkout activated a session, this step also runs with
+    # cachew disabled: the job-wide rewrite and Git wrapper are already in place,
+    # and only prepare takes them out of this checkout's way.
+    - name: Prepare isolated upstream Git configuration
+      id: session
+      if: >-
+        runner.os == 'Linux' && (env.CACHEW_SESSION_DIR != '' || (env.CACHEW_CHECKOUT != 'false' &&
+        inputs.cachew != 'false' && (inputs.cachew == 'true' || runner.environment == 'self-hosted')))
+      shell: bash
+      env:
+        CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
+        CACHEW_TEST_ALLOW_LOOPBACK_HTTP: ''
+        CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
+        CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
+        CACHEW_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}
+        CACHEW_REPOSITORY: ${{ inputs.repository }}
+      # Runs from this action's own directory: the consumer's pin to this action
+      # is the only pin. There is no post step; the runner empties RUNNER_TEMP,
+      # and with it the session, when the job completes.
+      run: bash "$GITHUB_ACTION_PATH/session/prepare.sh"
+    - name: Checkout from cachew
+      id: cachew
+      if: steps.session.outputs.ready == 'true' && env.CACHEW_CHECKOUT != 'false' && inputs.cachew != 'false'
+      continue-on-error: true
+      shell: bash
+      env:
+        CACHEW_ACTION_PATH: ${{ github.action_path }}
+        CACHEW_REPOSITORY: ${{ inputs.repository }}
+        CACHEW_REF: ${{ inputs.ref }}
+        CACHEW_TOKEN: ${{ inputs.token }}
+        CACHEW_SSH_KEY_SET: ${{ inputs.ssh-key != '' }}
+        CACHEW_SSH_KNOWN_HOSTS: ${{ inputs.ssh-known-hosts }}
+        CACHEW_SSH_STRICT: ${{ inputs.ssh-strict }}
+        CACHEW_SSH_USER: ${{ inputs.ssh-user }}
+        CACHEW_PERSIST_CREDENTIALS: ${{ inputs.persist-credentials }}
+        CACHEW_PATH: ${{ inputs.path }}
+        CACHEW_CLEAN: ${{ inputs.clean }}
+        CACHEW_FILTER: ${{ inputs.filter }}
+        CACHEW_SPARSE_CHECKOUT: ${{ inputs.sparse-checkout }}
+        CACHEW_SPARSE_CHECKOUT_CONE_MODE: ${{ inputs.sparse-checkout-cone-mode }}
+        CACHEW_FETCH_DEPTH: ${{ inputs.fetch-depth }}
+        CACHEW_FETCH_TAGS: ${{ inputs.fetch-tags }}
+        CACHEW_SHOW_PROGRESS: ${{ inputs.show-progress }}
+        CACHEW_LFS: ${{ inputs.lfs }}
+        CACHEW_SUBMODULES: ${{ inputs.submodules }}
+        CACHEW_SET_SAFE_DIRECTORY: ${{ inputs.set-safe-directory }}
+        CACHEW_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}
+        CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
+        CACHEW_TEST_ALLOW_LOOPBACK_HTTP: ''
+        CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
+        CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
+      run: |
+        if command -v python3 >/dev/null 2>&1; then
+          python3 "$CACHEW_ACTION_PATH/checkout.py" || echo "Cachew checkout unavailable; continuing with upstream checkout."
+        else
+          echo "python3 unavailable; continuing with upstream checkout."
+        fi
+    # Only when cachew did not produce the complete checkout: skipped session,
+    # unsupported mode, existing checkout, or any cache or local failure.
+    - name: Checkout from upstream
+      id: checkout
+      if: steps.cachew.outputs.checked-out != 'true'
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.ref }}
+        token: ${{ inputs.token }}
+        ssh-key: ${{ inputs.ssh-key }}
+        ssh-known-hosts: ${{ inputs.ssh-known-hosts }}
+        ssh-strict: ${{ inputs.ssh-strict }}
+        ssh-user: ${{ inputs.ssh-user }}
+        persist-credentials: ${{ inputs.persist-credentials }}
+        path: ${{ inputs.path }}
+        clean: ${{ inputs.clean }}
+        filter: ${{ inputs.filter }}
+        sparse-checkout: ${{ inputs.sparse-checkout }}
+        sparse-checkout-cone-mode: ${{ inputs.sparse-checkout-cone-mode }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+        fetch-tags: ${{ inputs.fetch-tags }}
+        show-progress: ${{ inputs.show-progress }}
+        lfs: ${{ inputs.lfs }}
+        submodules: ${{ inputs.submodules }}
+        set-safe-directory: ${{ inputs.set-safe-directory }}
+        github-server-url: ${{ inputs.github-server-url }}
+    - name: Configure job-global cachew Git transport
+      id: configure
+      if: steps.session.outputs.ready == 'true'
+      shell: bash
+      env:
+        CACHEW_ACTION_PATH: ${{ github.action_path }}
+        CACHEW_AVAILABLE: ${{ steps.cachew.outputs.available || 'unknown' }}
+        CACHEW_SELECTED_URL: ${{ steps.cachew.outputs.cache-url }}
+        CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
+        CACHEW_TEST_ALLOW_LOOPBACK_HTTP: ''
+        CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
+        CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
+        CACHEW_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}
+        CACHEW_REPOSITORY: ${{ inputs.repository }}
+        CACHEW_PATH: ${{ inputs.path }}
+        CACHEW_TOKEN: ${{ inputs.token }}
+        CACHEW_PERSIST_CREDENTIALS: ${{ inputs.persist-credentials }}
+      run: '"$CACHEW_NODE" "$CACHEW_CONFIG_HELPER" activate'

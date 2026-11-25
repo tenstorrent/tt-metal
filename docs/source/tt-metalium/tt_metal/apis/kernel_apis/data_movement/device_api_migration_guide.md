@@ -13,6 +13,9 @@ This guide helps developers migrate from legacy data movement APIs to the new De
    - [Circular Buffer Operations](#circular-buffer-operations)
    - [Semaphore Operations](#semaphore-operations)
    - [Memory Access](#memory-access)
+     - [Local-to-Local Copies (NoC Loopback)](#local-to-local-copies-noc-loopback)
+     - [Addressing a Tensor by Page or Shard](#addressing-a-tensor-by-page-or-shard)
+     - [Addressing a Tensor by Bank](#addressing-a-tensor-by-bank)
    - [Zeroing Memory](#zeroing-memory)
 5. [Complete Migration Examples](#complete-migration-examples)
 6. [Troubleshooting](#troubleshooting)
@@ -74,8 +77,9 @@ CoreLocalMem<uint32_t> mem(address);
 mem[0] = value;              // Array-style access
 auto val = *mem;             // Dereference
 mem++;                       // Pointer arithmetic
-auto addr = mem.get_address();
 ```
+
+`CoreLocalMem<T>` (like `Scratchpad<T>` and `LocalTensorAccessor<T>`) does not expose its raw address; see [Raw Addresses](#raw-addresses).
 
 ### `Semaphore`
 
@@ -95,7 +99,11 @@ Endpoints are used as sources or destinations for the `Noc` interface. Depending
 
 - `UnicastEndpoint` - For unicast NoC addresses
 - `MulticastEndpoint` - For multicast NoC addresses
-- `AllocatorBank<AllocatorBankType>` - For DRAM/L1 bank addressing
+- `TensorAccessor` / `PageView(accessor)` - For a tensor by page id: `{.page_id, .offset_bytes}`. The default for tensor transfers
+- `ShardView(accessor)` - For a sharded tensor by shard id: `{.shard_id, .offset_bytes}`
+- `ShardView::ResolvedShard` (from `ShardView(accessor).shard(shard_id, noc)`) - One shard of a tensor, looked up once: `{.offset_bytes}`. See [Addressing a Tensor by Page or Shard](#addressing-a-tensor-by-page-or-shard) for when to use each
+- `BankView(accessor)` - For a tensor by allocator bank: `{.bank_id, .offset_bytes}`; see [Addressing a Tensor by Bank](#addressing-a-tensor-by-bank)
+- `AllocatorBank<AllocatorBankType>` - Legacy raw bank addressing (`{.bank_id, .addr}` with an absolute bank address), for buffers not bound as a tensor. Prefer `BankView`.
 
 ---
 
@@ -501,12 +509,119 @@ CoreLocalMem<uint32_t> mem(base_addr);
 // Navigate through memory
 auto mid = mem + offset;           // Offset by elements
 auto diff = mid - mem;             // Difference in elements
-auto addr = mid.get_address();     // Get raw address
 
 // Iteration
 for (auto ptr = mem; ptr < end; ++ptr) {
     *ptr = value;
 }
+```
+
+#### Raw Addresses
+
+`CoreLocalMem<T>`, `Scratchpad<T>` and `LocalTensorAccessor<T>` have no raw-address getter. Instead of extracting the address:
+
+- **Element access:** `mem[i]`, `*mem`, `mem->field`. Use `&mem[i]` where an API needs a `T*` (e.g. `__atomic_*` builtins).
+- **Pointer arithmetic:** `pad.local_mem()` returns the region as a `CoreLocalMem<T>`, so `pad.local_mem() + i` points at element `i`.
+- **NoC transfers:** pass the handle itself as either endpoint, with `{.offset_bytes = off}` (bytes). See [Local-to-Local Copies](#local-to-local-copies-noc-loopback) for copies within this core.
+
+#### Local-to-Local Copies (NoC Loopback)
+
+To copy between two buffers in this core's L1 using the NoC, pass the local handles (`CoreLocalMem<T>`, `Scratchpad<T>`, `LocalTensorAccessor<T>`) directly as both endpoints. Do **not** build a loopback `UnicastEndpoint` from this core's own coordinates (`{.noc_x = my_x[...], .noc_y = my_y[...], .addr = ...}`): that needs the raw address, and the handle already says it is local.
+
+A local handle means "this core's L1" in either position:
+- **Local side** (write source / read destination): the handle's L1 address.
+- **NoC side** (read source / write destination): the same region addressed through the NoC from this core, i.e. a loopback.
+
+A `DataflowBuffer` / `CircularBuffer` can be the local side of such a copy, but not the NoC side.
+
+**Legacy API** (loopback read out of a scratchpad into a CB):
+```cpp
+uint32_t pad_addr = ...;
+noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], pad_addr + off), get_write_ptr(cb_id), size_bytes);
+```
+
+**Avoid** (Device 2.0 API, but hand-built loopback endpoint):
+```cpp
+noc.async_read(UnicastEndpoint{}, dfb, size_bytes,
+               {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = pad_addr + off}, {});
+```
+
+**New API:**
+```cpp
+Scratchpad<uint32_t> pad(scratch::my_pad);
+noc.async_read(pad, dfb, size_bytes, {.offset_bytes = off}, {});          // pad -> DFB entry
+noc.async_write(dfb, pad, size_bytes, {}, {.offset_bytes = off});         // DFB entry -> pad
+noc.async_read(pad, CoreLocalMem<uint32_t>(dst_addr), size_bytes, {}, {}); // pad -> any local region
+```
+
+#### Addressing a Tensor by Page or Shard
+
+Pass the tensor's accessor (or a view of it) as the NoC side of a transfer, rather than a NoC address built from
+core coordinates and the tensor's base address. The accessor knows where each page and shard lives, and the transfer is
+recorded for op-to-op R/W inference. Pick the form by how the kernel's work is organized:
+
+| Endpoint | Transfer args | Use when |
+|---|---|---|
+| `accessor` or `PageView(accessor)` | `{.page_id, .offset_bytes}` | The kernel works in pages. This is the default: the same kernel works for interleaved and sharded tensors. A transfer stays inside one page. |
+| `ShardView(accessor)` | `{.shard_id, .offset_bytes}` | The kernel is built around shard ownership: it gathers from or scatters to the cores that own the tensor's shards, and moves byte ranges within a shard that are not whole pages (part of a page, or a run of pages in one transfer, which is valid because a shard is contiguous on its core). Each transfer typically names a different shard. Sharded tensors only. |
+| `ShardView::ResolvedShard`, from `ShardView(accessor).shard(shard_id, noc)` | `{.offset_bytes}` | As for `ShardView`, but the kernel makes many transfers into the same shard. The shard is looked up once, when the kernel moves onto it, and each transfer only adds its offset. |
+
+- `offset_bytes` must stay inside the page (`PageView`) or the shard (`ShardView`, `ShardView::ResolvedShard`).
+- A `ShardView::ResolvedShard` is valid only on the NoC it was looked up for, can only be the NoC side of a transfer, and does
+  not expose its address.
+- When each transfer names a different shard, use `ShardView` rather than a `ShardView::ResolvedShard` per transfer: on Quasar,
+  `ShardView` lookups can be served by the hardware address generator.
+
+**Legacy API** (host sends each shard core's coordinates; the kernel adds the tensor's base address):
+```cpp
+uint64_t src = get_noc_addr(shard_x[s], shard_y[s], in_base_addr + offset);
+noc_async_read(src, l1_dst_addr, size_bytes);
+```
+
+**New API**, one transfer per shard:
+```cpp
+const auto in = TensorAccessor(tensor::in);
+const ShardView in_shards(in);
+noc.async_read(in_shards, dst, size_bytes, {.shard_id = s, .offset_bytes = offset}, {});
+```
+
+**New API**, many transfers into each shard:
+```cpp
+const auto in = TensorAccessor(tensor::in);
+const ShardView in_shards(in);
+const auto shard = in_shards.shard(s, noc.get_noc_id());  // looked up once
+for (uint32_t i = 0; i < n; ++i) {
+    noc.async_read(shard, dst[i], size_bytes, {.offset_bytes = offset + i * stride}, {});
+}
+```
+
+#### Addressing a Tensor by Bank
+
+When a kernel already works in allocator banks (for example the host hands it a bank id and an offset per transfer, as
+DRAM-sharded matmul and reshard do), address the tensor with `BankView`. Pass the bank id and the byte offset **into the
+tensor** in that bank. The bank's location (an L1 bank's worker core, or a DRAM bank and its per-bank offset) comes from
+the bank tables, and the tensor's memory type selects L1 vs DRAM. The kernel never handles the tensor's base address
+or DRAM coordinates. `BankView` can only be the NoC side of a transfer, and it works with the stateful
+`set_async_read_state` / `async_read_with_state` calls.
+
+**Legacy API:**
+```cpp
+uint32_t base = ...;  // tensor base address
+uint64_t src = get_noc_addr_from_bank_id<true>(bank_id, base + offset);
+noc_async_read(src, l1_dst_addr, size_bytes);
+```
+
+**Avoid** (Device 2.0 API, but a raw bank address):
+```cpp
+AllocatorBank<AllocatorBankType::DRAM> bank;
+noc.async_read(bank, dst, size_bytes, {.bank_id = bank_id, .addr = base + offset}, {});
+```
+
+**New API:**
+```cpp
+const auto in1 = TensorAccessor(tensor::in1);
+const BankView in1_bank(in1);
+noc.async_read(in1_bank, dst, size_bytes, {.bank_id = bank_id, .offset_bytes = offset}, {});
 ```
 
 ---
@@ -544,9 +659,8 @@ dfb.push_back(1);
 | `dst` | base |
 |---|---|
 | `CircularBuffer` / `DataflowBuffer` | `get_write_ptr()` |
-| `Scratchpad<T>` | `get_base_address()` |
-| `LocalTensorAccessor<T>` | `get_bank_base_address()` |
-| `CoreLocalMem<T>` | `get_address()` |
+| `Scratchpad<T>` / `LocalTensorAccessor<T>` | start of the local region |
+| `CoreLocalMem<T>` | where the handle points |
 
 `offset_bytes` is in **bytes** for every type, including the typed handles whose `operator[]` indexes in elements.
 

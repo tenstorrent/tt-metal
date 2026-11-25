@@ -231,7 +231,9 @@ def mesh() -> Mesh:
     return _mesh
 
 
-def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
+def sync_gradients(
+    parameters, axis_names: tuple[str, ...] = ("dp",), *, reduce_dtype: ttnn.DataType | None = None
+) -> None:
     """Average parameter gradients across one or more mesh axes.
 
     For each parameter with an initialized gradient, the grad is all-reduced
@@ -242,49 +244,33 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
     silently skipped — if none are present (or ``axis_names`` is empty, or
     no mesh is open), the function is a no-op. The default ``("dp",)``
     matches the common DDP case. TP is intentionally excluded: sharded
-    parameters already hold per-shard-correct grads, and replicated
-    parameters see identical inputs on every TP rank so their grads match
-    without a reduce.
+    parameters already hold per-shard-correct grads, and a layer whose
+    replicated parameter gets a TP-partial grad must sum it across TP itself
+    (e.g. ``lora_A`` in ``LoraColumnParallelLinear``). Nothing enforces this;
+    see #63970 for a known violation.
 
-    FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
-    mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
-    backward hook already reduce-scattered the grad into shard shape.
+    The sum is ``ttml.core.distributed.synchronize_gradients`` along the listed
+    axes, which skips, for each parameter, any axis its value is sharded on.
+    That covers ``ttml.fsdp.fully_shard``: its backward hook reduce-scatters the
+    grad into shard shape and reinstalls the Shard-labelled shard as the value.
 
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
         axis_names: Tuple of mesh axis names to reduce over.
+        reduce_dtype: The dtype the gradients are summed in, as ``ttml.core.distributed.synchronize_tensor`` takes
+            it: ``ttnn.DataType.FLOAT32`` sums in fp32 and casts the mean back to the gradient's dtype. ``None`` takes
+            the training config's ``precision.reduce_dtype``, which ``create_optimizer`` stores
+            (``AutoContext.get_gradient_reduce_dtype``); with no default set either, it sums in each gradient's own
+            dtype.
     """
+    ttml.core.distributed.check_reduce_dtype(reduce_dtype)
     m = maybe_mesh()
     if m is None or not axis_names:
         return
 
-    axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name))
+    # An axis of one device has nothing to average over.
+    axes = [m.axis_index(name) for name in axis_names if m.has_axis(name)]
+    axes = [a for a in axes if m.shape[a] > 1]
     if not axes:
         return
-
-    for _, param in parameters.items():
-        if not param.is_grad_initialized():
-            continue
-
-        # Drop axes on which this particular parameter is FSDP-sharded
-        axes_for_param = tuple(a for a in axes if not _param_is_fsdp_sharded(param, a))
-        if not axes_for_param:
-            continue
-
-        scaler = prod(m.shape[axis] for axis in axes_for_param)
-        if scaler == 1:
-            continue
-        inv_scaler = 1.0 / float(scaler)
-
-        grad = param.get_grad()
-        for axis in axes_for_param:
-            grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
-        grad = ttnn.multiply(grad, inv_scaler)
-        param.set_grad(grad)
-
-
-def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
-    """True if ``param`` is FSDP-sharded on the given mesh axis."""
-    if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
-        return True
-    return False
+    ttml.core.distributed.synchronize_gradients(parameters, axes, reduce_dtype=reduce_dtype)

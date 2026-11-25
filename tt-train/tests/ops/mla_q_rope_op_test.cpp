@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -17,6 +18,7 @@
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
 #include "test_utils/mla_layout.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
@@ -363,4 +365,210 @@ TEST_F(MLA_QRopeCacheTest, PackedInputRejectsMalformedShapes) {
         qk_rope_dim,
         /*packed_input=*/true))
         << "packed input with dim 1 != 1 must be rejected";
+}
+
+// ── Program-cache hits ──────────────────────────────────────────────────────────────────────────────
+// A launch whose shapes and attributes match a cached program reuses it, and only the buffer addresses of
+// its five tensors (q_in, cos, sin, trans_mat; q_out) are patched in. Every test clears the cache, so its
+// first launch of each direction is the miss, and keeps every tensor alive until it ends, so no launch can
+// land on the buffers of an earlier one.
+
+namespace {
+
+// B = 2 and Ts = cores + 1 give B * Ts = 2 * cores + 2 blocks: more than the core count and not a multiple of
+// it, so split_work_to_cores hands out two core groups on any grid.
+MLA_QRopeShape cache_hit_shape() {
+    return {
+        .name = "two_core_groups",
+        .batch = 2,
+        .seq_len = 32U * (ttml::test_utils::num_worker_cores() + 1U),
+        .n_heads = 2,
+        .qk_nope_dim = 32,
+        .qk_rope_dim = 64};
+}
+
+struct RopeInputs {
+    ttnn::Tensor cos_cache;
+    ttnn::Tensor sin_cache;
+    ttnn::Tensor trans_mat;
+};
+
+// One direction of mla_q_rope at the cache-hit shape. The forward (packed_input) rotates packed q; the backward
+// rotates head-major gradients back with the caches of the negated angle, as the backward of ttml::ops::mla_q_rope
+// does. The two are distinct programs: packed_input is hashed.
+class QRopeDirection {
+public:
+    QRopeDirection(const MLA_QRopeShape& shape, bool packed_input) : shape_(shape), packed_input_(packed_input) {
+    }
+
+    std::string name() const {
+        return packed_input_ ? "forward" : "backward";
+    }
+
+    RopeInputs rope_inputs(const ttml::ops::RotaryEmbeddingParams& params, const ttnn::Tensor& trans_mat) const {
+        if (packed_input_) {
+            return {params.cos_cache, params.sin_cache, trans_mat};
+        }
+        return {params.neg_cos_cache, params.neg_sin_cache, trans_mat};
+    }
+
+    // Forward: packed [B, 1, S, H * qk_head]. Backward: head-major [B, H, S, qk_head].
+    ttnn::Tensor make_q(uint32_t seed) const {
+        return packed_input_ ? make_bf16_4d(shape_.batch, 1U, shape_.seq_len, shape_.n_heads * qk_head(), seed)
+                             : make_bf16_4d(shape_.batch, shape_.n_heads, shape_.seq_len, qk_head(), seed);
+    }
+
+    ttnn::Tensor launch(const ttnn::Tensor& q, const RopeInputs& rope) const {
+        return ttml::metal::mla_q_rope(
+            q, rope.cos_cache, rope.sin_cache, rope.trans_mat, shape_.qk_nope_dim, shape_.qk_rope_dim, packed_input_);
+    }
+
+    ttnn::Tensor reference(const ttnn::Tensor& q, const RopeInputs& rope) const {
+        return reference_q_rope(
+            q,
+            rope.cos_cache,
+            rope.sin_cache,
+            rope.trans_mat,
+            shape_.n_heads,
+            shape_.qk_nope_dim,
+            shape_.qk_rope_dim,
+            packed_input_,
+            /*pack_output=*/!packed_input_);
+    }
+
+    // The backward's packed output is compared head-major, as in BackwardPacksGrad.
+    void expect_matches(const ttnn::Tensor& out, const ttnn::Tensor& ref, const std::string& label) const {
+        if (packed_input_) {
+            expect_q_rope_matches_reference(out, ref, shape_, label);
+            return;
+        }
+        expect_q_rope_matches_reference(
+            ttml::test_utils::packed_to_head_major(out, shape_.n_heads, qk_head()),
+            ttml::test_utils::packed_to_head_major(ref, shape_.n_heads, qk_head()),
+            shape_,
+            label);
+    }
+
+private:
+    uint32_t qk_head() const {
+        return shape_.qk_nope_dim + shape_.qk_rope_dim;
+    }
+
+    MLA_QRopeShape shape_;
+    bool packed_input_ = true;
+};
+
+// Launch A compiles the program of one direction. Every later launch must reuse it with its own addresses patched
+// in, and leave the outputs of the earlier ones untouched:
+//  - B runs on a new q and on rope inputs with other values: caches built with theta = 500 instead of 10000 and a
+//    negated rotation matrix. Every address changes, and a hit that kept reading any of A's buffers rotates by the
+//    wrong angles.
+//  - C runs on a new q with A's rope inputs, as every DeepSeek layer shares one set: the cos/sin/trans_mat addresses
+//    go back to the miss's while the program holds B's.
+//  - D runs on A's inputs again, so the q_in address goes back to the miss's as well.
+// A hit that patched only the addresses that differ from the miss's, or patched them by their offset from the miss's,
+// would read B's or C's inputs.
+void run_cache_hits(bool packed_input) {
+    auto* device = &ttml::test_utils::device_with_empty_program_cache();
+    const auto shape = cache_hit_shape();
+    const QRopeDirection direction(shape, packed_input);
+    const auto label = [&](const std::string& launch) { return direction.name() + " " + launch + ": "; };
+    const auto launch_hit = [&](const ttnn::Tensor& q, const RopeInputs& rope, const std::string& launch) {
+        const auto entries_before = device->num_program_cache_entries();
+        auto out = direction.launch(q, rope);
+        EXPECT_EQ(device->num_program_cache_entries(), entries_before)
+            << direction.name() << " " << launch << " must reuse launch A's program";
+        return out;
+    };
+
+    const auto q_a = direction.make_q(/*seed=*/31U);
+    const auto params_a = build_params(shape.seq_len, shape.qk_rope_dim);
+    const auto rope_a = direction.rope_inputs(params_a, params_a.trans_mat);
+    const auto entries_before_a = device->num_program_cache_entries();
+    const auto out_a = direction.launch(q_a, rope_a);
+    ASSERT_GT(device->num_program_cache_entries(), entries_before_a)
+        << direction.name() << " launch A must compile a program";
+    const auto ref_a = direction.reference(q_a, rope_a);
+    direction.expect_matches(out_a, ref_a, label("launch A"));
+
+    const auto q_b = direction.make_q(/*seed=*/37U);
+    const auto params_b = ttml::ops::build_rope_params(shape.seq_len, shape.qk_rope_dim, /*theta=*/500.0F);
+    const xt::xarray<float> negated_trans_mat = -ttml::core::to_xtensor(params_a.trans_mat);
+    const auto rope_b = direction.rope_inputs(params_b, ttml::core::from_xtensor(negated_trans_mat, device));
+    const auto out_b = launch_hit(q_b, rope_b, "launch B");
+    EXPECT_NE(q_b.buffer()->address(), q_a.buffer()->address()) << direction.name() << " q_in";
+    EXPECT_NE(rope_b.cos_cache.buffer()->address(), rope_a.cos_cache.buffer()->address()) << direction.name() << " cos";
+    EXPECT_NE(rope_b.sin_cache.buffer()->address(), rope_a.sin_cache.buffer()->address()) << direction.name() << " sin";
+    EXPECT_NE(rope_b.trans_mat.buffer()->address(), rope_a.trans_mat.buffer()->address())
+        << direction.name() << " trans";
+    EXPECT_NE(out_b.buffer()->address(), out_a.buffer()->address()) << direction.name() << " q_out";
+    const auto ref_b = direction.reference(q_b, rope_b);
+    direction.expect_matches(out_b, ref_b, label("launch B (cache hit)"));
+    direction.expect_matches(out_a, ref_a, label("launch A after launch B"));
+
+    const auto q_c = direction.make_q(/*seed=*/41U);
+    const auto out_c = launch_hit(q_c, rope_a, "launch C");
+    EXPECT_NE(out_c.buffer()->address(), out_b.buffer()->address()) << direction.name() << " q_out C vs B";
+    const auto ref_c = direction.reference(q_c, rope_a);
+    direction.expect_matches(out_c, ref_c, label("launch C (cache hit on launch A's rope inputs)"));
+    direction.expect_matches(out_b, ref_b, label("launch B after launch C"));
+
+    const auto out_d = launch_hit(q_a, rope_a, "launch D");
+    EXPECT_NE(out_d.buffer()->address(), out_c.buffer()->address()) << direction.name() << " q_out D vs C";
+    direction.expect_matches(out_d, ref_a, label("launch D (cache hit on launch A's inputs)"));
+    direction.expect_matches(out_c, ref_c, label("launch C after launch D"));
+}
+
+}  // namespace
+
+TEST_F(MLA_QRopeCacheTest, ForwardCacheHitWithFreshTensorsAndRopeCaches_TwoCoreGroups) {
+    run_cache_hits(/*packed_input=*/true);
+}
+
+TEST_F(MLA_QRopeCacheTest, BackwardCacheHitWithFreshTensorsAndRopeCaches_TwoCoreGroups) {
+    run_cache_hits(/*packed_input=*/false);
+}
+
+// A training step launches the forward and the backward, so both programs stay cached and hit in turn, with the
+// rope inputs every layer shares. Each hit must patch its own program: state kept per op instead of per program
+// would hand one direction's hit the runtime args of the other.
+TEST_F(MLA_QRopeCacheTest, ForwardAndBackwardCacheHitsAlternate_TwoCoreGroups) {
+    auto* device = &ttml::test_utils::device_with_empty_program_cache();
+    const auto shape = cache_hit_shape();
+    const auto params = build_params(shape.seq_len, shape.qk_rope_dim);
+    const std::array<QRopeDirection, 2> directions = {
+        QRopeDirection(shape, /*packed_input=*/true), QRopeDirection(shape, /*packed_input=*/false)};
+
+    struct Launch {
+        std::string label;
+        const QRopeDirection* direction = nullptr;
+        ttnn::Tensor q;
+        ttnn::Tensor out;
+        ttnn::Tensor ref;
+    };
+    std::vector<Launch> launches;
+    for (uint32_t step = 0U; step < 2U; ++step) {
+        for (const auto& direction : directions) {
+            auto& launch = launches.emplace_back();
+            launch.label = direction.name() + " step " + std::to_string(step);
+            launch.direction = &direction;
+            const auto rope = direction.rope_inputs(params, params.trans_mat);
+            launch.q = direction.make_q(/*seed=*/51U + static_cast<uint32_t>(launches.size()));
+            const auto entries_before = device->num_program_cache_entries();
+            launch.out = direction.launch(launch.q, rope);
+            if (step == 0U) {
+                ASSERT_GT(device->num_program_cache_entries(), entries_before)
+                    << launch.label << " must compile a program";
+            } else {
+                EXPECT_EQ(device->num_program_cache_entries(), entries_before)
+                    << launch.label << " must reuse its program from step 0";
+            }
+            launch.ref = direction.reference(launch.q, rope);
+            direction.expect_matches(launch.out, launch.ref, launch.label + ": ");
+        }
+    }
+
+    for (const auto& launch : launches) {
+        launch.direction->expect_matches(launch.out, launch.ref, launch.label + " after every launch: ");
+    }
 }

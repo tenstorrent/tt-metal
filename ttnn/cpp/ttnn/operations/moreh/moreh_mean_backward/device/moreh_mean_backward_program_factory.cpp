@@ -14,12 +14,12 @@
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 using namespace tt::tt_metal;
 using ttnn::Tensor;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
@@ -242,7 +242,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardProgramFactory::create_program_arti
             .compile_time_args =
                 {{"num_output_tiles", num_output_tiles},
                  {"wt_need_bcast", need_bcast_dim[0]},
-                 {"ht_need_bcast", need_bcast_dim.size() > 1 ? need_bcast_dim[1] : 0u}},
+                 {"ht_need_bcast", get_ht_need_bcast(need_bcast_dim)}},
             .hw_config = compute_hw_config,
         };
     };

@@ -105,6 +105,10 @@ enum class BinaryOp : std::uint8_t
     LOGICAL_RSHFT,
     LOGADDEXP,
     LOGADDEXP2,
+    GCD,
+    LCM,
+    RESHUFFLE_ROWS,
+    RSUB,
 };
 
 enum class DataLayout

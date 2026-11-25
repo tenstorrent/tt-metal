@@ -47,11 +47,11 @@ GatherCodegenDeviceOperation::program_factory_t GatherCodegenDeviceOperation::se
 // op's own L1 output included -- that create_descriptor() will.
 //
 // Cost: defining compute_program_hash at all opts this op out of the canonical program-cache key
-// (mesh_device_operation_adapter.hpp::compute_mesh_workload_canonical_key returns only the
-// op-identity prefix once a custom hash exists), so a 64-bit collision between two distinct gather
-// specs resolves to a wrong hit rather than a rebuild. Exposing the plan as an attribute instead
-// would keep that guarantee, but cannot: the plan depends on an own output that is not allocated
-// yet when the attributes are built.
+// (mesh_device_operation_adapter.hpp::compute_mesh_workload_cache_key keys only the op-identity
+// prefix and alias signature once a custom hash exists), so a 64-bit collision
+// between two distinct gather specs resolves to a wrong hit rather than a rebuild. Exposing the
+// plan as an attribute instead would keep that guarantee, but cannot: the plan depends on an own
+// output that is not allocated yet when the attributes are built.
 ttsl::hash::hash_t GatherCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto factory = select_program_factory(attributes, tensor_args);
@@ -139,7 +139,7 @@ void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
             tensor_args.input_index_tensor.logical_shape());
     }
     TT_FATAL(
-        (tensor_args.input_tensor.buffer() != nullptr) && (tensor_args.input_index_tensor.buffer() != nullptr),
+        (tensor_args.input_tensor.is_allocated()) && (tensor_args.input_index_tensor.is_allocated()),
         "gather_codegen: operands need to be allocated in buffers on the device. Buffer is null.");
     TT_FATAL(
         tensor_args.input_tensor.storage_type() == StorageType::DEVICE,
@@ -159,7 +159,7 @@ void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
             tensor_args.output_tensor.value().device() == tensor_args.input_tensor.device(),
             "gather_codegen: preallocated output tensor must be on the same device as the input.");
         TT_FATAL(
-            tensor_args.output_tensor.value().buffer() != nullptr,
+            tensor_args.output_tensor.value().is_allocated(),
             "gather_codegen: preallocated output tensor has no device buffer allocated.");
     }
     TT_FATAL(attributes.sparse_grad == false, "gather_codegen: sparse gradient is not supported.");

@@ -9,16 +9,23 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/constants.hpp>
+
+#include <bit>
+#include <cstdint>
+#include <variant>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {
 namespace {
 
-// is_integer_dtype doesn't include INT8 as of now because no unary op has native INT8 implementation yet.
+// No unary op has a native INT8 implementation yet, so INT8 is accepted only by the dtype-agnostic
+// copy/typecast ops in unary_op_supports_integer_dtype.
 bool is_integer_dtype(DataType dtype) {
     return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
-           dtype == DataType::UINT8;
+           dtype == DataType::UINT8 || dtype == DataType::INT8;
 }
 
 bool is_int32(DataType dtype) { return dtype == DataType::INT32; }
@@ -36,10 +43,6 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::ABS: return is_unsigned_int(dtype);
         case UnaryOpType::ABS_INT32:
         case UnaryOpType::CLAMP_TSS:
-        case UnaryOpType::GEZ:
-        case UnaryOpType::GTZ:
-        case UnaryOpType::LEZ:
-        case UnaryOpType::LTZ:
         case UnaryOpType::NEG:
         case UnaryOpType::SIGNBIT: return is_int32(dtype);
 
@@ -48,6 +51,10 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::LEAKY_RELU: return is_unsigned_int(dtype);
 
         case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::GEZ:
+        case UnaryOpType::GTZ:
+        case UnaryOpType::LEZ:
+        case UnaryOpType::LTZ:
         case UnaryOpType::MAXIMUM:
         case UnaryOpType::MINIMUM:
         case UnaryOpType::RSUB:
@@ -81,26 +88,28 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         // Copy / typecast kernels; valid on integer tiles without a separate integer LLK.
         case UnaryOpType::BITCAST:
         case UnaryOpType::IDENTITY:
-        case UnaryOpType::TYPECAST: return true;
+        case UnaryOpType::TYPECAST:
+        // Only carries the quant/requant zero points to binary_ng's QUANT/REQUANT/DEQUANT kernels; it never runs as
+        // a unary op, and quant and requant outputs are integer.
+        case UnaryOpType::ZERO_POINT: return true;
 
         default: return false;
     }
 }
 
+}  // namespace
+
 void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
     if (!is_integer_dtype(input_dtype)) {
         return;
     }
-    // A TYPECAST in a multi-op chain changes the dtype for later ops; this checker only
-    // sees the original tensor dtype, so skip rather than reject a valid post-cast float op.
-    if (op_chain.size() > 1) {
-        for (const auto& op : op_chain) {
-            if (op.type() == UnaryOpType::TYPECAST) {
-                return;
-            }
-        }
-    }
+    // A TYPECAST changes the dtype for the ops after it; this checker only knows the original
+    // tensor dtype, so it stops there rather than reject a valid post-cast float op. The ops
+    // before the cast still run on the integer input and are checked.
     for (const auto& op : op_chain) {
+        if (op.type() == UnaryOpType::TYPECAST) {
+            break;
+        }
         TT_FATAL(
             unary_op_supports_integer_dtype(op.type(), input_dtype),
             "Unary: {} does not support integer input dtype {}",
@@ -109,11 +118,22 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
     }
 }
 
-}  // namespace
-
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
-    return ttsl::hash::hash_objects_with_default_seed(
-        op_chain,
+    // Params are embedded bit-for-bit in kernel defines, but std::hash<float> equates +0.0 and -0.0.
+    auto hash = ttsl::hash::hash_objects_with_default_seed(op_chain.size());
+    for (const auto& op : op_chain) {
+        hash = ttsl::hash::hash_objects(hash, op.type(), op.base.index());
+        std::visit(
+            [&hash](auto params) {
+                hash = ttsl::hash::hash_objects(hash, params.size());
+                for (const auto param : params) {
+                    hash = ttsl::hash::hash_objects(hash, std::bit_cast<std::uint32_t>(param));
+                }
+            },
+            op.get_params());
+    }
+    return ttsl::hash::hash_objects(
+        hash,
         output_dtype,
         memory_config,
         fp32_dest_acc_en,
@@ -139,8 +159,29 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
-        "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
+        input_tensor.is_allocated(), "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
+
+    // A constant fill writes the same value to every element, so it is independent of the tile shape.
+    // zeros_like/full_like rely on this to clear tiny-tile outputs (e.g. sparse_matmul with 16x32 tiles).
+    const bool is_fill_only = args.op_chain.size() == 1 && args.op_chain[0].type() == UnaryOpType::FILL;
+    auto validate_tile_shape = [is_fill_only](const Tensor& tensor, const char* name) {
+        if (is_fill_only || tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+            "Unary supports only {}x{} tiles, but {} has a {}x{} tile",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            name,
+            tile_shape[0],
+            tile_shape[1]);
+    };
+    validate_tile_shape(input_tensor, "the input tensor");
+    if (output_tensor.has_value()) {
+        validate_tile_shape(*output_tensor, "the output tensor");
+    }
 
     validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
 
@@ -182,6 +223,28 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
                 "Unary: LGAMMA requires BFLOAT16 or FLOAT32 output, got dtype {}",
                 static_cast<int>(effective_out));
             break;
+        }
+    }
+
+    // QUICK_GELU exists only as a generated kernel, which the unary program selects for a lone op on
+    // BFLOAT16 input and output with FP32 DEST off; it has no kernel of its own for any other call.
+    for (const auto& op : args.op_chain) {
+        if (op.type() == operations::unary::UnaryOpType::QUICK_GELU) {
+            const DataType effective_out = output_tensor.has_value() ? output_tensor->dtype() : args.output_dtype;
+            TT_FATAL(
+                utils::get_bf16_kernel_defines(
+                    args.op_chain,
+                    input_tensor.dtype(),
+                    effective_out,
+                    args.fp32_dest_acc_en,
+                    input_tensor.device()->arch())
+                    .has_value(),
+                "Unary: QUICK_GELU runs only as the only op of its chain, on BFLOAT16 input and output with FP32 "
+                "DEST off, on Blackhole (chain has {} ops, "
+                "input dtype {}, output dtype {})",
+                args.op_chain.size(),
+                input_tensor.dtype(),
+                effective_out);
         }
     }
 
@@ -309,7 +372,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     const auto output_layout = tensor_args.input.layout();
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             args.output_dtype,
             PageConfig(output_layout),
             args.memory_config,
@@ -392,7 +455,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         distribution_key(
             output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr, "output"),
         src_shard_vol,
-        dst_shard_vol);
+        dst_shard_vol,
+        // The DRAM read flow selects kernel defines, dataflow buffers and semaphores.
+        get_dram_read_plan(attributes.op_chain, input_tensor, output_spec, attributes.worker_grid).flow);
 }
 
 bool UnaryDeviceOperation::skip_launch(
@@ -422,7 +487,7 @@ Tensor unary(
         optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
 
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
+        op_chain, input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .op_chain = op_chain,

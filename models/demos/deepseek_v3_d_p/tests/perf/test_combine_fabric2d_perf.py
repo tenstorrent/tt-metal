@@ -34,7 +34,7 @@ def test_device_perf_combine_fabric2d():
     # Same 3% margin and slow-memory adjustment as the other DeepSeek perf tests.
     margin = adjust_margin_for_ddr_speed(0.03)
     run_model_device_perf_test_per_op(
-        command=f"pytest {_WORKER} -k '{_K_FILTER}' --wrapper-invocation",
+        command=f"pytest {_WORKER} -k '{_K_FILTER}'",
         expected_per_op=_EXPECTED_NS,
         subdir="deepseek_v3_combine_fabric2d",
         model_name="deepseek_v3_combine_fabric2d_torus_xy_8x4_2link",

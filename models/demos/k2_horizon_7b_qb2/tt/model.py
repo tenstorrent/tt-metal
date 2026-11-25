@@ -19,10 +19,10 @@ import torch
 from huggingface_hub import hf_hub_download
 from safetensors import safe_open
 from transformers import AutoConfig, AutoTokenizer
+from tt_transformers.modules.lazy_weight import LazyWeight
+from tt_transformers.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
 
 import ttnn
-from models.common.modules.lazy_weight import LazyWeight
-from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
 
 from .collective_buffers import DecodeCollectiveBuffers
 from .full_model_policy import stage6_precision_policy

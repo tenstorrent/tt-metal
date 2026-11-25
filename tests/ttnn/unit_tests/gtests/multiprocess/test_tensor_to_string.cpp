@@ -15,6 +15,7 @@
 
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <internal/mesh_device.hpp>
 #include <ttnn/distributed/api.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
@@ -148,7 +149,7 @@ TEST_F(BigMeshDualRankTest2x4, ToStringPairsEveryLocalShardWithItsOwnCoordinate)
         const PrintedShard& shard = printed_shards[i];
 
         EXPECT_EQ(MeshCoordinate(shard.row, shard.col), coord) << "block " << i << " printed the wrong coordinate";
-        EXPECT_EQ(shard.device_id, static_cast<int>(mesh_device_->get_device(coord)->id()))
+        EXPECT_EQ(shard.device_id, static_cast<int>(tt::tt_metal::internal::get_device(*mesh_device_, coord)->id()))
             << "block " << i << " printed the wrong device_id for " << coord;
         // The payload must belong to the coordinate in the header, not to some other device.
         EXPECT_FLOAT_EQ(shard.first_value, expected_values[i])

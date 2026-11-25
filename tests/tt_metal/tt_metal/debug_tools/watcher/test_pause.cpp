@@ -24,8 +24,10 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher pause feature.
@@ -61,37 +63,37 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     const auto device_id = mesh_device->get_device_ids()[0];
     uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
     uint32_t delay_cycles = clk_mhz * 500000;  // .5 seconds
-    std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<experimental::KernelSpecName> kernel_names;
-    experimental::ProgramRunArgs params;
+    std::vector<KernelSpec> kernel_specs;
+    std::vector<KernelSpecName> kernel_names;
+    ProgramRunArgs params;
     auto add_dm_kernel =
         [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
             auto gen1_proc = gen1_processor.value_or(tt::tt_metal::DataMovementProcessor::RISCV_0);
             auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                 ? tt::tt_metal::NOC::RISCV_1_default
                                 : tt::tt_metal::NOC::RISCV_0_default;
-            experimental::DataMovementHardwareConfig dm_cfg;
+            DataMovementHardwareConfig dm_cfg;
             if (is_quasar) {
-                dm_cfg = experimental::DataMovementHardwareConfig{};
+                dm_cfg = DataMovementHardwareConfig{};
             } else {
-                dm_cfg = experimental::DataMovementHardwareConfig{
+                dm_cfg = DataMovementHardwareConfig{
                     .config_1xx =
-                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
                             .processor = gen1_proc,
                             .noc = gen1_noc,
                         },
                 };
             }
-            kernel_specs.push_back(experimental::KernelSpec{
-                .unique_id = experimental::KernelSpecName{name},
+            kernel_specs.push_back(KernelSpec{
+                .unique_id = KernelSpecName{name},
                 .source = path_metal2,
                 .num_threads = num_threads,
                 .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
                 .hw_config = dm_cfg,
             });
             kernel_names.emplace_back(name);
-            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-                .kernel = experimental::KernelSpecName{name},
+            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+                .kernel = KernelSpecName{name},
                 .common_runtime_arg_values = {{"wait_cycles", delay_cycles}},
             });
         };
@@ -105,32 +107,32 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         add_dm_kernel("pause_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
         add_dm_kernel("pause_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
 
-        const experimental::KernelSpecName compute_kernel_name{"pause_compute"};
-        kernel_specs.push_back(experimental::KernelSpec{
+        const KernelSpecName compute_kernel_name{"pause_compute"};
+        kernel_specs.push_back(KernelSpec{
             .unique_id = compute_kernel_name,
             .source = path_metal2,
             .num_threads = 1,
             .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
-            .hw_config = experimental::ComputeHardwareConfig{},
+            .hw_config = ComputeHardwareConfig{},
         });
         kernel_names.emplace_back(compute_kernel_name);
-        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = compute_kernel_name,
             .common_runtime_arg_values = {{"wait_cycles", delay_cycles}},
         });
     }
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = kernel_names,
-        .target_nodes = experimental::NodeRange{CoreRange(xy_start, xy_end)},
+        .target_nodes = NodeRange{CoreRange(xy_start, xy_end)},
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "watcher_pause",
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-    experimental::SetProgramRunArgs(program, params);
+    Program program(*mesh_device, spec);
+    program.set_program_run_args(params);
     workload.add_program(device_range, std::move(program));
 
     // Run the program
@@ -160,7 +162,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 }
 
 void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Metal 2.0 does not yet support ETH KernelSpecs";
     }
@@ -174,7 +176,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp";
     uint32_t clk_mhz = MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     std::vector<uint32_t> args = {clk_mhz * 500000};  // .5 seconds
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     auto create_eth_kernels = [&](bool is_active) {
         std::set<CoreRange> eth_core_ranges;

@@ -642,7 +642,9 @@ struct MatmulExpertCompressedDRAM {
             }
             reconfig_full_operand<SrcOrder::Reverse>(CTArgs::cb_in0, CTArgs::cb_in1);
             pack_reconfig_data_format<true>(CTArgs::cb_out);
-            compressed_custom_mm_block_init_short<false, true, false>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            // Compressed custom_mm has no split accumulation; Default is what this path has always run.
+            compressed_custom_mm_block_init_short<false, CustomMmDestLayout::Default>(
+                CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
             uint32_t in0_base = 0, in0_cb_base = 0;
             UNPACK(({ in0_cb_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
@@ -760,7 +762,7 @@ struct MatmulExpertCompressedDRAM {
                             }));
 
                             if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                compressed_custom_mm_block<false>(
+                                compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -768,7 +770,7 @@ struct MatmulExpertCompressedDRAM {
                                     CTArgs::subblock_k,
                                     CTArgs::subblock_n);
                             } else {
-                                compressed_custom_mm_block<true>(
+                                compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -894,7 +896,7 @@ struct MatmulExpertCompressedDRAM {
                         }));
                         uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
                         if (sb_k < num_subblocks_k_local - 1) {
-                            compressed_custom_mm_block<false>(
+                            compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                 CTArgs::cb_in0,
                                 CTArgs::cb_in1,
                                 meta_addr,
@@ -902,7 +904,7 @@ struct MatmulExpertCompressedDRAM {
                                 CTArgs::subblock_k,
                                 CTArgs::subblock_n);
                         } else {
-                            compressed_custom_mm_block<true>(
+                            compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                 CTArgs::cb_in0,
                                 CTArgs::cb_in1,
                                 meta_addr,
@@ -1055,7 +1057,7 @@ struct MatmulExpertCompressedDRAM {
                             uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
 
                             if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                compressed_custom_mm_block<false>(
+                                compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -1063,7 +1065,7 @@ struct MatmulExpertCompressedDRAM {
                                     CTArgs::subblock_k,
                                     CTArgs::subblock_n);
                             } else {
-                                compressed_custom_mm_block<true>(
+                                compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -1133,7 +1135,7 @@ struct MatmulExpertCompressedDRAM {
             // override is in place — leaving it unset would make the next
             // invocation's get_cb_rd_ptr return a stale mid-compute position.
             UNPACK(({ unified_kernels::override_cb_rd_ptr(CTArgs::cb_in0, in0_cb_base); }));
-            compressed_custom_mm_block_uninit<false>();
+            compressed_custom_mm_block_uninit<CustomMmDestLayout::Default>(CTArgs::cb_out);
 
             if constexpr (pop_in0) {
                 if constexpr (CTArgs::accum_experts) {

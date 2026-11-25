@@ -1,0 +1,885 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Host-only checks for the decode-trace allocation guard: a device allocation that appears after the
+decode trace was captured (and is still alive at the next replay) makes the generator release and
+re-capture its decode traces, a bounded number of times."""
+from collections import defaultdict
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+import ttnn
+from models.common.sampling.sampling_params import SamplingParams
+from models.demos.gemma4.tt import generator_trace as gt
+from models.demos.gemma4.tt.attention.continuation import continuation_sdpa_table_cols
+from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
+from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin as Mixin
+from models.demos.gemma4.tt.generator import filter_warmup_sampling_params
+from models.demos.gemma4.tt.warmup_isls import (
+    ENV_VAR,
+    PREFILL_PAD_BUCKETS_ENV,
+    continuation_tails,
+    gemma4_padded_prefill_len,
+    new_prefill_pad_lengths,
+    parse_prefill_pad_buckets,
+    parse_warmup_isls,
+    prefill_trim_width,
+    run_prefill_ladder,
+    run_prefix_continuation_warmup,
+    warmup_page_table_with_real_blocks,
+    warmup_prefill_isls,
+)
+from models.tt_transformers.tt.common import get_padded_prefill_len
+
+
+class _View:
+    """Allocator view with a bottom-up run of ``allocated`` bytes, one free gap, and a top-down block."""
+
+    def __init__(self, allocated, top_down=4096, total=1 << 20):
+        self.total_bytes_allocated_per_bank = allocated + top_down
+        self.block_table = [
+            {"address": "0", "size": str(allocated), "allocated": "yes"},
+            {"address": str(allocated), "size": str(total - allocated - top_down), "allocated": "no"},
+            {"address": str(total - top_down), "size": str(top_down), "allocated": "yes"},
+        ]
+
+
+def _guard(monkeypatch, levels):
+    """A bare mixin instance whose allocator view reports ``levels[buffer_type]`` bytes per bank."""
+    monkeypatch.setattr(ttnn, "get_memory_view", lambda mesh, buffer_type: _View(levels[buffer_type]))
+    g = ChunkedPrefillPageTableGuardMixin.__new__(ChunkedPrefillPageTableGuardMixin)
+    g.model_args = [SimpleNamespace(mesh_device=object())]
+    g.model = [SimpleNamespace(sampling=SimpleNamespace(reset_trace=lambda: None))]
+    g.trace_ids_decode = defaultdict(lambda: None)
+    g.trace_inputs_decode = defaultdict(lambda: None)
+    g.trace_output_decode = defaultdict(lambda: None)
+    g._g4_trace_alloc_baseline = {}
+    g._g4_trace_guard_recaptures = 0
+    g._g4_alloc_check_pending = True
+    return g
+
+
+def test_no_growth_no_recapture(monkeypatch):
+    levels = {ttnn.BufferType.DRAM: 1000, ttnn.BufferType.L1: 10}
+    g = _guard(monkeypatch, levels)
+    assert not g._g4_trace_guard_should_recapture("k")  # nothing captured yet
+    g._g4_trace_alloc_baseline["k"] = g._g4_alloc_levels()
+    assert not g._g4_trace_guard_should_recapture("k")
+    levels[ttnn.BufferType.DRAM] = 900  # something freed: still fine, and the baseline follows it down
+    g._g4_alloc_check_pending = True
+    assert not g._g4_trace_guard_should_recapture("k")
+    assert g._g4_trace_alloc_baseline["k"][0] == 900
+    # GEMMA4_TRACE_GUARD_DUMP=1 names the trigger: the blocks new since the baseline (snapshotted at the passing
+    # check above) with the tensors held at their addresses, and the tensors held now that were not held then
+    import models.demos.gemma4.tt.generator as generator_module
+
+    monkeypatch.setenv("GEMMA4_TRACE_GUARD_DUMP", "1")
+    g._g4_alloc_check_pending = True
+    assert not g._g4_trace_guard_should_recapture("k")  # still 900: the snapshot is taken here
+    assert g._g4_guard_baseline_state["blocks"]["DRAM"] == {(0, 900), ((1 << 20) - 4096, 4096)}
+    grown = _View(900)
+    grown.total_bytes_allocated_per_bank += 50
+    grown.block_table.insert(1, {"address": "900", "size": "50", "allocated": "yes"})
+    grown.block_table[2] = {"address": "950", "size": str((1 << 20) - 950 - 4096), "allocated": "no"}
+    monkeypatch.setattr(
+        ttnn, "get_memory_view", lambda mesh, bt: grown if bt == ttnn.BufferType.DRAM else _View(levels[bt])
+    )
+    output = SimpleNamespace(buffer_address=lambda: 900, dtype="DataType.BFLOAT16", shape=(1, 1, 32, 8))
+    g.trace_output_decode["k"] = [output]
+    g.model[0].stray = SimpleNamespace(buffer_address=lambda: 123456, dtype="DataType.INT32", shape=(32, 4096))
+    # the walk descends into objects (the sampler's state, a layer's attention), not only containers
+    g.model[0].sampling.tt_sampling = SimpleNamespace(
+        k_tensor=SimpleNamespace(buffer_address=lambda: 777, dtype="DataType.UINT32", shape=(32,)), rng=lambda: None
+    )
+    logged = []
+    monkeypatch.setattr(generator_module.logger, "warning", lambda message, *a, **k: logged.append(message.format(*a)))
+    g._g4_alloc_check_pending = True
+    assert g._g4_trace_guard_should_recapture("k")  # above the lowest level seen: a post-capture allocation
+    assert logged[-1] == (
+        "Gemma4: trace guard dump (re-capture 1/8): 1 new block(s), +50 B per bank; counted below the largest free "
+        "gap: 1 block(s), +50 B; histogram: DRAM 50B x1 below; blocks: DRAM 50B@900 below "
+        "owner=generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8] | new tensors held: "
+        "generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8], model[0].sampling.tt_sampling.k_tensor UINT32 "
+        "[32], model[0].stray INT32 [32,4096]"
+    )
+    assert logged[-2].startswith("Gemma4: device allocations grew after the decode-trace capture")
+    # a block above the largest free gap (a kernel binary, top-down) is listed but not counted
+    grown.block_table.append({"address": str((1 << 20) - 4096 - 2048), "size": "2048", "allocated": "yes"})
+    grown.block_table[2]["size"] = str((1 << 20) - 950 - 4096 - 2048)
+    g._g4_guard_dump(1, 8)
+    assert logged[-1].startswith(
+        "Gemma4: trace guard dump (re-capture 1/8): 2 new block(s), +2098 B per bank; counted below the largest free "
+        "gap: 1 block(s), +50 B; histogram: DRAM 2048B x1 above, DRAM 50B x1 below; blocks: DRAM 2048B@1042432 "
+        "above owner=?, DRAM 50B@900 below owner=generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8] | "
+    )
+    # without a block table the line carries the allocator statistics instead; off, nothing is snapshotted
+    bare = SimpleNamespace(total_bytes_allocated_per_bank=975, largest_contiguous_bytes_free_per_bank=7, block_table=[])
+    monkeypatch.setattr(ttnn, "get_memory_view", lambda mesh, bt: bare)
+    g._g4_guard_baseline_state = {
+        "blocks": {"DRAM": None, "L1": None},
+        "stats": {"DRAM": (900, 9), "L1": (10, 1)},
+        "tensors": set(),
+    }
+    g._g4_guard_dump(2, 8)
+    assert logged[-1] == (
+        "Gemma4: trace guard dump (re-capture 2/8): 0 new block(s), +0 B per bank; counted below the largest free "
+        "gap: 0 block(s), +0 B; histogram: none; blocks: none | new tensors held: "
+        "generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8], model[0].sampling.tt_sampling.k_tensor UINT32 "
+        "[32], model[0].stray INT32 [32,4096] | no block table: "
+        "DRAM allocated 900 -> 975, largest free 9 -> 7; L1 allocated 10 -> 975, largest free 1 -> 7"
+    )
+    # long lists are capped at 32 entries and say how many more there are
+    g.trace_output_decode["many"] = [
+        SimpleNamespace(buffer_address=lambda i=i: 5000 + i, dtype="DataType.INT32", shape=(1,)) for i in range(40)
+    ]
+    g._g4_guard_dump(3, 8)
+    assert logged[-1].count("generator.trace_output_decode['many']") == 31 and "and 11 more" in logged[-1]
+    monkeypatch.setenv("GEMMA4_TRACE_GUARD_DUMP", "0")
+    del g._g4_guard_baseline_state
+    g._g4_note_decode_trace_captured("k")
+    assert not hasattr(g, "_g4_guard_baseline_state")
+
+
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1])
+def test_growth_triggers_recapture_until_the_limit(monkeypatch, buffer_type):
+    monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_MAX", "2")
+    levels = {ttnn.BufferType.DRAM: 1000, ttnn.BufferType.L1: 10}
+    g = _guard(monkeypatch, levels)
+    g._g4_trace_alloc_baseline["k"] = g._g4_alloc_levels()
+    levels[buffer_type] += 64
+    g._g4_alloc_check_pending = True
+    assert g._g4_trace_guard_should_recapture("k")
+    g._g4_alloc_check_pending = True
+    assert g._g4_trace_guard_should_recapture("k")
+    g._g4_alloc_check_pending = True
+    assert not g._g4_trace_guard_should_recapture("k")  # limit spent: logged, no more re-captures
+    assert g._g4_trace_guard_recaptures == 2  # only the performed re-captures count, never the refused one
+
+
+def test_guard_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD", "0")
+    levels = {ttnn.BufferType.DRAM: 1000, ttnn.BufferType.L1: 10}
+    g = _guard(monkeypatch, levels)
+    g._g4_trace_alloc_baseline["k"] = g._g4_alloc_levels()
+    levels[ttnn.BufferType.DRAM] += 64
+    assert not g._g4_trace_guard_should_recapture("k")
+
+
+def test_top_down_growth_and_replays_only_do_not_recapture(monkeypatch):
+    levels = {ttnn.BufferType.DRAM: 1000, ttnn.BufferType.L1: 10}
+    g = _guard(monkeypatch, levels)
+    g._g4_trace_alloc_baseline["k"] = g._g4_alloc_levels()
+    # kernel binaries: top-down, never inside the replay's bottom-up scratch
+    monkeypatch.setattr(
+        ttnn,
+        "get_memory_view",
+        lambda mesh, bt: _View(levels[bt], top_down=65536 if bt == ttnn.BufferType.DRAM else 4096),
+    )
+    g._g4_alloc_check_pending = True
+    assert not g._g4_trace_guard_should_recapture("k")
+    # bottom-up growth without a prefill in between is not checked (replays allocate nothing persistent)
+    levels[ttnn.BufferType.DRAM] += 64
+    g._g4_alloc_check_pending = False
+    assert not g._g4_trace_guard_should_recapture("k")
+
+
+def test_warmup_captured_trace_gets_its_baseline_at_the_first_replay(monkeypatch):
+    levels = {ttnn.BufferType.DRAM: 1000, ttnn.BufferType.L1: 10}
+    g = _guard(monkeypatch, levels)
+    assert not g._g4_trace_guard_should_recapture("w")  # no baseline yet: recorded, no re-capture
+    assert g._g4_trace_alloc_baseline["w"] == g._g4_alloc_levels()
+    # A capture (the warmup's next bucket, or a key first replayed after a release) allocates its own trace
+    # inputs and output after the other keys' captures (the 12B at TP8: 328064 B per bank for the batch-32
+    # key); they are the generator's, not a stray allocation under a replay, so every key's baseline moves:
+    # the older key's next check re-baselines instead of releasing every trace again (the re-capture cascade).
+    levels[ttnn.BufferType.DRAM] += 328064
+    g._g4_note_decode_trace_captured("c")
+    assert g._g4_trace_alloc_baseline == {"c": g._g4_alloc_levels()}
+    g._g4_alloc_check_pending = True
+    assert not g._g4_trace_guard_should_recapture("w")
+    assert g._g4_trace_alloc_baseline["w"] == g._g4_alloc_levels()
+    levels[ttnn.BufferType.DRAM] += 4480  # a stray allocation after that capture still re-captures
+    g._g4_alloc_check_pending = True
+    assert g._g4_trace_guard_should_recapture("w")
+
+
+def test_release_drops_every_trace_and_resets_sampling(monkeypatch):
+    levels = {ttnn.BufferType.DRAM: 1000, ttnn.BufferType.L1: 10}
+    g = _guard(monkeypatch, levels)
+    released, resets = [], []
+    monkeypatch.setattr(ttnn, "release_trace", lambda mesh, tid: released.append(tid))
+    g.model[0].sampling.reset_trace = lambda: resets.append(1)
+    g.trace_ids_decode["a"] = {0: 11}
+    g.trace_ids_decode["b"] = {0: 12}
+    g._prev_decode_batch = 128  # the feedback buffer is found through this key: it must survive the release
+    g.trace_output_decode["a"] = [SimpleNamespace()]  # dropped, never freed by the release
+    g._g4_trace_alloc_baseline["a"] = (1, 2)
+    assert g._g4_release_decode_traces("test") == 2
+    assert sorted(released) == [11, 12]
+    assert resets == [1]
+    assert not g.trace_ids_decode["a"] and not g.trace_output_decode["a"]
+    assert g._g4_trace_alloc_baseline == {}
+    assert g._g4_recapture_without_precompile  # the live request's sampler state must not be touched
+    assert g._prev_decode_batch == 128
+    # With nothing left to drop, a release the decode warmup caused is logged at INFO (the wider bucket grows
+    # the tables the first bucket allocated); a serving-time release stays a WARNING.
+    import models.demos.gemma4.tt.generator as generator_module
+
+    logged = []
+    for level in ("info", "warning"):
+        monkeypatch.setattr(
+            generator_module.logger, level, lambda message, *a, _l=level, **k: logged.append((_l, message.format(*a)))
+        )
+    assert g._g4_release_decode_traces("warmup bucket grew the tables", in_warmup=True) == 0
+    assert g._g4_release_decode_traces("serving-time grow") == 0
+    assert [(level, text.split(":")[-1].strip()) for level, text in logged] == [
+        ("info", "warmup bucket grew the tables"),
+        ("warning", "serving-time grow"),
+    ]
+
+
+# ===== merged from tests/unit/test_trace_guard_arming_host.py: Host-only: when the decode-trace allocation guard walks the allocator (``ChunkedPrefillPageTableGuardMixin``).
+class _Guard(Mixin):
+    """The mixin over a stub generator: counted allocator walks, no device."""
+
+    def __init__(self, levels=(100, 10)):
+        self.model = [SimpleNamespace(_g4_persistent_alloc_event=None)]
+        self.trace_id_prefill = {}
+        self._g4_trace_alloc_baseline = {}
+        self._g4_trace_guard_recaptures = 0
+        self.levels = tuple(levels)
+        self.walks = 0
+
+    def _g4_alloc_levels(self):
+        self.walks += 1
+        return self.levels
+
+
+def _replays(g, n):
+    return [g._g4_trace_guard_should_recapture("k") for _ in range(n)]
+
+
+def test_prefill_mode_arms_on_every_prefill(monkeypatch):
+    monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_ARM", "prefill")
+    g = _Guard()
+    assert _replays(g, 1) == [False] and g.walks == 1  # the first replay takes the baseline
+    assert _replays(g, 3) == [False] * 3 and g.walks == 2  # armed by default on the first replay after capture
+    assert _replays(g, 3) == [False] * 3 and g.walks == 2  # replays alone never walk
+    assert g._g4_arm_alloc_check("prefill") is True
+    assert _replays(g, 2) == [False] * 2 and g.walks == 3
+    assert g._g4_arm_after_prefill(prefill_trace_ids_before={}, chunked=False, multimodal=False) == []
+
+
+def test_alloc_mode_arms_on_events_and_periodically(monkeypatch):
+    monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_ARM", "alloc")
+    monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_PERIOD", "4")
+    g = _Guard()
+    _replays(g, 2)  # baseline + the initial pending check
+    assert g.walks == 2
+    assert g._g4_arm_alloc_check("prefill") is False  # a plain prefill does not arm
+    assert _replays(g, 3) == [False] * 3 and g.walks == 2
+    assert _replays(g, 1) == [False] and g.walks == 3  # the 4th replay since the last check: periodic
+    assert g._g4_alloc_check_reason == "periodic"
+    assert _replays(g, 3) == [False] * 3 and g.walks == 3
+    # events arm in both modes
+    g.model[0]._g4_persistent_alloc_event = "grown"
+    reasons = g._g4_arm_after_prefill(prefill_trace_ids_before={}, chunked=False, multimodal=False)
+    assert reasons == ["page tables grown"] and g.model[0]._g4_persistent_alloc_event is None
+    assert _replays(g, 1) == [False] and g.walks == 4
+    g.trace_id_prefill = {(128, 1): 7}
+    assert g._g4_arm_after_prefill(prefill_trace_ids_before={}, chunked=False, multimodal=False) == [
+        "prefill trace capture"
+    ]
+    assert _replays(g, 1) == [False] and g.walks == 5
+    assert g._g4_arm_after_prefill(prefill_trace_ids_before={(128, 1): 7}, chunked=True, multimodal=True) == [
+        "chunked prefill",
+        "multimodal prefill",
+    ]
+    assert _replays(g, 1) == [False] and g.walks == 6
+    assert g._g4_arm_after_prefill(prefill_trace_ids_before={(128, 1): 7}, chunked=False, multimodal=False) == []
+    assert _replays(g, 1) == [False] and g.walks == 6
+
+
+def test_alloc_mode_period_zero_is_events_only(monkeypatch):
+    monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_ARM", "alloc")
+    monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_PERIOD", "0")
+    g = _Guard()
+    _replays(g, 2)
+    assert _replays(g, 200) == [False] * 200 and g.walks == 2
+
+
+def test_decision_is_the_same_in_both_modes(monkeypatch):
+    for mode in ("prefill", "alloc"):
+        monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_ARM", mode)
+        monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_MAX", "8")
+        g = _Guard(levels=(100, 10))
+        _replays(g, 2)
+        g.levels = (150, 10)  # a persistent allocation grew the bottom-up DRAM level
+        g._g4_arm_alloc_check("page tables grown")
+        assert _replays(g, 1) == [True], mode  # re-capture
+        assert g._g4_trace_guard_recaptures == 1
+        g._g4_trace_alloc_baseline["k"] = g.levels  # what the re-capture does
+        g.levels = (90, 10)  # lower than the baseline: tracked downwards, no re-capture
+        g._g4_arm_alloc_check("page tables grown")
+        assert _replays(g, 1) == [False] and g._g4_trace_alloc_baseline["k"] == (90, 10)
+
+
+def test_default_mode_is_alloc(monkeypatch):
+    monkeypatch.delenv("GEMMA4_TRACE_ALLOC_GUARD_ARM", raising=False)
+    g = _Guard()
+    assert g._g4_guard_arm_mode() == "alloc"
+    assert g._g4_arm_alloc_check("prefill") is False  # a plain prefill no longer arms the walk
+
+
+def test_unknown_mode_is_the_default(monkeypatch):
+    monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_ARM", "sometimes")
+    assert _Guard()._g4_guard_arm_mode() == "alloc"
+
+
+# ===== merged from tests/unit/test_trace_short_prefill_host.py: Host-only checks of the short-prefill trace opt-in (GEMMA4_TRACE_SHORT_PREFILL, tt/generator_trace.py): the
+@pytest.fixture()
+def _clean_env(monkeypatch):
+    monkeypatch.delenv(gt.GEMMA4_TRACE_SHORT_PREFILL_ENV, raising=False)
+    monkeypatch.delenv("GEMMA4_TRACE_SHORT_PREFILL_MAX", raising=False)
+
+
+@pytest.mark.usefixtures("_clean_env")
+def test_opt_in_off_by_default_off_the_column_mesh():
+    # no mesh shape (demo / host paths) or a row mesh: off unless GEMMA4_TRACE_SHORT_PREFILL=1
+    assert not gt.trace_short_prefill_opt_in()
+    assert not gt.trace_short_prefill_opt_in(128, 1)
+    assert not gt.trace_short_prefill_opt_in(128, 1, mesh_shape=(1, 4))
+    assert not gt.trace_short_prefill_opt_in(128, 1, mesh_shape=(8, 4))
+
+
+@pytest.mark.usefixtures("_clean_env")
+def test_default_on_for_the_blackhole_column_mesh(monkeypatch):
+    from models.common.utility_functions import is_blackhole
+
+    on = gt.trace_short_prefill_default((4, 1))
+    assert on == bool(is_blackhole())  # the validated 4-chip column mesh, Blackhole only
+    monkeypatch.setenv(gt.GEMMA4_TRACE_SHORT_PREFILL_ENV, "0")
+    assert not gt.trace_short_prefill_default((4, 1))
+    assert not gt.trace_short_prefill_opt_in(128, 1, mesh_shape=(4, 1))
+    monkeypatch.setenv(gt.GEMMA4_TRACE_SHORT_PREFILL_ENV, "1")
+    assert gt.trace_short_prefill_default((1, 4))
+
+
+@pytest.mark.usefixtures("_clean_env")
+def test_opt_in_short_single_user_only(monkeypatch):
+    monkeypatch.setenv(gt.GEMMA4_TRACE_SHORT_PREFILL_ENV, "1")
+    assert gt.trace_short_prefill_opt_in()
+    assert gt.trace_short_prefill_opt_in(100, 1)  # pads to the 128 bucket
+    assert gt.trace_short_prefill_opt_in(128, 1)
+    assert not gt.trace_short_prefill_opt_in(129, 1)  # pads to the 1024 bucket (get_padded_prefill_len)
+    assert not gt.trace_short_prefill_opt_in(128, 2)  # single user only
+    monkeypatch.setenv("GEMMA4_TRACE_SHORT_PREFILL_MAX", "1024")
+    assert gt.trace_short_prefill_opt_in(1000, 1)
+    assert not gt.trace_short_prefill_opt_in(1025, 1)
+
+
+def _resolve(enable_trace, seq_len, batch_size=1, can_batch=False, bounded=True):
+    model = SimpleNamespace(bounded_sliding_kv_cache=bounded, hidden_size_per_layer_input=0)
+    model_args = SimpleNamespace(max_batch_size=32, hidden_size_per_layer_input=0)
+    return gt.resolve_gemma4_prefill_trace_enable(
+        enable_trace,
+        model,
+        model_args,
+        batch_size=batch_size,
+        prefill_seq_lens=[seq_len],
+        can_batch_prefill=can_batch,
+        empty_slots=None,
+    )
+
+
+@pytest.mark.usefixtures("_clean_env")
+def test_bounded_policy_with_and_without_opt_in(monkeypatch):
+    assert not _resolve(True, 128)  # bounded: eager by default
+    monkeypatch.setenv(gt.GEMMA4_TRACE_SHORT_PREFILL_ENV, "1")
+    assert _resolve(True, 128)  # the 128 bucket is a trace bucket
+    assert not _resolve(True, 2048)  # longer prompts stay eager under bounded sliding
+    assert not _resolve(True, 128, batch_size=2, can_batch=True)  # batched prefills stay eager
+    assert not _resolve(False, 128)  # caller disabled
+    assert _resolve(True, 128, bounded=False)  # unbounded: the usual policy
+
+
+@pytest.mark.usefixtures("_clean_env")
+def test_short_prefill_stash_skipped_only_in_the_traced_bounded_short_bucket(monkeypatch):
+    # the traced short single-user bucket under bounded sliding records no sliding-tail stash ...
+    assert gt.short_prefill_stash_skipped(128, 1, bounded=True, trace_mode=True)
+    assert gt.short_prefill_stash_skipped(64, 1, bounded=True, trace_mode=True)
+    # ... every eager call keeps it (continuations are eager), as do unbounded, batched and long traced buckets
+    assert not gt.short_prefill_stash_skipped(128, 1, bounded=True, trace_mode=False)
+    assert not gt.short_prefill_stash_skipped(128, 1, bounded=False, trace_mode=True)
+    assert not gt.short_prefill_stash_skipped(128, 2, bounded=True, trace_mode=True)
+    assert not gt.short_prefill_stash_skipped(1024, 1, bounded=True, trace_mode=True)
+    monkeypatch.setenv("GEMMA4_TRACE_SHORT_PREFILL_MAX", "1024")
+    assert gt.short_prefill_stash_skipped(1024, 1, bounded=True, trace_mode=True)
+
+
+@pytest.mark.usefixtures("_clean_env")
+def test_batched_prefill_trace_buckets_default_follows_the_mesh(monkeypatch):
+    from models.common.utility_functions import is_blackhole
+
+    monkeypatch.delenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_ENV, raising=False)
+    monkeypatch.delenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV, raising=False)
+    # no mesh shape / a row mesh / the Galaxy: off unless GEMMA4_TRACE_BATCHED_PREFILL=1
+    assert gt.batched_prefill_trace_buckets() == set()
+    assert gt.batched_prefill_trace_buckets((1, 4)) == set()
+    assert gt.batched_prefill_trace_buckets((8, 4)) == set()
+    assert not gt.batched_prefill_trace_bucket(31, list(range(31)), 32, 128)
+    # the validated Blackhole 4-chip column mesh: the 32 x 128 bucket
+    assert gt.batched_prefill_trace_buckets((4, 1)) == ({(32, 128)} if is_blackhole() else set())
+    monkeypatch.setenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_ENV, "0")
+    assert gt.batched_prefill_trace_buckets((4, 1)) == set()
+
+
+@pytest.mark.usefixtures("_clean_env")
+def test_batched_prefill_trace_buckets_opt_in(monkeypatch):
+    monkeypatch.setenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_ENV, "1")
+    monkeypatch.delenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV, raising=False)
+    assert gt.batched_prefill_trace_buckets() == {(32, 128)}  # the QB2 32-user ramp bucket
+    # a 31-user cold call at 128 tokens pads to 32 (batched_prefill_padded_batch) -> replays the bucket
+    assert gt.batched_prefill_trace_bucket(31, list(range(31)), 32, 128)
+    assert gt.batched_prefill_trace_bucket(32, None, 32, 128)
+    # slots spanning the top of the batch pad to 32 as well, but a thin call (below the 0.4 fill = 13 of 32 users)
+    # takes the sequential single-user replays: 4 x ~59 ms beats the ~590 ms 32-row replay (shield 40142241727)
+    monkeypatch.delenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_MIN_FILL_ENV, raising=False)
+    assert gt.batched_prefill_bucket_min_users(32) == 13
+    assert gt.batched_prefill_bucket_min_users(8) == 4
+    assert gt.batched_prefill_bucket_min_users(2) == 2
+    assert gt.batched_prefill_trace_bucket(13, [0] + list(range(20, 32)), 32, 128)
+    assert not gt.batched_prefill_trace_bucket(12, list(range(20, 32)), 32, 128)
+    assert not gt.batched_prefill_trace_bucket(4, [28, 29, 30, 31], 32, 128)
+    assert not gt.batched_prefill_trace_bucket(2, [0, 31], 32, 128)
+    monkeypatch.setenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_MIN_FILL_ENV, "0")  # fill 0: every padded call replays
+    assert gt.batched_prefill_trace_bucket(2, [0, 31], 32, 128)
+    assert gt.batched_prefill_trace_bucket(4, [28, 29, 30, 31], 32, 128)
+    monkeypatch.setenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_MIN_FILL_ENV, "0.5")
+    assert gt.batched_prefill_bucket_min_users(32) == 16
+    assert not gt.batched_prefill_trace_bucket(15, list(range(17, 32)), 32, 128)
+    assert gt.batched_prefill_trace_bucket(16, list(range(16, 32)), 32, 128)
+    monkeypatch.setenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_MIN_FILL_ENV, "junk")  # unparsable: the default
+    assert gt.batched_prefill_bucket_min_users(32) == 13
+    monkeypatch.delenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_MIN_FILL_ENV, raising=False)
+    # other shapes keep the sequential single-user replays
+    assert not gt.batched_prefill_trace_bucket(2, [0, 1], 32, 128)
+    assert not gt.batched_prefill_trace_bucket(31, list(range(31)), 32, 1024)
+    assert not gt.batched_prefill_trace_bucket(1, [0], 32, 128)
+    assert not gt.batched_prefill_trace_bucket(31, list(range(31)), 32, None)
+    monkeypatch.setenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV, "32x128, 16x512,8x4096,3x128,32x100")
+    # 8 x 4096 = 32768 virtual tokens is a legal bucket; 3 is not a padded batch, 100 is not a trace ISL
+    assert gt.batched_prefill_trace_buckets() == {(32, 128), (16, 512), (8, 4096)}
+
+
+# ===== merged from tests/unit/test_warmup_prefill_isls.py: Host-only: GEMMA4_WARMUP_PREFILL_ISLS selection and ladder orchestration.
+def test_parse_is_tolerant_sorted_and_unique():
+    assert parse_warmup_isls("8192, 4096,abc,,4096,-1,0,32768") == [4096, 8192, 32768]
+    assert parse_warmup_isls(None) == [] and parse_warmup_isls("") == []
+
+
+def test_parse_warns_on_invalid_entries():
+    # A typo must not disappear silently: each bad entry is named in a warning.
+    from loguru import logger
+
+    messages = []
+    handle = logger.add(lambda m: messages.append(str(m)), level="WARNING", format="{message}")
+    try:
+        assert parse_warmup_isls("4096,8l92,-5") == [4096]
+    finally:
+        logger.remove(handle)
+    joined = "\n".join(messages)
+    assert "8l92" in joined and "-5" in joined and ENV_VAR in joined
+
+
+def test_unset_env_warms_nothing_extra():
+    assert warmup_prefill_isls(262144, env={}) == []
+
+
+def test_ladder_is_capped_by_context_and_nothing_is_inferred_as_covered():
+    env = {ENV_VAR: "128,512,4096,8192,16384,32768,65536"}
+    assert warmup_prefill_isls(16384, env=env) == [128, 512, 4096, 8192, 16384]
+    assert warmup_prefill_isls(None, env=env) == [128, 512, 4096, 8192, 16384, 32768, 65536]
+
+
+class _FakeGenerator:
+    def __init__(self, data_parallel=1, paged=True):
+        self.data_parallel = data_parallel
+        self.paged = paged
+        self.calls = []
+        self.tables = []
+
+    def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
+        # the stock mock table: all zeros (every column the null block 0), 128-token blocks
+        table = torch.zeros(batch_size, -(-seq_len // 128), dtype=torch.int32) if self.paged else None
+        return {"tokens": (batch_size, seq_len), "page_table": table, "model_id": model_id}
+
+
+def _prefill_recorder(gen):
+    def prefill_forward(**kwargs):
+        gen.calls.append(
+            (kwargs["model_id_warmup"], kwargs["tokens"][1], kwargs["enable_trace"], kwargs["warmup_prefill"])
+        )
+        gen.tables.append(kwargs["page_table"])
+
+    return prefill_forward
+
+
+def test_ladder_runs_once_per_process_and_per_model():
+    gen = _FakeGenerator(data_parallel=2)
+    warmed = run_prefill_ladder(
+        gen, kv_cache="kv", prefill_forward=_prefill_recorder(gen), ladder=[4096, 8192], chunk=4096
+    )
+    assert warmed == [4096, 8192]
+    assert gen.calls == [
+        (0, 4096, False, False),
+        (0, 8192, False, False),
+        (1, 4096, False, False),
+        (1, 8192, False, False),
+    ]
+    # the mock tables hold real block ids (one per column): the 8192 ladder's second chunk is an eager
+    # continuation over them, as a served chunk is, with no "chunk_page_table has no real block ids" warning
+    for table, (_, isl, _, _) in zip(gen.tables, gen.calls):
+        assert tuple(table.shape) == (1, isl // 128) and bool((table > 0).all()), "real block ids"
+        assert len(set(table.flatten().tolist())) == table.numel(), "one block per column"
+    # second (capture) pass: nothing runs again
+    assert (
+        run_prefill_ladder(gen, kv_cache="kv", prefill_forward=_prefill_recorder(gen), ladder=[4096, 8192], chunk=4096)
+        == []
+    )
+    assert len(gen.calls) == 4
+
+
+def test_prefix_continuation_warmup_prefills_every_reachable_tail_past_one_chunk_once_per_process():
+    calls = []
+
+    def prefill_forward(**kwargs):
+        calls.append(kwargs)
+
+    # every padded length a remnant past a cached prefix can take (get_padded_prefill_len), each a program set of
+    # its own: the served 12B QB2 paid 4.0 s on its first 2048-token tail, a length the ISL ladder never runs
+    assert continuation_tails(4096, get_padded_prefill_len) == [128, 1024, 2048, 4096]
+    assert continuation_tails(4096, get_padded_prefill_len, skip_chunk=True) == [128, 1024, 2048]
+    assert continuation_tails(2048, get_padded_prefill_len) == [128, 1024, 2048]
+    assert continuation_tails(8192, get_padded_prefill_len, skip_chunk=True) == [128, 1024, 2048, 4096]
+    # bounded by the served context: a tail the cached chunk cannot carry within max_seq_len is never prefilled
+    assert continuation_tails(4096, get_padded_prefill_len, max_seq_len=6144) == [128, 1024, 2048]
+    assert continuation_tails(4096, get_padded_prefill_len, max_seq_len=4096) == []
+    # no tail fits the context: the sweep is skipped, prefills nothing and leaves the once-per-process flag unset
+    bounded = _FakeGenerator(data_parallel=1)
+    assert not run_prefix_continuation_warmup(
+        bounded, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096, tails=[]
+    )
+    assert calls == [] and not getattr(bounded, "_warmed_prefix_continuation", False)
+    gen = _FakeGenerator(data_parallel=2)
+    tails = [128, 1024, 2048]
+    assert run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096, tails=tails)
+    assert [c["start_pos"] for c in calls] == [[4096]] * 6, "every tail per model, past one chunk"
+    assert [c["tokens"] for c in calls] == [(1, 4096 + t) for _ in range(2) for t in tails]
+    assert all(c["enable_trace"] is False and c["kv_cache"] == "kv" for c in calls)
+    assert [c["model_id_warmup"] for c in calls] == [0] * 3 + [1] * 3
+    # the mock user holds real block ids: a zero table (the null block) never reads the prior window at boot, so
+    # the served hit compiled the continuation's programs on the first cached request
+    for c, t in zip(calls, tails * 2):
+        table = c["page_table"]
+        assert tuple(table.shape) == (1, (4096 + t) // 128) and bool((table > 0).all()), "non-zero block ids"
+        assert len(set(table.flatten().tolist())) == table.numel(), "one block per column"
+    # the pool bound: ids wrap inside [1, pool) when the kv pool is known; real tables and fakes pass through
+    assert warmup_page_table_with_real_blocks(torch.zeros(1, 6, dtype=torch.int32), pool_blocks=4).tolist() == [
+        [1, 2, 3, 1, 2, 3]
+    ]
+    real = torch.tensor([[9, 4, 0]], dtype=torch.int32)
+    assert warmup_page_table_with_real_blocks(real) is real and warmup_page_table_with_real_blocks(None) is None
+    # the global layers' SDPA table (attention/continuation.py): one width per model and tail - the context's
+    # blocks plus the tail's, at the stick multiple - for the warmup past one chunk and for a served hit at any
+    # position, so the warmup's tail compiles the program the hit runs
+    assert [continuation_sdpa_table_cols(262144, 4096, t, 64) for t in (128, 1024, 2048, 4096)] == [
+        4104,
+        4112,
+        4128,
+        4160,
+    ]
+    assert all(
+        continuation_sdpa_table_cols(262144, start, t, 64) == continuation_sdpa_table_cols(262144, 4096, t, 64)
+        for start in (128, 2432, 130944, 258048)
+        for t in (128, 1024, 2048, 4096)
+    )
+    calls.clear()
+    assert not run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert calls == [], "once per process"
+    single = _FakeGenerator(data_parallel=1)
+    assert run_prefix_continuation_warmup(single, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert [c["tokens"] for c in calls] == [(1, 4096 + 128)], "the default tail is the short hit"
+    calls.clear()
+    off = _FakeGenerator(data_parallel=1, paged=False)
+    assert not run_prefix_continuation_warmup(off, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert calls == [], "no cached prefix to continue from with paged attention off"
+
+
+def test_ladder_stops_at_the_chunk_when_paged_attention_is_off():
+    gen = _FakeGenerator(paged=False)
+    warmed = run_prefill_ladder(
+        gen, kv_cache=None, prefill_forward=_prefill_recorder(gen), ladder=[2048, 4096, 8192, 16384], chunk=4096
+    )
+    assert warmed == [2048, 4096]
+    assert [c[1] for c in gen.calls] == [2048, 4096]
+
+
+# ===== merged from tests/unit/test_warmup_sampling_filter.py: The decode-warmup sampling sweep drops the request shapes a mesh's sampler opts out of
+B = 4
+
+
+PEN = SamplingParams(
+    temperature=[1.0] * B,
+    top_k=[10] * B,
+    top_p=[0.9] * B,
+    presence_penalty=[1.2] * B,
+    frequency_penalty=[1.2] * B,
+    repetition_penalty=[1.5] * B,
+)
+
+
+PLAIN = SamplingParams(
+    temperature=[1.0] * B,
+    top_k=[10] * B,
+    top_p=[0.9] * B,
+    presence_penalty=None,
+    frequency_penalty=None,
+    repetition_penalty=None,
+)
+
+
+GREEDY = SamplingParams(temperature=[0.0] * B, top_k=[1] * B, top_p=[1.0] * B)
+
+
+SWEEP = [PEN, PLAIN, GREEDY, None]
+
+
+def test_full_sampler_keeps_the_whole_sweep():
+    assert filter_warmup_sampling_params(SWEEP, SimpleNamespace()) == SWEEP
+    assert filter_warmup_sampling_params(SWEEP, None) == SWEEP
+
+
+def test_no_penalties_drops_only_the_penalty_configs():
+    sampler = SimpleNamespace(_allow_penalties_sampling=False, _allow_topk_sampling=True)
+    assert filter_warmup_sampling_params(SWEEP, sampler) == [PLAIN, GREEDY, None]
+
+
+def test_no_topk_keeps_only_greedy_and_none():
+    sampler = SimpleNamespace(_allow_penalties_sampling=False, _allow_topk_sampling=False)
+    assert filter_warmup_sampling_params(SWEEP, sampler) == [GREEDY, None]
+
+
+# ===== GEMMA4_PREFILL_PAD_BUCKETS: Gemma 4's own prefill padding (warmup_isls) and the shared loop's call cut to it
+PAD = "256,512,1024"
+
+
+@pytest.fixture()
+def _pad_knob(monkeypatch):
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, PAD)
+
+
+def test_pad_buckets_parse_keeps_powers_of_two_in_the_shared_1024_range():
+    assert parse_prefill_pad_buckets("256, 512,1024,abc,96,128,384,2048,,") == [256, 512, 1024]
+    assert parse_prefill_pad_buckets("") == [] and parse_prefill_pad_buckets(None) == []
+
+
+def test_pad_policy_unset_is_the_shared_policy_everywhere(monkeypatch):
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV, raising=False)
+    for n in (1, 128, 129, 143, 1024, 1025, 4097):
+        assert gemma4_padded_prefill_len(n) == get_padded_prefill_len(n)
+    assert prefill_trim_width(1024, 142) is None, "the shared loop's call keeps its width"
+    assert new_prefill_pad_lengths() == [] and warmup_prefill_isls(262144, env={}) == []
+
+
+@pytest.mark.usefixtures("_pad_knob")
+def test_pad_policy_buckets_the_129_to_1024_range_only():
+    expect = {
+        1: 128,
+        128: 128,
+        129: 256,
+        143: 256,
+        256: 256,
+        257: 512,
+        512: 512,
+        513: 1024,
+        1024: 1024,
+        1025: 2048,
+        5000: 8192,
+    }
+    for n, padded in expect.items():
+        assert gemma4_padded_prefill_len(n) == padded, n
+        assert padded <= get_padded_prefill_len(n), "never above the shared bucket"
+    assert gemma4_padded_prefill_len(200, buckets=[512]) == 512, "the smallest listed bucket at or above the prompt"
+    assert gemma4_padded_prefill_len(600, buckets=[512]) == 1024, "none listed above it: the shared bucket"
+    assert new_prefill_pad_lengths() == [256, 512] and new_prefill_pad_lengths(300) == [256]
+
+
+@pytest.mark.usefixtures("_pad_knob")
+def test_trim_width_cuts_cold_and_continued_single_user_calls_only():
+    assert prefill_trim_width(1024, 142) == 256, "143 rows: the 256 bucket"
+    assert prefill_trim_width(1024, 4096 + 199, num_cached_tokens=4096) == 256, "a 200-row continuation"
+    assert prefill_trim_width(1024, 600) is None, "601 rows pad to 1024 either way"
+    assert prefill_trim_width(128, 99) is None, "the 128 bucket is the shared one"
+    assert prefill_trim_width(4096, 4095) is None and prefill_trim_width(2048, 1500) is None, "above 1024: unchanged"
+    assert (
+        prefill_trim_width(1024, [142, 9], batch_size=2) is None and prefill_trim_width(1024, 142, batch_size=2) is None
+    )
+    assert prefill_trim_width(1024, None) is None and prefill_trim_width(1024, 142, buckets=[]) is None
+
+
+def test_ladder_and_continuation_tails_cover_the_knobs_lengths(monkeypatch):
+    env = {PREFILL_PAD_BUCKETS_ENV: PAD}
+    assert warmup_prefill_isls(16384, env=env) == [256, 512], "the lengths the shared policy never warms"
+    assert warmup_prefill_isls(300, env=env) == [256]
+    assert warmup_prefill_isls(16384, env={**env, ENV_VAR: "4096,256"}) == [256, 512, 4096]
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, PAD)
+    assert continuation_tails(4096, gemma4_padded_prefill_len) == [128, 256, 512, 1024, 2048, 4096]
+    assert continuation_tails(4096, gemma4_padded_prefill_len, skip_chunk=True) == [128, 256, 512, 1024, 2048]
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV)
+    assert continuation_tails(4096, gemma4_padded_prefill_len) == [128, 1024, 2048, 4096]
+
+
+@pytest.mark.usefixtures("_clean_env", "_pad_knob")
+def test_short_prefill_trace_opt_in_and_trace_isls_follow_the_policy(monkeypatch):
+    monkeypatch.setenv(gt.GEMMA4_TRACE_SHORT_PREFILL_ENV, "1")
+    monkeypatch.setenv("GEMMA4_TRACE_SHORT_PREFILL_MAX", "256")
+    assert gt.trace_short_prefill_opt_in(200, 1), "pads to 256 under the knob"
+    assert not gt.trace_short_prefill_opt_in(257, 1), "pads to 512"
+    monkeypatch.delenv("GEMMA4_TRACE_PREFILL_SEQ_LENS", raising=False)
+    assert gt._resolve_trace_prefill_seq_lens() == [
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+    ], "the knob's buckets are trace shapes"
+    monkeypatch.setenv("GEMMA4_TRACE_PREFILL_SEQ_LENS", "128")
+    assert gt._resolve_trace_prefill_seq_lens() == [128], "an explicit list is taken as given"
+    monkeypatch.delenv("GEMMA4_TRACE_PREFILL_SEQ_LENS")
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV)
+    assert not gt.trace_short_prefill_opt_in(200, 1), "the shared 1024 bucket without the knob"
+    assert gt._resolve_trace_prefill_seq_lens() == gt._DEFAULT_TRACE_PREFILL_SEQ_LENS
+
+
+def _trim_generator(calls):
+    """A bare mixin whose eager single-user prefill records what it is handed (no page table, no KV cache)."""
+    g = Mixin.__new__(Mixin)
+    g.model = [
+        SimpleNamespace(mesh_config=None, layers=[], hidden_size_per_layer_input=0, bounded_sliding_kv_cache=False)
+    ]
+    g.model_args = [SimpleNamespace(max_prefill_chunk_size=4096)]
+
+    def eager(tokens, page_table=None, kv_cache=None, num_cached_tokens=0, **kwargs):
+        calls.append(
+            (tokens.clone(), num_cached_tokens, dict(kwargs), getattr(g.model[0], "_g4_mm_prefill_embeds", None))
+        )
+        return "logits"
+
+    g._prefill_forward_single_user_text_eager = eager
+    return g
+
+
+def _padded_call(rows, width=1024):
+    """The shared loop's ``prefill_ids``: the prompt's ids then zeros up to the shared bucket."""
+    tokens = torch.zeros(1, width, dtype=torch.long)
+    tokens[0, :rows] = torch.arange(1, rows + 1)
+    return tokens
+
+
+@pytest.mark.usefixtures("_pad_knob")
+def test_the_shared_loops_padded_call_runs_at_the_gemma4_bucket():
+    calls = []
+    g = _trim_generator(calls)
+    assert g.prefill_forward_single_user_text(_padded_call(143), last_token_idx=142, model_id=0, user_id=0) == "logits"
+    toks, cached, kw, _mm = calls[-1]
+    assert tuple(toks.shape) == (1, 256) and int(toks[0, 142]) == 143 and int(toks[0, 143]) == 0
+    assert kw["last_token_idx"] == 142 and cached == 0, "the index is untouched: the last-token tile follows it"
+    # a continuation: the rows past the cached prefix set the bucket
+    g.prefill_forward_single_user_text(
+        _padded_call(200), last_token_idx=4096 + 199, num_cached_tokens=4096, model_id=0, user_id=0
+    )
+    assert tuple(calls[-1][0].shape) == (1, 256) and calls[-1][1] == 4096
+    # ids past the bucket that are not the loop's zero pad: the width stays
+    odd = _padded_call(143)
+    odd[0, 700] = 5
+    g.prefill_forward_single_user_text(odd, last_token_idx=142, model_id=0, user_id=0)
+    assert tuple(calls[-1][0].shape) == (1, 1024)
+    # the batched form (per-slot indices) keeps the width the shared batched consumption reshapes by
+    g.prefill_forward_single_user_text(
+        torch.zeros(2, 1024, dtype=torch.long), last_token_idx=[142, 9], batch_size=2, user_id=[0, 1], model_id=0
+    )
+    assert tuple(calls[-1][0].shape) == (2, 1024)
+
+
+def test_without_the_knob_the_shared_loops_width_is_kept(monkeypatch):
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV, raising=False)
+    calls = []
+    g = _trim_generator(calls)
+    g.prefill_forward_single_user_text(_padded_call(143), last_token_idx=142, model_id=0, user_id=0)
+    assert tuple(calls[-1][0].shape) == (1, 1024)
+
+
+@pytest.mark.usefixtures("_pad_knob")
+def test_a_multimodal_call_cuts_its_embedding_suffix_with_the_tokens():
+    calls = []
+    g = _trim_generator(calls)
+    embeds = torch.arange(143 * 4, dtype=torch.float32).reshape(143, 4)
+    g.prefill_forward_single_user_text(
+        _padded_call(143), last_token_idx=142, model_id=0, user_id=0, pixel_values=embeds
+    )
+    toks, _cached, kw, mm = calls[-1]
+    assert tuple(toks.shape) == (1, 256) and "pixel_values" not in kw
+    assert mm is not None and tuple(mm[0].shape) == (143, 4) and mm[1] == 0, "the suffix within the bucket"
+    assert g.model[0]._g4_mm_prefill_embeds is None, "released after the call"
+
+
+class _TraceBase:
+    def _easy_trace_prefill(self, prefill_ids, **kwargs):
+        self.trace_calls.append((prefill_ids.clone(), dict(kwargs)))
+        return "hidden"
+
+
+class _TraceGen(Mixin, _TraceBase):
+    pass
+
+
+def _trace_generator():
+    g = _TraceGen.__new__(_TraceGen)
+    g.trace_calls = []
+    g.model = [SimpleNamespace(layers=[])]
+    g._easy_trace_prefill_with_chunk_page_table = (
+        lambda prefill_ids, **kw: g.trace_calls.append((prefill_ids.clone(), dict(kw, mc=True))) or "hidden"
+    )
+    return g
+
+
+@pytest.mark.usefixtures("_pad_knob")
+def test_the_traced_single_user_call_is_keyed_and_captured_at_the_gemma4_bucket():
+    g = _trace_generator()
+    common = dict(page_table=None, batch_size=1, num_cached_tokens=0, model_id=0)
+    assert g._easy_trace_prefill(_padded_call(143), last_token_idx=142, prefill_seq_len=1024, **common) == "hidden"
+    ids, kw = g.trace_calls[-1]
+    assert tuple(ids.shape) == (1, 256) and kw["prefill_seq_len"] == 256 and kw["last_token_idx"] == 142
+    assert g._g4_pf_row == (142, 142 % 32)
+    # the multi-chunk walk's chunks keep the chunk's key (whole buckets; the last chunk's rows sit below it)
+    g._easy_trace_prefill(
+        _padded_call(300, width=4096),
+        last_token_idx=8192 + 299,
+        prefill_seq_len=4096,
+        force_chunk_page_table=True,
+        **dict(common, num_cached_tokens=8192),
+    )
+    ids, kw = g.trace_calls[-1]
+    assert tuple(ids.shape) == (1, 4096) and kw["prefill_seq_len"] == 4096 and kw.get("mc")
+    # the batched capture keeps its width
+    g._easy_trace_prefill(
+        torch.zeros(2, 1024, dtype=torch.long),
+        last_token_idx=[142, 9],
+        prefill_seq_len=1024,
+        **dict(common, batch_size=2),
+    )
+    ids, kw = g.trace_calls[-1]
+    assert tuple(ids.shape) == (2, 1024) and kw["prefill_seq_len"] == 1024

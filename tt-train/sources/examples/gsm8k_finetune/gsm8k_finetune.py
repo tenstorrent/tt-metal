@@ -49,16 +49,21 @@ def gsm8k_collate_fn(
 ) -> Batch:
     """Collate (question_tokens, answer_tokens) pairs into a :class:`Batch`.
 
+    ``eos_token_id`` is appended to each answer, so the last trained target is EOS.
     Loss is computed only on answer (completion) tokens; question (prompt) tokens
-    and padding are masked out via ``Batch.loss_mask``.
+    and padding are masked out via ``Batch.loss_mask``. ``labels`` are the
+    inputs shifted left by one and ``loss_mask`` is aligned with ``labels``.
     """
     X, Y = map(list, zip(*batch))
     batch_size = len(X)
 
     data_np = np.full((batch_size, max_sequence_length), eos_token_id, dtype=np.uint32)
     prompt_lens = []
+    seq_lens = []
 
     for i, (x_tokens, y_tokens) in enumerate(zip(X, Y)):
+        # The answer ends with EOS so the model learns to stop after it.
+        y_tokens = list(y_tokens) + [eos_token_id]
         x_len = len(x_tokens)
         y_len = len(y_tokens)
         total_len = x_len + y_len
@@ -82,6 +87,7 @@ def gsm8k_collate_fn(
             data_np[i, x_len : x_len + y_len] = y_tokens
 
         prompt_lens.append(x_len)
+        seq_lens.append(x_len + y_len)
 
     # input_ids: [B, 1, 1, T]
     input_ids_np = data_np.reshape(batch_size, 1, 1, max_sequence_length)
@@ -90,12 +96,14 @@ def gsm8k_collate_fn(
     labels_np = np.full((batch_size, max_sequence_length), eos_token_id, dtype=np.uint32)
     labels_np[:, :-1] = input_ids_np[:, 0, 0, 1:]
 
-    # loss_mask: 0 for prompt tokens and padding, 1 elsewhere, then normalised
-    loss_mask_np = np.ones((batch_size, 1, max_sequence_length, 1), dtype=np.float32)
-    for i, prompt_len in enumerate(prompt_lens):
-        loss_mask_np[i, :, :prompt_len, :] = 0.0
-        pad_positions = input_ids_np[i, 0, 0, :] == eos_token_id
-        loss_mask_np[i, :, pad_positions, :] = 0.0
+    # loss_mask lives in label space: position t scores labels[t] = input[t + 1].
+    # Train the positions whose label is an answer token, i.e. t in
+    # [prompt_len - 1, seq_len - 2]. Position prompt_len - 1 predicts the first
+    # answer token and position seq_len - 2 predicts the appended EOS; prompt,
+    # padding and the final real position (whose label is filler) get zero weight.
+    loss_mask_np = np.zeros((batch_size, 1, max_sequence_length, 1), dtype=np.float32)
+    for i, (prompt_len, seq_len) in enumerate(zip(prompt_lens, seq_lens)):
+        loss_mask_np[i, :, max(prompt_len - 1, 0) : max(seq_len - 1, 0), :] = 1.0
 
     total_weight = loss_mask_np.sum()
     if total_weight > 0:
@@ -425,8 +433,10 @@ def train():
 
     sched = SpeedrunScheduler(scheduler_config)
 
-    mask_np = build_causal_mask(max_sequence_length)
-    causal_mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+    causal_mask = None
+    if device_config.enable_tp:
+        mask_np = build_causal_mask(max_sequence_length)
+        causal_mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
     trainer = SFTTrainer(
         model=tt_model,
@@ -434,7 +444,8 @@ def train():
         eval_dataloader=eval_loader,
         config=sft_config,
         optimizer=optimizer_cfg,
-        lr_schedule=sched.lr_at,  # SpeedrunScheduler uses 0-based step index
+        # SpeedrunScheduler uses a 0-based step index; the optimizer's lr is max_lr, so lr_at / max_lr is the factor.
+        lr_lambda=lambda step: sched.lr_at(step) / scheduler_config.max_lr,
         attention_mask=causal_mask,
     )
 

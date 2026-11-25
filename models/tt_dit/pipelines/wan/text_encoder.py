@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import ftfy
 import regex as re
-from transformers import AutoTokenizer, UMT5EncoderModel
+from transformers import T5Tokenizer, UMT5EncoderModel
 
 import ttnn
 from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder
@@ -56,7 +56,7 @@ class TextEncoder:
         self._checkpoint_name = checkpoint_name
         self._max_sequence_length = max_sequence_length
 
-        self._tokenizer = AutoTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer", trust_remote_code=True)
+        self._tokenizer = T5Tokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer")
         self._torch_text_encoder = UMT5EncoderModel.from_pretrained(
             checkpoint_name, subfolder="text_encoder", trust_remote_code=True
         )

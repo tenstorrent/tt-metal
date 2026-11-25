@@ -7,12 +7,9 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <algorithm>
-#include <exception>
 #include <functional>
-#include <limits>
 #include <map>
 #include <memory>
-#include <numeric>
 #include <optional>
 #include <set>
 #include <string>
@@ -26,13 +23,11 @@
 #include <tt-logger/tt-logger.hpp>
 #include <cstdlib>
 #include <fmt/format.h>
-#include <fmt/ranges.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
-#include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::experimental::tt_fabric {
@@ -430,6 +425,7 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     // too sparse for the topology mapper to embed the MGD.
     std::size_t local_links = 0;
     std::size_t global_links = 0;
+    std::size_t pruned_links = 0;
     std::set<std::pair<tt::tt_metal::experimental::PhysicalNodeId, tt::tt_metal::experimental::PhysicalNodeId>> cross_host_pairs;
 
     // This is the solve input, so it is keyed on addresses rather than on the descriptor's own ASIC
@@ -453,7 +449,14 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
                 if (src_asic_id == dst_asic_id) {
                     continue;
                 }
-                const auto& dst_node_id = physical_system_descriptor.get_physical_node_id(dst_asic_id);
+                // A solve over a subset of a larger system still sees the subset's links into chips
+                // outside it; those chips are not part of the graph being solved against.
+                const auto dst_node_id_opt = physical_system_descriptor.find_physical_node_id(dst_asic_id);
+                if (!dst_node_id_opt.has_value()) {
+                    pruned_links += asic_connection.second.size();
+                    continue;
+                }
+                const auto& dst_node_id = *dst_node_id_opt;
 
                 const auto& eth_connections = asic_connection.second;
                 // Add each neighbor multiple times based on number of ethernet connections (channels)
@@ -474,11 +477,12 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     log_debug(
         tt::LogFabric,
         "build_flat_adjacency_map_from_psd: {} ASIC node(s), {} local eth link(s), {} cross-host eth link(s), {} "
-        "distinct cross-host ASIC pair(s)",
+        "distinct cross-host ASIC pair(s), {} eth link(s) to undescribed ASIC(s) pruned",
         flat_adj.size(),
         local_links,
         global_links,
-        cross_host_pairs.size());
+        cross_host_pairs.size(),
+        pruned_links);
 
     return flat_adj;
 }
@@ -1018,6 +1022,19 @@ std::optional<std::string> add_exit_node_constraints(
                 const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
                 auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
                 if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
+                    // RELAXED (#56762): a device-level connection with no physical exit nodes is logical-only too.
+                    if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                        log_warning(
+                            tt::LogFabric,
+                            "Relaxed mode: requested inter-mesh connection from fabric node (mesh {}, chip {}) toward "
+                            "logical mesh {} has NO physical exit nodes ({} logical channel(s) requested); the "
+                            "connection is logical-only and traffic must use the host interconnect",
+                            fabric_node_id.mesh_id.get(),
+                            fabric_node_id.chip_id,
+                            dst_logical_mesh.get(),
+                            num_logical_exit_nodes_assigned);
+                        continue;
+                    }
                     return fmt::format(
                         "no physical exit ASICs toward physical mesh {} (logical destination mesh {}) for "
                         "fabric node (mesh {}, chip {})",
@@ -1071,6 +1088,17 @@ std::optional<std::string> add_exit_node_constraints(
             const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
             auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
             if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
+                // RELAXED (#56762): a connection with no physical exit nodes is logical-only; skip its constraint.
+                if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                    log_warning(
+                        tt::LogFabric,
+                        "Relaxed mode: requested inter-mesh connection toward logical mesh {} has NO physical exit "
+                        "nodes from the mapped source mesh ({} logical channel(s) requested); the connection is "
+                        "logical-only and traffic must use the host interconnect",
+                        dst_logical_mesh.get(),
+                        num_logical_exit_nodes_assigned);
+                    continue;
+                }
                 return fmt::format(
                     "no physical exit ASICs toward physical mesh {} (logical destination mesh {})",
                     mapped_physical_dst_mesh_id.get(),
@@ -1130,6 +1158,16 @@ std::optional<std::string> add_exit_node_constraints(
             }
 
             if (effective_exit_pair_min_count == 0) {
+                if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                    log_warning(
+                        tt::LogFabric,
+                        "Relaxed mode: requested inter-mesh connection toward logical mesh {} has ZERO physical "
+                        "links from the mapped source mesh ({} logical channel(s) requested); the connection is "
+                        "logical-only and traffic must use the host interconnect",
+                        dst_logical_mesh.get(),
+                        num_logical_exit_nodes_assigned);
+                    continue;
+                }
                 return fmt::format(
                     "mesh-level exit toward logical mesh {} has zero effective exit pairs ({} logical "
                     "channel(s), {} physical link(s))",
@@ -1350,6 +1388,7 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         }
         const auto& physical_exit_node_graph = *physical_exit_node_graph_ptr;
 
+        // Zero-link tolerance (#56762) is inter-mesh only. TODO(fabric-2.0): revisit for intra-mesh.
         ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId> intra_mesh_constraints;
 
         if (!config.disable_rank_bindings) {
@@ -1422,6 +1461,12 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         }
 
         auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);
+
+        TT_FATAL(
+            !intra_mesh_constraints.allow_unmatched_target_edges(),
+            "Intra-mesh solve must not allow unmatched target edges (zero-link tolerance is inter-mesh only); "
+            "logical mesh {}",
+            logical_mesh_id.get());
 
         auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
             logical_graph, physical_graph, intra_mesh_constraints, validation_mode, /*quiet_mode=*/true);

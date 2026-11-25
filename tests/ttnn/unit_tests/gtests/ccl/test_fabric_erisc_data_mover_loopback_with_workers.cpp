@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
@@ -50,7 +49,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////

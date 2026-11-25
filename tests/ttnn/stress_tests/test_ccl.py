@@ -7,7 +7,12 @@ import ttnn
 
 from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
-from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+
+# Fabric init rejects 1-chip meshes, so skip before the mesh fixture opens the device.
+pytestmark = pytest.mark.skipif(
+    ttnn.get_num_devices() < 2, reason="CCL stress tests require fabric, which needs at least 2 devices"
+)
 
 
 @skip_for_wormhole_b0()
@@ -73,9 +78,9 @@ def test_ccl_ddr_smoke_test(
     enable_trace,
     num_iters,
 ):
-    if ttnn.get_num_devices() != 4 and ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING:
+    if ttnn.get_num_devices() != 4 and ttnn.get_fabric_config(bh_2d_mesh_device) == ttnn.FabricConfig.FABRIC_1D_RING:
         pytest.skip("This test is only for the quietbox")
-    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis, mesh_device=bh_2d_mesh_device)
     # Check all the rows and columns independantly within the device
     if cluster_axis == 0:
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -177,9 +182,9 @@ def test_ccl_other_smoke_test(
     enable_trace,
     num_iters,
 ):
-    if ttnn.get_num_devices() != 4 and ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING:
+    if ttnn.get_num_devices() != 4 and ttnn.get_fabric_config(bh_2d_mesh_device) == ttnn.FabricConfig.FABRIC_1D_RING:
         pytest.skip("Skipping unsupported case Ring on 2D mesh with no wraparound rings")
-    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis, mesh_device=bh_2d_mesh_device)
     for i in range(bh_2d_mesh_device.shape[(cluster_axis - 1) % 2]):
         if cluster_axis == 0:
             submesh_device = bh_2d_mesh_device.create_submesh(

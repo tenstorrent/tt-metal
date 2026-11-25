@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.demos.vision.generative.stable_diffusion.wormhole.sd_helper_funcs import get_reference_vae
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.vae.ttnn_vae_attention import Attention
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
