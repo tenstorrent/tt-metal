@@ -1,0 +1,36 @@
+chip 0 (pos 0): end  145.7  last landing  128.6  out_end med   93.0 p90  131.4 max  145.7  tail(max out - last land)  17.1
+   core (9, 9)   src 1,2    s1_end    nan land  121.3 s3    0.2- 136.4 wr_end  137.8 tail  16.5
+   core (2, 9)   src L,1    s1_end    nan land  126.8 s3    0.2- 141.9 wr_end  143.3 tail  16.4
+   core (4, 9)   src L,1    s1_end    nan land  127.3 s3    0.2- 142.3 wr_end  143.7 tail  16.4
+   core (3, 9)   src L,1    s1_end    nan land  125.2 s3    0.2- 143.0 wr_end  144.4 tail  19.2
+   core (8, 9)   src 1,2    s1_end    nan land  128.3 s3    0.2- 143.4 wr_end  144.7 tail  16.4
+   core (10, 9)  src 1,2    s1_end    nan land  128.6 s3    0.1- 143.6 wr_end  145.0 tail  16.4
+   core (5, 9)   src L,2    s1_end    nan land  125.8 s3    0.2- 143.7 wr_end  145.0 tail  19.2
+   core (7, 9)   src L,2    s1_end    nan land  126.7 s3    0.2- 144.3 wr_end  145.7 tail  19.0
+chip 1 (pos 1): end  152.3  last landing  136.0  out_end med   88.2 p90  146.3 max  152.3  tail(max out - last land)  16.4
+   core (10, 4)  src 0,L    s1_end    nan land  130.7 s3    0.2- 145.7 wr_end  147.0 tail  16.3
+   core (9, 5)   src 0,L    s1_end    nan land  131.5 s3    0.2- 146.6 wr_end  147.9 tail  16.4
+   core (10, 6)  src 0,L    s1_end    nan land  132.0 s3    0.2- 147.1 wr_end  148.4 tail  16.4
+   core (9, 7)   src 0,L    s1_end    nan land  132.6 s3    0.2- 147.6 wr_end  149.0 tail  16.4
+   core (10, 8)  src 0,L    s1_end    nan land  133.1 s3    0.2- 148.2 wr_end  149.6 tail  16.5
+   core (1, 9)   src 0,L    s1_end    nan land  134.5 s3    0.2- 149.5 wr_end  150.9 tail  16.4
+   core (5, 9)   src 0,2    s1_end    nan land  135.4 s3    0.2- 150.5 wr_end  151.8 tail  16.4
+   core (7, 9)   src 0,2    s1_end    nan land  136.0 s3    0.2- 151.0 wr_end  152.3 tail  16.4
+chip 2 (pos 2): end  148.3  last landing  130.0  out_end med   89.8 p90  141.0 max  148.3  tail(max out - last land)  18.2
+   core (9, 7)   src 0,1    s1_end    nan land  125.7 s3    0.2- 140.8 wr_end  142.1 tail  16.4
+   core (10, 8)  src 0,1    s1_end    nan land  126.4 s3    0.2- 141.4 wr_end  142.8 tail  16.4
+   core (2, 9)   src 0,1    s1_end    nan land  126.4 s3    0.2- 141.5 wr_end  142.8 tail  16.4
+   core (1, 9)   src 0,1    s1_end    nan land  126.9 s3    0.2- 142.0 wr_end  143.3 tail  16.4
+   core (4, 9)   src 0,1    s1_end    nan land  127.0 s3    0.2- 142.0 wr_end  143.4 tail  16.4
+   core (8, 9)   src 1,L    s1_end    nan land  128.3 s3    0.2- 143.4 wr_end  144.8 tail  16.5
+   core (10, 9)  src 1,L    s1_end    nan land  130.0 s3    0.1- 145.0 wr_end  146.4 tail  16.4
+   core (9, 9)   src 1,L    s1_end    nan land  130.0 s3    0.2- 146.9 wr_end  148.3 tail  18.2
+chip 3 (pos 3): end  151.1  last landing  134.5  out_end med   89.2 p90  145.2 max  151.1  tail(max out - last land)  16.5
+   core (10, 4)  src 0,1    s1_end    nan land  130.1 s3    0.2- 145.1 wr_end  146.4 tail  16.4
+   core (9, 5)   src 0,1    s1_end    nan land  130.8 s3    0.2- 145.9 wr_end  147.2 tail  16.4
+   core (10, 6)  src 0,1    s1_end    nan land  131.5 s3    0.2- 146.5 wr_end  147.8 tail  16.4
+   core (9, 7)   src 0,1    s1_end    nan land  131.9 s3    0.2- 147.1 wr_end  148.4 tail  16.5
+   core (10, 8)  src 0,1    s1_end    nan land  132.7 s3    0.1- 147.7 wr_end  149.1 tail  16.4
+   core (1, 9)   src 0,1    s1_end    nan land  133.3 s3    0.2- 148.5 wr_end  149.8 tail  16.5
+   core (5, 9)   src 0,2    s1_end    nan land  133.9 s3    0.2- 149.1 wr_end  150.5 tail  16.5
+   core (7, 9)   src 0,2    s1_end    nan land  134.5 s3    0.2- 149.7 wr_end  151.1 tail  16.5

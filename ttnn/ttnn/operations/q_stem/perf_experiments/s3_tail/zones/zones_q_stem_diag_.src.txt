@@ -1,0 +1,14 @@
+slot 0: pos 3  own quarter complete (RW_LOCAL end) min/max 104.0/105.2
+   src 2: row landing max per t t0: 101.0 t1: 101.2 t2: 101.3 t3: 101.4 t4: 101.5
+slot 1: pos 2  own quarter complete (RW_LOCAL end) min/max 99.5/142.4
+   src 0: row landing max per t t0:  61.2 t1:  82.1 t2:  98.1 t3: 112.0 t4: 142.3
+   src 1: row landing max per t t0:  37.6 t1:  59.8 t2:  82.1 t3:  98.7 t4: 114.8
+   src 3: row landing max per t t0:  96.3 t1:  96.5 t2:  96.6 t3:  96.7 t4:  96.8
+slot 2: pos 1  own quarter complete (RW_LOCAL end) min/max 99.9/130.2
+   src 0: row landing max per t t0:  34.6 t1:  50.5 t2:  63.2 t3:  75.3 t4:  89.9
+   src 2: row landing max per t t0:  97.1 t1:  97.2 t2:  97.3 t3: 101.7 t4: 130.0
+   src 3: row landing max per t t0:  97.1 t1:  97.2 t2:  97.3 t3: 100.6 t4: 118.9
+slot 3: pos 0  own quarter complete (RW_LOCAL end) min/max 98.6/137.8
+   src 1: row landing max per t t0:  39.1 t1:  51.4 t2:  63.6 t3:  75.3 t4:  90.5
+   src 2: row landing max per t t0:  95.8 t1:  96.0 t2:  96.1 t3: 121.2 t4: 137.6
+   src 3: row landing max per t t0:  95.9 t1:  96.0 t2:  96.1 t3:  96.3 t4: 105.8

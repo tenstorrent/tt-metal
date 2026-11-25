@@ -1,0 +1,36 @@
+chip 0 (pos 0): end  150.3  last landing  126.8  out_end med  126.0 p90  144.6 max  150.3  tail(max out - last land)  23.5
+   core (4, 5)   src 3      s1_end  115.7 land  117.8 s3  115.7- 145.1 wr_end  146.4 tail  28.7
+   core (2, 7)   src        s1_end  115.7 land  117.5 s3  115.8- 145.6 wr_end  146.9 tail  29.4
+   core (3, 6)   src        s1_end  115.7 land  117.7 s3  115.8- 146.0 wr_end  147.4 tail  29.7
+   core (3, 8)   src        s1_end  115.8 land  117.7 s3  115.8- 147.4 wr_end  148.8 tail  31.1
+   core (4, 6)   src        s1_end  115.7 land  117.7 s3  115.8- 147.7 wr_end  149.1 tail  31.4
+   core (4, 8)   src        s1_end  115.8 land  117.5 s3  115.8- 148.3 wr_end  149.7 tail  32.2
+   core (4, 7)   src        s1_end  115.7 land  117.3 s3  115.8- 148.8 wr_end  150.2 tail  32.8
+   core (3, 7)   src        s1_end  115.7 land  117.7 s3  115.8- 148.9 wr_end  150.3 tail  32.6
+chip 1 (pos 1): end  145.6  last landing  122.5  out_end med  123.1 p90  136.9 max  145.6  tail(max out - last land)  23.0
+   core (3, 6)   src        s1_end  103.5 land  102.4 s3  103.6- 137.6 wr_end  139.0 tail  36.6
+   core (4, 4)   src 3      s1_end  103.5 land  102.4 s3  103.5- 138.5 wr_end  139.9 tail  37.5
+   core (3, 8)   src        s1_end  103.5 land  102.4 s3  103.6- 138.9 wr_end  140.2 tail  37.8
+   core (4, 5)   src 3      s1_end  103.6 land  102.5 s3  103.6- 139.8 wr_end  141.1 tail  38.7
+   core (3, 7)   src        s1_end  103.5 land  102.4 s3  103.6- 140.5 wr_end  141.8 tail  39.4
+   core (4, 6)   src        s1_end  103.5 land  102.4 s3  103.6- 142.0 wr_end  143.3 tail  40.9
+   core (4, 8)   src        s1_end  103.5 land  102.6 s3  103.6- 143.1 wr_end  144.5 tail  41.8
+   core (4, 7)   src        s1_end  103.5 land  102.4 s3  103.6- 144.2 wr_end  145.6 tail  43.1
+chip 2 (pos 2): end  146.4  last landing  115.4  out_end med  121.4 p90  139.1 max  146.4  tail(max out - last land)  31.0
+   core (3, 5)   src 3      s1_end  102.0 land  111.6 s3  102.1- 139.6 wr_end  140.9 tail  29.3
+   core (4, 5)   src 3      s1_end  102.0 land  110.0 s3  102.1- 140.2 wr_end  141.5 tail  31.5
+   core (3, 6)   src        s1_end  102.0 land  110.6 s3  102.1- 142.5 wr_end  143.9 tail  33.3
+   core (4, 6)   src        s1_end  102.0 land  112.9 s3  102.1- 142.7 wr_end  144.1 tail  31.1
+   core (3, 8)   src        s1_end  102.0 land  112.6 s3  102.1- 143.6 wr_end  145.0 tail  32.3
+   core (4, 8)   src        s1_end  102.0 land  115.0 s3  102.1- 144.0 wr_end  145.4 tail  30.4
+   core (3, 7)   src        s1_end  102.0 land  113.6 s3  102.1- 144.8 wr_end  146.2 tail  32.6
+   core (4, 7)   src        s1_end  102.0 land  112.0 s3  102.1- 145.0 wr_end  146.4 tail  34.4
+chip 3 (pos 3): end  149.1  last landing  132.6  out_end med  127.1 p90  140.7 max  149.1  tail(max out - last land)  16.5
+   core (4, 4)   src L      s1_end  107.1 land  106.0 s3  107.1- 141.4 wr_end  142.8 tail  36.8
+   core (3, 6)   src        s1_end  107.1 land  106.0 s3  107.1- 142.2 wr_end  143.5 tail  37.5
+   core (4, 5)   src L      s1_end  107.1 land  106.0 s3  107.1- 143.2 wr_end  144.6 tail  38.6
+   core (3, 8)   src        s1_end  107.1 land  106.0 s3  107.1- 143.5 wr_end  144.9 tail  38.9
+   core (3, 7)   src        s1_end  107.1 land  106.0 s3  107.1- 145.0 wr_end  146.3 tail  40.3
+   core (4, 6)   src        s1_end  107.1 land  106.0 s3  107.1- 145.4 wr_end  146.8 tail  40.8
+   core (4, 8)   src        s1_end  107.1 land  106.1 s3  107.1- 147.0 wr_end  148.3 tail  42.2
+   core (4, 7)   src        s1_end  107.1 land  106.0 s3  107.1- 147.7 wr_end  149.1 tail  43.1

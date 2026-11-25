@@ -1,0 +1,21 @@
+chip dev0 p=3 antipodal dir=FWD: S1 end med 106.2  last landing 129.7  program end 141.8
+  FWD L0 late   fence    8.2  send    8.4 ->  115.1  pull end  106.9  blk 31 38 47 55 66 73 86 93 103 114
+  FWD L1 late   fence    8.2  send    8.4 ->  122.9  pull end  106.7  blk 32 38 44 53 64 71 84 92 103 121
+  BWD L0 early  fence    2.5  send    2.7 ->   90.3  pull end   81.6  blk 35 45 58 71 90
+  BWD L1 early  fence    2.5  send    2.8 ->   94.1  pull end   85.2  blk 37 51 62 76 93
+chip dev1 p=2 antipodal dir=BWD: S1 end med 101.1  last landing 137.0  program end 153.3
+  FWD L0 early  fence    4.3  send    4.6 ->   84.8  pull end   80.6  blk 34 46 60 72 84
+  FWD L1 early  fence    4.5  send    4.8 ->   90.8  pull end   82.2  blk 36 50 64 74 90
+  BWD L0 late   fence    9.7  send   10.0 ->  117.2  pull end  110.2  blk 32 41 49 56 68 76 87 95 103 116
+  BWD L1 late   fence    9.7  send   10.0 ->  133.3  pull end  130.1  blk 33 53 64 70 78 86 96 104 125 133
+chip dev2 p=1 antipodal dir=FWD: S1 end med 99.2  last landing 128.4  program end 144.5
+  FWD L0 late   fence    4.1  send    4.4 ->  124.9  pull end  122.6  blk 33 40 53 60 75 84 93 102 116 124
+  FWD L1 late   fence    4.2  send    4.4 ->  104.7  pull end   99.1  blk 32 41 47 56 63 70 80 89 95 103
+  BWD L0 early  fence    5.0  send    5.3 ->   90.3  pull end   85.9  blk 35 50 63 75 90
+  BWD L1 early  fence    5.0  send    5.2 ->   86.0  pull end   79.9  blk 38 48 61 75 85
+chip dev3 p=0 antipodal dir=BWD: S1 end med 99.2  last landing 135.0  program end 151.2
+  FWD L0 early  fence    2.5  send    2.8 ->   90.7  pull end   82.8  blk 35 50 64 76 90
+  FWD L1 early  fence    2.5  send    2.8 ->   92.3  pull end   85.7  blk 41 52 66 79 92
+  BWD L0 late   fence    4.2  send    4.4 ->  119.2  pull end  103.2  blk 33 39 50 57 69 76 85 93 99 117
+  BWD L1 late   fence    4.2  send    4.4 ->  127.9  pull end  109.5  blk 36 45 51 60 71 79 86 95 102 127
+PORTS_SUMMARY {"0": {"p": 3, "land": 129.72222222222223, "end": 141.80074074074074, "ports": [["FWD L0 late ", 115.1], ["FWD L1 late ", 122.89777777777778], ["BWD L0 early", 90.29185185185185], ["BWD L1 early", 94.08222222222223]]}, "1": {"p": 2, "land": 137.04592592592593, "end": 153.32074074074075, "ports": [["FWD L0 early", 84.81555555555556], ["FWD L1 early", 90.79333333333334], ["BWD L0 late ", 117.19037037037037], ["BWD L1 late ", 133.2762962962963]]}, "2": {"p": 1, "land": 128.35333333333332, "end": 144.54518518518518, "ports": [["FWD L0 late ", 124.90444444444445], ["FWD L1 late ", 104.69703703703703], ["BWD L0 early", 90.29481481481481], ["BWD L1 early", 85.97555555555556]]}, "3": {"p": 0, "land": 135.02370370370372, "end": 151.21333333333334, "ports": [["FWD L0 early", 90.72666666666667], ["FWD L1 early", 92.26814814814814], ["BWD L0 late ", 119.18592592592593], ["BWD L1 late ", 127.94962962962963]]}}

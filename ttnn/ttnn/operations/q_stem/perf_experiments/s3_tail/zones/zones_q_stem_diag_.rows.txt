@@ -1,0 +1,39 @@
+chip 1 core (5, 9): remote-row landings ['59.3', '81.5', '97.4', '111.3', '141.6'] local ['141.8']
+   row  0 compute    0.3-  65.3 (65.04)  write end   66.5
+   row  1 compute   65.3-  84.3 (18.99)  write end   85.5
+   row  2 compute   84.4- 100.3 (15.92)  write end  101.6
+   row  3 compute  100.3- 114.2 (13.90)  write end  119.5
+   row  4 compute  114.2- 144.5 (30.27)  write end  145.7
+   row  5 compute  144.5- 147.6 (3.08)  write end  148.8
+   row  6 compute  147.6- 150.7 (3.05)  write end  151.9
+   row  7 compute  150.7- 153.7 (3.03)  write end  154.9
+   row  8 compute  153.8- 156.8 (3.02)  write end  158.0
+   row  9 compute  156.8- 159.8 (3.02)  write end  161.0
+chip 1 core (7, 9): remote-row landings ['61.2', '82.1', '98.1', '112.0', '142.3'] local ['142.4']
+   row  0 compute    0.2-  67.1 (66.83)  write end   68.2
+   row  1 compute   67.1-  85.0 (17.92)  write end   86.2
+   row  2 compute   85.0- 101.0 (15.92)  write end  107.4
+   row  3 compute  101.0- 114.9 (13.89)  write end  120.9
+   row  4 compute  114.9- 145.1 (30.23)  write end  146.3
+   row  5 compute  145.2- 148.2 (3.07)  write end  149.4
+   row  6 compute  148.3- 151.3 (3.03)  write end  152.5
+   row  7 compute  151.3- 154.3 (3.02)  write end  155.5
+   row  8 compute  154.4- 157.4 (3.02)  write end  158.6
+   row  9 compute  157.4- 160.4 (3.01)  write end  161.6
+chip 1 core (3, 9): remote-row landings ['35.7', '58.1', '58.2', '80.4', '80.5', '96.7', '96.9', '110.7', '110.9', '141.0'] local []
+   row  0 compute    0.3-  47.7 (47.45)  write end   48.9
+   row  1 compute   47.8-  60.9 (13.16)  write end   62.1
+   row  2 compute   61.0-  64.0 (3.03)  write end   65.2
+   row  3 compute   64.0-  83.2 (19.23)  write end   84.4
+   row  4 compute   83.3-  86.3 (3.02)  write end   87.5
+   row  5 compute   86.3-  99.6 (13.29)  write end  100.8
+   row  6 compute   99.6- 102.7 (3.03)  write end  104.8
+   row  7 compute  102.7- 113.6 (10.92)  write end  115.0
+   row  8 compute  113.6- 116.7 (3.02)  write end  117.9
+   row  9 compute  116.7- 143.9 (27.21)  write end  145.1
+chip 1 core (6, 4): remote-row landings ['96.3', '96.5', '96.6', '96.7', '96.8'] local []
+   row  0 compute   98.5- 101.8 (3.24)  write end  131.6
+   row  1 compute  101.8- 104.8 (3.06)  write end  137.0
+   row  2 compute  104.9- 132.0 (27.16)  write end  138.6
+   row  3 compute  132.1- 137.4 (5.37)  write end  139.7
+   row  4 compute  137.4- 140.5 (3.02)  write end  141.8

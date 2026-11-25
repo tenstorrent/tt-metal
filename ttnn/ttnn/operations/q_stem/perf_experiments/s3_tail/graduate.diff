@@ -1,0 +1,473 @@
+diff -ru -x __pycache__ q_stem_base/kernels/q_stem_common.hpp /tmp/s3n/q_stem_v/kernels/q_stem_common.hpp
+--- q_stem_base/kernels/q_stem_common.hpp	2026-11-25 02:16:39.112034981 +0000
++++ /tmp/s3n/q_stem_v/kernels/q_stem_common.hpp	2026-11-25 04:00:11.898362238 +0000
+@@ -58,6 +58,14 @@
+         n_r(n_r_), hpc(hpc_), rows(rows_), ts(n_r_ < hpc_ ? ts_ : rows_) {}
+     uint32_t total() const { return hpc * rows; }
+     uint32_t first_local() const { return n_r * ts; }
++    // inverse of at(): the landing slot (consumption index of the static order) of head u's row t
++    uint32_t index(uint32_t u, uint32_t t) const {
++        const uint32_t a = n_r * ts;
++        if (u < n_r) {
++            return t < ts ? t * n_r + u : a + (hpc - n_r) * rows + (t - ts) * n_r + u;
++        }
++        return a + (u - n_r) * rows + t;
++    }
+     void at(uint32_t c, uint32_t& u, uint32_t& t) const {
+         const uint32_t a = n_r * ts;
+         const uint32_t l = (hpc - n_r) * rows;
+@@ -78,6 +86,13 @@
+     }
+ };
+
++// s3_tail dynamic stage-3 order: the reader hands each landed row to the compute and the writer as one word
++// (head u in the core's head list, row t, landing slot c = RowOrder::index(u, t)).
++inline uint32_t pack_row_desc(uint32_t u, uint32_t t, uint32_t c) { return (u << 24) | (t << 12) | c; }
++inline uint32_t desc_u(uint32_t v) { return v >> 24; }
++inline uint32_t desc_t(uint32_t v) { return (v >> 12) & 0xFFF; }
++inline uint32_t desc_c(uint32_t v) { return v & 0xFFF; }
++
+ inline uint32_t unpack_x(uint32_t v) { return v >> 16; }
+ inline uint32_t unpack_y(uint32_t v) { return v & 0xFFFF; }
+
+diff -ru -x __pycache__ q_stem_base/kernels/q_stem_compute.cpp /tmp/s3n/q_stem_v/kernels/q_stem_compute.cpp
+--- q_stem_base/kernels/q_stem_compute.cpp	2026-11-25 02:16:39.112182623 +0000
++++ /tmp/s3n/q_stem_v/kernels/q_stem_compute.cpp	2026-11-25 04:00:11.898491765 +0000
+@@ -99,6 +99,9 @@
+     constexpr uint32_t cb_q_recv1 = get_named_compile_time_arg_val("cb_q_recv1");
+     constexpr uint32_t cb_q_recv2 = get_named_compile_time_arg_val("cb_q_recv2");
+     constexpr uint32_t cb_s1_out = ksplit > 1 ? cb_q_kpart : cb_q_slice;  // the matmul's output
++    // s3_tail dynamic stage-3 order (R1): row descriptors from the reader, in landing order
++    constexpr bool s3_dyn = get_named_compile_time_arg_val("s3_dyn") != 0;
++    constexpr uint32_t cb_desc = get_named_compile_time_arg_val("cb_desc");
+
+     const uint32_t cols = get_arg_val<uint32_t>(0);
+     const uint32_t sbw1 = get_arg_val<uint32_t>(1);
+@@ -319,6 +322,30 @@
+         }
+     };
+     const q_stem::RowOrder order(n_r, hpc, rows_per_head, ts);
++    if constexpr (s3_dyn) {
++        // Raw CB read-pointer placement (bypasses the FIFO walk of cb_landing): the landing layout stays the static
++        // RowOrder, but rows are consumed in landing order, so the unpacker's read pointer is set to the row's slot
++        // before its ops (cb_landing's page counts still pace the rows: the reader pushes hw per handed-over row).
++        constexpr uint32_t hw = Dn_t + Dr_t;
++        [[maybe_unused]] uint32_t land_base = 0, land_page = 0;
++        UNPACK({
++            land_base = get_local_cb_interface(cb_landing).fifo_limit - get_local_cb_interface(cb_landing).fifo_size;
++            land_page = get_local_cb_interface(cb_landing).fifo_page_size;
++        })
++        for (uint32_t i = 0; i < order.total(); ++i) {
++            cb_wait_front(cb_desc, 1);
++            const uint32_t v = read_tile_value(cb_desc, 0, 0);
++            cb_pop_front(cb_desc, 1);
++            // k = the head's cb_wkv slot (the reader loads heads on demand, in first-need order; cumulative wait)
++            const uint32_t k = q_stem::desc_u(v), t = q_stem::desc_t(v), c = q_stem::desc_c(v);
++            cb_wait_front(cb_wkv, (k + 1) * head_tiles);
++            UNPACK({ get_local_cb_interface(cb_landing).fifo_rd_ptr = land_base + c * hw * land_page; })
++            row_block(k * head_tiles, t);
++        }
++        if (hpc > 0) {
++            cb_pop_front(cb_wkv, hpc * head_tiles);
++        }
++    } else {
+     // late remote rows after the local heads (a core holding both): no early pops (host sizes cb_wkv for every head)
+     const bool stack_local = n_r > 0 && order.ts < rows_per_head;
+     for (uint32_t c = 0; c < order.total(); ++c) {
+@@ -356,6 +383,7 @@
+             cb_pop_front(cb_wkv, hpc * head_tiles);
+         }
+     }
++    }
+     if constexpr (rope) {
+         if (hpc > 0) {
+             cb_pop_front(cb_trans, 1);
+diff -ru -x __pycache__ q_stem_base/kernels/q_stem_reader.cpp /tmp/s3n/q_stem_v/kernels/q_stem_reader.cpp
+--- q_stem_base/kernels/q_stem_reader.cpp	2026-11-25 02:16:39.112517221 +0000
++++ /tmp/s3n/q_stem_v/kernels/q_stem_reader.cpp	2026-11-25 04:00:11.898747222 +0000
+@@ -199,6 +199,11 @@
+     constexpr uint32_t kpart_tiles = get_named_compile_time_arg_val("kpart_tiles");
+     constexpr uint32_t sem_kpart_ready = get_named_compile_time_arg_val("sem_kpart_ready");  // + g
+     constexpr uint32_t sem_kpart_credit = get_named_compile_time_arg_val("sem_kpart_credit");
++    // s3_tail: dynamic stage-3 order (R1 only): rows are handed to the compute / writer in landing order
++    constexpr bool s3_dyn = get_named_compile_time_arg_val("s3_dyn") != 0;
++    constexpr uint32_t cb_desc = get_named_compile_time_arg_val("cb_desc");
++    constexpr uint32_t cb_wdesc = get_named_compile_time_arg_val("cb_wdesc");
++    constexpr bool s3_dyn_prefetch = get_named_compile_time_arg_val("s3_dyn_prefetch") != 0;
+
+     constexpr uint32_t rows_per_head = B * qrt;
+     constexpr uint32_t m_blk = get_compile_time_arg_val(20);  // s1_block_m_tiles
+@@ -474,7 +479,93 @@
+     // them once that row has landed), a local head's weights before its first row; R2: the row's N-block units right
+     // after its credit. The own quarter comes from many stage-1 writers in any order, so wait for all of it once,
+     // before the first local row.
+-    {
++    if constexpr (s3_dyn) {
++    // Dynamic order: poll every source's arrival counter and hand over each row as soon as it has landed (a
++    // non-delay schedule: the compute never idles while a landed row waits behind a late one). The landing layout
++    // is unchanged (RowOrder slots); the compute reads row c at its slot, the writer gets (u, t).
++    // wkv_b1 (R1, one unit per head) is loaded per head on demand, in first-need order: the compute gets the head's
++    // cb_wkv slot k (load order); while no row is ready (after the first landing) the next head is loaded ahead.
++    MaybeDeviceZoneScope("RD_S3_LAND");
++    const uint32_t total = order.total();
++    uint32_t next_t[G];
++    for (uint32_t i = 0; i < G; ++i) {
++        next_t[i] = 0;
++    }
++    constexpr uint32_t kMaxHeads = 64;
++    uint32_t wslot[kMaxHeads];  // cb_wkv slot of head u (load order), kMaxHeads = not loaded
++    for (uint32_t u = 0; u < hpc && u < kMaxHeads; ++u) {
++        wslot[u] = u < prefetched ? u : kMaxHeads;  // the stage-1 prefetch loaded units 0 .. prefetched-1
++    }
++    uint32_t n_loaded = prefetched;
++    auto load_head = [&](uint32_t u) {
++        if (wslot[u] == kMaxHeads) {
++            cb_reserve_back(cb_wkv, unit_tiles);
++            issue_tiles(u, 0, unit_tiles, get_write_ptr(cb_wkv));
++            noc_async_read_barrier();
++            cb_push_back(cb_wkv, unit_tiles);
++            wslot[u] = n_loaded++;
++        }
++    };
++    bool local_done = nh[my_pos] == 0;
++    bool first = true;
++    uint32_t emitted = 0;
++    auto emit = [&](uint32_t u, uint32_t t) {
++        if (first) {
++            load_rope_tables();
++            first = false;
++        }
++        load_head(u);
++        const uint32_t c = order.index(u, t);
++        cb_reserve_back(cb_desc, 1);
++        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_desc)) = q_stem::pack_row_desc(wslot[u], t, c);
++        cb_push_back(cb_desc, 1);
++        cb_reserve_back(cb_wdesc, 1);
++        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_wdesc)) = q_stem::pack_row_desc(u, t, c);
++        cb_push_back(cb_wdesc, 1);
++        cb_reserve_back(cb_landing, hw);
++        cb_push_back(cb_landing, hw);  // credits only (count): the compute reads the row at its slot
++        ++emitted;
++    };
++    while (emitted < total) {
++        invalidate_l1_cache();
++        const uint32_t before = emitted;
++        for (uint32_t s = 0; s < G; ++s) {
++            if (s == my_pos || nh[s] == 0 || next_t[s] >= rows_per_head) {
++                continue;
++            }
++            const uint32_t got = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_addr[s]);
++            while (next_t[s] < rows_per_head && got >= (next_t[s] + 1) * nh[s] * hw) {
++                for (uint32_t u = 0; u < hpc; ++u) {
++                    if (src_of(u) == s) {
++                        emit(u, next_t[s]);
++                    }
++                }
++                ++next_t[s];
++            }
++        }
++        if (!local_done) {
++            const uint32_t got = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_addr[my_pos]);
++            if (got >= nh[my_pos] * rows_per_head * hw) {
++                for (uint32_t u = 0; u < hpc; ++u) {
++                    if (src_of(u) == my_pos) {
++                        for (uint32_t t = 0; t < rows_per_head; ++t) {
++                            emit(u, t);
++                        }
++                    }
++                }
++                local_done = true;
++            }
++        }
++        if (s3_dyn_prefetch && emitted == before && !first && n_loaded < hpc) {
++            for (uint32_t u = 0; u < hpc; ++u) {  // idle: load the next head ahead of its first row
++                if (wslot[u] == kMaxHeads) {
++                    load_head(u);
++                    break;
++                }
++            }
++        }
++    }
++    } else {
+     MaybeDeviceZoneScope("RD_S3_LAND");  // stage-3 rows: arrival waits + wkv loads + landing credits
+     for (uint32_t c = 0; c < order.total(); ++c) {
+         uint32_t u, t;
+diff -ru -x __pycache__ q_stem_base/kernels/q_stem_writer.cpp /tmp/s3n/q_stem_v/kernels/q_stem_writer.cpp
+--- q_stem_base/kernels/q_stem_writer.cpp	2026-11-25 02:16:39.112603897 +0000
++++ /tmp/s3n/q_stem_v/kernels/q_stem_writer.cpp	2026-11-25 04:00:11.898833346 +0000
+@@ -61,6 +61,10 @@
+     constexpr uint32_t kpart_tile_bytes = get_named_compile_time_arg_val("kpart_tile_bytes");
+     constexpr uint32_t sem_kpart_ready = get_named_compile_time_arg_val("sem_kpart_ready");  // + (g - 1)
+     constexpr uint32_t sem_kpart_credit = get_named_compile_time_arg_val("sem_kpart_credit");
++    constexpr bool s3_dyn = get_named_compile_time_arg_val("s3_dyn") != 0;  // s3_tail: rows in landing order
++    constexpr uint32_t cb_wdesc = get_named_compile_time_arg_val("cb_wdesc");
++    // s3_tail: stage-1 cores (DM_DYNAMIC_NOC) alternate their output stick writes over both NoCs
++    constexpr bool out_alt_noc = get_named_compile_time_arg_val("out_alt_noc") != 0;
+
+     size_t a = 0;
+     const uint32_t p = get_arg_val<uint32_t>(a++);
+@@ -90,6 +94,7 @@
+     const uint32_t hpc = get_arg_val<uint32_t>(a++);
+     const uint32_t n_r = get_arg_val<uint32_t>(a++);  // remote heads (first, consumed row-major across heads)
+     const uint32_t heads_idx = a;
++    [[maybe_unused]] const uint32_t out_sel = get_arg_val<uint32_t>(heads_idx + hpc);  // s3_tail output NoC select
+
+     // ---- stage 1: K-split partner -----------------------------------------------------------------------------------
+     if constexpr (ksplit > 1) {
+@@ -186,10 +191,18 @@
+         uint32_t l1 = get_read_ptr(cb);
+         for (uint32_t i = 0; i < n_sticks; ++i) {
+ #ifndef ABLATE_OUT_WRITE
+-            noc_async_write(l1, out.get_noc_addr(stick0 + i, col_byte), seg);
++            if constexpr (out_alt_noc) {
++                const uint8_t nn = out_sel == 2 ? 1 - noc_index : (out_sel == 1 && !(i & 1)) ? 1 - noc_index : noc_index;
++                noc_async_write(l1, out.get_noc_addr(stick0 + i, col_byte, nn), seg, nn);
++            } else {
++                noc_async_write(l1, out.get_noc_addr(stick0 + i, col_byte), seg);
++            }
+ #endif
+             l1 += seg;
+         }
++        if constexpr (out_alt_noc) {
++            noc_async_writes_flushed(1 - noc_index);
++        }
+         noc_async_writes_flushed();
+         cb_pop_front(cb, n_tiles);
+     };
+@@ -222,8 +235,20 @@
+     MaybeDeviceZoneScope("WR_S3_OUT");  // output rows (waits on compute inside store_*) + final barrier
+     for (uint32_t c = 0; c < order.total(); ++c) {
+         uint32_t u, t;
+-        order.at(c, u, t);
++        if constexpr (s3_dyn) {
++            cb_wait_front(cb_wdesc, 1);
++            invalidate_l1_cache();
++            const uint32_t v = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_wdesc));
++            cb_pop_front(cb_wdesc, 1);
++            u = q_stem::desc_u(v);
++            t = q_stem::desc_t(v);
++        } else {
++            order.at(c, u, t);
++        }
+         store_row(u, t);
+     }
++    if constexpr (out_alt_noc) {
++        noc_async_write_barrier(1 - noc_index);
++    }
+     noc_async_write_barrier();
+ }
+diff -ru -x __pycache__ q_stem_base/q_stem_program_descriptor.py /tmp/s3n/q_stem_v/q_stem_program_descriptor.py
+--- q_stem_base/q_stem_program_descriptor.py	2026-11-25 02:16:39.110029576 +0000
++++ /tmp/s3n/q_stem_v/q_stem_program_descriptor.py	2026-11-25 04:00:11.897544829 +0000
+@@ -72,6 +72,22 @@
+ # so consuming local heads first hides their stage-3 rows + output writes behind that last landing. 0 -> local heads
+ # last (every remote row first). Clamped to rows_per_head - 1; dropped when it would push R1 out of residency.
+ S3_LATE_REMOTE_ROWS = 0
++# s3_tail: dynamic stage-3 order (R1 only). The reader polls every source's arrival counter and hands each landed row
++# to the compute / writer (a row descriptor CB each) in landing order, so no landed row waits behind a late one
++# (a non-delay schedule); the landing layout (landing_slot) is unchanged, the compute reads each row at its slot.
++# Every head's wkv_b1 stays resident for the whole stage 3. False -> the static RowOrder.
++S3_DYNAMIC_ORDER = True
++S3_DYN_PREFETCH = True  # dynamic order: while no row is ready (after the first landing), load the next head's wkv ahead
++# s3_tail: tie-break order of equally loaded cores in head_placement. "row": grid order (the stage-1 cores' heads fill
++# rows 1.. of the rect, 9 writers per row); "col": column-major (the heads spread over every row of the rect, in the
++# columns nearest the west DRAM column): the stage-1 cores' output writes after stage 1 share the per-row NoC links.
++S3_HEAD_ORDER = "row"
++# s3_tail: NoCs of the stage-1 cores' stage-3 output writes. 1: the writer's NoC (NoC1); 2: alternate sticks over
++# NoC1 / NoC0 (the stage-1 reader + writer run in DM_DYNAMIC_NOC mode, one KernelGroup = one noc mode). After stage 1
++# the stage-1 cores' output writes queue on NoC1 links (zones: east columns of the rect end ~15-25 us later).
++S3_S1_WRITE_NOCS = 1
++# with S3_S1_WRITE_NOCS = 3: stage-1 cores in columns >= S3_S1_NOC0_FROM_X write their output on NoC0, the rest on NoC1
++S3_S1_NOC0_FROM_X = 5
+ WKV_RESIDENT_BYTES = 512 * 1024  # per core: every remote head's weights resident (row-major consumption)
+ WKV_DEPTH = 2
+ OUT_DEPTH = 2
+@@ -116,6 +132,10 @@
+ CB_Q_KPART = 16
+ CB_Q_RECV1 = 17
+ CB_Q_RECV2 = 18
++# s3_tail dynamic stage-3 order: row descriptors (one uint32 per row) reader -> compute / reader -> writer
++CB_DESC = 19
++CB_WDESC = 20
++DESC_PAGE_BYTES = 32
+
+ # ---- program semaphore ids (port cores; declared on every core the program uses) -------------------------------------
+ SEM_BLOCK_READY = 0  # base id of the block-ready ring when BLOCK_READY_RING == 1 (else unused)
+@@ -261,14 +281,14 @@
+         # late remote rows (consumed after the local heads) a core holding both keeps every head resident (FIFO).
+         wkv_head_bytes = self.Dn_t * self.N_t * self.wkv_tile_bytes
+
+-        def wkv_units(late):
++        def wkv_units(late, all_heads=False):
+             s1u, freeu = 1, 1
+             for k, hs in enumerate(self.heads_of):
+                 c = self.compute_core_list[k]
+                 for dest in range(G):
+                     n_l = sum(1 for h in hs if h // self.Hl == dest)
+                     n_r = len(hs) - n_l
+-                    need = len(hs) if (late and n_l and n_r) else n_r + min(WKV_DEPTH, n_l)
++                    need = len(hs) if (all_heads or (late and n_l and n_r)) else n_r + min(WKV_DEPTH, n_l)
+                     if (c.x, c.y) in s1_set:
+                         s1u = max(s1u, need)
+                     else:
+@@ -281,6 +301,13 @@
+             self.late = 0  # late rows would push R1 out of residency: keep R1
+             self.wkv_units_s1, self.wkv_units_free, self.wkv_resident = wkv_units(0)
+         self.ts = self.rows_per_head - self.late  # remote rows >= ts are consumed after the local heads
++        # dynamic stage-3 order (s3_tail): R1 with every head of a core resident; descriptor fields u < 256, t / c < 4096
++        self.dyn = False
++        if S3_DYNAMIC_ORDER and self.hpc_max <= 64 and self.hpc_max * self.rows_per_head < 4096:
++            s1u, fu, res = wkv_units(self.late, all_heads=True)
++            if res:
++                self.dyn = True
++                self.wkv_units_s1, self.wkv_units_free, self.wkv_resident = s1u, fu, res
+         self.s3n = self.N_t if self.wkv_resident else _largest_divisor_leq(self.N_t, S3_BLOCK_N_CAP)
+         self.n_nb = self.N_t // self.s3n
+         self.wkv_unit_tiles = self.Dn_t * self.s3n
+@@ -412,15 +439,22 @@
+     head_cost = S3_COST_FACTOR * geo.rows_per_head * geo.Dn_t * geo.N_t
+     free_start = FREE_CORE_START * geo.cols_max * col_cost
+     heap = []
++    order_key = {
++        "row": lambda c: (c.y, c.x),
++        "col": lambda c: (c.x, c.y),
++        "checker": lambda c: ((c.x + c.y) % 2, c.y, c.x),  # every other core of every row and column first
++        "west7": lambda c: (c.x >= 7, c.y, c.x),  # rows of the 7 west columns first (east columns write slowest)
++    }[S3_HEAD_ORDER]
++    rank = {k: order_key(c) for k, c in enumerate(cores)}
+     for k, c in enumerate(cores):
+         i = s1.get((c.x, c.y))
+         cols = 0 if i is None else geo.s1_cols(i)[1]
+-        heapq.heappush(heap, (cols * col_cost if cols else free_start, cols, k))
++        heapq.heappush(heap, (cols * col_cost if cols else free_start, cols, rank[k], k))
+     heads_of = [[] for _ in cores]
+     for h in range(geo.H):
+-        load, cols, k = heapq.heappop(heap)
++        load, cols, r, k = heapq.heappop(heap)
+         heads_of[k].append(h)
+-        heapq.heappush(heap, (load + head_cost, cols, k))
++        heapq.heappush(heap, (load + head_cost, cols, r, k))
+     return cores, heads_of
+
+
+@@ -521,6 +555,7 @@
+     tb = geo.tile_bytes
+     s3_out = (geo.out_tile_depth + (OUT_DEPTH if geo.out_rm else 0)) * geo.s3m * (geo.s3n + geo.Dr_t) * tb
+     s3_out += (2 * geo.cs_tiles + 1 + geo.Dr_t) * tb if geo.rope else 0  # cb_cos/_sin/_trans/_rope_tmp
++    s3_out += 2 * DESC_PAGE_BYTES * geo.hpc_max * geo.rows_per_head if geo.dyn else 0  # cb_desc / cb_wdesc
+     wkv_unit = geo.wkv_unit_tiles * geo.wkv_tile_bytes
+     wkv_s1 = (geo.wkv_units_s1 if geo.wkv_resident else wkv_depth) * wkv_unit
+     wkv_free = (geo.wkv_units_free if geo.wkv_resident else wkv_depth) * wkv_unit
+@@ -559,8 +594,9 @@
+ # ---------------------------------------------------------------------------------------------------------------------
+
+
+-def _dm(risc, noc):
+-    return ttnn.DataMovementConfigDescriptor(processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc)
++def _dm(risc, noc, dynamic=False):
++    mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if dynamic else ttnn.NOC_MODE.DM_DEDICATED_NOC
++    return ttnn.DataMovementConfigDescriptor(processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc, noc_mode=mode)
+
+
+ def _cb(index, dtype, page, pages, cores):
+@@ -641,6 +677,12 @@
+     if ring < -(-X_ROUND_DEPTH // geo.nkb) + 4 or SEM_BLOCK_READY_RING + ring > 16:
+         raise RuntimeError(f"q_stem: BLOCK_READY_RING={ring} does not cover the owners' block drift")
+     ready_named = [("ready_ring", ring)]
++    dyn_named = [
++        ("s3_dyn", int(geo.dyn)),
++        ("cb_desc", CB_DESC),
++        ("cb_wdesc", CB_WDESC),
++        ("s3_dyn_prefetch", int(S3_DYN_PREFETCH)),
++    ]
+
+     mesh_desc = ttnn.MeshProgramDescriptor()
+     for coord, ch in chips.items():
+@@ -695,6 +737,11 @@
+                 S3_BLOCK_M_TILES,
+                 S3_BLOCK_N_CAP,
+                 S3_LATE_REMOTE_ROWS,
++                S3_DYNAMIC_ORDER,
++                S3_DYN_PREFETCH,
++                S3_HEAD_ORDER,
++                S3_S1_WRITE_NOCS,
++                S3_S1_NOC0_FROM_X,
+                 WKV_RESIDENT_BYTES,
+                 WKV_DEPTH,
+                 OUT_DEPTH,
+@@ -742,6 +789,12 @@
+         ]
+         if not geo.full_stick:  # full stick: the rope tiles live in cb_prefix_out / cb_prefix_rm
+             cbs.append(_cb(CB_ROPE_OUT, bf16, geo.tile_bytes, geo.out_tile_depth * geo.s3m * geo.Dr_t, compute_rect))
++        if geo.dyn:
++            n_desc = max(1, geo.hpc_max * geo.rows_per_head)
++            cbs += [
++                _cb(CB_DESC, ttnn.uint32, DESC_PAGE_BYTES, n_desc, compute_rect),
++                _cb(CB_WDESC, ttnn.uint32, DESC_PAGE_BYTES, n_desc, compute_rect),
++            ]
+         if rope:
+             cbs += [
+                 _cb(CB_COS, bf16, geo.tile_bytes, geo.cs_tiles, compute_rect),
+@@ -807,6 +860,8 @@
+             wargs += dirmap + rorder + port_args
+             wargs += [len(pieces) // 5] + pieces
+             wargs += [hpc, n_r] + heads
++            # s3_tail: output NoC select (0: the writer's NoC, 1: alternate sticks, 2: the other NoC)
++            wargs += [{1: 0, 2: 1, 3: 2 if core.x >= S3_S1_NOC0_FROM_X else 0}[S3_S1_WRITE_NOCS] if i is not None else 0]
+             (writer_rt_s1 if i is not None else writer_rt_other)[core.x][core.y] = wargs
+
+         # ---------------- ports ---------------------------------------------------------------------------------
+@@ -920,10 +975,12 @@
+                     kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
+                     core_ranges=grect,
+                     compile_time_args=reader_ct_s1,
+-                    named_compile_time_args=rope_named + named + ks_named,
++                    named_compile_time_args=rope_named + named + ks_named + dyn_named,
+                     defines=[("Q_STEM_X_FAMILY", str(g))],
+                     runtime_args=_rt_subset(reader_rt_s1, geo.s1_cores(g)),
+-                    config=_dm("RISCV_1", ttnn.NOC.NOC_1 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_0),
++                    config=_dm(
++                        "RISCV_1", ttnn.NOC.NOC_1 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_0, S3_S1_WRITE_NOCS >= 2
++                    ),
+                 )
+             )
+         injector_ks = []  # per injector: (DRAM/L1 half, multicast half)
+@@ -983,7 +1040,7 @@
+                 kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
+                 core_ranges=_crs(cores),
+                 compile_time_args=reader_ct_other,
+-                named_compile_time_args=rope_named + x_named + ks_named,
++                named_compile_time_args=rope_named + x_named + ks_named + dyn_named,
+                 runtime_args=_rt_subset(reader_rt_other, cores),
+                 config=_dm("RISCV_1", ttnn.NOC.NOC_1 if wnoc == 0 else ttnn.NOC.NOC_0),
+             )
+@@ -1023,7 +1080,7 @@
+                 geo.ts,
+             ],
+             runtime_args=compute_rt,
+-            named_compile_time_args=rope_named + ks_named,
++            named_compile_time_args=rope_named + ks_named + dyn_named,
+             config=compute_config,
+         )
+         writer_ct = [
+@@ -1053,9 +1110,9 @@
+             kernel_source=str(KERNEL_DIR / "q_stem_writer.cpp"),
+             core_ranges=s1_all_rect,
+             compile_time_args=writer_ct,
+-            named_compile_time_args=ks_named + ready_named,
++            named_compile_time_args=ks_named + ready_named + dyn_named + [("out_alt_noc", int(S3_S1_WRITE_NOCS >= 2))],
+             runtime_args=writer_rt_s1,
+-            config=_dm("RISCV_0", ttnn.NOC.NOC_0 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_1),
++            config=_dm("RISCV_0", ttnn.NOC.NOC_0 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_1, S3_S1_WRITE_NOCS >= 2),
+         )
+         for wnoc, cores in sorted(free_groups.items()):
+             kernels_tail.append(
+@@ -1063,7 +1120,7 @@
+                     kernel_source=str(KERNEL_DIR / "q_stem_writer.cpp"),
+                     core_ranges=_crs(cores),
+                     compile_time_args=writer_ct,
+-                    named_compile_time_args=ks_named + ready_named,
++                    named_compile_time_args=ks_named + ready_named + dyn_named + [("out_alt_noc", 0)],
+                     runtime_args=_rt_subset(writer_rt_other, cores),
+                     config=_dm("RISCV_0", ttnn.NOC.NOC_0 if wnoc == 0 else ttnn.NOC.NOC_1),
+                 )

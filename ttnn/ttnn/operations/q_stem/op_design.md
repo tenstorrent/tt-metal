@@ -100,7 +100,7 @@ intermediate q and the landed rows are re-blocked (Step-4 rule: every stage's da
 **Send order** (one source: host function `send_order(p)`, shared by injector, stage-1 writers, ports and
 the stage-3 arrival thresholds):
 `[(b, d, r) for b in range(B) for r in range(quarter_row_tiles) for d in remote_order(p)] + [(b, p, r) for b for r]`,
-`remote_order(p) = [p+1, p−1, p+2, p−2, …] mod G` (ring distance 1 both ways, then 2, …; for G=4: p+1, p−1, p+2).
+`remote_order(p) = [p+1, p−1, p+2, p−2, …] mod G` (ring distance 1 both ways, then 2, …; for G=4: p+1, p−1, p+2). **Perf 2:** for G=4 the per-row order is `send_remote_order(p)` = [antipodal, late neighbour (the one in the antipodal quarter's route direction), early neighbour]; `remote_order` stays the G≠4 order. Port roles per chip: the busy direction (2 own quarters) takes the left half of the centred row-0 port block, away from the x injector (`port_cores(..., route, p, G)`).
 x row tile of block `(b, d, r)` = `b*ceil(S/32) + d*quarter_row_tiles + r`. Remote rows first, interleaved across
 destinations (every direction busy from the first block); the own quarter last (it needs no fabric and feeds the
 local heads that fill the stage-3 wait — stall-shadow check below).

@@ -1,0 +1,672 @@
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_compute.cpp ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_compute.cpp
+--- ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_compute.cpp	2026-11-25 02:22:09.000435589 +0000
++++ ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_compute.cpp	2026-11-25 02:22:09.005828106 +0000
+@@ -30,7 +30,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+-#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_common.hpp"
++#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_common.hpp"
+
+ using namespace compute_kernel_lib;
+
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_injector.cpp ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_injector.cpp
+--- ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_injector.cpp	2026-11-25 02:19:27.170097738 +0000
++++ ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_injector.cpp	2026-11-25 03:34:36.554060930 +0000
+@@ -19,7 +19,7 @@
+ #include "api/tensor/noc_traits.h"
+ #include "hostdevcommon/common_values.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+-#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_common.hpp"
++#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_common.hpp"
+
+ using namespace dataflow_kernel_lib;
+
+@@ -38,22 +38,102 @@
+     constexpr uint32_t sem_x_credit = get_compile_time_arg_val(8);
+     constexpr uint32_t round_bytes = round_tiles * x_tile_bytes;
+
+-    Noc noc;
+-    auto pipe = mc.sender(noc);
++    constexpr bool x_split = get_named_compile_time_arg_val("x_split") != 0;
+     volatile tt_l1_ptr uint32_t* credit = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_x_credit));
+-    uint32_t base = 0;  // receivers' slot 0 (= this core's cb_x_round base: the CB is fresh at the first wait)
+-    uint32_t k = 0;
+-    MaybeDeviceZoneScope("INJ_X_MCAST");  // x rounds multicast (waits on the injector reader and receiver credits)
+-    for (uint32_t r = idx; r < num_rounds; r += num_injectors, ++k) {
+-        cb_wait_front(cb_x_round, round_tiles);
+-        const uint32_t src = get_read_ptr(cb_x_round);
+-        if (k == 0) {
+-            base = src;
++    if constexpr (x_split) {
++        // X_SPLIT (x_supply candidate): this injector multicasts tiles [t_lo, t_lo + t_n) of EVERY round (raw linked
++        // multicast, <= 16 KiB commands), then publishes its sent-round count on its ready counter (plain multicast
++        // write of a local word behind the payload; receivers wait_min, never clear). Bypasses the Mcast helper: its
++        // Flag allows one outstanding round per family, its Counter costs a write + atomic barrier per round.
++        constexpr uint32_t sem_x_ready = get_named_compile_time_arg_val("sem_x_ready");
++        constexpr uint32_t t_lo = get_named_compile_time_arg_val("x_t_lo");
++        constexpr uint32_t t_n = get_named_compile_time_arg_val("x_t_n");
++        constexpr uint32_t mx0 = get_named_compile_time_arg_val("x_mc_x0");
++        constexpr uint32_t my0 = get_named_compile_time_arg_val("x_mc_y0");
++        constexpr uint32_t mx1 = get_named_compile_time_arg_val("x_mc_x1");
++        constexpr uint32_t my1 = get_named_compile_time_arg_val("x_mc_y1");
++        constexpr uint32_t num_dests = get_named_compile_time_arg_val("x_mc_dests");
++        constexpr uint32_t lane_off = t_lo * x_tile_bytes;
++        constexpr uint32_t lane_bytes = t_n * x_tile_bytes;
++        // exact per-receiver credits (see q_stem_reader.cpp XSplitRx): word ci = rounds receiver ci has credited me
++        constexpr uint32_t cb_x_credits = get_named_compile_time_arg_val("cb_x_credits");
++        constexpr uint32_t sem_x_armed = get_named_compile_time_arg_val("sem_x_armed");
++        volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_x_credits));
++        constexpr bool slots = get_named_compile_time_arg_val("x_credit_slots") != 0;
++        constexpr uint32_t sem_x_slot = get_named_compile_time_arg_val("sem_x_slot");
++        for (uint32_t ci = 0; ci < (slots ? 0 : receivers); ++ci) {
++            words[ci] = 0;
+         }
+-        noc_semaphore_wait_min(credit, receivers * (k + 1));  // every receiver's slot r % depth is free
++        asm volatile("fence" ::: "memory");
++        for (uint32_t ci = 0; ci < (slots ? 0 : receivers); ++ci) {
++            const uint32_t pc = get_arg_val<uint32_t>(ci);
++            noc_semaphore_inc(get_noc_addr(q_stem::unpack_x(pc), q_stem::unpack_y(pc), get_semaphore(sem_x_armed)), 1);
++        }
++        noc_async_atomic_barrier();
++        uint32_t ok = 0;  // receivers [0, ok) have credited the round being waited for
++        const uint32_t ready = get_semaphore(sem_x_ready + idx);
++        const uint64_t ready_mc = get_noc_multicast_addr(mx0, my0, mx1, my1, ready, noc_index);
++        uint32_t base = 0;
++        MaybeDeviceZoneScope("INJ_X_MCAST");
++        for (uint32_t r = 0; r < num_rounds; ++r) {
++            cb_wait_front(cb_x_round, round_tiles);
++            const uint32_t src0 = get_read_ptr(cb_x_round);
++            if (r == 0) {
++                base = src0;
++            }
++            if constexpr (slots) {  // every receiver credited lap r / depth of slot r % depth
++                noc_semaphore_wait_min(
++                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_x_slot + r % depth)),
++                    receivers * (r / depth + 1));
++            }
++            for (ok = 0; ok < (slots ? 0 : receivers); ++ok) {  // every receiver freed slot r % depth
++                noc_semaphore_wait_min(words + ok, r + 1);
++            }
+ #ifndef ABLATE_X_MCAST
+-        pipe.send(src, base + (r % depth) * round_bytes, round_bytes);  // multicast, then data-ready counter
++            uint32_t src = src0 + lane_off, dst = base + (r % depth) * round_bytes + lane_off, left = lane_bytes;
++            while (left > 0) {
++                const uint32_t b = left < NOC_MAX_BURST_SIZE ? left : NOC_MAX_BURST_SIZE;
++                while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
++                ncrisc_noc_fast_write<noc_mode>(
++                    noc_index,
++                    write_cmd_buf,
++                    src,
++                    get_noc_multicast_addr(mx0, my0, mx1, my1, dst, noc_index),
++                    b,
++                    NOC_MULTICAST_WRITE_VC,
++                    true /* mcast */,
++                    true /* linked: the ready write below ends the sequence */,
++                    num_dests,
++                    true /* path reserve */,
++                    false /* non-posted */);
++                src += b;
++                dst += b;
++                left -= b;
++            }
++            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready) = r + 1;
++            noc_semaphore_set_multicast(ready, ready_mc, num_dests, false);
++            noc_async_writes_flushed();  // payload source + ready word reused only after they left
+ #endif
+-        cb_pop_front(cb_x_round, round_tiles);
++            cb_pop_front(cb_x_round, round_tiles);
++        }
++        noc_async_write_barrier();
++    } else {
++        Noc noc;
++        auto pipe = mc.sender(noc);
++        uint32_t base = 0;  // receivers' slot 0 (= this core's cb_x_round base: the CB is fresh at the first wait)
++        uint32_t k = 0;
++        MaybeDeviceZoneScope("INJ_X_MCAST");  // x rounds multicast (waits on the injector reader and receiver credits)
++        for (uint32_t r = idx; r < num_rounds; r += num_injectors, ++k) {
++            cb_wait_front(cb_x_round, round_tiles);
++            const uint32_t src = get_read_ptr(cb_x_round);
++            if (k == 0) {
++                base = src;
++            }
++            noc_semaphore_wait_min(credit, receivers * (k + 1));  // every receiver's slot r % depth is free
++#ifndef ABLATE_X_MCAST
++            pipe.send(src, base + (r % depth) * round_bytes, round_bytes);  // multicast, then data-ready flag
++#endif
++            cb_pop_front(cb_x_round, round_tiles);
++        }
+     }
+ }
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_injector_reader.cpp ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_injector_reader.cpp
+--- ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_injector_reader.cpp	2026-11-25 02:19:27.170146811 +0000
++++ ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_injector_reader.cpp	2026-11-25 02:24:18.453811154 +0000
+@@ -19,7 +19,7 @@
+ #include <cstdint>
+
+ #include "api/dataflow/dataflow_api.h"
+-#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_common.hpp"
++#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_common.hpp"
+
+ void kernel_main() {
+     constexpr uint32_t cb_x_round = get_compile_time_arg_val(0);
+@@ -38,6 +38,10 @@
+     constexpr uint32_t num_injectors = get_compile_time_arg_val(14);
+     constexpr uint32_t k_off = get_compile_time_arg_val(15);  // K-split: first K tile of my group's slice
+     constexpr auto x_args = TensorAccessorArgs<16>();
++    // X_SPLIT: this injector multicasts only tiles [t_lo, t_lo + t_n) of each round, so it reads only those
++    // (tile_aligned path; a realigned row tile is assembled whole)
++    constexpr uint32_t t_lo = get_named_compile_time_arg_val("x_t_lo");
++    constexpr uint32_t t_n = get_named_compile_time_arg_val("x_t_n");
+     constexpr uint32_t round_tiles = m * s1_kb;
+     // 32 x 32 tile of four 16 x 16 faces (f0 f1 / f2 f3), each face row-major: face row = 16 elements
+     constexpr uint32_t face_bytes = x_tile_bytes / 4;
+@@ -105,6 +109,10 @@
+                 if (delta == 0) {
+                     const uint32_t page0 = ta * Q_t + k_off + kb * s1_kb;
+                     for (uint32_t k = 0; k < s1_kb; ++k) {
++                        const uint32_t q = i * s1_kb + k;  // tile index in the round
++                        if (q < t_lo || q >= t_lo + t_n) {
++                            continue;
++                        }
+ #ifndef ABLATE_X_READ
+                         noc_async_read(x.get_noc_addr(page0 + k), off + k * x_tile_bytes, x_tile_bytes);
+ #endif
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_port_reader.cpp ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_port_reader.cpp
+--- ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_port_reader.cpp	2026-11-25 02:19:27.170200895 +0000
++++ ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_port_reader.cpp	2026-11-25 02:24:50.721228088 +0000
+@@ -10,7 +10,7 @@
+ #include <cstdint>
+
+ #include "api/dataflow/dataflow_api.h"
+-#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_common.hpp"
++#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_common.hpp"
+
+ void kernel_main() {
+     constexpr uint32_t cb_port_stage = get_compile_time_arg_val(0);
+@@ -43,6 +43,27 @@
+     const uint32_t heads_idx = a;
+     a += n_heads;
+     const uint32_t cores_idx = a;
++    // PORT_READY_EXACT (s1_pace): one block-ready counter PER OWNER on this port (cb_port_ready word ci, declared on
++    // stage-1 rect + ports: one address), counting owner ci's reports for my direction. Block idx's rows of owner
++    // ci are packed once word ci >= idx + 1: exact whatever the owners' skew (the ring aliased reports 8 blocks
++    // apart). The words are zeroed here, then every owner is armed (its sem_armed += 1); an owner reports only once
++    // every port has armed it, so no report can land before the zeroing.
++    constexpr bool ready_exact = get_named_compile_time_arg_val("ready_exact") != 0;
++    constexpr uint32_t cb_port_ready = get_named_compile_time_arg_val("cb_port_ready");
++    constexpr uint32_t sem_armed = get_named_compile_time_arg_val("sem_armed");
++    [[maybe_unused]] volatile tt_l1_ptr uint32_t* owner_ready =
++        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_port_ready));
++    if constexpr (ready_exact) {
++        for (uint32_t ci = 0; ci < C1; ++ci) {
++            owner_ready[ci] = 0;
++        }
++        asm volatile("fence" ::: "memory");
++        for (uint32_t ci = 0; ci < C1; ++ci) {
++            const uint32_t pc = get_arg_val<uint32_t>(cores_idx + ci);
++            noc_semaphore_inc(get_noc_addr(q_stem::unpack_x(pc), q_stem::unpack_y(pc), get_semaphore(sem_armed)), 1);
++        }
++        noc_async_atomic_barrier();
++    }
+     if (n_heads == 0) {
+         return;
+     }
+@@ -61,9 +82,11 @@
+             return;
+         }
+         const uint32_t idx = mine++;
+-        noc_semaphore_wait_min(
+-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_block_ready_id + idx % ready_ring)),
+-            (idx / ready_ring + 1) * C1);
++        if constexpr (!ready_exact) {
++            noc_semaphore_wait_min(
++                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_block_ready_id + idx % ready_ring)),
++                (idx / ready_ring + 1) * C1);
++        }
+         uint32_t pending = 0;  // segments read into the reserved batch, not yet pushed
+         uint32_t limit = 0;    // segments in the reserved batch (<= batch, up to the CB end)
+         uint32_t l1 = 0;
+@@ -96,6 +119,9 @@
+                     }
+                     const uint32_t run = (c0 + cols < c_end ? c0 + cols : c_end) - c;
+                     const uint32_t pc = get_arg_val<uint32_t>(cores_idx + ci);
++                    if constexpr (ready_exact) {
++                        noc_semaphore_wait_min(owner_ready + ci, idx + 1);  // owner ci packed block idx
++                    }
+                     const uint32_t src = q_base + ((j * m + i) * cols + (c - c0)) * tile_bytes;
+                     noc_async_read(get_noc_addr(q_stem::unpack_x(pc), q_stem::unpack_y(pc), src), l1, run * tile_bytes);
+                     l1 += run * tile_bytes;
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_port_sender.cpp ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_port_sender.cpp
+--- ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_port_sender.cpp	2026-11-25 02:19:27.170246311 +0000
++++ ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_port_sender.cpp	2026-11-25 02:19:27.173486883 +0000
+@@ -24,7 +24,7 @@
+ #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+ #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+ #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+-#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_common.hpp"
++#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_common.hpp"
+
+ using namespace tt::tt_fabric;
+
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_reader.cpp ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_reader.cpp
+--- ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_reader.cpp	2026-11-25 02:19:27.170304863 +0000
++++ ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_reader.cpp	2026-11-25 03:34:36.553939458 +0000
+@@ -31,7 +31,7 @@
+ #include "hostdevcommon/common_values.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+-#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_common.hpp"
++#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_common.hpp"
+
+ using namespace dataflow_kernel_lib;
+
+@@ -150,6 +150,68 @@
+         }
+     }
+ }
++
++// Credits are EXACT per receiver: receiver `rank` increments its own word (cb_x_credits + rank) on every injector, and
++// an injector sends round k only once EVERY word is >= k + 1. (Round 1 summed all credits on one semaphore: with credits
++// more than one round ahead a fast receiver's extra credits stood in for a slow receiver's missing one, and the
++// injector overwrote a slot the slow receiver still held -- the ~1 in 8 corrupted chip-calls.) The injector zeroes its
++// words, then arms every receiver (sem_x_armed += 1); a receiver credits only once all NI injectors armed it.
++// x_credit_slots (default): instead of the words, one credit counter PER SLOT on each injector (sem_x_slot + a %
++// depth); the injector sends round k once counter k % depth >= C1 * (k / depth + 1). Sound for any lead: a receiver
++// can credit lap L + 1 of a slot only after popping round k (lap L), i.e. after round k was sent, so before that send
++// every receiver's count on the slot is <= L + 1 and the sum reaching C1 * (L + 1) means each one is exactly L + 1.
++// One semaphore wait per round on the injector (the words cost a C1-word scan per round).
++// X_SPLIT (s1_pace, from round-1 x_supply): each of the NI injectors multicasts ITS tile range of EVERY round (one
++// tree per NoC, both busy every round) and publishes the count of rounds it has sent on its own ready counter
++// (sem_x_ready + i, a plain multicast write behind the linked payload). The counter is monotone and never cleared, so
++// a receiver credits slots up to `ahead` rounds ahead (to every injector: each sends part of every round) without a
++// per-round credit round trip. One credit state across the q_b pre-delivery and the main loop.
++// Raw (no Mcast helper): the helper's Flag allows one outstanding round per family, its Counter costs a write +
++// atomic barrier per round.
++template <uint32_t NI>
++struct XSplitRx {
++    uint32_t cb, round_tiles, num_rounds, ahead, sem_ready;
++    const uint64_t* inj_credit;
++    uint32_t sem_armed;
++    bool slots;                 // per-slot counters (inj_credit = the injectors' semaphore-0 base NoC address)
++    uint32_t sem_slot, depth;  // slot s counter = semaphore sem_slot + s on the injector
++    uint32_t acked = 0;  // rounds credited so far (to every injector)
++    bool armed = false;
++    // credit every round in [acked, r + ahead) whose slot is free; block for slot r itself (polling `idle`)
++    template <typename I>
++    void credit(uint32_t r, I&& idle) {
++        while (acked < num_rounds && acked < r + ahead) {
++            const uint32_t pages = (acked - r + 1) * round_tiles;  // slots r .. acked free
++            if (acked == r) {
++                while (!cb_pages_reservable_at_back(cb, pages)) {
++                    idle();
++                }
++            } else if (!cb_pages_reservable_at_back(cb, pages)) {
++                break;
++            }
++            if (slots) {
++                for (uint32_t i = 0; i < NI; ++i) {
++                    noc_semaphore_inc(inj_credit[i] + (get_semaphore(sem_slot + acked % depth) - get_semaphore(0)), 1);
++                }
++                ++acked;
++                continue;
++            }
++            if (!armed) {
++                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_armed)), NI);
++                armed = true;
++            }
++            for (uint32_t i = 0; i < NI; ++i) {
++                noc_semaphore_inc(inj_credit[i], 1);
++            }
++            ++acked;
++        }
++    }
++    void wait(uint32_t r) const {
++        for (uint32_t i = 0; i < NI; ++i) {
++            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ready + i)), r + 1);
++        }
++    }
++};
+ }  // namespace
+
+ void kernel_main() {
+@@ -199,6 +261,9 @@
+     constexpr uint32_t kpart_tiles = get_named_compile_time_arg_val("kpart_tiles");
+     constexpr uint32_t sem_kpart_ready = get_named_compile_time_arg_val("sem_kpart_ready");  // + g
+     constexpr uint32_t sem_kpart_credit = get_named_compile_time_arg_val("sem_kpart_credit");
++    constexpr bool x_split = get_named_compile_time_arg_val("x_split") != 0;
++    constexpr uint32_t x_split_ahead = get_named_compile_time_arg_val("x_split_ahead");
++    constexpr uint32_t sem_x_ready = get_named_compile_time_arg_val("sem_x_ready");
+
+     constexpr uint32_t rows_per_head = B * qrt;
+     constexpr uint32_t m_blk = get_compile_time_arg_val(20);  // s1_block_m_tiles
+@@ -275,6 +340,36 @@
+         injector_credit[i] = get_noc_addr(q_stem::unpack_x(xy), q_stem::unpack_y(xy), get_semaphore(sem_x_credit));
+     }
+     constexpr uint32_t num_rounds = num_blocks * nkb;
++    // X_SPLIT: my credit word on every injector (cb_x_credits + my rank; rank = last runtime arg, after the heads)
++    uint64_t injector_word[x_injectors];
++    for (uint32_t i = 0; i < x_injectors; ++i) {
++        const uint32_t xy =
++            i == 0 ? get_named_compile_time_arg_val("x_inj0_xy") : get_named_compile_time_arg_val("x_inj1_xy");
++        injector_word[i] = get_noc_addr(
++            q_stem::unpack_x(xy),
++            q_stem::unpack_y(xy),
++            get_write_ptr(get_named_compile_time_arg_val("cb_x_credits")) +
++                get_arg_val<uint32_t>(heads_idx + 2 * hpc) * sizeof(uint32_t));
++    }
++    constexpr bool x_credit_slots = get_named_compile_time_arg_val("x_credit_slots") != 0;
++    if constexpr (x_credit_slots) {
++        for (uint32_t i = 0; i < x_injectors; ++i) {
++            const uint32_t xy =
++                i == 0 ? get_named_compile_time_arg_val("x_inj0_xy") : get_named_compile_time_arg_val("x_inj1_xy");
++            injector_word[i] = get_noc_addr(q_stem::unpack_x(xy), q_stem::unpack_y(xy), get_semaphore(0));
++        }
++    }
++    XSplitRx<x_injectors> xrx{
++        cb_x_round,
++        round_tiles,
++        num_rounds,
++        x_split_ahead,
++        sem_x_ready,
++        injector_word,
++        get_named_compile_time_arg_val("sem_x_armed"),
++        x_credit_slots,
++        get_named_compile_time_arg_val("sem_x_slot"),
++        x_round_depth};
+     // x pre-delivery (qb_startup): the first `pre` x rounds are credited and received DURING the q_b slice load, one
+     // round per q_b part (the slice is read in `pre` K-row parts; round p is credited before part p is issued and
+     // received after it), so the x pipeline does not wait for the whole slice. Same credit protocol as
+@@ -315,8 +410,22 @@
+                 }
+             }
+         };
+-        load_with_x_rounds<x_injectors>(
+-            mc, mc1, cb_x_round, round_tiles, pre, parts, injector_credit, load_part);
++        if constexpr (x_split) {
++            if constexpr (pre > 0) {
++                xrx.credit(0, [] {});
++            }
++            for (uint32_t pp = 0; pp < parts; ++pp) {
++                load_part(pp);
++                if (pp < pre) {
++                    xrx.wait(pp);
++                    cb_push_back(cb_x_round, round_tiles);
++                    xrx.credit(pp + 1, [] {});
++                }
++            }
++        } else {
++            load_with_x_rounds<x_injectors>(
++                mc, mc1, cb_x_round, round_tiles, pre, parts, injector_credit, load_part);
++        }
+     }
+
+     // wkv prefetch (`wkv_load_block` for the first units): they need no remote data. On a stage-1 core the reads are
+@@ -375,6 +484,26 @@
+     };
+     {
+     MaybeDeviceZoneScope("RD_X_RECV");  // x rounds received (incl. the spread wkv prefetch issue)
++    auto after_round = [&]() {
++        const uint32_t to = issued + per_round < prefetch_tiles ? issued + per_round : prefetch_tiles;
++        issue_tiles(0, issued, to, prefetch_l1);
++        issued = to;
++        if (kowner) {
++            kpart_recv_service();
++        }
++    };
++    if constexpr (x_split && mc.active) {
++        for (uint32_t r = pre; r < num_rounds; ++r) {
++            xrx.credit(r, [&]() {
++                if (kowner) {
++                    kpart_recv_service();
++                }
++            });
++            xrx.wait(r);
++            cb_push_back(cb_x_round, round_tiles);
++            after_round();
++        }
++    } else
+     receive_x_rounds<x_injectors>(
+         mc,
+         mc1,
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_writer.cpp ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_writer.cpp
+--- ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_writer.cpp	2026-11-25 02:19:27.170397039 +0000
++++ ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_writer.cpp	2026-11-25 02:24:50.721393304 +0000
+@@ -22,7 +22,7 @@
+ #include <cstdint>
+
+ #include "api/dataflow/dataflow_api.h"
+-#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/kernels/q_stem_common.hpp"
++#include "ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/kernels/q_stem_common.hpp"
+
+ void kernel_main() {
+     constexpr uint32_t cb_q_slice = get_compile_time_arg_val(0);
+@@ -69,6 +69,7 @@
+     const uint32_t landing_addr = get_arg_val<uint32_t>(a++);
+     const uint32_t arrive_p_addr = get_arg_val<uint32_t>(a++);
+     [[maybe_unused]] const uint32_t kgroup = get_arg_val<uint32_t>(a++);  // K group (0: owner of q)
++    [[maybe_unused]] const uint32_t my_ci = get_arg_val<uint32_t>(a++);   // my owner index (port ready word)
+     // K-split peers (packed virtual xy): an owner's partners (groups 1 .. ksplit-1), a partner's owner
+     [[maybe_unused]] uint32_t kpeer[ksplit > 1 ? ksplit - 1 : 1];
+     for (uint32_t g = 0; g + 1 < ksplit; ++g) {
+@@ -122,10 +123,25 @@
+         // sem_block_ready_id + idx % ring, so a port waiting for report idx counts no later block of a faster owner
+         constexpr uint32_t ready_ring = get_named_compile_time_arg_val("ready_ring");
+         uint32_t reported[2] = {0, 0};  // per direction (FWD / BWD)
++        // PORT_READY_EXACT (s1_pace): my report for a block goes to my own word on the port (cb_port_ready + my_ci),
++        // so the port counts my reports only; the ring below is the old shared-counter scheme
++        constexpr bool ready_exact = get_named_compile_time_arg_val("ready_exact") != 0;
++        constexpr uint32_t cb_port_ready = get_named_compile_time_arg_val("cb_port_ready");
++        constexpr uint32_t sem_armed = get_named_compile_time_arg_val("sem_armed");
++        bool armed = false;
+         q_stem::for_each_block(B, qrt, m, G, p, rorder, [&](uint32_t j, uint32_t b, uint32_t d, uint32_t r0) {
+             cb_wait_front(cb_q_slice, (j + 1) * m * cols);
+             if (d != p) {
+-                const uint32_t block_ready = get_semaphore(sem_block_ready_id + reported[dirmap[d]]++ % ready_ring);
++                if constexpr (ready_exact) {
++                    if (!armed) {  // every port zeroed its per-owner words (q_stem_port_reader.cpp)
++                        noc_semaphore_wait_min(
++                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_armed)), n_ports);
++                        armed = true;
++                    }
++                }
++                const uint32_t block_ready = ready_exact
++                                                 ? get_write_ptr(cb_port_ready) + my_ci * sizeof(uint32_t)
++                                                 : get_semaphore(sem_block_ready_id + reported[dirmap[d]]++ % ready_ring);
+                 for (uint32_t k = 0; k < n_ports; ++k) {
+                     if (get_arg_val<uint32_t>(ports_idx + 2 * k + 1) == dirmap[d]) {
+                         const uint32_t pc = get_arg_val<uint32_t>(ports_idx + 2 * k);
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/q_stem_program_descriptor.py ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/q_stem_program_descriptor.py
+--- ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_base/q_stem_program_descriptor.py	2026-11-25 02:19:27.167788923 +0000
++++ ttnn/ttnn/operations/q_stem/perf_experiments/s1_pace/q_stem_v/q_stem_program_descriptor.py	2026-11-25 03:34:36.554497873 +0000
+@@ -63,7 +63,14 @@
+ # x injectors (lamp L3/L9: free row-0 cores): injector i multicasts the global x rounds r % X_INJECTORS == i on NoC
+ # X_INJECTOR_NOCS[i % 2] (its DRAM/L1 half reads on the other NoC); receivers credit every free slot to its injector
+ # ahead of time, so the injectors' rounds overlap. 1 or 2.
+-X_INJECTORS = 1  # 2 measured: x floor -18 us, stage 1 ends -14 us, full op flat / slowest chip +10 us (Refinement 6)
++# s1_pace candidate (X_SPLIT, from round-1 x_supply): every injector multicasts its tile range of EVERY round (one
++# tree per NoC, both busy every round) with a monotone ready counter, so the receivers credit X_SPLIT_AHEAD rounds
++# ahead with no per-round credit round trip. 0 = the rotating-round Mcast-helper scheme. Off under K-split.
++X_SPLIT = 1
++X_SPLIT_AHEAD = 0  # receivers' credit lead in X_SPLIT (0 = X_ROUND_DEPTH)
++# s1_pace: per-owner block-ready words on the ports (exact under any owner skew) instead of the 8-slot ring
++PORT_READY_EXACT = 1
++X_INJECTORS = 2  # s1_pace candidate (was 1) # 2 measured: x floor -18 us, stage 1 ends -14 us, full op flat / slowest chip +10 us (Refinement 6)
+ X_INJECTOR_NOCS = (0, 1)
+ S3_BLOCK_M_TILES = 1
+ S3_BLOCK_N_CAP = 16
+@@ -125,6 +132,15 @@
+ # drift apart). Exact while owners stay < ring blocks apart; the x rounds bound that drift (block_ready_ring()).
+ SEM_BLOCK_READY_RING = 5
+ BLOCK_READY_RING = 8
++SEM_X_READY = 13  # X_SPLIT: stage-1 cores, id 13 + i = rounds injector i has sent (monotone, set by multicast)
++SEM_ARMED = SEM_BLOCK_READY  # PORT_READY_EXACT: owners, ports that zeroed their per-owner words (id 0 is free then)
++CB_X_CREDITS = 20  # X_SPLIT: per-receiver credit words on the injectors, stage-1 rect + injectors (one address)
++# X_SPLIT credit protocol: "slots" = one counter per x slot on each injector (sound for any lead, one wait per round);
++# "words" = one word per receiver on each injector (exact, C1-word scan per round)
++X_CREDIT = "slots"
++SEM_X_SLOT = 7  # X_SLOT credits: injectors, ids 7 .. 7 + X_ROUND_DEPTH - 1
++SEM_X_ARMED = 15  # X_SPLIT: stage-1 cores, injectors that zeroed their credit words
++CB_PORT_READY = 19  # PORT_READY_EXACT: per-owner block-ready words, stage-1 rect + ports (one address)
+ SEM_X_CREDIT = 1  # injectors: cumulative slot credits from the stage-1 receivers
+ SEM_KPART_READY = 2  # owners: partial blocks landed from partner group 1 (id 2) / group 2 (id 3), cumulative
+ SEM_KPART_CREDIT = 4  # partners: recv slots the owner has freed for them, cumulative
+@@ -610,6 +626,15 @@
+     wkv_ct = list(ttnn.TensorAccessorArgs(wkv).get_compile_time_args())
+     out_ct = list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
+     cs_ct = list(ttnn.TensorAccessorArgs(cos).get_compile_time_args()) if rope else wkv_ct  # NoPE: stand-in
++    x_split = int(bool(X_SPLIT) and ks == 1)
++    ni = len(injectors)
++    split_t = [
++        (i * geo.round_tiles // ni, (i + 1) * geo.round_tiles // ni - i * geo.round_tiles // ni) for i in range(ni)
++    ]
++    if x_split and X_CREDIT == "slots" and SEM_X_SLOT + X_ROUND_DEPTH > SEM_X_READY:
++        raise RuntimeError("q_stem: X_ROUND_DEPTH too deep for the per-slot x credit semaphores")
++    if x_split and min(n for _, n in split_t) < 1:
++        raise RuntimeError("q_stem: X_SPLIT needs at least one tile per injector per round")
+     x_named = [
+         ("x_injectors", len(injectors)),
+         ("x_round_depth", X_ROUND_DEPTH),
+@@ -617,6 +642,13 @@
+         ("sem_x_credit", SEM_X_CREDIT),
+         ("x_inj0_xy", _pack(virt(injectors[0]))),
+         ("x_inj1_xy", _pack(virt(injectors[-1]))),
++        ("x_split", x_split),
++        ("x_split_ahead", X_SPLIT_AHEAD or X_ROUND_DEPTH),
++        ("sem_x_ready", SEM_X_READY),
++        ("cb_x_credits", CB_X_CREDITS),
++        ("sem_x_armed", SEM_X_ARMED),
++        ("x_credit_slots", int(X_CREDIT == "slots")),
++        ("sem_x_slot", SEM_X_SLOT),
+     ]
+     rope_named = [
+         ("rope", int(rope)),
+@@ -638,9 +670,14 @@
+     # once every owner freed its slot (consumed round idx - X_ROUND_DEPTH), and a K-split owner packs a block one
+     # round after consuming it: owners stay < ceil(depth / nkb) + 2 blocks apart. Margin of 2 for writer lag.
+     ring = BLOCK_READY_RING
+-    if ring < -(-X_ROUND_DEPTH // geo.nkb) + 4 or SEM_BLOCK_READY_RING + ring > 16:
++    if not PORT_READY_EXACT and (ring < -(-X_ROUND_DEPTH // geo.nkb) + 4 or SEM_BLOCK_READY_RING + ring > 16):
+         raise RuntimeError(f"q_stem: BLOCK_READY_RING={ring} does not cover the owners' block drift")
+-    ready_named = [("ready_ring", ring)]
++    ready_named = [
++        ("ready_ring", ring),
++        ("ready_exact", int(bool(PORT_READY_EXACT))),
++        ("cb_port_ready", CB_PORT_READY),
++        ("sem_armed", SEM_ARMED),
++    ]
+
+     mesh_desc = ttnn.MeshProgramDescriptor()
+     for coord, ch in chips.items():
+@@ -688,6 +725,11 @@
+                 S1_KSPLIT,
+                 S1_KPART_DEPTH,
+                 BLOCK_READY_RING,
++                X_SPLIT,
++                X_SPLIT_AHEAD,
++                X_CREDIT,
++                PORT_READY_EXACT,
++                X_PRE_ROUNDS,
+                 S1_COLS_PER_CORE,
+                 QB_READ_BATCH,
+                 S3_COST_FACTOR,
+@@ -715,6 +757,15 @@
+             ttnn.SemaphoreDescriptor(id=SEM_KPART_READY, core_ranges=all_crs, initial_value=0),
+             ttnn.SemaphoreDescriptor(id=SEM_KPART_READY + 1, core_ranges=all_crs, initial_value=0),
+             ttnn.SemaphoreDescriptor(id=SEM_KPART_CREDIT, core_ranges=all_crs, initial_value=0),
++        ] + [
++            ttnn.SemaphoreDescriptor(id=SEM_X_READY + i, core_ranges=_merge(s1_all_rect, inj_crs), initial_value=0)
++            for i in range(ni if x_split else 0)
++        ] + [
++            ttnn.SemaphoreDescriptor(id=SEM_X_ARMED, core_ranges=s1_all_rect, initial_value=0)
++            for _ in range(1 if x_split else 0)
++        ] + [
++            ttnn.SemaphoreDescriptor(id=SEM_X_SLOT + s, core_ranges=inj_crs, initial_value=0)
++            for s in range(X_ROUND_DEPTH if x_split and X_CREDIT == "slots" else 0)
+         ] + [  # port cores only: the owners' Mcast families keep their ids >= 5
+             ttnn.SemaphoreDescriptor(id=SEM_BLOCK_READY_RING + k, core_ranges=port_crs, initial_value=0)
+             for k in range(ring)
+@@ -729,6 +780,10 @@
+             _cb(CB_X_STAGE, x.dtype, geo.x_tile_bytes, 2 * geo.s1_kb if not geo.aligned else 1, inj_crs),
+             _cb(CB_QB_SLICE, q_b.dtype, geo.qb_tile_bytes, geo.Q_ks * geo.cols_max, s1_all_rect),
+         ]
++        if x_split:
++            cbs.append(_cb(CB_X_CREDITS, ttnn.uint32, -(-geo.C1 * 4 // 16) * 16, 1, _merge(s1_all_rect, inj_crs)))
++        if PORT_READY_EXACT:
++            cbs.append(_cb(CB_PORT_READY, ttnn.uint32, -(-geo.C1 * 4 // 16) * 16, 1, _merge(s1_rect, port_crs)))
+         if geo.nkb > 1:
+             cbs.append(_cb(CB_Q_PARTIAL, geo.partial_dtype, geo.partial_tile_bytes, geo.m * geo.cols_max, s1_all_rect))
+         if ks > 1:  # declared on every group: one address per CB, so a partner writes into its owner's slot directly
+@@ -786,6 +841,7 @@
+             rargs += [int(wkv.buffer_address()), p, cos_addr, sin_addr]
+             rargs += arrive_addrs
+             rargs += [hpc] + [v for h in heads for v in (h, h // geo.Hl)]
++            rargs += [i if i is not None else 0]  # X_SPLIT: my credit word on the injectors
+             (reader_rt_s1 if i is not None else reader_rt_other)[core.x][core.y] = rargs
+             # compute
+             sbw1 = _largest_divisor_leq(cols, geo.dest_limit) if cols else 1
+@@ -803,7 +859,8 @@
+                     base, stride, _ = head_slot(h, p)  # local heads: contiguous rows, no jump
+                     pieces += [c - c0, n, _pack(virt(dest_core)), base + cc, stride]
+                     c += n
+-            wargs = [p, cols, int(out.buffer_address()), landing_addr, arrive_addrs[p], g, *peer_args]
++            my_ci = i if (i is not None and g == 0) else 0
++            wargs = [p, cols, int(out.buffer_address()), landing_addr, arrive_addrs[p], g, my_ci, *peer_args]
+             wargs += dirmap + rorder + port_args
+             wargs += [len(pieces) // 5] + pieces
+             wargs += [hpc, n_r] + heads
+@@ -926,6 +983,10 @@
+                     config=_dm("RISCV_1", ttnn.NOC.NOC_1 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_0),
+                 )
+             )
++        def mc_bounds(noc):  # the stage-1 rect (K group 0) in virtual coords, in the NoC's routing order
++            lo, hi = virt(ttnn.CoreCoord(0, 1)), virt(ttnn.CoreCoord(geo.W1 - 1, geo.R1))
++            return (lo.x, lo.y, hi.x, hi.y) if noc == 0 else (hi.x, hi.y, lo.x, lo.y)
++
+         injector_ks = []  # per injector: (DRAM/L1 half, multicast half)
+         for i, inj in enumerate(injectors):
+             send_noc = X_INJECTOR_NOCS[i % len(X_INJECTOR_NOCS)]
+@@ -945,14 +1006,20 @@
+                     geo.Sq,
+                     geo.x_St,
+                     CB_X_STAGE,
+-                    0 if ks > 1 else i,  # K-split: every injector sends all rounds of its group's K slice
+-                    1 if ks > 1 else len(injectors),
++                    0 if ks > 1 or x_split else i,  # K-split / X_SPLIT: every injector reads every round
++                    1 if ks > 1 or x_split else len(injectors),
+                     i * geo.Q_ks if ks > 1 else 0,  # first K tile of the slice
+                     *x_ct,
+                 ],
+                 runtime_args=inj_rt,
++                named_compile_time_args=[
++                    ("x_t_lo", split_t[i][0] if x_split else 0),
++                    ("x_t_n", split_t[i][1] if x_split else geo.round_tiles),
++                ],
+                 config=_dm("RISCV_0", noc_of(1 - send_noc)),
+             )
++            inj_send_rt = ttnn.RuntimeArgs()
++            inj_send_rt[inj.x][inj.y] = [_pack(virt(c)) for c in geo.s1_cores(0)] if x_split else []
+             send_k = ttnn.KernelDescriptor(
+                 kernel_source=str(KERNEL_DIR / "q_stem_injector.cpp"),
+                 core_ranges=_crs([inj]),
+@@ -968,7 +1035,19 @@
+                     SEM_X_CREDIT,
+                 ],
+                 defines=[("Q_STEM_X_FAMILY", str(i))],
+-                runtime_args=ttnn.RuntimeArgs(),
++                named_compile_time_args=[
++                    ("x_split", x_split),
++                    ("sem_x_ready", SEM_X_READY),
++                    ("x_t_lo", split_t[i][0]),
++                    ("x_t_n", split_t[i][1]),
++                    *zip(("x_mc_x0", "x_mc_y0", "x_mc_x1", "x_mc_y1"), mc_bounds(send_noc)),
++                    ("x_mc_dests", geo.W1 * geo.R1),
++                    ("cb_x_credits", CB_X_CREDITS),
++                    ("sem_x_armed", SEM_X_ARMED),
++                    ("x_credit_slots", int(X_CREDIT == "slots")),
++                    ("sem_x_slot", SEM_X_SLOT),
++                ],
++                runtime_args=inj_send_rt,
+                 config=_dm("RISCV_1", noc_of(send_noc)),
+             )
+             injector_ks.append((reader_k, send_k, send_noc))

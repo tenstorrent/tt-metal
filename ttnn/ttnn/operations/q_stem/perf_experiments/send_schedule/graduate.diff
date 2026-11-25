@@ -1,0 +1,33 @@
+--- ttnn/ttnn/operations/q_stem/q_stem_program_descriptor.py	2026-11-25 01:33:26.759994503 +0000
++++ ttnn/ttnn/operations/q_stem/q_stem_program_descriptor.py	2026-11-25 03:07:30.104983320 +0000
+@@ -360,6 +360,21 @@
+     return out[: G - 1]
+
+
++def send_remote_order(p, G, route):
++    """Per-row destination order of chip p's send order (the inner loop of `for_each_block`): the antipodal quarter
++    first, then the ring neighbour in its route direction (the 'late' direction: its ports carry 2 quarters), then
++    the other neighbour: the 2-hop quarter enters the fabric first in every row, so the neighbour's forwarding link
++    gets it from the first row on (measured, perf_experiments/send_schedule: PERF FOCUS -1.5 us, GLM RoPE -6 us).
++    Rows within a destination stay ascending (one in-order stream per (core, source)); the order is one host list
++    shared by injector, stage-1 writers and ports through their `rorder` runtime args.
++    G != 4: remote_order."""
++    if G != 4:
++        return remote_order(p, G)
++    nxt, prv, anti = (p + 1) % G, (p - 1) % G, (p + 2) % G
++    late = nxt if route[(p, anti)] == FWD else prv
++    return [anti, late, prv if late == nxt else nxt]
++
++
+ def exchange_plan(mesh, cluster_axis, num_links):
+     rows, cols = tuple(mesh.shape)
+     if cluster_axis != 1:
+@@ -647,7 +662,7 @@
+         p = ch["p"]
+         grp = ch["grp"]
+         route = ch["route"]
+-        rorder = remote_order(p, G)
++        rorder = send_remote_order(p, G, route)
+         dirmap = [route[(p, d)] if d != p else 0 for d in range(G)]
+
+         program = ttnn.ProgramDescriptor()

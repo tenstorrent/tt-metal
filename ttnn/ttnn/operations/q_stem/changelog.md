@@ -435,3 +435,83 @@ the helper library: the x_supply variant bypassed the Mcast helper for a `capabi
 cleared before the next send, so only one round can be in flight, and Counter signalling pays a write + atomic
 barrier per round (Refinement 6: 147.7 → 172.6 µs); missing mode: a sender-published monotonic round count written
 behind the linked payload that receivers wait on without clearing. Helper 2.70 µs/round vs raw 1.39 µs/round (bench).)
+
+## Perf 2
+- Date: 2026-11-25. Focus: LOOSE_CASES[0] (PERF FOCUS, the model config: Kimi S=640, latent L1 bf16, q_b bfloat8_b,
+  wkv_b1 bf16, NoPE, HiFi2, 16-bit DEST, ROW_MAJOR out, 2 links, Ring, payload 7232 B). Every knob is in SUPPORTED.
+  Fused CCL op on 4 chips. Headline numbers come from `perf_measure.py` (ccl_perf, 5 experiments) and are the fastest
+  chip per call. Instrumentation: the Perf 1 zones are unchanged; no new kernel path was added, so none needed new zones.
+- **Measured breakdown.** Cumulative peel with `perf_ablate.py` (3 exp), fastest / slowest chip in µs:
+
+  | run (stubbed cumulatively) | fastest | slowest | Δ fastest | part SOL / note |
+  |---|---|---|---|---|
+  | full (`perf_measure`, 5 exp) | 144.67 | 158.26 | | roofline 73.8 |
+  | − OUT_WRITE | 131.28 | 144.43 | −13.4 | output 17.7 MB; schedule est. 38.7 µs (sweep `4e16aaba`); exposed on the tail |
+  | − S3, WKV_READ | 116.97 | 127.81 | −14.3 | wkv 12.6 MB ≈ 25 µs DRAM; stage-3 matmul small |
+  | − SEND_PAYLOAD | 87.81 | 91.88 | −29.2 | busiest eth link 1.47 MB: 30 µs at 48.5 GB/s, 61 at the 24 GB/s one link reached; isolated exchange 88 µs (17–18 GB/s per link) |
+  | − QB_READ | 73.92 | 78.57 | −13.9 | 7.5 MB ≈ 15 µs; read ends at ~20 µs, exposed |
+  | − S1_COMPUTE | 69.84 | 71.39 | −4.1 | 2.25 µs per block SOL, 2.37 measured (hidden behind x) |
+  | − X_READ (everything stubbed) | 68.14 | 69.50 | −1.7 | x-round scaffold 68 vs ~23 µs multicast SOL |
+
+  Solo SEND_PAYLOAD stub: 151.7 (slower; landing early floods stage 3). Exchange as the only live payload: 101.6.
+  Zones (1 call per chip): stage 1 ends 97–106 µs. On every chip two ports end at 83–91 µs. The other two, the
+  direction that also carries the antipodal quarter, end at 109–113 (chip 0), 114/136 (chip 1), 104/123 (chip 2) and
+  118/135 (chip 3). Last landing per chip is at 131/142/135/141, and the op ends ~16 µs after it.
+  **Ranked:** (1) the late-direction ports, ~11–14 GB/s per link in the op against 17–18 GB/s isolated (exchange);
+  (2) the post-exchange stage-3 tail (~15 µs); (3) the stage-1 pace (hidden behind 1); (4) the q_b start-up (at SOL,
+  exposed). Knob probes (perf_ablate, fastest / slowest): `S3_LATE_REMOTE_ROWS` 1 → 142.19 / 154.25 (−1.7%, noise)
+  and 2 → 143.07 / 157.02; `FREE_CORE_START=1.0` → 165.7 / 169.9; `S3_COST_FACTOR=100` → 165.4 / 170.0.
+- **Calculator.** `estimate.py sweep` phase "Perf 2" (`4e16aaba`) on the RM output write (36 evaluated, current
+  schedule fixed): current 38.7 µs, best 37.0 µs (96 cores, batch 16). That is inside the 10% band, so no data-movement
+  schedule was fanned out. The exchange and the port pull are fabric / L1→L1 transfers, which `estimate.py` refuses;
+  those ideas went out unranked. `estimate.py report`: Perf 2 evaluated 36, shortlisted 6, built 0.
+- **Portfolio and verdicts** (one perf-part-optimizer each; artifacts in `perf_experiments/<slug>/`; µs fastest /
+  slowest):
+
+  | idea | kind | verdict | numbers | domain / notes |
+  |---|---|---|---|---|
+  | `transport_2link`: per-link rate at 2 links | TRANSPORT | WIN isolated, small in op | isolated 100.6 → 63.9 (fused increment with `flush=false` + ports next to their eth cores; 25 GB/s per link), 56.3 with the balanced split. In the op: eth placement 144.5 / 159.2 → 143.1 / 151.9; no-flush 144.9 / **166.4**; both 147.2 / 155.9 | Two caps, each enough to hold ~19 GB/s alone: the receiving router waits for the data write before the fused increment, and the centred ports share NoC1 paths to the eth cores. No-flush checked race-free (0 early increments in 71k checks; the racy control is caught). In the op, no-flush slows stage 1 by ~10 µs (inbound writes contend), so it is **not graduated**; it becomes worth taking once stage 1 stops colliding with the inbound writes. Reference: fabric_all_gather at 7232 B reaches 25 GB/s per link at 2 links. |
+  | `port_feed`: the late port in the op | OVERLAP | **WIN** | 144.52 / 159.34 → 142.00 / 151.96 (layout (3,4,6,5), median of 3); (2,3,5,6) 140.5 / 150.3, but GLM fastest +1.7 | A busy port is not starved and mostly not fabric-bound. It is slow to issue its NoC1 writes when it sits next to the injector (x 5–6) or at x 9–10, behind the stage-3 output writes after stage 1. Giving the busy direction the left half of the port block (same 4 cores) fixes it. Alone: LC1 fastest +2.8 (1.6%); in the combination LC1 is flat (below). |
+  | `send_schedule`: direction-aware send order | OVERLAP | **WIN (small)** | 144.64 / 159.79 → 143.12 / 157.75 (`anti_first`, 3 pairs); GLM 149.0 / 168.8 → 143.7 / 161.8; balanced split 147.49 / 163.23 | Round 1's balanced-split regression explained: it keeps all 4 ports sending past stage-1 end, so the output-write stall moves onto every port. Bit-identical output. |
+  | `s3_tail`: chain from the last landing to the last write | OVERLAP | NULL (fastest) / WIN (slowest) | dynamic consumption order 144.47 / 159.03 → 143.46 / 152.55 (rerun 143.59 / 153.12); tail after the last landing 16 → 4.3 µs | Fastest −0.7% (noise); LC1 **+2.6%** (measured regression); raw-LLK `cb_landing` read-pointer override. Not graduated; recorded as an option. Spreading heads one per core loses because ~12.7 MB of output then goes out on the stage-1 cores' NoC1. |
+  | `s1_pace`: x supply + stage-1 matmul + exact port block-ready | local | REGRESSION (focus), WIN (DSV3.2) | stage 1 ends 100 → 81.5 µs; x alone 68.2 → 53.2; op 144.42 / 159.61 → 147.70 / **172.15**; DSV3.2 227.77 / 231.47 → 212.56 / 221.29; exact port protocol alone 143.92 / 158.77 (null) | Matmul per block is at 0.89 of SOL (helper 2556 ns, raw LLK 2515 ns: −1.6%, not worth it). It wins where stage 1 binds and loses where the exchange binds. **Latent race found:** the summed x-credit counter corrupts output once credits run more than one round ahead (X_INJECTORS=2, which is parked). Per-slot credits fix it. The default single-injector path is not affected. |
+
+- **Graduated** (host only, `q_stem_program_descriptor.py`, no kernel change):
+  1. Port roles per chip (`port_cores(gx, L, route, p, G)`). Same centred core set on every chip. The busy direction
+     (the one whose ports send to 2 chips) takes the left half, the light one the right half. Remote ready-fence
+     targets use the target chip's roles. The fixed chip-free role map is gone from the per-chip path; the chip-free
+     call only names the core set for CBs and resources.
+  2. Send order `send_remote_order(p, G, route)` = [antipodal, late neighbour, early neighbour] per row (G=4).
+     Carve-out: G ≠ 4 keeps `remote_order`. The antipodal/late/early roles are defined for a 4-ring only, and G=4 is
+     the only group size in INPUTS.
+  Domain: every cell. No other carve-outs.
+- **Whole-op result** (`perf_measure.py`, 5 exp, two runs): fastest 144.67 → **140.46 / 140.73 µs** (−4.2, −2.9%,
+  noise 0.30), slowest 158.26 → 151.88 / 152.18 (−6.4). `ccl_perf compare` verdict **win**. Not dispatch-bound (max
+  gap 0.54 µs).
+- **Guard set** (all 4 perf cases, `CCL_PERF_CASES=all`, 5 exp, base and new measured back to back in the same
+  session):
+
+  | case | base fastest / slowest | new fastest / slowest |
+  |---|---|---|
+  | LC0 PERF FOCUS | 144.57 / 159.63 | 140.38 / 151.97 |
+  | LC1 Kimi Phase 0 (bf16, fp32 DEST, DRAM, TILE) | 175.15 / 191.31 | 174.97 / 191.42 (flat) |
+  | LC2 DSV3.2 RoPE | 227.60 / 231.04 | 227.66 / 231.19 (flat) |
+  | LC3 GLM RoPE | 148.52 / 171.00 | 145.03 / 161.14 |
+
+  No regression on any case.
+- **Golden**: full `eval/golden_tests/q_stem/` 1103 / 1103 passed (12 chunks, `--precompile`). `test_q_stem.py` +
+  `test_q_stem_ksplit.py` 15 / 15.
+- **Findings for the next round**: the late ports are now fabric-bound, and the remaining in-op exchange cost is NoC
+  contention between the inbound fabric writes / port sends and the stage-3 output writes plus stage 1. With output
+  writes stubbed, the last landing moves to 120–127 µs and stage 1 ends 13 µs earlier. The transport half
+  (no-flush, 25 GB/s per link) and the stage-1 half (s1_pace, stage 1 ends at 81 µs) each lose in the op today
+  because they push more traffic into the same window. Taking them, together with the dynamic stage-3 order, means
+  keeping the output writes off the paths the fabric traffic and stage 1 use.
+
+### Helper bypasses — none
+(Both graduated changes are host-only. Not graduated, recorded for the helper library: `s1_pace` X_SPLIT bypasses
+the kernel_lib Mcast helper (`capability`). Flag signalling allows only one round in flight, and Counter signalling
+pays a write plus an atomic barrier per round. The helper has no mode where receivers wait on a counter that the
+sender publishes behind the linked payload and never clears, with credits counted per slot. Measured in round 1:
+helper 2.70 µs per round vs raw 1.39 µs per round on the bench. `s3_tail` overrides the `cb_landing` unpacker read
+pointer (`capability`): no CB helper consumes a statically laid-out buffer in a data-dependent order.)

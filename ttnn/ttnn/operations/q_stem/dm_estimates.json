@@ -1951,6 +1951,306 @@
      "note": "Perf 1 coordinator: whole op with every payload stubbed (x pipeline + scaffold), fastest chip, 3 exp"
     }
    ]
+  },
+  {
+   "id": "4e16aaba",
+   "kind": "sweep",
+   "utc": "2026-11-25T02:14:35.503300+00:00",
+   "phase": "Perf 2",
+   "label": "sweep",
+   "schedule": {
+    "op": "q_stem",
+    "case": "Perf 2 PERF FOCUS Kimi: ROW_MAJOR output write, 96 heads x 160 sticks x 1152 B (17.7 MB) from the 99 compute cores, one flush per 32-stick row block",
+    "work_bytes": 17694720,
+    "top": 6,
+    "max_l1_bytes": 262144,
+    "candidates": [
+     {
+      "name": "out_sticks",
+      "family": "dram_write",
+      "bytes": 1152,
+      "placement": "interleaved"
+     }
+    ],
+    "fixed": [
+     {
+      "name": "current",
+      "family": "dram_write",
+      "bytes": 1152,
+      "placement": "interleaved",
+      "cores": 99,
+      "pages_per_core": 155,
+      "batch": 32,
+      "noc": "split"
+     }
+    ],
+    "vary": {
+     "cores": [
+      72,
+      96,
+      99
+     ],
+     "batch": [
+      8,
+      16,
+      32,
+      64
+     ],
+     "noc": [
+      0,
+      1,
+      "split"
+     ]
+    }
+   },
+   "result": {
+    "op": "q_stem",
+    "case": "Perf 2 PERF FOCUS Kimi: ROW_MAJOR output write, 96 heads x 160 sticks x 1152 B (17.7 MB) from the 99 compute cores, one flush per 32-stick row block",
+    "work_bytes": 17694720,
+    "stats": {
+     "evaluated": 36,
+     "estimated": 36,
+     "refused": 0,
+     "over_l1_cap": 0,
+     "shortlisted": 6,
+     "wall_s": 40.77
+    },
+    "groups": [
+     {
+      "name": "out_sticks batch=16 cores=96 noc=split",
+      "family": "dram_write",
+      "status": "estimated",
+      "pass_ns": 36973.91010802469,
+      "details": {
+       "pass_cycles": 49914.778645833336,
+       "steady_cycles_per_pass": 49590.00000000001,
+       "binding": "NoC link ['link', 0, 0, 8, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 49590.0,
+        "dram_channel": 48000.0
+       },
+       "issue_cycles_per_request": [
+        41.0703125,
+        40.427083333333336
+       ],
+       "noc": "split",
+       "cores": 96
+      },
+      "steady_ns_per_pass": 36733.33333333334,
+      "rank": 1,
+      "candidate_id": "8b9ed34440f0abce",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 18432,
+      "config": {
+       "family": "dram_write",
+       "bytes": 1152,
+       "placement": "interleaved",
+       "batch": 16,
+       "cores": 96,
+       "noc": "split",
+       "name": "out_sticks batch=16 cores=96 noc=split",
+       "pages_per_core": 160
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "out_sticks batch=32 cores=96 noc=split",
+      "family": "dram_write",
+      "status": "estimated",
+      "pass_ns": 37570.73109567902,
+      "details": {
+       "pass_cycles": 50720.48697916667,
+       "steady_cycles_per_pass": 49604.25,
+       "binding": "NoC link ['link', 0, 0, 8, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 49590.0,
+        "dram_channel": 48000.0
+       },
+       "issue_cycles_per_request": [
+        41.0703125,
+        40.427083333333336
+       ],
+       "noc": "split",
+       "cores": 96
+      },
+      "steady_ns_per_pass": 36743.88888888889,
+      "rank": 2,
+      "candidate_id": "27333ad91fa0361a",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 36864,
+      "config": {
+       "family": "dram_write",
+       "bytes": 1152,
+       "placement": "interleaved",
+       "batch": 32,
+       "cores": 96,
+       "noc": "split",
+       "name": "out_sticks batch=32 cores=96 noc=split",
+       "pages_per_core": 160
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "out_sticks batch=16 cores=99 noc=split",
+      "family": "dram_write",
+      "status": "estimated",
+      "pass_ns": 37851.10339506173,
+      "details": {
+       "pass_cycles": 51098.989583333336,
+       "steady_cycles_per_pass": 50160.00000000001,
+       "binding": "NoC link ['link', 0, 0, 8, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 50160.00000000001,
+        "dram_channel": 49500.0
+       },
+       "issue_cycles_per_request": [
+        41.0703125,
+        40.427083333333336
+       ],
+       "noc": "split",
+       "cores": 99
+      },
+      "steady_ns_per_pass": 37155.55555555556,
+      "rank": 3,
+      "candidate_id": "06cebe5dc5246b24",
+      "padding_pct": 3.125,
+      "l1_bytes_per_core": 18432,
+      "config": {
+       "family": "dram_write",
+       "bytes": 1152,
+       "placement": "interleaved",
+       "batch": 16,
+       "cores": 99,
+       "noc": "split",
+       "name": "out_sticks batch=16 cores=99 noc=split",
+       "pages_per_core": 160
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "out_sticks batch=32 cores=99 noc=split",
+      "family": "dram_write",
+      "status": "estimated",
+      "pass_ns": 38719.25154320988,
+      "details": {
+       "pass_cycles": 52270.989583333336,
+       "steady_cycles_per_pass": 50158.5,
+       "binding": "NoC link ['link', 0, 0, 8, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 50160.00000000001,
+        "dram_channel": 49500.0
+       },
+       "issue_cycles_per_request": [
+        41.0703125,
+        40.427083333333336
+       ],
+       "noc": "split",
+       "cores": 99
+      },
+      "steady_ns_per_pass": 37154.444444444445,
+      "rank": 4,
+      "candidate_id": "48ff471ea28f3c38",
+      "padding_pct": 3.125,
+      "l1_bytes_per_core": 36864,
+      "config": {
+       "family": "dram_write",
+       "bytes": 1152,
+       "placement": "interleaved",
+       "batch": 32,
+       "cores": 99,
+       "noc": "split",
+       "name": "out_sticks batch=32 cores=99 noc=split",
+       "pages_per_core": 160
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "out_sticks batch=16 cores=96 noc=1",
+      "family": "dram_write",
+      "status": "estimated",
+      "pass_ns": 42739.043209876545,
+      "details": {
+       "pass_cycles": 57697.708333333336,
+       "steady_cycles_per_pass": 57464.92708333332,
+       "binding": "NoC link ['link', 1, 1, 4, 0, 4]",
+       "lower_bounds_cycles": {
+        "noc_link": 57400.0,
+        "dram_channel": 48000.0
+       },
+       "issue_cycles_per_request": [
+        0,
+        40.427083333333336
+       ],
+       "noc": 1,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 42566.612654320976,
+      "rank": 5,
+      "candidate_id": "1807ae5cdf952610",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 18432,
+      "config": {
+       "family": "dram_write",
+       "bytes": 1152,
+       "placement": "interleaved",
+       "batch": 16,
+       "cores": 96,
+       "noc": 1,
+       "name": "out_sticks batch=16 cores=96 noc=1",
+       "pages_per_core": 160
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "out_sticks batch=8 cores=96 noc=1",
+      "family": "dram_write",
+      "status": "estimated",
+      "pass_ns": 42772.80092592593,
+      "details": {
+       "pass_cycles": 57743.28125,
+       "steady_cycles_per_pass": 57402.25,
+       "binding": "NoC link ['link', 1, 1, 4, 0, 4]",
+       "lower_bounds_cycles": {
+        "noc_link": 57400.0,
+        "dram_channel": 48000.0
+       },
+       "issue_cycles_per_request": [
+        0,
+        40.427083333333336
+       ],
+       "noc": 1,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 42520.18518518518,
+      "rank": 6,
+      "candidate_id": "1ced56ccf61674ac",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 9216,
+      "config": {
+       "family": "dram_write",
+       "bytes": 1152,
+       "placement": "interleaved",
+       "batch": 8,
+       "cores": 96,
+       "noc": 1,
+       "name": "out_sticks batch=8 cores=96 noc=1",
+       "pages_per_core": 160
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     }
+    ],
+    "refusals": {},
+    "cross_family": false,
+    "note": "One family: the order is as reliable as that family's ranking."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": []
   }
  ]
 }

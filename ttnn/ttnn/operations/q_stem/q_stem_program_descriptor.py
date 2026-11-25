@@ -332,12 +332,25 @@ def _first_hop_dir(mesh, src, dst, nxt, prv):
     return None
 
 
-def port_cores(gx, num_links):
-    """2 * num_links port cores, centred on logical row 0: {(direction, link): core}."""
+def port_cores(gx, num_links, route=None, p=0, G=0):
+    """2 * num_links port cores, centred on logical row 0: {(direction, link): core}. The same core set on every
+    chip; the roles follow the chip's load: the busy direction (the one whose ports send to more chips, i.e. carry
+    the antipodal quarter as well: 2 quarters vs 1) takes the left half of the block (x0 + l), the light one the
+    right half (x0 + 2L-1 - l). Measured (Perf 2, port_feed): a busy port in the right half of the block (next to
+    the x injector) is NoC-issue bound behind the stage-3 output writes after stage 1 and ends ~20 us late."""
     n = 2 * num_links
     x0 = max(0, gx // 2 - num_links)
     cores = [ttnn.CoreCoord(x0 + i, 0) for i in range(n)]
-    return {(d, l): cores[2 * l + d] for l in range(num_links) for d in (FWD, BWD)}
+    busy = FWD
+    if route is not None:
+        n_to = {d: sum(1 for t in range(G) if t != p and route[(p, t)] == d) for d in (FWD, BWD)}
+        busy = FWD if n_to[FWD] >= n_to[BWD] else BWD
+    light = BWD if busy == FWD else FWD
+    out = {}
+    for l in range(num_links):
+        out[(busy, l)] = cores[l]
+        out[(light, l)] = cores[n - 1 - l]
+    return out
 
 
 def injector_cores(gx, ports, n=None):
@@ -358,6 +371,21 @@ def remote_order(p, G):
             if d != p and d not in out:
                 out.append(d)
     return out[: G - 1]
+
+
+def send_remote_order(p, G, route):
+    """Per-row destination order of chip p's send order (the inner loop of `for_each_block`): the antipodal quarter
+    first, then the ring neighbour in its route direction (the 'late' direction: its ports carry 2 quarters), then
+    the other neighbour: the 2-hop quarter enters the fabric first in every row, so the neighbour's forwarding link
+    gets it from the first row on (measured, perf_experiments/send_schedule: PERF FOCUS -1.5 us, GLM RoPE -6 us).
+    Rows within a destination stay ascending (one in-order stream per (core, source)); the order is one host list
+    shared by injector, stage-1 writers and ports through their `rorder` runtime args.
+    G != 4: remote_order."""
+    if G != 4:
+        return remote_order(p, G)
+    nxt, prv, anti = (p + 1) % G, (p - 1) % G, (p + 2) % G
+    late = nxt if route[(p, anti)] == FWD else prv
+    return [anti, late, prv if late == nxt else nxt]
 
 
 def exchange_plan(mesh, cluster_axis, num_links):
@@ -647,8 +675,9 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         p = ch["p"]
         grp = ch["grp"]
         route = ch["route"]
-        rorder = remote_order(p, G)
+        rorder = send_remote_order(p, G, route)
         dirmap = [route[(p, d)] if d != p else 0 for d in range(G)]
+        ports = port_cores(geo.gx, L, route, p, G)  # this chip's roles (same core set as the chip-free one)
 
         program = ttnn.ProgramDescriptor()
         if geo.wkv_resident:
@@ -854,7 +883,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                         sargs += list(head_slot(h, t)) if t != p else [0, 0, 0]
                 sargs += [len(ready_targets)]
                 for s, sdir in ready_targets:
-                    rc = virt(ports[(sdir, l)])
+                    rc = virt(port_cores(geo.gx, L, route, s, G)[(sdir, l)])
                     sargs += [dests.index(s), rc.x, rc.y]
                 sargs += [len(sends_to), int(has_conn)]
                 if has_conn:
