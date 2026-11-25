@@ -69,6 +69,81 @@ inline float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint3
 
 std::map<std::string, std::weak_ptr<DevicePrintParser>> DevicePrintParser::parser_cache;
 
+namespace {
+
+// The type format_message() hands to fmt for each element of a tile or a typed array. Their data format is known only
+// at run time, so the device checks only that a spec suits one of these types.
+enum class ElementType : uint8_t { signed_int, unsigned_int, floating_point };
+
+// The element type of a tile, or none for a data format that prints without the spec.
+std::optional<ElementType> tile_element_type(tt::DataFormat data_format) {
+    switch (data_format) {
+        case tt::DataFormat::Float16_b:
+        case tt::DataFormat::Float32:
+        case tt::DataFormat::Bfp4_b:
+        case tt::DataFormat::Bfp8_b: return ElementType::floating_point;
+        case tt::DataFormat::Int8:
+        case tt::DataFormat::Int32: return ElementType::signed_int;
+        case tt::DataFormat::UInt8:
+        case tt::DataFormat::UInt16:
+        case tt::DataFormat::UInt32: return ElementType::unsigned_int;
+        default: return std::nullopt;
+    }
+}
+
+// The element type of a typed array, or none for a data format that prints without the spec.
+std::optional<ElementType> typed_array_element_type(tt::DataFormat data_format) {
+    switch (data_format) {
+        case tt::DataFormat::Float16:
+        case tt::DataFormat::Bfp8:
+        case tt::DataFormat::Bfp4:
+        case tt::DataFormat::Bfp2:
+        case tt::DataFormat::Lf8:
+        case tt::DataFormat::Bfp8_b:
+        case tt::DataFormat::Bfp4_b:
+        case tt::DataFormat::Bfp2_b:
+        case tt::DataFormat::Float16_b:
+        case tt::DataFormat::Tf32:
+        case tt::DataFormat::Float32: return ElementType::floating_point;
+        case tt::DataFormat::Int8:
+        case tt::DataFormat::Int32: return ElementType::signed_int;
+        case tt::DataFormat::UInt8:
+        case tt::DataFormat::UInt16:
+        case tt::DataFormat::UInt32: return ElementType::unsigned_int;
+        default: return std::nullopt;
+    }
+}
+
+// Whether fmt accepts `fmt_format` for an element of `element_type` (true for none). fmt's checks depend on the type,
+// not the value, so formatting a zero decides.
+bool spec_suits_elements(const std::string& fmt_format, std::optional<ElementType> element_type) {
+    if (!element_type.has_value()) {
+        return true;
+    }
+    try {
+        switch (*element_type) {
+            case ElementType::signed_int: (void)fmt::formatted_size(fmt::runtime(fmt_format), 0); break;
+            case ElementType::unsigned_int: (void)fmt::formatted_size(fmt::runtime(fmt_format), 0u); break;
+            case ElementType::floating_point: (void)fmt::formatted_size(fmt::runtime(fmt_format), 0.0f); break;
+        }
+    } catch (const fmt::format_error&) {
+        return false;
+    }
+    return true;
+}
+
+// The line written before a print whose spec doesn't suit the data of a tile or typed array, which then prints as {}
+// would. `format_spec` is the placeholder's spec, ":x" in "{:x}".
+void append_spec_warning(fmt::memory_buffer& out, std::string_view format_spec, tt::DataFormat data_format) {
+    fmt::format_to(
+        std::back_inserter(out),
+        "Warning: invalid format specifier {{{}}} for {} data, printed with {{}}\n",
+        format_spec,
+        enchantum::to_string(data_format));
+}
+
+}  // namespace
+
 template <uint8_t PointerSize>
 class DevicePrintParserImpl : public DevicePrintParser {
 public:
@@ -496,6 +571,8 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
     }
     read_arguments_from_payload(string_info.argument_types, payload_bytes, buffer.argument_values);
 
+    // Warnings about a spec that doesn't suit the data of a tile or typed array. They go before the print's text.
+    fmt::memory_buffer warnings;
     for (size_t i = 0; i < string_info.placeholders.size(); i++) {
         // Append prefix plain text part before the placeholder
         auto& plain_text_part = string_info.plain_text_parts[i];
@@ -519,6 +596,12 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                     std::back_inserter(buffer.buffer),
                     format,
                     std::get<uint8_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'C':  // char, formatted as a char: a character, or its code with an integer presentation type
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    static_cast<char>(std::get<uint8_t>(buffer.argument_values[placeholder.arg_id])));
                 break;
             case 'h':  // int16_t
                 fmt::format_to(
@@ -626,6 +709,10 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                 // The device copies a hardware code; hw_data_format_to_host maps the Quasar UInt8 and Fp8P collisions.
                 const uint8_t raw_format = tile_slice.header.data_format;
                 const tt::DataFormat data_format = hw_data_format_to_host(raw_format);
+                if (!spec_suits_elements(placeholder.fmt_format, tile_element_type(data_format))) {
+                    append_spec_warning(warnings, placeholder.format_spec, data_format);
+                    format = fmt::runtime("{0}");
+                }
                 const uint8_t* data = tile_slice.data.data();
                 uint32_t i = 0;
                 bool count_exceeded = false;
@@ -724,7 +811,12 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
             case 'A':  // dp_typed_array_t
             {
                 const auto& arr = std::get<TypedArray>(buffer.argument_values[placeholder.arg_id]);
-                std::string elements_format = "{" + std::string(placeholder.format_spec) + "} ";
+                std::string_view element_spec = placeholder.format_spec;
+                if (!spec_suits_elements(placeholder.fmt_format, typed_array_element_type(arr.type))) {
+                    append_spec_warning(warnings, placeholder.format_spec, arr.type);
+                    element_spec = {};
+                }
+                std::string elements_format = "{" + std::string(element_spec) + "} ";
                 switch (arr.type) {
                     case tt::DataFormat::Float16:
                     case tt::DataFormat::Bfp8:
@@ -927,6 +1019,12 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
     }
     auto& plain_text_part = string_info.plain_text_parts[string_info.placeholders.size()];
     buffer.buffer.append(plain_text_part.data(), plain_text_part.data() + plain_text_part.size());
+    if (warnings.size() != 0) {
+        // Move the warnings in front of the print's text.
+        const std::size_t text_size = buffer.buffer.size();
+        buffer.buffer.append(warnings.data(), warnings.data() + warnings.size());
+        std::rotate(buffer.buffer.begin(), buffer.buffer.begin() + text_size, buffer.buffer.end());
+    }
     return std::string_view(buffer.buffer.data(), buffer.buffer.size());
 }
 
@@ -937,6 +1035,7 @@ DevicePrintParser::ArgumentValue DevicePrintParserImpl<PointerSize>::read_argume
         case 'b':  // int8_t
             return read_value_from_payload<int8_t>(payload_bytes, offset);
         case 'B':  // uint8_t
+        case 'C':  // char, kept as its uint8_t value
             return read_value_from_payload<uint8_t>(payload_bytes, offset);
         case 'h':  // int16_t
             return read_value_from_payload<int16_t>(payload_bytes, offset);

@@ -17,8 +17,9 @@
  * string with compile-time format/argument checking. Format strings are stored host-side in
  * dedicated ELF sections, so they do not consume device L1.
  *
- * The legacy stream-style API (`DPRINT << ... << ENDL();`) has been removed. Existing call sites
- * trip a static_assert pointing at the deprecation. See
+ * The legacy stream-style API (`DPRINT << ... << ENDL();`) has been removed. Streaming a value
+ * into DPRINT trips a static_assert pointing at the deprecation, and the old manipulators and
+ * wrappers (ENDL(), HEX(), F32(), ...) are no longer declared. See
  * tech_reports/Debugging/DEVICE_PRINT_replaces_DPRINT.md for the migration guide.
  *
  * On the host it's required to start the print server first, otherwise the behavior will be
@@ -45,42 +46,6 @@
 namespace internal_ {
 void risc_context_switch(bool);
 }
-
-// Deprecated structures that should be removed once all users are migrated to the new API.
-struct [[deprecated("Use DEVICE_PRINT's bf16_t instead")]] BF16 {
-    BF16(uint16_t) {}
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT instead")]] F32 {
-    F32(float) {}
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT instead")]] U32 {
-    U32(uint32_t) {}
-} ATTR_PACK;
-
-struct [[deprecated("Use DEVICE_PRINT instead")]] ENDL {
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT instead")]] SETPRECISION {
-    SETPRECISION(char) {}
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT instead")]] FIXED {
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT instead")]] DEFAULTFLOAT {
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT instead")]] HEX {
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT instead")]] OCT {
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT instead")]] DEC {
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT instead")]] SETW {
-    SETW(char) {}
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT's dp_typed_array_t<> instead")]] U32_ARRAY {
-    U32_ARRAY(uint32_t*, uint32_t) {}
-} ATTR_PACK;
-struct [[deprecated("Use DEVICE_PRINT's dp_typed_array_t<> instead")]] TYPED_U32_ARRAY {
-    TYPED_U32_ARRAY(uint16_t, uint16_t, uint32_t*, uint32_t) {}
-} ATTR_PACK;
 
 // Fake printer object used only to report nice errors for deprecated API usage.
 class OldStyleDevicePrint {

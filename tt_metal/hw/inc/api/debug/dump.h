@@ -91,7 +91,7 @@ DEVICE_PRINT_FORCE_NOINLINE void debug_dump_cb_typed_words(
 }
 
 __attribute__((always_inline)) inline void debug_dump_cb_typed_info(
-    uint32_t cb_id, uint32_t tile_idx, bool untilize, bool ptr_type, const tile_info_t& info) {
+    uint32_t cb_id, uint32_t tile_idx, bool untilize, bool ptr_type, const dprint_tile_info_t& info) {
     debug_dump_cb_typed_words(
         cb_id,
         tile_idx,

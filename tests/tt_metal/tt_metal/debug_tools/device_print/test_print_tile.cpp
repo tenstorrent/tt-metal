@@ -213,7 +213,16 @@ TEST_P(DevicePrintTileFixture, TestPrintTile) {
     }
 }
 
-class DevicePrintTileKnownIssueFixture : public DevicePrintSeparateFilesFixture {
+class DevicePrintTileBriscKernelFixture : public DevicePrintSeparateFilesFixture {
+protected:
+    void SetUp() override {
+        DevicePrintSeparateFilesFixture::SetUp();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Quasar: this test builds its kernels with CreateKernel(), which Quasar rejects; it needs "
+                            "porting to ProgramSpec";
+        }
+    }
+
 public:
     void RunTestOnEveryDevice(
         tt::DataFormat data_format, const std::string& brisc_kernel, const BriscGolden& brisc_golden = {}) {
@@ -228,10 +237,7 @@ public:
     }
 };
 
-// Known issue: TileSlice's size is an int but the generic serialization's is a uint32_t, so only TileSlice<64> and
-// TileSlice<128>, which have their own, can be printed; today this kernel fails to compile with "No serialization
-// defined for this type". Disabled until that is fixed.
-TEST_F(DevicePrintTileKnownIssueFixture, DISABLED_PrintTileSliceSizes) {
+TEST_F(DevicePrintTileBriscKernelFixture, PrintTileSliceSizes) {
     RunTestOnEveryDevice(
         tt::DataFormat::Float16_b,
         "print_tile_slice_sizes.cpp",
@@ -241,15 +247,11 @@ TEST_F(DevicePrintTileKnownIssueFixture, DISABLED_PrintTileSliceSizes) {
         });
 }
 
-// Known issue: TileSlice has no default constructor outside tt-llk's test environment, so today tile_slice_from_l1
-// fails to compile. Disabled until that is fixed.
-TEST_F(DevicePrintTileKnownIssueFixture, DISABLED_PrintTileSliceFromL1) {
+TEST_F(DevicePrintTileBriscKernelFixture, PrintTileSliceFromL1) {
     RunTestOnEveryDevice(tt::DataFormat::Bfp8_b, "print_tile_slice_from_l1.cpp");
 }
 
-// Known issue: today the host hands the spec to fmt unchecked, fmt throws, and none of the run's output is written,
-// from any RISC. Disabled until that is fixed.
-TEST_F(DevicePrintTileKnownIssueFixture, DISABLED_PrintTileWithSpecNotSuitingData) {
+TEST_F(DevicePrintTileBriscKernelFixture, PrintTileWithSpecNotSuitingData) {
     RunTestOnEveryDevice(
         tt::DataFormat::Float16_b,
         "print_tile_spec_not_suiting_data.cpp",
@@ -264,10 +266,8 @@ std::string GoesOnAfterSpecNotSuitingDataGolden(const std::string& data, const s
     return "Before\n" + std::string(kSpecNotSuitingFloat16bWarning) + "Hex:" + data + "\n\nAfter\n";
 }
 
-// Known issue: today a print the host can't format stops the print server. That RISC's later prints, the other RISCs'
-// prints and every later program's prints are lost, in fast dispatch the earlier ones too, and nothing is reported. The
-// second run checks a later program. Disabled until that is fixed.
-TEST_F(DevicePrintTileKnownIssueFixture, DISABLED_PrintGoesOnAfterSpecNotSuitingData) {
+// The second run checks a later program.
+TEST_F(DevicePrintTileBriscKernelFixture, PrintGoesOnAfterSpecNotSuitingData) {
     for (int run = 0; run < 2; run++) {
         RunTestOnEveryDevice(
             tt::DataFormat::Float16_b,
@@ -276,9 +276,8 @@ TEST_F(DevicePrintTileKnownIssueFixture, DISABLED_PrintGoesOnAfterSpecNotSuiting
     }
 }
 
-// Known issue: the same as users run it, outside test mode. Today the print server's thread rethrows fmt's exception,
-// which ends the whole process, so run this test on its own. Disabled until that is fixed.
-TEST_F(DevicePrintTileKnownIssueFixture, DISABLED_PrintGoesOnAfterSpecNotSuitingDataOutsideTestMode) {
+// The same as users run it, outside test mode.
+TEST_F(DevicePrintTileBriscKernelFixture, PrintGoesOnAfterSpecNotSuitingDataOutsideTestMode) {
     MetalContext::instance().rtoptions().set_test_mode_enabled(false);
     for (int run = 0; run < 2; run++) {
         RunTestOnEveryDevice(

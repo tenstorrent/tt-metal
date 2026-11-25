@@ -42,7 +42,7 @@ using dprint_tslice_cb_t = bool;
 #define TSLICE_INPUT_CB true
 #define TSLICE_OUTPUT_CB false
 
-struct tile_info_t {
+struct dprint_tile_info_t {
     uint32_t tile_dim_r;
     uint32_t tile_dim_c;
     uint32_t tile_size;
@@ -177,14 +177,14 @@ static constexpr bool is_supported_format(const CommonDataFormat& format) {
 }
 
 #if !defined(ENV_LLK_INFRA)
-__attribute__((always_inline)) inline tile_info_t get_tile_info(
+__attribute__((always_inline)) inline dprint_tile_info_t get_tile_info(
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     uint8_t cb, dprint_tslice_cb_t cb_type, dprint_tslice_ptr_t ptr_type
 #else
     uint8_t cb
 #endif
 ) {
-    tile_info_t info = {0};
+    dprint_tile_info_t info = {0};
 #if defined(UCK_CHLKC_PACK)
     info.cb_ptr = CB_WR_PTR(cb);  // PACK only has write pointer
     info.data_format = pack_dst_format[cb];
@@ -249,7 +249,7 @@ __attribute__((always_inline)) inline uint32_t dprint_tile_slice_flags(
     return static_cast<uint32_t>(endl_rows) | static_cast<uint32_t>(print_untilized) << 1 |
            static_cast<uint32_t>(ptr_type) << 2;
 }
-__attribute__((always_inline)) inline uint32_t dprint_tile_slice_descriptors(const tile_info_t& info) {
+__attribute__((always_inline)) inline uint32_t dprint_tile_slice_descriptors(const dprint_tile_info_t& info) {
     return info.data_format | info.tile_dim_r << 8 | info.tile_dim_c << 16 | info.face_dim_r << 24;
 }
 
@@ -258,7 +258,7 @@ template <int MAX_BYTES>
 __attribute__((always_inline)) inline void dprint_tile_slice_sample(
     TileSliceHostDev<MAX_BYTES>* ts,
     uint8_t cb,
-    const tile_info_t& info,
+    const dprint_tile_info_t& info,
     int tile_idx,
     const SliceRange& slice_range,
     bool endl_rows,
@@ -288,9 +288,9 @@ DPRINT_TILE_SAMPLER void dprint_tile_slice_sample_cb(
     bool endl_rows,
     bool print_untilized) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-    const tile_info_t info = get_tile_info(cb, cb_type, ptr_type);
+    const dprint_tile_info_t info = get_tile_info(cb, cb_type, ptr_type);
 #else
-    const tile_info_t info = get_tile_info(cb);
+    const dprint_tile_info_t info = get_tile_info(cb);
 #endif
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     dprint_tile_slice_sample<MAX_BYTES>(ts, cb, info, tile_idx, slice_range, endl_rows, print_untilized, ptr_type);
@@ -303,7 +303,7 @@ DPRINT_TILE_SAMPLER void dprint_tile_slice_sample_cb(
 // Specialization of TileSliceHostDev, with device-side implementation
 template <int MAX_BYTES = 32 * 2>
 struct TileSlice : TileSliceHostDev<MAX_BYTES> {
-    static inline uint32_t get_data_index(tile_info_t& tile_info, uint32_t h, uint32_t w, bool untilize) {
+    static inline uint32_t get_data_index(dprint_tile_info_t& tile_info, uint32_t h, uint32_t w, bool untilize) {
         if (untilize) {
             uint32_t row_in_face = h % tile_info.face_dim_r;
             uint32_t col_in_face = w % tile_info.face_dim_c;
@@ -317,7 +317,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
             return w + h * tile_info.tile_dim_r;
         }
     }
-    static inline uint32_t get_exponent_index(tile_info_t& tile_info, uint32_t h, uint32_t w, bool untilize) {
+    static inline uint32_t get_exponent_index(dprint_tile_info_t& tile_info, uint32_t h, uint32_t w, bool untilize) {
         if (untilize) {
             // For tilized data, exponents are grouped by face
             uint32_t row_in_face = h % tile_info.face_dim_r;
@@ -333,6 +333,9 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
     }
 
 #if !defined(ENV_LLK_INFRA)
+    // For tile_slice_from_l1(), which value-initializes a TileSlice (zeroes it) and fills it in.
+    TileSlice() = default;
+
     __attribute__((always_inline)) TileSlice(
         uint8_t cb,
         int tile_idx,
@@ -415,7 +418,7 @@ DPRINT_TILE_SAMPLER void dprint_tile_slice_sample_words(
     uint32_t flags,
     uint32_t format_and_dims,
     uint32_t num_faces) {
-    tile_info_t tile_info;
+    dprint_tile_info_t tile_info;
     tile_info.data_format = format_and_dims & 0xff;
     tile_info.tile_dim_r = (format_and_dims >> 8) & 0xff;
     tile_info.tile_dim_c = (format_and_dims >> 16) & 0xff;
@@ -533,7 +536,7 @@ inline TileSlice<MAX_BYTES> tile_slice_from_l1(
         return ts;
     }
 
-    tile_info_t info{};
+    dprint_tile_info_t info{};
     info.tile_dim_r = tile_dim_r;
     info.tile_dim_c = tile_dim_c;
     info.face_dim_r = face_dim_r;

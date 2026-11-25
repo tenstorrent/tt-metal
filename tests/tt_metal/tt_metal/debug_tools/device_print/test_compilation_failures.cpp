@@ -76,17 +76,13 @@ TEST_F(DevicePrintFailuresFixture, OldStyleDprint) {
         "Old style DPRINT is deprecated. Use DPRINT(format, ...) instead.");
 }
 
-// Known issue: a spec isn't checked against its argument when the kernel compiles, so today this compiles. Disabled
-// until that is fixed.
-TEST_F(DevicePrintFailuresFixture, DISABLED_SpecNotSuitingArgument) {
+TEST_F(DevicePrintFailuresFixture, SpecNotSuitingArgument) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_not_suiting_argument.cpp",
         "invalid format specifier");
 }
 
-// Known issue: a spec isn't checked against its argument when the kernel compiles, and a char is sent as uint8_t, so
-// today this compiles and prints "097". Disabled until that is fixed.
-TEST_F(DevicePrintFailuresFixture, DISABLED_SpecNotSuitingChar) {
+TEST_F(DevicePrintFailuresFixture, SpecNotSuitingChar) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_not_suiting_char.cpp",
         "invalid format specifier");
@@ -98,33 +94,25 @@ TEST_F(DevicePrintFailuresFixture, PrintTooBigForBuffer) {
         "does not fit in the print buffer");
 }
 
-// Known issue: a spec isn't checked against a tile when the kernel compiles, so today this compiles. Disabled until
-// that is fixed.
-TEST_F(DevicePrintFailuresFixture, DISABLED_SpecSuitingNoNumberOnTile) {
+TEST_F(DevicePrintFailuresFixture, SpecSuitingNoNumberOnTile) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_suiting_no_number_on_tile.cpp",
         "invalid format specifier");
 }
 
-// Known issue: a spec isn't checked against a tile when the kernel compiles, so today this compiles. Disabled until
-// that is fixed.
-TEST_F(DevicePrintFailuresFixture, DISABLED_SpecSuitingNoNumberCombinedOnTile) {
+TEST_F(DevicePrintFailuresFixture, SpecSuitingNoNumberCombinedOnTile) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_suiting_no_number_combined_on_tile.cpp",
         "invalid format specifier");
 }
 
-// Known issue: a spec isn't checked against a typed array when the kernel compiles, so today this compiles. Disabled
-// until that is fixed.
-TEST_F(DevicePrintFailuresFixture, DISABLED_SpecSuitingNoNumberOnTypedArray) {
+TEST_F(DevicePrintFailuresFixture, SpecSuitingNoNumberOnTypedArray) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_suiting_no_number_on_typed_array.cpp",
         "invalid format specifier");
 }
 
-// Known issue: today a format that isn't a string literal fails with an unrelated message ("'format' is not
-// captured"). Disabled until that is fixed.
-TEST_F(DevicePrintFailuresFixture, DISABLED_FormatNotStringLiteral) {
+TEST_F(DevicePrintFailuresFixture, FormatNotStringLiteral) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/format_not_string_literal.cpp",
         "format must be a string literal");

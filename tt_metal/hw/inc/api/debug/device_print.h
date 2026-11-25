@@ -202,9 +202,13 @@ struct dp_top_callstack_t {
 // DEVICE_PRINT is one statement, `do { } while (0)`. Its arguments are the arguments of one call of a generic lambda
 // that takes them by value (bit-fields, packed fields and volatile objects are copied), so each is evaluated exactly
 // once, in the caller's scope, before the print takes the lock. The lambda checks the format string and calls
-// send_message(); both are always_inline.
+// send_message(); both are always_inline. The format must be a string literal, which is checked first: the lambda
+// captures nothing, so its checks can't name a variable.
 #define DEVICE_PRINT(_device_print_format, ...)                                                                     \
     do {                                                                                                            \
+        static_assert(                                                                                              \
+            device_print_detail::checks::is_string_literal<decltype(_device_print_format)>,                         \
+            "DEVICE_PRINT: format must be a string literal");                                                       \
         [](auto... args) __attribute__((always_inline)) {                                                           \
             /* Validate format string syntax */                                                                     \
             static_assert(                                                                                          \
@@ -231,6 +235,10 @@ struct dp_top_callstack_t {
                     device_print_detail::checks::count_placeholders(_device_print_format) ==                        \
                         device_print_detail::helpers::count_arguments(args...),                                     \
                 "Number of {} placeholders must match number of arguments");                                        \
+            /* Each placeholder's spec suits its argument, as fmt formats it on the host */                         \
+            static_assert(device_print_detail::checks::specs_suit_arguments<                                        \
+                          device_print_detail::checks::unsuitable_spec<decltype(args)...>(_device_print_format),    \
+                          decltype(args)...>());                                                                    \
             /* A local Tag struct carries format/file/line as static constexprs. Two struct definitions in distinct \
              * scopes are distinct types, so each DEVICE_PRINT call site gets its own register_string_info          \
              * instantiation. */                                                                                    \
@@ -618,6 +626,14 @@ constexpr FormatToken parse_format_token(const char (&format)[N], std::size_t i)
 
 namespace checks {
 
+// A string literal (also adjacent, macro-built and stringized ones) is an lvalue of type const char[N], so decltype()
+// of it is const char (&)[N]. A named array is const char[N] (the declared type of an id-expression) and a pointer is a
+// pointer.
+template <typename T>
+inline constexpr bool is_string_literal =
+    std::is_lvalue_reference_v<T> && std::is_array_v<std::remove_reference_t<T>> &&
+    std::is_same_v<std::remove_extent_t<std::remove_reference_t<T>>, const char>;
+
 // Helper to validate format string for invalid brace sequences
 // Returns true if format string is valid, false if it contains errors
 template <std::size_t N>
@@ -895,6 +911,16 @@ struct device_print_type<double> {
         store_64bit_value<To>(dst, offset, __builtin_bit_cast(uint64_t, argument));
     }
 };
+// Plain char prints as a character; signed char and unsigned char are int8_t and uint8_t, which print as numbers. It is
+// stored as a uint8_t, by uint8_t's serializer, which the two share where it isn't inlined (-O0).
+template <>
+struct device_print_type<char> {
+    static constexpr device_print_type_info value = {'C', sizeof(char)};
+    template <typename To>
+    static void serialize(typename To::byte_ptr dst, uint32_t offset, char argument) {
+        device_print_type<std::uint8_t>::template serialize<To>(dst, offset, static_cast<std::uint8_t>(argument));
+    }
+};
 template <>
 struct device_print_type<bool> {
     static constexpr device_print_type_info value = {'?', 1};
@@ -938,10 +964,10 @@ template <typename T>
 struct device_print_type<
     T,
     std::enable_if_t<
-        std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, std::int8_t> &&
-        !std::is_same_v<T, std::uint8_t> && !std::is_same_v<T, std::int16_t> && !std::is_same_v<T, std::uint16_t> &&
-        !std::is_same_v<T, std::int32_t> && !std::is_same_v<T, std::uint32_t> && !std::is_same_v<T, std::int64_t> &&
-        !std::is_same_v<T, std::uint64_t>>> {
+        std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, char> &&
+        !std::is_same_v<T, std::int8_t> && !std::is_same_v<T, std::uint8_t> && !std::is_same_v<T, std::int16_t> &&
+        !std::is_same_v<T, std::uint16_t> && !std::is_same_v<T, std::int32_t> && !std::is_same_v<T, std::uint32_t> &&
+        !std::is_same_v<T, std::int64_t> && !std::is_same_v<T, std::uint64_t>>> {
     // Pick the fixed-width type with matching size and signedness
     using fixed_type = std::conditional_t<
         std::is_signed_v<T>,
@@ -1041,7 +1067,7 @@ DEVICE_PRINT_ALWAYS_INLINE const image_word_t* tile_slice_image(TileSlice<MAX_BY
 }
 
 // Copies a TileSlice word by word, then stores the size of its data in its `pad` byte.
-template <typename To, uint32_t MAX_BYTES>
+template <typename To, int MAX_BYTES>
 static DEVICE_PRINT_ALWAYS_INLINE void serialize_tile_slice(
     typename To::byte_ptr dst, uint32_t offset, const TileSlice<MAX_BYTES>& argument) {
     static_assert(
@@ -1055,29 +1081,13 @@ static DEVICE_PRINT_ALWAYS_INLINE void serialize_tile_slice(
     store_8bit_value<To>(dst, offset + offsetof(TileSliceHostDev<MAX_BYTES>, pad), MAX_BYTES);  // The actual size
 }
 
-// TileSlice types
-template <uint32_t MAX_BYTES>
+// TileSlice types. The size is an int, as TileSlice's: C++17 deduces it only from a parameter of the same type.
+template <int MAX_BYTES>
 struct device_print_type<TileSlice<MAX_BYTES>> {
     static constexpr device_print_type_info value = {'t', sizeof(TileSlice<MAX_BYTES>)};
     template <typename To>
     static void serialize(typename To::byte_ptr dst, uint32_t offset, const TileSlice<MAX_BYTES>& argument) {
         serialize_tile_slice<To, MAX_BYTES>(dst, offset, argument);
-    }
-};
-template <>
-struct device_print_type<TileSlice<64>> {
-    static constexpr device_print_type_info value = {'t', sizeof(TileSlice<64>)};
-    template <typename To>
-    static void serialize(typename To::byte_ptr dst, uint32_t offset, const TileSlice<64>& argument) {
-        serialize_tile_slice<To, 64>(dst, offset, argument);
-    }
-};
-template <>
-struct device_print_type<TileSlice<128>> {
-    static constexpr device_print_type_info value = {'t', sizeof(TileSlice<128>)};
-    template <typename To>
-    static void serialize(typename To::byte_ptr dst, uint32_t offset, const TileSlice<128>& argument) {
-        serialize_tile_slice<To, 128>(dst, offset, argument);
     }
 };
 #endif  // defined(KERNEL_BUILD)
@@ -1443,6 +1453,165 @@ constexpr auto update_format_string_from_args(const char (&format)[N], const Arg
 }
 
 }  // namespace formatting
+
+namespace checks {
+
+// What the host formats an argument as (dprint_parser.cpp, by its type letter), which decides the specs that suit it.
+enum class spec_kind : uint8_t {
+    signed_int,
+    unsigned_int,
+    boolean,
+    character,
+    floating,
+    string,       // std::string_view: a CTSTR or a type name
+    enumeration,  // its enumerator's name, a std::string_view; the host deletes every '#' from the spec
+    number,       // the elements of a tile or a typed array, whose type only the host knows: any number
+    unchecked,    // pointers and call stacks: the host ignores the spec
+};
+
+template <typename T>
+constexpr spec_kind spec_kind_of() {
+    if constexpr (std::is_enum_v<std::remove_cv_t<std::remove_reference_t<T>>>) {
+        return spec_kind::enumeration;
+    } else if constexpr (std::is_pointer_v<std::remove_cv_t<std::remove_reference_t<T>>>) {
+        // Every pointer prints as its address, a runtime const char* too, which shares a CTSTR's type letter.
+        return spec_kind::unchecked;
+    } else {
+        switch (formatting::get_type_info<T>().type_char) {
+            case 'b':
+            case 'h':
+            case 'i':
+            case 'q': return spec_kind::signed_int;
+            case 'B':
+            case 'H':
+            case 'I':
+            case 'Q': return spec_kind::unsigned_int;
+            case '?': return spec_kind::boolean;
+            case 'C': return spec_kind::character;
+            case 'f':
+            case 'd':
+            case 'e':
+            case 'E':
+            case 'w': return spec_kind::floating;
+            case 's': return spec_kind::string;
+            case 't':
+            case 'A': return spec_kind::number;
+            default: return spec_kind::unchecked;
+        }
+    }
+}
+
+// Whether fmt 11 formats a value of the kind with the placeholder's spec (parse_format_specs() and check_char_specs()
+// in fmt/base.h).
+constexpr bool spec_suits_kind(const parsing::FormatToken& token, spec_kind kind) {
+    const bool signed_int = kind == spec_kind::signed_int;
+    const bool character = kind == spec_kind::character;
+    const bool floating = kind == spec_kind::floating;
+    const bool text = kind == spec_kind::string || kind == spec_kind::enumeration;
+    const bool integral = signed_int || kind == spec_kind::unsigned_int || kind == spec_kind::boolean || character;
+    const bool arithmetic = integral || floating;
+    const char type = token.format_type.value_or('\0');
+    // A char printed as a character takes no '#', and a '0' only after an alignment, which then ignores it.
+    const bool as_character = character && (type == '\0' || type == 'c' || type == '?');
+    if (token.sign.has_value() && !(signed_int || floating)) {
+        return false;
+    }
+    if (token.use_alternate_form && !((arithmetic && !as_character) || kind == spec_kind::enumeration)) {
+        return false;
+    }
+    if (token.use_zero_padding && !(arithmetic && !(as_character && !token.align.has_value()))) {
+        return false;
+    }
+    if (token.precision.has_value() && !(floating || text)) {
+        return false;
+    }
+    if (token.use_current_locale && !arithmetic) {
+        return false;
+    }
+    switch (type) {
+        case 'd':
+        case 'o':
+        case 'x':
+        case 'X':
+        case 'b':
+        case 'B': return integral;
+        case 'a':
+        case 'A':
+        case 'e':
+        case 'E':
+        case 'f':
+        case 'F':
+        case 'g':
+        case 'G': return floating;
+        case 'c': return integral && kind != spec_kind::boolean;
+        case 's': return kind == spec_kind::boolean || text;
+        case '?': return character || text;
+        case 'p': return false;  // only pointers, which aren't checked
+        default: return true;
+    }
+}
+
+constexpr bool spec_suits(const parsing::FormatToken& token, spec_kind kind) {
+    if (kind == spec_kind::unchecked) {
+        return true;
+    }
+    if (kind == spec_kind::number) {
+        return spec_suits_kind(token, spec_kind::signed_int) || spec_suits_kind(token, spec_kind::unsigned_int) ||
+               spec_suits_kind(token, spec_kind::floating);
+    }
+    return spec_suits_kind(token, kind);
+}
+
+inline constexpr uint32_t all_specs_suit = ~0u;
+
+// The first placeholder whose spec doesn't suit its argument, as (placeholder << 16) | argument (both counted from 0),
+// or all_specs_suit. Placeholders without an argument are left to the other checks.
+template <typename... Args, std::size_t N>
+constexpr uint32_t unsuitable_spec(const char (&format)[N]) {
+    constexpr spec_kind kinds[] = {spec_kind_of<Args>()..., spec_kind::unchecked};
+    uint32_t placeholder = 0;
+    for (std::size_t i = 0; i < N - 1;) {
+        const parsing::FormatToken token = parsing::parse_format_token(format, i);
+        if (token.type == parsing::TokenType::Placeholder) {
+            const uint32_t argument = token.is_indexed() ? token.index.value() : placeholder;
+            if (argument < sizeof...(Args) && !spec_suits(token, kinds[argument])) {
+                return (placeholder << 16) | argument;
+            }
+            ++placeholder;
+        }
+        i = token.end_pos;
+    }
+    return all_specs_suit;
+}
+
+// Instantiated only for the first placeholder whose spec doesn't suit its argument, so that the compiler names the
+// placeholder and the argument (counted from 0) and the argument's type.
+template <uint32_t Placeholder, uint32_t Argument, typename Type>
+inline constexpr bool spec_suits_argument = false;
+
+template <uint32_t Placeholder, uint32_t Argument, typename Type>
+struct invalid_format_specifier {
+    static_assert(
+        spec_suits_argument<Placeholder, Argument, Type>,
+        "DEVICE_PRINT: invalid format specifier: a spec doesn't suit the type of its argument (Placeholder and "
+        "Argument, counted from 0, and Type in invalid_format_specifier<Placeholder, Argument, Type>)");
+    static constexpr bool value = true;
+};
+
+template <uint32_t Unsuitable, typename... Args>
+constexpr bool specs_suit_arguments() {
+    if constexpr (Unsuitable == all_specs_suit) {
+        return true;
+    } else {
+        constexpr uint32_t argument = Unsuitable & 0xffff;
+        return invalid_format_specifier<
+            (Unsuitable >> 16),
+            argument,
+            std::tuple_element_t<argument, std::tuple<Args...>>>::value;
+    }
+}
+
+}  // namespace checks
 
 namespace locking {
 

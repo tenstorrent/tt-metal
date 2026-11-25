@@ -47,10 +47,11 @@ pipeline will replace the transport (§3).
   `.device_print_strings`. The call site's id is the entry's index from `__device_print_strings_info_start`.
 - `CTSTR` puts its literal in `.device_print_strings` too, and a `ct_string` holds the literal's address. The device
   sends it like a `const char*`, and the host prints the text when the address falls inside that section.
-- The stored format is rewritten at compile time. Each placeholder becomes `{slot,type[:spec]}` with a one-letter
-  type (`b B h H i I q Q` integers, `f d` floats, `?` bool, `e E w` block floats, `s` strings, `p` pointers, `t`
-  tiles, `A` typed arrays, `c` call stacks), or `/e_<type>_<Name>` for an enum and `/E_<type>_<Name>` for a flag enum.
-  The arguments are stored largest first, and `slot` is an argument's position in that order.
+- The stored format is rewritten at compile time. Each placeholder becomes `{slot,type[:spec]}` with a one-letter type
+  (`b B h H i I q Q` integers, `C` plain `char`, `f d` floats, `?` bool, `e E w` block floats, `s` strings, `p`
+  pointers, `t` tiles, `A` typed arrays, `c` call stacks), or `/e_<type>_<Name>` for an enum and `/E_<type>_<Name>` for
+  a flag enum. `signed char` and `unsigned char` are `int8_t` and `uint8_t` (`b B`) and print as numbers; the host
+  formats a `C` as a `char`. The arguments are stored largest first, and `slot` is an argument's position in that order.
 - A message is a 4-byte header, `is_kernel:1 | risc_id:5 | message_payload:10 | info_id:16`
   (`device_print_structures.h`), followed by the arguments, padded to 4 bytes. Messages are only 4-byte aligned, and
   Quasar's 64-bit RISCs, which store 8 bytes in one instruction, fault on such a store to an address that isn't
@@ -94,6 +95,20 @@ pipeline will replace the transport (§3).
   tt-llk's build errors on unused functions), `noinline` and `noclone`: a non-LTO build (the RVV recipe, tt-llk) gets
   only the ones its prints call, and GCC doesn't specialize them for one call site. Unoptimized builds compile them
   with `optimize("Os")`; optimized builds compile `device_print_message()` with `optimize("no-split-loops")`.
+- Besides the format's syntax and how its placeholders match the arguments, the checks cover the format's type and each
+  spec. The lambda captures nothing, so its checks can't name a variable: `DEVICE_PRINT` first checks with `decltype`
+  that the format's type is `const char (&)[N]`, which a string literal has, also one made by concatenation, a macro or
+  stringizing. A pointer or an array variable fails with a message that contains `format must be a string literal`. Each
+  placeholder's spec has to suit its argument by fmt 11.1.4's rules (`parse_format_specs()` and `check_char_specs()` in
+  fmt's `base.h`), for the type that the host formats the value as: a signed or an unsigned integer (`int8_t` and
+  `uint8_t` too), `bool`, a plain `char`, a float (`float`, `double`, `bf4_t`, `bf8_t`, `bf16_t`), a string
+  (`ct_string`, `dp_type_name_t`), or an enum's name, whose spec may also hold `#` (the host deletes every `#` and
+  prints the qualified name). The data format of a `TileSlice` or a typed array is known only at run time, so its spec
+  only has to suit a signed integer, an unsigned integer or a float, and the host checks it against the data format
+  (§4). A pointer, a runtime `const char*` too, prints as its address, and the host ignores its spec and that of a
+  `dp_top_callstack_t`, so theirs isn't checked. A spec that doesn't suit fails with a message that contains
+  `invalid format specifier`, and the compiler names the first such placeholder, its argument (both counted from 0)
+  and the argument's type in `invalid_format_specifier<Placeholder, Argument, Type>`.
 - A print takes at most 64 arguments (`print_argument_count<Count>`), and its scalar arguments (all but typed arrays
   and `TileSlice`s) take at most 256 bytes (`print_argument_bytes<Bytes>`); a message must fit its RISC's print
   buffer. Each is a `static_assert` whose message contains the phrase in the manual's table of compile-time checks.
@@ -208,6 +223,11 @@ The print regions that the memory map gives DPRINT:
   message with the RISC's firmware ELF, whose path the build environment gives.
 - `DevicePrintParser` (`dprint_parser.cpp`) reads the two sections from that ELF, parses the rewritten formats, reads
   enum names and call stacks from DWARF, and formats each value with fmt.
+- A `TileSlice` or a typed array carries its data format, so the host checks the spec against the type it formats that
+  format's elements as, a signed or an unsigned integer or a float. When the spec doesn't suit it, as `{:x}` doesn't
+  suit `Float16_b` elements, the host formats the elements as `{}` would, and writes a warning line before the print's
+  text: `Warning: invalid format specifier {:x} for Float16_b data, printed with {}`. It never throws, so the print
+  server goes on.
 - Per RISC, the server assembles lines, the kernel's and the firmware's apart, holds `\r` blocks until the next `\n`,
   adds the prefix (and `[FW] ` ahead of it on a firmware line with `TT_METAL_DPRINT_TAG_FIRMWARE=1`, which
   `DevicePrintFixture` turns on so that tests check kernel lines only), and writes to stdout, a file or one file per
@@ -236,6 +256,12 @@ The print regions that the memory map gives DPRINT:
   up at the call site and passes them to one out-of-line dump, `debug_dump_cb_typed_words()`, whose rows are
   `TileSlice`s built from those words (a `TileSlice` constructor that takes the sampler's arguments); a run-time CB is
   looked up once, in `debug_dump_cb_typed_rt()`.
+- `TileSlice<N>` takes any `N` that the manual allows (a multiple of 4 below 256): one serializer, the partial
+  specialization of `device_print_type` for `TileSlice<N>` on `int N` as `TileSlice` declares it, sends every size.
+  `tile_slice_from_l1()` value-initializes a `TileSlice`, which zeroes it, as `TileSlice`'s default constructor is
+  defaulted, and samples the tile at an L1 address into it, always untilized. The samplers and `dump.h` pass a tile's
+  descriptors as a `dprint_tile_info_t`, a name with DPRINT's prefix, as kernels define generic names at global scope
+  (spec §3).
 - The register and memory dumps are functions made of ordinary prints. `dprint_tensix.h` reads DEST rows and prints
   each as a typed array, the pack and unpack headers print configuration fields, and `dprint_pages.h` and `dump.h`
   print circular-buffer state, pages and L1 words.
@@ -290,9 +316,10 @@ What tt-llk has:
 - Before each run the harness zeroes the region's header, so the first print finds the region empty and the lock
   free. It polls while the kernel runs and drains once more at the end.
 - The decoder, `tests/python_tests/helpers/device_print.py`, is a port of `dprint_parser.cpp`. It reads the region and
-  the ELF sections through tt-exalens and writes back only the read position, never the reset flag. It prints each
-  message on its own line with a `[RISC|file:line] ` prefix and formats values with Python's `format()`, so a float
-  `{}` prints `1.0`.
+  the ELF sections through tt-exalens and writes back only the read position, never the reset flag. Its type table
+  includes `C` (plain `char`), which it prints as the character, or as its code with an integer presentation type. It
+  prints each message on its own line with a `[RISC|file:line] ` prefix and formats values with Python's `format()`, so
+  a float `{}` prints `1.0`.
 - `tests/python_tests/test_device_print.py` checks that output, with kernels in `tests/sources/`. The tensor-shape
   coverage tables (`tt_metal/tt-llk/common/tensor_shape_coverage_*.h`) are regenerated from what LLK prints in
   tt-llk's tests, by `tests/python_tests/helpers/tensor_shape_coverage_parser.py`.
@@ -559,26 +586,17 @@ In the manual's order:
 
 - **Lone `}`, fill outside ASCII.** `parse_format_token` in `device_print.h` treats a lone `}` as text and reads the
   fill as one byte.
-- **Format that isn't a literal.** The checks take a `const char (&)[N]`. A local pointer fails because the macro's
-  lambda captures nothing, a global pointer finds no overload, and a `constexpr` array with static storage passes.
-- **Spec that doesn't suit its argument.** The device checks only syntax and counts. fmt then throws on the host,
-  which stops printing in test mode and ends the process otherwise. A tile's or typed array's data format is known
-  only on the host.
+- **Format that is a reference parameter.** `DEVICE_PRINT` checks with `decltype` that the format's type is
+  `const char (&)[N]`, which such a parameter has too, and the macro's lambda, which captures nothing, can't use it.
 - **Prints of more than 1020 bytes.** The header's 10-bit payload field overflows (`-Werror=overflow`), which fails
   the build with an unrelated message and also limits Quasar's bigger buffers.
 - **`CTSTR` in inline functions and templates.** Its `static` array lands in a COMDAT group, which GCC won't mix
   with the other data in `.device_print_strings`: it reports a section type conflict or silently moves the array to
   `.data`.
 - **`volatile` block floats.** `bf16_t`, `bf8_t` and `bf4_t` have no constructor that takes a `volatile` object.
-- **`char` prints as a number.** Plain `char` is serialized as `uint8_t`.
 - **Enums in functions and anonymous namespaces.** The device names the type with `__PRETTY_FUNCTION__`. The host
   finds no DWARF entry for `kernel_main()::Color`, and the braces in `{anonymous}` end its placeholder early.
 - **`#` as an enum's fill.** The host strips every `#` from an enum's spec and reads it as the alternate form.
-- **Global names.** `dprint.h` keeps the old stream API's deprecated structs (`F32`, `BF16`, ..., `TYPED_U32_ARRAY`)
-  at global scope for their deprecation messages, and `dprint_tile.h` defines `tile_info_t` there.
-- **`TileSlice<N>` sizes.** The generic serializer takes a `uint32_t` size and `TileSlice` an `int`, so C++17
-  deduction never matches it and only the 64 and 128 specializations work. `tile_slice_from_l1` value-initializes a
-  `TileSlice`, which has no default constructor outside `ENV_LLK_INFRA`.
 - **Unknown typed-array formats.** The warning formats a `tt::DataFormat`, whose formatter throws
   `std::invalid_argument` for a number with no name, and the server catches only `std::runtime_error`. The host also
   reads a Quasar format number as a Wormhole and Blackhole one.

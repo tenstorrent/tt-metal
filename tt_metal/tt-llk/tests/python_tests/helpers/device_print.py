@@ -79,6 +79,7 @@ def _risc_names_tensix() -> dict[int, str]:
 _BASE_TYPE_TABLE: dict[str, tuple[str, int, object]] = {
     "b": ("b", 1, str),
     "B": ("B", 1, str),
+    "C": ("B", 1, chr),  # plain char, see _build_render_plan
     "h": ("h", 2, str),
     "H": ("H", 2, str),
     "i": ("i", 4, str),
@@ -92,6 +93,9 @@ _BASE_TYPE_TABLE: dict[str, tuple[str, int, object]] = {
     "E": ("H", 2, lambda v: f"bf8(0x{v:04x})"),
     "w": ("H", 2, lambda v: f"bf16(0x{v:04x})"),
 }
+
+# fmt's integer presentation types.
+_INTEGER_PRESENTATION_TYPES = frozenset("bBdoxX")
 
 
 def _type_table_for(pointer_size: int) -> dict[str, tuple[str, int, object]]:
@@ -297,6 +301,35 @@ def _build_render_plan(
                         spec=spec,
                     )
                 )
+            elif base_char == "C":
+                # As in fmt, a char prints its code for an integer presentation
+                # type, else the character (quoted for '?'), padded as a string.
+                presentation = spec[-1:]
+                if presentation in _INTEGER_PRESENTATION_TYPES:
+                    compiled.append(
+                        _Placeholder(
+                            kind="plain",
+                            unpacker=unpacker,
+                            size=size,
+                            offset=offset,
+                            spec=spec,
+                        )
+                    )
+                else:
+                    compiled.append(
+                        _Placeholder(
+                            kind="custom",
+                            unpacker=unpacker,
+                            size=size,
+                            offset=offset,
+                            formatter=(
+                                (lambda v: repr(chr(v)))
+                                if presentation == "?"
+                                else formatter
+                            ),
+                            spec=spec[:-1] if presentation in ("c", "?") else spec,
+                        )
+                    )
             elif formatter is str:
                 compiled.append(
                     _Placeholder(

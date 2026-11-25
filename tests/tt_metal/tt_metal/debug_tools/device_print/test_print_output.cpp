@@ -875,9 +875,7 @@ TEST_F(DevicePrintOutputFixture, PrintBuiltinTypes) {
     TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", messages);
 }
 
-// Known issue: plain char prints as a number, so today this prints "97" and "c=97 [ 97] 97 0x61 a sc=97 uc=97".
-// Disabled until that is fixed.
-TEST_F(DevicePrintOutputFixture, DISABLED_PrintCharTypes) {
+TEST_F(DevicePrintOutputFixture, PrintCharTypes) {
     std::vector<std::string> messages = {
         "a",
         "c=a [a  ] 97 0x61 a sc=97 uc=97",
@@ -987,10 +985,7 @@ TEST_F(DevicePrintOutputFixture, PrintInUnbracedIfElse) {
     TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_unbraced_if_else.cpp", messages);
 }
 
-// Known issue: dprint.h, which every kernel includes, defines generic type names at global scope: its old stream API's,
-// such as F32, BF16, U32, ENDL and HEX, and dprint_tile.h's tile_info_t. So today this kernel doesn't compile. Disabled
-// until that is fixed.
-TEST_F(DevicePrintOutputFixture, DISABLED_PrintWithUserGlobalNames) {
+TEST_F(DevicePrintOutputFixture, PrintWithUserGlobalNames) {
     std::vector<std::string> messages = {
         "dprint: 1.5",
         "print_tile_rows: 2",
@@ -1002,9 +997,7 @@ TEST_F(DevicePrintOutputFixture, DISABLED_PrintWithUserGlobalNames) {
     TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_user_global_names.cpp", messages);
 }
 
-// Known issue: today the host hands a typed array's spec to fmt unchecked, fmt throws, and the print server writes
-// nothing more. Disabled until that is fixed.
-TEST_F(DevicePrintOutputFixture, DISABLED_PrintTypedArrayWithSpecNotSuitingData) {
+TEST_F(DevicePrintOutputFixture, PrintTypedArrayWithSpecNotSuitingData) {
     std::vector<std::string> messages = {
         "[0.0 0.0 0.0 0.0 ]",
         "Warning: invalid format specifier {:x} for Float16_b data, printed with {}",
