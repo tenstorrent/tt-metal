@@ -222,9 +222,7 @@ inline uint32_t rdcycle() {
     return 0;
 }
 
-// Busy-waits for `iters` iterations of a two-instruction loop (addi + bnez). It touches no memory
-// and no register block, so it is not contended, and it does not need the cycle CSR (ttsim doesn't
-// support it yet).
+// Busy-waits for `iters` iterations of a two-instruction loop (addi + bnez).
 FORCE_INLINE void dfb_spin(uint32_t iters) {
     // Unrolling would copy only the (empty) asm and drop branches, shortening the wait.
 #pragma GCC unroll 1

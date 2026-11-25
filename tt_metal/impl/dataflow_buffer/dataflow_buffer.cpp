@@ -757,7 +757,7 @@ size_t serialize_dfb_config_for_core(
     }
     const uint32_t hart_blobs_base = dfb_align_cl(dm0_off + total_dm0_isr_blob_size);
 
-    // Source stride of the DM0 descriptor pool: 8, 16 or 32 B, set by the widest descriptor.
+    // Source stride of the DM0 descriptor pool: 16 or 32 B, set by the widest descriptor.
     uint32_t dm0_desc_stride = static_cast<uint32_t>(sizeof(dfb_dm0_txn_descriptor_image_t));
     // DM0 reads only dm0_packed in its prologue, so it must agree with the fields it replaces.
     if (ghdr.has_dm0_isr != 0) {

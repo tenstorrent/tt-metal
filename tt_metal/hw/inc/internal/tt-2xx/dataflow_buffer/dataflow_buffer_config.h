@@ -180,15 +180,9 @@ struct dfb_global_header_t {
 constexpr uint32_t DFB_DM0_PACKED_MASK_BITS = 24u;
 static_assert(
     HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1 <= DFB_DM0_PACKED_MASK_BITS, "DFB txn-id masks no longer fit dm0_packed");
-// dm0_packed bits [1:0]: 0 = 32 B, 1 = 16 B. (2 = 8 B is decoded but never emitted: an 8 B slot cannot
-// hold the 7 B head, a counter and the 16-bit threshold.)
-inline uint32_t dfb_dm0_desc_stride_code(uint32_t stride) {
-    if (stride == 8u) {
-        return 2u;
-    }
-    return stride == 16u ? 1u : 0u;
-}
-inline uint32_t dfb_dm0_packed_desc_stride(uint64_t w) { return 32u >> (static_cast<uint32_t>(w) & 3u); }
+// dm0_packed bit 0: descriptor stride, 0 = 32 B, 1 = 16 B (dfb_dm0_desc_stride_for never picks another).
+inline uint32_t dfb_dm0_desc_stride_code(uint32_t stride) { return stride == 16u ? 1u : 0u; }
+inline uint32_t dfb_dm0_packed_desc_stride(uint64_t w) { return 32u >> (static_cast<uint32_t>(w) & 1u); }
 // blob_offset must be 64B aligned: its low bits are dropped to carry the stride code.
 inline uint64_t dfb_dm0_packed_make(
     uint32_t blob_offset, uint32_t desc_stride, uint32_t producer_mask, uint32_t consumer_mask) {
@@ -446,8 +440,8 @@ static_assert(
 // the same for every txn id on the core, with the threshold in the slot's last two bytes (32B: bytes
 // 26-27, past the counters). DM0 copies a slot into g_txn_dfb_descriptor in whole 8B words, so the
 // threshold is copied too. It is always past the slot's last possible counter, so it only lands in
-// counter entries beyond num_counters or in padding, neither of which the ISR reads. An 8B slot no
-// longer fits: the 7B head plus the 2B threshold leave no room for a counter.
+// counter entries beyond num_counters or in padding, neither of which the ISR reads. There is no 8B
+// slot: the 7B head plus the 2B threshold would leave no room for a counter.
 
 // What DM0 needs to finish one implicit-sync DFB side at kernel exit (dfb_dm0_flush_side). Every txn id of
 // the side carries the same copy.
