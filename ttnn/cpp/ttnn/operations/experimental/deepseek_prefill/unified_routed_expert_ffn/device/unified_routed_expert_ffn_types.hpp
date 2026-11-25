@@ -27,6 +27,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 // measured token-count crossover between them stops applying. Read it, do not restate it.
 inline constexpr uint32_t kCoreGridX = 11;
 inline constexpr uint32_t kCoreGridY = 8;
+// weights_from_pages expert groups (program factory: EXPERT_GROUPS): 4-row groups from this many token tiles per
+// call, 2-row groups below.
+inline constexpr uint32_t kGroupTallFromMTiles = 128;
 
 // Maximum number of global experts the op supports.
 //
@@ -128,6 +131,19 @@ struct UnifiedRoutedExpertFfnParams {
     // program (part of the cache key).
     bool weights_tile_transposed = false;
 
+    // Table-addressed weights: the kernels read every gate / up / down weight tile through the weight_pages table
+    // (one (dram_bank_id, byte_offset) entry per expert column) from gate_up_weight_source / down_weight_source
+    // instead of from per-expert weight tensors. The shapes and the tile format come from the fields below, which
+    // are all 0 / unused when the mode is off. Changes the reader and writer programs (part of the cache key).
+    bool weights_from_pages = false;
+    uint32_t gate_up_k_stride = 0;   // bytes between tile k and k + 1 of one gate / up column
+    uint32_t down_k_stride = 0;      // bytes between tile k and k + 1 of one down column
+    uint32_t weights_n_gate_up = 0;  // gate (= up) tile columns per expert
+    uint32_t weights_n_down = 0;     // down tile columns per expert
+    uint32_t weights_k_gate_up = 0;  // gate / up K tiles
+    uint32_t weights_k_down = 0;     // down K tiles
+    tt::tt_metal::DataType weights_dtype = tt::tt_metal::DataType::BFLOAT8_B;  // format of every weight tile
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -140,7 +156,15 @@ struct UnifiedRoutedExpertFfnParams {
         "x_indexed",
         "output_row_major",
         "zero_output_row",
-        "weights_tile_transposed");
+        "weights_tile_transposed",
+        "weights_from_pages",
+        "gate_up_k_stride",
+        "down_k_stride",
+        "weights_n_gate_up",
+        "weights_n_down",
+        "weights_k_gate_up",
+        "weights_k_down",
+        "weights_dtype");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -154,7 +178,15 @@ struct UnifiedRoutedExpertFfnParams {
             x_indexed,
             output_row_major,
             zero_output_row,
-            weights_tile_transposed);
+            weights_tile_transposed,
+            weights_from_pages,
+            gate_up_k_stride,
+            down_k_stride,
+            weights_n_gate_up,
+            weights_n_down,
+            weights_k_gate_up,
+            weights_k_down,
+            weights_dtype);
     }
 };
 
@@ -204,6 +236,15 @@ struct UnifiedRoutedExpertFfnInputs {
     // Optional dispatch row index (x_indexed): UINT32 ROW_MAJOR, one page, one entry per buffer row (the output's
     // row count): the x row each buffer row holds. Rows no pair writes may hold any valid x row; they are never read.
     std::optional<Tensor> x_row_index;
+    // Table-addressed weights (weights_from_pages; gate_projs / up_projs / down_projs are then empty).
+    // weight_pages: UINT32 ROW_MAJOR, one page (row) per local expert e of 2 * (2 * n_gu + n_d) words: the gate
+    // columns' entries, then up's, then down's, each entry (dram_bank_id, byte_offset) of the column's tile k = 0;
+    // tile k is at byte_offset + k * k_stride in the same bank. byte_offset is relative to the source tensor's
+    // buffer address (gate / up: gate_up_weight_source, down: down_weight_source). The op reads only the sources'
+    // buffer addresses; holding them here keeps them alive.
+    std::optional<Tensor> weight_pages;
+    std::optional<Tensor> gate_up_weight_source;
+    std::optional<Tensor> down_weight_source;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

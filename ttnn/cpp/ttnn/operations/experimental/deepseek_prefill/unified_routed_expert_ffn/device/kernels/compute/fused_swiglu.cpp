@@ -511,6 +511,25 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // Constant CB block sizes (per_core_M_max-derived, from the host CB sizing).
     constexpr uint32_t X_BLOCK_TILES_MAX = in0_block_num_tiles;
     constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
+    // Narrow N slice (gpt-oss tensor-parallel experts: 2 hidden tiles per core): one N subblock, and all per_core_M
+    // rows of it fit DST at once. Then each gate / up K-block is ONE matmul over every row (rt_dim = EFF_M) instead of
+    // one 1 x w subblock per row, so every weight tile unpacked feeds all the rows and each K-block pays one DST
+    // acquire / pack per matmul. Measured: 1 x 2 subblocks spent 27 ns per tile multiply where the 1 x 3 of the
+    // full-width experts spent 13. Its DST layout (row-major rows x w) is exactly the partials' slot order.
+    constexpr uint32_t kGuDst =
+#if defined(FP32_DEST_ACC_EN) && FP32_DEST_ACC_EN
+        4;
+#else
+        8;
+#endif
+    // Rows per matmul: as many as DST holds (kGuDst / out_subblock_w), in groups when per_core_M is larger.
+    constexpr bool kFullM = out_subblock_h == 1 && in1_num_subblocks == 1 && 2 * out_subblock_w <= kGuDst;
+    constexpr uint32_t kRowGroup = kFullM ? kGuDst / out_subblock_w : 1;
+    const uint32_t gu_rt = kFullM ? (EFF_M < kRowGroup ? EFF_M : kRowGroup) : out_subblock_h;
+    uint32_t cur_rt = gu_rt;  // rt_dim of the last matmul_block_init (a tail row group re-inits)
+    if constexpr (kFullM) {
+        matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, gu_rt, in0_block_w);
+    }
     pack_reconfig_data_format(partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -576,7 +595,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
             x_tilized_cb.push_back(x_pad);
         }
         reconfig_data_format_srca(gate_cb_id);
-        matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, out_subblock_h, in0_block_w);
+        matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, cur_rt, in0_block_w);
         pack_reconfig_data_format(x_tilized_cb_id, partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
         PACK((llk_pack_reconfig_l1_acc(mm_block == 0 ? 0 : 1)));
@@ -607,6 +626,42 @@ FORCE_INLINE void matmul_phase_fused_gu(
         gate_cb.wait_front(in1_block_num_tiles);
         up_cb.wait_front(in1_block_num_tiles);
 
+        if constexpr (kFullM) {
+            // Phantom-column cores (n_subblocks 0) skip both matmuls and packs, as below.
+            if (n_subblocks > 0) {
+                for (uint32_t rg = 0; rg < EFF_M; rg += kRowGroup) {
+                    const uint32_t rt = EFF_M - rg < kRowGroup ? EFF_M - rg : kRowGroup;
+                    if (rt != cur_rt) {
+                        matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, rt, in0_block_w);
+                        cur_rt = rt;
+                    }
+                    const uint32_t n_out = rt * out_subblock_w;
+                    for (uint32_t which = 0; which < 2; ++which) {
+                        const uint32_t w_cb = which == 0 ? gate_cb_id : up_cb_id;
+                        const uint32_t p_cb = which == 0 ? partials_gu_cb_id : partials_up_cb_id;
+                        tile_regs_acquire();
+                        for (uint32_t k = 0; k < in0_block_w; ++k) {
+                            matmul_block(
+                                x_cb_id,
+                                w_cb,
+                                rg * in0_block_w + k,
+                                k * in1_per_core_w,
+                                0,
+                                kWeightsTranspose,
+                                out_subblock_w,
+                                rt,
+                                in0_block_w);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t i = 0; i < n_out; ++i) {
+                            pack_tile<true>(i, p_cb, rg * out_subblock_w + i);
+                        }
+                        tile_regs_release();
+                    }
+                }
+            }
+        } else {
         int in0_index_subblock_offset = 0;
         uint32_t partials_slot_idx = 0;
         for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
@@ -677,6 +732,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                 in1_index_subblock_offset += out_subblock_w;
             }
             in0_index_subblock_offset += in0_subblock_num_tiles;
+        }
         }
 
 #ifdef PACKER_L1_ACC
@@ -973,7 +1029,16 @@ constexpr bool kOutRowMajor = true;
 constexpr bool kOutRowMajor = false;
 #endif
 
+// EXPERT_GROUPS (program factory): this core's group (kExpertGroup) runs the experts adaptive_chunk::group_experts
+// assigns it; without groups the core runs every local expert in id order.
+#ifdef EXPERT_GROUPS
+#define EXPERT_LOOP_SETUP const uint32_t kExpertGroup = get_arg_val<uint32_t>(EXPERT_GROUP_RT);
+#else
+#define EXPERT_LOOP_SETUP
+#endif
+
 void kernel_main() {
+    EXPERT_LOOP_SETUP
     // Per-core valid N-subblock counts. per_core_N is the GRID-ceil'd width, so the
     // highest-gx cores own phantom output columns whose weights were never fetched;
     // these bound the MAC to the subblocks holding real columns. Runtime (not
@@ -1111,9 +1176,33 @@ void kernel_main() {
     silu_tile_init();
 #endif
 
+    // This core's experts in run order (as the reader and writer compute them): UNPACK, which can read the counts,
+    // computes the list and mails its length to MATH / PACK, then the count of each expert in turn.
+    uint8_t expert_order[experts_per_chip];
+#ifdef EXPERT_GROUPS
+    uint32_t n_experts = 0;
+    UNPACK(({
+        const volatile tt_l1_ptr uint32_t* counts_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
+            get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4);
+        const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
+            get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4);
+        n_experts = adaptive_chunk::group_experts<experts_per_chip, EXPERT_GROUPS>(
+            counts_ptr, idx_ptr, min_active_tokens, max_active_tokens, kExpertGroup, expert_order);
+        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, n_experts);
+        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, n_experts);
+    }));
+    MATH(n_experts = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(n_experts = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+#else
+    constexpr uint32_t n_experts = experts_per_chip;
+    for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        expert_order[e] = static_cast<uint8_t>(e);
+    }
+#endif
+
     // ======================= per-local-expert loop =======================
     // Run the full gate/up/down FFN for every local expert in this program.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    for (uint32_t ei = 0; ei < n_experts; ++ei) {
         // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
         // cannot read the counts/idx L1 via the CB interface).
         // count -> effective_chunks bounds this expert's chunk loop; count=0 => the
@@ -1126,7 +1215,7 @@ void kernel_main() {
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
             const volatile tt_l1_ptr uint32_t* idx_ptr =
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
-            const uint32_t global_expert_id = idx_ptr[local_expert_id];
+            const uint32_t global_expert_id = idx_ptr[expert_order[ei]];
             // Hybrid dispatch: experts outside this op's band belong to the other
             // routed-expert op and are dropped here exactly like a zero count.
             count_value =
