@@ -542,7 +542,13 @@ class ColParallelLinear(Module):
 
             if self.chunks is not None:
                 matmul_config = matmul_config or get_matmul_config(
-                    M, K, N, core_grid, default_block_size, row_independent=self._row_independent_matmul_config
+                    M,
+                    K,
+                    N,
+                    core_grid,
+                    default_block_size,
+                    row_independent=self._row_independent_matmul_config,
+                    mesh_shape=tuple(self.mesh_device.shape),
                 )
                 outputs = ttnn.experimental.minimal_matmul_split(
                     x,
@@ -570,6 +576,7 @@ class ColParallelLinear(Module):
                     core_grid,
                     default_block_size,
                     row_independent=self._row_independent_matmul_config,
+                    mesh_shape=tuple(self.mesh_device.shape),
                 )
                 output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
                     x,
@@ -717,7 +724,13 @@ class RowParallelLinear(Module):
 
             core_grid = get_matmul_core_grid(self.mesh_device)
             matmul_config = get_matmul_config(
-                M, K, N, core_grid, default_block_size, row_independent=self._row_independent_matmul_config
+                M,
+                K,
+                N,
+                core_grid,
+                default_block_size,
+                row_independent=self._row_independent_matmul_config,
+                mesh_shape=tuple(self.mesh_device.shape),
             )
             output = ttnn.experimental.minimal_matmul(
                 input_tensor=list(x),
@@ -919,6 +932,7 @@ def _linear(
             core_grid,
             default_block_size,
             row_independent=row_independent_matmul_config,
+            mesh_shape=tuple(mesh_device.shape),
         ),
         fused_activation=fused_activation,
         compute_kernel_config=compute_kernel_config,
