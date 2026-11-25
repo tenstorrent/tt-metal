@@ -160,7 +160,7 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
     if (!allowed_cpus.empty()) {
         return allowed_cpus[physical_device_id % allowed_cpus.size()];
     }
-    uint32_t num_threads = std::thread::hardware_concurrency();
+    uint32_t num_threads = detail::usable_cpu_count();  // LOCAL ONLY (investigation), see common/executor.hpp
     TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
     return physical_device_id % num_threads;
 }

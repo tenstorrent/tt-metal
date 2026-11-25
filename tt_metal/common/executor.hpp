@@ -6,6 +6,7 @@
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <pthread.h>
+#include <sched.h>
 #include <unistd.h>
 #endif
 // Include LSan interface only when present
@@ -27,7 +28,19 @@
 #include <thread>
 
 namespace tt::tt_metal::detail {
-inline static const size_t EXECUTOR_NTHREADS = std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
+// LOCAL ONLY (investigation): the CPUs this process may run on. A container's cpuset narrows the affinity mask, while
+// hardware_concurrency() reports the whole machine (12 on a box whose container has 6).
+inline size_t usable_cpu_count() {
+#if defined(__linux__)
+    cpu_set_t cpus;
+    CPU_ZERO(&cpus);
+    if (sched_getaffinity(0, sizeof(cpus), &cpus) == 0 && CPU_COUNT(&cpus) > 0) {
+        return static_cast<size_t>(CPU_COUNT(&cpus));
+    }
+#endif
+    return std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
+}
+inline static const size_t EXECUTOR_NTHREADS = usable_cpu_count();
 
 using Executor = tf::Executor;
 using ExecTask = tf::Task;
