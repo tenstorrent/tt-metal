@@ -34,6 +34,9 @@ namespace ttnn::transformer {
  *
  * "Ring" mode (initial_state_block_idx): in-place per-head initial-state select; see the Python binding for the
  * contract.
+ *
+ * exact_state (default false): opt-in exact-state compute kernel (the fp32 state and the decay never pass through
+ * the TF32 source registers; requires fp32_dest_acc_en). With false the program is exactly the default one.
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delta_rule(
     const ttnn::Tensor& q,
@@ -48,6 +51,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     bool output_per_token_state = false,
     bool use_qk_l2norm = false,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool exact_state = false);
 
 }  // namespace ttnn::transformer

@@ -14,6 +14,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -66,7 +67,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     bool output_per_token_state,
     bool use_qk_l2norm,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool exact_state) {
     TT_FATAL(!use_qk_l2norm, "fused_recurrent_gated_delta_rule: use_qk_l2norm not done here; L2-normalize q/k on host");
 
     auto* dev = q_in.device();
@@ -111,6 +113,12 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // decay/beta come from headvec_split as [BH,T] (BH packed in tile-rows); they always need the
     // relayout to per-scalar tiles [BH*T,1,1] so bcast_scalar reads element [0,0]. They are tiny.
     decay = reshape_rm(decay, ttnn::Shape({BH * T, 1, 1}));
+    if (exact_state) {
+        // The exact-state kernel multiplies on the SFPU by column 0 of the decay tile: fill all 32 rows.
+        decay = ttnn::to_layout(
+            ttnn::repeat(ttnn::to_layout(decay, Layout::ROW_MAJOR), ttsl::SmallVector<uint32_t>{1, 32, 1}),
+            Layout::TILE);
+    }
     beta = reshape_rm(beta, ttnn::Shape({BH * T, 1, 1}));
 
     // Initial state [B,HV,K,V] -> [BH,K,V] fp32 TILE. Always provide (zeros if absent) so the reader
@@ -153,7 +161,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         want_state && !output_per_token_state,
         output_per_token_state,
         out_mem,
-        kernel_cfg);
+        kernel_cfg,
+        exact_state);
     const ttnn::Tensor& o_pt = res[0];  // [BH*T, 1, V]
     const ttnn::Tensor& st = res[1];    // [BH*T,K,V] per-token, else [BH,K,V]
 

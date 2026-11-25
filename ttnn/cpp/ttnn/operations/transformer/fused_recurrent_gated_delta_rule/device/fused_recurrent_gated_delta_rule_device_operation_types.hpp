@@ -30,6 +30,10 @@ struct FusedRecurrentGatedDeltaRuleParams {
     bool output_per_token_state;  // emit S after EVERY token (spec-decode verify slots)
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Opt-in (default off): the exact-state compute kernel (compute/fused_recurrent_gated_delta_rule_exact.cpp): the
+    // state and the decay are unpacked straight to the fp32 DST and the decay is applied on the SFPU; decay is
+    // [BH*T, 32, 1] (exp(g) in column 0 of every row). Hashed with the other attributes.
+    bool exact_state = false;
 };
 
 // All device-op input tensors are fp32, TILE layout, interleaved (DRAM or L1).
@@ -37,7 +41,8 @@ struct FusedRecurrentGatedDeltaRuleParams {
 // the compute kernel does only the pure recurrence.
 //   q, k : [BH*T, 1, K]   (q already scaled by `scale`; both already L2-normalized over K)
 //   v    : [BH*T, 1, V]
-//   decay: [BH*T, 1, 1]   (= exp(g_t), one scalar per (head, token) in tile element [0,0])
+//   decay: [BH*T, 1, 1]   (= exp(g_t), one scalar per (head, token) in tile element [0,0]; exact_state:
+//          [BH*T, 32, 1], the scalar down column 0)
 //   beta : [BH*T, 1, 1]
 //   initial_state: [BH, K, V] or absent (zeros).
 //

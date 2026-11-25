@@ -88,7 +88,11 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     check(in.q, "q", {BHT, 1u, K});
     check(in.k, "k", {BHT, 1u, K});
     check(in.v, "v", {BHT, 1u, V});
-    check(in.decay, "decay", {BHT, 1u, 1u});
+    if (attrs.exact_state) {
+        check(in.decay, "decay", {BHT, 32u, 1u});  // exp(g) broadcast down column 0 (exact-state kernel)
+    } else {
+        check(in.decay, "decay", {BHT, 1u, 1u});
+    }
     check(in.beta, "beta", {BHT, 1u, 1u});
     // Ring mode: initial_state is the [BH*T,K,V] ring (also the in-place state output); otherwise [BH,K,V].
     const bool ring = in.initial_state_block_idx.has_value();
@@ -177,7 +181,8 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     bool output_final_state,
     bool output_per_token_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool exact_state) {
     using OperationType = FusedRecurrentGatedDeltaRuleDeviceOperation;
 
     const auto& q_shape = q.logical_shape();  // [BH*T, 1, K]
@@ -200,6 +205,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         .output_per_token_state = output_per_token_state,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
+        .exact_state = exact_state,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .q = q,

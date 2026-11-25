@@ -46,6 +46,10 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
             use_qk_l2norm (bool): must be False (L2-norm is done on host).
             memory_config (ttnn.MemoryConfig, optional).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            exact_state (bool): default False. Opt-in exact-state kernel: the fp32 state and the decay are
+                unpacked straight to the fp32 DST and the decay is applied on the SFPU, so the carried state
+                never passes through the TF32 source registers (requires fp32_dest_acc_en). False runs exactly
+                the default program.
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
@@ -70,7 +74,8 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
         nb::arg("output_per_token_state") = false,
         nb::arg("use_qk_l2norm") = false,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("exact_state") = false);
 }
 
 }  // namespace ttnn::operations::transformer

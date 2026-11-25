@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -41,6 +42,8 @@ constexpr uint32_t sd = tt::CBIndex::c_10;        // [K,V]  decayed state (S*dec
 constexpr uint32_t vread = tt::CBIndex::c_11;     // [1,V]  k . S'
 constexpr uint32_t u = tt::CBIndex::c_12;         // [1,V]  beta*(v - vread)
 constexpr uint32_t kcol = tt::CBIndex::c_13;      // [K,1]  transpose(k)
+constexpr uint32_t sm2 = tt::CBIndex::c_14;       // [K,V]  FPU-read copy of the state (ping), exact_state only
+constexpr uint32_t sm3 = tt::CBIndex::c_15;       // [K,V]  FPU-read copy of the state (pong), exact_state only
 constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring mode only
 }  // namespace cb
 
@@ -99,6 +102,10 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::vread, Vt);
     add_cb(cb::u, Vt);
     add_cb(cb::kcol, Kt);
+    if (attrs.exact_state) {
+        add_cb(cb::sm2, kv);
+        add_cb(cb::sm3, kv);
+    }
     if (ring) {
         const tt::DataFormat idx_fmt = datatype_to_dataformat_converter(in.initial_state_block_idx->dtype());
         desc.cbs.push_back(CBDescriptor{
@@ -155,6 +162,19 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode};
+    if (attrs.exact_state) {
+        compute.kernel_source = kdir + "compute/fused_recurrent_gated_delta_rule_exact.cpp";
+        // The FP32 state and the decay are unpacked straight to DST (no TF32 source-register truncation); the
+        // exact-state kernel keeps them off the FPU (see the kernel header).
+        std::vector<UnpackToDestMode> unpack_modes(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        for (uint32_t idx : {cb::decay, cb::S, cb::s2, cb::s3}) {
+            unpack_modes[idx] = UnpackToDestMode::UnpackToDestFp32;
+        }
+        TT_FATAL(
+            fp32_dest_acc_en,
+            "fused_recurrent_gated_delta_rule: exact_state requires fp32_dest_acc_en for the FP32 state");
+        std::get<ComputeConfigDescriptor>(compute.config).unpack_to_dest_mode = unpack_modes;
+    }
     compute.runtime_args.reserve(BH);
 
     auto* q_buf = in.q.buffer();
