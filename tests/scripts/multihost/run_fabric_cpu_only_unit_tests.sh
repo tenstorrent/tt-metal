@@ -117,6 +117,10 @@ SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE="tt_metal/third_party/tt-cluster-descrip
 SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE}/SC20_32x4_revAB_subtorus_aisleC_mapping.yaml"
 # SC4 revAB single-pod (4-rank) mock: column-1 single-pod subset of the revAB subtorus Aisle C set.
 SC4_REVAB_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE}/SC4_32x4_revAB_subtorus_aisleC_mapping.yaml"
+# Two-host (2-rank) mocks: neighbouring hosts in a pod's cabling ring, for the [RING,RING] prefill carve on a
+# Galaxy pair and the two-host seam mesh: c01u02 -> c01u08 (revAB) and c07u08 -> c07u02 (revC).
+SC2_REVAB_SUBTORUS_AISLEC_PAIR_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE}/SC2_32x4_revAB_subtorus_aisleC_c01u02_c01u08_mapping.yaml"
+SC2_REVC_SUBTORUS_AISLEC_PAIR_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC2_32x4_revC_subtorus_aisleC_c07u08_c07u02_mapping.yaml"
 # Full 20-host SC20 revC subtorus galaxy (system-110, hosts bh-glx-110-c01..c10). Used for the 80-stage Blitz
 # decode ring, which needs the subtorus wrap-around to close (the revAB subtorus mock above cannot).
 SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC20_32x4_revC_subtorus_aisleC_mapping.yaml"
@@ -635,15 +639,15 @@ for mock in \
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_PREFILL_RR}/sc4_4x4_rr_mgd.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_PREFILL_RR}"
 done
 for mock in \
-    "${MGD_SUBTORUS}/SC2_32x4_revC_subtorus_aisleC_c07u08_c07u02_mapping.yaml" \
-    "${MGD_SUBTORUS}/SC2_32x4_revAB_subtorus_aisleC_c01u02_c01u08_mapping.yaml"; do
+    "${SC2_REVC_SUBTORUS_AISLEC_PAIR_MAPPING}" \
+    "${SC2_REVAB_SUBTORUS_AISLEC_PAIR_MAPPING}"; do
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_PREFILL_RR}/sc2_4x4_rr_mgd.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_PREFILL_RR}"
 done
 # Placement exchange of the prefill ops on the two-host seam mesh: both ranks must agree on every chip's placement, and a
 # local_record failure injected on one rank must raise on both.
 for mock in \
-    "${MGD_SUBTORUS}/SC2_32x4_revC_subtorus_aisleC_c07u08_c07u02_mapping.yaml" \
-    "${MGD_SUBTORUS}/SC2_32x4_revAB_subtorus_aisleC_c01u02_c01u08_mapping.yaml"; do
+    "${SC2_REVC_SUBTORUS_AISLEC_PAIR_MAPPING}" \
+    "${SC2_REVAB_SUBTORUS_AISLEC_PAIR_MAPPING}"; do
   run_test tt-run --mesh-graph-descriptor "${MGD_PREFILL_RR}/sc2_4x4_rr_seam_mgd.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/ttnn/multiprocess/unit_tests_dual_rank_4x4_ring
 done
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_8x4_pipeline_4stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_8X4_PIPELINE}"
