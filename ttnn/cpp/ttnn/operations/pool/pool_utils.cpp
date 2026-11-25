@@ -35,7 +35,13 @@ uint32_t get_bf16_pool_scalar(
 }
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
-uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
+uint32_t get_bf16_pool_init_value(Pool2DType pool_type, bool return_indices) {
+    if (pool_type == Pool2DType::MAX_POOL2D && return_indices &&
+        tt::tt_metal::hal::get_arch() == tt::ARCH::WORMHOLE_B0) {
+        // All-ones (a negative NaN): the Wormhole SFPSWAP orders it below -inf, so padding never wins a tie against
+        // an input element and its index is never returned, even for an all -inf window.
+        return 0xFFFF;
+    }
     float value;
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;

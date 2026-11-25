@@ -327,7 +327,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         max_in_nhw_per_core);
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
-    const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
+    const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type, return_indices);
     FactoryParameters params = get_factory_parameters(
         num_shards_c,
         input.dtype(),
