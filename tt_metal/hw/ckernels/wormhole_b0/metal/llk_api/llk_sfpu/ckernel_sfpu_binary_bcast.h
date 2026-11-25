@@ -636,15 +636,9 @@ inline void _norm_col_tile_begin_(std::uint32_t dst_index_data) {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index_data);
 }
 
-// Restore the dest offset programmed by _llk_math_eltwise_sfpu_start_ once
-// the in-flight stores have drained (config writes must not overtake them).
-inline void _norm_col_tile_end_() {
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0 /*tile_index*/);
-}
-
-// The normalize drivers walk RWC.Dst over the tile's 8 bands and leave it at
-// 48 for the enclosing `_done_` to clear.
+// The normalize drivers walk RWC.Dst over the tile's 8 bands and, as on the
+// ROW and scalar paths, leave it at 48 and the dest base at the data tile for
+// the enclosing `_done_` / next `_start_` to reset.
 inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
     std::uint32_t dst_index_data,
     std::uint32_t dst_index_mean,
@@ -669,7 +663,6 @@ inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
             _advance_rwc_dst_one_face_();
         }
     }
-    _norm_col_tile_end_();
 }
 
 inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
@@ -695,7 +688,6 @@ inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
             _advance_rwc_dst_one_face_();
         }
     }
-    _norm_col_tile_end_();
 }
 
 inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
@@ -740,7 +732,6 @@ inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
             _advance_rwc_dst_one_face_();
         }
     }
-    _norm_col_tile_end_();
 }
 
 // Broadcast element zero of the mean and inv_std tiles to all 32 lanes:
