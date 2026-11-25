@@ -58,6 +58,29 @@ inline void llk_pack_wait_fp32_dest_acc(bool enable) {
     ckernel::packer::llk_pack_live_forget();
 }
 
+constexpr int llk_pack_first_valid_output() {
+    for (std::uint32_t i = 0; i < sizeof(pack_dst_format); i++) {
+        if (pack_src_format[i] != static_cast<std::uint8_t>(DataFormat::Invalid) &&
+            pack_dst_format[i] != static_cast<std::uint8_t>(DataFormat::Invalid)) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+// An output with no CB here (hw_startup's default CB 0) configures as the first pack output: the skipping
+// reconfigures and live inits take what hw_configure wrote as every pack output's configuration.
+inline std::uint32_t llk_pack_config_output_id(const std::uint32_t output_id) {
+    constexpr int first = llk_pack_first_valid_output();
+    if constexpr (first >= 0) {
+        if (pack_src_format[output_id] == static_cast<std::uint8_t>(DataFormat::Invalid) ||
+            pack_dst_format[output_id] == static_cast<std::uint8_t>(DataFormat::Invalid)) {
+            return static_cast<std::uint32_t>(first);
+        }
+    }
+    return output_id;
+}
+
 /**
  * Configure the packer hardware for the given output operand.
  *
@@ -70,7 +93,7 @@ inline void llk_pack_wait_fp32_dest_acc(bool enable) {
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_hw_configure(std::uint32_t pack_output) {
-    const std::uint32_t output_id = get_output_id(pack_output);
+    const std::uint32_t output_id = llk_pack_config_output_id(get_output_id(pack_output));
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
