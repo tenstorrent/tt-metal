@@ -10,11 +10,16 @@ from helpers.compressed_utils import (
     assign_random,
     generate_exact_assignment,
 )
+from helpers.llk_params import CustomMmDestLayout, DestSync
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
+from helpers.tile_constants import DEFAULT_TILE_C_DIM
 from test_matmul_custom_compressed import (
     COMPRESSION_GRANULARITY,
+    DEEPSEEK_IN0_BLOCKS,
     DEEPSEEK_SHAPES,
+    IN0_BLOCK_CASES,
+    IN0_BLOCK_FORMATS,
     LAYOUT_SHAPES,
     LAYOUTS,
     MULTI_FORMATS,
@@ -169,6 +174,76 @@ def test_perf_matmul_custom_compressed_deepseek(
         K,
         N,
         assignment,
+        **_perf_kwargs(
+            perf_report,
+            run_types,
+            loop_factor,
+            is_perf,
+            f"deepseek:seed={PERF_SEED}",
+        ),
+    )
+
+
+@pytest.mark.perf
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,rt_dim,K,N,dest_layout,dest_sync",
+    [pytest.param(*case[1:], id=case[0]) for case in IN0_BLOCK_CASES],
+)
+@parametrize(**PERF_MEASUREMENT_AXES)
+def test_perf_matmul_custom_compressed_in0_block(
+    perf_report,
+    M,
+    rt_dim,
+    K,
+    N,
+    dest_layout,
+    dest_sync,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    assignment = assign_random(K, N, IN0_BLOCK_FORMATS, COMPRESSION_GRANULARITY)
+    run_tile_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        dest_layout=dest_layout,
+        dest_sync=dest_sync,
+        rt_dim=rt_dim,
+        **_perf_kwargs(
+            perf_report,
+            run_types,
+            loop_factor,
+            is_perf,
+            f"in0_block:random:{','.join(IN0_BLOCK_FORMATS)}",
+        ),
+    )
+
+
+@pytest.mark.perf
+@blackhole_only
+@parametrize(
+    shape=DEEPSEEK_SHAPES,
+    in0_block=DEEPSEEK_IN0_BLOCKS,
+    **PERF_MEASUREMENT_AXES,
+)
+def test_perf_matmul_custom_compressed_deepseek_in0_block(
+    perf_report, shape, in0_block, run_types, loop_factor, is_perf
+):
+    _, K, N = shape
+    M, rt_dim = in0_block
+    assignment = generate_exact_assignment(K, N, DEEPSEEK_T420, seed=PERF_SEED)
+    ct = N // DEFAULT_TILE_C_DIM
+    run_tile_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        dest_layout=CustomMmDestLayout.Default,
+        dest_sync=DestSync.Half if rt_dim * ct <= 8 else DestSync.Full,
+        rt_dim=rt_dim,
         **_perf_kwargs(
             perf_report,
             run_types,

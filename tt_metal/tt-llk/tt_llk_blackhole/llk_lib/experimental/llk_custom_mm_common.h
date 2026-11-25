@@ -55,6 +55,29 @@ constexpr bool custom_mm_split_acc(const CustomMmDestLayout layout)
     return layout == CustomMmDestLayout::DefaultSplitAcc || layout == CustomMmDestLayout::DenseSplitAcc;
 }
 
+// Faces in a short [{1, 2, 4, 8}, 32] in0 tile, one row of two faces.
+constexpr std::uint32_t CUSTOM_MM_SHORT_IN0_NUM_FACES = MAX_NUM_FACES / 2;
+
+// Whether in0 is a full [32, 32] tile, which only compressed_custom_mm takes; custom_mm's in0 is always short.
+constexpr bool custom_mm_full_in0(const std::uint32_t in0_num_faces)
+{
+    return in0_num_faces == MAX_NUM_FACES;
+}
+
+// Whether the compressed_custom_mm init can take this in0 tile: [{1, 2, 4, 8}, 32] or [32, 32].
+constexpr bool custom_mm_legal_in0(const std::uint32_t in0_face_r_dim, const std::uint32_t in0_num_faces)
+{
+    if (custom_mm_full_in0(in0_num_faces))
+    {
+        return in0_face_r_dim == MAX_FACE_R_DIM;
+    }
+    return in0_num_faces == CUSTOM_MM_SHORT_IN0_NUM_FACES && (in0_face_r_dim == 1 || in0_face_r_dim == 2 || in0_face_r_dim == 4 || in0_face_r_dim == 8);
+}
+
+// L1 faces one base address of the SrcB walk reaches: the face index is an 8-bit Y plus an 8-bit Z counter. A k-tile
+// takes CUSTOM_MM_SHORT_IN0_NUM_FACES or MAX_NUM_FACES of them.
+constexpr std::uint32_t CUSTOM_MM_MAX_FACES_PER_WALK = 512;
+
 // Faces in a narrow in1 tile: [32, 16], or [16, 32] with transpose. A full in1 tile has MAX_NUM_FACES.
 constexpr std::uint32_t CUSTOM_MM_NARROW_IN1_NUM_FACES = MAX_NUM_FACES / 2;
 
