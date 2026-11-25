@@ -241,14 +241,23 @@ def test_mm_mcast_write_ack_failure_duty(mesh_device):
     """The op that hangs matmul:duty-cycle-bursty-5 on the galaxy mesh, alone on one chip: tests/didt/test_duty_cycle.py
     [blackhole-duty-5-rep-1000x-all], i.e. [1280,6912] bf16 block-sharded in L1 @ [6912,27648] bf8 in DRAM, LoFi, 2D
     multicast over the full compute grid, run in bursts of DUTY_REPS x (matmul + DUTY_NON_MM x cos) and one more
-    matmul per iteration. On the mesh the in0 sender's NCRISC parks in noc_async_write_barrier."""
+    matmul per iteration. It runs through the mesh test's DutyCycleTest, so iterations, device syncs and the
+    determinism check (every DUTY_DET_INTERVAL iterations, 0 disables it) are logged the same way."""
     if float(os.environ.get(WATCHDOG_ENV, 0)) <= 0:
         pytest.fail(f"{WATCHDOG_ENV} is non-positive, which disables hang detection entirely")
+
+    from tests.didt.op_test_base import OpParameter
+
+    # Not a module-level import: test_duty_cycle calls get_num_devices() on import, which in the scan parent would
+    # open every chip before the per-chip children start.
+    from tests.didt.test_duty_cycle import DutyCycleTest
 
     grid = mesh_device.compute_with_storage_grid_size()
     gx, gy = (int(v) for v in os.environ.get("MATMUL_GRID", f"{grid.x}x{grid.y}").split("x"))
     reps = int(os.environ.get("DUTY_REPS", 1000))
     non_mm = int(os.environ.get("DUTY_NON_MM", 5))
+    iters = int(os.environ.get("MATMUL_ITERS", 10))
+    det_interval = int(os.environ.get("DUTY_DET_INTERVAL", 1))
     per_core_m, per_core_n = 4, 72
     in0_shape = [1, 1, 32 * per_core_m * gy, 576 * gx]
     in1_shape = [1, 1, 576 * gx, 32 * per_core_n * gx]
@@ -256,30 +265,16 @@ def test_mm_mcast_write_ack_failure_duty(mesh_device):
     identity = chip_identity()
     for runtime_id in mesh_device.get_device_ids():
         logger.info(f"participating {describe(runtime_id, identity)}")
-    logger.info(f"duty matmul {in0_shape} @ {in1_shape} on {gx}x{gy} cores, {reps} x (mm + {non_mm} cos) per iteration")
+    logger.info(
+        f"duty matmul {in0_shape} @ {in1_shape} on {gx}x{gy} cores, {iters} iterations of {reps} x (mm + {non_mm} cos)"
+        f" + mm, determinism check every {det_interval}"
+    )
 
-    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
     in0_mem = ttnn.create_sharded_memory_config(
         in0_shape, ttnn.CoreGrid(y=gy, x=gx), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR
     )
     dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
-    in0 = ttnn.from_torch(
-        torch.randn(in0_shape),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=in0_mem,
-        mesh_mapper=replicate,
-    )
-    in1 = ttnn.from_torch(
-        torch.randn(in1_shape),
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=dram,
-        mesh_mapper=replicate,
-    )
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(gx, gy),
         in0_block_w=3,
@@ -293,26 +288,29 @@ def test_mm_mcast_write_ack_failure_duty(mesh_device):
     compute_config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
     )
-
-    def mm():
-        return ttnn.matmul(
-            in0,
-            in1,
-            program_config=program_config,
-            memory_config=out_mem,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_config,
-        )
+    duty = DutyCycleTest(
+        mesh_device,
+        OpParameter(in0_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT, in0_mem),
+        [OpParameter(in1_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, dram)],
+        out_mem_config=out_mem,
+        out_dtype=ttnn.DataType.BFLOAT16,
+        program_config=program_config,
+        compute_config=compute_config,
+        loop_count=iters,
+        determinism_check_enabled=det_interval > 0,
+        determinism_check_interval=det_interval,
+        non_mm_loops=non_mm,
+        wl_loops=reps,
+    )
+    duty.nd_core_block = (32 * per_core_m, 32 * per_core_n)
+    duty.nd_core_grid_size = (gx, gy)
 
     try:
-        for i in range(int(os.environ.get("MATMUL_ITERS", 10))):
-            for _ in range(reps):
-                ttnn.deallocate(mm())
-                for _ in range(non_mm):
-                    ttnn.deallocate(ttnn.cos(in1))
-            ttnn.deallocate(mm())
-            ttnn.synchronize_device(mesh_device)
-            logger.info(f"duty iteration {i} done")
+        duty.run_op_test()
+    except AssertionError:
+        for runtime_id in mesh_device.get_device_ids():
+            logger.error(f"ND {describe(runtime_id, identity)}")
+        raise
     except Exception:
         asics = asic_ids()
         for runtime_id in mesh_device.get_device_ids():
@@ -376,6 +374,7 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None, workload=None):
             why = "no diagnostic line -- process killed (Bus error / OOM); check dmesg"
             for pattern in (
                 r"HUNG chip \d+.*",
+                r"ND chip \d+.*",
                 r"Device \d+: Timeout[^.]*\.",
                 r"Read 0x[0-9a-f]+ over PCIe[^\n]*",
                 r"TT_THROW: [^(]*",
