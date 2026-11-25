@@ -509,6 +509,7 @@ private:
     uint32_t eth_interrupt_mode_base_reg_{};
     uint32_t eth_interrupt_num_vecs_{};
     uint32_t noc_max_burst_size_bytes_{};
+    uint32_t noc_max_bytes_in_packet_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -638,6 +639,7 @@ public:
     uint32_t get_num_dataflow_buffers() const { return num_dataflow_buffers_; }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
+    uint32_t get_noc_max_bytes_in_packet() const { return noc_max_bytes_in_packet_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const

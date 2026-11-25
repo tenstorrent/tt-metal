@@ -848,7 +848,7 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
-          # e2e demo combo (b1, short prompt).
+          # e2e demo combo (b1, short prompt). From All Model Tests run 39375190180 (#61548): fused decode, routed prefill.
           - batch_size: 1
             seq_len: null
             status: active
@@ -859,12 +859,18 @@ targets:
               decode_t/s: 375.0
               decode_t_s_u_tolerance: 0.2
               decode_t_s_tolerance: 0.2
-              prefill_t/s: 435.0536
-              prefill_time_to_token: 0.1701
-              # One traced decode step: the trace is captured during prefill warmup.
-              compile_decode: 0.005
-              compile_decode_tolerance: 0.6
-              compile_prefill: 47.0974
+              # #61548 prefill (routed experts, packed prefill), re-seeded on the rebased head: All Model Tests run
+              # 44246170615 measured 1847.6 t/s and 0.0401 s (earlier branch runs: 1832-1849 t/s).
+              prefill_t/s: 1847.6
+              prefill_time_to_token: 0.0401
+              # One traced decode step (~2.4 ms) after warmup, measured 3-10 ms: any first step under 15 ms passes.
+              compile_decode: 0.0075
+              compile_decode_tolerance: 1.0
+              # First prefill (program compile) depends on the runner's JIT kernel cache: QB2 runs from 2026-10-23 to
+              # 2026-11-18 measured 44.2, 45.2, 45.0, 45.8, 43.9, 38.6 and 22.5 s. Like compile_decode, only an upper
+              # bound is checked: 42.2 +/-100% passes anything up to 84.4 s.
+              compile_prefill: 42.2
+              compile_prefill_tolerance: 1.0
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models

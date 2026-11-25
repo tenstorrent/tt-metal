@@ -73,13 +73,14 @@ const DFBSpecName UNTILIZE_OUT0{"untilize_out0"};
 const DFBSpecName UNTILIZE_OUT1{"untilize_out1"};
 const DFBSpecName PAD0{"pad0"};
 const DFBSpecName PAD1{"pad1"};
-// DRAM-config landing scratch (only used when config_tensors_in_dram): each reader
-// async-reads its config page from DRAM into a private L1 scratch, then reads it by
-// base pointer.  Self-loop bound (one reader fills + reads -> validator-satisfying).
-const DFBSpecName GATHER_SCRATCH0{"gather_scratch0"};
-const DFBSpecName GATHER_SCRATCH1{"gather_scratch1"};
-const DFBSpecName PAD_SCRATCH0{"pad_config_scratch0"};
-const DFBSpecName PAD_SCRATCH1{"pad_config_scratch1"};
+// DRAM-config landing scratchpads (only used when config_tensors_in_dram): each reader
+// async-reads its config page from DRAM into a private L1 scratchpad, then reads it by
+// base pointer.  Only that reader touches it, so it needs no FIFO sync (a DFB here would be
+// self-looped by a DM kernel, which Quasar rejects).
+const ScratchpadSpecName GATHER_SCRATCH0{"gather_scratch0"};
+const ScratchpadSpecName GATHER_SCRATCH1{"gather_scratch1"};
+const ScratchpadSpecName PAD_SCRATCH0{"pad_config_scratch0"};
+const ScratchpadSpecName PAD_SCRATCH1{"pad_config_scratch1"};
 
 const KernelSpecName READER0{"reader0"};
 const KernelSpecName READER1{"reader1"};
@@ -323,33 +324,17 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         });
     }
 
-    const tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // UInt16 unsupported for CB types
+    // One config page per reader: the kernel reads the page into the scratchpad, then walks it.
+    Group<ScratchpadSpec> scratchpads;
     if (config_tensors_in_dram) {
-        const uint32_t gather_page0 = gather_config0_t.tensor_spec().compute_page_size_bytes();
-        const uint32_t gather_page1 = gather_config1_t.tensor_spec().compute_page_size_bytes();
-        const uint32_t pad_page0 = pad_config0_t.tensor_spec().compute_page_size_bytes();
-        const uint32_t pad_page1 = pad_config1_t.tensor_spec().compute_page_size_bytes();
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = GATHER_SCRATCH0,
-            .entry_size = gather_page0,
-            .num_entries = 1,
-            .data_format_metadata = kernel_config_df});
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = GATHER_SCRATCH1,
-            .entry_size = gather_page1,
-            .num_entries = 1,
-            .data_format_metadata = kernel_config_df});
+        const auto page_size = [](const MeshTensor& t) { return t.tensor_spec().compute_page_size_bytes(); };
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = GATHER_SCRATCH0, .size_per_node = page_size(gather_config0_t)});
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = GATHER_SCRATCH1, .size_per_node = page_size(gather_config1_t)});
         if (enable_padding) {
-            dataflow_buffers.push_back(DataflowBufferSpec{
-                .unique_id = PAD_SCRATCH0,
-                .entry_size = pad_page0,
-                .num_entries = 1,
-                .data_format_metadata = kernel_config_df});
-            dataflow_buffers.push_back(DataflowBufferSpec{
-                .unique_id = PAD_SCRATCH1,
-                .entry_size = pad_page1,
-                .num_entries = 1,
-                .data_format_metadata = kernel_config_df});
+            scratchpads.push_back(ScratchpadSpec{.unique_id = PAD_SCRATCH0, .size_per_node = page_size(pad_config0_t)});
+            scratchpads.push_back(ScratchpadSpec{.unique_id = PAD_SCRATCH1, .size_per_node = page_size(pad_config1_t)});
         }
     }
 
@@ -391,8 +376,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                                  const DFBSpecName& untilize_out_dfb,
                                  const DFBSpecName& pad_dfb,
                                  const DFBSpecName& pad_other_dfb,
-                                 const DFBSpecName& gather_scratch_dfb,
-                                 const DFBSpecName& pad_scratch_dfb,
+                                 const ScratchpadSpecName& gather_scratch,
+                                 const ScratchpadSpecName& pad_scratch,
                                  const TensorParamName& gather_cfg,
                                  const TensorParamName& pad_cfg,
                                  uint32_t reader_block_start_offset,
@@ -464,24 +449,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                 .endpoint_type = DFBEndpointType::CONSUMER});
         }
         if (config_tensors_in_dram) {
-            // DRAM config landing scratch (self-loop: reader fills via NoC read, then reads it).
-            reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = gather_scratch_dfb,
-                .accessor_name = "gather_config_scratch",
-                .endpoint_type = DFBEndpointType::PRODUCER});
-            reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = gather_scratch_dfb,
-                .accessor_name = "gather_config_scratch",
-                .endpoint_type = DFBEndpointType::CONSUMER});
+            // DRAM config landing scratchpads (private to this reader).
+            reader.scratchpad_bindings.push_back(
+                ScratchpadBinding{.scratchpad_spec_name = gather_scratch, .accessor_name = "gather_config_scratch"});
             if (enable_padding) {
-                reader.dfb_bindings.push_back(DFBBinding{
-                    .dfb_spec_name = pad_scratch_dfb,
-                    .accessor_name = "padding_config_scratch",
-                    .endpoint_type = DFBEndpointType::PRODUCER});
-                reader.dfb_bindings.push_back(DFBBinding{
-                    .dfb_spec_name = pad_scratch_dfb,
-                    .accessor_name = "padding_config_scratch",
-                    .endpoint_type = DFBEndpointType::CONSUMER});
+                reader.scratchpad_bindings.push_back(
+                    ScratchpadBinding{.scratchpad_spec_name = pad_scratch, .accessor_name = "padding_config_scratch"});
             }
         }
 
@@ -591,6 +564,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         .name = "untilize_with_halo",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = {wu},
     };
