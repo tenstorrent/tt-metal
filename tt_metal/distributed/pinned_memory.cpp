@@ -20,7 +20,7 @@
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/execution/distributed.hpp>
 #include "impl/context/metal_env_impl.hpp"
-#include <tt-umd/chip_helpers/sysmem_buffer.hpp>
+#include <tt-umd/system_memory/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <distributed/mesh_device_impl.hpp>

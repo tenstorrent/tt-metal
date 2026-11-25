@@ -26,7 +26,7 @@
 
 #include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
-#include <tt-umd/chip_helpers/sysmem_buffer.hpp>
+#include <tt-umd/system_memory/sysmem_buffer.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/io_window_config.hpp>
 #include <tt-umd/soc_descriptor.hpp>
