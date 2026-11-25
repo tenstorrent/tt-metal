@@ -16,9 +16,9 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/memory/cross_program/global_semaphore.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
