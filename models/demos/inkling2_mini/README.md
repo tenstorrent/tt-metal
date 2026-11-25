@@ -198,6 +198,11 @@ What a rebuild reproduces (checked for the caches the numbers in this file were 
 - Capture: not repeated. The captured inputs depend on the prefill's numerics, and the measured caches' capture
   ran before the prefill's faster defaults went in (K-blocked LoFi projections, bf16 gate messages). `capture`
   uses the defaults of the day, so a capture made now differs in the low bits, and some codes with it.
+- Not measured: a rebuild from nothing (a new capture with today's prefill, every solve, both caches) against
+  the measured caches. By the times in this section it takes about 4 minutes on the card for the capture, about
+  1.5 hours for the 37 solves on the 80-core host (5 to 6 minutes per solve on a 12-core host) and about 40
+  minutes for `variant` and the layouts. Its KL to the bf16 model then needs a card run over an evaluation set;
+  no tool for that is in this folder.
 - Solve, measured with 40 threads on the 80-core host: 78 to 180 s per layer with the host otherwise idle
   (about 1.5 hours for the 37 solves in sequence, half that in two processes); about 10 minutes per layer when
   the host ran other jobs. 9 to 15 GB of RAM per solve process over the 108,544 tokens.
