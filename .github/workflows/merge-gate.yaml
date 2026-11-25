@@ -64,7 +64,7 @@ jobs:
       perf-run-types: L1_TO_L1
       pipeline: merge_baseline
       upload-to-warehouse: false  # trial: never write the warehouse
-      stage2-baseline-ref: ${{ github.event.merge_group.base_sha || 'dd437b3a383341f4396e0a280065e20015c62da5' }}
+      stage2-baseline-ref: ${{ github.event.merge_group.base_sha || 'e69327a72529bba08e4bfddcb54f14846e371c64' }}
       stage2-thresholds: >-
         ${{ format('{{"blackhole": {0}, "wormhole": {1}}}',
             toJSON(fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds).blackhole),
@@ -84,7 +84,7 @@ jobs:
       arch: ${{ matrix.arch }}
       gate_name: LLK perf merge gate
       baseline_pipeline: merge_baseline
-      baseline_match_ref: ${{ github.event.merge_group.base_sha || 'dd437b3a383341f4396e0a280065e20015c62da5' }}
+      baseline_match_ref: ${{ github.event.merge_group.base_sha || 'e69327a72529bba08e4bfddcb54f14846e371c64' }}
       # No wait, so the queue never waits for the warehouse: a missing baseline
       # falls back to the newest older one in the base's history, marked stale.
       baseline_wait_minutes: "0"
