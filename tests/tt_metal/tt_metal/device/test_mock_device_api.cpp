@@ -187,10 +187,12 @@ TEST_F(MockDeviceAPIFixture, FabricProgramIsCompiledOnMockWithTensixMux) {
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 }
 
+class MockDeviceSocketFixture : public MockDeviceAPIFixture, public ::testing::WithParamInterface<tt::ARCH> {};
+
 // Nothing on mock advances the bytes_acked counter H2D credit accounting polls, so without the
 // self-ack the host wedges once it has written one FIFO's worth. Several FIFOs must go through.
-TEST_F(MockDeviceAPIFixture, H2DSocketWritesDoNotDeadlockOnMock) {
-    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
+TEST_P(MockDeviceSocketFixture, H2DSocketWritesDoNotDeadlockOnMock) {
+    experimental::configure_mock_mode(GetParam(), 1);
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 
     constexpr uint32_t kFifoSize = 2048;
@@ -219,8 +221,8 @@ TEST_F(MockDeviceAPIFixture, H2DSocketWritesDoNotDeadlockOnMock) {
 
 // The D2H mirror: nothing produces data, so bytes_sent never advances and read() blocks forever.
 // The payload is meaningless under mock; what matters is that the host path completes.
-TEST_F(MockDeviceAPIFixture, D2HSocketReadsDoNotDeadlockOnMock) {
-    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
+TEST_P(MockDeviceSocketFixture, D2HSocketReadsDoNotDeadlockOnMock) {
+    experimental::configure_mock_mode(GetParam(), 1);
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 
     constexpr uint32_t kFifoSize = 2048;
@@ -263,7 +265,13 @@ TEST_F(MockDeviceAPIFixture, D2HSocketReadsDoNotDeadlockOnMock) {
     mesh_device->close();
 }
 
-class MockDeviceProfilerFixture : public ::testing::Test {
+INSTANTIATE_TEST_SUITE_P(
+    MockArch,
+    MockDeviceSocketFixture,
+    ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::QUASAR),
+    [](const ::testing::TestParamInfo<tt::ARCH>& info) { return tt::arch_to_str(info.param); });
+
+class MockDeviceProfilerFixture : public ::testing::TestWithParam<tt::ARCH> {
 protected:
     void SetUp() override {
 #if !defined(TRACY_ENABLE)
@@ -302,8 +310,8 @@ protected:
 };
 
 // Verify that the device profiler is not enabled on mock device.
-TEST_F(MockDeviceProfilerFixture, CPU_DeviceProfilerIsNotStartedOnMockDevice) {
-    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
+TEST_P(MockDeviceProfilerFixture, CPU_DeviceProfilerIsNotStartedOnMockDevice) {
+    experimental::configure_mock_mode(GetParam(), 1);
 
     ASSERT_TRUE(MetalContext::instance().rtoptions().get_profiler_enabled())
         << "Test expects device profiler option to be enabled.";
@@ -326,5 +334,11 @@ TEST_F(MockDeviceProfilerFixture, CPU_DeviceProfilerIsNotStartedOnMockDevice) {
         << "Device profiler was started on mock device " << mock_device_id
         << " -- the profiler must be skipped for mock/emulated clusters";
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    MockArch,
+    MockDeviceProfilerFixture,
+    ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::QUASAR),
+    [](const ::testing::TestParamInfo<tt::ARCH>& info) { return tt::arch_to_str(info.param); });
 
 }  // namespace tt::tt_metal
