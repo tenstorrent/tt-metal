@@ -156,7 +156,7 @@ __attribute__((noinline)) void realtime_profiler_sync() {
 
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 
-    uint32_t sync_count = 0;
+    [[maybe_unused]] uint32_t sync_count = 0;
     while (rt_profiler_msg->sync_request) {
         invalidate_l1_cache();
 

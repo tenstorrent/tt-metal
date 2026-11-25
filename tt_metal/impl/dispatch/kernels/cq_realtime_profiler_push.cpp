@@ -105,7 +105,7 @@ void kernel_main() {
     // Wait for config_buffer_addr to be written by the host
     RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_CONFIG_WAIT);
     uint32_t socket_config_addr = 0;
-    uint32_t wait_iters = 0;
+    [[maybe_unused]] uint32_t wait_iters = 0;
     while (socket_config_addr == 0) {
         invalidate_l1_cache();
         socket_config_addr = rt_profiler_msg->config_buffer_addr;
@@ -141,8 +141,8 @@ void kernel_main() {
     RT_PROF_NCRISC_DBG_SET(ring_buffer, fifo_addr_lo, data_addr_lo);
 
     RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_MAIN_LOOP);
-    uint32_t loop_count = 0;
-    uint32_t push_count = 0;
+    [[maybe_unused]] uint32_t loop_count = 0;
+    [[maybe_unused]] uint32_t push_count = 0;
 
     while (true) {
         invalidate_l1_cache();
