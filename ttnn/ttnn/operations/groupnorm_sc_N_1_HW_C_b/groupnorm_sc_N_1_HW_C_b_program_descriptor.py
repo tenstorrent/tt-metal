@@ -20,6 +20,13 @@ TILE: the input ring is the shard (two views, K = B), the output tiles are the o
 32) / sw consecutive sticks form one virtual row of W = lcm(sw, 32) / 32 tiles (lane v holds channel v mod sw),
 compute tilizes chunks from the shard into the resident ring and untilizes the result into the output shard.
 
+in_place (Refinement 2): the output shard is the input shard - the output CBs are borrowed from the same buffer, so
+no second shard is allocated and the L1 it would take returns to the static CBs. Write ordering keeps it safe:
+TILE pass 2 packs tile i over tile i in the chunk it just read (unpack precedes pack per tile); RM pass 2 untilizes a
+chunk only after it was tilized (resident tiles first; a non-resident head chunk is re-tilized from the shard right
+before its rows are overwritten); the members' pilot reads of the root shard complete before their gather, so before
+the root's pass 2.
+
 Every block knob (gx, chunk_ht, K, buffer depths, max_cores) is defined once here and flows into
 CB sizes and kernel args.
 """
@@ -221,6 +228,7 @@ class GroupNormPlan:
     footprint: int
     work: list = field(default_factory=list)
     sharded: bool = False
+    in_place: bool = False  # sharded only: the output is the input shard
     map_period: int = 0  # channels per slice (lane v holds channel v mod map_period)
     shard_grid: object = None  # sharded: the shard grid (ttnn.CoreRangeSet)
 
@@ -339,11 +347,13 @@ def _distribute(plan_fields, grid_x):
     return work
 
 
-def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta):
+def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta, in_place=False):
     """Build the blocking plan; NotImplementedError when no feasible column-slice count exists."""
     tuning = _tuning()
     if input_tensor.is_sharded():
-        return _plan_sharded(input_tensor, num_groups, has_gamma=has_gamma, has_beta=has_beta, tuning=tuning)
+        return _plan_sharded(
+            input_tensor, num_groups, has_gamma=has_gamma, has_beta=has_beta, in_place=in_place, tuning=tuning
+        )
     N, _, HW, C = tuple(input_tensor.shape)
     G = num_groups
     Ht, Wt = HW // 32, C // 32
@@ -437,8 +447,9 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta):
     return plan
 
 
-def _plan_sharded(input_tensor, num_groups, *, has_gamma, has_beta, tuning):
-    """Blocking plan of an L1 BLOCK_SHARDED input: one block per core, the core's own shard."""
+def _plan_sharded(input_tensor, num_groups, *, has_gamma, has_beta, in_place, tuning):
+    """Blocking plan of an L1 BLOCK_SHARDED input: one block per core, the core's own shard (in_place: the output
+    shard is that same buffer)."""
     mem = input_tensor.memory_config()
     spec = mem.shard_spec
     N, _, HW, C = tuple(input_tensor.shape)
@@ -479,8 +490,9 @@ def _plan_sharded(input_tensor, num_groups, *, has_gamma, has_beta, tuning):
 
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
-    # The output shard is allocated after this plan, below the live L1 buffers the budget is measured against.
-    out_shard_bytes = _align_up(sh * sw * 2, 64)
+    # Out of place, the output shard is allocated after this plan, below the live L1 buffers the budget is measured
+    # against. In place there is no second shard: the output CBs borrow the input shard already excluded.
+    out_shard_bytes = 0 if in_place else _align_up(sh * sw * 2, 64)
     l1_budget = l1_cb_budget(device) - out_shard_bytes
 
     # Chunk = the per-core block of one compute pass: a whole number of the shard's tile rows (no ragged tail:
@@ -506,12 +518,20 @@ def _plan_sharded(input_tensor, num_groups, *, has_gamma, has_beta, tuning):
     B = rows_core // h
     fp_kw = fp_kw_for(h)
     if is_rm:
+        # Residency K of the tilized ring. Fully resident (K = B) the ring is the B chunks alone; partially
+        # resident it also holds the one re-tilized chunk in flight, so K < B is solved against the streaming
+        # footprint. (Solving K = B against the streaming footprint too undercounts by that slot: the same ring
+        # bytes, but a chunk needlessly re-tilized in pass 2.)
+        chunk_bytes = BF16_TILE_BYTES * T
+        K_full = (l1_budget - footprint_bytes(K_alloc=0, stream=False, **fp_kw)) // chunk_bytes
         f_fixed = footprint_bytes(K_alloc=0, stream=True, **fp_kw)
-        K_max = (l1_budget - f_fixed) // (BF16_TILE_BYTES * T)
-        if K_max < 0:
+        K_part = (l1_budget - f_fixed) // chunk_bytes
+        if K_part < 0:
             refuse(f"the static CBs ({f_fixed} B) exceed the L1 left beside the shards ({l1_budget} B)")
+        K_max = K_full if K_full >= B else K_part  # resident-chunk headroom (recorded in the plan)
         override = tuning.get("max_resident_chunks")
-        K_alloc = min(B, K_max) if override is None else max(0, min(int(override), K_max, B))
+        K_want = B if override is None else max(0, min(int(override), B))
+        K_alloc = B if K_want == B and K_full >= B else min(K_want, K_part)
     else:
         K_max = K_alloc = B  # the shard itself is the resident ring
     stream = B > K_alloc
@@ -552,6 +572,7 @@ def _plan_sharded(input_tensor, num_groups, *, has_gamma, has_beta, tuning):
         l1_budget=l1_budget,
         footprint=footprint,
         sharded=True,
+        in_place=in_place,
         map_period=sw,
         shard_grid=spec.grid,
     )
@@ -612,6 +633,9 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     sharded = plan.sharded
     cores = plan.shard_grid if sharded else _used_core_range_set(len(plan.work), plan.grid_x)
     map_period = plan.map_period
+
+    # In place the output tensor is the input tensor, so the output CBs below borrow the input shard's bytes.
+    assert output_tensor is input_tensor or not plan.in_place
 
     def shard_cb(tensor, formats):
         # Zero-copy: the CB is the core's own shard (no NoC traffic); the views are tile-sized pages over it.

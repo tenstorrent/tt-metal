@@ -37,7 +37,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes, 
 | `cb_stats_out` (19) | 2 | 2 | `{n: streams → 1, ht: streams → none, wt: streams → none, g: spans → G_core, i: streams → none}` | Float32 | compute | writer | finalize → mcast (root) | **Not shared.** It is concurrent with `cb_group_stats`, because the root's mcast/local copy reads it while that CB is being written. It must also not join group D, because the finalize chain reads `cb_group_sums` while packing this CB. |
 | `cb_group_stats` (20) | 2 | 2 | `{n: streams → 1, ht: streams → none, wt: streams → none, g: spans → G_core, i: streams → none}` | Float32 | writer | compute | mcast landing → expand | **Not shared.** It is a remote-written landing zone (the root sets the write time), and the remote-address invariant requires capacity = quantum = 2. |
 | `cb_affine_staging` (21) | 1 page of `align_up((HAS_GAMMA + HAS_BETA)·W·64, 64)` B (iff any affine) | 1 | `{n: streams → none, ht: streams → none, wt: spans → W (64 B per tile), g: streams → none, i: streams → none}` | raw bytes (dataflow-only payload) | reader | reader | load (affine) | **Not shared.** It is the copy source for (13)/(14) and is concurrent with them. It is ≤ 5 KB, with a non-tile page size. |
-| `cb_output_rm` (1) | sharded RM only: **the output shard** (zero-copy, `cb_descriptor_from_sharded_tensor`; 2 KB views over `sh·sw·2` B) | the whole shard | `{n: streams → 1, ht: spans → rows_core (B chunks of h), wt: spans → the shard width, g: streams → none, i: streams → none}` | Float16_b (output ABI) | compute (untilize) | writer (credit drain only, no NoC) | pass 2 | **Not static CB space** — borrowed from the output tensor. Pass 2 untilizes each normalized chunk straight into the shard rows it came from. |
+| `cb_output_rm` (1) | sharded RM only: **the output shard** (zero-copy, `cb_descriptor_from_sharded_tensor`; 2 KB views over `sh·sw·2` B). In place (R2): **the input shard** — the same bytes as `cb_input_rm` | the whole shard | `{n: streams → 1, ht: spans → rows_core (B chunks of h), wt: spans → the shard width, g: streams → none, i: streams → none}` | Float16_b (output ABI) | compute (untilize) | writer (credit drain only, no NoC) | pass 2 | **Not static CB space** — borrowed from the output tensor (in place: from the input tensor, so it **shares** the shard with `cb_input_rm`: pass 2 untilizes a chunk only over rows already tilized — in pass 1 for resident chunks, just before for re-tilized ones). Pass 2 untilizes each normalized chunk straight into the shard rows it came from. |
 | `cb_pilot_rows` (22) | `m·W`, `m = pilot_repeat(W, h)` (largest divisor of `h` ≤ `ceil(4/W)`; 1 for `W ≥ 4`) | `m·W` (row 0 of each tile: the shift `k` of the lane's group; rows 1..31 zero; the `W` tiles repeated `m` times so the pass-1 chain walks `m` tile rows as one row of `m·W` tiles) | `{n: streams → 1 per block, ht: spans → m (replicated), wt: spans → W, g: spans → G_core (one k per group), i: streams → none}` | Float16_b (`k` is a data sample, exactly bf16) | reader | compute | pass 1 (pass-1 chain srcB, `BroadcastDim::Row`) | **Not shared.** Live through every pass-1 chunk, concurrent with the input ring, the x·(x−k) intermediate and both accumulators. |
 | `cb_sum_seed` (23) | `W` pages of 4 KB | `W` (row 0: `−n·k` per lane, exact; rows 1..31 zero) | same as (22) | Float32 + `UnpackToDestFp32` (the seed must be exact: `n·k` exceeds bf16) | reader | compute | chunk 0 of pass 1 (the Σx reduce reloads it in place of the accumulator) | **Not shared.** Produced in chunk 0's read shadow, while every other pass-1 buffer is live; it is consumed within the first chunk, so an alias with the x·(x−k) intermediate would need the reduce to pop it before that chunk's chain packs — not true (chain packs first). |
 | `cb_group_shift` (24) | 1 page of 4 KB | 1 (lane g = `k_g`, rows replicated) | `{n: streams → 1, ht: streams → none, wt: streams → none, g: spans → G_core, i: streams → none}` | Float32 + `UnpackToDestFp32` | reader | compute (root finalize) | block start → finalize (root); allocated on every core (uniform CB layout) | **Not shared.** Written by the reader at chunk 0 and read at the finalize, so it spans pass 1 and the combine. 4 KB. |
@@ -55,6 +55,8 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes, 
 | R1: compute split by role (`IS_ROOT` CT arg) | the root-only combine/finalize is not in the member binary; keeps the RM root binary inside the kernel-config ring under `--dev` | none |
 | R1: two-op per-chunk chains blocked over the DEST window (`CHAIN_BLOCK = DEST_AUTO_LIMIT`, `PerBlockSize` pack) | one FPU init per element per window instead of per tile | none (`cb_x_squared` / `cb_output_tiles` capacity `T ≥` the window) |
 | R1: pilot rows replicated `m = pilot_repeat(W, h)` times (pass 1); `W = 1` pass 2 walks the chunk as `tiles(rows)` with `Scalar` a / b′ | the chain's DEST window only spans one walk row, so at `W < 4` it never filled (flux1 1M×64 at W = 1: 912 → 869 µs) | `+2 KB·(m−1)·W` (≤ 6 KB, only at `W < 4`) |
+| R2: in place — the output CBs (`cb_output_tiles` TILE / `cb_output_rm` RM) are borrowed from the **input** shard | the result overwrites the input; no second shard exists | `+sh·sw·2 B` of budget (the output shard is no longer subtracted) |
+| R2: sharded RM residency solved as `K_full` (stream-free footprint) first, `K_part` (with the stream slot) only when `K_full < B` | R1 solved every `K` against the streaming footprint, so a shard whose whole tilized copy fit was planned one chunk short and re-tilized it in pass 2 (same ring bytes) | none (same ring bytes; 16384×640 in place 91.5 → 86.9 µs) |
 
 ### Symbol table
 
@@ -110,6 +112,37 @@ Zero-copy CBs over the shards (`ttnn.cb_descriptor_from_sharded_tensor`):
 | TILE | the input ring, both views (2)/(3): `K = B`, the whole shard is resident | `cb_output_tiles` (5) | the ring and group B's output half (`x·(x−k)` keeps its own `4 KB·T`) |
 | RM | `cb_input_rm` (0), stick pages viewed as 2 KB tile pages (`k = lcm(sw,32)/sw` sticks per virtual tile row) | `cb_output_rm` (1) — pass 2 untilizes into it | `cb_input_rm`'s `D_RM·T`; the tilized ring stays (`K_alloc·T`, `K_max` re-derived against the budget left beside both shards) |
 
+### In place (Refinement 2)
+
+The output tensor **is** the input tensor: `cb_output_tiles` (TILE) / `cb_output_rm` (RM) are
+`cb_descriptor_from_sharded_tensor(input)`, the same bytes as the input ring (TILE) / `cb_input_rm` (RM). No CB is
+added; the plan's budget simply stops subtracting an output shard:
+
+`L1_budget(in place) = l1_cb_budget(device)` (already capped below the input shard) vs
+`l1_cb_budget(device) − align_up(sh·sw·2, 64)` out of place.
+
+Write ordering (why no extra buffer is needed): TILE pass 2 packs tile i over the tile i it just unpacked (unpack →
+math → pack per tile; the unpacker only runs ahead onto tiles not yet packed). RM pass 2 untilizes a chunk only over
+rows already tilized: resident chunks in pass 1, re-read chunks by the `tilize_chunk` right before. The column
+members read the pilot from the root's shard at step 0, which precedes their gather and so the root's pass 2.
+
+**Residency (RM).** `K_full = floor((L1_budget − F(K = 0, STREAM = 0)) / (2 KB·T))`; if `K_full ≥ B` the shard is
+fully resident (`K = B`, no stream slot). Otherwise `K = K_part = floor((L1_budget − F(K = 0, STREAM = 1)) / (2 KB·T))`
+(the ring also holds the re-tilized chunk in flight). R1 used `K_part` for both, one chunk short whenever the whole
+copy fit with less than one chunk to spare.
+
+Worked fits (BH, 8×8, γ+β, RM, `L1_budget` on an otherwise empty L1 = 1 460 288 B minus the input shard):
+
+| Case | Shard | `k`, `W`, `rows_core` | `L1_budget` | `F(h)` with `K = B` | Chosen | Footprint / margin |
+|------|-------|-----------------------|-------------|---------------------|--------|--------------------|
+| `unet_rm_ip_16384x640` | 2048×80 = 320 KB | 2, 5, 32 | 1 132 608 B | `471 552 + 20 480·h` | `h = 32` (`T = 160`), `B = 1`, `K = 1` | 1 126 912 B / 5 696 B |
+| `unet_rm_ip_16384x960` | 2048×120 = 480 KB | 4, 15, 16 | 968 768 B | `840 320 + 61 440·h` | `h = 2` (`T = 30`), `B = 8`, `K = 8` (`h = 4` needs 1 086 080 B) | 963 200 B / 5 568 B |
+
+The `h` term is the Float32 x·(x−k) intermediate (group B, `4 KB·T`). At `h = 32` it is 640 KB, twice the shard —
+the largest single buffer of the in-place RM footprint, and the lever if a later refinement wants L1 back (a smaller
+`h` trades it for more chunks). Out of place neither shape is a TARGET cell: 16384×640 plans `h = 16, K = B = 2`
+(804 928 B budget); 16384×960 does not fit beside two 480 KB shards.
+
 Chunk = the per-core block: `h` is the coarsest divisor of the shard's tile rows whose fully-resident footprint
 fits (the whole shard whenever it fits — every model geometry in `feature_spec`); `chunk_tiles_target` caps it.
 RM falls back to partial residency (`K < B`, head chunks re-tilized from the input shard in pass 2) only when no
@@ -153,7 +186,7 @@ resident chunk is `2 KB·T` = 64 KB.
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
 | input | `1 + ρ` (block-sharded: **0** — the shard is consumed in place) | The tail residency keeps `K = min(B, K_max)` chunks per core in L1 across the combine. Only the `B−K` head chunks are re-read in pass 2. R1's pilot adds `2·W·64 B` per core (TILE: rows 0–1 of faces 0/1 of the slice's first tile row; RM: one stick segment) — read in chunk 0's barrier. | block-sharded: the pilot comes from the unit root's shard over the NoC (`2·W·64 B` TILE / `P·2 B` RM per core) |
-| output | 1 (block-sharded: **0** — packed / untilized straight into the output shard) | Written once, in pass 2 | 0 |
+| output | 1 (block-sharded: **0** — packed / untilized straight into the output shard; in place that shard is the input's, so no second L1 buffer either) | Written once, in pass 2 | 0 |
 | gamma | `P_used·W·64 B` total (each core reads its own slice once per block) | Reuse-shared across a unit's `cpi` cores, read per core (`affine_mcast` deferred) | 0 |
 | beta | same as gamma | same | 0 |
 | per-channel / per-group partials | 0 (never leave L1) | Collapsed on-core to 2 × 32 lanes before the combine | gather: `P_used × 256 B` (4 × 64 B rows) + `P_used` semaphore incs |

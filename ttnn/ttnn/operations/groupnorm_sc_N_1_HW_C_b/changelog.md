@@ -124,3 +124,53 @@ DRAM PERF FOCUS cases. "Phase 0" is the changelog value above; "Phase 0 rerun" i
 | flux1_dram_16384x256 | 61 871 | 61 491 | 60 809 | −1.7% | −1.1% |
 | flux1_dram_1048576x64 | 863 864 | 861 453 | 871 479 | +0.9% | +1.2% |
 | mochi_dram_8x407040x128 | 6 382 888 | 6 363 399 | 6 344 183 | −0.6% | −0.3% |
+
+## Refinement 2 — in_place=True on block-sharded input (both layouts), including the 16384x640 / 16384x960 L1 fit
+- Date: 2026-11-25
+- What was done:
+  - **Registry.** `SUPPORTED["in_place"]` = `[False, True]`. `True` on an interleaved input stays a `ValueError` in `validate()` (INVALID in `feature_spec`); ragged shards stay unsupported (R3).
+  - **Aliasing (knob-turn, no new CB, no kernel change).** In place, the entry point returns the input tensor itself. `cb_output_tiles` (TILE) / `cb_output_rm` (RM) are `cb_descriptor_from_sharded_tensor(input)`, the same bytes as the input ring / `cb_input_rm`. `io_tensors` lists the input once, as the output (`[γ, β, input]`), so the cache-hit address patching sees the standard in-place alias. Write ordering needs nothing extra:
+    - TILE pass 2 packs tile i over the tile i it just unpacked.
+    - RM pass 2 untilizes a chunk only over rows already tilized: resident chunks in pass 1, re-read chunks by the `tilize_chunk` just before.
+    - The column members read the pilot from the root's shard at step 0, before their gather, so before the root's pass 2.
+  - **L1 fit.** `_plan_sharded` no longer subtracts an output shard from the budget in place (`+sh·sw·2 B`). RM residency is now solved as `K = B` against the stream-free footprint (`K_full`), and against the footprint with the stream slot (`K_part`) only when `K_full < B`. R1 solved both against the streaming footprint, so a shard whose whole tilized copy fit with less than one chunk to spare was planned one chunk short and re-tilized it in pass 2 for the same ring bytes.
+    - 16384×640: `h = 32, K = B = 1` (was `K = 0`).
+    - 16384×960: `h = 2, K = B = 8` (was `K = 7`).
+    - Both have about 5.6 KB of margin (`l1_ledger.md` "In place"). Of the 154 sharded RM plans over INPUTS and the perf shapes, only 11 change, none of them an R1 golden cell.
+  - `l1_ledger.md` (in-place section, worked fits, deviations, DM budget) and `op_design.md` (the regime row is built, with the realization) were updated, and a one-line in-place note was added to the compute kernel.
+- Accuracy achieved:
+  - 9 RM in-place perf cases at `PERF_TOLERANCE`: PCC 0.999997–0.999998, relative RMS 0.00186–0.00224 (`unet_rm_ip_16384x640` 0.999998 / 0.00199; `unet_rm_ip_16384x960` 0.999998 / 0.00207).
+  - TILE perf shapes run in place: PCC 0.999998, RMS 0.00183–0.00196.
+  - `test_sharded_offset_heavy[inplace]`: mean 5 PCC 0.999991 / RMS 0.00425; mean 10 PCC 0.999968 / RMS 0.00802 (limit 0.02).
+- Golden test progress: targeted slice (plain mode): **250 passed, 0 failed**, made up of:
+  - all 120 `BLOCK_SHARDED, shard_fit=even, in_place=True` cells (111 `test_op` + the 9 RM in-place loose cases);
+  - all 114 R1 out-of-place sharded cells;
+  - 8 DRAM picks;
+  - the 8 sharded regression tests, `[oop|inplace]` × `offset_heavy` / `program_cache_fresh_address`.
+  The unit directory passes 77/77 both plain and under `--dev`.
+- Issues encountered:
+  - None in the kernels: the in-place path passed on its first run.
+  - The planner's off-by-one-chunk RM residency (above) was found from the in-place plans and fixed.
+  - Probe pitfall: the returned tensor aliases the input, so a plain `x.deallocate()` while `y` is alive frees nothing, and later plans see a shrunken budget. The bench frees the result with `ttnn.deallocate(out, force=True)`.
+  - Finding for R10 (DRAM, out of scope here): the DRAM planner has the same accounting. `K_max` is solved with the `D_IN·T` stream depth even when `K = B` would need none. `flux1_dram_1048576x64` (K = 17, B = 19, D_IN = 2) would be fully resident (ρ 0.11 → 0) for the same ring bytes.
+- Tests added:
+  - `test_groupnorm_sc_N_1_HW_C_b_sharded.py`: `test_sharded_inplace` (the 11 R1 geometries in place) and `test_sharded_rm_partial_residency_inplace` (K = 0 / 1: tail written over pass-1 rows, head re-tilized just before overwrite).
+  - `_op_bench.py`: `test_bench_sharded_inplace` (9 RM perf cases + 3 TILE perf shapes in place).
+
+### Device kernel duration — Refinement 2 (Blackhole, DEVICE KERNEL DURATION [ns], one fresh-cache profiled run per case, bf16 γ+β, RM, 8×8, in place)
+
+| Case | R2 (ns) | Native (ns) | vs native |
+|---|---|---|---|
+| unet_rm_ip_1024x1280 | 25 791 | 41 026 | 1.59× faster |
+| unet_rm_ip_16384x320 | 52 627 | 256 041 | 4.87× faster |
+| unet_rm_ip_4096x320 | 26 405 | 81 969 | 3.10× faster |
+| unet_rm_ip_4096x640 | 34 813 | 88 043 | 2.53× faster |
+| unet_rm_ip_1024x640 | 22 048 | 40 638 | 1.84× faster |
+| refiner_rm_ip_256x1536 | 21 371 | 30 251 | 1.42× faster |
+| refiner_rm_ip_16384x384 | 52 566 | 253 781 | 4.83× faster |
+| unet_rm_ip_16384x640 | 86 893 (91 450 with R1's `K = 0`, −5.0%) | 320 169 | 3.68× faster |
+| unet_rm_ip_16384x960 | 166 190 (166 449 with `K = 7`) | 345 006 | 2.08× faster |
+
+These are R8's "before" numbers. The TILE perf shapes run in place track their R1 out-of-place times: 24 199 / 45 961 / 56 065 ns vs 24 618 / 45 990 / 56 141.
+
+16384×960 costs about 0.69 µs per tilized tile per core (166 190 ns / 240 tiles), against 0.54 µs for 16384×640 (86 893 ns / 160 tiles). It is the widest slice (`W = 15`, `k = 4` sticks per virtual row) and the smallest chunk (`h = 2`, eight chunks), because the Float32 x·(x−k) intermediate (`4 KB·T`) is what limits `h`. That is a lead for R8, not measured further here.

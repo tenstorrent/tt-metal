@@ -64,6 +64,25 @@ SHARDED_CASES = [
 ]
 
 
+# L1 BLOCK_SHARDED, in place (Refinement 2): the nine RM PERF FOCUS cases (their model form) plus the three TILE
+# perf shapes run in place.
+SHARDED_INPLACE_CASES = [
+    # name, shape, G, grid, layout, eps
+    ("unet_rm_ip_1024x1280", (1, 1, 1024, 1280), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_rm_ip_16384x320", (1, 1, 16384, 320), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_rm_ip_4096x320", (1, 1, 4096, 320), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_rm_ip_4096x640", (1, 1, 4096, 640), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_rm_ip_1024x640", (1, 1, 1024, 640), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("refiner_rm_ip_256x1536", (1, 1, 256, 1536), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("refiner_rm_ip_16384x384", (1, 1, 16384, 384), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_rm_ip_16384x640", (1, 1, 16384, 640), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_rm_ip_16384x960", (1, 1, 16384, 960), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("unet_tile_ip_1024x1280", (1, 1, 1024, 1280), 32, (8, 8), ttnn.TILE_LAYOUT, 1e-6),
+    ("unet_tile_ip_4096x640_4x8", (1, 1, 4096, 640), 32, (4, 8), ttnn.TILE_LAYOUT, 1e-6),
+    ("vae_tile_ip_16384x512", (1, 1, 16384, 512), 32, (8, 8), ttnn.TILE_LAYOUT, 1e-6),
+]
+
+
 @pytest.mark.parametrize("name, shape, G, layout, eps", CASES, ids=[c[0] for c in CASES])
 def test_bench(device, name, shape, G, layout, eps):
     torch.manual_seed(0)
@@ -95,6 +114,17 @@ def test_bench(device, name, shape, G, layout, eps):
 
 @pytest.mark.parametrize("name, shape, G, grid, layout, eps", SHARDED_CASES, ids=[c[0] for c in SHARDED_CASES])
 def test_bench_sharded(device, name, shape, G, grid, layout, eps):
+    _bench_sharded(device, shape, G, grid, layout, eps, in_place=False)
+
+
+@pytest.mark.parametrize(
+    "name, shape, G, grid, layout, eps", SHARDED_INPLACE_CASES, ids=[c[0] for c in SHARDED_INPLACE_CASES]
+)
+def test_bench_sharded_inplace(device, name, shape, G, grid, layout, eps):
+    _bench_sharded(device, shape, G, grid, layout, eps, in_place=True)
+
+
+def _bench_sharded(device, shape, G, grid, layout, eps, *, in_place):
     from eval.golden_tests.groupnorm_sc_N_1_HW_C_b.helpers import block_shard_memory_config
 
     torch.manual_seed(0)
@@ -115,7 +145,10 @@ def test_bench_sharded(device, name, shape, G, grid, layout, eps):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
-    out = groupnorm_sc_N_1_HW_C_b(x, G, gamma=g, beta=b, eps=eps)
+    out = groupnorm_sc_N_1_HW_C_b(x, G, gamma=g, beta=b, eps=eps, in_place=in_place)
     ttnn.synchronize_device(device)
-    out.deallocate()
-    x.deallocate()
+    # In place the output aliases the input: free the shard once, by force (a plain deallocate is a no-op while
+    # the other handle is alive), so the next case plans against a clean L1.
+    ttnn.deallocate(out, force=True)
+    if not in_place:
+        x.deallocate()

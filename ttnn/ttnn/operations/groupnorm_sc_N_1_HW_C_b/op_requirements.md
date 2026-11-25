@@ -127,7 +127,7 @@
 - Finding: the non-contract `mid_*` DRAM bench shapes (~50–120 µs, latency-bound) carry the fixed pilot / seed / shift cost, +2.9…+10.6%.
 - Details are in `changelog.md`.
 
-### [ ] Refinement 2 — in_place=True on block-sharded input (both layouts), including the 16384x640 / 16384x960 L1 fit
+### [x] Refinement 2 — in_place=True on block-sharded input (both layouts), including the 16384x640 / 16384x960 L1 fit
 
 **Goal**:
 - Add `True` to `SUPPORTED["in_place"]` for `BLOCK_SHARDED` input, in both layouts. In-place on interleaved input stays a `ValueError`.
@@ -166,6 +166,20 @@
   - `test_sharded_program_cache_fresh_address[rm-inplace]`
   - `test_sharded_program_cache_fresh_address[tile-inplace]`
 - R1 and DRAM cells stay green.
+
+**Outcome**: Done (2026-11-25).
+- `SUPPORTED["in_place"] = [False, True]`, realized by aliasing:
+  - the entry point returns the input tensor, and the output CBs are borrowed from the input shard;
+  - no new CB and no kernel change (TILE packs tile i over tile i; RM untilizes only over rows already tilized).
+- **L1 fit.** In place, the plan no longer subtracts an output shard. RM residency is solved stream-free first (`K = B` whenever the whole tilized copy fits; R1 planned these one chunk short).
+  - 16384×640: `h = 32, K = B = 1`.
+  - 16384×960: `h = 2, K = B = 8`.
+  - Both have about 5.6 KB of margin.
+- **Slice.** 120/120 in-place cells and the 4 in-place regression tests pass; the 114 R1 sharded cells and the DRAM picks stay green. The unit directory passes 77/77 plain and under `--dev`.
+- **Speed.** The 9 RM in-place perf cases run 1.42–4.87× faster than native; 16384×640 is 86.9 µs (−5.0% from the residency fix) and 16384×960 is 166.2 µs. Details are in `changelog.md`.
+- **Findings.**
+  - The DRAM planner shares the stream-slot undercount (`flux1_dram_1048576x64` could be fully resident): R10.
+  - 16384×960 is chunk-limited by the Float32 x·(x−k) intermediate: R8.
 
 ### [ ] Refinement 3 — ragged shard geometries (padded last row/column, shards straddling images, groups straddling core columns)
 

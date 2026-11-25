@@ -11,7 +11,8 @@ per-channel a = rstd·γ and b' = mean·a − β, and applied as y = x·a − b'
 
 DRAM interleaved input -> DRAM interleaved TILE output. L1 BLOCK_SHARDED input -> an output with the
 input's layout and memory config (identical shard spec); the shards are consumed and produced in place
-by the kernels (zero-copy circular buffers).
+by the kernels (zero-copy circular buffers). in_place=True (BLOCK_SHARDED only) writes the result over the
+input's own shard and returns the input tensor: no second buffer, the output CBs are the input shard's bytes.
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0 + Refinement 1: L1 BLOCK_SHARDED, even shards, out of place)
+# 2. SUPPORTED (Phase 0 + Refinement 1: L1 BLOCK_SHARDED, even shards; Refinement 2: in place on BLOCK_SHARDED)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -100,7 +101,9 @@ SUPPORTED = {
     "affine_layout": [ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
     "shard_fit": ["none", "even"],
-    "in_place": [False],
+    # True only on a BLOCK_SHARDED input (an interleaved input has no L1 shard to write over: ValueError
+    # in validate(), INVALID in feature_spec).
+    "in_place": [False, True],
 }
 
 
@@ -195,7 +198,9 @@ def validate(input_tensor, num_groups, *, gamma=None, beta=None, eps=1e-5, in_pl
     # Shape-class gate: a feasible column-slice count must exist (cross_column_group_combine regime).
     from .groupnorm_sc_N_1_HW_C_b_program_descriptor import plan_or_raise
 
-    return plan_or_raise(input_tensor, num_groups, has_gamma=gamma is not None, has_beta=beta is not None)
+    return plan_or_raise(
+        input_tensor, num_groups, has_gamma=gamma is not None, has_beta=beta is not None, in_place=bool(in_place)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -208,20 +213,21 @@ def groupnorm_sc_N_1_HW_C_b(input_tensor, num_groups, *, gamma=None, beta=None, 
 
     from .groupnorm_sc_N_1_HW_C_b_program_descriptor import create_program_descriptor
 
-    device = input_tensor.device()
-    sharded = input_tensor.is_sharded()
-    output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(list(input_tensor.shape)),
-        input_tensor.dtype,
-        input_tensor.layout if sharded else ttnn.TILE_LAYOUT,
-        device,
-        input_tensor.memory_config() if sharded else ttnn.DRAM_MEMORY_CONFIG,
-    )
+    if in_place:
+        # The result overwrites the input's own shard (validate() admits in_place only for BLOCK_SHARDED).
+        output_tensor = input_tensor
+    else:
+        sharded = input_tensor.is_sharded()
+        output_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(list(input_tensor.shape)),
+            input_tensor.dtype,
+            input_tensor.layout if sharded else ttnn.TILE_LAYOUT,
+            input_tensor.device(),
+            input_tensor.memory_config() if sharded else ttnn.DRAM_MEMORY_CONFIG,
+        )
     program_descriptor = create_program_descriptor(plan, input_tensor, output_tensor, gamma=gamma, beta=beta, eps=eps)
-    io_tensors = [input_tensor]
-    if gamma is not None:
-        io_tensors.append(gamma)
-    if beta is not None:
-        io_tensors.append(beta)
+    # The output is the last io tensor. In place, the input *is* the output: list it once, as the output.
+    io_tensors = [] if in_place else [input_tensor]
+    io_tensors.extend(t for t in (gamma, beta) if t is not None)
     io_tensors.append(output_tensor)
     return ttnn.generic_op(io_tensors, program_descriptor)

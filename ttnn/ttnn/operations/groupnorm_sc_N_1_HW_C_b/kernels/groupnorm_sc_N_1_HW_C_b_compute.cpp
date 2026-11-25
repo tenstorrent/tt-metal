@@ -447,6 +447,9 @@ void kernel_main() {
 
         // ---------------- normalize_block (pass 2): resident chunks first, then re-reads ----------------
         // cb_input_keep already fronts the resident tail; the re-read head lands behind it.
+        // In place (sharded, the output CBs are the input shard's bytes) needs no extra ordering: TILE packs tile i
+        // over the tile i it just unpacked (unpack -> math -> pack per tile); RM untilizes a chunk over the rows it
+        // was tilized from, which happened in pass 1 (resident) or in the tilize_chunk just above (re-read).
         if constexpr (UNTILIZE_OUT) {
             // The output shard is a FIFO in row order: skip the head region (re-read last), write the resident
             // tail, then wrap to the head. The writer drains every credit.
