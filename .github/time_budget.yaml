@@ -421,7 +421,7 @@ models:
     wh_n300: 30
     wh_galaxy_perf: 85
     bh_p150: 53
-    bh_quietbox_2: 65
+    bh_quietbox_2: 70  # +5: GPT-OSS 20B unit tests 10 -> 15 min (the suite takes ~10 min)
   unit_tier3:
     wh_llmbox: 90
     wh_galaxy: 80
