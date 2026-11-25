@@ -9,9 +9,9 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
 
 namespace tt::tt_metal {
 

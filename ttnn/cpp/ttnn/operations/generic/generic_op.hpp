@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -44,10 +44,16 @@ void prepare_generic_op(
 
 // generic_op on a Metal 2.0 ProgramSpec, which describes everything fixed about a program, and ProgramRunArgs, which
 // hold the values of one call. Arguments are named and tensors are bound by name. Experimental while its API may still
-// change. See tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for examples.
+// change. docs/source/ttnn/ttnn/generic_op_program_spec.rst is a guide, and
+// tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py has examples.
 
 using tt::tt_metal::ProgramRunArgs;
 using tt::tt_metal::ProgramSpec;
+
+// For both forms: a tensor argument binds the whole MeshTensor of the tensor it is given, and on each device a program
+// runs on, it reads that device's part. The per-device views of a tensor share its MeshTensor, so a view's MeshTensor
+// bound in a program on another device reads that device's part, not the view's. generic_op sees only MeshTensors
+// here and cannot catch this, so bind a view's MeshTensor only in a program on the view's devices.
 
 // Fixed: a ProgramSpec per mesh coordinate range. The ranges must stay inside the mesh and must not overlap, and every
 // device in a range must hold every tensor.

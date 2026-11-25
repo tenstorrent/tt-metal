@@ -8,11 +8,11 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>

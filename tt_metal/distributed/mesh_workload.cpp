@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/mesh_workload_runtime_args.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt_stl/fmt.hpp>
-#include <mesh_command_queue.hpp>
-#include <mesh_workload.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <cstdint>
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt_metal/impl/program/program_command_sequence.hpp>
@@ -31,24 +31,24 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
-#include "buffer.hpp"
-#include "buffer_types.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal.hpp>
-#include "kernel_types.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
+#include "tt-metalium/vocabulary/mesh_coord.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include "mesh_workload_impl.hpp"
 #include "program/program_device_map.hpp"
 #include "program/program_impl.hpp"
-#include "tt-metalium/program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/lightmetal/host_api_capture_helpers.hpp"
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "llrt/tt_cluster.hpp"
-#include "sub_device_types.hpp"
+#include "tt-metalium/mesh/sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
 #include <tt-umd/types/core_coordinates.hpp>
@@ -811,6 +811,7 @@ std::shared_ptr<MeshBuffer> MeshWorkloadImpl::prepare_for_command_list(MeshComma
     }
 
     compile(mesh_device);
+    check_circular_buffers_bound();
 
     const ProgramBinaryStatus binary_status = get_program_binary_status(mesh_device->id());
     TT_FATAL(
@@ -1048,6 +1049,12 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         programs);
 
     set_finalized(max_program_kernels_sizeB, mesh_device->id());
+}
+
+void MeshWorkloadImpl::check_circular_buffers_bound() {
+    for (auto& [_, program] : programs_) {
+        program.impl().check_circular_buffers_bound();
+    }
 }
 
 // MeshWorkload PIMPL Implementation

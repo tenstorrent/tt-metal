@@ -4,7 +4,7 @@
 
 #include "ttnn_ops.hpp"
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-umd-workload/cluster.hpp>

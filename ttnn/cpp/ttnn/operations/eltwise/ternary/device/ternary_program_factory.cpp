@@ -4,14 +4,14 @@
 
 #include "ternary_device_operation.hpp"
 #include "ternary_op_utils.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;

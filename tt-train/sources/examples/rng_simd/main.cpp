@@ -17,7 +17,7 @@
 
 #include "core/random.hpp"
 #include "core/random_sse.hpp"
-#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/data_formats/bfloat16.hpp"
 
 using namespace std::chrono;
 

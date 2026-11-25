@@ -15,9 +15,9 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 using namespace tt::tt_metal;
 

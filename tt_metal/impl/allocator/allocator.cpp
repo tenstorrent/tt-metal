@@ -3,24 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <memory>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include "allocator_state.hpp"
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include "allocator_types.hpp"
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <mutex>
 
 #include <tt_stl/assert.hpp>
-#include "buffer_types.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/trace/trace_buffer.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/allocator/allocator.hpp"
 #include "tt_metal/impl/allocator/algorithms/address_ranges.hpp"

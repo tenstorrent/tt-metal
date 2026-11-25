@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
