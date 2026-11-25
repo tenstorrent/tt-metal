@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_JIT_BUILD_SRC
+    test_binary_cache.cpp
     test_compile_stress.cpp
     test_compiler_version.cpp
     test_depend.cpp
@@ -9,6 +10,7 @@ set(UNIT_TESTS_JIT_BUILD_SRC
     test_firmware_build_dedup.cpp
     test_jit_build_telemetry.cpp
     test_jit_compile_deduper.cpp
+    test_kernel_cache_eviction.cpp
     test_kernel_signature_parser.cpp
     test_named_ct_arg_channels.cpp
     test_named_ct_arg_map.cpp

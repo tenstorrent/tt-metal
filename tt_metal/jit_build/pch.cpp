@@ -17,6 +17,7 @@
 
 #include "common/stable_hash.hpp"
 #include "jit_build_utils.hpp"
+#include "kernel_cache_eviction.hpp"
 
 namespace tt::jit_build {
 
@@ -42,6 +43,10 @@ std::string ensure_pch(
     const std::string key = fmt::format("{:016x}", hasher.digest());
     const fs::path dir = fs::absolute(pch_root / key);
 
+    // With a kernel cache cap, a PCH directory is evicted like a kernel variant once nobody has used it for a
+    // while, so stamp it before looking it up, and stage it again below if it is gone.
+    tt::tt_metal::note_kernel_cache_dir_used(dir);
+
     // A server handles multiple cache roots in one process; keep their staged paths
     // separate even when the compiler flags and umbrella text match.
     // Built at most once per directory per process. The map also caches failure (an empty string),
@@ -50,7 +55,10 @@ std::string ensure_pch(
     static std::unordered_map<std::string, std::string> staged;
     std::lock_guard lock(mutex);
     if (auto it = staged.find(dir.string()); it != staged.end()) {
-        return it->second;
+        if (it->second.empty() || fs::exists(it->second + ".gch")) {
+            return it->second;
+        }
+        it->second.clear();
     }
     std::string& result = staged[dir.string()];
 
@@ -109,24 +117,27 @@ std::string ensure_pch(
     args.push_back(temp.string());
 
     const std::string log_path = (dir / "build.log").string();
-    if (!utils::exec_command(args, dir.string(), log_path)) {
-        log_warning(
-            tt::LogBuildKernels,
-            "Skipping the shared PCH: {} failed, see {}. Compiles will parse the standard headers "
-            "as before.",
-            fmt::join(args, " "),
-            log_path);
-        fs::remove(temp, ec);
-        return result;
-    }
-    fs::rename(temp, gch, ec);
-    if (ec) {
-        fs::remove(temp, ec);
-        log_warning(tt::LogBuildKernels, "Skipping the shared PCH: cannot publish {}: {}", gch.string(), ec.message());
-        return result;
-    }
-
-    result = header.string();
+    // With a kernel cache cap, what the compile adds to the directory goes into the cache's size counter.
+    tt::tt_metal::track_kernel_cache_growth(dir, [&] {
+        if (!utils::exec_command(args, dir.string(), log_path)) {
+            log_warning(
+                tt::LogBuildKernels,
+                "Skipping the shared PCH: {} failed, see {}. Compiles will parse the standard headers "
+                "as before.",
+                fmt::join(args, " "),
+                log_path);
+            fs::remove(temp, ec);
+            return;
+        }
+        fs::rename(temp, gch, ec);
+        if (ec) {
+            fs::remove(temp, ec);
+            log_warning(
+                tt::LogBuildKernels, "Skipping the shared PCH: cannot publish {}: {}", gch.string(), ec.message());
+            return;
+        }
+        result = header.string();
+    });
     return result;
 }
 

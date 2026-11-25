@@ -75,45 +75,56 @@ const CachedBinary& get_cached_binary(
     BinaryCache& cache = binary_cache();
 
     std::unique_lock lock(cache.mutex);
-    auto [slot, inserted] = cache.map.try_emplace(path);
-    const CachedBinary* ptr = nullptr;
-    if (inserted) {
+    for (;;) {
+        auto [slot, inserted] = cache.map.try_emplace(path);
+        if (!inserted) {
+            if (slot->second) {
+                TT_ASSERT(slot->second->image.get_loading() == loading);
+                return *slot->second;
+            }
+            // Someone else is creating the initial entry: wait, then look again (a failed load removes it).
+            cache.cvar.wait(lock);
+            continue;
+        }
         // We're the first with PATH. Create and insert.
         lock.unlock();
-        // Single ELF open: harvest metadata from the pristine ELF first (from_elf may transform it in
-        // place for XIP), then pack the device image.
-        ll_api::ElfFile elf;
-        elf.ReadImage(path);
-        ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
-        // Every device-executed image, kernel or firmware, passes through here before it can run, so
-        // harvesting .tt_event_descriptor_meta registers an event's name strictly before that event can reach the
-        // host. Not gated on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the JIT build key)
-        // carry .tt_event_descriptor_meta, and ingest_elf returns immediately for the rest. Must run before
-        // from_elf, which may XIP-transform the ELF in place.
-        ObservabilityEventMetaRegistry::instance().ingest_elf(elf, path);
-        ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
-        if (update_callback) {
-            update_callback(image);
+        std::unique_ptr<const CachedBinary> loaded;
+        try {
+            // Single ELF open: harvest metadata from the pristine ELF first (from_elf may transform it in
+            // place for XIP), then pack the device image.
+            ll_api::ElfFile elf;
+            elf.ReadImage(path);
+            ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
+            // Every device-executed image, kernel or firmware, passes through here before it can run, so
+            // harvesting .tt_event_descriptor_meta registers an event's name strictly before that event can reach
+            // the host. Not gated on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the
+            // JIT build key) carry .tt_event_descriptor_meta, and ingest_elf returns immediately for the rest.
+            // Must run before from_elf, which may XIP-transform the ELF in place.
+            ObservabilityEventMetaRegistry::instance().ingest_elf(elf, path);
+            ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
+            if (update_callback) {
+                update_callback(image);
+            }
+            loaded = std::make_unique<const CachedBinary>(
+                CachedBinary{.image = std::move(image), .metadata = std::move(metadata)});
+        } catch (...) {
+            // Drop the empty entry, so waiters and later calls load PATH again (e.g. once a kernel cache that
+            // lost the file has rebuilt it) instead of waiting forever.
+            lock.lock();
+            cache.map.erase(path);
+            cache.cvar.notify_all();
+            throw;
         }
-        auto* mutable_ptr = new CachedBinary{.image = std::move(image), .metadata = std::move(metadata)};
 
         lock.lock();
-        // maps have iterator stability, so SLOT is still valid.
-        slot->second = decltype(slot->second)(mutable_ptr);
-        ptr = mutable_ptr;
+        // Look the entry up again: an insert by another thread may have rehashed the map.
+        auto& entry = cache.map.at(path);
+        entry = std::move(loaded);
         // We can't wake just those waiting on this slot, so wake them
         // all. Should be a rare event anyway.
         cache.cvar.notify_all();
-    } else {
-        if (!slot->second) {
-            // Someone else is creating the initial entry, wait for them.
-            cache.cvar.wait(lock, [=] { return bool(slot->second); });
-        }
-        ptr = slot->second.get();
-        TT_ASSERT(ptr->image.get_loading() == loading);
+        return *entry;
     }
-
-    return *ptr;
 }
 
 }  // namespace

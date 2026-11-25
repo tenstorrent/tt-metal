@@ -6,6 +6,7 @@
 
 #include "build_cache_telemetry.hpp"
 #include "jit_build_cache.hpp"
+#include "kernel_cache_eviction.hpp"
 #include "jit_device_config.hpp"
 
 #include <fcntl.h>
@@ -565,6 +566,14 @@ void JitBuildEnv::init(
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
     this->firmware_binary_root_ = this->out_firmware_root_;
+
+    // Once per process, before this process has built or loaded anything: read the size counter, trim if over.
+    static std::once_flag trim_once;
+    std::call_once(trim_once, [&] {
+        const std::uint64_t max_size = resolve_kernel_cache_max_size(this->out_root_, rtoptions.get_cache_max_size());
+        set_kernel_cache_cap(this->out_root_, max_size);
+        maintain_kernel_cache(this->out_root_, max_size);
+    });
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal) :

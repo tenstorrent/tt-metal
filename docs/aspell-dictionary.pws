@@ -75,13 +75,17 @@ GetLatestProgramsPerfData
 GetNumAvailableDevices
 GetNumPCIeDevices
 GetRuntimeArgs
+Gi
+GiB
 Grayskull
 HW
 HiFi
 HostDataType
 InterleavedBufferConfig
+JIT
 Jupyter
 KernelHandle
+Ki
 KtNt
 LREG
 LREGs
@@ -97,10 +101,12 @@ MathFidelity
 MaxPool
 MemoryConfig
 Metalium
+Mi
 MtKt
 MtNt
 NCRISC
 NCRISCs
+NFS
 NOC
 NOP
 Namespace
@@ -156,6 +162,7 @@ TensorMemoryLayout
 Tensorflow
 Tenstorrent
 Theano
+Ti
 TileSize
 TileSlice
 Tilizing
@@ -210,6 +217,7 @@ cachable
 cb
 cbid
 cbrt
+ccache
 cd
 cin
 ckernel
@@ -217,6 +225,7 @@ ckernels
 cli
 codebase
 concat
+conf
 config
 configs
 const
@@ -353,6 +362,7 @@ matmul
 maxdepth
 md
 mish
+mkdir
 modindex
 mse
 mul
@@ -387,6 +397,7 @@ parallelization
 parallelizes
 param
 pcc
+pch
 perf
 performant
 phiyodr
@@ -396,6 +407,7 @@ polygamma
 polyval
 pragma
 pre
+precompiled
 prelu
 preprocess
 preprocessing
