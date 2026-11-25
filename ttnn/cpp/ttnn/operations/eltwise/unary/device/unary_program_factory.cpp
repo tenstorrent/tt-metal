@@ -498,11 +498,18 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         require_buffer_distribution_matches_spec(output, "output");
     }
 
-    // For ROW_MAJOR interleaved: use tile_size DFB entries and group/chunk rows.
-    // For sharded ROW_MAJOR or TILE layout: DFB entry is always tile_size.
+    // ROW_MAJOR (interleaved or sharded): DFB entries are 32x32 tile_size, and interleaved rows are grouped/chunked.
+    // TILE layout: a DFB entry is one tensor page, i.e. one of the tensor's own tiles, which is not always 32x32
+    // (FILL accepts any tile shape). The reader and writer move get_entry_size() bytes per page.
     const bool rm_interleaved = is_row_major && !has_sharding;
-    const uint32_t input_dfb_page_size = single_tile_size;
-    const uint32_t output_dfb_page_size = single_tile_size_output;
+    const std::optional<tt::tt_metal::Tile> input_dfb_tile =
+        is_row_major ? std::nullopt : std::optional<tt::tt_metal::Tile>(input.tensor_spec().tile());
+    const std::optional<tt::tt_metal::Tile> output_dfb_tile =
+        is_row_major ? std::nullopt : std::optional<tt::tt_metal::Tile>(output.tensor_spec().tile());
+    const uint32_t input_dfb_page_size =
+        input_dfb_tile ? input_dfb_tile->get_tile_size(dfb_data_format) : single_tile_size;
+    const uint32_t output_dfb_page_size =
+        output_dfb_tile ? output_dfb_tile->get_tile_size(dfb_data_format_output) : single_tile_size_output;
 
     auto shard_pages = [](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
         if (rm) {
@@ -570,6 +577,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         // Two bursts, so the next burst moves while compute works on the last one.
         .num_entries = src_num_tiles_per_shard.value_or(2 * read_burst(plan.flow)),
         .data_format_metadata = dfb_data_format_for_input,
+        .tile_format_metadata = input_dfb_tile,
         .borrowed_from = src_sharded ? std::optional<TensorParamName>(INPUT) : std::nullopt,
     });
 
@@ -579,6 +587,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             .entry_size = input_dfb_page_size,
             .num_entries = 2,
             .data_format_metadata = dfb_data_format,
+            .tile_format_metadata = input_dfb_tile,
         });
     }
 
@@ -587,6 +596,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .entry_size = output_dfb_page_size,
         .num_entries = dst_num_tiles_per_shard.value_or(2 * write_burst(plan.flow)),
         .data_format_metadata = dfb_data_format_output,
+        .tile_format_metadata = output_dfb_tile,
         .borrowed_from = dst_sharded ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
     });
 
