@@ -243,6 +243,10 @@ void queue_ahead_build(std::function<size_t()> build_fn);
 size_t wait_for_ahead_builds(bool drop_queued = false);
 // Whether a queued build has not finished yet.
 bool ahead_builds_pending();
+// Diagnostic: note a kernel ("<name>/<hash>") whose build a dry run queued, and take the ones noted for the first
+// time since the last call.
+void note_queued_ahead_build(std::string kernel);
+std::vector<std::string> take_queued_ahead_builds();
 
 // Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
 void jit_build_cache_clear();

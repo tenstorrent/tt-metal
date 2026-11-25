@@ -467,6 +467,11 @@ void device_module(nb::module_& m_device) {
         "Wait for the running kernel builds a dry run queued; the ones that have not started are dropped, or run as "
         "well with drop_queued=False. Returns how many kernels the queued builds built.");
 
+    m_device.def(
+        "TakeQueuedBuilds",
+        &tt::tt_metal::experimental::dry_run::take_queued_builds,
+        "Diagnostic: the kernels (name/hash) whose builds dry runs queued for the first time since the last call.");
+
     m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
         Clear the in-memory kernel compilation hash lookup cache.
 

@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <exception>
+#include <string>
+#include <vector>
 
 namespace tt::tt_metal::experimental::dry_run {
 
@@ -57,6 +59,9 @@ struct Scope {
  * that needs the kernel builds it again when it compiles, and reports the failure then.
  */
 size_t finish_queued_builds(bool drop_queued = true);
+
+/** Diagnostic: the kernels ("<name>/<hash>") whose builds dry runs queued for the first time since the last call. */
+std::vector<std::string> take_queued_builds();
 
 /**
  * Mark the stretch of a process in which dry runs happen, device opens and closes between them included. A fabric

@@ -3484,6 +3484,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             for (auto& kernels : kernels_) {
                 for (auto& [id, kernel] : kernels) {
                     auto [build_options, kernel_hash] = prep_kernel(kernel);
+                    note_queued_ahead_build(kernel->name() + "/" + std::to_string(kernel_hash));
                     if (!remote_kernel_cached(device, kernel)) {
                         {
                             const std::lock_guard<std::mutex> lock(prepared_mutex);
@@ -3519,6 +3520,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     continue;
                 }
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
+                note_queued_ahead_build(kernel->name() + "/" + std::to_string(kernel_hash));
                 queue_ahead_build([kernel,
                                    kernel_hash = kernel_hash,
                                    build_options = std::move(build_options),

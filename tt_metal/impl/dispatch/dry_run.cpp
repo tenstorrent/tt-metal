@@ -31,6 +31,8 @@ Suspended::~Suspended() { depth.fetch_add(depth_, std::memory_order_acq_rel); }
 
 size_t finish_queued_builds(bool drop_queued) { return wait_for_ahead_builds(drop_queued); }
 
+std::vector<std::string> take_queued_builds() { return take_queued_ahead_builds(); }
+
 void set_pass(bool in_dry_pass) { pass.store(in_dry_pass, std::memory_order_release); }
 
 bool in_pass() { return pass.load(std::memory_order_acquire); }

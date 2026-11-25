@@ -1379,6 +1379,24 @@ size_t wait_for_ahead_builds(bool drop_queued) {
     return ahead_built;
 }
 
+namespace {
+std::mutex queued_names_mutex;
+std::unordered_set<std::string> queued_names_seen;
+std::vector<std::string> queued_names;
+}  // namespace
+
+void note_queued_ahead_build(std::string kernel) {
+    const std::lock_guard<std::mutex> lock(queued_names_mutex);
+    if (queued_names_seen.insert(kernel).second) {
+        queued_names.push_back(std::move(kernel));
+    }
+}
+
+std::vector<std::string> take_queued_ahead_builds() {
+    const std::lock_guard<std::mutex> lock(queued_names_mutex);
+    return std::exchange(queued_names, {});
+}
+
 bool ahead_builds_pending() {
     const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
     std::erase_if(ahead_builds, [](const auto& build) {
