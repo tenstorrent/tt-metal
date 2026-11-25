@@ -121,7 +121,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: .github/scripts/llk-fetch-test-durations.sh pr-gate.yaml main push split-durations
+        run: |  # trial: the table of run 45585767139 for every arm
+          gh run download 45585767139 -n split-durations -D split-durations
+          ls split-durations
+          echo found=true >> "$GITHUB_OUTPUT"
       # The legs read the outcome of this upload, so an artifact fault here
       # falls back to cutting by count instead of skipping every leg.
       - name: Upload test durations for the legs
