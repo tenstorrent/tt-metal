@@ -150,7 +150,21 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
         .express_axis = express_axis,
         .wrap_around_meshes = wrap_around_meshes};
     if (options.vc_config.vc2_forwards) {
-        options.vc2_directions = vc2_directions(ports, fabric_context.get_inter_domain_mesh());
+        const auto& domain = fabric_context.get_inter_domain_mesh();
+        options.vc2_directions = vc2_directions(ports, domain);
+        for (const auto& [node, chip] : domain.domain_chip) {
+            log_info(tt::LogFabric, "fabric graph: VC2 domain chip {} is {}", chip, node);
+        }
+        for (const auto& p : domain_ports) {
+            log_info(
+                tt::LogFabric,
+                "fabric graph: VC2-only {} {} plane {} chan {} to {}",
+                p.port.node,
+                *p.port.direction,
+                p.port.plane,
+                p.eth_chan,
+                p.port.peer);
+        }
     }
     const auto rules = stock_wiring_rules(ports, options);
     auto logical = lower_to_logical(ports, *rules);

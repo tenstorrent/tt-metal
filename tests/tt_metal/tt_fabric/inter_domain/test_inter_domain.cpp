@@ -140,10 +140,14 @@ std::map<std::pair<FabricNodeId, chan_id_t>, uint64_t> packets_sent(
     const distributed::MeshDevice& mesh, const std::map<uint64_t, FabricNodeId>& node_of) {
     std::map<std::pair<FabricNodeId, chan_id_t>, uint64_t> sent;
     for (const auto& [_, node] : node_of) {
-        for (const auto& sample : read_fabric_telemetry(mesh, node)) {
-            if (sample.snapshot.dynamic_info) {
-                sent[{node, sample.channel_id}] = sample.snapshot.dynamic_info->tx_bandwidth.packets_sent;
+        try {
+            for (const auto& sample : read_fabric_telemetry(mesh, node)) {
+                if (sample.snapshot.dynamic_info) {
+                    sent[{node, sample.channel_id}] = sample.snapshot.dynamic_info->tx_bandwidth.packets_sent;
+                }
             }
+        } catch (const std::exception& e) {
+            log_error(tt::LogTest, "{}: no telemetry: {}", node, e.what());
         }
     }
     return sent;
@@ -194,6 +198,7 @@ void run(bool all_at_once) {
         coord_of.emplace(asic, coord);
         device_of[asic] = mesh->get_view().impl().get_device(coord);
         node_of.emplace(asic, node);
+        log_info(tt::LogTest, "domain {}: {} is device {}, asic {}", *domain, node, device_of[asic]->id(), asic);
     }
 
     Side me;
@@ -391,13 +396,15 @@ void run(bool all_at_once) {
             for (auto& [asic, program] : programs) {
                 workload.add_program(distributed::MeshCoordinateRange(coord_of.at(asic)), std::move(program));
             }
-            distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, true);
+            // not waited on until the checks: where a send stalls, the routers' counts show the link
+            distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, false);
         }
         log_info(tt::LogTest, "domain {} mesh {} round {}: {} sends", *domain, my_mesh, round, sent.sent.size());
         write_file(mine(std::to_string(round) + ".sent"), to_text(sent));
         const Side expected = gather(*peer_domain, std::to_string(round) + ".sent");
 
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(env_u32("TT_INTER_DOMAIN_DEADLINE_S").value_or(30));
         uint32_t checked = 0;
         for (const auto& [from, via, to] : expected.sent) {
             if (!device_of.contains(to)) {
@@ -406,8 +413,13 @@ void run(bool all_at_once) {
             uint32_t wrong = 0;
             while (true) {
                 std::vector<uint32_t> got;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device_of.at(to), kCore, me.rx.at(to).addr + slot_of(peer, from) * kBytes, kBytes, got);
+                try {
+                    tt::tt_metal::detail::ReadFromDeviceL1(
+                        device_of.at(to), kCore, me.rx.at(to).addr + slot_of(peer, from) * kBytes, kBytes, got);
+                } catch (const std::exception& e) {
+                    log_error(tt::LogTest, "{}: unreadable: {}", node_of.at(to), e.what());
+                    got.assign(kBytes / 4, 0);
+                }
                 wrong = 0;
                 for (uint32_t i = 0; i < kBytes / 4; ++i) {
                     wrong += got[i] != pattern(*peer_domain, from, round, i);
@@ -418,7 +430,9 @@ void run(bool all_at_once) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
             ++checked;
-            EXPECT_EQ(wrong, 0u) << "round " << round << ": chip " << to << " from asic " << from;
+            EXPECT_EQ(wrong, 0u) << "round " << round << ": chip " << to << " " << node_of.at(to) << " from asic "
+                                 << from << " landing on " << via << ": " << wrong << " of " << kBytes / 4
+                                 << " words wrong";
         }
         log_info(tt::LogTest, "domain {} mesh {} round {}: checked {} sends", *domain, my_mesh, round, checked);
 
@@ -488,6 +502,9 @@ void run(bool all_at_once) {
                 dm.shape()[0],
                 cols,
                 longest);
+        }
+        if (all_at_once) {
+            distributed::Finish(mesh->mesh_command_queue());
         }
         step("received");
 
