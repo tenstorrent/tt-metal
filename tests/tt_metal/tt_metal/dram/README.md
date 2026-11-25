@@ -2275,3 +2275,77 @@ Proposed steps, none done yet:
 3. Read the firmware trap handler and the CCE RTL path of a hart's uncached store, or raise it with the CCE designers with the logs.
 
 Logs, the probe diff (`temp_probe.diff`) and the loop scripts are in `/localdev/sagarwal/mimir_prefetch_flake_2026-11-24/`.
+
+## Root cause of the `PreloadChurn` snoop-leg failure, 2026-11-25
+
+Covers row 109, `CceCache/MimirCacheStress.PreloadChurn`, snoop leg, on every CCE. It replaces the earlier readings in this file: the snoop tag is honoured on a sibling CCE's GDDR-sourced copy on VC 5, and the failure does not depend on the source or the VC. The receiving CCE's snoop master drops part of the cache update when the preload is large. The stale counts in the result rows above are sums over the 4 rounds (out of 8192 word reads), not out of 2048.
+
+The cause is the known RTL bug GREN-1691 in `cce_axi_snoop_master.sv`, present at the revision the emulator model pins (soc/cce `efb9194f`, pinned by mimir_soc `dft_0p4p35` `Bender.lock`, which grendelemulation `Checkout.yml` selects):
+
+1. A snooped NoC write arrives as 128 B beats. Each beat is forwarded to TL1 and recorded in a 16-entry table (`pending_wr_ptr_table`) until TL1's write response returns. On the response the beat's data is written again through the L2 front port, as two 64 B requests, and the entry is freed.
+2. The table's occupancy counter is 4 bits wide and is compared with `< 16` to hold off new writes, which is always true. The snoop master therefore never back-pressures the NoC when the table is full.
+3. A beat that arrives with all 16 entries in use is still forwarded to TL1, but no entry is recorded for it. When its response returns nothing matches, so no L2 write is issued.
+4. TL1 holds the new data and L2 keeps the old line. The hart's cached read is stale until the line leaves the cache.
+
+The L2 writes are slower than the TL1 writes, so responses back up and the table fills during a long run of back-to-back beats. An 8 KiB preload is about 65 beats.
+
+GREN-1691 says a full table lets new writes overwrite valid entries; in `efb9194f` the beat is not stored at all. The outcome is the same. Newer soc/cce carries the fix behind a define, commented "GREN-1691 ECO fix". The ticket has a note dated 2026-05-20 that the issue is unlikely to be hit on Mimir and needs no fix there.
+
+Emulator runs on 2026-11-25, `mimir_1x1`, CCE 0, one session (soc-c-24), with a temporary probe that is not in the tree. The probe recorded a per-line stale map for both cached reads of each round, and took the preload size, source and destination offset from the environment. Each run is 4 rounds. The patch and logs are in `/localdev/sagarwal/mimir_churn_probe_2026-11-25/`.
+
+| Run | Result |
+|---|---|
+| Unchanged, 8 KiB from local GDDR (VC 5) | fail: 16 of 128 lines stale each round, inside lines 97 to 114 (TL1 `0x8cd00` to `0x8d180`), the same on both cached reads. TL1 read through the uncached alias is complete |
+| Same, hot set dropped from L1 D$ before the cached read | same failure: the stale copy is in L2 |
+| Same, hot set dropped from L1 D$ before the preload | same failure |
+| Same, about 5000 loop iterations of delay before the cached read | same failure |
+| Same, the hart polls one word instead of the whole hot set | same failure |
+| 4096 B from local GDDR | pass, 0 stale |
+| 6144 B from local GDDR | pass, 0 stale |
+| 8 KiB from the sibling's TL1 (VC 2) | fail: 32 lines stale each round, from line 45 |
+| 4096 B from the sibling's TL1 | fail: 16 lines stale each round |
+| 2048 B from the sibling's TL1 | pass, 0 stale |
+| 8 KiB from local GDDR, destination moved up 64 B | fail: 26 lines stale each round, different lines |
+
+What the runs show:
+
+- The loss depends on the size of the preload and on how fast the beats arrive, not on GDDR or the VC. The TL1-sourced copy arrives faster and loses lines sooner and in greater number.
+- In the 8 KiB GDDR run the loss starts at byte 6208 of the preload, just past the 6144 B size that passes.
+- Whole 128 B beats are lost, which is what an unrecorded beat produces. The stale lines mostly still hold the pre-fill from before round 0, so the same beats are lost every round.
+- The count with the destination moved 64 B (416 words a round) matches the 1664 recorded on 2026-10-22.
+- No run hung, and the loss stayed the same over about 40 rounds in one session, so table entries are not leaking.
+
+Pass rate: every recorded run of the gating version (since 2026-10-30) fails, on `mimir_1x1` and `mimir_2x_package`, and all 7 probe runs at 8 KiB from GDDR failed. The only recorded pass (row 109 in the first results note) is from the version that recorded the snoop leg without asserting it. The stale count varies slightly between runs (1008 or 1024).
+
+Not established:
+
+- The revision was read from the pin. The image the emulator loads was not checked against it.
+- The table was not observed. The mechanism rests on the RTL, the ticket and the size and rate results.
+- Two rounds lost only the lower 64 B of one beat (240 stale words instead of 256). An unrecorded beat loses both halves, so GREN-1691 does not explain these. They account for the 1008 against 1024 variation.
+- Where the loss starts and stops (beat 49, with the last 7 beats kept) fits the table filling and draining but was not derived.
+- CCE-217, the per-ID sequence wrap past 32 outstanding writes in the same module, is not ruled out by the RTL. The steady loss count argues against it.
+- The probes ran on CCE 0 of `mimir_1x1` only. The other CCEs and `mimir_2x_package` show the same failure in the result rows above and were not probed.
+- That the 2026-10-22 hot set sat at a 128 B aligned address is inferred from the matching count, not checked.
+
+The `kIdmaSnoopNote` text in this failure message, and the "not honoured on VC 5" and "of 2048 words" wording in the result notes above, describe the earlier reading, not this cause.
+
+### Where the fix belongs
+
+The fix belongs in the CCE RTL (soc/cce), and it already exists there. No software layer causes the failure:
+
+- soc/cce: the GREN-1691 fix detects a full table directly, so the snoop master holds off the NoC and every snooped beat gets its L2 write. It is behind a define.
+- mimir_soc: has to turn that define on, or move its `cce` pin to a revision where the fix is unconditional. Which define it is, and whether the Mimir flow sets it, was not checked.
+- grendelemulation: needs only a new `mimir_soc` rev in `Checkout.yml` and a rebuilt emulator. A patch kept only there would hide the bug on the emulator.
+- chippy: no bring-up setting avoids it. Of the three `NOC_SNOOP_TL_MASTER_CFG` bits, bit 0 is the mode that loses writes (see Root cause of the `DirtyLineRace` snoop-config failures), bit 1 only acts with bit 0, and bit 2 sends one L2 request per beat, which leaves the upper half of every beat stale.
+- UMD: host transport; it has no part in a write from one CCE to another.
+- tt-metal runtime: never sets the snoop tag. The prefetcher's iDMA calls pass `snoop=false` (`prefetcher_pipe.h:991`, `:993`), and it invalidates and reads through the uncached alias.
+
+Until fixed RTL is on the emulator, the rule for software is: a snooped write into a CCE's TL1 is reliable only while fewer than 16 beats of 128 B (2 KiB) are in flight to that CCE. For anything larger the consumer runs INVALIDATE64 over the range once the data has landed, as this test's invalidate leg does; that leg passes at 8 KiB. The 4096 B and 6144 B GDDR passes depend on the arrival rate and are not a safe limit.
+
+Proposed steps, none done yet:
+
+1. Comment on GREN-1691 that one 8 KiB snooped iDMA packet reproduces it on Mimir, with the size sweep above, and ask the CCE designers to revisit the "no fix needed on Mimir" note. If the Mimir RTL cannot change, the rule above becomes permanent.
+2. Keep the 8 KiB snoop leg of row 109 as a known failure tied to GREN-1691, so it passes once fixed RTL arrives.
+3. Add a 2 KiB snoop leg that must pass, so the snoop tag stays covered meanwhile.
+4. Correct `kIdmaSnoopNote` and the earlier notes in this file that blame VC 5.
+5. If a snooped preload is ever added to the runtime, put the size limit or the invalidate in that helper.
