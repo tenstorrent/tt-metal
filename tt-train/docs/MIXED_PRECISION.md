@@ -18,6 +18,10 @@ creates a copy in the other float precision the first time someone asks for it:
 Forward and backward use the default, so they always run on bf16. Non-float tensors, such as uint32 token ids, are
 returned as stored for every precision.
 
+`ops::log_softmax` is an exception: it reads the native input and computes normalization and backward
+intermediates in fp32 to preserve small log-probabilities and dominant-class gradients. Its output and input
+gradient have the input's native dtype.
+
 ## How the two views stay coherent
 
 The native tensor is the source of truth, and the derived copy is refreshed from it:

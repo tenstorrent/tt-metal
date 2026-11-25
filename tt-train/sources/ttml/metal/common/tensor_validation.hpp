@@ -71,6 +71,15 @@ inline void check_device_tensor(
     }
 }
 
+// Whether `tensor` has only tile padding: its padded shape is its logical shape rounded up to whole tiles.
+inline bool has_only_tile_padding(const ttnn::Tensor& tensor) {
+    const auto& tile = tensor.tensor_spec().tile();
+    auto expected_padded = tensor.logical_shape();
+    expected_padded[-2] = tt::round_up(expected_padded[-2], tile.get_height());
+    expected_padded[-1] = tt::round_up(expected_padded[-1], tile.get_width());
+    return tensor.padded_shape() == expected_padded;
+}
+
 // Checks that `tensor` is padded only up to whole tiles. Kernels that take tile counts from the padded shape and masks
 // from the logical one misplace tiles under custom padding, even when the logical shapes match.
 inline void check_tile_padding(const ttnn::Tensor& tensor, std::string_view op, std::string_view name) {
