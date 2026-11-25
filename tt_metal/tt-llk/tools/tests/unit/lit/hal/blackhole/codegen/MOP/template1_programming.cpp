@@ -207,11 +207,10 @@ extern "C" __attribute__((noinline, used)) void reference_program_start_empty_in
     mop_cfg[3] = TT_OP_NOP;
 }
 
-// With EndOp1 set, the count anomaly needs an outer count of 1, so this
-// no-start, empty-inner configuration is accepted.
+// A start op keeps an empty inner loop with both end ops out of the count anomaly.
 extern "C" __attribute__((noinline, used)) void program_empty_inner_second_end()
 {
-    mop::program(mop::loop(4, mop::loop(0, OP_BODY), OP_END, OP_SECOND_END));
+    mop::program(mop::loop(4, OP_START, mop::loop(0, OP_BODY), OP_END, OP_SECOND_END));
 }
 
 extern "C" __attribute__((noinline, used)) void reference_program_empty_inner_second_end()
@@ -220,7 +219,7 @@ extern "C" __attribute__((noinline, used)) void reference_program_empty_inner_se
     ckernel::mop_sync();
     mop_cfg[0] = 4;
     mop_cfg[1] = 0;
-    mop_cfg[2] = TT_OP_NOP;
+    mop_cfg[2] = OP_START;
     mop_cfg[3] = OP_END;
     mop_cfg[4] = OP_SECOND_END;
 }
