@@ -426,6 +426,7 @@ std::string host_name() {
     return host;
 }
 
+#ifdef TT_RUN_RANK_HAS_PMIX
 // What a wrapper says of its program: "failed <rank> <code> <signal> <reason>" (stop or notify the others) or
 // "ended <rank> <code>" (count it).
 void on_peer(const std::string& what) {
@@ -457,7 +458,6 @@ void on_peer(const std::string& what) {
     }
 }
 
-#ifdef TT_RUN_RANK_HAS_PMIX
 constexpr pmix_status_t kPeerEvent = PMIX_EXTERNAL_ERR_BASE - 4242;  // payload "tt.peer": "<nspace> <what>"
 
 void peer_event(
@@ -790,10 +790,16 @@ int main(int argc, char** argv) {
                 rank_name(),
                 static_cast<int>(daemon));
             forward(SIGTERM);
-        } else if (orphaned_ticks >= 0 && ++orphaned_ticks == 100) {  // still there 10 s later
-            ::kill(child, SIGKILL);
+        } else if (orphaned_ticks >= 0) {
+            ++orphaned_ticks;
+            if (orphaned_ticks == 100) {  // still there 10 s later
+                ::kill(child, SIGKILL);
+            }
         }
-        if (!dump_ended && core_dumping(child) && (g_stop_signal != 0 || ++dump_ticks >= kDumpBoundTicks)) {
+        if (!dump_ended && core_dumping(child)) {
+            ++dump_ticks;
+        }
+        if (dump_ticks > 0 && !dump_ended && (g_stop_signal != 0 || dump_ticks >= kDumpBoundTicks)) {
             std::fprintf(
                 stderr,
                 "[tt-run-rank] rank %s was still writing a core dump %s; ending it (core cut short)\n",
@@ -802,7 +808,10 @@ int main(int argc, char** argv) {
             ::kill(child, SIGKILL);
             dump_ended = true;
         }
-        if (g_stop_signal != 0 && !forced && ++stop_ticks >= g_job.grace * 10) {
+        if (g_stop_signal != 0) {
+            ++stop_ticks;
+        }
+        if (!forced && stop_ticks >= g_job.grace * 10) {
             std::fprintf(
                 stderr,
                 "[rank %s] did not exit within its stop grace of %g s: forced (SIGKILL); the devices may need tt-smi "
