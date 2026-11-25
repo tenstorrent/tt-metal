@@ -61,8 +61,6 @@ public:
     std::shared_ptr<DriscL1Allocation> sender_state_drisc_l1_allocation() const {
         return pipes_.front().impl().sender_state_drisc_l1_allocation();
     }
-    // The address every receiver holds its pages_sent credit line at.
-    uint64_t pages_sent_receiver_l1_base() const { return config_address() + kDramReceiverCreditLineOffset; }
     std::vector<std::vector<CoreCoord>> receiver_logical_cores_per_sender() const {
         std::vector<std::vector<CoreCoord>> receivers;
         for (const experimental::PrefetcherPipe& pipe : pipes_) {
