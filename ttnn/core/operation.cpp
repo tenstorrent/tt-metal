@@ -11,6 +11,16 @@ namespace tt::tt_metal::operation {
 using ttnn::StorageType;
 using ttnn::Tensor;
 
+float peak_dram_bandwidth_gb_per_s(tt::ARCH arch) {
+    // WH DRAM bandwidth: 258 GB/s = 21.5 GB/s * 6 channels * 2 banks
+    // BH DRAM bandwidth: 512 GB/s (32GB GDDR6 @ 16 GT/sec)
+    switch (arch) {
+        case ARCH::WORMHOLE_B0: return 6 * 2 * 21.5;
+        case ARCH::BLACKHOLE: return 512.0;
+        default: TT_THROW("Unsupported architecture for OpPerformanceModel");
+    }
+}
+
 template <typename OutputTensorsT>
 OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
     Tensors input_tensors, const OutputTensors& output_tensors, int ideal_compute_cycles) :
@@ -31,23 +41,14 @@ OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
 
     // WH L1 Bisection bandwidth: 512 B/cycle = sqrt(64) * 32 B/cycle * 2
     // 512 * 1.0 GHz = 512 GB/s
-    // WH DRAM bandwidth: 258 GB/s = 21.5 GB/s * 6 channels * 2 banks
 
-    // BH DRAM bandwidth: 512 GB/s (32GB GDDR6 @ 16 GT/sec)
-
-    float peak_dram_bw;
-    if (arch == ARCH::WORMHOLE_B0) {
-        peak_dram_bw = 6 * 2 * 21.5;  // 258 GB/s
-    } else if (arch == ARCH::BLACKHOLE) {
-        peak_dram_bw = 512.0;  // 512 GB/s
-    } else {
-        TT_THROW("Unsupported architecture for OpPerformanceModel");
-    }
+    const float peak_dram_bw = peak_dram_bandwidth_gb_per_s(arch);
 
     auto tensor_ns = [peak_dram_bw](const Tensor& t) {
-        int size_bytes = t.physical_volume() * t.element_size();
+        const uint64_t size_bytes = t.physical_volume() * t.element_size();
         if (t.memory_config().is_dram()) {
-            return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
+            // peak_dram_bw is in decimal GB/s, and bytes / (1e9 bytes/s) is nanoseconds.
+            return static_cast<float>(static_cast<double>(size_bytes) / peak_dram_bw);
         }
         if (t.memory_config().is_l1()) {
             return 1.0f;  // TODO: figure out better modelling scheme for L1->L1 Transfers

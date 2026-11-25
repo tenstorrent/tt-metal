@@ -638,7 +638,7 @@ def test_summarize_chunk_recurrence_emitted_outputs_reconstruct_scan(
 
     assert_accurate(
         expected_output.float(),
-        zero + torch.matmul(identity - zero, entry.unsqueeze(1)),
+        (zero + torch.matmul(identity - zero, entry.unsqueeze(1))).flatten(1, 2),
         name="chunk outputs from the emitted terms",
         nrmse_threshold=0.004,
     )

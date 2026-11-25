@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat4.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tt_stl/span.hpp>
 
 #include <cstdint>

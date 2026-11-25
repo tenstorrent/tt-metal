@@ -216,7 +216,7 @@ def filter_params_with_constraints(all_params):
         if transpose_of_faces == Transpose.Yes and face_r_dim < 16:
             continue
 
-        # BROADCAST + ACC_TO_DEST: ALL COMBINATIONS BROKEN (BLOCK ENTIRELY)
+        # BROADCAST + ACC_TO_DEST: this kernel's math datacopy does not accumulate; test_bcast.py covers it.
         # Check this early as it eliminates many combinations
         if broadcast_type != BroadcastType.None_ and acc_to_dest:
             continue
@@ -241,10 +241,6 @@ def filter_params_with_constraints(all_params):
                 and formats.output_format == DataFormat.Float16
             ):
                 continue
-
-        # SCALAR broadcast + acc_to_dest not allowed (already checked above, but explicit)
-        if broadcast_type == BroadcastType.Scalar and acc_to_dest:
-            continue
 
         # Broadcast incompatible with DEST_TO_SRCB/SRCA
         if not broadcast_none:

@@ -11,6 +11,9 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t total_num_reduction_tiles = get_compile_time_arg_val(1);
+    constexpr bool fuse_residual = get_compile_time_arg_val(2) != 0;
+    constexpr uint32_t residual_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t num_residual_tiles = get_compile_time_arg_val(4);
 
     // runtime args
     size_t arg_idx = 0;
@@ -27,6 +30,12 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
 
     CircularBuffer cb(cb_id);
+
+    // 0. Fused residual: its shard is already resident in L1 (CB backed by the residual tensor), just publish it
+    if constexpr (fuse_residual) {
+        CircularBuffer cb_res(residual_cb_id);
+        cb_res.push_back(num_residual_tiles);
+    }
 
     // 1. Wait for signal from All-Gather worker
     noc_semaphore_wait(out_ready_sema, out_ready_sem_wait_value);

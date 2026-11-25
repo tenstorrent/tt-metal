@@ -31,10 +31,13 @@ struct df_to_std<DataFormat::Int32> {
     using std_type = uint32_t;
 };
 
+// Quasar has no UInt32 DataFormat (and intimg only runs bf16/fp32 there).
+#ifndef ARCH_QUASAR
 template <>
 struct df_to_std<DataFormat::UInt32> {
     using std_type = uint32_t;
 };
+#endif
 
 template <>
 struct df_to_std<DataFormat::UInt16> {

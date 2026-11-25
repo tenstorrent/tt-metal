@@ -7,12 +7,12 @@
 #include <enchantum/enchantum.hpp>
 #include <cstdlib>
 #include <sys/types.h>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "allocator/allocator.hpp"
 #include "dispatch/system_memory_manager.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -24,28 +24,26 @@
 #include <optional>
 #include <set>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
 #include "dispatch_test_utils.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "multi_command_queue_fixture.hpp"
-#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-umd/types/arch.hpp>
 
@@ -2369,31 +2367,18 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, ShardedBufferL1ReadWrites) {
     std::map<std::string, std::vector<std::array<uint32_t, 2>>> test_params;
 
     for (const auto& mesh_device : devices_) {
-        // This test hangs on Blackhole A0 when using static VCs through static TLBs and there are large number of
-        // reads/writes issued
-        //  workaround is to use dynamic VC (implemented in UMD)
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            test_params = {
-                {"cores",
-                 {{1, 1},
-                  {static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().x),
-                   static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().y)}}},
-                {"num_pages", {{3, 65}}},
-                {"page_shape", {{32, 32}}}};
-        } else {
-            test_params = {
-                {"cores",
-                 {{1, 1},
-                  {5, 1},
-                  {1, 5},
-                  {5, 3},
-                  {3, 5},
-                  {5, 5},
-                  {static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().x),
-                   static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().y)}}},
-                {"num_pages", {{1, 1}, {2, 1}, {1, 2}, {2, 2}, {7, 11}, {3, 65}, {67, 4}, {3, 137}}},
-                {"page_shape", {{32, 32}, {1, 4}, {1, 120}, {1, 1024}, {1, 2048}}}};
-        }
+        test_params = {
+            {"cores",
+             {{1, 1},
+              {5, 1},
+              {1, 5},
+              {5, 3},
+              {3, 5},
+              {5, 5},
+              {static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().x),
+               static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().y)}}},
+            {"num_pages", {{1, 1}, {2, 1}, {1, 2}, {2, 2}, {7, 11}, {3, 65}, {67, 4}, {3, 137}}},
+            {"page_shape", {{32, 32}, {1, 4}, {1, 120}, {1, 1024}, {1, 2048}}}};
         for (const std::array<uint32_t, 2> cores : test_params.at("cores")) {
             for (const std::array<uint32_t, 2> num_pages : test_params.at("num_pages")) {
                 for (const std::array<uint32_t, 2> page_shape : test_params.at("page_shape")) {

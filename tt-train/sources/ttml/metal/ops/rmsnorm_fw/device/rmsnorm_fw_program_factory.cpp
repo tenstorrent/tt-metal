@@ -7,8 +7,8 @@
 #include <bit>
 #include <cstdint>
 #include <optional>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
 #include "rmsnorm_fw_device_operation.hpp"
@@ -140,8 +140,6 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
     const WorkSplit split = compute_tile_row_work_split(input);
-    check_work_split(
-        split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers

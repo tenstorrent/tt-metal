@@ -6,16 +6,17 @@
 #include <iostream>
 #include <random>
 #include <sys/prctl.h>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/tensor/host_tensor.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/memory/tensor/host_tensor.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
 
 #include "stop_simulation_on_termination.hpp"
 
@@ -177,7 +178,7 @@ int main() {
 
     // A MeshWorkload is a collection of programs that are executed on a MeshDevice. Building it from the ProgramSpec
     // compiles the kernels; the specific physical devices the workload runs on are determined by the mesh shape.
-    distributed::MeshWorkload workload = tt_metal::experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    distributed::MeshWorkload workload(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     // Bind the tensors the kernels operate on. The reader and writer get their buffer addresses from these tensor
@@ -201,7 +202,7 @@ int main() {
         {IN1_T, TensorArgument{src1_tensor}},
         {OUT_T, TensorArgument{dst_tensor}},
     };
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Create the data that will be used as input to the kernels.
     // src0 is a vector of bfloat16 values initialized to random values between 0.0f and 14.0f.

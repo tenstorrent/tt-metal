@@ -7,8 +7,8 @@
 #include <enchantum/enchantum.hpp>
 #include <cstdint>
 #include <sys/types.h>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/program/program_impl.hpp"
 #include <algorithm>
 #include <array>
@@ -24,23 +24,23 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/float8.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 #include "llk_device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/int8.hpp"
 #include "tt_metal/test_utils/uint8.hpp"
@@ -48,8 +48,9 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "single_core_compute_runners.hpp"
 
@@ -411,7 +412,7 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     std::vector<std::uint32_t> src0_vec = test_config.src0_data.empty()
                                               ? create_arange_vector_of_bfloat16(input_dram_buffer_size, false)
@@ -443,7 +444,7 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
             node, {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}),
     });
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE});
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -743,7 +744,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     std::vector<std::uint32_t> src0_vec = create_random_vector_of_bfloat16(input_dram_buffer_size, 100, 42);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), src0_vec);
@@ -768,7 +769,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
         {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -1075,7 +1076,11 @@ static void run_quasar_tilize_untilize_test(
     const std::uint32_t num_faces = tile_shape_in_faces[0] * tile_shape_in_faces[1];
     const bool tiny_tile = (tile_shape_in_faces != std::array<std::uint32_t, 2>{2, 2} || face_r_dim != 16);
 
-    bool is_8bit_integer = (input_data_format == tt::DataFormat::Int8 || input_data_format == tt::DataFormat::UInt8);
+    // An 8-bit integer input is promoted to a 32-bit word in dest, so the golden needs expanding
+    // only when the pack writes that word out. A pack back down to 8 bits stays byte-packed.
+    const bool promotes_8bit_to_dest_width =
+        (input_data_format == tt::DataFormat::Int8 || input_data_format == tt::DataFormat::UInt8) &&
+        output_data_format == tt::DataFormat::Int32;
     std::uint32_t num_tiles = num_tiles_r * num_tiles_c;
     std::uint32_t input_single_tile_size = tt::tile_size(input_data_format);
     std::uint32_t output_single_tile_size = tt::tile_size(output_data_format);
@@ -1219,7 +1224,7 @@ static void run_quasar_tilize_untilize_test(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     std::vector<std::uint32_t> src_vec;
     if (input_data_format == tt::DataFormat::Int8) {
@@ -1276,7 +1281,7 @@ static void run_quasar_tilize_untilize_test(
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -1295,7 +1300,7 @@ static void run_quasar_tilize_untilize_test(
     auto golden = is_tilize ? ::unit_tests::compute::gold_standard_tilize(src_vec, golden_config)
                             : ::unit_tests::compute::gold_standard_untilize(src_vec, golden_config);
 
-    if (is_8bit_integer) {
+    if (promotes_8bit_to_dest_width) {
         // Int8/UInt8 in dest is promoted to Int32. Expand each byte to a uint32_t word.
         // Hardware uses sign-magnitude representation for Int8:
         //   bit 31 = sign (MSB of the byte), bits [6:0] = magnitude (lower 7 bits of the byte)
@@ -1629,6 +1634,95 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) 
                 /*fp32_dest_acc_en=*/true,
                 tt::DataFormat::Int8,
                 /*output_data_format=*/tt::DataFormat::Int32);
+        }
+    }
+}
+
+// Pack Untilize Int8 -> Int8, which no other test in this file exercises. Random byte stimuli keep
+// every datum distinct, so a pack that stopped short of the full tile or stepped the wrong face row
+// cannot pass on fill bytes alone.
+//
+// A 16-bit Dest is the only working configuration for an Int8 output today. With a 32-bit Dest the
+// FPU promotes the input to a sign-magnitude word, but get_single_pack_src_format still derives
+// pack_src from the output CB and yields Int8, so the packer reads the SM8 datum (the top byte of
+// the word) and every output datum comes back as its sign bit alone.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt8) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            run_quasar_tilize_untilize_test(
+                this->device(),
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/false,
+                tt::DataFormat::Int8,
+                /*output_data_format=*/tt::DataFormat::Int8);
+        }
+    }
+}
+
+// Pack Untilize Dst Int8 -> Int8 (tiles pre-loaded into dest via copy_tile)
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt8) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            run_quasar_tilize_untilize_test(
+                this->device(),
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE_DST,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/false,
+                tt::DataFormat::Int8,
+                /*output_data_format=*/tt::DataFormat::Int8);
+        }
+    }
+}
+
+// Int8 output on the strided pack path, over the geometries a tiny tile actually runs.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTileInt8) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
+    const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
+    for (auto& cfg : test_configs) {
+        for (const auto& geo : geometries) {
+            for (bool dst_full_sync_en : {true, false}) {
+                run_quasar_tilize_untilize_test(
+                    this->device(),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::UNTILIZE,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/false,
+                    tt::DataFormat::Int8,
+                    tt::DataFormat::Int8,
+                    /*tile_shape_in_faces=*/{geo[0], geo[1]},
+                    /*face_r_dim=*/geo[2]);
+            }
+        }
+    }
+}
+
+// Pack Untilize Dst tiny tile, Int8 output: tiles pre-loaded into dest via copy_tile.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTileInt8) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
+    const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
+    for (auto& cfg : test_configs) {
+        for (const auto& geo : geometries) {
+            for (bool dst_full_sync_en : {true, false}) {
+                run_quasar_tilize_untilize_test(
+                    this->device(),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::UNTILIZE_DST,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/false,
+                    tt::DataFormat::Int8,
+                    tt::DataFormat::Int8,
+                    /*tile_shape_in_faces=*/{geo[0], geo[1]},
+                    /*face_r_dim=*/geo[2]);
+            }
         }
     }
 }
