@@ -34,6 +34,7 @@ import pytest
 import torch
 from loguru import logger
 from safetensors import safe_open
+from safetensors.torch import save_file
 from tracy import signpost
 
 import ttnn
@@ -2235,6 +2236,13 @@ def run_chunked_transformer_updated(
     # a layer's host snapshot back into natural chunk order. Built here alongside `flat` so the
     # permutation has exactly one derivation.
     chunk_local_pos = []
+    # Opt-in capture of real per-layer inputs for perf tests that need a real prompt's top-k (sparse_mla
+    # perf_cases.REAL_DATA_CASES): TT_PREFILL_DUMP_LAYERS="73,74" saves those layers' decoder outputs, every chunk of
+    # the first iteration, under TT_PREFILL_DUMP_DIR in the golden traces' chunked_group_a_v1 layout.
+    dump_layers = [int(v) for v in os.environ.get("TT_PREFILL_DUMP_LAYERS", "").split(",") if v]
+    dump_dir = Path(os.environ["TT_PREFILL_DUMP_DIR"]) if dump_layers else None
+    assert not (dump_layers and use_trace), "TT_PREFILL_DUMP_LAYERS needs host snapshots, impossible under trace"
+    dumped = {i: torch.zeros(n_chunks * chunk_size, emb_dim, dtype=torch.bfloat16) for i in dump_layers}
     for c in range(n_chunks):
         kv_actual = preload_isl + c * chunk_size
         positions = rotated_chip_positions(kv_actual, sp, chunk_local)
@@ -2418,10 +2426,14 @@ def run_chunked_transformer_updated(
                 actual_start=kv_actual,
                 actual_end=kv_actual + chunk_size,
                 cache_user_id=0,
-                return_intermediates=check_layer_pcc,
+                return_intermediates=check_layer_pcc or (bool(dump_layers) and it == 0),
                 index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
+            if dump_layers and it == 0:
+                for i in dump_layers:
+                    rows = dumped[i][c * chunk_size : (c + 1) * chunk_size]
+                    rows[chunk_local_pos[c]] = layer_outputs[f"layer_{i}"][0].to(torch.bfloat16)
             if check_layer_pcc:
                 # min over every chunk (and iteration, though accuracy callers pass num_iters=1 since
                 # each iteration replays the same chunks into the same cache region).
@@ -2457,6 +2469,18 @@ def run_chunked_transformer_updated(
                 )
         iter_total = time.time() - iter_start
         iteration_chunk_times.append(chunk_times)
+        if dump_layers and it == 0:
+            rows_end = preload_isl + n_chunks * chunk_size
+            for i, rows in dumped.items():
+                key = f"decoder_output_layer_{i}"
+                (dump_dir / "decoder_io" / key).mkdir(parents=True, exist_ok=True)
+                path = dump_dir / "decoder_io" / key / f"rows_{preload_isl:08d}_{rows_end:08d}.safetensors"
+                save_file({key: rows.contiguous()}, str(path))
+                path.chmod(0o644)  # safetensors writes owner-only; CI reads these as another user
+            (dump_dir / "metadata.json").write_text(
+                json.dumps({"token_ids": token_ids_full[:rows_end].tolist(), "n_prompt_tokens": rows_end})
+            )
+            logger.info(f"dumped layers {dump_layers} rows [{preload_isl}, {rows_end}) to {dump_dir}")
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
         if determinism_check:
             # Compare the whole cache the iteration just wrote, exactly. PCC rounds away a single flipped element

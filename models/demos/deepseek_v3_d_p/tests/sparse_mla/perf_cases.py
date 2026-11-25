@@ -15,14 +15,19 @@ Boxes, from the device count and TT_MESH_GRAPH_DESC_PATH:
 
 import copy
 import gc
+import json
 import os
 from dataclasses import dataclass
 from fractions import Fraction
+from pathlib import Path
 
 import pytest
+import torch
+from safetensors import safe_open
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
+from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.reference import pretrained_mla_weights
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     STAGE_4X4_TOPOLOGY,
     fabric2d_device_params,
@@ -37,6 +42,7 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import read_sharded_rows
 
 GALAXY_SP = 8
 # Galaxy-global scenario sizes: a 5k chunk over a 50k (warm) or 500k (long) cache. A 4x4 stage runs 2.5k chunks.
@@ -52,6 +58,46 @@ GATE_CASES = {
     "glm_5_3": ("glm_5_3", False),
     "glm_5_3-no_indexer": ("glm_5_3", True),
 }
+
+# Real-data cases: GLM-5.3 traces (chunked_group_a_v1 layout) that hold the full layer's input for every prompt
+# position (decoder_io/decoder_output_layer_<layer - 1>). name -> (trace dir, cache tokens); the timed chunk is the
+# last one, rows [cache, cache + CHUNK_TOKENS).
+GLM53_TRACES = Path("/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces")
+REAL_DATA_CASES = {
+    "55k": (GLM53_TRACES / "vllm-glm53-indexer-kcache-55k", 51200),
+    # The 1M trace's prompt (code_debug), prefilled on a Galaxy with test_glm_prefill_transformer_chunked_no_pcc and
+    # TT_PREFILL_DUMP_LAYERS=73 (layer 74's input, 102,400 rows).
+    "64k": (GLM53_TRACES / "glm53-real-prompt-100k", 61440),
+}
+GLM53_CHECKPOINT = Path(os.environ.get("GLM53_HF_MODEL", "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4"))
+
+
+@dataclass(frozen=True)
+class RealData:
+    """A prompt's real inputs to one layer: its pretrained weights (from `checkpoint`) and the previous layer's output
+    for every position (from `trace_dir`), normalized by the layer's input RMSNorm as the decoder block does."""
+
+    trace_dir: Path
+    checkpoint: Path = GLM53_CHECKPOINT
+
+    def _shards(self, prefix: str) -> list[str]:
+        weight_map = json.loads((self.checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
+        return sorted({str(self.checkpoint / f) for k, f in weight_map.items() if k.startswith(prefix)})
+
+    def weights(self, config, layer: int) -> dict:
+        return pretrained_mla_weights(
+            config, layer=layer, checkpoint_path=self._shards(f"model.layers.{layer}.self_attn.")
+        )
+
+    def layer_input(self, config, layer: int, start: int, end: int) -> torch.Tensor:
+        """Rows [start, end) of `layer`'s attention input, [1, 1, end - start, hidden] bf16."""
+        key = f"model.layers.{layer}.input_layernorm.weight"
+        with safe_open(self._shards(key)[0], framework="pt") as f:
+            gamma = f.get_tensor(key).float()
+        name = f"decoder_output_layer_{layer - 1}"
+        h = read_sharded_rows(self.trace_dir / "decoder_io" / name, name, start, end)
+        h = h * torch.rsqrt(h.pow(2).mean(-1, keepdim=True) + config.rms_norm_eps) * gamma
+        return h.to(torch.bfloat16).reshape(1, 1, end - start, -1)
 
 
 @dataclass(frozen=True)
@@ -149,6 +195,7 @@ def build_sparse_perf_case(
     tp_shard_kv: bool = True,
     shared_layer: bool = False,
     sp_axis: int = 0,
+    real_data: RealData | None = None,
 ) -> SparsePerfCase:
     """ttMLA, its caches and one chunk of input for forwards over a `cache + chunk` prefix.
 
@@ -158,6 +205,10 @@ def build_sparse_perf_case(
     layer's prefix beside its sparse SDPA.
     shared_layer (GLM-5.3, sparse): the shared layer after it; it reuses the full layer's top-k, pushes only the rest of
     its KV and pushes the next layer's prefix beside its sparse SDPA.
+    real_data (GLM-5.3, sparse): the full layer gets its pretrained weights and a real prompt's input, and runs every
+    chunk before the timed one to fill its caches, so its indexer scores real keys and its top-k (which the shared
+    layer reuses) is the model's. The shared layer keeps random weights: it runs no indexer, so they don't change
+    which rows it reads.
     """
     has_indexer = attn_mode == "sparse"
     tp_axis = 1 - sp_axis
@@ -197,9 +248,11 @@ def build_sparse_perf_case(
         cache_layer_idx = variant.model_config.mla_kv_slot(mla_layer_idx)
         index_cache_layers = mla_layer_num
 
+    if real_data is not None:
+        assert has_indexer and full_indexer_layers, f"real_data needs a GLM-5.3 sparse layer, got {variant.name}"
     mla = ttMLA(
         config,
-        dict(random_mla_weights(config)),
+        dict(real_data.weights(config, mla_layer_idx) if real_data else random_mla_weights(config)),
         mesh_device,
         topology=topology,
         layer_idx=mla_layer_idx,
@@ -241,14 +294,35 @@ def build_sparse_perf_case(
         )
     shard_dims = [None, None]
     shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
-    x = ttnn.from_torch(
-        make_hidden(chunk, config.hidden_size, seed=42)[:, :chunk].unsqueeze(0),
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
-    )
+
+    def to_device(hidden):
+        return ttnn.from_torch(
+            hidden,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        )
+
+    if real_data is None:
+        x = to_device(make_hidden(chunk, config.hidden_size, seed=42)[:, :chunk].unsqueeze(0))
+    else:
+        # Fill the caches the way the prompt did: one forward per chunk before the timed one.
+        for start in range(0, cache, chunk):
+            x = to_device(real_data.layer_input(config, mla_layer_idx, start, start + chunk))
+            ttnn.deallocate(
+                mla.forward(
+                    x,
+                    rope,
+                    kvpe_cache,
+                    actual_start=start,
+                    cache_layer_idx=cache_layer_idx,
+                    index_kv_cache=index_kv_cache,
+                )
+            )
+            ttnn.deallocate(x)
+        x = to_device(real_data.layer_input(config, mla_layer_idx, cache, cache + chunk))
     case = SparsePerfCase(mla, x, rope, kvpe_cache, index_kv_cache, cache_layer_idx, tuple(shard_dims))
     if not shared_layer:
         return case
@@ -336,3 +410,25 @@ def gate_params():
         )
         params.append(pytest.param(BOX.mesh, dp, variant, case, id=f"{BOX.id}-{case}"))
     return params
+
+
+def real_data_params():
+    """GLM-5.3 gate cases x REAL_DATA_CASES, on the 8x4 Galaxy only: the traces hold Galaxy-global positions, which a
+    scaled box (smaller chunk and cache) or a 4x4 stage would not line up with."""
+    if BOX is None or BOX.name != "Galaxy":
+        return [
+            pytest.param(
+                (8, 4),
+                {},
+                "glm_5_3",
+                "glm_5_3",
+                next(iter(REAL_DATA_CASES)),
+                marks=pytest.mark.skip(reason="real-data sparse MLA perf runs on the Blackhole Galaxy 8x4 only"),
+            )
+        ]
+    return [
+        pytest.param(*p.values, data, id=f"{p.id}-{data}")
+        for p in gate_params()
+        if p.values[2] == "glm_5_3"
+        for data in REAL_DATA_CASES
+    ]
