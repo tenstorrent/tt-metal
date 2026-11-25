@@ -27,8 +27,8 @@ GraphFabricBuilder::GraphFabricBuilder(
         const auto& port = graph_.logical.routers[r].port;
         if (port.node == local_node_) {
             on_chip_.emplace(graph_.eth_chans[r], r);
-            if (port.capability == EdgeCapability::INTERDOMAIN) {
-                chip_facts_.per_direction_capabilities.at(*port.direction) = EdgeCapability::INTERDOMAIN;
+            if (port.capability == EdgeCapability::INTERDOMAIN || port.capability == EdgeCapability::INTRADOMAIN) {
+                chip_facts_.per_direction_capabilities.at(*port.direction) = port.capability;
             }
         }
     }
@@ -85,6 +85,10 @@ RouterGraphInputs GraphFabricBuilder::inputs_of(RouterIndex router) const {
         vc2.translates =
             in.inter_domain && fabric_context_.get_control_plane().get_mesh_graph().get_mesh_ids().size() > 1;
         in.vc2_domain = vc2;
+    }
+    if (g.routers[router].port.capability == EdgeCapability::INTRADOMAIN) {
+        const RouterIndex peer = *g.routers[router].peer;
+        in.link_peer = std::pair{g.routers[peer].port.node, graph_.eth_chans[peer]};
     }
     for (ChannelIndex c : g.channels_of(router, ChannelKind::Sender)) {
         const uint32_t i = base[g.channels[c].vc] + graph_.index_in_vc[c];
@@ -157,9 +161,13 @@ std::vector<RouterLocation> GraphFabricBuilder::perimeter_router_locations() con
     std::vector<RouterLocation> locations;
     for (const auto& [chan, r] : on_chip_) {
         const auto& port = graph_.logical.routers[r].port;
-        if (port.capability == EdgeCapability::INTERDOMAIN) {
+        if (port.capability == EdgeCapability::INTERDOMAIN || port.capability == EdgeCapability::INTRADOMAIN) {
+            const bool perimeter = port.capability == EdgeCapability::INTERDOMAIN;
             locations.push_back(RouterLocation{
-                .eth_chan = chan, .remote_node = local_node_, .direction = *port.direction, .is_dispatch_link = false});
+                .eth_chan = chan,
+                .remote_node = perimeter ? local_node_ : port.peer,
+                .direction = *port.direction,
+                .is_dispatch_link = false});
         }
     }
     return locations;

@@ -24,6 +24,7 @@ enum class EdgeCapability : uint8_t {
     INTRAMESH_EXPRESS,   // same-mesh express chord, command Z
     INTERMESH,           // crosses a mesh boundary, on any direction
     INTERDOMAIN,
+    INTRADOMAIN,  // inside the domain, off the workload's links: VC2 only
 };
 
 // What this chip's Z port is used for.

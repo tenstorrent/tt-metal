@@ -43,7 +43,8 @@ struct WiringOptions {
 };
 
 inline EdgeCapability stock_capability(EdgeCapability c) {
-    return c == EdgeCapability::INTERDOMAIN ? EdgeCapability::INTRAMESH_CARDINAL : c;
+    return c == EdgeCapability::INTERDOMAIN || c == EdgeCapability::INTRADOMAIN ? EdgeCapability::INTRAMESH_CARDINAL
+                                                                                : c;
 }
 
 // Same routers, VCs and turns as the stock builder: the turn sets come from turn_set_for_router.

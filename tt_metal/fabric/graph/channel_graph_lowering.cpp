@@ -106,8 +106,9 @@ void legacy_stock_sender_counts(ChannelGraph& cg, const WiringOptions& options) 
         }
         for (uint32_t vc = 0; vc < counts.size(); ++vc) {
             counts[vc] = std::max(counts[vc], shape.sender_counts[vc]);
-            // a forwarding VC2 has no stock layout to match: its padding keeps positions, not service
-            if (vc == 2 && options.vc_config.vc2_forwards) {
+            // no stock layout to match (a forwarding VC2, an inter-domain router): padding keeps positions, not service
+            if ((vc == 2 && options.vc_config.vc2_forwards) || port.capability == EdgeCapability::INTERDOMAIN ||
+                port.capability == EdgeCapability::INTRADOMAIN) {
                 continue;
             }
             for (uint32_t i = 0; i < counts[vc]; ++i) {

@@ -876,6 +876,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         inter_domain_ = graph_inputs->inter_domain;
         on_domain_edge_ = graph_inputs->on_domain_edge;
         vc2_domain_ = graph_inputs->vc2_domain;
+        link_peer_ = graph_inputs->link_peer;
     }
 
     TT_FATAL(
@@ -1113,7 +1114,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     PeerLayout peer = NullPeerLayout{};
     if (!inter_domain_) {
         const auto [link_peer_node, link_peer_chan] =
-            control_plane.get_connected_mesh_chip_chan_ids(this->local_fabric_node_id, this->my_eth_channel);
+            link_peer_
+                ? *link_peer_
+                : control_plane.get_connected_mesh_chip_chan_ids(this->local_fabric_node_id, this->my_eth_channel);
         peer = fabric_context.get_builder_context().get_peer_router_channel_layout(link_peer_node, link_peer_chan);
     }
     const RouterChannelLayout peer_layout =

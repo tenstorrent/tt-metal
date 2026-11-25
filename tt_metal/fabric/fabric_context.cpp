@@ -11,6 +11,8 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/reflection.hpp>
@@ -218,7 +220,26 @@ FabricContext::FabricContext(
     this->compute_routing_mode();
 
     if (rtoptions_.get_fabric_inter_domain() && this->is_2D_routing_enabled_) {
-        this->inter_domain_mesh_ = make_inter_domain_mesh(control_plane.get_mesh_graph());
+        const auto& mesh_graph = control_plane.get_mesh_graph();
+        const auto& psd = control_plane.get_physical_system_descriptor();
+        std::vector<DomainLink> physical;
+        for (MeshId mesh : mesh_graph.get_mesh_ids()) {
+            for (ChipId chip = 0; chip < mesh_graph.get_mesh_shape(mesh).mesh_size(); ++chip) {
+                const FabricNodeId a(mesh, chip);
+                const auto asic = control_plane.get_asic_id_from_fabric_node_id(a);
+                for (const auto& [peer_asic, link] : psd.get_eth_links(asic)) {
+                    const auto id = psd.find_physical_node_id(peer_asic);
+                    const auto b =
+                        id ? control_plane.get_topology_mapper().find_fabric_node_id_from_physical_node_id(*id)
+                           : std::nullopt;
+                    if (b && a < *b) {
+                        physical.push_back(
+                            DomainLink{.a = a, .a_chan = link.src_chan, .b = *b, .b_chan = link.dst_chan});
+                    }
+                }
+            }
+        }
+        this->inter_domain_mesh_ = make_inter_domain_mesh(mesh_graph, physical);
     }
 
     // Step 5: Compute packet specifications (depends on: routing flags)

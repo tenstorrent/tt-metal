@@ -66,6 +66,7 @@ void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability ed
     switch (edge_capability) {
         case EdgeCapability::INTERMESH:
         case EdgeCapability::INTERDOMAIN:
+        case EdgeCapability::INTRADOMAIN:
             TT_FATAL(
                 chip_z_role == ZPortRole::INTERMESH_BOUNDARY,
                 "A Z-facing intermesh edge means the chip's Z port is the boundary: role must be "
