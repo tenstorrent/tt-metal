@@ -9,7 +9,9 @@ on a LoudBox (2x4) the tests use the first row. Patches are put in window order 
 window's four patches consecutive), padded to 67,584 rows and split along the ring, so the merger is a
 reshape on each chip. Attention is ring attention with the padding masked; everything else is
 sequence parallel. Weights are bf16 and replicated. Activations are currently bf16 in DRAM, except the encoder's
-residual stream, which is fp32 (`tt/vision_block.py`). Matmuls are currently HiFi4 with fp32 accumulation.
+residual stream, which is fp32 (`tt/vision_block.py`). All matmuls accumulate in fp32. The encoder's
+linears (wqkv, wo, fc0, fc1) are HiFi3 with packer L1 accumulation, and ring attention is HiFi3 with
+the approximate exp (`tt/model_config.py`); the norms, patch embed and projector are HiFi4.
 
 ## Structure
 

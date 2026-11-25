@@ -24,7 +24,7 @@ from __future__ import annotations
 import ttnn
 
 from .linear import Linear
-from .model_config import MoonViTConfig, VisionParallel
+from .model_config import MoonViTConfig, VisionParallel, sdpa_kernel_config
 from .module import Module
 from .rope import RopeTensors
 
@@ -42,7 +42,8 @@ class TT_Vision_Attention(Module):
         compute_kernel_config,
         ccl_slot: int = 0,
     ) -> None:
-        """`ccl_slot` picks the ring attention semaphores and K/V gather buffers (`ccl.ccl_slot_for_layer`)."""
+        """`compute_kernel_config` is for wqkv and wo; the attention op uses `sdpa_kernel_config`. `ccl_slot`
+        picks the ring attention semaphores and K/V gather buffers (`ccl.ccl_slot_for_layer`)."""
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
@@ -53,9 +54,9 @@ class TT_Vision_Attention(Module):
         self.wqkv = Linear(config.hidden_size, 3 * config.qkv_hidden_size, **kwargs)
         # fp32 out: added to the fp32 residual stream (vision_block.py).
         self.wo = Linear(config.qkv_hidden_size, config.hidden_size, output_dtype=ttnn.float32, **kwargs)
-        self.compute_kernel_config = compute_kernel_config
-        # Built on the first forward: they read the device's core grid, and construction stays
-        # device-free (test_module.py builds the tree on a stand-in device).
+        # Built on the first forward: they read the device, and construction stays device-free
+        # (test_module.py builds the tree on a stand-in device).
+        self._sdpa_compute_kernel_config = None
         self._program_config: ttnn.SDPAProgramConfig | None = None
         self._ccl_core_grid_offset: ttnn.CoreCoord | None = None
 
@@ -63,13 +64,14 @@ class TT_Vision_Attention(Module):
         """The SDPA program config on every worker column but the last, and the offset of that last
         column, where the K/V all-gather runs."""
         if self._program_config is None:
+            self._sdpa_compute_kernel_config = sdpa_kernel_config(self.mesh_device)
             grid = self.mesh_device.compute_with_storage_grid_size()
             self._ccl_core_grid_offset = ttnn.CoreCoord(grid.x - 1, 0)
             self._program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(grid.x - 1, grid.y),
                 q_chunk_size=Q_CHUNK_SIZE,
                 k_chunk_size=K_CHUNK_SIZE,
-                exp_approx_mode=False,
+                exp_approx_mode=True,
             )
         return self._program_config, self._ccl_core_grid_offset
 
@@ -120,7 +122,7 @@ class TT_Vision_Attention(Module):
             logical_n=logical_n,
             program_config=program_config,
             scale=self.scale,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self._sdpa_compute_kernel_config,
             dim=2,
             multi_device_global_semaphore=ccl.ring_attention_semaphores(self.ccl_slot),
             num_links=ccl.num_links,

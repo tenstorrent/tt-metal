@@ -486,12 +486,13 @@ def check_ring_layer(
     reference_call,
     state_prefixes: tuple[str, ...] | None = None,
     input_dtype=ttnn.bfloat16,
+    kernel_config=compute_kernel_config,
     relative_rmse: float,
     real_rows_from_each_chip: bool,
 ) -> None:
-    """`tt_class` (built like `TT_Vision_Attention`, loaded from encoder block `layer`, only the keys
-    starting with `state_prefixes` when given) on the ring against `reference_call(block, x, cu_seqlens,
-    max_seqlen, rope_freqs_cis)`. The device runs window-ordered rows.
+    """`tt_class` (built like `TT_Vision_Attention` with `kernel_config(mesh_device)`, loaded from encoder
+    block `layer`, only the keys starting with `state_prefixes` when given) on the ring against
+    `reference_call(block, x, cu_seqlens, max_seqlen, rope_freqs_cis)`. The device runs window-ordered rows.
 
     By default the golden is the bf16 block over every row, compared as a whole in raster order. With
     `real_rows_from_each_chip` (an image with real rows on every chip, at the production padded length)
@@ -501,9 +502,7 @@ def check_ring_layer(
     from models.experimental.kimi_k3_moonvit_v2.tests.goldens import to_fp32, use_sampled_attention
 
     parallel = resolve_parallel(mesh_device, *ring_parallel(mesh_device, sp_axis, num_links), config)
-    tt = tt_class(
-        config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=compute_kernel_config(mesh_device)
-    )
+    tt = tt_class(config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=kernel_config(mesh_device))
     block = reference.vision_tower.encoder.blocks[layer]
     state = block.state_dict()
     if state_prefixes is not None:
