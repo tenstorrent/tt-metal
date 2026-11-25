@@ -127,6 +127,7 @@ void kernel_main() {{
     const uint32_t inj_bit = get_arg_val<uint32_t>(10);
     const uint32_t inj_mask = get_arg_val<uint32_t>(11);
     const uint32_t decode_max = get_arg_val<uint32_t>(12);
+    const uint32_t writeback = get_arg_val<uint32_t>(13);
     constexpr uint32_t scratch = get_compile_time_arg_val(0);
     constexpr uint32_t chunk = get_compile_time_arg_val(1);
     constexpr bool fill = get_compile_time_arg_val(2);
@@ -261,6 +262,14 @@ void kernel_main() {{
                             ++other;
                         }}
                     }}
+                    // Rewriting the fill data keeps every page correct, so a write that lands on another page
+                    // shows up there as an alias on its next read.
+                    if (writeback) {{
+                        for (uint32_t i = 0; i < n; ++i) {{
+                            noc_async_write(gold_addr + i * {PAGE_BYTES}, buf.get_noc_addr(c0 + i), {PAGE_BYTES});
+                        }}
+                        noc_async_write_barrier();
+                    }}
                 }}
             }}
             ++pass;
@@ -334,7 +343,7 @@ def allocate_buffer(device, bank_mb):
     raise RuntimeError("could not allocate a DRAM sweep buffer")
 
 
-def build_programs(buf, tt_out, cores, grid, rows, chunk):
+def build_programs(buf, tt_out, cores, grid, rows, chunk, writeback=0):
     slots = 2 * len(cores)
     bounds = [(s * rows // slots, (s + 1) * rows // slots) for s in range(slots)]
     scratch_bytes = ROW_WORDS * 4 + (2 * chunk + 1) * PAGE_BYTES
@@ -401,6 +410,7 @@ def build_programs(buf, tt_out, cores, grid, rows, chunk):
                 inj_bit,
                 inj_mask,
                 decode_max,
+                writeback,
             ]
 
         kernels = dm_kernels(fill, args)
@@ -462,7 +472,9 @@ class ChipRun:
         )
         self.buf, rows, self.bank_mb = allocate_buffer(device, cfg["bank_mb"])
         self.base = self.buf.buffer_address()
-        self.make, self.bounds = build_programs(self.buf, self.tt_out, self.cores, grid, rows, cfg["chunk"])
+        self.make, self.bounds = build_programs(
+            self.buf, self.tt_out, self.cores, grid, rows, cfg["chunk"], cfg["writeback"]
+        )
         logger.info(
             f"chip {chip}: {self.bank_mb} MB/bank x {BANKS} banks at bank offset "
             f"{self.base:#x}..{self.base + rows // BANKS * PAGE_BYTES:#x}, {len(self.cores)} cores x 2 RISCs, "
@@ -626,6 +638,8 @@ def test_dram_sweep_stress():
         "seed0": env_int("STRESS_SEED", int(time.time()) & 0xFFFF) * 1024,
         "self_test": env_int("STRESS_SELF_TEST", 1),
         "retention_s": env_int("STRESS_RETENTION_S", 0),
+        # 1: the check phase writes every page back right after verifying it, so reads and writes interleave.
+        "writeback": env_int("STRESS_WRITEBACK", 0),
     }
     assert all(a in ("on", "off") for a in cfg["arms"]), cfg["arms"]
     OUT_DIR.mkdir(parents=True, exist_ok=True)
