@@ -28,7 +28,7 @@ enum class ContextSource : std::uint8_t
 };
 
 /** @brief Select whether a transfer retains or hands off its source bank. */
-enum class SourceHandoff : std::uint8_t
+enum class SrcHandoff : std::uint8_t
 {
     Unset               = 0xFF,
     Keep                = 0,
@@ -64,17 +64,19 @@ enum class CacheScope : bool
 };
 
 /** @brief Describe the per-channel address-counter increments applied after a transfer. */
-struct AddressCounterPostIncrements
+class AddressCounterPostIncrements
 {
+public:
     /** @brief Describe the two-bit Y and Z increments supported by one UNPACR channel. */
-    struct Channel
+    class Channel
     {
-        std::uint8_t y = 0;
-        std::uint8_t z = 0;
+    public:
+        std::uint8_t y = 0; ///< Y increment in [0, 3].
+        std::uint8_t z = 0; ///< Z increment in [0, 3].
     };
 
-    Channel channel0 = {};
-    Channel channel1 = {};
+    Channel channel0 = {}; ///< Input-side (L1) increments.
+    Channel channel1 = {}; ///< Output-side (SrcA, SrcB or Dst) increments.
 };
 
 /**
@@ -83,14 +85,15 @@ struct AddressCounterPostIncrements
  * The factories clear fields that are ignored by their selected context mode. Hand-written
  * aggregate values remain supported and receive the same range validation in the encoders.
  */
-struct ContextSelection
+class Context
 {
-    ContextSource source                 = ContextSource::Explicit;
-    std::uint8_t configuration_context   = 0;
-    std::uint8_t address_counter_context = 0;
+public:
+    ContextSource source                 = ContextSource::Explicit; ///< How the configuration context is resolved.
+    std::uint8_t configuration_context   = 0;                       ///< Explicit configuration context; ignored otherwise.
+    std::uint8_t address_counter_context = 0;                       ///< Address-counter context; ignored for ThreadDefault.
 
     /** @brief Select configuration context zero and the issuing thread's address counters. */
-    static constexpr ContextSelection thread_default();
+    static constexpr Context thread_default();
 
     /**
      * @brief Select explicit configuration and address-counter contexts.
@@ -98,27 +101,27 @@ struct ContextSelection
      * @param configuration_context: Configuration context in [0, 7], or [0, 1] for unpacker 1.
      * @param address_counter_context: Address-counter context in [0, 2].
      */
-    static constexpr ContextSelection explicit_context(std::uint8_t configuration_context = 0, std::uint8_t address_counter_context = 0);
+    static constexpr Context explicit_context(std::uint8_t configuration_context = 0, std::uint8_t address_counter_context = 0);
 
     /**
      * @brief Select and advance the configuration context counter during a transfer.
      *
      * @param address_counter_context: Address-counter context in [0, 2].
      */
-    static constexpr ContextSelection counter(std::uint8_t address_counter_context = 0);
+    static constexpr Context counter(std::uint8_t address_counter_context = 0);
 };
 
-constexpr ContextSelection ContextSelection::thread_default()
+constexpr Context Context::thread_default()
 {
     return {ContextSource::ThreadDefault, 0, 0};
 }
 
-constexpr ContextSelection ContextSelection::explicit_context(const std::uint8_t configuration_context, const std::uint8_t address_counter_context)
+constexpr Context Context::explicit_context(const std::uint8_t configuration_context, const std::uint8_t address_counter_context)
 {
     return {ContextSource::Explicit, configuration_context, address_counter_context};
 }
 
-constexpr ContextSelection ContextSelection::counter(const std::uint8_t address_counter_context)
+constexpr Context Context::counter(const std::uint8_t address_counter_context)
 {
     return {ContextSource::Counter, 0, address_counter_context};
 }
@@ -134,28 +137,31 @@ constexpr ContextSelection ContextSelection::counter(const std::uint8_t address_
  *       offset is added to the selected ID; ensure the resolved configuration context,
  *       including configured offsets, remains below two.
  */
-struct DataTransfer
+class DataTransfer
 {
-    Engine engine;
-    AddressCounterPostIncrements increments = {};
-    ContextSelection context                = ContextSelection::explicit_context();
-    SourceHandoff handoff                   = SourceHandoff::Unset;
-    DatumOverride datum_override            = DatumOverride::None;
-    SearchMode search                       = SearchMode::DatumRange;
-    AccumulationAction accumulation         = AccumulationAction::Flush;
+public:
+    Engine engine;                                                         ///< Unpacker that executes the transfer.
+    AddressCounterPostIncrements increments = {};                          ///< Address-counter increments applied after the transfer.
+    Context context                         = Context::explicit_context(); ///< Configuration and address-counter context selection.
+    SrcHandoff handoff                      = SrcHandoff::Unset;           ///< Source-bank handoff; must be set at every call site.
+    DatumOverride datum_override            = DatumOverride::None;         ///< Whether datums keep their values or become zero.
+    SearchMode search                       = SearchMode::DatumRange;      ///< Datum-range or compressed-row-start search.
+    AccumulationAction accumulation         = AccumulationAction::Flush;   ///< Whether the transfer continues or flushes the accumulation task.
 };
 
 /** @brief Describe a canonical UNPACR configuration-context-counter increment. */
-struct ContextCounterIncrement
+class ContextCounterIncrement
 {
-    Engine engine;
+public:
+    Engine engine; ///< Unpacker whose context counter is incremented.
 };
 
 /** @brief Describe a canonical UNPACR compressed-row-start-cache flush. */
-struct RowStartCacheFlush
+class RowStartCacheFlush
 {
-    Engine engine;
-    CacheScope scope = CacheScope::CurrentThread;
+public:
+    Engine engine;                                ///< Unpacker whose cache is flushed.
+    CacheScope scope = CacheScope::CurrentThread; ///< Cache entries the flush clears.
 };
 
 namespace detail
@@ -170,9 +176,9 @@ constexpr bool is_valid(const ContextSource source)
     return source == ContextSource::ThreadDefault || source == ContextSource::Explicit || source == ContextSource::Counter;
 }
 
-constexpr bool is_valid(const SourceHandoff handoff)
+constexpr bool is_valid(const SrcHandoff handoff)
 {
-    return handoff == SourceHandoff::Keep || handoff == SourceHandoff::FlipAndSetDataValid;
+    return handoff == SrcHandoff::Keep || handoff == SrcHandoff::FlipAndSetDataValid;
 }
 
 constexpr bool is_valid(const DatumOverride override)
@@ -201,7 +207,7 @@ constexpr bool is_valid(const AddressCounterPostIncrements increments)
            ckernel::is_valid(increments.channel1.z, 2);
 }
 
-constexpr bool is_valid(const ContextSelection context)
+constexpr bool is_valid(const Context context)
 {
     return is_valid(context.source) && ckernel::is_valid(context.configuration_context, 3) && context.address_counter_context <= 2;
 }
@@ -286,29 +292,29 @@ constexpr std::uint32_t address_mode(const AddressCounterPostIncrements incremen
            (static_cast<std::uint32_t>(increments.channel0.y) << 2) | static_cast<std::uint32_t>(increments.channel0.z);
 }
 
-constexpr std::uint32_t configuration_context(const ContextSelection context)
+constexpr std::uint32_t configuration_context(const Context context)
 {
     return context.source == ContextSource::Explicit ? context.configuration_context : 0;
 }
 
-constexpr std::uint32_t address_counter_context(const ContextSelection context)
+constexpr std::uint32_t address_counter_context(const Context context)
 {
     return context.source == ContextSource::ThreadDefault ? 0 : context.address_counter_context;
 }
 
-constexpr std::uint32_t multi_context_mode(const ContextSelection context)
+constexpr std::uint32_t multi_context_mode(const Context context)
 {
     return context.source == ContextSource::ThreadDefault ? 0 : 1;
 }
 
-constexpr std::uint32_t use_context_counter(const ContextSelection context)
+constexpr std::uint32_t use_context_counter(const Context context)
 {
     return context.source == ContextSource::Counter ? 1 : 0;
 }
 
-constexpr std::uint32_t set_data_valid(const SourceHandoff handoff)
+constexpr std::uint32_t set_data_valid(const SrcHandoff handoff)
 {
-    return handoff == SourceHandoff::FlipAndSetDataValid ? 1 : 0;
+    return handoff == SrcHandoff::FlipAndSetDataValid ? 1 : 0;
 }
 
 constexpr std::uint32_t get_operation(const DataTransfer operation)
