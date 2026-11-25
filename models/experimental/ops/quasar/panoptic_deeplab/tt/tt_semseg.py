@@ -9,7 +9,7 @@ from models.experimental.ops.quasar.panoptic_deeplab.tt.tt_aspp import TtASPP
 from models.experimental.ops.quasar.panoptic_deeplab.tt.tt_upsample import (
     BilinearUpsampleMatmulTTNN as TtBilinearUpsample,
 )
-from models.tt_cnn.tt.builder import TtConv2d
+from models.experimental.ops.quasar.panoptic_deeplab.tt.quasar_ops import TtConv2d
 from models.experimental.ops.quasar.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.ops.quasar.panoptic_deeplab.tt.common import reshape_flattened_conv_output

@@ -124,7 +124,8 @@ namespace {
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
-    const KernelRiscMaskMap& kernel_to_risc_mask) {
+    const KernelRiscMaskMap& kernel_to_risc_mask,
+    tt::ARCH arch) {
     // With multi-binding, all same-role KernelSpecs share kind (DM/compute), access_pattern,
     // num_threads, and risc_mask. The first three are enforced in ValidateProgramSpec; the
     // fourth is solver-guaranteed on Gen2 (the coupling-group equivalence-class constraint)
@@ -214,13 +215,16 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,
+        .unpack_on_trisc3 = is_gen2_arch(arch) &&
+                            ComputeKernelUsesSfpuPipeline(*consumer, dfb_spec->unique_id, DFBEndpointType::CONSUMER),
+        .pack_on_trisc3 = is_gen2_arch(arch) &&
+                          ComputeKernelUsesSfpuPipeline(*producer, dfb_spec->unique_id, DFBEndpointType::PRODUCER),
         // DFB externally placed storage is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime: from the borrowed
         // TensorParameter's MeshTensor, an SRAMArenaParameter's allocation, or (relay) from the
         // PrefetcherPipe ring the relay aliases.
         .borrows_memory = dfb_spec->borrowed_from.has_value() ||
-                          dfb_spec->advanced_options.allocation_override.has_value() ||
-                          is_relay,
+                          dfb_spec->advanced_options.allocation_override.has_value() || is_relay,
         // A PrefetcherPipe relay is lane-interleaved (producer h owns entries h, h+P, ...).
         .is_relay = is_relay};
 }
@@ -231,6 +235,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     const KernelRiscMaskMap& kernel_to_risc_mask,
+    tt::ARCH arch,
     detail::ProgramImpl& program_impl) {
     // Create DataflowBuffers and build name -> ID map.
     // NOTE: Iterate over spec.dataflow_buffers (not collected.dfb_endpoints) to ensure
@@ -242,7 +247,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
         const DFBSpecName& dfb_name = dfb_spec.unique_id;
         const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
         const experimental::dfb::DataflowBufferConfig config =
-            MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask);
+            MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask, arch);
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
         // Allocation nodes use the DFB's effective placement.
