@@ -638,6 +638,37 @@ class TestRankCpuBinding:
         assert result.exit_code != 0
         assert "invalid CPU list" in result.output
 
+    @pytest.mark.parametrize(
+        "binding, exclude, expected",
+        [
+            ("auto", None, []),
+            ("auto", "1,2", ["--rank-cpu-exclude", "1,2"]),
+            ("none", None, ["--rank-cpu-binding", "none"]),
+        ],
+        ids=["default", "exclude", "opted_out"],
+    )
+    def test_phase2_rerun_command_keeps_cpu_policy(self, temp_dir, binding, exclude, expected):
+        """The logged Phase 2 re-run line places ranks on the same CPUs as the run it came from."""
+        ctx = click.Context(main)
+        ctx.args = ["echo", "hello"]
+        with patch.object(ttrun_module, "get_mpi_launcher", return_value="mpirun"), patch.object(
+            ttrun_module, "logger"
+        ) as fake_logger:
+            ttrun_module._log_new_mode_phase2_rerun_command(
+                ctx,
+                temp_dir / "rank_bindings.yaml",
+                temp_dir / "rankfile",
+                None,
+                ["--bind-to", "none"],
+                RankfileSyntax.RANKFILE,
+                rank_cpu_binding=binding,
+                rank_cpu_exclude=exclude,
+            )
+        parts = shlex.split(fake_logger.info.call_args.args[0].split(": ", 1)[1])
+        flags = parts[: parts.index("--mpi-args")]
+        cpu_flags = [p for i, p in enumerate(flags) if p.startswith("--rank-cpu") or flags[i - 1].startswith("--rank-cpu")]
+        assert cpu_flags == expected
+
 
 class TestLegacyFlow:
     """Test legacy flow function - minimal smoke tests."""

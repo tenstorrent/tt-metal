@@ -125,8 +125,12 @@ def test_usable_cores_drop_excluded_cpus_and_their_siblings():
 def run_main(monkeypatch):
     """Run main() with a fake CPU mask and exec, returning (pinned CPUs or None, exec'd argv)."""
 
-    def run(argv, allowed, local_rank=None, local_size=None):
-        for name, value in ((rcb.LOCAL_RANK_ENV, local_rank), (rcb.LOCAL_SIZE_ENV, local_size)):
+    def run(argv, allowed, local_rank=None, local_size=None, numa_affinity=None):
+        for name, value in (
+            (rcb.LOCAL_RANK_ENV, local_rank),
+            (rcb.LOCAL_SIZE_ENV, local_size),
+            (rcb.NUMA_AFFINITY_ENV, numa_affinity),
+        ):
             if value is None:
                 monkeypatch.delenv(name, raising=False)
             else:
@@ -165,8 +169,26 @@ def test_main_leaves_the_mask_alone_without_mpi_or_exclude(run_main):
     assert pinned is None and execd == ["prog"]
 
 
+def test_main_fails_when_exclude_leaves_no_cpus(run_main, expect_error):
+    """Running anyway would put the program on CPUs the user excluded."""
+    with expect_error(SystemExit, "leaves none of CPUs"):
+        run_main(["--exclude", "0-3", "--", "prog"], range(4))
+
+
+def test_main_does_not_split_under_numa_based_affinity(run_main):
+    """tt-metal rebinds threads across all host CPUs with this option, so a rank mask would not hold."""
+    pinned, execd = run_main(["--", "prog"], range(16), local_rank=1, local_size=2, numa_affinity=1)
+    assert pinned is None and execd == ["prog"]
+
+
+def test_main_rejects_exclude_under_numa_based_affinity(run_main, expect_error):
+    with expect_error(SystemExit, "cannot be honored"):
+        run_main(["--exclude", "1", "--", "prog"], range(16), local_rank=0, local_size=2, numa_affinity=1)
+
+
 def test_main_exits_127_when_the_program_is_missing(monkeypatch, expect_error):
     monkeypatch.delenv(rcb.LOCAL_SIZE_ENV, raising=False)
+    monkeypatch.delenv(rcb.NUMA_AFFINITY_ENV, raising=False)
     with expect_error(SystemExit, str(rcb.EXEC_FAILED_EXIT_CODE)) as e:
         rcb.main(["--", "/nonexistent/tt-run-test-program"])
     assert e.value.code == rcb.EXEC_FAILED_EXIT_CODE

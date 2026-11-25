@@ -2761,8 +2761,10 @@ def _log_new_mode_phase2_rerun_command(
     rankfile_syntax: Optional[RankfileSyntax],
     *,
     bindings_input_is_rank_bindings_mapping_yaml: bool = False,
+    rank_cpu_binding: Literal["auto", "none"] = "auto",
+    rank_cpu_exclude: Optional[str] = None,
 ) -> None:
-    """Log the Phase-2-equivalent tt-run line (rank binding + rankfile + --mpi-args + program args)."""
+    """Log the Phase-2-equivalent tt-run line (rank binding + rankfile + CPU binding + --mpi-args + program args)."""
 
     def _path_for_display(p: Path) -> str:
         try:
@@ -2785,6 +2787,10 @@ def _log_new_mode_phase2_rerun_command(
             else "mca"
         )
         phase2_parts.extend(["--rankfile-syntax", syntax_name])
+    if rank_cpu_binding != "auto":
+        phase2_parts.extend(["--rank-cpu-binding", rank_cpu_binding])
+    if rank_cpu_exclude:
+        phase2_parts.extend(["--rank-cpu-exclude", rank_cpu_exclude])
     mpi_launcher = get_mpi_launcher()
     rankfile_args = inject_rankfile_mpi_args(
         rankfile_path,
@@ -3001,6 +3007,8 @@ def new_mode_flow(
                 mpi_args,
                 rankfile_syntax,
                 bindings_input_is_rank_bindings_mapping_yaml=mgd_mapping_yaml,
+                rank_cpu_binding=rank_cpu_binding,
+                rank_cpu_exclude=rank_cpu_exclude,
             )
             logger.info(
                 f"{TT_RUN_PREFIX} Dry-run: Phase 2 mpirun command not printed (requires Phase 1 rank binding "
@@ -3053,6 +3061,8 @@ def new_mode_flow(
         mpi_args,
         rankfile_syntax,
         bindings_input_is_rank_bindings_mapping_yaml=mgd_mapping_yaml,
+        rank_cpu_binding=rank_cpu_binding,
+        rank_cpu_exclude=rank_cpu_exclude,
     )
 
     # Stale-cache hint only if Phase 1 was skipped via cache; fresh Phase 1 or --force-rediscovery → no hint.

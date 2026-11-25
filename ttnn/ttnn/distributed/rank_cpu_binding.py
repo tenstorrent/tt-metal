@@ -28,6 +28,8 @@ PREFIX = "[tt-run]"
 MIN_CORES_PER_RANK = 2
 LOCAL_RANK_ENV = "OMPI_COMM_WORLD_LOCAL_RANK"
 LOCAL_SIZE_ENV = "OMPI_COMM_WORLD_LOCAL_SIZE"
+# With this tt-metal option on, DeviceManager binds threads across every host CPU, ignoring the process's CPU mask.
+NUMA_AFFINITY_ENV = "TT_METAL_NUMA_BASED_AFFINITY"
 EXEC_FAILED_EXIT_CODE = 127
 
 
@@ -162,6 +164,13 @@ def main(argv: list[str]) -> None:
     except (KeyError, ValueError):
         local_rank, local_size = 0, 1
     allowed = os.sched_getaffinity(0)
+    if os.environ.get(NUMA_AFFINITY_ENV, "").startswith("1"):
+        # tt-metal would move threads back onto other ranks' and excluded CPUs, so a mask set here would not hold.
+        if exclude:
+            raise SystemExit(f"{PREFIX} --exclude cannot be honored with {NUMA_AFFINITY_ENV}=1; unset one of them")
+        if local_size >= 2 and local_rank == 0:
+            _say(f"{NUMA_AFFINITY_ENV}=1 binds threads across every host CPU; not splitting ranks")
+        return _exec(program)
     cpus = cpus_for_local_rank(allowed, local_rank, local_size, exclude, thread_siblings, numa_node)
     if cpus is not None:
         os.sched_setaffinity(0, cpus)
@@ -174,11 +183,17 @@ def main(argv: list[str]) -> None:
             )
         if exclude:
             kept = {cpu for core in usable_cores(allowed, exclude, thread_siblings) for cpu in core}
-            if kept:
-                os.sched_setaffinity(0, kept)
-                _say(f"local rank {local_rank} on CPUs {format_cpu_list(kept)}, without {format_cpu_list(exclude)}")
-            else:
-                _say(f"excluding {format_cpu_list(exclude)} leaves no CPUs; ignoring --exclude")
+            if not kept:
+                raise SystemExit(
+                    f"{PREFIX} excluding {format_cpu_list(exclude)} leaves none of CPUs {format_cpu_list(allowed)}; "
+                    "narrow --rank-cpu-exclude"
+                )
+            os.sched_setaffinity(0, kept)
+            _say(f"local rank {local_rank} on CPUs {format_cpu_list(kept)}, without {format_cpu_list(exclude)}")
+    _exec(program)
+
+
+def _exec(program: list[str]) -> None:
     try:
         os.execvp(program[0], program)
     except OSError as e:
