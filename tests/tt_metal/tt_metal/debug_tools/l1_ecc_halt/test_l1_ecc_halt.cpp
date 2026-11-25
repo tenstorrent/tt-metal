@@ -5,8 +5,8 @@
 // Blackhole silicon L1 ECC halt. The tests come in three kinds:
 // 1. Emulated halt: Blackhole has no L1 error injection, so the host writes the halt record the BRISC handler would
 //    write. These cover the host side: Finish and EventSynchronize report the halt, and the message names the cause.
-// 2. Real ECC errors: a NoC read past the end of L1 raises real DBEs from the unpopulated rows. The handler must
-//    return without halting.
+// 2. Real ECC errors: a NoC read or a load past the end of L1 raises real SBEs and DBEs from the unpopulated rows.
+//    Every DBE must interrupt, and the handler must return without halting.
 // 3. Real interrupt: the watchdog's software interrupt raises IRQ 3, and the real handler halts the core. Reopening
 //    the device must then release the BRISC from the handler.
 
