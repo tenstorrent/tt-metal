@@ -377,7 +377,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::CBFormatDescriptor::buffer_index,
             "Index of the buffer within the command buffer")
         .def_rw("data_format", &tt::tt_metal::CBFormatDescriptor::data_format, "Format of the data in the buffer")
-        .def_prop_ro(
+        .def_prop_rw(
             "data_format_as_uint8",
             [](const tt::tt_metal::CBFormatDescriptor& self) -> uint8_t {
                 // Return the raw tt::DataFormat enum value as uint8.
@@ -387,7 +387,13 @@ void py_module_types(nb::module_& mod) {
                 // variants, so we expose the raw value for reliable comparison.
                 return static_cast<uint8_t>(self.data_format);
             },
-            "Raw tt::DataFormat enum value as uint8 (reliable getter for all formats)")
+            [](tt::tt_metal::CBFormatDescriptor& self, uint8_t raw) {
+                // Set a format ttnn::DataType has no member for (e.g. Bfp2_b = 15, which the hardware packs and
+                // unpacks natively): the raw tt::DataFormat enum value.
+                self.data_format = static_cast<tt::DataFormat>(raw);
+            },
+            "Raw tt::DataFormat enum value as uint8 (get / set; set reaches formats ttnn::DataType lacks, e.g. Bfp2_b "
+            "15)")
         .def_rw("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes")
         .def_rw("tile", &tt::tt_metal::CBFormatDescriptor::tile, "Optional tile descriptor for custom tile dimensions")
         .def_rw(
