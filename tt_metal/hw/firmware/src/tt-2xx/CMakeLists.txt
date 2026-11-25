@@ -1,5 +1,4 @@
 add_library(metalium_firmware_2xx INTERFACE)
-add_library(TT::Metalium::Firmware2xx ALIAS metalium_firmware_2xx)
 
 # These source files are for the device, not host; will require cross compiling to lint them (future work).
 set_target_properties(
