@@ -9,8 +9,8 @@
 #include <vector>
 
 #include <hostdevcommon/fabric_common.h>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 

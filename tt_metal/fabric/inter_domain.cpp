@@ -8,7 +8,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
 
