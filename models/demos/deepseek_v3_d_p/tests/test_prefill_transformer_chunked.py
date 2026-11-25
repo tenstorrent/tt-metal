@@ -3138,8 +3138,10 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 )
 @pytest.mark.parametrize(
     "n_chunks",
-    [1, 2, 5, 10, 11, 20],
-    ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks_eleven", "chunks20"],
+    # 26 / 51 / 101: one chunk past a 128K / 256K / 512K cache, for the real-data perf captures
+    # (sparse_mla perf_cases.REAL_DATA_CASES).
+    [1, 2, 5, 10, 11, 20, 26, 51, 101],
+    ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks_eleven", "chunks20", "chunks26", "chunks51", "chunks101"],
 )
 # preload_isl (multiple of CHUNK): pretend the cache already holds this many prior KV tokens so the
 # measured chunks run at KV depth [preload_isl, preload_isl + n_chunks*CHUNK) WITHOUT first running prefill
@@ -3242,8 +3244,10 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     chunk_size,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
-    if preload_isl + n_chunks * chunk_size > SEQ_CACHE_NOPCC:
-        pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
+    # The cache grows past the sweep's default to fit the longer runs, which start from an empty cache.
+    seq_cache = max(SEQ_CACHE_NOPCC, n_chunks * chunk_size)
+    if preload_isl + n_chunks * chunk_size > seq_cache:
+        pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {seq_cache}-token cache")
     # Only the TRACED mode is gated. Untraced resolves to None (record-only, prints the table and asserts
     # nothing) because its per-chunk stddev is far wider than any band worth setting -- see
     # glm_chunked_perf_gate and the comment above GLM_TRACED_PERF_MARGIN.
@@ -3271,6 +3275,7 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         kv_cache_format=GLM_KV_CACHE_FORMAT,
         sp_axis=sp_axis,
         chunk_size=chunk_size,
+        seq_cache=seq_cache,
     )
 
 

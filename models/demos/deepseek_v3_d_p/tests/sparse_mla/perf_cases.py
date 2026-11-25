@@ -68,6 +68,10 @@ REAL_DATA_CASES = {
     # The 1M trace's prompt (code_debug), prefilled on a Galaxy with test_glm_prefill_transformer_chunked_no_pcc and
     # TT_PREFILL_DUMP_LAYERS=73 (layer 74's input, 102,400 rows).
     "64k": (GLM53_TRACES / "glm53-real-prompt-100k", 61440),
+    # Not captured yet (the test skips them): the same capture with chunks26 / chunks51 / chunks101.
+    "128k": (GLM53_TRACES / "glm53-real-prompt-133k", 128000),
+    "256k": (GLM53_TRACES / "glm53-real-prompt-261k", 256000),
+    "512k": (GLM53_TRACES / "glm53-real-prompt-517k", LONG_CACHE_TOKENS),
 }
 GLM53_CHECKPOINT = Path(os.environ.get("GLM53_HF_MODEL", "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4"))
 
