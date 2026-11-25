@@ -153,9 +153,7 @@ def test_multicast_writer_starts_from_the_far_corner_on_noc_1():
     arch) and NOC_1 routes a multicast from the bottom-right corner; the producers' multicast hung at the write
     barrier until the corners were swapped for it (the DRAM-sharded matmul factory swaps them the same way)."""
 
-    source = _source(
-        "mcast_phase.h"
-    )  # the phase body; mcast_writer.cpp runs it once, gr_fold's mcast_writer2.cpp twice
+    source = _source("mcast_phase.h")  # the phase body; mcast_writer.cpp runs it once
     writer = _source("mcast_writer.cpp")
     assert '#include "mcast_phase.h"' in writer
     assert "mcast_phase<SRC_CB, DST_CB, NUM_TILES, WRITE_TILES, EXTRA_CB, SEM_ID>(tiles_args, extra_args, 0);" in writer

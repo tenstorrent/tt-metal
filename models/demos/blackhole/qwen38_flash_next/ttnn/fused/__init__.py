@@ -52,8 +52,8 @@ from . import (
     sparse_sdpa_tiled,
     untilize_rows,
 )
-from . import gr_fold  # after gr_read: it composes gr_read's programs
-from . import gr_recip_last  # after gr_fold: it composes gr_fold's transports over gr_read's programs
+from . import gr_fold  # after gr_read: the TP line transport library (it reads gr_read's constants)
+from . import gr_recip_last  # after gr_fold: it runs gr_read's read over gr_fold's line transports
 from . import row_gather  # after gr_fold: it uses its line transport
 from . import row_reduce  # after gr_fold: it uses its line transport (QWEN38_ROW_REDUCE=0 turns it off)
 from . import moe_dense  # after router_tail, shared_expert, untilize_rows and gr_read: it hosts their kernels

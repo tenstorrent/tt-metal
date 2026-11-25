@@ -56,27 +56,25 @@ def test_registered_component_default_with_its_proof():
         and "oracle" in entry.component_proof
         and "43-prompt" in entry.component_proof
     )
-    assert entry.fused is gl.gr_read_recip_last and entry.composed is gr_fold.gr_read_fold
+    assert entry.fused is gl.gr_read_recip_last and entry.composed is gl._composed_read
     assert fused.resolve("gr_recip_last", {}) is gl.gr_read_recip_last
-    assert fused.resolve("gr_recip_last", {fused.OFF_ENV: "gr_recip_last"}) is gr_fold.gr_read_fold  # the fold's front
+    assert fused.resolve("gr_recip_last", {fused.OFF_ENV: "gr_recip_last"}) is gl._composed_read  # the gr_read chain
     assert fused.resolve("gr_recip_last", {fused.ENV: "gr_recip_last"}) is gl.gr_read_recip_last
     assert (
         fused.resolve("gr_recip_last", {fused.ENV: "gr_recip_last", fused.OFF_ENV: "gr_recip_last"})
-        is gr_fold.gr_read_fold
+        is gl._composed_read
     )
     assert "gr_recip_last" in fused.default_names()  # the registry's guard admits it: COMPONENT with its proof
     read = flat(inspect.getsource(gl.gr_read_recip_last))
     assert 'scaler_mode="chain",matmul="chain",read_front=read_front' in read
 
 
-def test_model_hook_takes_the_fold_place_when_enabled_and_creates_the_line_semaphores():
+def test_model_hook_takes_the_read_place_when_enabled_and_creates_the_line_semaphores():
     hook = GR_SOURCE[GR_SOURCE.index('if fused_kernels.enabled("gr_read"):') :]
-    assert 'name = "gr_fold" if fused_kernels.enabled("gr_fold") else "gr_read"' in hook
+    assert 'name = "gr_read"' in hook and 'enabled("gr_fold")' not in hook
     assert hook.index('if fused_kernels.enabled("gr_recip_last"):') < hook.index('name = "gr_recip_last"')
-    assert hook.index('name = "gr_recip_last"') < hook.index('if name in ("gr_fold", "gr_recip_last"):')
-    assert hook.index('if name in ("gr_fold", "gr_recip_last"):') < hook.index(
-        "fused_kernels.gr_fold.line_semaphores(mesh_device)"
-    )
+    assert hook.index('name = "gr_recip_last"') < hook.index('if name == "gr_recip_last":')
+    assert hook.index('if name == "gr_recip_last":') < hook.index("fused_kernels.gr_fold.line_semaphores(mesh_device)")
 
 
 def test_norm_core_compute_layout_and_bodies():
@@ -283,9 +281,6 @@ def test_reader_gate_transports_and_semaphores_are_gr_folds():
     # the same io order and output placements as gr_fold's front (low_rank_gate consumes them unchanged)
     assert "[residual,norm_scale,down_inject,gathered_stats,normalized,gathered]" in FRONT
     assert "outputs=((gathered_stats,None),(normalized,3),(gathered,None))" in FRONT
-    assert "outputs=((gathered_stats,None),(normalized,3),(gathered,None))" in flat(
-        inspect.getsource(gr_fold.stats_normalize_down_gather)
-    )
 
 
 def test_cb_indices_are_distinct_per_core_set():

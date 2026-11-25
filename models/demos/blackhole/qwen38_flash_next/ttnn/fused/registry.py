@@ -41,7 +41,6 @@ DEFAULT_ON: frozenset[str] = frozenset(
         "gdn_rows_wrap",
         "gdn_rows_scan",
         "gdn_step",
-        "gr_fold",
         "gr_read",
         "gr_recip_last",
         "gr_write",
@@ -92,7 +91,6 @@ TP8_READY: frozenset[str] = frozenset(
         "qsa_score_pages",  # QWEN38_TP8_QSA_SCORE_PAGES (default on)
         "gr_read",
         "ple",
-        "gr_fold",
         "gr_recip_last",
         "gdn_prefill_rows",
         "sparse_sdpa_tiled",

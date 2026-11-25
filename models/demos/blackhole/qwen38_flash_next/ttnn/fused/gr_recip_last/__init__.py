@@ -342,6 +342,12 @@ def gr_read_recip_last(module, residual, live_rows=None):
 gr_read_recip_last.supports_live_rows = True
 
 
+def _composed_read(module, residual):
+    """gr_read's composed chain with the rounding knobs pinned to the chain (scaler ``chain``, matmul ``chain``)."""
+
+    return gr_read.gr_read_fused(module, residual, scaler_mode="chain", matmul="chain")
+
+
 register(
     FusedKernel(
         name=NAME,
@@ -350,7 +356,7 @@ register(
         "class, on by default, resolved by the GR module when gr_read is on",
         tolerance=COMPONENT,
         fused=gr_read_recip_last,
-        composed=gr_fold.gr_read_fold,
+        composed=_composed_read,
         gate=None,  # the collectives need the TP_SIZE line: the component gate is the mesh replica with the oracle (dev tools)
         component_proof="the 1x4 replica against the CPU oracle on captured residual rows (layers 2/12/47 x rows 1/5/32, the checkpoint's attention-block weights), 2026-09-27: block-input rms_rel 0.0036-0.0045 where the composed fold reads 0.0038-0.0045 (inside 1.10x + 1e-3 on every row), |bias| <= 1.9e-4, ULP p99 8-16 against the fold's 8-16; the paired 43-prompt EOS-honoured served sample +2.99 % tok/s (95 % interval +1.15..+4.84), the pass 1.2-1.7 ms shorter",
     )

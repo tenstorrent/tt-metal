@@ -40,7 +40,6 @@ UNDECLARED: dict[tuple[str, str], str] = {
         "gdn_step",
         '"step"',
     ): "the GDN module's outputs are read on the same die (the state slot and the gated tile the out-projection consumes)",
-    ("gr_fold", '"sem_probe"'): "a probe read back to the host",
     ("gr_read", '"down_project"'): "a partial sum the caller hands to its gather (module._mark_partial)",
     ("gr_read", '"noc_probe"'): "a probe read back to the host",
     ("gr_write", '"write"'): "the residual written in place keeps its placement",
@@ -129,7 +128,7 @@ def test_every_launch_declares_its_output_placements_or_is_listed() -> None:
             assert key in UNDECLARED, f"{key} neither declares outputs= nor is listed with a reason"
     assert set(UNDECLARED) <= seen, sorted(set(UNDECLARED) - seen)
     declared = {k for k in seen if k not in UNDECLARED}
-    assert {("gr_fold", '"stats_normalize_down_gather"'), ("moe_dense", '"composite"')} <= declared
+    assert {("moe_dense", '"composite"')} <= declared
 
 
 def test_program_meta_carries_the_declared_placements(expect_error) -> None:

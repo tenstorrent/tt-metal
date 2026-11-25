@@ -18,7 +18,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
 FUSED = Path(fp.__file__).parent
 MODULES = sorted(FUSED.glob("*/__init__.py"))
 KERNELS = 36  # sub-packages under ttnn/fused
-LAUNCHES = 79  # run_program call sites over them (every one passes its meta, but the exempt ones below)
+LAUNCHES = 74  # run_program call sites over them (every one passes its meta, but the exempt ones below)
 # The streamed-matmul programs (QWEN38_MM_STREAM2, default on) and the routed-experts program (moe_experts): their
 # launches pass no meta yet.  Listed so the contract stays strict for every other program; their launches are counted apart.
 META_EXEMPT = {"mm_stream2": 2, "moe_experts": 1}
@@ -99,7 +99,7 @@ def test_every_meta_names_a_kernel_and_a_distinct_variant():
         seen[path.parent.name] = set(variants)
     # the served step's programs are legible by these names (the census table's rows)
     assert {"post", "post_sigmoid"} <= seen["moe_post"]
-    assert {"stats_normalize_down_gather", "normalize_down_gather", "stats_gather", "gather_line"} <= seen["gr_fold"]
+    assert "gr_fold" not in seen  # the line transport library launches nothing itself
     assert seen["gr_recip_last"] == {"stats_recip_down_gather"}
     assert {"normalize_down", "low_rank_gate", "normalize", "down_project", "low_rank", "gate", "stats"} <= seen[
         "gr_read"

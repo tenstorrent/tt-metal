@@ -60,7 +60,7 @@ on the 1-row loop under both).  A second fresh prefill reproduces the first bitw
 Decode chains run as fused programs (`ttnn/fused/`, built on `ttnn.generic_op`) where a kernel is bitwise against the
 chain it replaces on device, leaves every pinned table above unchanged and beats the previous step time in its own
 timing slot. On by default: `gr_read` with `gr_recip_last` (its front with the rsqrt applied after the down projection,
-COMPONENT class, its own section below; `QWEN38_FUSED_OFF=gr_recip_last` restores `gr_fold`), `gr_write`, `greedy_tail`, `moe_combine` (the prefill slab's
+COMPONENT class, its own section below; `QWEN38_FUSED_OFF=gr_recip_last` restores the gr_read chain), `gr_write`, `greedy_tail`, `moe_combine` (the prefill slab's
 MoE combine as one program), `moe_post`, `ple`, `position_derive`,
 `qsa_block`, `qsa_rows`, `router_tail`, `shared_expert`: the gated-residual read as two programs with its two all-gathers inside
 them (the stats, their gather, normalize + down-project and the partial gather as one program whose transport cores send
@@ -176,8 +176,7 @@ token at 32k -13.1 %; a four-die device test guards the mesh-topology seam the o
 `ttnn.prim.chunk_gdn_prep` / `chunk_gdn_scan`), bitwise the chain's on one p150 die at 64 and 2048 rows, the recurrent
 state and the FIR history included (PREFILL.md has the measured per-call figures).
 `QWEN38_FUSED_OFF=<name>[,...]` (or `all`) in the server's environment falls back to the composed
-chains; an unknown name in either variable refuses to start; `QWEN38_FUSED_OFF=gr_fold` runs the GR read's merged
-three-program form with the stock collectives (5 programs per read); `QWEN38_FUSED_GR_READ_MERGED=0` runs the GR read's
+chains; an unknown name in either variable refuses to start; `QWEN38_FUSED_GR_READ_MERGED=0` runs the GR read's
 split form (7 programs per read); `QWEN38_ROUTER_TAIL_LANES=0` runs the router tail's top-k on one core per tile (the
 same program, the LLK's four passes on that core); `QWEN38_ROUTER_TAIL_EXP_LIVE=0` runs the router tail's exp over every
 vector of every tile (the same bits, the full cost).
@@ -349,7 +348,7 @@ attention class of one slab is 5.5x shorter than the chain's (89.77 -> 16.28 ms)
 ## The GR read with the rsqrt applied last (`QWEN38_FUSED=gr_recip_last`, 2026-09-27)
 
 A COMPONENT-class fused kernel, on by default since 2026-09-27 with the component proof below recorded in its registry
-entry (it needs `gr_read`; `QWEN38_FUSED_OFF=gr_recip_last` restores the fold's front): `gr_recip_last` replaces `gr_fold`'s one-program front (the stats, their line gather, normalize and
+entry (it needs `gr_read`; `QWEN38_FUSED_OFF=gr_recip_last` restores the gr_read chain): `gr_recip_last` replaces `gr_fold`'s one-program front (the stats, their line gather, normalize and
 the down projection, the partials' line gather) with the same program re-associated so that nothing waits on the
 statistics exchange.  The fold's 5-row zone timeline (the MTP verify's rows, 111 traced calls, one 1x4 p150 line) puts
 22 of its 44.1 us per call between the two gathers waiting on rsqrt(mean): the norm compute 8.6, the 80-tile multicast

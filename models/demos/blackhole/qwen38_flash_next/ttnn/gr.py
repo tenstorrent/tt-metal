@@ -510,15 +510,13 @@ class Qwen38TTNNGatedResidual:
             )  # front v2 / v3 (flag on): the landing buffers of the decode row counts, not at the first warm call
         self._read_fused = None
         if fused_kernels.enabled("gr_read"):
-            # gr_fold (on by default) is gr_read's read with its collectives folded into the programs; it needs the mesh's
-            # global semaphores before any trace capture, so they are created here
-            name = "gr_fold" if fused_kernels.enabled("gr_fold") else "gr_read"
+            name = "gr_read"
             if fused_kernels.enabled("gr_recip_last"):
                 # the COMPONENT-class front (ttnn/fused/gr_recip_last: the rsqrt applied after the down projection),
-                # on by default, takes the fold's place; it runs on the same line transports (QWEN38_FUSED_OFF=gr_recip_last
-                # restores the fold)
+                # on by default; it runs on the line transports, which need the mesh's global semaphores before any
+                # trace capture, so they are created here (QWEN38_FUSED_OFF=gr_recip_last restores the gr_read chain)
                 name = "gr_recip_last"
-            if name in ("gr_fold", "gr_recip_last"):
+            if name == "gr_recip_last":
                 fused_kernels.gr_fold.line_semaphores(mesh_device)
             self._read_fused = fused_kernels.kernel(name).fused
             self.read = functools.partial(self._read_fused, self)
