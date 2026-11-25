@@ -38,6 +38,7 @@ import os
 import queue
 import signal
 import threading
+import types
 import time
 from types import SimpleNamespace
 
@@ -55,7 +56,16 @@ from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import build_mesh, repeat_interleave
 from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from ttml.modules import RunMode
-from ttml.trainers import GRPOConfig, GRPOTrainer, RolloutBatch, RolloutSampler, TrainerCallback, get_grpo_config
+from ttml.trainers import (
+    GRPOConfig,
+    GRPOTrainer,
+    MultiTurnConfig,
+    RolloutBatch,
+    RolloutSampler,
+    Tool,
+    TrainerCallback,
+    get_grpo_config,
+)
 from ttml.trainers.grpo_trainer import (
     RemoteRolloutConfig,
     grpo_ttml_model,
@@ -525,6 +535,7 @@ def test_setup_records_num_generation_batches(monkeypatch):
     trainer.optimizer_dict = {}
     trainer.callbacks = []
     trainer.reward_funcs = [lambda completions, **_: [0.0] * len(completions)]
+    trainer.tools = []
     trainer.rollout_sampler = _EchoSampler()
     trainer._rollout_client = None
 
@@ -625,9 +636,133 @@ def test_get_grpo_config_reads_rollout_backend():
     assert cfg.rollout_backend == "ttml_in_process_sync"
 
 
+def _multi_turn_yaml(multi_turn):
+    return {
+        "training_config": {
+            "model_source": "Qwen/Qwen3-1.7B",
+            "grpo_config": {**_GRPO_CONFIG_FIELDS, "rollout_backend": "ttt_remote_sync", "multi_turn": multi_turn},
+        },
+        "remote_rollout_config": {"mesh_shape": [1, 1], "max_batch_size": 1, "max_seq_len": 128},
+    }
+
+
+def test_get_grpo_config_takes_tool_call_format_from_model_type():
+    cfg = get_grpo_config(_multi_turn_yaml({"max_turns": 4}))
+    assert cfg.multi_turn == MultiTurnConfig(max_turns=4, tool_call_format="qwen3")
+
+
+def test_get_grpo_config_keeps_explicit_tool_call_format():
+    cfg = get_grpo_config(_multi_turn_yaml({"max_turns": 4, "tool_call_format": "qwen3"}))
+    assert cfg.multi_turn.tool_call_format == "qwen3"
+
+
+@pytest.mark.parametrize("value", [None, "hermes"])
+def test_multi_turn_rejects_bad_tool_call_format(expect_error, value):
+    with expect_error(ValueError, "'tool_call_format' must be one of"):
+        get_grpo_config(_multi_turn_yaml({"max_turns": 4, "tool_call_format": value}))
+
+
+def test_get_grpo_config_needs_tool_call_format_for_other_models(expect_error):
+    yaml_config = _multi_turn_yaml({"max_turns": 4})
+    yaml_config["training_config"]["model_source"] = "unsloth/Llama-3.2-1B-Instruct"
+    with expect_error(ValueError, "no default tool_call_format for model_type 'llama'"):
+        get_grpo_config(yaml_config)
+
+
+def test_get_grpo_config_rejects_null_multi_turn(expect_error):
+    with expect_error(ValueError, "'multi_turn' must be a section"):
+        get_grpo_config(_multi_turn_yaml(None))
+
+
+def test_grpo_config_rejects_multi_turn_in_process(expect_error):
+    with expect_error(ValueError, "'multi_turn' needs a ttt_remote_"):
+        GRPOConfig(**_HOST_GRPO_CONFIG, multi_turn=MultiTurnConfig(max_turns=2, tool_call_format="qwen3"))
+
+
+class _NamedTool(Tool):
+    description = "Test tool."
+    parameters = {"type": "object", "properties": {}}
+
+    def __init__(self, name):
+        self.name = name
+
+    def call(self, arguments):
+        return ""
+
+
+@pytest.mark.parametrize(
+    "with_multi_turn, tool_names, message",
+    [
+        (False, ["calculator"], "'tools' and grpo_config.multi_turn go together"),
+        (True, [], "'tools' and grpo_config.multi_turn go together"),
+        (True, ["calculator", "calculator"], "two tools have the same name"),
+    ],
+)
+def test_grpo_trainer_checks_tools(expect_error, with_multi_turn, tool_names, message):
+    config = GRPOConfig(
+        **_GRPO_CONFIG_FIELDS,
+        rollout_backend="ttt_remote_sync",
+        remote_rollout=RemoteRolloutConfig(mesh_shape=[1, 1], max_batch_size=1, max_seq_len=128),
+        multi_turn=MultiTurnConfig(max_turns=2, tool_call_format="qwen3") if with_multi_turn else None,
+    )
+    with expect_error(ValueError, message):
+        GRPOTrainer(
+            transformer_config=types.SimpleNamespace(model_type="qwen3"),
+            device_config=types.SimpleNamespace(enable_fsdp=False),
+            model_source="Qwen/Qwen3-1.7B",
+            dataset_func=lambda: None,
+            config=config,
+            reward_funcs=[lambda **kwargs: [0.0]],
+            optimizer_dict={},
+            tools=[_NamedTool(name) for name in tool_names],
+        )
+
+
 def test_layout_microbatch_rejects_short_prompt(expect_error):
     with expect_error(ValueError, "Prompt is too short"):
         layout_microbatch([[1]], [[2, 3]], pad_token=0)
+
+
+def test_layout_microbatch_applies_loss_mask():
+    prompts = [[11, 12], [21, 22, 23]]
+    completions = [[101, 102, 103, 104], [201, 202]]
+    loss_mask = np.zeros((2, 6), dtype=np.float32)
+    loss_mask[0, :4] = [1.0, 0.0, 0.0, 1.0]
+    loss_mask[1, :2] = [1.0, 1.0]
+    _, _, mask, _ = layout_microbatch(prompts, completions, 0, loss_mask)
+    np.testing.assert_array_equal(mask[0, :6], [0.0, 1.0, 0.0, 0.0, 1.0, 0.0])
+    np.testing.assert_array_equal(mask[1, :5], [0.0, 0.0, 1.0, 1.0, 0.0])
+
+
+def test_optimize_gives_loss_mask_to_the_loss(monkeypatch):
+    masks = []
+    monkeypatch.setattr(
+        GRPOTrainer, "_compute_loss_and_backward", lambda self, nlog_new, m, old, adv, n: masks.append(m)
+    )
+    monkeypatch.setattr(
+        GRPOTrainer,
+        "_compute_policy_nlog_probs",
+        lambda self, inputs, targets: SimpleNamespace(to_numpy=lambda *a, **k: np.zeros(inputs.shape, np.float32)),
+    )
+    trainer = object.__new__(GRPOTrainer)
+    trainer.config = GRPOConfig(**_HOST_GRPO_CONFIG)
+    trainer.model = SimpleNamespace(get_run_mode=lambda: RunMode.TRAIN)
+    trainer._optimizer = SimpleNamespace(zero_grad=lambda: None)
+    trainer._batch_layout = SimpleNamespace(composer=None)
+    trainer._completions_per_microbatch = 2
+    trainer._pad_token = 0
+    trainer.metrics = {}
+    loss_mask = np.zeros((2, 4), dtype=np.float32)
+    loss_mask[:, :3] = [1.0, 0.0, 1.0]
+    batch = RolloutBatch(
+        weight_version=0,
+        prompts=[[1, 2], [1, 2]],
+        completions=[[3, 4, 5], [3, 4, 5]],
+        logprobs=np.full((2, 4), -0.5, dtype=np.float32),
+        loss_mask=loss_mask,
+    )
+    trainer._optimize(batch, np.zeros(2, dtype=np.float32))
+    np.testing.assert_array_equal(masks[0][:, :5], [[0.0, 1.0, 0.0, 1.0, 0.0]] * 2)
 
 
 def _to_capitals_chat_prompt(tokenizer, user_text: str) -> str:
@@ -724,6 +859,18 @@ def test_grpo_config_accepts_trl_lr_scheduler_types(lr_scheduler_type):
     ],
 )
 def test_grpo_config_rejects_invalid_lr_and_clip(expect_error, override, message):
+    with expect_error(ValueError, message):
+        GRPOConfig(**{**_HOST_GRPO_CONFIG, **override})
+
+
+@pytest.mark.parametrize(
+    "override, message",
+    [
+        ({"loss_type": "dapo"}, "'loss_type' must be one of"),
+        ({"max_completion_length": 0}, "'max_completion_length' must be > 0"),
+    ],
+)
+def test_grpo_config_rejects_invalid_loss_settings(expect_error, override, message):
     with expect_error(ValueError, message):
         GRPOConfig(**{**_HOST_GRPO_CONFIG, **override})
 
@@ -1050,6 +1197,47 @@ def test_compute_policy_nlog_probs_divides_logits_by_temperature(temperature):
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+@pytest.mark.requires_device
+@pytest.mark.parametrize("loss_type", ["grpo", "dr_grpo"])
+def test_compute_grpo_loss_matches_numpy(loss_type):
+    B, Tp, max_completion_length, global_len, eps = 2, 32, 16, 4, 0.2
+    rng = np.random.default_rng(0)
+    bf16 = lambda x: torch.from_numpy(x.astype(np.float32)).bfloat16().float().numpy()
+    old = bf16(rng.uniform(0.5, 2.0, size=(B, Tp)))
+    new = bf16(old + rng.normal(scale=0.3, size=(B, Tp)))
+    mask = np.zeros((B, Tp), dtype=np.float32)
+    mask[0, 3:8] = 1.0
+    mask[1, 3:15] = 1.0
+    adv = np.array([1.0, 0.5], dtype=np.float32)
+
+    def constant(x, layout):
+        tensor = ttml.autograd.Tensor.from_numpy(x, layout, ttnn.DataType.BFLOAT16)
+        tensor.set_requires_grad(False)
+        return tensor
+
+    adv_tt = ttml.autograd.create_tensor(grpo_trainer_module.upload_micro_advantages(adv, None, 1), requires_grad=False)
+    trainer = GRPOTrainer.__new__(GRPOTrainer)
+    loss = trainer._compute_grpo_loss(
+        constant(old, ttnn.Layout.TILE),
+        constant(new, ttnn.Layout.TILE),
+        constant(mask, ttnn.Layout.ROW_MAJOR),
+        adv_tt,
+        global_len,
+        eps,
+        loss_type=loss_type,
+        max_completion_length=max_completion_length,
+    )
+
+    ratio = np.exp(old - new)
+    surr = np.minimum(ratio * adv[:, None], np.clip(ratio, 1 - eps, 1 + eps) * adv[:, None]) * mask
+    if loss_type == "grpo":
+        expected = -(surr.sum(axis=1) / mask.sum(axis=1)).sum() / global_len
+    else:
+        expected = -surr.sum() / (global_len * max_completion_length)
+    np.testing.assert_allclose(loss.to_numpy(ttnn.DataType.FLOAT32).item(), expected, rtol=2e-2)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
 def _make_muon_with_adamw():
     from ttml.common.muon_optimizer import MuonWithAdamW
 
@@ -1221,17 +1409,35 @@ def test_mpi_rollout_loopback(mpi_loopback, expect_error):
     assert at_exit == [os._exit, client.shutdown]
 
     client.send_weights({}, version=0)
-    assert client.remote_generate([[1, 2], [3]]) == ([[1, 2], [3]], [[-0.5, -0.5], [-0.5]], 0)
+    assert client.remote_generate([[1, 2], [3]]) == ([[1, 2], [3]], [[-0.5, -0.5], [-0.5]], 0, None)
     with expect_error(RuntimeError, r"rollout rank 1 failed:[\s\S]*ValueError: empty prompt"):
         client.remote_generate([[1], []])
     with expect_error(RuntimeError, r"rollout rank 1 failed:[\s\S]*ValueError: version 0 <= 0"):
         client.send_weights({}, version=0)
-    _, _, version = client.remote_generate([[4]])
+    _, _, version, _ = client.remote_generate([[4]])
     assert version == 0
 
     client.shutdown()
     thread.join(timeout=30)
     assert at_exit == [client.shutdown]
+
+
+class _MaskedEchoSampler(_EchoSampler):
+    """_EchoSampler with loss mask 1.0 on the first token of each completion and 0.0 on the others."""
+
+    def generate(self, prompts):
+        batch = super().generate(prompts)
+        batch.loss_mask = np.zeros_like(batch.logprobs)
+        batch.loss_mask[:, 0] = 1.0
+        return batch
+
+
+def test_mpi_rollout_loopback_sends_loss_mask(mpi_loopback):
+    client, thread = _start_rollout_server(_MaskedEchoSampler())
+    client.send_weights({}, version=0)
+    assert client.remote_generate([[1, 2], [3]])[3] == [[1.0, 0.0], [1.0]]
+    client.shutdown()
+    thread.join(timeout=30)
 
 
 class _IdsTokenizer:
@@ -1454,6 +1660,19 @@ def test_validate_rollout_batch_rejects(expect_error, completions, logprobs, mes
         validate_rollout_batch(rollout, num_prompts=1, num_generations=2, max_completion_length=4)
 
 
+@pytest.mark.parametrize("loss_mask", [np.ones((2, 3), np.float32), np.ones((2, 4), np.float64)])
+def test_validate_rollout_batch_rejects_bad_loss_mask(expect_error, loss_mask):
+    rollout = RolloutBatch(
+        weight_version=0,
+        prompts=[[1], [1]],
+        completions=[[7], [7]],
+        logprobs=np.zeros((2, 4), np.float32),
+        loss_mask=loss_mask,
+    )
+    with expect_error(RuntimeError, "loss_mask must be None or a float32 array"):
+        validate_rollout_batch(rollout, num_prompts=1, num_generations=2, max_completion_length=4)
+
+
 class _FakeRolloutClient:
     """Records weight pushes; remote_generate echoes the prompts at the version the rollout rank holds."""
 
@@ -1468,7 +1687,7 @@ class _FakeRolloutClient:
             self.version = version
 
     def remote_generate(self, prompts):
-        return prompts, [[-0.5] * len(p) for p in prompts], self.version
+        return prompts, [[-0.5] * len(p) for p in prompts], self.version, None
 
 
 def _sync_source(monkeypatch, client, weight_sync_every):
@@ -1484,6 +1703,17 @@ def _sync_source(monkeypatch, client, weight_sync_every):
         max_completion_length=4,
         weight_sync_every=weight_sync_every,
     )
+
+
+def test_sync_source_pads_the_loss_mask(monkeypatch):
+    class _MaskClient(_FakeRolloutClient):
+        def remote_generate(self, prompts):
+            return *super().remote_generate(prompts)[:3], [[0.0] * len(p) for p in prompts]
+
+    source = _sync_source(monkeypatch, _MaskClient(), weight_sync_every=1)
+    source.update_weights(None, 0)
+    rollout = next(iter(source)).rollout
+    assert rollout.loss_mask.shape == rollout.logprobs.shape and not rollout.loss_mask.any()
 
 
 def test_in_process_source_update_weights_returns_zero_duration_and_updates_sampler_version():
@@ -1561,6 +1791,16 @@ def _scored_batch(version):
         generation_time_s=0.25,
         reward_time_s=0.125,
     )
+
+
+def test_rollout_queue_codec_keeps_loss_mask():
+    scored = _scored_batch(0)
+    assert rollout_queue._decode(rollout_queue._encode(scored)).rollout.loss_mask is None
+    scored.rollout.loss_mask = np.zeros((2, 4), dtype=np.float32)
+    scored.rollout.loss_mask[0, :2] = [1.0, 0.0]
+    scored.rollout.loss_mask[1, 0] = 1.0
+    decoded = rollout_queue._decode(rollout_queue._encode(scored)).rollout.loss_mask
+    np.testing.assert_array_equal(decoded, scored.rollout.loss_mask)
 
 
 def test_rollout_queue_loopback(monkeypatch):
@@ -2232,7 +2472,9 @@ class _FirstBlockGrads(TrainerCallback):
                 self.grads[name] = np.asarray(ttml.Sharding.from_tensor(grad).gather(grad), dtype=np.float32)
 
 
-def _first_block_grads_after_one_step(fresh_device_mesh, device_config, gradient_accumulation_steps, scored=None):
+def _first_block_grads_after_one_step(
+    fresh_device_mesh, device_config, gradient_accumulation_steps, loss_type, scored=None
+):
     """One GRPO step of Qwen3-0.6B on a fresh mesh; generates the scored batch unless ``scored`` is given."""
     recorder = _FirstBlockGrads()
     mesh = build_mesh(device_config)
@@ -2248,6 +2490,7 @@ def _first_block_grads_after_one_step(fresh_device_mesh, device_config, gradient
                 "prompts_to_train": 4,
                 "max_completion_length": 8,
                 "gradient_accumulation_steps": gradient_accumulation_steps,
+                "loss_type": loss_type,
                 "disable_default_monitor": True,
             }
         )
@@ -2270,8 +2513,9 @@ def _first_block_grads_after_one_step(fresh_device_mesh, device_config, gradient
 
 
 @pytest.mark.requires_device
+@pytest.mark.parametrize("loss_type", ["grpo", pytest.param("dr_grpo", marks=pytest.mark.slow)])
 @pytest.mark.parametrize("parallelism", ["enable_ddp", "enable_fsdp"])
-def test_grpo_gradients_match_across_device_counts(fresh_device_mesh, parallelism):
+def test_grpo_gradients_match_across_device_counts(fresh_device_mesh, parallelism, loss_type):
     """Gradients don't depend on the device count.
 
     One step on the same 8 completions: 1 device runs two micro-batches of 4, and a
@@ -2282,8 +2526,8 @@ def test_grpo_gradients_match_across_device_counts(fresh_device_mesh, parallelis
     one_device = DeviceConfig({"device_config": {"mesh_shape": [1, 1]}})
     two_devices = DeviceConfig({"device_config": {parallelism: True, "mesh_shape": [1, 2]}})
 
-    actual, scored = _first_block_grads_after_one_step(fresh_device_mesh, two_devices, 1)
-    expected, _ = _first_block_grads_after_one_step(fresh_device_mesh, one_device, 2, scored)
+    actual, scored = _first_block_grads_after_one_step(fresh_device_mesh, two_devices, 1, loss_type)
+    expected, _ = _first_block_grads_after_one_step(fresh_device_mesh, one_device, 2, loss_type, scored)
 
     assert expected and actual.keys() == expected.keys()
     for name, grad in expected.items():

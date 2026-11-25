@@ -102,6 +102,7 @@ def build_sampler(
     max_seq_len: int = MAX_SEQ_LEN,
     model_source: str = MODEL_ID,
     instruct: bool = True,
+    **sampler_kwargs: Any,
 ):
     """Build a :class:`TTTRolloutSampler` wrapped in :class:`_TttSampler`.
 
@@ -131,6 +132,7 @@ def build_sampler(
         top_p=1.0,
         seed=0,
         dummy_weights=dummy_weights,
+        **sampler_kwargs,
     )
     return _TttSampler(worker, model_source)
 
@@ -143,6 +145,7 @@ def open_sampler(
     max_seq_len: int = MAX_SEQ_LEN,
     model_source: str = MODEL_ID,
     instruct: bool = True,
+    **sampler_kwargs: Any,
 ):
     """Open the device, build a TTT sampler, and tear both down on exit.
 
@@ -168,6 +171,7 @@ def open_sampler(
             max_seq_len=max_seq_len,
             model_source=model_source,
             instruct=instruct,
+            **sampler_kwargs,
         )
         yield sampler
     finally:

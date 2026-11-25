@@ -17,7 +17,7 @@ import random
 import sys
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import os
 import numpy as np
@@ -40,6 +40,7 @@ from ttml.modules import RunMode
 from ..callback import TrainerCallback
 from .distributed import BatchLayout, exit_on_error, init_distributed_training, is_rollout_rank, resolve_batch_layout
 from .grpo_ttml_model import CHECKPOINT_FILE, setup_ttml_model
+from .tool_calling import TOOL_CALL_PARSERS, Tool, default_tool_call_format
 
 if TYPE_CHECKING:
     from .rollout_batch_source import RolloutBatchSource, ScoredRolloutBatch
@@ -64,12 +65,15 @@ class RolloutBatch:
             log pi_old(a_t | s_t): the full-vocab log_softmax of logits / temperature
             (unscaled at temperature 0), without top_k/top_p. Padding positions are don't-care; the
             trainer masks them out.
+        loss_mask: [B, max_completion_length] float32, or None to train on all completion tokens.
+            1.0 on a sampled token, 0.0 on a tool-response token.
     """
 
     weight_version: int
     prompts: List[List[int]]
     completions: List[List[int]]
     logprobs: np.ndarray
+    loss_mask: Optional[np.ndarray] = None
 
 
 class RolloutSampler(ABC):
@@ -128,6 +132,8 @@ def build_rollout_sampler(
     model_source: Optional[str] = None,
     mesh_device: Any = None,
     remote_rollout: Optional[RemoteRolloutConfig] = None,
+    multi_turn: Optional[MultiTurnConfig] = None,
+    tools: Sequence[Tool] = (),
 ) -> RolloutSampler:
     """Build the :class:`RolloutSampler` named by ``source``.
 
@@ -164,6 +170,8 @@ def build_rollout_sampler(
             top_k=remote_rollout.top_k,
             top_p=remote_rollout.top_p,
             dummy_weights=True,
+            multi_turn=multi_turn,
+            tools=tools,
         )
     raise ValueError(f"unknown rollout sampler {source!r}")
 
@@ -179,6 +187,28 @@ class RemoteRolloutConfig:
     top_p: float = 1.0
     # ttt_remote_async: scored batches buffered on each rank.
     rollout_queue_capacity: int = 2
+
+
+@dataclass
+class MultiTurnConfig:
+    """Multi-turn tool-calling rollouts, from the grpo_config.multi_turn yaml section."""
+
+    max_turns: int
+    tool_call_format: str
+    max_tool_response_chars: int = 2048
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tool_call_format, str) or self.tool_call_format not in TOOL_CALL_PARSERS:
+            raise ValueError(
+                f"grpo_config.multi_turn: 'tool_call_format' must be one of {list(TOOL_CALL_PARSERS)} "
+                f"(got {self.tool_call_format!r}); remove the key to use the model_type of model_source."
+            )
+        if self.max_turns < 1:
+            raise ValueError(f"grpo_config.multi_turn: 'max_turns' must be >= 1 (got {self.max_turns}).")
+        if self.max_tool_response_chars < 1:
+            raise ValueError(
+                f"grpo_config.multi_turn: 'max_tool_response_chars' must be >= 1 (got {self.max_tool_response_chars})."
+            )
 
 
 @dataclass
@@ -214,6 +244,10 @@ class GRPOConfig:
     # "ttt_remote_sync": tt-transformers on rank 1 of a 2-rank tt-run job, on request.
     # "ttt_remote_async": tt-transformers on rank 1, generating and scoring continuously with the newest pushed weights.
     rollout_backend: str
+    # Token aggregation of the clipped surrogate; values follow TRL's ``loss_type``:
+    #   "grpo"    -> divide each completion's token sum by its length, then average over completions.
+    #   "dr_grpo" -> divide the token sum of all completions by completions * ``max_completion_length``.
+    loss_type: str = "grpo"
     # LR schedule; values follow TRL's ``lr_scheduler_type``:
     #   "constant"             -> flat at base_lr; ``warmup_steps`` is ignored.
     #   "constant_with_warmup" -> linear warmup, then flat at base_lr.
@@ -250,6 +284,8 @@ class GRPOConfig:
     # ttt_remote_async: drop a batch generated with weights more than max_staleness optimizer steps older than
     # the policy.
     max_staleness: int = 0
+    # Multi-turn tool-calling rollouts (ttt_remote_* only), from the grpo_config.multi_turn yaml section.
+    multi_turn: Optional[MultiTurnConfig] = None
 
     def __post_init__(self) -> None:
         # num_generations is the GRPO group size: each prompt must produce at least
@@ -270,6 +306,7 @@ class GRPOConfig:
             ("num_iterations", self.num_iterations),
             ("gradient_accumulation_steps", self.gradient_accumulation_steps),
             ("prompts_to_train", self.prompts_to_train),
+            ("max_completion_length", self.max_completion_length),
         ):
             if _val <= 0:
                 raise ValueError(f"grpo_config: '{_name}' must be > 0 (got {_val}).")
@@ -295,6 +332,8 @@ class GRPOConfig:
                 f"grpo_config: 'lr_scheduler_type' must be one of {sorted(_allowed_lr_scheduler)} "
                 f"(got {self.lr_scheduler_type!r})."
             )
+        if self.loss_type not in ("grpo", "dr_grpo"):
+            raise ValueError(f"grpo_config: 'loss_type' must be one of ['dr_grpo', 'grpo'] (got {self.loss_type!r}).")
         # ``min_lr_rate`` is a fraction of base_lr (TRL semantics). Only
         # consulted by "cosine_with_min_lr"; still validate the range so a
         # misconfigured yaml fails at construction rather than silently.
@@ -343,6 +382,10 @@ class GRPOConfig:
                     "training waits for a fresh batch from inference, and inference waits for new weights from "
                     "training, forever. 'max_staleness' >= 'weight_sync_every' - 'num_iterations' is required."
                 )
+        if self.multi_turn is not None and self.backend.sampler != "ttt":
+            raise ValueError(
+                f"grpo_config: 'multi_turn' needs a ttt_remote_* rollout_backend (got {self.rollout_backend!r})."
+            )
         if not self.backend.in_process and self.remote_rollout is None:
             raise ValueError(
                 f"grpo_config: rollout_backend={self.rollout_backend!r} needs a top-level "
@@ -427,6 +470,22 @@ def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
     remote_section = yaml_config.get("remote_rollout_config")
     if remote_section is not None:
         fields.setdefault("remote_rollout", RemoteRolloutConfig(**remote_section))
+
+    if "multi_turn" in fields:
+        multi_turn = fields.pop("multi_turn")
+        if not isinstance(multi_turn, dict):
+            raise ValueError("grpo_config: 'multi_turn' must be a section; remove it for single-turn rollouts.")
+        multi_turn = dict(multi_turn)
+        if "tool_call_format" not in multi_turn:
+            from transformers import AutoConfig
+
+            model_source = tc.get("model_source")
+            if model_source is None:
+                raise ValueError("grpo_config.multi_turn: set 'tool_call_format' or training_config.model_source.")
+            multi_turn["tool_call_format"] = default_tool_call_format(
+                AutoConfig.from_pretrained(model_source).model_type
+            )
+        fields["multi_turn"] = MultiTurnConfig(**multi_turn)
 
     return GRPOConfig(**fields)
 
@@ -923,6 +982,7 @@ def layout_microbatch(
     prompts: List[List[int]],
     completions: List[List[int]],
     pad_token: int,
+    loss_mask_rows: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Right-padded next-token layout for one micro-batch.
 
@@ -930,7 +990,7 @@ def layout_microbatch(
     prediction: ``inputs[i, :L] = seq[:-1]`` and ``targets[i, :L] = seq[1:]``
     with ``L = len(seq) - 1``; pad tokens fill ``[L, Tp)``. Completion token
     ``j`` is therefore predicted at column ``len(prompts[i]) - 1 + j``, which is
-    where ``mask`` is 1.0. ``Tp`` is the tile-rounded max ``L`` over the
+    where ``mask`` is 1.0, or ``loss_mask_rows[i, j]``. ``Tp`` is the tile-rounded max ``L`` over the
     micro-batch. Padding only on the right means a plain causal mask keeps real
     tokens from attending to pads.
 
@@ -951,7 +1011,7 @@ def layout_microbatch(
         L = len(seq) - 1
         inputs[i, :L] = np.asarray(seq[:-1], dtype=np.uint32)
         targets[i, :L] = np.asarray(seq[1:], dtype=np.uint32)
-        mask[i, len(p) - 1 : len(p) - 1 + len(c)] = 1.0
+        mask[i, len(p) - 1 : len(p) - 1 + len(c)] = 1.0 if loss_mask_rows is None else loss_mask_rows[i, : len(c)]
     return inputs, targets, mask, Tp
 
 
@@ -1095,6 +1155,7 @@ class GRPOTrainer:
         optimizer_dict: Optional[dict] = None,
         callbacks: Optional[List[Any]] = None,
         reward_funcs: Optional[List[Callable[..., List[float]]]] = None,
+        tools: Sequence[Tool] = (),
     ) -> None:
         """
         Args:
@@ -1106,6 +1167,7 @@ class GRPOTrainer:
                 with checkpoints.
             dataset_func: Zero-argument callable that returns the training
                 dataset. The trainer calls it once, in the constructor.
+            tools: Tools the model can call; needs ``config.multi_turn``.
 
         The trainer opens the device and builds the policy model and tokenizer
         (``self.model`` / ``self.tokenizer``) with
@@ -1131,9 +1193,15 @@ class GRPOTrainer:
         _validate_remote_inputs(config, transformer_config, device_config, model_source)
 
         self._init_rewards(reward_func, reward_funcs)
+        tools = list(tools)
+        if (config.multi_turn is None) != (not tools):
+            raise ValueError("GRPOTrainer: 'tools' and grpo_config.multi_turn go together; set both or neither.")
+        if len({tool.name for tool in tools}) != len(tools):
+            raise ValueError("GRPOTrainer: two tools have the same name.")
 
         # Constructor inputs (immutable during ``train``).
         self.config = config
+        self.tools: List[Tool] = tools
         self.optimizer_dict = optimizer_dict
         self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
@@ -1257,6 +1325,8 @@ class GRPOTrainer:
             max_completion_length=cfg.max_completion_length,
             temperature=cfg.temperature,
             completions_per_prompt=cfg.num_generations,
+            multi_turn=cfg.multi_turn,
+            tools=self.tools,
         )
         self._rollout_server = self._build_rollout_server(device_config, dataset_func)
 
@@ -1350,6 +1420,8 @@ class GRPOTrainer:
         completions_batch_len: int,
         eps: float,
         ddp_world_size: int = 1,
+        loss_type: str = "grpo",
+        max_completion_length: Optional[int] = None,
     ) -> ttml.autograd.Tensor:
         """Compute the clipped GRPO surrogate loss.
 
@@ -1371,10 +1443,15 @@ class GRPOTrainer:
         surr2 = clipped_ratio * adv_ttml
         surr = ttml.ops.binary.min(surr1, surr2)
 
-        # Per-completion normalised weight: w[i,t] = mask[i,t] / max(sum_t(mask[i,t]), 1)
         mask_val = mask.get_value()
-        tokens_per_completion = ttnn.maximum(ttnn.sum(mask_val, dim=1, keepdim=True), 1.0)
-        weight_tt = ttml.autograd.create_tensor(ttnn.div(mask_val, tokens_per_completion), requires_grad=False)
+        if loss_type == "dr_grpo":
+            # Constant weight: w[i,t] = mask[i,t] / max_completion_length
+            weight_val = ttnn.multiply(mask_val, 1.0 / max_completion_length)
+        else:
+            # Per-completion normalised weight: w[i,t] = mask[i,t] / max(sum_t(mask[i,t]), 1)
+            tokens_per_completion = ttnn.maximum(ttnn.sum(mask_val, dim=1, keepdim=True), 1.0)
+            weight_val = ttnn.div(mask_val, tokens_per_completion)
+        weight_tt = ttml.autograd.create_tensor(weight_val, requires_grad=False)
 
         weighted_surr = surr * weight_tt
         weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B_local, Tp])
@@ -1479,7 +1556,7 @@ class GRPOTrainer:
                 f"{grad_accum} = {generation_batch_prompts}) to avoid a ragged final batch that can break "
                 "micro-batch sharding"
             )
-        prompts, extra_columns = tokenize_prompts(dataset, tokenizer, total_prompts)
+        prompts, extra_columns = tokenize_prompts(dataset, tokenizer, total_prompts, tools=self.tools)
         return prompts, extra_columns, generation_batch_prompts
 
     # -- phase helpers -------------------------------------------------------
@@ -1570,7 +1647,8 @@ class GRPOTrainer:
         micro_batch_logprobs = []
         for i, (p, c) in enumerate(iter_micro_batch(batch.prompts, batch.completions, mb)):
             rows = slice(i * mb, i * mb + len(c))
-            inputs, targets, mask_np, Tp = layout_microbatch(p, c, self._pad_token)
+            loss_mask_rows = None if batch.loss_mask is None else batch.loss_mask[rows]
+            inputs, targets, mask_np, Tp = layout_microbatch(p, c, self._pad_token, loss_mask_rows)
             old_np = place_old_nlog_probs(p, c, batch.logprobs[rows], Tp)
             nlog_new = self._compute_policy_nlog_probs(inputs, targets)
             self._compute_loss_and_backward(nlog_new, mask_np, old_np, advantages_np[rows], global_len)
@@ -1629,6 +1707,8 @@ class GRPOTrainer:
             global_len,
             self.config.epsilon,
             ddp_world_size=self._batch_layout.grad_sync_world_size,
+            loss_type=self.config.loss_type,
+            max_completion_length=self.config.max_completion_length,
         )
         loss.backward(retain_graph=False)
         ttml.autograd.AutoContext.get_instance().reset_graph()

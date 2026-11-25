@@ -7,12 +7,13 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 from ttml.common.utils import repeat_interleave
 
 from .grpo_trainer import RolloutBatch, RolloutSampler, _derive_reward_names, dispatch_reward
+from .tool_calling import Tool
 
 
 @dataclass
@@ -55,6 +56,12 @@ def validate_rollout_batch(
             f"logprobs must be a float32 array of shape [{B}, {max_completion_length}], "
             f"got {getattr(lp, 'dtype', type(lp))} {getattr(lp, 'shape', '')}"
         )
+    mask = rollout.loss_mask
+    if mask is not None and (not isinstance(mask, np.ndarray) or mask.shape != lp.shape or mask.dtype != np.float32):
+        raise RuntimeError(
+            f"loss_mask must be None or a float32 array of shape [{B}, {max_completion_length}], "
+            f"got {getattr(mask, 'dtype', type(mask))} {getattr(mask, 'shape', '')}"
+        )
     for r, c in enumerate(rollout.completions):
         if len(c) > max_completion_length:
             raise RuntimeError(f"row {r}: completion length {len(c)} > max_completion_length {max_completion_length}")
@@ -78,17 +85,32 @@ def pad_logprobs(completions: List[List[int]], token_logprobs: List[List[float]]
 
 
 def encode_rollout(rollout: RolloutBatch) -> Dict[str, Any]:
-    """JSON fields of a rollout: completions, their log-probs without the padding, and the weight version."""
-    return {
+    """JSON fields of a rollout: completions, their log-probs and loss masks without the padding, and the weight
+    version."""
+    fields = {
         "completions": [[int(t) for t in c] for c in rollout.completions],
         "logprobs": [rollout.logprobs[r, : len(c)].tolist() for r, c in enumerate(rollout.completions)],
         "weight_version": int(rollout.weight_version),
     }
+    if rollout.loss_mask is not None:
+        fields["loss_mask"] = [rollout.loss_mask[r, : len(c)].tolist() for r, c in enumerate(rollout.completions)]
+    return fields
 
 
-def tokenize_prompts(dataset: Any, tokenizer: Any, num_prompts: int) -> Tuple[List[List[int]], Dict[str, list]]:
+def tokenize_prompts(
+    dataset: Any, tokenizer: Any, num_prompts: int, tools: Sequence[Tool] = ()
+) -> Tuple[List[List[int]], Dict[str, list]]:
+    """A "prompt" that is a list of chat messages gets the chat template, with the tool schemas in the system prompt."""
     dataset = dataset.select(range(num_prompts))
-    prompts = [tokenizer.encode(row["prompt"], add_special_tokens=False) for row in dataset]
+    schemas = [tool.schema() for tool in tools] or None
+    prompts = [
+        tokenizer.apply_chat_template(
+            row["prompt"], tools=schemas, add_generation_prompt=True, tokenize=True, return_dict=False
+        )
+        if isinstance(row["prompt"], list)
+        else tokenizer.encode(row["prompt"], add_special_tokens=False)
+        for row in dataset
+    ]
     extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
     return prompts, extra_columns
 

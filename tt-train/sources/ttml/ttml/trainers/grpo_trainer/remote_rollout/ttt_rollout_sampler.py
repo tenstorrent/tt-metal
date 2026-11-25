@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import torch
 import ttnn
 from huggingface_hub import snapshot_download
+from transformers import AutoTokenizer
 from models.common.sampling import SamplingParams
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -26,8 +27,9 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttml.common.utils import repeat_interleave
 
-from ..grpo_trainer import RolloutBatch, RolloutSampler
+from ..grpo_trainer import MultiTurnConfig, RolloutBatch, RolloutSampler
 from ..rollout_batch_source import pad_logprobs, validate_rollout_batch
+from ..tool_calling import TOOL_CALL_PARSERS, Tool, generate_tool_turns
 
 OptimizationsFn = Callable[[int, str], Any]
 
@@ -67,7 +69,11 @@ class TTTRolloutSampler(RolloutSampler):
         paged_block_size: int = 32,
         min_num_blocks: int = 1024,
         dummy_weights: bool = False,
+        multi_turn: Optional[MultiTurnConfig] = None,
+        tools: Sequence[Tool] = (),
     ) -> None:
+        if (multi_turn is None) != (not tools):
+            raise ValueError("TTTRolloutSampler: 'tools' and 'multi_turn' go together; set both or neither.")
         self.parent_mesh: Any = mesh_device
         self._dtype: Any = ttnn.bfloat16
         self._stop_token_ids: frozenset[int] = frozenset(int(t) for t in stop_token_ids)
@@ -75,6 +81,13 @@ class TTTRolloutSampler(RolloutSampler):
         self._completions_per_prompt: int = int(completions_per_prompt)
         self._max_completion_length: int = int(max_completion_length)
         self._weight_version: int = -1 if dummy_weights else 0
+        self._multi_turn = multi_turn
+        self._tools: Dict[str, Tool] = {tool.name: tool for tool in tools}
+        self._tool_call_parser = (
+            TOOL_CALL_PARSERS[multi_turn.tool_call_format](AutoTokenizer.from_pretrained(model_source))
+            if multi_turn is not None
+            else None
+        )
 
         # one [1,1] submesh per device of the parent mesh
         self._data_parallel: int = mesh_device.get_num_devices()
@@ -184,13 +197,17 @@ class TTTRolloutSampler(RolloutSampler):
             f"top_k={top_k} and top_p={top_p} are not applied"
         )
         self._sampling_warmed_up = False
+        self._histories: Optional[List[Optional[List[int]]]] = None
 
     @property
     def weight_version(self) -> int:
         return self._weight_version
 
     def generate(self, prompts: List[List[int]]) -> RolloutBatch:
-        """Generate completions_per_prompt completions per prompt, in calls of at most slots_per_call."""
+        """Generate completions_per_prompt completions per prompt, in calls of at most slots_per_call.
+
+        With multi_turn, a completion holds all turns and the tool responses; tool-response tokens have log-prob 0.
+        """
         if self._weight_version < 0:
             raise RuntimeError("TTTRolloutSampler has dummy weights; call update_weights before generate")
         version = self._weight_version
@@ -198,13 +215,30 @@ class TTTRolloutSampler(RolloutSampler):
         prompts_x = repeat_interleave(prompts, g)
         completions: List[List[int]] = []
         token_logprobs: List[List[float]] = []
+        loss_masks: List[List[float]] = []
         for start in range(0, len(prompts_x), self._slots_per_call):
-            c, lp = self.generate_and_get_log_probs(prompts_x[start : start + self._slots_per_call], max_new_tokens=W)
+            chunk = prompts_x[start : start + self._slots_per_call]
+            if self._multi_turn is None:
+                c, lp = self.generate_and_get_log_probs(chunk, [W] * len(chunk))
+            else:
+                c, lp, m = generate_tool_turns(
+                    self,
+                    chunk,
+                    tools=self._tools,
+                    parser=self._tool_call_parser,
+                    max_turns=self._multi_turn.max_turns,
+                    max_tool_response_chars=self._multi_turn.max_tool_response_chars,
+                    max_completion_length=W,
+                )
+                loss_masks.extend(m)
             completions.extend(c)
             token_logprobs.extend(lp)
 
         logprobs = pad_logprobs(completions, token_logprobs, W)
-        batch = RolloutBatch(weight_version=version, prompts=prompts_x, completions=completions, logprobs=logprobs)
+        loss_mask = None if self._multi_turn is None else pad_logprobs(completions, loss_masks, W)
+        batch = RolloutBatch(
+            weight_version=version, prompts=prompts_x, completions=completions, logprobs=logprobs, loss_mask=loss_mask
+        )
         validate_rollout_batch(batch, num_prompts=len(prompts), num_generations=g, max_completion_length=W)
         return batch
 
@@ -229,30 +263,59 @@ class TTTRolloutSampler(RolloutSampler):
 
     def generate_and_get_log_probs(
         self,
-        prompts: List[List[int]],
+        token_ids: List[List[int]],
+        max_new_tokens: List[int],
         *,
-        max_new_tokens: int = 128,
+        append_to_previous: bool = False,
         stop_at_eos: bool = True,
     ) -> Tuple[List[List[int]], List[List[float]]]:
         """Same as :meth:`generate_tokens`, but also returns per-token sampled log-probs
         (log_softmax of logits / temperature, unscaled at temperature 0, without top_k/top_p)
-        aligned 1:1 with completion tokens.
+        aligned 1:1 with completion tokens. ``max_new_tokens`` has one limit per row.
+
+        With ``append_to_previous``, ``token_ids[u]`` goes after row ``u`` of the previous call (its input and its
+        generated tokens) and the KV cache keeps those tokens; an empty list means row ``u`` is idle.
 
         Returns:
             ``(completions, logprobs)`` where ``completions[u][t]`` is the ``t``-th
             emitted token for user ``u`` and ``logprobs[u][t]`` is the log-probability
             of that token under the full-vocab softmax of logits / temperature.
         """
+        if len(max_new_tokens) != len(token_ids) or min(max_new_tokens, default=0) < 0:
+            raise ValueError(f"max_new_tokens needs one non-negative limit for each of the {len(token_ids)} rows")
+        start_pos = None
+        if append_to_previous:
+            self._check_append(token_ids, max_new_tokens)
+            # Decode never feeds back the last sampled token, so its KV is not in the cache.
+            start_pos = [len(h) - 1 if t else 0 for h, t in zip(self._histories, token_ids)]
+            token_ids = [h + list(t) if t else None for h, t in zip(self._histories, token_ids)]
         completions, logprobs = self._generate_impl(
-            prompts,
-            max_new_tokens=max_new_tokens,
+            token_ids,
+            max_new_tokens=max(max_new_tokens),
             enable_trace=True,
             stop_at_eos=stop_at_eos,
             collect_logprobs=True,
+            start_pos=start_pos,
+            row_max_new_tokens=list(max_new_tokens),
         )
         if logprobs is None:
             raise RuntimeError("collect_logprobs=True must return log-probs")
         return completions, logprobs
+
+    def _check_append(self, token_ids: List[List[int]], max_new_tokens: List[int]) -> None:
+        if self._histories is None:
+            raise RuntimeError("append_to_previous needs a previous call with the same weights")
+        if len(token_ids) != len(self._histories):
+            raise ValueError(
+                f"append_to_previous got {len(token_ids)} rows; the previous call had {len(self._histories)}"
+            )
+        for u, (history, tokens) in enumerate(zip(self._histories, token_ids)):
+            if tokens and history is None:
+                raise ValueError(f"row {u} is idle since an earlier call and cannot get new tokens")
+        if not any(token_ids):
+            raise ValueError("append_to_previous needs new tokens for at least one row")
+        if any(tokens and limit < 1 for tokens, limit in zip(token_ids, max_new_tokens)):
+            raise ValueError("append_to_previous needs max_new_tokens >= 1 for each row with new tokens")
 
     def _warm_up_sampling(self, prompts: List[List[int]], *, max_new_tokens: int, stop_at_eos: bool) -> None:
         """Run one untraced generate with the sampler's sampling params before the first trace capture.
@@ -271,15 +334,19 @@ class TTTRolloutSampler(RolloutSampler):
 
     def _generate_impl(
         self,
-        prompts: List[List[int]],
+        prompts: List[Optional[List[int]]],
         *,
         max_new_tokens: int,
         enable_trace: bool,
         stop_at_eos: bool,
         collect_logprobs: bool,
+        start_pos: Optional[List[int]] = None,
+        row_max_new_tokens: Optional[List[int]] = None,
     ) -> Tuple[List[List[int]], Optional[List[List[float]]]]:
         """Shared prefill + decode driver behind :meth:`generate_tokens` and
-        :meth:`generate_and_get_log_probs`. When ``collect_logprobs`` is True, also
+        :meth:`generate_and_get_log_probs`. A ``None`` prompt gets a pad slot and no tokens. With ``start_pos``,
+        the KV cache is kept and prefill starts at ``start_pos[u]``. ``row_max_new_tokens[u]`` limits row ``u``
+        below ``max_new_tokens``. When ``collect_logprobs`` is True, also
         collects per-token sampled log-probs into a parallel list-of-lists sized to
         match ``completions`` slot-for-slot; when False, returns ``None`` for the
         log-probs.
@@ -287,6 +354,7 @@ class TTTRolloutSampler(RolloutSampler):
         if max_new_tokens == 0:
             empty_completions: List[List[int]] = [[] for _ in prompts]
             empty_logprobs: Optional[List[List[float]]] = [[] for _ in prompts] if collect_logprobs else None
+            self._histories = None
             return empty_completions, empty_logprobs
         assert (
             enable_trace or max_new_tokens <= 2
@@ -297,8 +365,15 @@ class TTTRolloutSampler(RolloutSampler):
 
         _t_total = time.perf_counter()
 
-        prompts, prompt_lens, active_batch_size = self._prepare_prompt_batch(prompts, max_new_tokens)
+        finished = [p is None for p in prompts]
+        prompts, prompt_lens, active_batch_size = self._prepare_prompt_batch(
+            prompts, max_new_tokens, row_max_new_tokens
+        )
         batch_size = len(prompts)  # == self._slots_per_call
+        pad_slots = [0] * (batch_size - active_batch_size)
+        limits = list(row_max_new_tokens or [max_new_tokens] * active_batch_size) + pad_slots
+        if start_pos is not None:
+            start_pos = list(start_pos) + pad_slots
         max_prompt_len = max(prompt_lens)
         print(
             f"[TTTRolloutSampler] generate() start: data_parallel={self._data_parallel}, "
@@ -312,7 +387,8 @@ class TTTRolloutSampler(RolloutSampler):
         for i, p in enumerate(prompts):
             input_tokens_prefill_pt[i, : len(p)] = torch.tensor(p, dtype=torch.int32)
 
-        self._reset_kv_cache()
+        if start_pos is None:
+            self._reset_kv_cache()
 
         # On-device sampling -> prefill returns (tokens, log_probs); tokens is [slots_per_call, 1].
         _t_prefill = time.perf_counter()
@@ -321,6 +397,7 @@ class TTTRolloutSampler(RolloutSampler):
             page_table=self.page_table,
             kv_cache=self.tt_kv_cache,
             prompt_lens=prompt_lens,
+            start_pos=start_pos,
             sampling_params=self._sampling_params,
             warmup_prefill=True,
             enable_trace=enable_trace,
@@ -350,9 +427,7 @@ class TTTRolloutSampler(RolloutSampler):
 
         completions: List[List[int]] = [[] for _ in range(batch_size)]
         logprobs: Optional[List[List[float]]] = [[] for _ in range(batch_size)] if collect_logprobs else None
-        user_done = [False] * batch_size
-        for u in range(active_batch_size, batch_size):
-            user_done[u] = True
+        user_done = [u >= active_batch_size or finished[u] for u in range(batch_size)]
         stop_ids = self._stop_token_ids if stop_at_eos else frozenset()
 
         def _collect_step(step_tokens: List[int], step_logprobs: Optional[List[float]] = None) -> None:
@@ -367,7 +442,7 @@ class TTTRolloutSampler(RolloutSampler):
                     # generate_and_get_log_probs always request them, so in practice
                     # this branch is never taken there.
                     logprobs[u].append(float(step_logprobs[u]) if step_logprobs is not None else 0.0)
-                if stop_at_eos and tok in stop_ids:
+                if (stop_at_eos and tok in stop_ids) or len(completions[u]) >= limits[u]:
                     user_done[u] = True
 
         _collect_step(
@@ -380,6 +455,7 @@ class TTTRolloutSampler(RolloutSampler):
                 f"[TTTRolloutSampler] generate() done (no decode loop): "
                 f"total={time.perf_counter() - _t_total:.2f}s",
             )
+            self._histories = [None if finished[u] else prompts[u] + completions[u] for u in range(active_batch_size)]
             return (
                 completions[:active_batch_size],
                 logprobs[:active_batch_size] if logprobs is not None else None,
@@ -460,6 +536,7 @@ class TTTRolloutSampler(RolloutSampler):
             f"(prefill={_prefill_s:.2f}s, decode={_decode_s:.2f}s over {steps_executed} steps), "
             f"completion_tokens={decode_active_tokens} -> {overall_tok_s:.1f} tok/s overall",
         )
+        self._histories = [None if finished[u] else prompts[u] + completions[u] for u in range(active_batch_size)]
         return (
             completions[:active_batch_size],
             logprobs[:active_batch_size] if logprobs is not None else None,
@@ -477,6 +554,7 @@ class TTTRolloutSampler(RolloutSampler):
         for model, hf_dict in zip(self.models, weights):
             model.update_weights(hf_dict)
         self._weight_version = version
+        self._histories = None
 
     def close(self) -> None:
         """Release the traces, then drop the generator, models and KV caches; the mesh stays open."""
@@ -495,9 +573,10 @@ class TTTRolloutSampler(RolloutSampler):
         self.generator.prev_page_table = None
 
     def _prepare_prompt_batch(
-        self, prompts: List[List[int]], max_new_tokens: int
+        self, prompts: List[Optional[List[int]]], max_new_tokens: int, row_max_new_tokens: Optional[List[int]] = None
     ) -> tuple[List[List[int]], List[int], int]:
         """Check one call's prompts and pad the batch to slots_per_call with 1-token pad prompts.
+        A ``None`` prompt also becomes a 1-token pad prompt.
 
         Raises ValueError if a prompt doesn't fit: prompts are never truncated. Returns the
         padded prompts, their lengths, and the number of real prompts.
@@ -512,7 +591,8 @@ class TTTRolloutSampler(RolloutSampler):
                 f"(data_parallel={self._data_parallel} x max_batch_size={self._max_batch_size_per_dp})"
             )
 
-        normalized_prompts = [[int(tok) for tok in prompt] for prompt in prompts]
+        pad_prompt = [int(self._pad_token_id)]
+        normalized_prompts = [pad_prompt if prompt is None else [int(tok) for tok in prompt] for prompt in prompts]
         prompt_lens = [len(p) for p in normalized_prompts]
         if min(prompt_lens) == 0:
             raise ValueError("empty prompts are not supported")
@@ -521,16 +601,18 @@ class TTTRolloutSampler(RolloutSampler):
         max_prompt_len = max_seq_len - max_new_tokens
         if max_prompt_len <= 0:
             raise ValueError(f"max_new_tokens ({max_new_tokens}) must be smaller than max_seq_len ({max_seq_len})")
-        too_long = [i for i, n in enumerate(prompt_lens) if n > max_prompt_len]
+        limits = row_max_new_tokens or [max_new_tokens] * len(prompt_lens)
+        too_long = [i for i, (n, m) in enumerate(zip(prompt_lens, limits)) if n > max_seq_len - m]
         if too_long:
             raise ValueError(
-                f"{len(too_long)} prompt(s) longer than {max_prompt_len} tokens (max_seq_len - max_new_tokens), "
-                f"first at index {too_long[0]} with {prompt_lens[too_long[0]]} tokens"
+                f"{len(too_long)} prompt(s) longer than max_seq_len - max_new_tokens, "
+                f"first at index {too_long[0]} with {prompt_lens[too_long[0]]} + {limits[too_long[0]]} tokens"
             )
 
-        if max(prompt_lens) + max_new_tokens > self._paged_cache_max_seq_len:
+        longest = max(n + m for n, m in zip(prompt_lens, limits))
+        if longest > self._paged_cache_max_seq_len:
             raise ValueError(
-                f"prompt prefill tokens ({max(prompt_lens)}) + decode tokens ({max_new_tokens}) "
+                f"prompt prefill tokens + decode tokens ({longest}) "
                 f"must be <= paged-cache capacity ({self._paged_cache_max_seq_len})"
             )
 

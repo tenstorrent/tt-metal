@@ -7,6 +7,7 @@ from .grpo_trainer import (
     GRPOConfig,
     GRPOMonitor,
     GRPOTrainer,
+    MultiTurnConfig,
     RemoteRolloutConfig,
     RolloutBackend,
     RolloutBatch,
@@ -22,6 +23,7 @@ from .grpo_trainer import (
     save_checkpoint,
     upload_micro_advantages,
 )
+from .tool_calling import Tool
 from .rollout_batch_source import (
     InProcessRolloutBatchSource,
     RolloutBatchSource,
