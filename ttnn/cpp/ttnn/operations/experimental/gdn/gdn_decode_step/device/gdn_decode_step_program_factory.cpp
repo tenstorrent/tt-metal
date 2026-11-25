@@ -308,8 +308,6 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         .unique_id = COMPUTE,
         .source = std::string(kDir) +
                   (a.fast_mode ? "compute/gdn_decode_step_conv_fast.cpp" : "compute/gdn_decode_step_conv.cpp"),
-        // O3: at O2 GCC stops constant-folding the LLK addr-mod structs in the non-fast compute body, so the TTI_SETC16
-        // immediates in addr_mod_t::set are not compile-time constants and the trisc1 link fails.
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .compile_time_args =
             {{"Kt", Kt},
