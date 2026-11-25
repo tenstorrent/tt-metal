@@ -22,7 +22,9 @@ FORCE_INLINE void apply_identity(DFBIdentity& identity, uint32_t srca_id, uint32
     const uint32_t identity_id = identity.get_id();
     reconfig_data_format_srca(srca_id, identity_id);
     copy_init(identity_id);
+    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     copy_tile(identity_id, 0, scratch);
+    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
     reconfig_data_format_srca(identity_id, srca_id);
     if constexpr (Subtract) {
         sub_binary_tile_init();
@@ -53,7 +55,9 @@ FORCE_INLINE void complement_to_a(DFBIdentity& identity, uint32_t srca_id, uint3
 template <typename DFBIn, typename DFBIdentity>
 FORCE_INLINE uint32_t copy_tile_as_a(DFBIn& in, DFBIdentity& identity, uint32_t tile, bool diagonal, uint32_t a_slot) {
     const uint32_t in_id = in.get_id();
+    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     copy_tile(in_id, tile, 0);
+    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
     if (!diagonal) {
         return 0;
     }

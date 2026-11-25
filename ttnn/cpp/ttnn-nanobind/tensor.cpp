@@ -37,12 +37,12 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/topology_check.hpp"
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;

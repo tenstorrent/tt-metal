@@ -36,13 +36,6 @@ pytestmark = [
 ]
 
 
-@pytest.fixture(scope="module")
-def hsdp_mesh(fresh_device_mesh):
-    """``[2, 2]`` with axes ``("dp", "fsdp")``."""
-    with fresh_device_mesh((2, 2), ("dp", "fsdp"), what="HSDP placements tests", require_mgd=True) as mesh:
-        yield mesh
-
-
 # --- DP x TP on [2, 2] ("dp", "tp") -----------------------------------------------------------------------------
 
 

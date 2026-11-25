@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt_stl/assert.hpp>
-#include <device.hpp>
-#include <host_api.hpp>
-#include <sub_device.hpp>
-#include <sub_device_types.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <limits>
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include <tt_stl/strong_type.hpp>

@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
-#include <circular_buffer.hpp>
-#include <circular_buffer_config.hpp>
-#include <device.hpp>
-#include <graph_tracking.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <numeric>
 #include <ranges>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -41,29 +41,29 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include "buffer.hpp"
-#include "buffer_types.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
-#include "circular_buffer_constants.h"
-#include <tt-metalium/core_coord.hpp>
+#include "tt-metalium/workload/legacy/circular_buffer_constants.h"
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "impl/context/context_types.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
-#include "tt-metalium/mesh_buffer.hpp"
-#include "tt-metalium/mesh_device.hpp"
-#include "tt-metalium/mesh_workload.hpp"
-#include "tt-metalium/tensor/mesh_tensor.hpp"
+#include "tt-metalium/memory/buffer/mesh_buffer.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
+#include "tt-metalium/workload/mesh_workload.hpp"
+#include "tt-metalium/memory/tensor/mesh_tensor.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
 #include "jit_build/build_cache_telemetry.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
-#include "kernel_types.hpp"
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -71,11 +71,11 @@
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
 #include "slow_dispatch.hpp"
-#include "tt-metalium/program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
-#include "sub_device_types.hpp"
+#include "tt-metalium/mesh/sub_device_types.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
@@ -89,8 +89,8 @@
 #include "kernel_compile_utils.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include "host_api.hpp"
-#include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
+#include "tt-metalium/workload/legacy/host_api.hpp"
+#include "tt-metalium/execution/slow_dispatch.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt-metalium/experimental/op_profiler_support.hpp>
@@ -842,7 +842,8 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
         const size_t crta_words =
             static_cast<size_t>(layout.vararg_section_offset) + schema->num_common_runtime_varargs;
 
-        // Per-node RTAs: [ named | per-node tensor bindings | varargs ], with the vararg count from the schema.
+        // Per-node RTAs: [ named | per-node tensor bindings | fabric connections | varargs ], with the vararg count
+        // from the schema.
         const size_t rta_vararg_offset = kernel->get_rta_layout().vararg_section_offset;
 
         // Reserve unique RTAs first so set_common_runtime_args can validate against
@@ -865,6 +866,8 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
             std::vector<uint32_t> zeros(rta_words, 0u);
             kernel->set_runtime_args(core, zeros);
         }
+        // Fabric connection words are fixed at construction, so they do not depend on Program::set_program_run_args.
+        kernel->write_fabric_connection_runtime_args();
 
         if (crta_words == 0) {
             continue;
@@ -876,6 +879,42 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
         std::vector<uint32_t> zeros(crta_words, 0u);
         kernel->set_common_runtime_args(zeros);
     }
+}
+
+std::vector<ProgramImpl::DeviceSpecificRuntimeArgs> ProgramImpl::device_specific_runtime_args(
+    const distributed::MeshCoordinateRange& range) const {
+    std::vector<DeviceSpecificRuntimeArgs> runs;
+    for (const auto& kernels_of_core_type : this->kernels_) {
+        for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            for (const auto& handle : kernel->fabric_connection_binding_handles()) {
+                for (const CoreCoord& node : kernel->logical_cores()) {
+                    const std::vector<uint32_t>& own_words = handle.words_by_device.front().second.at(node);
+                    DeviceSpecificRuntimeArgs run{
+                        .kernel = kernel_handle,
+                        .core = node,
+                        .first_word = handle.rta_word,
+                        .num_words = static_cast<uint32_t>(own_words.size())};
+                    bool differs = false;
+                    for (const auto& coord : range) {
+                        const auto device = std::ranges::find(
+                            handle.words_by_device, coord, [](const auto& entry) { return entry.first; });
+                        TT_FATAL(
+                            device != handle.words_by_device.end(),
+                            "Program {} was not built to run on device {}",
+                            this->id,
+                            coord);
+                        const std::vector<uint32_t>& words = device->second.at(node);
+                        differs = differs || words != own_words;
+                        run.values_in_range_order.insert(run.values_in_range_order.end(), words.begin(), words.end());
+                    }
+                    if (differs) {
+                        runs.push_back(std::move(run));
+                    }
+                }
+            }
+        }
+    }
+    return runs;
 }
 
 void ProgramImpl::register_tensor_parameter(
@@ -1448,7 +1487,9 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
     if (not circular_buffer->globally_allocated()) {
         this->invalidate_circular_buffer_allocation();
     } else {
-        circular_buffer->assign_global_address();
+        if (!cb_buffer_is_unbound(circular_buffer->config())) {
+            circular_buffer->assign_global_address();
+        }
         // invalidate_circular_buffer_allocation() would have done this; adding a buffer still means
         // the program has to be laid out again.
         this->compile_and_allocate_needed_ = true;
@@ -1488,6 +1529,7 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
     }
 
     this->circular_buffers_.push_back(circular_buffer);
+    this->circular_buffers_bound_ = false;
     this->circular_buffer_by_id_.insert({circular_buffer->id(), circular_buffer});
     return circular_buffer->id();
 }
@@ -2493,33 +2535,33 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
 
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
-            // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
+            // Track globally allocated CBs too (they use L1 memory from the allocator).
+            // An unbound CB has no address yet, so it is tracked at address 0.
             for (const IDevice* dev : devices_to_track) {
                 tt::tt_metal::GraphTracker::instance().track_allocate_cb(
                     circular_buffer->core_ranges(),
-                    circular_buffer->address(),
+                    cb_buffer_is_unbound(circular_buffer->config()) ? 0 : circular_buffer->address(),
                     circular_buffer->size(),
                     circular_buffer->globally_allocated(),
                     dev);
             }
-            continue;
-        }
-
-        const uint64_t computed_addr = allocate_dfb(
-            this->cb_allocation_metadata_,
-            circular_buffer->core_ranges(),
-            circular_buffer->size(),
-            device->allocator()->get_alignment(BufferType::DRAM));
-        // Report CB allocation for ALL devices being tracked
-        for (const IDevice* dev : devices_to_track) {
-            tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+        } else {
+            const uint64_t computed_addr = allocate_dfb(
+                this->cb_allocation_metadata_,
                 circular_buffer->core_ranges(),
-                computed_addr,
                 circular_buffer->size(),
-                circular_buffer->globally_allocated(),
-                dev);
+                device->allocator()->get_alignment(BufferType::DRAM));
+            // Report CB allocation for ALL devices being tracked
+            for (const IDevice* dev : devices_to_track) {
+                tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                    circular_buffer->core_ranges(),
+                    computed_addr,
+                    circular_buffer->size(),
+                    circular_buffer->globally_allocated(),
+                    dev);
+            }
+            circular_buffer->set_locally_allocated_address(computed_addr);
         }
-        circular_buffer->set_locally_allocated_address(computed_addr);
     }
 
     // Register program ONLY with NEW devices (prevents duplicate registration)
@@ -3688,6 +3730,17 @@ size_t detail::ProgramImpl::num_kernels() const {
 
 std::span<const std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_buffers() const {
     return circular_buffers_;
+}
+
+void detail::ProgramImpl::check_circular_buffers_bound() {
+    // A bound CB stays bound, so a passing check holds until a CB is added.
+    if (circular_buffers_bound_) {
+        return;
+    }
+    for (const auto& circular_buffer : circular_buffers_) {
+        circular_buffer->check_bound();
+    }
+    circular_buffers_bound_ = true;
 }
 
 std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {
