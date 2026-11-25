@@ -25,6 +25,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
+from models.demos.deepseek_v3_d_p.tt.mla.utils import l1_if_fits
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
@@ -794,7 +795,8 @@ class TtIndexerBase:
             weight=self._idx_knorm_w,
             bias=self._idx_knorm_b,
             epsilon=self._index_k_norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # The norm, RoPE and Hadamard outputs live for one op each until the cache write: L1 when small.
+            memory_config=(k_mem := l1_if_fits(k.shape, 2, 4 << 20)),
             compute_kernel_config=self.default_compute_kernel_config,
             dtype=norm_dtype,
         )
@@ -813,7 +815,7 @@ class TtIndexerBase:
                 k,
                 self._index_hadamard,
                 dtype=index_kbuf.dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=k_mem,
                 compute_kernel_config=self.default_compute_kernel_config,
                 **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
             )
@@ -943,21 +945,29 @@ class TtIndexerBase:
         )  # [1,1,S/(sp*tp),H_idx*D_idx] — all heads, only this TP rank's query rows
         if qr_local is not qr:
             ttnn.deallocate(qr_local)
+        # The heads and their RoPE go to L1 when the per-call Hadamard writes the scored query to DRAM after them:
+        # ring_indexer_score_dsa writes its logits where q is.
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            q, num_heads=a.index_n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            q,
+            num_heads=a.index_n_heads,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=l1_if_fits(q.shape, 2, 8 << 20) if self._q_hadamard_per_call else ttnn.DRAM_MEMORY_CONFIG,
         )  # [1,H_idx,S/(sp*tp),D_idx] — all heads resident
         # Reuse the SP-sharded tables. The op preserves their original slab stride and adds this TP
         # query window after deriving the rotated start, including metadata-driven trace replays.
         q_dev = self._bc_rope_pe(
             q, rope_tensors, start_pos, metadata=metadata, seq_subshard_axis=self.tp_axis if tpsp else None
         )
+        if q_dev is not q:  # a NoPE indexer returns q itself
+            ttnn.deallocate(q)
         if self._q_hadamard_per_call:
             q_hadamard_cfg = self._resolve_mm_cfg("indexer.q_hadamard", sq_local)
             q_h = ttnn.matmul(
                 q_dev,
                 self._index_hadamard,
                 dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # ring_indexer_score_dsa writes its logits where q is
                 compute_kernel_config=self.default_compute_kernel_config,
                 **({"program_config": q_hadamard_cfg["program_config"]} if q_hadamard_cfg is not None else {}),
             )

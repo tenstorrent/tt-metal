@@ -65,12 +65,13 @@ MODES = ("untraced", "traced")
 # Galaxy (3 runs), unscaled. Galaxy 8x4 GLM-5.3: re-measured with the stage cases on a CI host (1 run). LoudBox
 # GLM-5.3 (both cases): first measured on CI LoudBoxes (6 processes on 3 hosts, 10 readings per value with in-process
 # repeats): the mean of the readings, every reading within the band; one warm untraced reading (+18%, a third repeat in
-# one process, traced replay normal) left out.
+# one process, traced replay normal) left out. Galaxy 8x4 then scaled by the L1-activation / sharded-norm change's
+# measured speedup (2 runs of main, 3 of the change, on one Galaxy; ratios under 1% left unapplied).
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (2.93, 2.63, 6.47, 6.18),
-        "glm_5_3": (3.13, 2.70, 6.73, 6.32),
-        "glm_5_3-no_indexer": (2.29, 1.97, 2.36, 2.05),
+        "kimi_k3_1": (2.88, 2.53, 6.34, 6.09),
+        "glm_5_3": (3.13, 2.63, 6.73, 6.32),
+        "glm_5_3-no_indexer": (2.24, 1.83, 2.26, 1.89),
     },
     "Galaxy 4x4": {
         "kimi_k3_1": (3.21, 3.05, 7.21, 6.98),
