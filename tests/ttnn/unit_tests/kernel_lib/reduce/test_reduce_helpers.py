@@ -642,8 +642,11 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
 @pytest.mark.parametrize("case", ALL_CASES, ids=lambda case: case.name)
 def test_reduce_helpers_complete_input_space(device, case: ReduceCase):
     """Exercise every valid helper branch and its numerical/layout boundaries."""
-    if "QUASAR" in str(device.arch()).upper() and case.uses_sfpu:
-        pytest.skip("The reduce helper rejects SFPU reduce paths on Quasar")
+    if "QUASAR" in str(device.arch()).upper():
+        if case.uses_sfpu:
+            pytest.skip("The reduce helper rejects SFPU reduce paths on Quasar")
+        if case.calls > 1 and case.pool == "MAX" and case.dim == "REDUCE_ROW":
+            pytest.skip("The reduce helper rejects accumulated MAX/REDUCE_ROW on Quasar")
 
     actual, expected = _run_case(device, case)
     if case.input_dtype == "int32":

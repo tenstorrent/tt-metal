@@ -861,8 +861,10 @@ def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate
 # the op rejects the request instead of silently changing the dtype.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("dim", [-1, -2])
-def test_rm_reduce_row_major_output_rejected_for_block_float(device, reduce_op, dim, expect_error):
-    torch_input = torch.rand((1, 1, 64, 128))
+# (1, 1, 1025, 64) takes the H-split, and for max/min the BFLOAT16 widening of a partial tile.
+@pytest.mark.parametrize("shape", [(1, 1, 64, 128), (1, 1, 1025, 64)])
+def test_rm_reduce_row_major_output_rejected_for_block_float(device, reduce_op, dim, shape, expect_error):
+    torch_input = torch.rand(shape)
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_op = _OPS[reduce_op][1]
 

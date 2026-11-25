@@ -46,20 +46,23 @@ Tensor reduce(
     bool fast_and_approximate_mode = false,
     const std::optional<Layout>& output_layout = std::nullopt);
 
+
+static void validate_output_layout(DataType dtype, const std::optional<Layout>& output_layout) {
+    TT_FATAL(
+        output_layout != Layout::ROW_MAJOR || !tt::tt_metal::is_block_float(dtype),
+        "output_layout=ROW_MAJOR is not supported for a {} result: block-float formats only exist in "
+        "TILE layout, so honoring the request would silently widen the dtype to BFLOAT16. Reduce to "
+        "TILE and typecast explicitly if a row-major result is needed.",
+        dtype);
+}
+
 // Honor an output-layout request the device path could not satisfy natively (e.g. a tilized reduce
 // asked for ROW_MAJOR); a no-op when the path already emitted the requested layout.
 static Tensor convert_output_layout(const Tensor& tensor, const std::optional<Layout>& output_layout) {
     if (!output_layout.has_value() || tensor.layout() == *output_layout) {
         return tensor;
     }
-    // Untilizing a block-float result would widen it to BFLOAT16; reject rather than silently
-    // returning a dtype the caller did not ask for.
-    TT_FATAL(
-        *output_layout != Layout::ROW_MAJOR || !tt::tt_metal::is_block_float(tensor.dtype()),
-        "output_layout=ROW_MAJOR is not supported for a {} result: block-float formats only exist in "
-        "TILE layout, so honoring the request would silently widen the dtype to BFLOAT16. Reduce to "
-        "TILE and typecast explicitly if a row-major result is needed.",
-        tensor.dtype());
+    validate_output_layout(tensor.dtype(), output_layout);
     return ttnn::to_layout(tensor, *output_layout);
 }
 
@@ -605,6 +608,8 @@ Tensor reduce(
         TT_FATAL(
             dt != DataType::INT32 && dt != DataType::UINT32, "ttnn.mean does not support integer inputs - got {}.", dt);
     }
+    // Checked before path selection: the H-split and BFLOAT16-widening paths would otherwise bypass it.
+    validate_output_layout(input_tensor_arg.dtype(), output_layout);
 
     // A BFLOAT8_B tile shares one exponent per 16-lane block of a row. The -inf / +inf Max / Min pad written into the
     // tile padding below ends up in blocks that also hold real lanes (the last block of each input row when the width
@@ -629,9 +634,6 @@ Tensor reduce(
                 sub_core_grids,
                 fast_and_approximate_mode,
                 output_layout);
-            if (result.layout() != TILE_LAYOUT) {
-                return result;
-            }
             return ttnn::typecast(result, block_dtype, std::nullopt, std::nullopt, sub_core_grids);
         }
     }
