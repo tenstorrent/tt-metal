@@ -5,10 +5,11 @@
 of layers on the first ``--seq`` tokens of a prompt, in chunks of ``--chunk``. No GPU golden of this model exists.
 
     python -m models.demos.deepseek_v3_d_p.tests.mistral_large_4.cpu_golden \
-        --prompt prompt.json --out DIR [--seq 5120] [--layers 0-71] [--dump 0,1,...]
+        --prompt prompt.json --out DIR [--seq 5120] [--layers 0-71] [--dump 0,1,...] [--tf-targets 36,40,...]
 
-Writes DIR/chunk_<c>.safetensors per chunk (``L<i>``: the output of each dumped layer, ``final_norm``; bfloat16, rows
-in position order) and, for the last chunk, ``logits`` (fp32, its last LOGITS_ROWS rows), then DIR/meta.json. With
+Writes DIR/chunk_<c>.safetensors per chunk (``L<i>``: the output of each dumped layer, ``final_norm``; ``--dump-dtype``,
+bfloat16 by default, rows in position order; ``L<i>.topk``: the top-k of each ``--dump-topk`` layer, int32 [S, 2048]
+ascending, -1 pads) and, for the last chunk, ``logits`` (fp32, its last LOGITS_ROWS rows), then DIR/meta.json. With
 ``--state``, also the KV-cache golden in the prefill trace layout: DIR/metadata.json (``token_ids``) and
 DIR/kv_cache/layer_<i>.safetensors (``kv_latent_cache_layer_<i>``, ``k_rope_cache_layer_<i>``,
 ``index_key_cache_layer_<i>``: each layer's state over the whole sequence, ``--state-dtype``; [seq, 0] where it owns none). Holds
@@ -20,6 +21,10 @@ uses it; ``--dense-dtype device`` rounds every dense weight (and the LM head) to
 module stores it in under the current MISTRAL_LARGE_4_* settings. Both default to the unrounded bf16 weights.
 ``--round-impl torch`` uses the vectorized emulation, checked bit-exact against ttnn's host round trip on the first
 tensor of each layer (reference/mistral_large_4/device_rounding.py).
+
+``--tf-targets`` prepares a golden for the teacher-forced per-layer test (test_teacher_forced_galaxy.py): each target
+layer i also dumps i - 1 (its input) and i, and the top-k of i (a full-indexer layer, compared) or of its source full
+layer (a shared-index layer, injected). Use with ``--state``: the KV / index-key state is injected and compared too.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ LOGITS_ROWS = 32
 STATE_DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16}
 # layers dumped by default: every block variant early, then groups through the stack to the last layer
 DUMP = (0, 1, 2, 3, 4, 7, 8, 15, 16, 17, 18, 31, 35, 36, 39, 40, 47, 55, 63, 67, 70, 71)
+DUMP_DTYPES = {"bfloat16": torch.bfloat16, "float32": torch.float32}
 
 
 class Spec:
@@ -55,6 +61,17 @@ def parse_layers(text: str) -> list[int]:
     return list(range(int(a), int(b or a) + 1))
 
 
+def int_list(text: str) -> list[int]:
+    return [int(x) for x in text.split(",") if x.strip()]
+
+
+def tf_dumps(cfg, targets) -> tuple[set, set]:
+    """The layers whose output and whose top-k a teacher-forced check of ``targets`` reads: (i - 1, i) per target; i's
+    own top-k on a full-indexer layer, its source full layer's on a shared-index layer."""
+    assert all(i >= 1 for i in targets), "layer 0's input is the embedding, not a dumped layer"
+    return {j for i in targets for j in (i - 1, i)}, {i if cfg.is_full(i) else cfg.topk_source(i) for i in targets}
+
+
 def prompt_tokens(path: str) -> list[int]:
     return list(json.loads(Path(path).read_text())["token_ids"])
 
@@ -71,6 +88,9 @@ def main(argv=None):
     p.add_argument("--chunk", type=int, default=5120)
     p.add_argument("--layers", default="0-71")
     p.add_argument("--dump", default=",".join(map(str, DUMP)))
+    p.add_argument("--dump-dtype", default="bfloat16", choices=sorted(DUMP_DTYPES), help="dtype of the L<i> dumps")
+    p.add_argument("--dump-topk", default="", help="layers whose top-k (L<i>.topk) is dumped")
+    p.add_argument("--tf-targets", default="", help="teacher-forced target layers: adds their dumps (module doc)")
     p.add_argument("--hf-dir", default=CHECKPOINT_DIR)
     p.add_argument("--state", action="store_true", help="also write the serving golden (kv_cache/, metadata.json)")
     p.add_argument("--state-dtype", default="float32", choices=sorted(STATE_DTYPES))
@@ -90,9 +110,11 @@ def main(argv=None):
     a = p.parse_args(argv)
     assert a.seq % a.chunk == 0, (a.seq, a.chunk)
     layers = parse_layers(a.layers)
-    dump = [i for i in map(int, a.dump.split(",")) if i in layers]
+    dump = [i for i in int_list(a.dump) if i in layers]
     if layers[-1] not in dump:
         dump.append(layers[-1])
+    dump_topk = set(int_list(a.dump_topk))
+    tf_targets = sorted(int_list(a.tf_targets))
     tokens = prompt_tokens(a.prompt)[: a.seq]
     assert len(tokens) == a.seq, f"the prompt has {len(tokens)} tokens, need {a.seq}"
     out = Path(a.out)
@@ -100,6 +122,16 @@ def main(argv=None):
 
     t0 = time.time()
     ref = Reference(Spec(a.hf_dir, a.seq), layers=layers, dtype=torch.float32)
+    if tf_targets:
+        assert a.state, "--tf-targets needs --state (the test injects and compares the KV / index-key state)"
+        outs, topks = tf_dumps(ref.cfg, tf_targets)
+        missing = sorted((outs | topks) - set(layers))
+        assert not missing, f"--tf-targets needs layers {missing}, outside --layers {a.layers}"
+        dump = sorted(set(dump) | outs)
+        dump_topk |= topks
+    dump_topk = sorted(i for i in dump_topk if i in layers)
+    bad = [i for i in dump_topk if not ref.cfg.is_full(i)]
+    assert not bad, f"--dump-topk {bad}: shared-index layers reuse their source's top-k; dump the source"
     rounding, rounder = {}, None
     if a.experts_dtype != "bfloat16" or a.dense_dtype != "bfloat16":
         from models.demos.deepseek_v3_d_p.reference.mistral_large_4.device_rounding import (
@@ -125,7 +157,9 @@ def main(argv=None):
 
         def rec(name, t):
             if name.endswith(".out") and int(name[1:].split(".")[0]) in dump:
-                got[name.split(".")[0]] = t.detach().to(torch.bfloat16).contiguous()
+                got[name.split(".")[0]] = t.detach().to(DUMP_DTYPES[a.dump_dtype]).contiguous()
+            elif name.endswith(".topk") and int(name[1:].split(".")[0]) in dump_topk:
+                got[name] = t.detach().to(torch.int32).contiguous()
 
         t1 = time.time()
         final, logits = ref.forward_chunk(
@@ -158,6 +192,9 @@ def main(argv=None):
         "chunk": a.chunk,
         "layers": [layers[0], layers[-1]],
         "dump": dump,
+        "dump_dtype": a.dump_dtype,
+        "dump_topk": dump_topk,
+        "tf_targets": tf_targets,
         "logits_rows": LOGITS_ROWS,
         "reference": "fp32 compute, bf16 weights (reference/mistral_large_4/model.py)",
         "experts_dtype": a.experts_dtype,
