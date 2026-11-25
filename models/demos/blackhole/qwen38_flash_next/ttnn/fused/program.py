@@ -29,8 +29,6 @@ from typing import Iterable, Sequence
 
 import ttnn
 
-from . import range_merge
-
 TILE = ttnn.TILE_SIZE
 FACE = 16
 ROWS_MAX = TILE
@@ -185,7 +183,7 @@ def cb_descriptor(
     tile = {} if tile_rows is None else {"tile": ttnn.TileDescriptor(tile_rows, TILE)}
     return ttnn.CBDescriptor(
         total_size=pages * page_bytes,
-        core_ranges=range_merge.apply(cores, "cb"),
+        core_ranges=cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_bytes, **tile)
         ],
@@ -220,7 +218,7 @@ def _kernel(source, cores, compile_time_args, runtime_args, defines, config, nam
     return ttnn.KernelDescriptor(
         kernel_source=source,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=range_merge.apply(cores, "kernel"),
+        core_ranges=cores,
         compile_time_args=[int(a) for a in compile_time_args],
         named_compile_time_args=_named(named),
         defines=[*defines, *zone_defines()],
@@ -274,7 +272,7 @@ def compute_kernel(
 
 
 def semaphore_descriptor(id: int, cores: ttnn.CoreRangeSet, initial: int = 0) -> ttnn.SemaphoreDescriptor:
-    return ttnn.SemaphoreDescriptor(id=id, core_ranges=range_merge.apply(cores, "semaphore"), initial_value=initial)
+    return ttnn.SemaphoreDescriptor(id=id, core_ranges=cores, initial_value=initial)
 
 
 def program_descriptor(kernels: Sequence, cbs: Sequence = (), semaphores: Sequence = ()) -> ttnn.ProgramDescriptor:
@@ -584,9 +582,6 @@ def run_program(io_tensors: Sequence, descriptor, *, meta: FusedProgramMeta | No
     MeshProgramDescriptor; ``meta`` (``program_meta``) is recorded with the launch's device operation ids while
     recording is on, and its ``outputs`` are stamped with their declared placements after the launch."""
 
-    if isinstance(descriptor, ttnn.ProgramDescriptor):
-        range_merge.merge_program(descriptor)  # QWEN38_RANGE_MERGE: descriptors built outside this module
-    range_merge.flush(f"{meta.kernel}/{meta.variant}" if meta is not None else "?")
     if not _META_RECORDING or meta is None:
         result = ttnn.generic_op(list(io_tensors), descriptor)
     else:
