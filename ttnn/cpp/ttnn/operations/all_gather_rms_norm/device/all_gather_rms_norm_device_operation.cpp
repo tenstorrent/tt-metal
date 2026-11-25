@@ -15,7 +15,9 @@ using namespace tt::tt_metal;
 
 namespace {
 
-void refuse_axis(bool ok, std::string_view axis, const std::string& value, std::string_view allowed) {
+// The message is formatted only when the check fails: the public entry runs these checks on every call.
+template <typename Value>
+void refuse_axis(bool ok, std::string_view axis, const Value& value, std::string_view allowed) {
     if (!ok) {
         throw UnsupportedAxisValue(
             fmt::format("all_gather_rms_norm: {}={} not in SUPPORTED [{}]", axis, value, allowed));
@@ -24,13 +26,6 @@ void refuse_axis(bool ok, std::string_view axis, const std::string& value, std::
 
 bool is_sharded_layout(TensorMemoryLayout l) {
     return l == TensorMemoryLayout::HEIGHT_SHARDED || l == TensorMemoryLayout::WIDTH_SHARDED;
-}
-
-std::string output_placement(const MemoryConfig& mc) {
-    if (mc.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
-        return mc.buffer_type() == BufferType::L1 ? "l1_interleaved" : "dram_interleaved";
-    }
-    return "l1_sharded";
 }
 
 const MemoryConfig& out_memory_config(const AllGatherRmsNormParams& attrs, const AllGatherRmsNormInputs& t) {
@@ -60,32 +55,28 @@ void check_support(const AllGatherRmsNormParams& attrs, const AllGatherRmsNormIn
     refuse_axis(
         dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B,
         "dtype",
-        fmt::format("{}", dtype),
+        dtype,
         "float32, bfloat16, bfloat8_b");
-    refuse_axis(x.layout() == Layout::TILE, "layout", fmt::format("{}", x.layout()), "TILE");
+    refuse_axis(x.layout() == Layout::TILE, "layout", x.layout(), "TILE");
     const uint32_t rank = x.logical_shape().rank();
-    refuse_axis(rank >= 2 && rank <= 4, "rank", std::to_string(rank), "2, 3, 4");
+    refuse_axis(rank >= 2 && rank <= 4, "rank", rank, "2, 3, 4");
     if (t.gamma.has_value()) {
         const DataType g = t.gamma->dtype();
-        refuse_axis(
-            g == DataType::FLOAT32 || g == DataType::BFLOAT16,
-            "gamma_dtype",
-            fmt::format("{}", g),
-            "float32, bfloat16, none");
+        refuse_axis(g == DataType::FLOAT32 || g == DataType::BFLOAT16, "gamma_dtype", g, "float32, bfloat16, none");
     }
     const TensorMemoryLayout in_layout = x.memory_config().memory_layout();
     refuse_axis(
         in_layout == TensorMemoryLayout::INTERLEAVED || is_sharded_layout(in_layout),
         "memory_layout",
-        fmt::format("{}", in_layout),
+        in_layout,
         "INTERLEAVED, HEIGHT_SHARDED, WIDTH_SHARDED");
-    refuse_axis(attrs.cluster_axis <= 1, "cluster_axis", std::to_string(attrs.cluster_axis), "0, 1");
+    refuse_axis(attrs.cluster_axis <= 1, "cluster_axis", attrs.cluster_axis, "0, 1");
     refuse_axis(
         attrs.topology == tt::tt_fabric::Topology::Linear || attrs.topology == tt::tt_fabric::Topology::Ring,
         "topology",
-        std::to_string(static_cast<int>(attrs.topology)),
+        static_cast<int>(attrs.topology),
         "Linear, Ring");
-    refuse_axis(attrs.num_links >= 1 && attrs.num_links <= 2, "num_links", std::to_string(attrs.num_links), "1, 2");
+    refuse_axis(attrs.num_links >= 1 && attrs.num_links <= 2, "num_links", attrs.num_links, "1, 2");
 
     // EXCLUSIONS
     if (dtype == DataType::FLOAT32 && !attrs.fp32_dest_acc_en) {
@@ -121,7 +112,6 @@ void check_support(const AllGatherRmsNormParams& attrs, const AllGatherRmsNormIn
     } else if (!out_mc.shard_spec().has_value()) {
         throw UnsupportedAxisValue("all_gather_rms_norm: a sharded output memory config needs a shard spec");
     }
-    (void)output_placement(out_mc);
     if (t.gamma.has_value() && t.gamma->memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED) {
         throw UnsupportedAxisValue("all_gather_rms_norm: gamma must be interleaved");
     }
