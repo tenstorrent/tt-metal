@@ -16,8 +16,11 @@ you. This file covers what is specific to Panoptic-DeepLab.
 
 The model was captured on a 20-core Blackhole grid (5x4, `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3"`),
 so run the suite on that grid. Conv, pool and upsample choose their own shard grid from
-the device. On a larger grid their outputs are sharded differently from the capture, and
-the placement check reports that difference.
+the device. On a larger grid their outputs are sharded differently from the capture. For
+pool and upsample the placement check reports that difference. For conv2d it checks only
+the shard orientation and, for height-sharded outputs, the shard width, unless the call
+fixes the grid (an already-sharded input, or `override_sharding_config`); then the full
+placement is checked.
 
 ```bash
 # whole suite (one file per pytest invocation is fine too)
@@ -33,6 +36,28 @@ pytest models/experimental/ops/quasar/tests/panoptic_deeplab_ops/ -m emulator
 # shapes/dtypes/finiteness only — no PCC against a torch golden
 TTNN_GRAPH_OPS_NO_GOLDEN=1 pytest models/experimental/ops/quasar/tests/panoptic_deeplab_ops/
 ```
+
+## Running on Quasar (craq-sim / emulator)
+
+Two switches, both off on Wormhole/Blackhole by default:
+
+- `TTNN_GRAPH_OPS_BF8_AS_BF16=1`: Quasar has no block-float formats, so build every captured
+  bfloat8_b / bfloat4_b tensor (and a `DataType::BFLOAT8_B` inside a `Conv2dConfig`) as bfloat16.
+  Same switch as the qwen3_vl / gpt_oss suites. The PCC floors still use the captured dtype.
+- `TTNN_GRAPH_OPS_QUASAR_FORKS=auto|1|0` (default `auto`, i.e. on when the device is Quasar):
+  call `ttnn.experimental.quasar.<op>` for the ops whose base implementation has no Quasar kernels
+  (`op_utils._QUASAR_FORKED_OPS`: conv2d, add, multiply, move, max_pool2d, avg_pool2d). Every other op
+  runs the base implementation, so failures still show which base ops are missing on Quasar.
+
+```bash
+TT_METAL_SIMULATOR=/path/to/craq-sim/libttsim.so TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DISABLE_SFPLOADMACRO=1 \
+TTNN_GRAPH_OPS_BF8_AS_BF16=1 pytest models/experimental/ops/quasar/tests/panoptic_deeplab_ops/test_add.py
+```
+
+What fails on Quasar, and why, is tracked in
+[`panoptic_deeplab/QUASAR_GAPS.md`](../../panoptic_deeplab/QUASAR_GAPS.md). Some cases hang on
+craq-sim; pytest's `--timeout` cannot interrupt a hang inside the simulator, so run one file per
+process under an external timeout.
 
 ## Coverage of the current capture
 

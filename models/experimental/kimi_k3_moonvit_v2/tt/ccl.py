@@ -32,6 +32,10 @@ import ttnn
 
 # Semaphores per ring attention call: one per all-gather direction (forward, backward).
 RING_ATTENTION_SEMAPHORES = 2
+# The ring: 4 Blackhole chips along one mesh axis, 2 links between neighbours. `FABRIC_2D_TORUS_X`, not
+# `FABRIC_1D_RING`, because a 1D ring cannot route the wraparound link of a LoudBox or Galaxy row.
+RING_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_X
+RING_NUM_LINKS = 2
 # Slots for the encoder's layers: alternating 0, 1, and the last layer on 2 when the count is odd.
 CCL_SLOTS = 3
 

@@ -9,10 +9,10 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config_types.hpp"
 
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include "tt-metalium/work_split.hpp"
-#include "tt-metalium/tensor_accessor_args.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include "tt-metalium/utils/work_split.hpp"
+#include "tt-metalium/workload/legacy/tensor_accessor_args.hpp"
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::prim::qsr {
 
@@ -21,7 +21,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const ttnn::prim::qsr::SparseMatmulParams& operation_attributes,
     const ttnn::prim::qsr::SparseMatmulInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::Program program{}; /* Create a program */
+    tt::tt_metal::Program program =
+        tt::tt_metal::CreateProgram(*tensor_args.input_tensors.at(0).device()); /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
     using namespace tt;
     using namespace operations::experimental::quasar::matmul::utilities;
@@ -140,6 +141,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     uint32_t num_blocks_x = ((Nt - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
 
+    TT_FATAL(
+        num_blocks_y == 1,
+        "sparse_matmul requires num_blocks_y == 1 (Mt <= per_core_M) for mcast_in0. Got Mt={}, per_core_M={}.",
+        Mt,
+        per_core_M);
     TT_FATAL(
         num_blocks_total <= num_cores_available,
         "Number of blocks exceeds number of cores available: {} blocks > {} cores",

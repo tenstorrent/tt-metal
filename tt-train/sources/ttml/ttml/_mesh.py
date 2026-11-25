@@ -232,8 +232,13 @@ def mesh() -> Mesh:
     return _mesh
 
 
-def sync_gradients(parameters, axis_names: tuple[str, ...] | None = None):
-    """Turn each device's local gradient into the global one; call once per step."""
+def sync_gradients(
+    parameters, axis_names: tuple[str, ...] | None = None, *, reduce_dtype: ttnn.DataType | None = None
+) -> None:
+    """Turn each device's local gradient into the global one; call once per step.
+
+    ``reduce_dtype`` applies to both sums, as :func:`average_gradients` and :func:`sum_partial_gradients` take it.
+    """
     if axis_names is not None:
         warnings.warn(
             "sync_gradients(axis_names=...) is deprecated: sync_gradients(parameters) averages over 'dp' and 'fsdp'; "
@@ -241,11 +246,13 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] | None = None):
             DeprecationWarning,
             stacklevel=2,
         )
-    average_gradients(parameters, axis_names=("dp", "fsdp") if axis_names is None else axis_names)
-    sum_partial_gradients(parameters)
+    average_gradients(
+        parameters, axis_names=("dp", "fsdp") if axis_names is None else axis_names, reduce_dtype=reduce_dtype
+    )
+    sum_partial_gradients(parameters, reduce_dtype=reduce_dtype)
 
 
-def average_gradients(parameters, axis_names: tuple[str, ...]):
+def average_gradients(parameters, axis_names: tuple[str, ...], *, reduce_dtype: ttnn.DataType | None = None) -> None:
     """Average parameter gradients across one or more mesh axes.
 
     For each parameter with an initialized gradient, the grad is all-reduced
@@ -259,66 +266,45 @@ def average_gradients(parameters, axis_names: tuple[str, ...]):
     parameter whose grad is partial across TP is marked with
     ``ttml.parallel.mark_partial`` and summed by ``sum_partial_gradients``.
 
-    FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
-    mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
-    backward hook already reduce-scattered the grad into shard shape.
-
-    A parameter sharded on a listed axis by its own label (MoE experts placed on
-    "dp", say) is skipped for that axis too: each rank holds a different slice, so
-    averaging would mix unrelated parameters. synchronize_gradients does the same.
+    The sum is ``ttml.core.distributed.synchronize_gradients`` along the listed
+    axes, which skips, for each parameter, any axis its value is sharded on.
+    That covers ``ttml.fsdp.fully_shard``: its backward hook reduce-scatters the
+    grad into shard shape and reinstalls the Shard-labelled shard as the value.
+    It also covers a parameter sharded on a listed axis by its own label (MoE
+    experts placed on "dp", say): each rank holds a different slice, so
+    averaging would mix unrelated parameters.
 
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
         axis_names: Tuple of mesh axis names to reduce over.
+        reduce_dtype: The dtype the gradients are summed in, as ``ttml.core.distributed.synchronize_tensor`` takes
+            it: ``ttnn.DataType.FLOAT32`` sums in fp32 and casts the mean back to the gradient's dtype. ``None`` takes
+            the training config's ``precision.reduce_dtype``, which ``create_optimizer`` stores
+            (``AutoContext.get_gradient_reduce_dtype``); with no default set either, it sums in each gradient's own
+            dtype.
     """
+    ttml.core.distributed.check_reduce_dtype(reduce_dtype)
     m = maybe_mesh()
     if m is None or not axis_names:
         return
 
     # A collective over a size-1 axis is an error, not a no-op: sync_gradients always names "dp" and "fsdp".
-    axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name) and m.axis_size(name) > 1)
+    axes = [m.axis_index(name) for name in axis_names if m.has_axis(name) and m.axis_size(name) > 1]
     if not axes:
         return
-
-    for _, param in parameters.items():
-        if not param.is_grad_initialized():
-            continue
-
-        # Drop axes on which this particular parameter is sharded: by FSDP, or by its own label. The label read is the
-        # parameter's, not its gradient's, which ops may label otherwise.
-        value = param.get_value(ttml.autograd.PreferredPrecision.NATIVE)
-        axes_for_param = tuple(
-            a
-            for a in axes
-            if not _param_is_fsdp_sharded(param, a) and not ttml.core.distributed.is_sharded_on_axis(value, a)
-        )
-        if not axes_for_param:
-            continue
-
-        inv_scaler = 1.0 / float(prod(m.shape[axis] for axis in axes_for_param))
-
-        grad = param.get_grad()
-        for axis in axes_for_param:
-            grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
-        grad = ttnn.multiply(grad, inv_scaler)
-        param.set_grad(grad)
+    ttml.core.distributed.synchronize_gradients(parameters, axes, reduce_dtype=reduce_dtype)
 
 
-def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
-    """True if ``param`` is FSDP-sharded on the given mesh axis."""
-    if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
-        return True
-    return False
-
-
-def sum_partial_gradients(parameters):
+def sum_partial_gradients(parameters, *, reduce_dtype: ttnn.DataType | None = None) -> None:
     """Sum each gradient across the mesh axes its parameter is marked partial on (``ttml.parallel.mark_partial``).
 
-    Axes the mesh lacks, or of size 1, are skipped.
+    Axes the mesh lacks, or of size 1, are skipped. ``reduce_dtype`` is the dtype the sum runs in, as
+    :func:`average_gradients` takes it; the sum is written back in the gradient's own dtype.
 
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
     """
+    reduce_dtype = ttml.core.distributed.resolve_reduce_dtype(reduce_dtype)
     m = maybe_mesh()
     if m is None:
         return
@@ -332,6 +318,11 @@ def sum_partial_gradients(parameters):
         if not axes:
             continue
         grad = param.get_grad()
+        grad_dtype = grad.dtype
+        if reduce_dtype == ttnn.DataType.FLOAT32 and grad_dtype != ttnn.DataType.FLOAT32:
+            grad = ttnn.typecast(grad, ttnn.DataType.FLOAT32)
         for axis in axes:
             grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
+        if grad.dtype != grad_dtype:
+            grad = ttnn.typecast(grad, grad_dtype)
         param.set_grad(grad)

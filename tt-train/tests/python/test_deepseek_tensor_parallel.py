@@ -84,7 +84,7 @@ def grad(t) -> np.ndarray:
 
 def step(model: DeepSeek) -> tuple[float, np.ndarray]:
     """Forward and backward on fixed tokens with the loss train.py picks, gradients synced; returns the loss and the
-    logits."""
+    logits of the real vocab (the TP head keeps the padded columns, at -1e4)."""
     vocab = model.config.vocab_size
     rng = np.random.default_rng(7)
     ids = rng.integers(0, vocab, (BATCH, 1, 1, SEQ_LEN)).astype(np.uint32)
@@ -96,7 +96,7 @@ def step(model: DeepSeek) -> tuple[float, np.ndarray]:
     loss.backward(False)
     ttml.autograd.AutoContext.get_instance().reset_graph()
     ttml.sync_gradients(model.parameters())
-    return float(gather_like(loss.get_value(), loss).item()), gather_like(logits.get_value(), logits)
+    return float(gather_like(loss.get_value(), loss).item()), gather_like(logits.get_value(), logits)[..., :vocab]
 
 
 def assert_close(actual: np.ndarray, expected: np.ndarray, what: str) -> None:
@@ -119,7 +119,8 @@ def reset_graph():
         ("dense", 64, VOCAB),
         ("sparse_ep", 0, VOCAB),
         ("sparse_ep", 64, VOCAB),
-        # Padded to 128 either way, and sliced back to 100 after the TP head gathers its logits.
+        # Padded to 128 either way. Without TP the logits are sliced back to 100; with it they stay vocab-sharded,
+        # the padded columns at -1e4.
         ("dense", 0, 100),
     ],
     ids=["dense-direct_q", "dense-low_rank_q", "sparse_ep-direct_q", "sparse_ep-low_rank_q", "padded_vocab"],

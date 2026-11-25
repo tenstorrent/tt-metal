@@ -22,6 +22,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_prefetch.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
+#include "tt_metal/impl/dispatch/kernels/dispatch_noc_trids.hpp"
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 #include "api/debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
@@ -335,9 +336,13 @@ struct DispatchSRelayInlineState {
         cb_writer{};
 };
 
+// NoC read transaction ids of relay_linear's two scratch halves, one per half.
+constexpr dispatch_noc_trids::TridRange RELAY_LINEAR_TRIDS = dispatch_noc_trids::kPrefetchRelayLinear;
+static_assert(RELAY_LINEAR_TRIDS.size() == 2);
+
 struct PrefetchExecBufState {
     // NoC transaction ID for exec_buf DRAM reads into cmddat_q
-    static constexpr uint32_t READ_TRID = 1U;
+    static constexpr uint32_t READ_TRID = dispatch_noc_trids::kPrefetchExecBuf[0];
 
     uint32_t page_id;
     uint32_t base_addr;
@@ -666,22 +671,9 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     static uint32_t inflight_count = 0U;
     static uint32_t inflight_head = 0U;
 
-    // NoC read transaction IDs used by the prefetcher:
-    //   0                                default
-    //   PrefetchExecBufState::READ_TRID  exec_buf DRAM reads (1)
-    //   PREFETCH_TRIDS                   in-flight fetch_q reads (2-5)
-    //   RELAY_LINEAR_TRIDS               relay_linear scratch DB halves (6-7)
-    // Keep TRIDs unique across in-flight reads so retirement barriers only wait for the oldest read.
-    static constexpr uint32_t MIN_TRID = PrefetchExecBufState::READ_TRID + 1U;
-    static constexpr std::array<uint32_t, tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS>
-        PREFETCH_TRIDS = {{
-            MIN_TRID,
-            MIN_TRID + 1U,
-            MIN_TRID + 2U,
-            MIN_TRID + 3U,
-        }};
-    static_assert((PREFETCH_TRIDS.size() & (PREFETCH_TRIDS.size() - 1U)) == 0U);  // power-of-two for masking
-    static_assert(tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS <= PREFETCH_TRIDS.size());
+    // In-flight fetch_q reads, one NoC read id each (the prefetcher's ids are in dispatch_noc_trids.hpp). Keep TRIDs
+    // unique across in-flight reads so retirement barriers only wait for the oldest read.
+    static constexpr dispatch_noc_trids::TridRange PREFETCH_TRIDS = dispatch_noc_trids::kPrefetchFetchQ;
 
     static uint32_t next_trid_idx = 0U;
 
@@ -1833,7 +1825,6 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     // Each TRID is barriered before the next read to the same half, so the max outstanding
     // per TRID is ceil(scratch_db_half_size / NOC_MAX_BURST_SIZE).
     static_assert((scratch_db_half_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE <= NOC_MAX_TRANSACTION_ID_COUNT);
-    static constexpr uint32_t RELAY_LINEAR_TRIDS[2] = {6U, 7U};
 
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
@@ -2763,7 +2754,6 @@ uint32_t process_relay_linear_h_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data
     // Each TRID is barriered before the next read to the same half, so the max outstanding
     // per TRID is ceil(scratch_db_half_size / NOC_MAX_BURST_SIZE).
     static_assert((scratch_db_half_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE <= NOC_MAX_TRANSACTION_ID_COUNT);
-    static constexpr uint32_t RELAY_LINEAR_TRIDS[2] = {6U, 7U};
 
     // First step - read into DB0
     uint32_t amt_to_read =

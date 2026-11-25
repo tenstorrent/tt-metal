@@ -6,17 +6,17 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstdint>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <cmath>
 #include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "ttnn/async_runtime.hpp"

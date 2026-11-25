@@ -7,12 +7,13 @@
 #include <thread>
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <impl/context/metal_context.hpp>
 
-#include "hal_types.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "noc_debugging_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
 

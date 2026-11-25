@@ -19,7 +19,7 @@ namespace tt::tt_metal {
 // WorkUnitSpec target nodes: within the compute grid, at least one WorkUnitSpec, no overlap.
 void ValidateWorkUnitFields(const ValidationContext& ctx, const CoreCoord& compute_grid_size);
 
-// Per-node limits: work-unit capacity, DFB slots, Gen1 DM processors, scratchpad binders.
+// Validate work-unit capacity, DFB slots, Gen1 DM processors, and scratchpad placement and sharing.
 void ValidateNodeCapacity(const ValidationContext& ctx, tt::ARCH arch, uint32_t max_slots_per_core);
 
 // ----------------------------------------------------------------------------
@@ -37,6 +37,8 @@ void ValidateDFBSlotsPerNode(
 void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch);
 
 // scratchpad.cpp
-void ValidateScratchpadBindersPerNode(const ValidationContext& ctx, tt::ARCH arch);
+// Validate scratchpad placement overrides and sharing on the selected nodes.
+// precondition: Every scratchpad is bound to at least one placed kernel.
+void ValidateScratchpadPlacement(const ValidationContext& ctx, tt::ARCH arch);
 
 }  // namespace tt::tt_metal

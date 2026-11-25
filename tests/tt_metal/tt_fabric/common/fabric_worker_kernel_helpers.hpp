@@ -6,8 +6,8 @@
 #include <chrono>
 #include <memory>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 constexpr uint32_t WORKER_KEEP_RUNNING = 0;
 constexpr uint32_t WORKER_TEARDOWN = 1;

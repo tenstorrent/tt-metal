@@ -520,17 +520,9 @@ def test_unary_log_operations_ttnn(
     torch.manual_seed(data_seed)
     in_data = torch.Tensor(size=input_shapes).uniform_(low_range, high_range).to(torch_dtype)
 
-    # Only use pad_value=1.0 for bfloat8_b to avoid log(0) issues with shared exponent flushing
-    tensor_kwargs = {
-        "dtype": ttnn_dtype,
-        "layout": ttnn.TILE_LAYOUT,
-        "device": device,
-        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-    }
-    if ttnn_dtype == ttnn.bfloat8_b:
-        tensor_kwargs["pad_value"] = 1.0
-
-    input_tensor = ttnn.from_torch(in_data, **tensor_kwargs)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     output_tensor = log_function(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     golden_function = ttnn.get_golden_function(log_function)
@@ -2427,6 +2419,10 @@ def test_unary_bitcast_ttnn(
     # Convert to torch tensor
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_output_dtype)
 
+    if padded_torch_tensor.element_size() == 4:
+        assert torch.equal(output_tensor.view(torch.int32), padded_torch_tensor.view(torch.int32))
+        return
+
     # Extract the relevant values from the output tensor (first len(input_vals) elements)
     output_vals = output_tensor.flatten()[: len(input_vals)].tolist()
     expected_vals = y_torch.tolist()
@@ -2444,15 +2440,7 @@ def test_unary_bitcast_ttnn(
             # Inf values should match
             assert torch.isinf(torch.tensor(actual)), f"Value {i}: Expected Inf, got {actual}"
         else:
-            # Normal values should match exactly
-            # Note: There may be precision loss due to hardware limitations
-            if torch_output_dtype == torch.float32:
-                # Allow tolerance for precision issues
-                assert (
-                    abs(expected - actual) < 0.002 or expected == actual
-                ), f"Value {i}: Expected {expected}, got {actual}, diff: {abs(expected - actual)}"
-            else:
-                assert expected == actual, f"Value {i}: Expected {expected}, got {actual}"
+            assert expected == actual, f"Value {i}: Expected {expected}, got {actual}"
 
 
 @pytest.mark.parametrize(
@@ -2731,6 +2719,38 @@ def test_unary_preallocated_output_shape_match(device):
 
     assert list(result.shape) == shape
     assert_with_pcc(torch.exp(torch_input.float()), ttnn.to_torch(output_tensor).float(), 0.999)
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (8, 32), (4, 32)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_unary_rejects_non_default_tile(device, expect_error, tile_shape):
+    tensor = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.relu(tensor)
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (8, 32), (4, 32)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_unary_rejects_non_default_output_tile(device, expect_error, tile_shape):
+    tensor = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    output = ttnn.from_torch(
+        torch.zeros((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.relu(tensor, output_tensor=output)
 
 
 def test_unary_preallocated_output_shape_mismatch_program_cache_hit(device, expect_error):

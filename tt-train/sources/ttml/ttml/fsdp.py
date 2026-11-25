@@ -28,8 +28,9 @@ Hybrid FSDP + DDP (HSDP) on a 2D mesh ``[D, F]`` with axes
     # DDP-replicated shards across the "dp" axis; FSDP-sharded params are
     # skipped on the "fsdp" axis (already reduce-scattered in backward-post)
     # but still reduced on the "dp" axis to average across DP replicas.
-    # The per-param axis filter in ttml.sync_gradients is what makes the
-    # same single call cover pure DDP, pure FSDP, and HSDP.
+    # ttml.sync_gradients skips, per parameter, any axis its value is
+    # sharded on (backward-post reinstalls the Shard-labelled shard), which
+    # is what makes the same single call cover pure DDP, pure FSDP, and HSDP.
 
 Contract:
     * Call ``fully_shard`` BEFORE ``create_optimizer`` so optimizer state
@@ -102,6 +103,7 @@ class FSDPState:
         module: AbstractModuleBase,
         mesh_axis: str,
         reshard_after_forward: bool,
+        reduce_dtype: Optional[ttnn.DataType],
     ) -> None:
         self.module = module
         self.mesh_axis_name = mesh_axis
@@ -109,6 +111,7 @@ class FSDPState:
         mesh = ttml.mesh()
         self.axis_index = mesh.axis_index(mesh_axis)
         self.axis_size = mesh.axis_size(mesh_axis)
+        self.reduce_dtype = reduce_dtype
 
         self.reshard_after_forward = reshard_after_forward
         self.sharded_state = _ShardedState.SHARDED
@@ -189,12 +192,18 @@ class FSDPState:
         """Called after all of the module's internal backward closures have run.
 
         At this point every managed parameter has its ``.grad`` populated at
-        gathered shape. We reduce-scatter each grad into a shard-shaped grad,
-        explicitly deallocate the gathered value and gathered grad, and
-        restore the sharded m_value (in that order, so ``set_grad``'s shape
-        check sees the shard-shaped m_value). A managed parameter with no
+        gathered shape. We restore the sharded m_value and free the gathered
+        weight first, then reduce-scatter each grad into a shard-shaped grad,
+        free the gathered grad, and install the shard (``set_grad``'s shape
+        check then sees the shard-shaped m_value). A managed parameter with no
         grad (frozen, like LoRA's base weights, or unused) is resharded too.
+
+        Without a ``reduce_dtype`` from ``fully_shard``, the sum takes the one
+        ``create_optimizer`` stored from the training config, read here as the
+        DDP sync reads it: this hook first runs in the first backward, after the
+        optimizer exists.
         """
+        reduce_dtype = ttml.core.distributed.resolve_reduce_dtype(self.reduce_dtype)
         gathered = self.sharded_state == _ShardedState.UNSHARDED
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
@@ -202,24 +211,33 @@ class FSDPState:
                 if gathered:
                     self._reshard_param(param_tensor)
                 continue
-            # Pull a Python-side handle to the gathered grad before we reduce
-            # it; we'll explicitly deallocate it after set_grad to release the
-            # full-size buffer on device immediately.
+            # Swap m_value back to the cached shard and free the gathered
+            # weight before the grad's reduce-scatter, the peak of this hook:
+            # nothing reads the weight from here on, and set_value doesn't
+            # check shapes.
+            self._reshard_param(param_tensor)
+
+            # The gathered grad is still installed until set_grad below, but
+            # nothing reads it after the reduce-scatter's input is made: the
+            # fp32 cast when the sum runs in fp32 (the scatter half of
+            # core::distributed::synchronize_tensor's fp32 route, written here
+            # because FSDP keeps the shard), the grad itself otherwise.
             gathered_grad = param_tensor.get_grad()
             _label_partial_axes_replicated(param_tensor, gathered_grad)
-            reduced = ttml.core.distributed.reduce_scatter(
-                gathered_grad,
-                shard_dim,
-                self.axis_index,
-            )
+            grad_dtype = gathered_grad.dtype
+            to_reduce = gathered_grad
+            if reduce_dtype == ttnn.DataType.FLOAT32 and grad_dtype != ttnn.DataType.FLOAT32:
+                to_reduce = ttnn.typecast(gathered_grad, ttnn.DataType.FLOAT32)
+                ttnn.deallocate(gathered_grad)
+            summed = ttml.core.distributed.reduce_scatter(to_reduce, shard_dim, self.axis_index)
+            ttnn.deallocate(to_reduce)
             # Mean-reduction: reduce_scatter sums one shard's contribution
             # per DP rank; divide by axis_size to get the per-shard average,
-            # matching the implicit averaging a DDP all-reduce would do.
-            reduced = ttnn.multiply(reduced, 1.0 / float(self.axis_size))
-
-            self._reshard_param(param_tensor)
+            # matching the implicit averaging a DDP all-reduce would do. The
+            # multiply writes the grad's own dtype.
+            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=grad_dtype)
+            ttnn.deallocate(summed)
             param_tensor.set_grad(reduced)
-            ttnn.deallocate(gathered_grad)
 
         self.sharded_state = _ShardedState.SHARDED
 
@@ -526,6 +544,8 @@ def fully_shard(
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
     replicate: Sequence[str] = (),
+    *,
+    reduce_dtype: Optional[ttnn.DataType] = None,
 ) -> AbstractModuleBase:
     """Wrap ``module`` with torch-style FSDP in place.
 
@@ -554,9 +574,19 @@ def fully_shard(
             tied parameter matches if any of its names does.
             Raises if a matched parameter is already sharded on
             ``mesh_axis``.
+        reduce_dtype: The dtype the gradients are reduce-scattered in, as ``ttml.sync_gradients`` takes it:
+            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and casts the shard back to the gradient's dtype.
+            During backward it holds an fp32 copy of each gathered gradient plus the reduce-scatter's working buffer,
+            allocated in that fp32 dtype at the input's size (twice that on a line): about 12 bytes per gathered
+            element on a line, against 6 for the bf16 sum. ``None``
+            takes the training config's ``precision.reduce_dtype`` that ``create_optimizer`` stores
+            (``AutoContext.get_gradient_reduce_dtype``), read when the backward hook runs, as ``ttml.sync_gradients``
+            does; with no default stored either, it sums in each gradient's own dtype. A value passed here applies to
+            the parameters this call shards and wins over the stored one.
     Returns:
         ``module`` (modified in place).
     """
+    ttml.core.distributed.check_reduce_dtype(reduce_dtype)
     if _is_fsdp_wrapped_module(module):
         raise RuntimeError(f"Module {module.get_name()!r} already wrapped with fully_shard.")
     replicate_res = _compile_replicate_patterns(replicate)
@@ -575,7 +605,9 @@ def fully_shard(
         )
         return module
 
-    state = FSDPState(module, mesh_axis=mesh_axis, reshard_after_forward=reshard_after_forward)
+    state = FSDPState(
+        module, mesh_axis=mesh_axis, reshard_after_forward=reshard_after_forward, reduce_dtype=reduce_dtype
+    )
     module._fsdp_state = state
 
     # Walk Python ``Parameter`` wrappers (one collector for both eager and
@@ -663,9 +695,9 @@ def _mark_fsdp_managed(parameter: Parameter, shard_dim: int, axis_index: int) ->
 
     The wrapper-side marker is used by ``fully_shard``'s own dedup (so a
     second pass can skip already-managed wrappers, e.g. tied weights). The
-    tensor-side marker is what downstream infra — ``ttml.sync_gradients``,
-    the Muon guard, ``ttml.fsdp.is_fsdp_managed`` — looks at, since it
-    iterates ``model.parameters()`` (autograd tensors).
+    tensor-side marker is what downstream infra — the Muon guard,
+    ``ttml.fsdp.is_fsdp_managed`` — looks at, since it iterates
+    ``model.parameters()`` (autograd tensors).
 
     For eager wraps the autograd tensor exists already and the mirror runs
     immediately. For lazy wraps the tensor doesn't exist yet, so the mirror

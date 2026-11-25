@@ -4,6 +4,7 @@
 import pytest
 import torch
 from helpers.constraints import (
+    REUSE_DEST_MATH_OPS,
     get_valid_dest_accumulation_modes,
     get_valid_math_fidelities,
 )
@@ -74,11 +75,7 @@ BASE_PERF_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwmul]
 BFP4_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwsub]
 # Elwadd is already in the base BFP4 perf sweep, so this list stays Elwsub-only.
 BFP4_PERF_MATH_OPS = [MathOperation.Elwsub]
-DEST_REUSE_MATH_OPS = [
-    MathOperation.Elwadd,
-    MathOperation.Elwsub,
-    MathOperation.Elwmul,
-]
+DEST_REUSE_MATH_OPS = REUSE_DEST_MATH_OPS
 INT8_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwsub]
 # BH/WH covers Int8 -> Int8; Quasar separately exercises its Int8 -> Int32 path.
 INT8_FORMAT = InputOutputFormat(DataFormat.Int8, DataFormat.Int8)
@@ -293,10 +290,10 @@ def get_bfp4_formats():
     ]
 
 
-def get_dest_reuse_formats(math_op):
+def get_dest_reuse_formats(mathop):
     return input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float32]
-        + ([] if math_op == MathOperation.Elwmul else [DataFormat.Bfp8_b]),
+        + ([] if mathop == MathOperation.Elwmul else [DataFormat.Bfp8_b]),
         same=True,
     )
 
@@ -307,7 +304,7 @@ def _run_eltwise_binary_test(
     unpack_to_dest,
     formats,
     broadcast_type,
-    math_op,
+    mathop,
     math_fidelity,
     transpose_srca,
     input_dimensions,
@@ -445,7 +442,7 @@ def _run_eltwise_binary_test(
         None if broadcast_type != BroadcastType.None_ else formats.input_format
     )
     golden_tensor = binary_golden(
-        math_op,
+        mathop,
         golden_src_A,
         golden_src_B,
         formats.output_format,
@@ -469,7 +466,7 @@ def _run_eltwise_binary_test(
         "templates": [
             MATH_FIDELITY(math_fidelity),
             BROADCAST_TYPE(broadcast_type),
-            MATH_OP(mathop=math_op),
+            MATH_OP(mathop=mathop),
             DEST_SYNC(dest_sync),
             REUSE_DEST_TYPE(reuse_dest_type=EltwiseBinaryReuseDestType.NONE),
             ACC_TO_DEST(acc_to_dest),
@@ -546,8 +543,8 @@ def _run_eltwise_binary_test(
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
-    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
-    math_fidelity=lambda formats, math_op: get_valid_math_fidelities(formats, math_op),
+    mathop=lambda formats: get_eltwise_binary_math_ops(formats),
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
         transpose_srca, BroadcastType.None_
@@ -566,7 +563,7 @@ def test_eltwise_binary(
     dest_sync,
     unpack_to_dest,
     formats,
-    math_op,
+    mathop,
     math_fidelity,
     transpose_srca,
     input_dimensions,
@@ -579,7 +576,7 @@ def test_eltwise_binary(
         unpack_to_dest,
         formats,
         BroadcastType.None_,
-        math_op,
+        mathop,
         math_fidelity,
         transpose_srca,
         input_dimensions,
@@ -595,7 +592,7 @@ def test_eltwise_binary(
     formats=get_bfp4_formats(),
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     transpose_srca=Transpose.No,
-    math_op=BFP4_MATH_OPS,
+    mathop=BFP4_MATH_OPS,
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
         transpose_srca, BroadcastType.None_
     ),
@@ -615,7 +612,7 @@ def test_eltwise_binary_bfp4_b(
     formats,
     math_fidelity,
     transpose_srca,
-    math_op,
+    mathop,
     input_dimensions,
     tile_dimensions,
     acc_to_dest,
@@ -626,7 +623,7 @@ def test_eltwise_binary_bfp4_b(
         unpack_to_dest,
         formats,
         BroadcastType.None_,
-        math_op,
+        mathop,
         math_fidelity,
         transpose_srca,
         input_dimensions,
@@ -716,10 +713,10 @@ def _prepare_dest_reuse_inputs(
 
 
 def _apply_dest_reuse_op(
-    math_op, math_fidelity, formats, torch_format, binary_golden, srcA, srcB
+    mathop, math_fidelity, formats, torch_format, binary_golden, srcA, srcB
 ):
-    if math_op != MathOperation.Elwmul:
-        return (srcA + srcB) if math_op == MathOperation.Elwadd else (srcA - srcB)
+    if mathop != MathOperation.Elwmul:
+        return (srcA + srcB) if mathop == MathOperation.Elwadd else (srcA - srcB)
 
     # Mask from the original operands each fidelity phase. Do not use
     # _compute_eltwise: it mutates t1/t2 across iterations, so later phases
@@ -741,7 +738,7 @@ def _apply_dest_reuse_op(
 
 
 def _compute_dest_reuse_golden(
-    math_op, reuse_dest_type, math_fidelity, formats, prepared
+    mathop, reuse_dest_type, math_fidelity, formats, prepared
 ):
     """Simulate seeded dest reuse (seed first tile, then fold via DEST_TO_SRCA/B)."""
     tile_elements = prepared["tile_elements"]
@@ -779,7 +776,7 @@ def _compute_dest_reuse_golden(
                 srcA, srcB = a_tile, dest.clone()
 
             dest = _apply_dest_reuse_op(
-                math_op, math_fidelity, formats, torch_format, binary_golden, srcA, srcB
+                mathop, math_fidelity, formats, torch_format, binary_golden, srcA, srcB
             )
 
         out_start = out_t * tile_elements
@@ -940,7 +937,7 @@ def get_dest_reuse_perf_output_dimensions(
 
 def _run_eltwise_binary_dest_reuse_test(
     reuse_dest_type,
-    math_op,
+    mathop,
     formats,
     dest_acc,
     dest_sync,
@@ -964,7 +961,7 @@ def _run_eltwise_binary_dest_reuse_test(
         dest_acc=dest_acc,
     )
     golden_tensor = _compute_dest_reuse_golden(
-        math_op, reuse_dest_type, math_fidelity, formats, prepared
+        mathop, reuse_dest_type, math_fidelity, formats, prepared
     )
 
     if is_perf and perf_report is None:
@@ -978,7 +975,7 @@ def _run_eltwise_binary_dest_reuse_test(
         "templates": [
             MATH_FIDELITY(math_fidelity),
             BROADCAST_TYPE(BroadcastType.None_),
-            MATH_OP(mathop=math_op),
+            MATH_OP(mathop=mathop),
             DEST_SYNC(dest_sync),
             EN_DEST_REUSE(),
             REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
@@ -1058,12 +1055,12 @@ def _run_eltwise_binary_dest_reuse_test(
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    math_op=DEST_REUSE_MATH_OPS,
+    mathop=DEST_REUSE_MATH_OPS,
     formats=get_dest_reuse_formats,
     dest_acc=[DestAccumulation.No],
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
-    math_fidelity=lambda formats, math_op: get_valid_math_fidelities(formats, math_op),
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     tile_dimensions=DEST_REUSE_TILE_DIMENSIONS,
     input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: get_dest_reuse_input_dimensions(
         dest_acc, dest_sync, formats, tile_dimensions
@@ -1078,7 +1075,7 @@ def _run_eltwise_binary_dest_reuse_test(
 )
 def test_eltwise_binary_dest_reuse(
     reuse_dest_type,
-    math_op,
+    mathop,
     formats,
     dest_acc,
     dest_sync,
@@ -1090,7 +1087,7 @@ def test_eltwise_binary_dest_reuse(
 ):
     _run_eltwise_binary_dest_reuse_test(
         reuse_dest_type,
-        math_op,
+        mathop,
         formats,
         dest_acc,
         dest_sync,
