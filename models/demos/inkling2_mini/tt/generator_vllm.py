@@ -735,14 +735,10 @@ class Inkling2SpecForCausalLM(Inkling2ForCausalLM):
     def _prefill_chunked(self, ids, start=0):
         """As Inkling2ForCausalLM._prefill_chunked; the prefill also writes the drafter's context of the prompt
         (Inkling2Prefill.drafter: DSparkDrafter.commit_chunk) while the prompt lies inside the drafter's positions.
-        The positions before `start` that steps stashed are committed first.
-        shortcut: a prompt that goes on from the conversation on the card (start > 0) does not feed the drafter: its
-        commit_chunk hung the card in the last pass of such a prefill (12,312 tokens, then 20,528 that extend them:
-        passes from 12416). The tokens do not change; drafts after it see no context for the new positions, so the
-        reply decodes slower until the conversation starts over. Upgrade when the hang is understood."""
+        The positions before `start` that steps stashed are committed first."""
         d = self.drafter
         self._flush()
-        fits = d is not None and start == 0 and len(ids) + self.pf.chunk <= d.S
+        fits = d is not None and len(ids) + self.pf.chunk <= d.S
         self.pf.drafter = d if fits else None
         how = super()._prefill_chunked(ids, start)
         self._stash, self._pending, self._next = False, 0, len(ids)

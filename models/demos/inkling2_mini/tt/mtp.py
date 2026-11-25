@@ -451,9 +451,14 @@ class DSparkDrafter:
             c = ttnn.typecast(norm(mix(i), f"l{i}.ctx_norm"), ttnn.bfloat16)
             kv = ttnn.linear(c, self.w[f"l{i}.wkv_ctx"], dtype=ttnn.bfloat16, compute_kernel_config=self.mmc)
 
-            def heads(c0):
-                h = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, c0], [1, 1, t, c0 + NKV * D]), [1, t, NKV, D])
-                return ttnn.permute(h, (0, 2, 1, 3))  # [1, 8, t, 128]
+            def heads(c0):  # [1, 8, t, 128]
+                # Row major: a TILE reshape to [1, t, 8, 128] pads 8 to 32 rows, and its cached program owns a
+                # page-mapping tensor in DRAM made on the first call of each t. Made during a prefill, after the
+                # decode traces were captured, it can sit in DRAM the decode replays write; the next prefill's
+                # call of that t then follows a corrupted mapping and wrote into worker firmware L1 (V7).
+                h = ttnn.to_layout(ttnn.slice(kv, [0, 0, 0, c0], [1, 1, t, c0 + NKV * D]), ttnn.ROW_MAJOR_LAYOUT)
+                h = ttnn.permute(ttnn.reshape(h, [1, t, NKV, D]), (0, 2, 1, 3))
+                return ttnn.to_layout(h, ttnn.TILE_LAYOUT)
 
             k = self._rope(norm(heads(0), f"l{i}.k_norm_ctx"), cos, sin)
             v = heads(NKV * D)
