@@ -85,9 +85,13 @@ def open_mesh_device(
         fabric_config = fabric_mode_map[fabric_mode]
     elif fabric_mode:
         raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
+    elif os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
+        # A torus mode needs a descriptor declaring RING on each wrapped axis; a LINE one hangs at bring-up. So the
+        # descriptor decides: the control plane wraps exactly its RING axes (8x4 [RING, RING]: torus XY; a 4x4 tray
+        # half [LINE, RING]: torus X), whichever axis SP is on. tt-run always sets the descriptor.
+        fabric_config = ttnn.FabricConfig.MGD_DEFAULT
     else:
-        # A torus mode needs a descriptor declaring RING on each wrapped axis; a LINE one hangs at bring-up.
-        # SP on axis 1 is the 4x4 tray-half stage, whose descriptor is [LINE, RING]: wrap X only.
+        # No descriptor: the system default. SP on axis 1 is the 4x4 tray-half stage: wrap X only.
         fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if sp_axis == 0 else ttnn.FabricConfig.FABRIC_2D_TORUS_X
     logger.info(
         f"Fabric config: {fabric_config} (sp={sp} on axis {sp_axis}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})"
@@ -106,9 +110,11 @@ def open_mesh_device(
         ttnn.FabricManagerMode.DEFAULT,
         fabric_router_config,
     )
-    return ttnn.open_mesh_device(
+    mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size, trace_region_size=trace_region_size
     )
+    logger.info(f"Fabric opened: {ttnn.get_fabric_config(mesh_device)}")
+    return mesh_device
 
 
 H2D_PAGE_ALIGNMENT_BYTES = 64
@@ -142,6 +148,25 @@ def mtp_union_rows(chunk_size: int, sp_factor: int, mtp_levels: int) -> int:
         f"chunk_size/sp_factor = {chunk_size // sp_factor} must itself be tile-aligned"
     )
     return rows
+
+
+# The SP-axis knob: the mesh axis that carries SP (TP takes the other). The runner reads it with the manifest's stage
+# layout as the default; tests read it through stage_sp_axis.
+SP_AXIS_ENV = "PREFILL_SP_AXIS"
+
+
+def default_sp_axis(mesh_shape: tuple) -> int:
+    """The axis a stage of ``mesh_shape`` carries SP on by default: axis 1 on a 4x4 tray half, whose only ring is
+    axis 1 (the 4x4 manifests' PREFILL_SP_AXIS=1), else axis 0."""
+    return 1 if tuple(mesh_shape) == (4, 4) else 0
+
+
+def stage_sp_axis(mesh_shape: tuple) -> int:
+    """The axis SP runs on for a stage of ``mesh_shape``: ``$PREFILL_SP_AXIS`` when set, else ``default_sp_axis``."""
+    value = os.environ.get(SP_AXIS_ENV, "").strip()
+    axis = int(value) if value else default_sp_axis(mesh_shape)
+    assert axis in (0, 1), f"{SP_AXIS_ENV} must be 0 or 1, got {value!r}"
+    return axis
 
 
 def stage_mesh_shape(sp_factor: int, tp_factor: int, sp_axis: int = 0) -> tuple:

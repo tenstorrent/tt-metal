@@ -21,6 +21,7 @@
 #endif
 
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_ring_balance_plan.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -88,6 +89,36 @@ SPARSE_RING_HOT void piece_bits(const uint32_t (&words)[kWords], uint32_t nb, ui
     hi = h;
 }
 
+// A unit's load-balancing cost before kUnitCost: its kept blocks holding a real token, over its whole mask row.
+template <bool has_counts>
+SPARSE_RING_HOT uint32_t row_cost(
+    uint32_t row_addr,
+    const pooled_bias_gen::Geometry& geo,
+    const volatile tt_l1_ptr uint8_t* counts,
+    uint32_t shards) {
+    const uint32_t* row = reinterpret_cast<const uint32_t*>(row_addr);
+    uint32_t n = 0;
+    for (uint32_t s = 0; s < shards; ++s, row += geo.nb_pad) {
+        if constexpr (has_counts) {
+            const volatile tt_l1_ptr uint8_t* c = counts + s * geo.nb_pad;
+            for (uint32_t b = 0; b < geo.nb; ++b) {
+                n += (row[b] != 0 && c[b] != 0) ? 1u : 0u;
+            }
+        } else {
+            // Geometric lengths: the blocks holding a real token are a prefix of the shard.
+            const uint32_t s0 = s * geo.shard_tokens;
+            const uint32_t real = geo.logical_n > s0 ? geo.logical_n - s0 : 0u;
+            const uint32_t tokens = real < geo.shard_tokens ? real : geo.shard_tokens;
+            const uint32_t live = (tokens + pooled_bias_gen::kBlockTokens - 1) / pooled_bias_gen::kBlockTokens;
+            const uint32_t end = live < geo.nb ? live : geo.nb;
+            for (uint32_t b = 0; b < end; ++b) {
+                n += row[b] != 0 ? 1u : 0u;
+            }
+        }
+    }
+    return n;
+}
+
 }  // namespace sparse_ring_bits
 
 // Reader of the block-sparse ring SDPA: every core holds its Q blocks ("resident" chunks of
@@ -150,15 +181,16 @@ void kernel_main() {
     constexpr auto pooled_k_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto pooled_v_args = TensorAccessorArgs<pooled_k_args.next_compile_time_args_offset()>();
     constexpr auto block_counts_args = TensorAccessorArgs<pooled_v_args.next_compile_time_args_offset()>();
+    constexpr auto balance_table_args = TensorAccessorArgs<block_counts_args.next_compile_time_args_offset()>();
 #if defined(SPARSE_LOGICAL_N_TENSOR)
     constexpr bool kLogicalNTensor = true;
     constexpr uint32_t kLengthWordsOffset = SPARSE_LOGICAL_N_TENSOR;
-    constexpr auto logical_n_args = TensorAccessorArgs<block_counts_args.next_compile_time_args_offset()>();
+    constexpr auto logical_n_args = TensorAccessorArgs<balance_table_args.next_compile_time_args_offset()>();
     constexpr uint32_t chains_base_offset = logical_n_args.next_compile_time_args_offset();
 #else
     constexpr bool kLogicalNTensor = false;
     constexpr uint32_t kLengthWordsOffset = 0;
-    constexpr uint32_t chains_base_offset = block_counts_args.next_compile_time_args_offset();
+    constexpr uint32_t chains_base_offset = balance_table_args.next_compile_time_args_offset();
 #endif
 
     uint32_t argidx = 0;
@@ -168,10 +200,10 @@ void kernel_main() {
     const uint32_t gathered_k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t gathered_v_addr = get_arg_val<uint32_t>(argidx++);
     argidx++;  // attention sink address (none)
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // With load balancing, replaced by positions in the core's unit table.
+    uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     argidx++;  // KV cache batch index (no KV cache)
-    const uint32_t q_per_core = global_q_end - global_q_start;
 
     ChainConfig head_cfg;
     if constexpr (use_head_chain) {
@@ -211,10 +243,15 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(sparse_args_base + 0);
     [[maybe_unused]] const uint32_t pooled_k_addr = get_arg_val<uint32_t>(sparse_args_base + 1);
     [[maybe_unused]] const uint32_t pooled_v_addr = get_arg_val<uint32_t>(sparse_args_base + 2);
-    // +3: block counts address (none: geometric counts). Then the packed bf16 bias-per-token-count table
-    // (pooled_bias_gen::kTableWords words) and the head group's delivery arguments.
+    // +3: block counts address (none: geometric counts). Then (load balancing) the balance words, the packed bf16
+    // bias-per-token-count table (pooled_bias_gen::kTableWords words) and the head group's delivery arguments.
     [[maybe_unused]] const uint32_t block_counts_addr = get_arg_val<uint32_t>(sparse_args_base + 3);
-    const uint32_t pooled_bias_table_base = sparse_args_base + 4;
+    // Balance args: +0 core index, +1 cost table, +2 / +3 balance core NoC x / y, +4 / +5 import Q / mask (remote).
+    constexpr bool balance = get_named_compile_time_arg_val("balance") == 1;
+    constexpr bool balance_remote = get_named_compile_time_arg_val("balance_remote") == 1;
+    const uint32_t balance_base = sparse_args_base + 4;
+    constexpr uint32_t kBalanceArgs = balance ? 6 : 0;
+    const uint32_t pooled_bias_table_base = balance_base + kBalanceArgs;
     constexpr uint32_t mask_nb = get_named_compile_time_arg_val("mask_nb");
     constexpr uint32_t mask_nb_pad = get_named_compile_time_arg_val("mask_nb_pad");
     constexpr uint32_t mask_n_blocks_pad = get_named_compile_time_arg_val("mask_n_blocks_pad");
@@ -347,6 +384,11 @@ void kernel_main() {
     // Sparse sources: mask [1, NH, nqc_pad, n_blocks_pad] uint32 row-major (one page per row); pooled K/V
     // [1, NH, n_blocks_pad, DH] tiles (pooled route only, their readers are built where they are used).
     const auto mask_reader = TensorAccessor(mask_args, mask_addr);
+    // Q and mask rows swapped in from another device, laid out as Q and the mask.
+    const auto import_q_generator = PaddedAddrGenerator(
+        TensorAccessor(q_args, balance_remote ? get_arg_val<uint32_t>(balance_base + 4) : 0u), input_q_tile_logical);
+    const auto import_mask_reader =
+        TensorAccessor(mask_args, balance_remote ? get_arg_val<uint32_t>(balance_base + 5) : 0u);
     // Pooled chunks are consumed on the first active ring iteration of every pass.
     bool pooled_pending = true;
     // Real tokens of block b of shard s. Block b is computed exactly iff its mask bit is set and it holds a real
@@ -411,6 +453,65 @@ void kernel_main() {
     const uint32_t ring_index =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
+
+    // Load balancing: publish this core's static unit costs, then wait for its unit table (units become positions).
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* unit_table = nullptr;
+    [[maybe_unused]] bool imports_ready = false;
+    if constexpr (balance) {
+        constexpr uint32_t cost_words = get_named_compile_time_arg_val("balance_cost_words");
+        // The plan pages are free before the first iteration: a mask row, then the costs (64-byte aligned).
+        CircularBuffer cb_plan(cb_sparse_plan);
+        cb_plan.reserve_back(2);
+        const uint32_t row_addr = cb_plan.get_write_ptr() + plan_header_bytes;
+        const uint32_t costs_addr = (row_addr + mask_row_bytes + 63) & ~63u;
+        volatile tt_l1_ptr uint32_t* costs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(costs_addr);
+        for (uint32_t f = global_q_start; f < global_q_end; ++f) {
+            noc.async_read(
+                mask_reader,
+                CoreLocalMem<uint32_t>(row_addr),
+                mask_row_bytes,
+                {.page_id = (f / num_q_chunks) * mask_nqb_pad + f % num_q_chunks},
+                {});
+            noc.async_read_barrier();
+            invalidate_l1_cache();
+            const uint32_t c = sparse_ring_bits::row_cost<has_block_counts>(row_addr, geo, counts_table, ring_size) +
+                               get_named_compile_time_arg_val("balance_unit_cost");
+            costs[f - global_q_start] = c < sparse_balance::kMaxUnitCost ? c : sparse_balance::kMaxUnitCost;
+        }
+        if (global_q_end > global_q_start) {
+            sparse_balance::flush_stores(costs, global_q_end - global_q_start - 1);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(costs_addr),
+                TensorAccessor(balance_table_args, get_arg_val<uint32_t>(balance_base + 1)),
+                cost_words * sizeof(uint32_t),
+                {},
+                {.page_id = ring_index,
+                 .offset_bytes = get_arg_val<uint32_t>(balance_base) * cost_words * sizeof(uint32_t)});
+            noc.async_write_barrier();
+            Semaphore<>(get_named_compile_time_arg_val("balance_sem_costs"))
+                .up(noc, get_arg_val<uint32_t>(balance_base + 2), get_arg_val<uint32_t>(balance_base + 3), 1);
+            noc.async_atomic_barrier();
+        }
+        Semaphore<>(get_named_compile_time_arg_val("balance_sem_table")).wait_min(1);
+        CircularBuffer cb_table(get_named_compile_time_arg_val("cb_balance"));
+        cb_table.reserve_back(1);
+        unit_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_table.get_write_ptr());
+        invalidate_l1_cache();
+        global_q_start = 0;
+        global_q_end = unit_table[0];
+        cb_table.push_back(1);
+    }
+    const uint32_t q_per_core = global_q_end - global_q_start;
+    const auto unit_at = [&](uint32_t k) -> uint32_t {
+        if constexpr (balance) {
+            return sparse_balance::unit_of(unit_table[1 + k]);
+        } else {
+            return k;
+        }
+    };
+    [[maybe_unused]] const auto swapped_in = [&](uint32_t k) -> bool {
+        return balance_remote && sparse_balance::is_imported(unit_table[1 + k]);
+    };
     // The ring order before any iteration, replayed by the passes after the first.
     const auto ring_seq_start = fused_op_receiver.seq;
     for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
@@ -455,19 +556,38 @@ void kernel_main() {
             uint32_t res_nb[kResMax];
             uint32_t res_nq[kResMax];
             uint32_t res_qc[kResMax];
+            // Bit i: resident chunk i is swapped in from another device.
+            uint32_t res_imported = 0;
             for (uint32_t i = 0; i < n_res; ++i) {
-                const auto d = decompose_global_q_index(pass_q_start + i, num_q_chunks, NH, use_zigzag_balancing);
+                const auto d =
+                    decompose_global_q_index(unit_at(pass_q_start + i), num_q_chunks, NH, use_zigzag_balancing);
                 res_nb[i] = d.nb;
                 res_nq[i] = d.nq;
                 res_qc[i] = d.q_chunk;
+                if constexpr (balance_remote) {
+                    res_imported |= swapped_in(pass_q_start + i) ? 1u << i : 0u;
+                }
             }
+            const auto imported = [&](uint32_t i) { return ((res_imported >> i) & 1u) != 0; };
             // 1. Q, once per pass. The reserve waits until compute has popped the previous pass's Q.
             if (!q_pushed) {
                 for (uint32_t i = 0; i < n_res; ++i) {
                     const Slice q_slice(
                         res_nb[i], res_nq[i], res_qc[i] * Sq_chunk_t, res_qc[i] * Sq_chunk_t + Sq_chunk_t, 0, DHt);
+                    if constexpr (balance_remote) {
+                        if (imported(i) && !imports_ready) {
+                            Semaphore<>(get_named_compile_time_arg_val("balance_sem_import")).wait_min(1);
+                            imports_ready = true;
+                        }
+                    }
                     read_block(
-                        q_generator, q_slice, q_local_padded_Nt, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
+                        imported(i) ? import_q_generator : q_generator,
+                        q_slice,
+                        q_local_padded_Nt,
+                        cb_q_in,
+                        q_tile_bytes,
+                        false,
+                        q_barrier_threshold);
                 }
                 if constexpr (num_q_passes > 1) {
                     // Fill cb_q_in to its capacity (resident_slots blocks) so compute pops it whole at the end of the
@@ -488,22 +608,23 @@ void kernel_main() {
             CircularBuffer cb_plan(cb_sparse_plan);
             cb_plan.reserve_back(1);
             uint32_t scratch = cb_plan.get_write_ptr() + plan_header_bytes;
-            const auto read_chunk_row = [&](uint32_t nq, uint32_t qc) {
+            const auto read_chunk_row = [&](uint32_t i) {
                 noc.async_read(
-                    mask_reader,
+                    imported(i) ? import_mask_reader : mask_reader,
                     CoreLocalMem<uint32_t>(scratch),
                     mask_row_bytes,
-                    {.page_id = nq * mask_nqb_pad + qc},
+                    {.page_id = res_nq[i] * mask_nqb_pad + res_qc[i]},
                     {});
                 noc.async_read_barrier();
             };
             // This shard's slice of a row (nb_pad words from block ring_id * nb_pad) into the scratch.
-            const auto read_shard_slice = [&](uint32_t nq, uint32_t qc) {
+            const auto read_shard_slice = [&](uint32_t i) {
                 noc.async_read(
-                    mask_reader,
+                    imported(i) ? import_mask_reader : mask_reader,
                     CoreLocalMem<uint32_t>(scratch),
                     mask_nb_pad * sizeof(uint32_t),
-                    {.page_id = nq * mask_nqb_pad + qc, .offset_bytes = ring_id * mask_nb_pad * sizeof(uint32_t)},
+                    {.page_id = res_nq[i] * mask_nqb_pad + res_qc[i],
+                     .offset_bytes = ring_id * mask_nb_pad * sizeof(uint32_t)},
                     {});
                 noc.async_read_barrier();
             };
@@ -533,7 +654,7 @@ void kernel_main() {
                     cb_plan.get_write_ptr() + (plan_rec_base + i * kPlanRec) * sizeof(uint32_t));
             };
             for (uint32_t i = 0; i < n_res; ++i) {
-                read_shard_slice(res_nq[i], res_qc[i]);
+                read_shard_slice(i);
                 uint32_t words[kBlockWords];
                 row_block_bits(words);
                 if constexpr (plan_rec_base != 0) {
@@ -582,7 +703,7 @@ void kernel_main() {
                         scratch = cb_plan.get_write_ptr() + plan_header_bytes;
                     }
                     // The chunk's own block bits, from its slice again (the scratch holds the last chunk's).
-                    read_shard_slice(res_nq[i], res_qc[i]);
+                    read_shard_slice(i);
                     uint32_t words[kBlockWords];
                     row_block_bits(words);
                     CoreLocalMem<volatile uint32_t> plan_words(cb_plan.get_write_ptr());
@@ -934,7 +1055,7 @@ void kernel_main() {
                             for (uint32_t i = i0; i < i1; ++i) {
                                 // The chunk's own row back into the plan scratch: compute reads only the header
                                 // words of a plan page, and every page has been popped by now.
-                                read_chunk_row(nq, res_qc[i]);
+                                read_chunk_row(i);
                                 CircularBuffer cb_bias(cb_pooled_bias);
                                 cb_bias.reserve_back(Sk_chunk_t);
                                 // Block-form row: exact iff the block's own bit is set on a block with a real token.

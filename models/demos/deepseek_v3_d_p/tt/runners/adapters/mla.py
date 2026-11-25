@@ -90,8 +90,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """Mirror the pytest weight_cache_path layout so the runner reads the same
         files the cache-populate run wrote:
-          $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {rows}x{cols}[_sp1]
-        ``mesh_shape`` is (axis 0, axis 1); see ``mesh_cache_key`` for the SP-axis suffix.
+          $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / weight_cache_key(mesh_shape, sp_axis)
         Defaults to ``ttnn_cache_default``; None only if explicitly empty."""
         env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
         if not env_cache:
@@ -102,9 +101,14 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             # A [RING,RING] seam stage's mesh spans two hosts, so this process sees only its own half of the
             # chips; the cache is keyed by the stage mesh, which every stage of the run shares.
             num_devices = int(mesh_shape[0]) * int(mesh_shape[1])
-        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / mesh_cache_key(mesh_shape, sp_axis)
+        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / self.weight_cache_key(mesh_shape, sp_axis)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def weight_cache_key(self, mesh_shape: tuple, sp_axis: int) -> Path:
+        """The cache's path below the model directory: ``{rows}x{cols}[_sp1]`` (``mesh_cache_key``; ``mesh_shape``
+        is (axis 0, axis 1)). A model whose cache producer keys it otherwise overrides this."""
+        return Path(mesh_cache_key(mesh_shape, sp_axis))
 
     # ------------------------------------------------------------------
     # KV cache + runtime build
