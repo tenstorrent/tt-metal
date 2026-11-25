@@ -21,8 +21,8 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.audio.qwen3_asr.tt.model_args import Qwen3ASRModelArgs
 from models.demos.audio.qwen3_asr.tt.qwen3_asr_decoder import Qwen3ASRDecoder
-from models.tt_transformers.tt.model_config import ModelArgs
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 DECODER_DEVICE_PARAMS = {"l1_small_size": 32768, "trace_region_size": 200000000}
@@ -31,7 +31,7 @@ PCC_PREFILL = 0.97
 
 
 def _build_decoder(device, max_seq_len):
-    args = ModelArgs(device, max_batch_size=1, max_seq_len=max_seq_len)
+    args = Qwen3ASRModelArgs(device, max_batch_size=1, max_seq_len=max_seq_len)
     state_dict = args.load_state_dict()
     model = Qwen3ASRDecoder(
         args,
