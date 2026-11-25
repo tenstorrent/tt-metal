@@ -2,6 +2,9 @@
 # plus 0, +-0.5, +-1, +-3, a small normal (1e-4), +-20 (quick_gelu's saturated tails) and +-100,
 # +-65000 (exp overflow inside quick_gelu's sigmoid).
 #
+# atol / rtol: two bf16 ulps (rtol 0.016 = 2 * 2^-7) over the measured worst case of one ulp,
+# the result's own rounding.
+#
 # Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
 # dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
 # the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
@@ -38,6 +41,8 @@ operands:
   - name: "sfpu_out"
     dims: [32, 32]
     format: Float16_b
+    atol: 1.0e-6
+    rtol: 0.016
 
 operations:
   - math:

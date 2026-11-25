@@ -30,8 +30,7 @@ inline void _calculate_negative_()
 }
 
 // Element-wise negate for int32: out = -x (two's-complement negate, -INT_MIN wraps to INT_MIN), for the
-// negative_tile_int32 path. The explicit I32 layout reads and writes the raw two's-complement Dest words
-// instead of the format-implied default load.
+// negative_tile_int32 path.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_negative_int_()
 {

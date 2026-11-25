@@ -130,7 +130,7 @@ inline void calculate_lrelu(const std::uint32_t slope) {
  *
  * @tparam IS_LOWER_BOUND: true for relu_min (max(x, t)), false for relu_max (max(min(x, t), 0)).
  * @param threshold: two's-complement int32 threshold.
- * @note No SFPNOP after SFPSWAP: SFPSWAP always stalls the next SFPU instruction (TEN-4581).
+ * @note No SFPNOP after SFPSWAP: SFPSWAP always stalls the next SFPU instruction.
  */
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, int ITERATIONS = SFPU_ITERATIONS>
 inline void relu_clamp_int(const std::uint32_t threshold) {

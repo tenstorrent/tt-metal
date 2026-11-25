@@ -2,6 +2,9 @@
 # sides of 0 (where log1p keeps the relative accuracy ln(1 + x) loses), and the large-x tail up to
 # 65000. Values at or below -1 stay out: the golden's NaN / -inf there is not a finite stimulus.
 #
+# atol / rtol: two bf16 ulps (rtol 0.016 = 2 * 2^-7) over the measured worst case of one ulp,
+# which is the result's own rounding.
+#
 # Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
 # dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
 # the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
@@ -31,6 +34,8 @@ operands:
   - name: "sfpu_out"
     dims: [32, 32]
     format: Float16_b
+    atol: 1.0e-6
+    rtol: 0.016
 
 operations:
   - math:

@@ -319,43 +319,15 @@ inline void calculate_gelu() {
 }
 
 // =============================================================================
-// Fused x * exp(t) for GELU negative tail - avoids intermediate underflow
+// Fused x * exp(t) for the GELU derivative's negative tail, t = -x^2 / 2 for x in (-13.375, -3)
 // =============================================================================
-// Computes x * exp(t) where t = -x²/2 for x in the negative region (-13.375, -5].
-// Input range: t ∈ [-89.5, -12.5] (from t = -x²/2 where x ∈ [-13.375, -5])
-// Output range: x * exp(t) ∈ [~-4e-38, ~-1.4e-6]
-//
-// This function combines specialized inline exp() with a key insight to avoid
-// intermediate underflow. Advantages over _sfpu_exp_f32_accurate_():
-// 1. No overflow check (never happens for negative t)
-// 2. No NaN check (input is computed from valid x)
-// 3. Simpler FTZ handling via exponent field check
-// 4. Uses degree-5 Taylor (vs degree-7 in accurate version)
-// 5. ~15-18 ops vs ~25-30 for general-purpose exp
-// 6. Fused multiply avoids intermediate underflow (see below)
-//
-// Method:
-// 1. Range reduction: t = k·ln(2) + r, where k = round(t/ln2), |r| < 0.5
-// 2. Polynomial: exp(r) via degree-5 Taylor series
-// 3. Fused multiply: x * poly BEFORE 2^k scaling
-// 4. Scaling: (x * poly) * 2^k via exponent bit manipulation (FREE)
-//
-// KEY INSIGHT: exp(t) alone may underflow (e.g., exp(-88.6) ≈ 3e-39 < BF16 min normal),
-// but x * exp(t) may NOT underflow (e.g., -13.3 * 3e-39 = -4e-38 > BF16 min normal).
-//
-// Solution: Multiply x by poly BEFORE applying the 2^k exponent shift.
-//   exp(t) = 2^k * poly(r)
-//   x * exp(t) = x * 2^k * poly = (x * poly) * 2^k
-//
-// Since |x| ≈ 5-13 and poly ≈ 0.7-1.0, x * poly has a larger exponent than poly alone.
-// When we then shift by 2^k, we're less likely to underflow.
-//
-// Example for x = -13.3125, t = -88.62:
-//   OLD: poly=0.67, k=-128 → exp = 0.67 * 2^(-128) ≈ 2e-39 → FTZ to 0!
-//   NEW: x*poly=-8.9, k=-128 → x*exp = -8.9 * 2^(-128) ≈ -2.6e-38 → representable!
-//
-// Performance: ~15-18 operations, no external function calls
-// Accuracy: Max ULP ≤ 1 across entire (-13.375, -5] range
+// exp(t) = 2^k * p(r): k = round(t / ln 2), r = t - k ln 2 by a two-part (Cody-Waite) ln 2, and
+// p(r) the degree-5 Taylor polynomial of exp on |r| <= ln(2) / 2. x is multiplied into p(r) before
+// the 2^k scaling, which is applied by adding k to the biased exponent of x * p(r). exp(t) on its own
+// drops below the smallest normal for t < -87.3 (x < -13.2), but x * exp(t) is larger by |x|, so the
+// product stays representable down to x = -13.375; it is flushed to 0 only when the final exponent
+// underflows. No overflow or NaN handling: t is finite and negative for every x the caller passes.
+// Max error 1 ULP over the range (Blackhole measurement).
 // =============================================================================
 sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat t) {
     // Cody-Waite constants for extended precision range reduction
@@ -363,32 +335,29 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     constexpr float LN2_HI = -0.6931152343750000f;  // -ln(2) high bits (exact in float)
     constexpr float LN2_LO = -3.19461832987e-05f;   // -ln(2) low bits
 
-    // Step 1: Range reduction - split t into k*ln(2) + r
+    // Range reduction: t = k * ln(2) + r
     sfpi::vFloat z = t * INV_LN2;
     sfpi::vInt k_int;
     sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
-    // Step 2: Extended precision range reduction (Cody-Waite)
+    // Two-part ln(2): k * LN2_HI is exact, LN2_LO carries the rest
     sfpi::vFloat r = k * LN2_HI + t;
     r = k * LN2_LO + r;
 
-    // Step 3: Polynomial approximation of exp(r) for |r| < 0.5
+    // exp(r), degree-5 Taylor
     constexpr float C2 = 0.5f;
     constexpr float C3 = 0.166666667f;
     constexpr float C4 = 0.0416666667f;
     constexpr float C5 = 0.00833333333f;
     sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4, C5);
 
-    // Step 4: FUSED MULTIPLY - multiply by x BEFORE exponent shift!
-    // This is the key to avoiding intermediate underflow.
-    // x * exp(t) = x * 2^k * poly = (x * poly) * 2^k
-    sfpi::vFloat x_poly = x * poly;  // x * poly ≈ -9 to -13 (safe range)
+    // x * exp(t) = (x * poly) * 2^k: multiply first, then scale through the exponent field
+    sfpi::vFloat x_poly = x * poly;
 
-    // Step 5: Exponent bit manipulation on the FUSED result
-    sfpi::vInt xpoly_exp = sfpi::exexp(x_poly, sfpi::ExponentMode::Biased);  // Extract exponent of x*poly
-    sfpi::vInt new_exp = xpoly_exp + k_int;                                  // Shift by 2^k
+    sfpi::vInt xpoly_exp = sfpi::exexp(x_poly, sfpi::ExponentMode::Biased);
+    sfpi::vInt new_exp = xpoly_exp + k_int;
 
-    // Step 6: FTZ check on FINAL result (x * exp(t)), not intermediate exp(t)
+    // Flush to zero when the scaled product underflows
     sfpi::vFloat result = 0.0f;
     v_if(new_exp > 0) { result = sfpi::setexp(x_poly, new_exp); }
     v_endif;
@@ -543,32 +512,31 @@ constexpr float GELU_DERIV_H6 = 6.0921474869e-06f;
 constexpr float GELU_DERIV_H7 = -2.3764030743e-07f;
 constexpr float GELU_DERIV_H8 = 4.2734988881e-09f;
 
-// Saturation threshold: GELU'(x) rounds to exactly 1 in BF16 for x >= 3.1719. Both destination
-// arms below test it (the fp32 arm as -x <= -GELU_DERIV_SAT_ONE), so it lives in one place.
+// Saturation threshold: x >= 3.1719 returns 1. GELU'(x) is still above 1 there, by at most 7.5e-3 (at
+// the threshold, under one bf16 ulp of 1). Both destination arms below test it (the fp32 arm as
+// -x <= -GELU_DERIV_SAT_ONE).
 constexpr float GELU_DERIV_SAT_ONE = 3.1719f;
 
-// GELU Derivative Evaluation with Polynomial Approximation
-// Saturation thresholds derived from exhaustive BF16 research (DAZ+FTZ model):
-// - Zero saturation: x <= -13.375 (GELU'(x) becomes 0 in BF16)
-// - One saturation: x >= 3.1719 (GELU'(x) becomes exactly 1 in BF16)
-// Note: GELU'(x) has a "hump" exceeding 1.0 for x in [0.77, 3.16]
+// GELU'(x) for one row of lanes:
+// - x <= -13.375 returns 0 (|GELU'(x)| < 1e-38 there)
+// - x >= 3.1719 returns 1 (see GELU_DERIV_SAT_ONE)
+// GELU'(x) exceeds 1 for every x above 0.7518, peaking at 1.1289 at x = sqrt(2), and tends to 1 from above.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
     // NaN (fp32 destination only). The region tests are sign-magnitude ordered compares, which
-    // sort +NaN above +inf and -NaN below -inf, so +NaN used to saturate to 1.0 and -NaN to fall
-    // through to 0 (tenstorrent/tt-llk#1701 item 12). x*1 and x*-1 are exact for every other
-    // input (a denormal flushes to a zero, which lands in the same region) and turn every NaN
-    // into the canonical +NaN. Testing -x <= -GELU_DERIV_SAT_ONE then keeps NaN out of the
-    // saturation region, and x >= -3 sends it into the polynomial, which propagates it.
-    // Hoisting x*x, which both remaining regions computed separately before, offsets one of the
-    // two SFPMADs; net +1 instruction per row.
+    // sort +NaN above +inf and -NaN below -inf, so a raw NaN would land in the saturation region
+    // (+NaN) or the zero default (-NaN). x*1 and x*-1 are exact for every other input (a denormal
+    // flushes to a zero, which lands in the same region) and turn every NaN into the canonical
+    // +NaN. Testing -x <= -GELU_DERIV_SAT_ONE then keeps NaN out of the saturation region, and
+    // x >= -3 sends it into the polynomial, which propagates it. x*x is formed once here for both
+    // remaining regions.
     // The products must be raw SFPMADs: written as x * 1.0f / -x, sfpi is free to fold the
     // multiply by one away and to lower the negation to a sign flip, neither of which touches
-    // a NaN, and the canonicalisation would silently be lost.
+    // a NaN, and the canonicalisation would be lost.
     // A bfloat16 destination keeps the plain compares: convert<vFloat16b> below (SFPSTOCHRND)
-    // turns any NaN into an infinity, so that arm could not return NaN anyway.
+    // turns any NaN into an infinity, so that arm cannot return NaN anyway.
     sfpi::vFloat neg_x, x2;
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vFloat zero = 0.0f;
@@ -579,7 +547,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         x2 = x * x;
     }
 
-    // For x >= GELU_DERIV_SAT_ONE, output saturates to 1 (verified saturation threshold)
+    // For x >= GELU_DERIV_SAT_ONE, output saturates to 1
     v_if(is_fp32_dest_acc_en ? sfpi::vBool(neg_x <= -GELU_DERIV_SAT_ONE) : sfpi::vBool(x >= GELU_DERIV_SAT_ONE)) {
         result = 1.0f;
     }
@@ -601,17 +569,13 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
             GELU_DERIV_H8);
         result = 0.5f + x * h;
     }
-    // Tail region (-13.375, -3): asymptotic formula with fused x*exp(t)
-    // LEFT polynomial eliminated — the asymptotic formula achieves Max ULP ≤ 1
-    // across the entire (-13.375, -3) range.
-    // GELU'(x) ≈ φ(x) * (x - 1/x + 1/x³) where φ(x) = exp(-x²/2) / sqrt(2π)
-    //
-    // Uses x_times_exp_negative_tail() for fused x * exp(t) to avoid intermediate
-    // underflow. Cody-Waite range reduction + degree-5 Taylor + direct exponent
-    // bit manipulation.
-    //
-    // For APPROXIMATION_MODE=true: use simple x*φ(x) (~1% relative error)
-    // For APPROXIMATION_MODE=false: use Mills ratio correction (<0.01% relative error)
+    // Tail region (-13.375, -3): GELU'(x) = Φ(x) + x φ(x), φ(x) = exp(-x²/2) / sqrt(2π), from the
+    // asymptotic (Mills ratio) series Φ(x) ≈ φ(x) (-1/x + 1/x³), with x * exp(-x²/2) from
+    // x_times_exp_negative_tail, which does not underflow before the final product.
+    // - APPROXIMATION_MODE=false: φ(x) (x - 1/x + 1/x³). The dropped -3/x⁵ term bounds the relative
+    //   error by 3/x⁶: 0.4% at x = -3, falling fast with |x|.
+    // - APPROXIMATION_MODE=true: x φ(x), i.e. Φ(x) is dropped: absolute error Φ(x) <= Φ(-3) = 1.35e-3
+    //   (11% relative at x = -3, 0.6% at x = -13.375).
     v_elseif(x > -13.375f) {
         constexpr float INV_SQRT_2PI = 0.3989422804014327f;  // 1/sqrt(2*pi)
 
@@ -623,15 +587,14 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
             sfpi::vFloat x_exp = x_times_exp_negative_tail(x, t);
             result = x_exp * INV_SQRT_2PI;
         } else {
-            // 1 NR step suffices for BF16 (7 mantissa bits); FP32 needs 2 steps (23 bits).
+            // 1/x² from the reciprocal seed plus Newton steps: 1 for a BF16 result, 2 for FP32.
             sfpi::vFloat inv_x2 = _sfpu_reciprocal_<is_fp32_dest_acc_en ? 2 : 1>(x2);  // 1/x²
             sfpi::vFloat inv_x4 = inv_x2 * inv_x2;                                     // 1/x⁴
             sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
             sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
-            // Blackhole forms x * exp(t) first and scales it by INV_SQRT_2PI * correction after; Quasar
-            // folds the scale into x before the fused exponential instead, which keeps one value fewer
-            // live across x_times_exp_negative_tail (Blackhole's order runs out of LRegs here). The
-            // tail's FTZ check then applies to the final product rather than to x * exp(t).
+            // The scale INV_SQRT_2PI * correction is folded into x before the fused exponential, so one
+            // value fewer stays live across x_times_exp_negative_tail (scaling its result instead runs
+            // out of LRegs). Its flush-to-zero check therefore applies to the final product.
             result = x_times_exp_negative_tail(x * (correction * INV_SQRT_2PI), t);
         }
     }

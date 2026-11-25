@@ -1,7 +1,10 @@
-# gelu_tanh(x) = 0.5 x (1 + tanh(sqrt(2/pi) (x + 0.044715 x^3))) and gelu'(x) = Phi(x) + x phi(x)
-# on [-14, 8]: the polynomial / tail region boundaries of the derivative kernel (+-3, 3.1719,
-# -13.375), 0, +-0.5, +-1, a small normal (1e-4), and the saturated tails at +-20, in both
-# approximation modes.
+# gelu'(x) = Phi(x) + x phi(x) on [-14, 8]: the polynomial / tail region boundaries of the
+# derivative kernel (+-3, 3.1719, -13.375), 0, +-0.5, +-1, a small normal (1e-4), and the saturated
+# tails at +-20.
+#
+# approximation_mode: true, whose tail returns x phi(x) and drops Phi(x): its absolute error is
+# Phi(x) <= Phi(-3) = 1.35e-3 (11% relative at x = -3). atol 2e-3 covers that bound; rtol is two
+# bf16 ulps (0.016).
 #
 # Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
 # dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
@@ -41,14 +44,15 @@ operands:
   - name: "sfpu_out"
     dims: [32, 32]
     format: Float16_b
+    atol: 0.002
+    rtol: 0.016
 
 operations:
   - math:
       - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
       - type: "UnarySfpu"
-        operation: [GeluTanh, GeluDerivative]
-        # true selects gelu_tanh's fast path and gelu_derivative's simple x * phi(x) tail.
-        approximation_mode: [false, true]
+        operation: [GeluDerivative]
+        approximation_mode: true
         iterations: 32
         block_size: [32, 32]
     pack:

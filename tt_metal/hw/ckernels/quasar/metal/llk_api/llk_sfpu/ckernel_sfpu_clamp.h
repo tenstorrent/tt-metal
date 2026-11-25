@@ -58,7 +58,7 @@ inline void calculate_clamp(std::uint32_t min_val, std::uint32_t max_val) {
  * @tparam APPROXIMATION_MODE: accepted for ABI parity but ignored (clamp is exact).
  * @param min_val: lower bound as a two's-complement int32.
  * @param max_val: upper bound as a two's-complement int32.
- * @note No SFPNOP after SFPSWAP: SFPSWAP always stalls the next SFPU instruction (TEN-4581).
+ * @note No SFPNOP after SFPSWAP: SFPSWAP always stalls the next SFPU instruction.
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_clamp_int32(const std::uint32_t min_val, const std::uint32_t max_val) {

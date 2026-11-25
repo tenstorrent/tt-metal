@@ -3,6 +3,12 @@
 # tile and the key is what gets packed. x spans the far negative tail (softplus ~ exp(x)), both sides
 # of 0 and past the softplus threshold 20; the bias spans both signs. fp32 Dest only: the kernel has
 # no bf16 rounding step.
+# Bfloat16 inputs; the Float32 ones are in sfpu_moe_gate_sqrt_softplus_dest32_fp32.
+#
+# atol / rtol: the score is softplus to ~5e-6 relative and a 23-bit sqrt, and the bias add can cancel
+# it, so the bound is mostly absolute: the measured worst case is 1.5e-6 absolute (1.7e-5 relative
+# where the key is near 0), against atol 3e-6 + rtol 4e-6. Without the last sqrt refinement the
+# error reaches 1.1e-4, without the top log1p term 8.8e-3.
 #
 # Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
 # dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
@@ -14,7 +20,7 @@ dest_acc: true
 operands:
   - name: "x"
     dims: [32, 32]
-    format: [Float16_b, Float32]
+    format: [Float16_b]
     stimuli:
       include:
         - [-30.0, -10.01]
@@ -43,6 +49,8 @@ operands:
   - name: "sfpu_out"
     dims: [32, 32]
     format: Float32
+    atol: 3.0e-6
+    rtol: 4.0e-6
 
 operations:
   - math:
