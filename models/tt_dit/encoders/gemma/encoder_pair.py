@@ -216,7 +216,7 @@ class GemmaTokenizerEncoderPair:
     def module_specs(self) -> list[tuple[Module, dict]]:
         """The encoder, feature extractor and connectors with their ``cache.load_model`` keywords.
 
-        Gemma weights come from ``gemma_path``; the others from the LTX checkpoint, read only on a
+        Gemma weights come from ``gemma_path``; the others from ``checkpoint_name``, read only on a
         cache miss, so an all-cache-hit load reads neither the checkpoint nor the tilizer.
         """
         if self.gemma_encoder is None:
