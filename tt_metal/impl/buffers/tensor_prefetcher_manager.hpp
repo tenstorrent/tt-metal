@@ -395,6 +395,7 @@ private:
     // enumerate_dram_senders TT_FATALs if a device disagrees.
     std::vector<CoreCoord> sender_logical_cores_;
     uint32_t num_senders_ = 0;
+    uint32_t senders_per_bank_ = 0;
     uint32_t num_banks_ = 0;
 
     // One program per IDevice in the mesh; programs_[d].

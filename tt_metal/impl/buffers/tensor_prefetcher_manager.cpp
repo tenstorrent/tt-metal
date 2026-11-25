@@ -1112,6 +1112,7 @@ void TensorPrefetcherManager::enumerate_dram_senders(const std::vector<uint32_t>
             reference_device->id());
     }
     num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
+    senders_per_bank_ = static_cast<uint32_t>(roles_per_bank);
     drain_targets_per_sender_.assign(num_senders_, {});
 }
 
@@ -1345,7 +1346,13 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         std::vector<bool> primary_bank_seen(num_banks_, false);
         for (const auto& [sender, receivers] : mapping) {
             const uint32_t bank = static_cast<uint32_t>(sender.x);
-            if (bank >= num_banks_ || primary_bank_seen[bank] || sender != sender_logical_cores_[2 * bank] ||
+            // Each provisioned bank's senders sit together in sender_logical_cores_, the primary first.
+            const std::vector<CoreCoord>::const_iterator provisioned_sender =
+                std::find(sender_logical_cores_.begin(), sender_logical_cores_.end(), sender);
+            const bool is_primary_sender =
+                provisioned_sender != sender_logical_cores_.end() &&
+                (provisioned_sender - sender_logical_cores_.begin()) % senders_per_bank_ == 0;
+            if (bank >= num_banks_ || primary_bank_seen[bank] || !is_primary_sender ||
                 receivers.num_cores() != receivers_per_bank) {
                 return false;
             }
