@@ -126,7 +126,8 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;
     std::vector<uint8_t> processor_classes_num_fw_binaries;
-    // An empty ethernet list leaves this slot with no processors. Nothing is built or loaded.
+    // An empty ethernet list leaves this slot with no processors. Nothing is built or loaded, and
+    // the active slot, a CCE whose Ethernet link has a peer, has no processors either.
     if (programmable) {
         std::vector<HalJitBuildConfig> processors;
         std::vector<std::pair<std::string, std::string>> names;

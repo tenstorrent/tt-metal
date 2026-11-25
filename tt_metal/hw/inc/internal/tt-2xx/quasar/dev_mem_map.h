@@ -349,7 +349,8 @@
 // Routing path sizes (union = same memory, consolidated from intermediate aliases)
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
-// Eight ethernet harts instantiate the same mailboxes_t as a CCE.
+// Eight ethernet harts instantiate the same mailboxes_t as a CCE. The active slot is a CCE whose Ethernet link
+// has a peer; this size is that CCE's mailbox size, MEM_IERISC_MAILBOX_SIZE.
 #define MEM_ERISC_MAILBOX_SIZE 32768
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 
