@@ -35,6 +35,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/cb_api.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -92,6 +93,9 @@ constexpr bool UNTILIZE_OUT = SHARDED && IS_RM;
 // it (two copies of the whole per-block body would not fit the kernel-config ring under the watcher build).
 constexpr bool IS_ROOT = get_compile_time_arg_val(9) != 0;
 constexpr uint32_t T = CHUNK_HT * W;
+// Tiles per DEST window of the two-op per-chunk chains (pass-1 x*(x - k), pass-2 a*x - b'): each element runs
+// over the whole window, so its FPU init is paid once per window, not per tile. The chain clamps it to DEST.
+constexpr uint32_t CHAIN_BLOCK = DEST_AUTO_LIMIT;
 
 // b' lives in cb_chan_work when beta is present (5e writes it back in place), else in cb_chan_shift.
 constexpr uint32_t cb_bprime = HAS_BETA ? cb_chan_work : cb_chan_shift;
@@ -150,7 +154,7 @@ ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
     // re-enters the FPU through the bf16 srcB the pilot left: exact whenever k/2 <= x <= 2k (Sterbenz), the
     // offset-heavy regime the shift exists for; elsewhere |x - k| ~ std and its rounding is ordinary noise.
     eltwise_chain(
-        IterationShape::grid(rows_valid, W),
+        IterationShape::grid(rows_valid, W).block_size(CHAIN_BLOCK),
         BinaryFpu<
             BinaryFpuOp::Sub,
             input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
@@ -160,7 +164,7 @@ ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
             BinaryFpuOp::Mul,
             input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
             DestReuseType::DEST_TO_SRCB>{x_dfb},
-        PackTile<output(cb_x_squared)>{xsq_dfb});
+        PackTile<output(cb_x_squared, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{xsq_dfb});
     push_pad(cb_x_squared, T - rows_valid * W);
     cb_wait_front(cb_x_squared, T);
 
@@ -225,7 +229,7 @@ ALWI void normalize_chunk(uint32_t rows_valid) {
 
     cb_wait_front(x_cb, T);
     eltwise_chain(
-        IterationShape::grid(rows_valid, W),
+        IterationShape::grid(rows_valid, W).block_size(CHAIN_BLOCK),
         BinaryFpu<
             BinaryFpuOp::Mul,
             input(cb_chan_scale, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
@@ -234,7 +238,7 @@ ALWI void normalize_chunk(uint32_t rows_valid) {
             BinaryFpuOp::Sub,
             input(cb_bprime, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
             DestReuseType::DEST_TO_SRCA>{bprime_dfb},
-        PackTile<output(cb_output_tiles)>{out_dfb});
+        PackTile<output(cb_output_tiles, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{out_dfb});
     push_pad(cb_output_tiles, T - rows_valid * W);
     cb_pop_front(x_cb, T);
 }
