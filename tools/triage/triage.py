@@ -997,9 +997,10 @@ def _patch_risc_debug() -> None:
                 location = self.risc_info.noc_block.location
                 risc_debug = self.risc_info.noc_block.get_risc_debug(self.risc_info.risc_name, self.risc_info.neo_id)
                 for _ in range(4):
-                    if location.noc_read32(risc_debug.read_gpr(32) - 4) & 0x707F != 0x000F:
+                    instruction_address = risc_debug.get_l1().translate_to_noc_address(risc_debug.read_gpr(32) - 4)
+                    if instruction_address is None or location.noc_read32(instruction_address) & 0x707F != 0x000F:
                         break
-                    self.step()
+                    risc_debug.step()
 
     BabyRiscDebugHardware.halt = patched_halt  # type: ignore[method-assign]
 
