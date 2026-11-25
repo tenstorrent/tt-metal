@@ -27,6 +27,7 @@
 constexpr uint32_t kXnh = 2;  // the helper relays feeding a primary
 #include "api/dataflow/dataflow_api.h"
 #include "flat_options.hpp"
+#include "zz_probes.hpp"
 #include "expert_schedule.hpp"
 
 void kernel_main() {
@@ -75,16 +76,20 @@ void kernel_main() {
             ++cb_done;
         }
     };
+    ZZ_COUNTER(zz_data);
+    ZZ_COUNTER(zz_slots);
+    [[maybe_unused]] const uint32_t zz_start = ZZ_NOW();
     for (uint32_t b = 0; b < num_sb; ++b) {
         // Super-block b was read and tilized by helper h = b % kXnh (x_injector_helper_writer.cpp) into landing ring h
         // here (ring h follows ring h - 1); DATA sem help_sem[h] here counts arrivals, the CREDIT sem x_credit_sem on
         // the helper counts freed slots.
         const uint32_t hh = b % kXnh, hb = b / kXnh;
         constexpr uint32_t help_sem[kXnh] = {4, 7};
-        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])) < hb + 1) {
-            invalidate_l1_cache();
-            chain_retire(kChainDepth);  // (waiting: count acknowledged batches into the head's XARR)
-        }
+        ZZ_WAIT(
+            zz_data, while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])) < hb + 1) {
+                invalidate_l1_cache();
+                chain_retire(kChainDepth);  // (waiting: count acknowledged batches into the head's XARR)
+            });
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
         const uint32_t src = land + (hh * land_slots + hb % land_slots) * sb_tiles * tb;
         // The whole super-block goes out as one batch once its last block's ring slot is free. Batches in flight are
@@ -92,10 +97,11 @@ void kernel_main() {
         // that needs the whole ring (row passes: all Ht / KBLK blocks of a sub-block resident, GLM-5.3 24 of 24)
         // never sees the last batch and never frees one (deadlock).
         invalidate_l1_cache();
-        while (sent + per_sb > *freed + x_slots) {
-            chain_retire(kChainDepth);
-            invalidate_l1_cache();
-        }
+        ZZ_WAIT(
+            zz_slots, while (sent + per_sb > *freed + x_slots) {
+                chain_retire(kChainDepth);
+                invalidate_l1_cache();
+            });
         // the batch's pieces into the snake head (unicast, under the batch's transaction id); the head forwards them
         // along the snake, gate_up_core_reader.cpp
         chain_retire(kChainDepth - 1);  // (room for this batch's id)
@@ -119,6 +125,9 @@ void kernel_main() {
             get_noc_addr(helper_xy[hh] >> 16, helper_xy[hh] & 0xFFFF, get_semaphore(flat_options::x_credit_sem)),
             1);  // slot free
     }
+    ZZ_EMIT("ZZ-XP-DATAWAIT", zz_data);
+    ZZ_EMIT("ZZ-XP-SLOTWAIT", zz_slots);
+    ZZ_EMIT("ZZ-XP-SPAN", ZZ_NOW() - zz_start);
     chain_retire(0);
     noc_async_write_set_trid(0);
     noc_async_write_barrier();
