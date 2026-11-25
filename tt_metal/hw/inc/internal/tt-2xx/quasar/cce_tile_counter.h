@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // LLK tile counters of a Keraunos CCE (a Quasar Ethernet core): 16 per CCE, each a 16-bit occupancy to which a
-// register write adds atomically (Grendel CCE spec v1.0 §3.4.2, Table 7). The RESET, POSTED and BUFFER_CAPACITY offsets
-// are the Quasar overlay's (llk_intf_api.hpp, interface 0), which equal the CCE's (chippy
-// registers/ker/cce/cce_reg.h); its read-back and error-status offsets differ, so nothing here reads them.
+// register write adds atomically. The RESET, POSTED and BUFFER_CAPACITY offsets
+// are the Quasar overlay's (llk_intf_api.hpp, interface 0), which equal the CCE's; its read-back and error-status
+// offsets differ, so nothing here reads them.
 
 #pragma once
 
@@ -40,7 +40,7 @@ inline void reset(uint32_t id, uint32_t capacity) {
 }
 
 // Adds @p n to the counter whose POSTED register is at @p posted: posted_addr() on this CCE, or another tile's CCE
-// register by system address, which reaches it over the SMN (Keraunos-E100 Table 30). One store, atomic at the
+// register by system address, which reaches it over the SMN. One store, atomic at the
 // counter, so any number of harts may add to one counter concurrently. Returns once the store issues; nothing tells
 // the caller when it lands. Never blocks.
 inline void add(uint64_t posted, uint32_t n) {

@@ -50,8 +50,8 @@ constexpr uint32_t kStageBadArgs = 0x7C0000BA;
 constexpr uint32_t kStageAdding = 0x7CA00000;  // | adds issued, low 16 bits
 constexpr uint32_t kPollLimit = 1u << 20;
 
-// The CCE's READ_POSTED and ERROR_STATUS offsets from the POSTED register (chippy registers/ker/cce/cce_reg.h: 0x34 and
-// 0x3C in a counter's block, POSTED at 0x08). Quasar's header, and so llk_intf_get_posted() / llk_intf_get_error(), has
+// The CCE's READ_POSTED and ERROR_STATUS offsets from the POSTED register: 0x34 and 0x3C in a counter's block, POSTED
+// at 0x08. Quasar's header, and so llk_intf_get_posted() / llk_intf_get_error(), has
 // 0x14 and 0x1C, which on the CCE are other registers.
 constexpr uint32_t kReadPostedFromPosted = 0x2C;
 constexpr uint32_t kErrorStatusFromPosted = 0x34;
