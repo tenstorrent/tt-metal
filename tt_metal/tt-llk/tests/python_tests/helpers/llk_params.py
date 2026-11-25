@@ -139,6 +139,7 @@ class MathOperation(Enum):
     # round-half-to-even to integer (decimals = 0).
     Round = OpSpec("round", MathOpType.SFPU_UNARY)
     # Uniform [from, from + scale] generator from the per-lane PRNG; ignores its input.
+    QuickGelu = OpSpec("quick_gelu", MathOpType.SFPU_UNARY)
     Rand = OpSpec("rand", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
@@ -299,6 +300,7 @@ class MathOperation(Enum):
     # Fused GLU activations over (gate, up): silu(min(gate, limit)) * clamp(up, -limit, limit) and
     # SiTU-GLU (softcapped gate * sigmoid(gate) * softcapped up).
     SfpuClampedSiluGlu = OpSpec("CLAMPED_SILU_GLU", MathOpType.SFPU_BINARY)
+    SfpuSiluGlu = OpSpec("SILU_GLU", MathOpType.SFPU_BINARY)
     SfpuSituGlu = OpSpec("SITU_GLU", MathOpType.SFPU_BINARY)
     SfpuGcd = OpSpec("GCD", MathOpType.SFPU_BINARY)
     SfpuLcm = OpSpec("LCM", MathOpType.SFPU_BINARY)

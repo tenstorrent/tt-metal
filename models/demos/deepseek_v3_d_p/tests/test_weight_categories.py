@@ -35,7 +35,7 @@ def test_checkpoint_available_needs_a_safetensors_index(tmp_path):
     assert wc.checkpoint_available(tmp_path)
 
 
-_OPT_OUT = ("deepseek_v4_pro", "deepseek_v4_flash", "kimi_k3", "mistral_small_4")
+_OPT_OUT = ("deepseek_v4_pro", "deepseek_v4_flash", "kimi_k3", "kimi_k3_1", "mistral_small_4")
 
 
 def _mla_adapters():

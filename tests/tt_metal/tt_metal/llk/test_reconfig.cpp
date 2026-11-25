@@ -41,7 +41,8 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <tt-umd/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
@@ -522,7 +523,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     // Random stimulus: U(0, 1) per element (keep magnitudes small so matmul output
     // stays in a sensible bfloat16 range; each output element is sum of 32 products).
@@ -632,7 +633,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(*mesh_device, std::move(program));
 
@@ -877,7 +878,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     constexpr int kRandMax = 1;
     constexpr std::uint32_t elems_per_tile = tt::constants::TILE_HW;
@@ -1003,7 +1004,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(*mesh_device, std::move(program));
 
@@ -1111,7 +1112,8 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 
 TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+        GTEST_SKIP()
+            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
     }
     for (bool explicit_reconfig : {true, false}) {
         for (bool split_src_reconfig : {true, false}) {
@@ -1150,7 +1152,8 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
 
 TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+        GTEST_SKIP()
+            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
     }
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -1164,14 +1167,13 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     }
 }
 
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixUnpackReconfigQuasarDfb) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixUnpackReconfigQuasarDfb) {
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::reconfig::single_core_unpack_reconfig_quasar(device));
     }
 }
 
-// Disabled due to hang: tenstorrent/tt-metal#59923
+// Disabled: packed output misses tolerance (~0.5% rel vs rtol 1e-3); no longer hangs.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixPackReconfigQuasarDfb) {
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(device));

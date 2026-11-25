@@ -65,8 +65,9 @@ FORCE_INLINE bool should_log(uint32_t global_iter, uint32_t total_iters, uint32_
 
 // Gather this receiver's expected tiles for one block into `scratch_addr`, laid out as the sender
 // pushes them: page row h holds tiles (phys_blk * k_block_w_tiles + h, n_col_start + n) for n in
-// [0, n_per_recv_tiles). One accessor call per tile keeps bank routing out of the kernel. Returns
-// once the reads have landed.
+// [0, n_per_recv_tiles) of the (K, N) matrix that starts `first_page` pages into the tensor -- one group
+// of a grouped weight. One accessor call per tile keeps bank routing out of the kernel. Returns once the
+// reads have landed.
 template <typename Accessor>
 FORCE_INLINE void read_expected_block_tiles(
     const Accessor& accessor,
@@ -76,11 +77,12 @@ FORCE_INLINE void read_expected_block_tiles(
     uint32_t k_block_w_tiles,
     uint32_t total_n_tiles,
     uint32_t n_col_start,
-    uint32_t n_per_recv_tiles) {
+    uint32_t n_per_recv_tiles,
+    uint32_t first_page = 0) {
     uint32_t scratch_cursor = scratch_addr;
     for (uint32_t h = 0; h < k_block_w_tiles; ++h) {
         const uint32_t k_row = phys_blk * k_block_w_tiles + h;
-        const uint32_t row_page_base = k_row * total_n_tiles + n_col_start;
+        const uint32_t row_page_base = first_page + k_row * total_n_tiles + n_col_start;
         for (uint32_t n = 0; n < n_per_recv_tiles; ++n) {
             const uint64_t src_noc = accessor.get_noc_addr(row_page_base + n);
             noc_async_read(src_noc, scratch_cursor, tile_bytes);
@@ -104,10 +106,11 @@ FORCE_INLINE uint32_t l1_word(uint32_t base_addr, uint32_t word_index) {
 
 // Index of the first word where the delivered block differs from the expected one, or kNoMismatch
 // when they match. Word-strided so a mismatch reports where it starts rather than just that it
-// happened.
-FORCE_INLINE uint32_t first_mismatching_word(uint32_t received_addr, uint32_t expected_addr, uint32_t page_bytes) {
+// happened. With a word_stride above 1 it compares only every word_stride'th word, from word 0.
+FORCE_INLINE uint32_t
+first_mismatching_word(uint32_t received_addr, uint32_t expected_addr, uint32_t page_bytes, uint32_t word_stride = 1) {
     const uint32_t words = page_bytes / sizeof(uint32_t);
-    for (uint32_t w = 0; w < words; ++w) {
+    for (uint32_t w = 0; w < words; w += word_stride) {
         if (l1_word(received_addr, w) != l1_word(expected_addr, w)) {
             return w;
         }
@@ -127,7 +130,8 @@ FORCE_INLINE void read_expected_block_tiles(
     uint32_t k_block_w_tiles,
     uint32_t total_n_tiles,
     uint32_t n_col_start,
-    uint32_t n_per_recv_tiles) {
+    uint32_t n_per_recv_tiles,
+    uint32_t first_page = 0) {
     read_expected_block_tiles(
         accessor,
         static_cast<uint32_t>(local_mem::detail::AddressAccess::address(scratch)),
@@ -136,7 +140,8 @@ FORCE_INLINE void read_expected_block_tiles(
         k_block_w_tiles,
         total_n_tiles,
         n_col_start,
-        n_per_recv_tiles);
+        n_per_recv_tiles,
+        first_page);
 }
 
 template <typename T, typename A>
@@ -146,11 +151,15 @@ FORCE_INLINE uint32_t l1_word(const CoreLocalMem<T, A>& base, uint32_t word_inde
 
 template <typename T1, typename A1, typename T2, typename A2>
 FORCE_INLINE uint32_t first_mismatching_word(
-    const CoreLocalMem<T1, A1>& received, const CoreLocalMem<T2, A2>& expected, uint32_t page_bytes) {
+    const CoreLocalMem<T1, A1>& received,
+    const CoreLocalMem<T2, A2>& expected,
+    uint32_t page_bytes,
+    uint32_t word_stride = 1) {
     return first_mismatching_word(
         static_cast<uint32_t>(local_mem::detail::AddressAccess::address(received)),
         static_cast<uint32_t>(local_mem::detail::AddressAccess::address(expected)),
-        page_bytes);
+        page_bytes,
+        word_stride);
 }
 
 }  // namespace prefetcher_validator

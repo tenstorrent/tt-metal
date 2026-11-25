@@ -23,7 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -106,6 +106,22 @@ inline TensorSpec make_flat_dram_tensor_spec(
     const uint32_t elem_size = dtype == DataType::UINT32 ? 4u : 2u;  // UINT32 or BFLOAT16
     const uint32_t elements_per_page = page_size_bytes / elem_size;
     return TensorSpec(Shape{num_pages, elements_per_page}, tensor_layout);
+}
+
+// DRAM tensor for one DM side of a DFB. An implicit-sync BLOCKED DM side moves a whole block in one NoC
+// transaction from one address, but consecutive pages of an interleaved tensor sit in different DRAM banks,
+// so that side gets one page per block (block_pages). The flat host data is the same either way.
+inline TensorSpec make_dfb_side_tensor_spec(
+    uint32_t entry_size, uint32_t num_entries, bool block_pages, uint32_t block_size, DataType dtype) {
+    if (!block_pages) {
+        return make_flat_dram_tensor_spec(entry_size, num_entries, dtype);
+    }
+    TT_FATAL(
+        block_size > 0 && num_entries % block_size == 0,
+        "num_entries {} must be a whole number of blocks of {}",
+        num_entries,
+        block_size);
+    return make_flat_dram_tensor_spec(entry_size * block_size, num_entries / block_size, dtype);
 }
 
 template <typename T>
@@ -366,16 +382,21 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     const TensorParamName IN_TENSOR{"in_tensor"};
     const TensorParamName OUT_TENSOR{"out_tensor"};
 
-    const auto tensor_spec = make_flat_dram_tensor_spec(p.entry_size, entries_per_core, DataType::UINT32);
     // Only allocate (and bind) a DRAM tensor on the side that has a DM kernel.
     // Tensix producer reads from host-prefilled L1; Tensix consumer doesn't write DRAM.
     std::optional<MeshTensor> in_tensor;
     std::optional<MeshTensor> out_tensor;
     if (p.producer_type == M2PorCType::DM) {
-        in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+        in_tensor = MeshTensor::allocate_on_device(
+            mesh_device,
+            make_dfb_side_tensor_spec(
+                p.entry_size, entries_per_core, producer_blocked && p.implicit_sync, p.block_size, DataType::UINT32));
     }
     if (p.consumer_type == M2PorCType::DM) {
-        out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+        out_tensor = MeshTensor::allocate_on_device(
+            mesh_device,
+            make_dfb_side_tensor_spec(
+                p.entry_size, entries_per_core, consumer_blocked && p.implicit_sync, p.block_size, DataType::UINT32));
     }
 
     DataflowBufferSpec dfb_spec{
@@ -529,7 +550,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     if (p.producer_type == M2PorCType::DM) {
@@ -574,7 +595,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     if (out_tensor) {
         params.tensor_args.insert({OUT_TENSOR, std::cref(*out_tensor)});
     }
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Stimulus
     const uint32_t total_words = p.entry_size * entries_per_core / sizeof(uint32_t);
@@ -811,7 +832,8 @@ inline void run_a1_blocked_pipeline(
     const NodeCoord node{0, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(
+        mesh_device, make_dfb_side_tensor_spec(entry_size, num_entries, implicit, block_size, DataType::BFLOAT16));
     auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
     const DFBSpecName DFB_IN{"dfb_in"};
@@ -896,7 +918,7 @@ inline void run_a1_blocked_pipeline(
             },
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -913,7 +935,7 @@ inline void run_a1_blocked_pipeline(
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     const uint32_t total_bytes = entry_size * num_entries;
     auto input = create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xA1B1);
@@ -1024,7 +1046,7 @@ inline void run_tensix_blocked_out_pipeline(
              {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -1039,7 +1061,7 @@ inline void run_tensix_blocked_out_pipeline(
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     const uint32_t total_bytes = entry_size * num_entries;
     auto input = create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xB10C);
@@ -1087,7 +1109,10 @@ inline void run_a1_fanout_blocked_pipeline(
     const NodeCoord node{0, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(
+        mesh_device,
+        make_dfb_side_tensor_spec(
+            entry_size, num_entries, implicit && pap_in == DFBAccessPattern::BLOCKED, block_size, DataType::BFLOAT16));
     auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
     const DFBSpecName DFB_IN{"dfb_in"};
@@ -1174,7 +1199,7 @@ inline void run_a1_fanout_blocked_pipeline(
              {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -1189,7 +1214,7 @@ inline void run_a1_fanout_blocked_pipeline(
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     const uint32_t total_bytes = entry_size * num_entries;
     auto input = create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xA1C1);
@@ -1216,6 +1241,87 @@ inline void run_a1_fanout_blocked_pipeline(
         log_output_provenance(input, output, wpe, num_entries, fmt::format("A1-fanout BLOCKED C={}", C));
     }
     EXPECT_EQ(expected, output) << "A1-fanout multi-Tensix-consumer BLOCKED data mismatch (C=" << C << ")";
+}
+
+// Metal 2.0 intra-Tensix self-loop harness
+inline void run_intra_tensix_dfb_program_2_0(
+    distributed::MeshDevice& mesh_device, uint32_t entry_size, uint32_t num_threads) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 INTRA test is Quasar-only";
+    }
+
+    constexpr uint32_t num_entries = 16;  // matches legacy
+    TT_FATAL(num_entries % num_threads == 0, "num_entries must be divisible by num_threads");
+    const uint32_t entries_per_neo = num_entries / num_threads;
+    const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+    const uint32_t total_bytes = num_entries * entry_size;
+
+    const DFBSpecName DFB{"intra_dfb"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    DataflowBufferSpec dfb_spec{
+        .unique_id = DFB,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    // Compute kernel binds the same DFB as both PRODUCER ("out") and CONSUMER
+    // ("in"). M2 infers INTRA scope. Names MUST differ: using the same name for
+    // both endpoints causes M2 to only wire one Neo's slice, leaving the others'
+    // L1 untouched. No tensor_bindings (TRISC compute kernels can't include
+    // tensor_accessor.h transitively). Matches the working
+    // run_intra_tensix_dfb_program pattern in main's test_dataflow_buffer.cpp.
+    auto compute =
+        make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra_2_0.cpp", num_threads);
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB,
+         .accessor_name = "out",
+         .endpoint_type = DFBEndpointType::PRODUCER,
+         .access_pattern = DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB,
+         .accessor_name = "in",
+         .endpoint_type = DFBEndpointType::CONSUMER,
+         .access_pattern = DFBAccessPattern::STRIDED},
+    };
+    compute.compile_time_args = {{"entries_per_neo", entries_per_neo}, {"words_per_entry", words_per_entry}};
+
+    // target_nodes MUST be a NodeRangeSet (not a bare NodeCoord) to match the
+    // working legacy M2 helper on main (run_intra_tensix_dfb_program). With a
+    // bare NodeCoord the framework takes a different scheduling path that
+    // exposes a PACK/UNPACK write race for some Neos' L1 slices.
+    const NodeRangeSet node_set{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}};
+    ProgramSpec spec{
+        .name = "intra_tensix_2_0",
+        .kernels = {compute},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters = {},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
+    };
+
+    Program program(mesh_device, spec);
+
+    // Kernel has no runtime args; pass kernel_spec_name only (matches legacy
+    // pattern in main's run_intra_tensix_dfb_program).
+    ProgramRunArgs params;
+    params.kernel_run_args = {{.kernel = COMPUTE}};
+    program.set_program_run_args(params);
+
+    // DFB is the first L1 allocation in the program → lands at the base L1
+    // allocator address. Same trick the legacy intra test uses.
+    const uint32_t dfb_l1_addr =
+        static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
+
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_bytes / sizeof(uint32_t));
+    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, input);
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<uint32_t> expected(input.size());
+    std::transform(input.begin(), input.end(), expected.begin(), [](uint32_t v) { return v + 2; });
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, total_bytes, output);
+    EXPECT_EQ(expected, output) << "M2 intra-tensix DFB +2 per word mismatch (num_threads=" << num_threads << ")";
 }
 
 }  // namespace tt::tt_metal

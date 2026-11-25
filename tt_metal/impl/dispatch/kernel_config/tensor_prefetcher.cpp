@@ -14,6 +14,7 @@
 
 #include "hostdev/remote_dfb_config_layout.h"
 #include "impl/buffers/tensor_prefetcher_fifo.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -48,9 +49,18 @@ fifo::RegionLayout tensor_prefetcher_region_layout(const Cluster& cluster) {
         fifo::kMaxKernels,
         kernels.size());
     uint32_t kernel_state_bytes = 0;
+    uint32_t trids = 0;
     for (const TensorPrefetcherKernelInfo& kernel : kernels) {
         kernel_state_bytes += kernel_state_zone_bytes(kernel);
+        TT_FATAL(
+            kernel.trids >= 1, "Tensor prefetcher kernel {} names no NoC transaction id; it needs one", kernel.file);
+        trids += kernel.trids;
     }
+    TT_FATAL(
+        trids <= fifo::kMaxTrids,
+        "The Tensor prefetcher kernels name {} NoC transaction ids together, more than the {} they share",
+        trids,
+        fifo::kMaxTrids);
     return fifo::RegionLayout{.lanes = num_dram_banks, .kernel_state_bytes = kernel_state_bytes};
 }
 
@@ -92,7 +102,21 @@ TensorPrefetcherKernel::TensorPrefetcherKernel(
     const uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
     // Shares the dispatch engine (and its L1) with this CQ's prefetch, dispatch and dispatch_s kernels.
     logical_core_ = dispatch_core_manager.dispatcher_core(device_id, channel, cq_id_);
+    const CoreCoord named = tensor_prefetcher_dispatch_engine(dispatch_core_manager, device_id);
+    TT_FATAL(
+        CoreCoord(logical_core_.x, logical_core_.y) == named,
+        "Device {}: fast dispatch placed the Tensor prefetcher kernels on dispatch engine {}, but device init named "
+        "{} as theirs",
+        device_id,
+        CoreCoord(logical_core_.x, logical_core_.y),
+        named);
     kernel_type_ = FDKernelType::DISPATCH;
+}
+
+CoreCoord tensor_prefetcher_dispatch_engine(dispatch_core_manager& dispatch_core_manager, ChipId device_id) {
+    const std::vector<CoreCoord> pool = dispatch_core_manager.get_all_logical_dispatch_cores(device_id);
+    TT_FATAL(!pool.empty(), "Device {} has no dispatch cores to run the Tensor prefetcher on", device_id);
+    return pool.front();
 }
 
 uint32_t TensorPrefetcherKernel::index() const {
@@ -118,8 +142,10 @@ void TensorPrefetcherKernel::CreateKernel() {
     const uint32_t k = index();
     TT_ASSERT(k < kernels.size());
     uint32_t state_offset = layout_.kernel_state_zone_offset();
+    uint32_t trid_offset = 0;
     for (uint32_t j = 0; j < k; ++j) {
         state_offset += kernel_state_zone_bytes(kernels[j]);
+        trid_offset += kernels[j].trids;
     }
     const std::map<std::string, std::string> defines = {
         {"TENSOR_PREFETCHER_REGION_BASE", std::to_string(region_base_)},
@@ -130,8 +156,12 @@ void TensorPrefetcherKernel::CreateKernel() {
         {"TENSOR_PREFETCHER_KERNEL_INDEX", std::to_string(k)},
         {"TENSOR_PREFETCHER_STATE_BASE", std::to_string(region_base_ + state_offset)},
         {"TENSOR_PREFETCHER_STATE_SIZE", std::to_string(kernels[k].state_bytes)},
+        {"TENSOR_PREFETCHER_TRID_OFFSET", std::to_string(trid_offset)},
+        {"TENSOR_PREFETCHER_TRIDS", std::to_string(kernels[k].trids)},
     };
-    configure_kernel_variant(kernels[k].file, {}, defines);
+    // Built for speed, as the CQ prefetch and dispatch kernels are: the reader and pusher loops run once per NoC
+    // transfer, and at -Os their bookkeeping costs as much core time as the transfers they issue.
+    configure_kernel_variant(kernels[k].file, {}, defines, KernelBuildOptLevel::O2);
 }
 
 void TensorPrefetcherKernel::ConfigureCore() {

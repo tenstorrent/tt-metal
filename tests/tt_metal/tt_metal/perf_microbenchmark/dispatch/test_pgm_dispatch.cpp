@@ -27,7 +27,8 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -38,6 +39,7 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "perf/perf_contract_benchmark.hpp"
 #include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -461,8 +463,8 @@ bool initialize_program(
         total_kg.start_coord.x = total_kg.end_coord.x;
     }
 
-    program = m2::experimental::MakeProgramFromSpec(*mesh_device, spec);
-    m2::experimental::SetProgramRunArgs(program, run_args);
+    program = m2::Program(*mesh_device, spec);
+    program.set_program_run_args(run_args);
     return true;
 }
 
@@ -633,7 +635,9 @@ void set_benchmark_counters(
 
         state.counters["IterationTime"] = benchmark::Counter(
             total_iterations, benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
-        state.counters["Clock"] = benchmark::Counter(get_tt_npu_clock(device), benchmark::Counter::kDefaults);
+        const int aiclk_mhz = get_tt_npu_clock(device);
+        state.counters["Clock"] = benchmark::Counter(aiclk_mhz, benchmark::Counter::kDefaults);
+        tt::perf::add_case_context(state, "aiclk_mhz", aiclk_mhz);
     }
 }
 
@@ -883,19 +887,19 @@ static void BM_pgm_dispatch_vary_slow_cycles(benchmark::State& state, TestInfo i
 static void BM_pgm_dispatch_random(benchmark::State& state, TestInfo info) { pgm_dispatch(state, info); }
 
 static void Max12288Args(benchmark::internal::Benchmark* b) {
-    b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
+    b->ArgName("kernel_size")->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
 }
 
 static void Max8192Args(benchmark::internal::Benchmark* b) {
-    b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192);
+    b->ArgName("kernel_size")->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192);
 }
 static void Range512To12KArgs(benchmark::internal::Benchmark* b) {
-    b->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
+    b->ArgName("kernel_size")->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
 }
 
 static void KernelCycleArgs(benchmark::internal::Benchmark* b) {
     // Dispatch time for most normal kernels is around 3000-4000 cycles.
-    b->Arg(0)->Arg(1000)->Arg(2000)->Arg(3000)->Arg(4000)->Arg(5000)->Arg(10000);
+    b->ArgName("slow_kernel_cycles")->Arg(0)->Arg(1000)->Arg(2000)->Arg(3000)->Arg(4000)->Arg(5000)->Arg(10000);
 }
 
 // Which processors are enabled (BRISC/NCRISC/TRISC); single core unless *_all_cores.
@@ -1350,6 +1354,7 @@ int main(int argc, char** argv) {
             ->UseManualTime();
     }
 
+    tt::perf::declare_metric("IterationTime", {"s", tt::perf::Better::Lower, tt::perf::Aggregate::Min});
     benchmark::Initialize(&argc, argv);
     benchmark::RunSpecifiedBenchmarks();
     benchmark::Shutdown();

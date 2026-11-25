@@ -12,12 +12,15 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     conv/test_conv2d.cpp
     test_multi_cq_multi_dev.cpp
     test_multiprod_queue.cpp
+    test_command_queue_id_stack.cpp
+    test_command_queue_selection.cpp
 )
 
 set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_add.cpp
     test_scalar_lhs_binary.cpp
     test_add_int.cpp
+    test_bitwise_scalar_overloads.cpp
     test_broadcast_to.cpp
     test_command_list.cpp
     test_command_list_tensor_prefetcher.cpp
@@ -28,7 +31,9 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_gelu_bw_main_ulp.cpp
     test_generic_op.cpp
     test_generic_op_hashing.cpp
+    test_generic_op_program_spec.cpp
     test_per_device_program_merge.cpp
+    test_spec_per_device_run_args.cpp
     test_graph_add.cpp
     test_graph_basic.cpp
     test_levelized_graph.cpp
@@ -43,8 +48,13 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_moreh_sum_backward.cpp
     test_matmul.cpp
     test_matmul_dram_sharded_placement.cpp
+    test_gbdt_model.cpp
+    test_matmul_model_candidates.cpp
+    test_matmul_model_features.cpp
+    test_matmul_model_selector.cpp
     test_sparse_matmul_fp32.cpp
     test_normalization.cpp
+    test_noc_bw_perf_model.cpp
     test_op_performance_model.cpp
     test_program_cache_l1.cpp
     test_reduction.cpp
@@ -130,4 +140,7 @@ set(TEST_CCL_MULTI_CQ_MULTI_DEVICE_SOURCES multi_thread/test_ccl_multi_cq_multi_
 
 set(UNIT_TESTS_TTNN_EMITC_SOURCES emitc/test_sanity.cpp)
 
-set(UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES test_query_op_constraints_mock_device.cpp)
+set(UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES
+    test_query_op_constraints_mock_device.cpp
+    test_matmul_model_mock_device.cpp
+)

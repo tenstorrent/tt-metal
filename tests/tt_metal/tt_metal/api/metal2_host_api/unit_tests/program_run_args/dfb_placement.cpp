@@ -6,7 +6,7 @@
 #include <type_traits>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -35,9 +35,9 @@ TYPED_TEST(DFBPlacementRunArgsTest, CPU_DFBPlacementResizeReservesLargerRegion) 
     spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
     spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     ProgramRunArgs args{.dfb_run_overrides = {{.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8}}};
-    SetProgramRunArgs(program, args);
+    program.set_program_run_args(args);
     program.impl().compile_and_allocate(&fixture_device, false);
     const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
     const auto next = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
@@ -48,9 +48,9 @@ TYPED_TEST(DFBPlacementRunArgsTest, CPU_DFBPlacementResizeKeepsExcludedMemoryAva
     // Growing a DFB preserves independent backing allocations on excluded nodes.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = test_helpers::MakeDisjointDFBPlacementsForTest(TypeParam::value);
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     ProgramRunArgs args{.dfb_run_overrides = {{.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8}}};
-    SetProgramRunArgs(program, args);
+    program.set_program_run_args(args);
     program.impl().compile_and_allocate(&fixture_device, false);
     const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
     const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));

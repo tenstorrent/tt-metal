@@ -44,7 +44,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <impl/context/metal_context.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mxfp4.hpp>
@@ -501,7 +502,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     // Reader/writer RTAs depend on reduce_dim
     KernelRunArgs::RuntimeArgValues reader_named_rtas;
@@ -543,7 +544,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
         {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
         {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Shared seeded stimulus (packed bf16, TILED_NFACES). For bf16 input this is written to the
     // device as-is; for MxFp4 input it is quantized to MxFp4 for the device.
@@ -737,7 +738,7 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
             },
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -753,7 +754,7 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
         {SCALER_TENSOR, ProgramRunArgs::TensorArgument{scaler_tensor}},
         {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Data: the same seeded stimulus as the other MxFp4 reduce tests, quantized to MxFp4 (tile-major).
     // Scaler: the SUM scaler (1.0) in the first row of each face, 0 elsewhere (tile-major).
@@ -820,9 +821,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
     }
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     std::vector<std::uint32_t> shape = {1, 3, 19 * TILE_HEIGHT, 17 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -867,9 +865,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -909,9 +904,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -960,9 +952,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -1012,9 +1001,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -1060,9 +1046,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHWMathOnly) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);

@@ -7,6 +7,7 @@ set(SOURCES
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
     core/parameter_dtype_test.cpp
+    core/synchronize_tensor_test.cpp
     core/random_tests.cpp
     core/program_utils_test.cpp
     model/linear_regression_ddp_test.cpp
@@ -59,6 +60,7 @@ set(SOURCES
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
     ops/distributed/ring_sdpa_schedule_test.cpp
+    ops/distributed/ring_attention_merge_test.cpp
     ops/distributed/mesh_workload_cache_hit_test.cpp
     ops/distributed/gumbel_sample_mesh_test.cpp
     ops/distributed/moe_ep_mesh_test.cpp

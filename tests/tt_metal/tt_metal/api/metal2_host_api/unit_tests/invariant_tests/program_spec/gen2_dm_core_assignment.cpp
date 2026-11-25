@@ -15,7 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -157,12 +157,12 @@ TEST_F(ProgramSpecTestQuasar, CPU_BacktrackingSolverFindsAssignment_RegardlessOf
     // All kernel permutations should succeed with all work_unit permutations.
     for (const auto& kernel_perm : kernel_permutations) {
         for (const auto& work_unit_perm : work_unit_permutations1) {
-            EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, make_spec("", kernel_perm, work_unit_perm)));
+            EXPECT_NO_THROW(Program(*mesh_device_, make_spec("", kernel_perm, work_unit_perm)));
         }
     }
     for (const auto& kernel_perm : kernel_permutations) {
         for (const auto& work_unit_perm : work_unit_permutations2) {
-            EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, make_spec("", kernel_perm, work_unit_perm)));
+            EXPECT_NO_THROW(Program(*mesh_device_, make_spec("", kernel_perm, work_unit_perm)));
         }
     }
 }
@@ -221,7 +221,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SimplifyingAssumptionViolation_OverlappingMult
 
     // EXPECTED BEHAVIOR: FAILS due to simplifying assumption violation.
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Failed to find valid processor assignments for DM kernels")));
 }
@@ -268,7 +268,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBMultiBindingForcesUniformRiscMaskAcrossProd
         MakeMinimalWorkUnit("wu_g2", node1, {"producer_b", "consumer"}),
     };
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 }  // namespace

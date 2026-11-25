@@ -4,11 +4,13 @@
 
 #include "program_spec.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -17,6 +19,7 @@
 #include <nanobind/stl/detail/nb_dict.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
@@ -29,6 +32,7 @@
 
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/generic/generic_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
@@ -146,7 +150,8 @@ auto setter_accepts_none() { return nb::for_setter(nb::arg("value").none()); }
 // Tripwires: adding a field to one of these Metal 2.0 types must be a deliberate choice. Bind it below,
 // or note why Python leaves it out, then update the count. DFBAdvancedOptions has none: Python binds only
 // alias_with, which Blaze uses, and the other advanced options stay C++ only until a caller needs them. Python
-// binds no varargs: Metal 2.0 keeps them only to ease migration, and array arguments replace them.
+// binds no varargs: Metal 2.0 keeps them only to ease migration, and array arguments replace them. GlobalSemaphore
+// parameters, bindings and args stay C++ only until Python can pass a GlobalSemaphore in run args.
 static_assert(reflect::size<m2::TensorSpecRelaxations>() == 5);
 static_assert(reflect::size<m2::TensorParameter>() == 3);
 static_assert(reflect::size<m2::DataflowBufferSpec>() == 7);
@@ -167,12 +172,15 @@ static_assert(reflect::size<m2::DFBBinding>() == 5);
 static_assert(reflect::size<m2::SemaphoreBinding>() == 2);
 static_assert(reflect::size<m2::ScratchpadBinding>() == 2);
 static_assert(reflect::size<m2::TensorBinding>() == 2);
-static_assert(reflect::size<m2::KernelSpec>() == 13, "advanced_options is C++ only");
+static_assert(reflect::size<m2::KernelSpec>() == 14, "advanced_options and global_semaphore_bindings are C++ only");
 static_assert(reflect::size<m2::WorkUnitSpec>() == 3);
-static_assert(reflect::size<m2::ProgramSpec>() == 8, "advanced_options is C++ only");
+static_assert(reflect::size<m2::ProgramSpec>() == 9, "advanced_options and global_semaphore_parameters are C++ only");
 static_assert(reflect::size<m2::KernelRunArgs>() == 6, "advanced_options is C++ only");
 static_assert(reflect::size<m2::DFBRunOverrides>() == 3);
-static_assert(reflect::size<m2::ProgramRunArgs>() == 4, "advanced_options is C++ only");
+static_assert(reflect::size<m2::ProgramRunArgs>() == 5, "advanced_options and global_semaphore_args are C++ only");
+// The same tripwires for generic_op's mesh form, which TT-NN defines rather than Metal.
+static_assert(reflect::size<ttnn::experimental::MeshProgramSpec>() == 1);
+static_assert(reflect::size<ttnn::experimental::MeshProgramRunArgs>() == 1);
 
 // Data formats are ttnn data types in Python, so a format without one, such as Float16, cannot be set. A buffer
 // takes the format that ttnn's own ops declare for a tensor of that data type: int8 becomes UInt8, because the
@@ -221,8 +229,8 @@ nb::dict copy_tensor_args(const nb::dict& tensor_args) {
     return copy;
 }
 
-// The attribute in which a Python ProgramRunArgs holds its tensor_args dict. The C++ object refers to the tensors'
-// MeshTensors, so the dict keeps them alive.
+// The attribute in which a Python ProgramRunArgs holds its tensor_args dict, and a MeshProgramRunArgs a list of those
+// dicts, one per program. The C++ objects refer to the tensors' MeshTensors, so the dicts keep them alive.
 constexpr const char* TENSOR_ARGS_ATTRIBUTE = "_tensor_args";
 
 // Another value, or none, in the attribute that holds the tensors, or in the instance dict that holds it, would leave
@@ -1076,7 +1084,165 @@ void bind_program_run_args(nb::module_& mod) {
         .def_rw("dfb_run_overrides", &m2::ProgramRunArgs::dfb_run_overrides, COPY);
 }
 
+// generic_op's mesh form. A MeshProgramRunArgs keeps the tensors of its run args alive the way ProgramRunArgs does,
+// so it shares the private attribute and helpers above.
+void bind_mesh_programs(nb::module_& mod) {
+    using m2::ProgramRunArgs;
+    using m2::ProgramSpec;
+    using ttnn::experimental::MeshProgramRunArgs;
+    using ttnn::experimental::MeshProgramSpec;
+
+    nb::class_<MeshProgramSpec>(
+        mod,
+        "MeshProgramSpec",
+        R"doc(
+        Everything fixed about a mesh program: a ttnn.experimental.ProgramSpec for each mesh coordinate range.
+        generic_op raises if the MeshProgramSpec has no programs, if a range reaches outside the mesh, if two ranges
+        overlap, if a device in a range does not hold every tensor, or if the MeshProgramRunArgs does not give run
+        args for exactly these ranges. Lists are copied in and out.
+        )doc")
+        .def(
+            "__init__",
+            [](MeshProgramSpec* self, std::vector<std::pair<MeshCoordinateRange, ProgramSpec>> programs) {
+                new (self) MeshProgramSpec{.programs = std::move(programs)};
+            },
+            nb::kw_only(),
+            nb::arg("programs") = std::vector<std::pair<MeshCoordinateRange, ProgramSpec>>{})
+        .def_rw("programs", &MeshProgramSpec::programs, nb::rv_policy::copy);
+
+    // A Python ProgramRunArgs keeps its tensors alive in an attribute. A MeshProgramRunArgs holds C++ copies of its
+    // run args, so it keeps a copy of each of those attributes, in the order of its programs.
+    const auto set_programs = [](nb::pointer_and_handle<MeshProgramRunArgs> self,
+                                 const std::vector<std::pair<MeshCoordinateRange, nb::object>>& programs) {
+        std::vector<std::pair<MeshCoordinateRange, ProgramRunArgs>> run_args;
+        nb::list tensors;
+        run_args.reserve(programs.size());
+        for (std::size_t i = 0; i < programs.size(); ++i) {
+            const auto& [range, program_run_args] = programs[i];
+            // Unchecked, nb::cast would report only std::bad_cast.
+            if (!nb::isinstance<ProgramRunArgs>(program_run_args)) {
+                throw nb::type_error(("MeshProgramRunArgs: programs[" + std::to_string(i) + "] holds a " +
+                                      nb::cast<std::string>(program_run_args.type().attr("__name__")) +
+                                      ", not a ttnn.experimental.ProgramRunArgs")
+                                         .c_str());
+            }
+            run_args.emplace_back(range, nb::cast<const ProgramRunArgs&>(program_run_args));
+            tensors.append(nb::getattr(program_run_args, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
+        }
+        set_tensor_owners(self.h, tensors);
+        self.p->programs = std::move(run_args);
+    };
+    nb::class_<MeshProgramRunArgs>(
+        mod,
+        "MeshProgramRunArgs",
+        nb::dynamic_attr(),
+        R"doc(
+        The values of one mesh program run: a ttnn.experimental.ProgramRunArgs for each range of the
+        MeshProgramSpec. It keeps the tensors of its run args alive. Lists are copied in and out.
+        )doc")
+        .def(
+            "__init__",
+            [set_programs](
+                nb::pointer_and_handle<MeshProgramRunArgs> self,
+                const std::vector<std::pair<MeshCoordinateRange, nb::object>>& programs) {
+                new (self.p) MeshProgramRunArgs{};
+                set_programs(self, programs);
+            },
+            nb::kw_only(),
+            nb::arg("programs") = std::vector<std::pair<MeshCoordinateRange, nb::object>>{})
+        .def(
+            "__setattr__",
+            [](nb::handle self, const nb::str& name, nb::handle value) {
+                set_known_attribute(self, name, value, nb::type<MeshProgramRunArgs>());
+            },
+            nb::arg("name"),
+            nb::arg("value").none())
+        .def(
+            "__delattr__",
+            [](nb::handle self, const nb::str& name) { delete_known_attribute(self, name); },
+            nb::arg("name"))
+        .def_prop_rw(
+            "programs",
+            [](nb::pointer_and_handle<MeshProgramRunArgs> self) {
+                nb::object tensors = nb::getattr(self.h, TENSOR_ARGS_ATTRIBUTE);
+                nb::list programs;
+                for (std::size_t i = 0; i < self.p->programs.size(); ++i) {
+                    const auto& [range, run_args] = self.p->programs[i];
+                    nb::object run_args_copy = nb::cast(run_args, nb::rv_policy::copy);
+                    set_tensor_owners(run_args_copy, tensors[i].attr("copy")());
+                    programs.append(nb::make_tuple(range, run_args_copy));
+                }
+                return programs;
+            },
+            set_programs);
+}
+
 }  // namespace
+
+namespace {
+
+// The tensors of a run args object made in Python, as its _tensor_args attribute holds them, or None for run args made
+// in C++, which Python cannot have given tensors.
+nb::object tensor_owners(nb::handle python_object) {
+    return python_object.is_valid() ? nb::getattr(python_object, TENSOR_ARGS_ATTRIBUTE, nb::none()) : nb::none();
+}
+
+// Calls visit for each entry of one of those dicts. ProgramRunArgs and MeshProgramRunArgs write the dicts themselves,
+// from str keys and ttnn.Tensor values, so an entry of another type means the dict was edited in place; set_again says
+// how to fix it. Such an edit that keeps the types goes unseen.
+void for_each_entry(
+    nb::handle owners,
+    const char* set_again,
+    const std::function<void(std::string_view name, const ttnn::Tensor& tensor)>& visit) {
+    TT_FATAL(nb::isinstance<nb::dict>(owners), "generic_op: the tensors that {}", set_again);
+    for (const auto& [key, value] : nb::borrow<nb::dict>(owners)) {
+        TT_FATAL(
+            nb::isinstance<nb::str>(key) && nb::isinstance<ttnn::Tensor>(value),
+            "generic_op: the tensors that {}",
+            set_again);
+        // Length-aware: a name may hold a NUL character. The str object keeps the UTF-8 text.
+        Py_ssize_t size = 0;
+        const char* text = PyUnicode_AsUTF8AndSize(key.ptr(), &size);
+        if (text == nullptr) {
+            throw nb::python_error();
+        }
+        visit(std::string_view(text, static_cast<std::size_t>(size)), nb::cast<const ttnn::Tensor&>(value));
+    }
+}
+
+constexpr const char* SET_TENSOR_ARGS_AGAIN = "a ProgramRunArgs keeps were edited in place; set its tensor_args again";
+constexpr const char* SET_PROGRAMS_AGAIN = "a MeshProgramRunArgs keeps were edited in place; set its programs again";
+
+}  // namespace
+
+void for_each_python_tensor_arg(
+    const m2::ProgramRunArgs& run_args,
+    const std::function<void(std::string_view name, const ttnn::Tensor& tensor)>& visit) {
+    const nb::object owners = tensor_owners(nb::find(run_args));
+    if (!owners.is_none()) {
+        for_each_entry(owners, SET_TENSOR_ARGS_AGAIN, visit);
+    }
+}
+
+void for_each_python_tensor_arg(
+    const ttnn::experimental::MeshProgramRunArgs& run_args,
+    const std::function<void(std::size_t program, std::string_view name, const ttnn::Tensor& tensor)>& visit) {
+    const nb::object owners = tensor_owners(nb::find(run_args));
+    if (owners.is_none()) {
+        return;
+    }
+    TT_FATAL(
+        nb::isinstance<nb::list>(owners) && nb::len(owners) == run_args.programs.size(),
+        "generic_op: the tensors that {}",
+        SET_PROGRAMS_AGAIN);
+    std::size_t program = 0;
+    for (const nb::handle program_owners : nb::borrow<nb::list>(owners)) {
+        for_each_entry(program_owners, SET_PROGRAMS_AGAIN, [&](std::string_view name, const ttnn::Tensor& tensor) {
+            visit(program, name, tensor);
+        });
+        ++program;
+    }
+}
 
 void py_module_types(nb::module_& mod) {
     bind_enums(mod);
@@ -1086,6 +1252,7 @@ void py_module_types(nb::module_& mod) {
     bind_kernel_spec(mod);
     bind_program_spec(mod);
     bind_program_run_args(mod);
+    bind_mesh_programs(mod);
 
     // Namespace-level names that Metal also has.
     nb::object kernel_spec = mod.attr("KernelSpec");

@@ -55,6 +55,53 @@ CoreCoord pick_unused_dram_logical_core(const metal_SocDescriptor& soc_desc, uin
         num_subchannels);
 }
 
+std::vector<CoreCoord> dram_sender_logical_cores(
+    const metal_SocDescriptor& soc_desc, uint32_t bank_id, ChipId device_id) {
+    // Sender 0: the free non-endpoint subchannel.
+    const CoreCoord free_core = pick_unused_dram_logical_core(soc_desc, bank_id, device_id);
+
+    // Sender 1: the NOC1 worker-endpoint subchannel. Resolve its subchannel index by
+    // matching the endpoint's physical (TRANSLATED) coord against this bank's
+    // subchannels (mirrors the loop in pick_unused_dram_logical_core).
+    const CoreCoord noc1_endpoint_phys =
+        soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/static_cast<uint8_t>(1));
+    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
+    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
+        const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
+            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+        if (coord.x == noc1_endpoint_phys.x && coord.y == noc1_endpoint_phys.y) {
+            const CoreCoord noc1_core =
+                soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+            // A sender mapping resolves logical DRAM coords against one reference device and is then
+            // reused mesh-wide (see build_dram_sender_mapping), so a role must land on the same
+            // logical y on every device. dram_bank_endpoint_coords orders a bank as [NOC0 endpoint,
+            // NOC1 endpoint, remaining subchannels ascending], which pins the NOC1 endpoint to y == 1
+            // and every free subchannel above it -- but only while the bank's two worker endpoints are
+            // distinct subchannels. A descriptor that names one subchannel for both NOCs (Wormhole
+            // does) collapses that ordering and would let the free and NOC1 roles swap logical y
+            // between devices, which the per-device membership check cannot see. Wormhole has no DRAM
+            // senders, so require the split here rather than in the descriptor.
+            TT_FATAL(
+                noc1_core.y == 1 && free_core.y > noc1_core.y,
+                "DRAM bank {} on device {}: expected the NOC1 worker endpoint at logical y=1 with the free "
+                "subchannel above it, but found NOC1 at ({}, {}) and free at ({}, {}). A bank's NOC0 and NOC1 "
+                "worker endpoints must be distinct subchannels so that a sender's logical coord names the same "
+                "endpoint role on every device in the mesh; check this view's worker_endpoint pair in the SoC "
+                "descriptor.",
+                bank_id,
+                device_id,
+                noc1_core.x,
+                noc1_core.y,
+                free_core.x,
+                free_core.y);
+            return {free_core, noc1_core};
+        }
+    }
+    TT_THROW(
+        "Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={} on device {}", bank_id, device_id);
+}
+
 std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     const distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
@@ -150,7 +197,10 @@ std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<Co
 }
 
 std::optional<DramSenderPlacement> dram_sender_placement(ContextId context_id, uint8_t num_hw_cqs) {
-    auto& metal_ctx = MetalContext::instance(context_id);
+    return dram_sender_placement(MetalContext::instance(context_id), num_hw_cqs);
+}
+
+std::optional<DramSenderPlacement> dram_sender_placement(MetalContext& metal_ctx, uint8_t num_hw_cqs) {
     const Hal& hal = metal_ctx.hal();
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         return DramSenderPlacement::DramCore;
@@ -174,11 +224,7 @@ bool dram_senders_on_dispatch_engine(const distributed::MeshDevice& mesh_device)
 }
 
 CoreCoord dram_sender_dispatch_engine(ContextId context_id, ChipId device_id) {
-    auto& metal_ctx = MetalContext::instance(context_id);
-    const uint16_t channel = metal_ctx.get_cluster().get_assigned_channel_for_device(device_id);
-    // The Tensor prefetcher kernels share CQ 0's dispatch engine (TensorPrefetcherKernel).
-    const tt_cxy_pair dispatch_engine = metal_ctx.get_dispatch_core_manager().dispatcher_core(device_id, channel, 0);
-    return CoreCoord(dispatch_engine.x, dispatch_engine.y);
+    return tensor_prefetcher_dispatch_engine(MetalContext::instance(context_id).get_dispatch_core_manager(), device_id);
 }
 
 namespace {
@@ -188,23 +234,33 @@ namespace {
 struct DramSenderStateCore {
     CoreCoord logical;
     CoreType core_type = CoreType::DRAM;
-    HalProgrammableCoreType programmable_core_type = HalProgrammableCoreType::DRAM;
 };
+
+DramSenderPlacement placement_of(const distributed::MeshDevice& mesh_device) {
+    const auto placement = mesh_device.impl().dram_sender_placement();
+    TT_FATAL(placement.has_value(), "Mesh device {} runs no DRAM-sender endpoints", mesh_device.id());
+    return *placement;
+}
+
+HalProgrammableCoreType state_core_programmable_type(DramSenderPlacement placement) {
+    return placement == DramSenderPlacement::DispatchEngine ? HalProgrammableCoreType::DISPATCH
+                                                            : HalProgrammableCoreType::DRAM;
+}
 
 DramSenderStateCore dram_sender_state_core(
     const distributed::MeshDevice& mesh_device, const IDevice* device, const CoreCoord& sender_logical) {
-    const auto placement = mesh_device.impl().dram_sender_placement();
-    TT_FATAL(placement.has_value(), "Device {} runs no DRAM-sender endpoints", device->id());
-    if (*placement == DramSenderPlacement::DispatchEngine) {
-        return {
-            dram_sender_dispatch_engine(mesh_device.impl().get_context_id(), device->id()),
-            CoreType::DISPATCH,
-            HalProgrammableCoreType::DISPATCH};
+    if (placement_of(mesh_device) == DramSenderPlacement::DispatchEngine) {
+        return {dram_sender_dispatch_engine(mesh_device.impl().get_context_id(), device->id()), CoreType::DISPATCH};
     }
-    return {sender_logical, CoreType::DRAM, HalProgrammableCoreType::DRAM};
+    return {sender_logical, CoreType::DRAM};
 }
 
 }  // namespace
+
+uint64_t dram_sender_l1_noc_addr(const distributed::MeshDevice& mesh_device, DeviceAddr local_addr) {
+    const HalProgrammableCoreType core_type = state_core_programmable_type(placement_of(mesh_device));
+    return mesh_device.impl().metal_env().get_hal().get_l1_noc_offset(core_type) + static_cast<uint64_t>(local_addr);
+}
 
 CoreCoord dram_sender_virtual_core(
     const distributed::MeshDevice& mesh_device, const IDevice* device, const CoreCoord& sender_logical) {
@@ -218,12 +274,9 @@ void write_dram_sender_l1(
     const CoreCoord& sender_logical,
     DeviceAddr local_addr,
     std::span<const std::byte> bytes) {
-    const DramSenderStateCore state = dram_sender_state_core(mesh_device, device, sender_logical);
-    auto& env = mesh_device.impl().metal_env();
-    const uint64_t write_addr =
-        env.get_hal().get_l1_noc_offset(state.programmable_core_type) + static_cast<uint64_t>(local_addr);
-    const CoreCoord virtual_core = device->virtual_core_from_logical_core(state.logical, state.core_type);
-    env.get_cluster().write_core(device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, write_addr);
+    const CoreCoord virtual_core = dram_sender_virtual_core(mesh_device, device, sender_logical);
+    mesh_device.impl().metal_env().get_cluster().write_core(
+        device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, dram_sender_l1_noc_addr(mesh_device, local_addr));
 }
 
 }  // namespace tt::tt_metal

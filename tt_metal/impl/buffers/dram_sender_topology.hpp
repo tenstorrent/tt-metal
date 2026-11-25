@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 
@@ -29,6 +29,7 @@ struct metal_SocDescriptor;
 namespace tt::tt_metal {
 
 class IDevice;
+class MetalContext;
 
 namespace distributed {
 class MeshDevice;
@@ -48,6 +49,7 @@ enum class DramSenderPlacement : uint8_t {
 // Placement for a device of context `context_id` running `num_hw_cqs` CQs, or nullopt when it can run no
 // DRAM-sender endpoints.
 std::optional<DramSenderPlacement> dram_sender_placement(ContextId context_id, uint8_t num_hw_cqs);
+std::optional<DramSenderPlacement> dram_sender_placement(MetalContext& metal_ctx, uint8_t num_hw_cqs);
 
 // Whether `mesh_device` runs its DRAM-sender endpoints on its dispatch engine.
 bool dram_senders_on_dispatch_engine(const distributed::MeshDevice& mesh_device);
@@ -61,6 +63,10 @@ CoreCoord dram_sender_dispatch_engine(ContextId context_id, ChipId device_id);
 CoreCoord dram_sender_virtual_core(
     const distributed::MeshDevice& mesh_device, const IDevice* device, const CoreCoord& sender_logical);
 
+// The address that a NoC transaction, a dispatcher write among them, names for `local_addr` in the L1 of a
+// core holding DRAM-sender endpoint state (dram_sender_virtual_core).
+uint64_t dram_sender_l1_noc_addr(const distributed::MeshDevice& mesh_device, DeviceAddr local_addr);
+
 // The logical DRAM core of DRAM view `bank_id` whose physical NoC coord the SoC descriptor does not
 // already claim as a worker_endpoint or eth_endpoint -- i.e. one safe for a DRISC kernel to occupy.
 // Resolved against `soc_desc`'s harvested DRAM topology; `device_id` only names the device in errors.
@@ -68,6 +74,13 @@ CoreCoord dram_sender_virtual_core(
 // descriptor, so device init can name this core in the firmware's tensor_prefetcher_signal_noc_xy table before
 // any MeshDevice exists.
 CoreCoord pick_unused_dram_logical_core(const metal_SocDescriptor& soc_desc, uint32_t bank_id, ChipId device_id);
+
+// The two DRISC sender cores of DRAM view `bank_id`, as logical DRAM coords: element 0 is the free
+// non-endpoint subchannel (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
+// subchannel. Throws when `bank_id` is out of range, the bank has no free subchannel, the NOC1 endpoint cannot be
+// resolved, or the two roles do not sit at logical y = 1 and above it. `device_id` only names the device in errors.
+std::vector<CoreCoord> dram_sender_logical_cores(
+    const metal_SocDescriptor& soc_desc, uint32_t bank_id, ChipId device_id);
 
 // How many DRISC sender cores drive one DRAM bank. TwoPerBank splits a bank's receivers across
 // both of its senders; OnePerBank is what a shard feeding more than one receiver requires.

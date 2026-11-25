@@ -45,13 +45,23 @@ from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
         # width and the activation are new here — 33792 is 1.8x DSv3's 18432, and it is far past
         # ttnn.situ_glu's 3072 L1 cutoff, so every intermediate is a full-size DRAM tensor.
         (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
+        # The same over a packed forward's rows (4 chunks): more rows per chip than the fused gather was tuned at.
+        (4 * PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
         # TtFfn's clamped branch at the DeepSeek default width. No shipped config selects it --
         # V4, the only clamped model, is MoE on every layer -- so this is its only coverage.
         (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
         # GLM-5.3's dense layers 0-2: 6144 -> 12288, SiLU-GLU.
         (PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.INTERMEDIATE_SIZE, ACTIVATION_SILU),
+        (4 * PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.INTERMEDIATE_SIZE, ACTIVATION_SILU),
     ],
-    ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped", "isl_5k-glm-12288"],
+    ids=[
+        "isl_5k",
+        "isl_5k-k3-33792-situ",
+        "isl_20k-k3-33792-situ",
+        "isl_5k-v4-18432-clamped",
+        "isl_5k-glm-12288",
+        "isl_20k-glm-12288",
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, tp_axis",
@@ -109,9 +119,18 @@ from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-tp0",
         ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-tp0",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("fuse_tp_collectives", [False, True], ids=["unfused", "fused"])
 def test_ffn_pcc(
     mesh_device,
     device_params,
@@ -121,6 +140,7 @@ def test_ffn_pcc(
     activation: str,
     num_links: int,
     tp_axis: int,
+    fuse_tp_collectives: bool,
 ):
     """
     Test TtFfn PCC against TorchExpert reference.
@@ -136,6 +156,10 @@ def test_ffn_pcc(
     """
     if activation == ACTIVATION_SITU and not is_blackhole():
         pytest.skip("SiTU-GLU needs ttnn.softcap, which is Blackhole-only")
+    if fuse_tp_collectives and hidden_dim not in (KimiK3Config.INTERMEDIATE_SIZE, GLM53Config.INTERMEDIATE_SIZE):
+        pytest.skip("the fused TP collectives run in production on Kimi-K3 and GLM-5.3's dense layers only")
+    if fuse_tp_collectives and not is_blackhole():
+        pytest.skip("the fused TP collectives need a core column free of the matmul grid (Blackhole)")
 
     activations_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat8_b
@@ -193,21 +217,31 @@ def test_ffn_pcc(
         activation=activation,
         clamped_silu_glu_limit=clamp_limit,
         tp_axis=tp_axis,
+        fuse_tp_collectives=fuse_tp_collectives,
         **situ_betas,
     )
+    if fuse_tp_collectives:
+        assert tt_model.fuses_tp_collectives, "the fused path was not taken on this mesh"
 
     # Create input tensor (replicated across all devices)
     torch_input = torch.randn(batch_seq_len, emb_dim, dtype=torch.float32)
     logger.debug(f"Created torch input: {torch_input.shape}")
 
+    # The fused path takes the TP-sharded input (it gathers inside its first matmul); the plain one the gathered.
     tt_input = ttnn.from_torch(
         torch_input,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=(
+            ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=mesh_device.shape, dims=(None, -1) if tp_axis == 1 else (-1, None)
+            )
+            if fuse_tp_collectives
+            else ttnn.ReplicateTensorToMesh(mesh_device)
+        ),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=activations_dtype,
     )
-    logger.debug(f"Created ttnn input (replicated): {tt_input.shape}")
+    logger.debug(f"Created ttnn input: {tt_input.shape}")
 
     # Run forward passes
     logger.debug("Running torch forward pass")
@@ -217,6 +251,13 @@ def test_ffn_pcc(
     logger.debug("Running ttnn forward pass")
     tt_output = tt_model(tt_input)
     logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
+    if fuse_tp_collectives:
+        # A second call, from an input at another address, reuses the gather's persistent buffer, counters and
+        # barrier: it must give the same result.
+        again = tt_model(ttnn.clone(tt_input))
+        for a, b in zip(ttnn.get_device_tensors(tt_output), ttnn.get_device_tensors(again)):
+            assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), "a second fused call gave a different output"
+        ttnn.deallocate(again)
 
     # Convert and compare
     logger.debug("Converting TTNN output to torch for comparison")
@@ -248,3 +289,92 @@ def test_ffn_pcc(
     assert pcc_passed, f"PCC test failed: {pcc_message}"
 
     logger.debug("PCC test passed!")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, tp_axis",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("forward_chunks", [2, 4], ids=["f2", "f4"])
+def test_ffn_fused_rows_position_invariant(mesh_device, device_params, num_links, tp_axis, forward_chunks):
+    """The fused dense FFN must give a row the same bits wherever it sits, as packed forwards require.
+
+    Rolling the input by one chunk and the output back must be bit-identical.
+    """
+    if not is_blackhole():
+        pytest.skip("the fused TP collectives need a core column free of the matmul grid (Blackhole)")
+    rows = forward_chunks * PREFILL_CHUNK_TOKENS_PER_CHIP
+    emb_dim, hidden_dim = EMB_DIM, KimiK3Config.INTERMEDIATE_SIZE
+    torch.manual_seed(0)
+    torch_model = TorchExpert(
+        emb_dim,
+        hidden_dim,
+        activation=ACTIVATION_SITU,
+        situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+    )
+    tt_model = TtFfn(
+        mesh_device=mesh_device,
+        torch_weights={
+            "gate_proj": torch_model.gate_proj.data,
+            "up_proj": torch_model.up_proj.data,
+            "down_proj": torch_model.down_proj.data,
+        },
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        num_links=num_links,
+        topology=per_axis_topology(device_params["fabric_config"])[tp_axis],
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
+        activation=ACTIVATION_SITU,
+        tp_axis=tp_axis,
+        fuse_tp_collectives=True,
+        situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+    )
+    assert tt_model.fuses_tp_collectives, "the fused path was not taken on this mesh"
+
+    def run(x):
+        tt_x = ttnn.from_torch(
+            x,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=mesh_device.shape, dims=(None, -1) if tp_axis == 1 else (-1, None)
+            ),
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+        )
+        y = tt_model(tt_x)
+        out = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(y)]
+        ttnn.deallocate(y)
+        ttnn.deallocate(tt_x)
+        return out
+
+    x = torch.randn(rows, emb_dim, dtype=torch.float32).to(torch.bfloat16)
+    shift = PREFILL_CHUNK_TOKENS_PER_CHIP
+    base = run(x)
+    # The down projection must take the plan the regression lived in, or this test covers nothing.
+    plan = dict(ttnn._ttnn.operations.experimental.ccl_experimental._matmul_reduce_scatter_prefill_last_plan())
+    assert (
+        plan["schedule"] == "ring_balanced" and plan["xblock"] == "stream" and min(plan["grid"]) >= 2
+    ), f"down projection plan changed, the test no longer covers a streamed balanced-ring plan: {plan}"
+    assert plan["half_split"] == "n", f"a row-dependent half split makes rows round by position: {plan}"
+    rolled = run(torch.roll(x, shifts=shift, dims=0))
+    for device, (a, b) in enumerate(zip(base, rolled)):
+        b = torch.roll(b, shifts=-shift, dims=-2)
+        if not torch.equal(a, b):
+            diff = (a.float() - b.float()).abs()
+            pytest.fail(
+                f"device {device}: {int((diff != 0).sum())} elements differ after moving rows by one chunk "
+                f"(max |diff| {diff.max().item():.3e}): the fused FFN's result depends on a row's position"
+            )

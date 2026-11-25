@@ -16,6 +16,7 @@ arbitrary rollback into evicted tokens. Page-ID changes require live KV migratio
 """
 
 import ttnn
+from models.common.hf_layer_type_attention import layer_type_attention
 from models.demos.gemma4_31b_qb2.tt.sdpa_l1 import BLACKHOLE_L1_BYTES, full_sdpa_fp32_l1_end
 from models.demos.gpt_oss.tt.ccl import CCLManager
 
@@ -106,8 +107,9 @@ class Decoder:
         self.eps = c.rms_norm_eps
         self.sliding = self.kind == "sliding_attention"
         assert self.kind in ("sliding_attention", "full_attention")
-        self.head_dim = c.head_dim if self.sliding else c.global_head_dim
-        self.kv_heads = (c.num_key_value_heads if self.sliding else c.num_global_key_value_heads) // 4
+        attn = layer_type_attention(c)
+        self.head_dim = attn.sliding_head_dim if self.sliding else attn.full_head_dim
+        self.kv_heads = (attn.sliding_kv_heads if self.sliding else attn.full_kv_heads) // 4
         self.window = c.sliding_window if self.sliding else None
         self.compute = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
