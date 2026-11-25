@@ -29,7 +29,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     // Id-free copy-into-DST init from the input CB (c_0); the copy_tile OP below stays the legacy CB-id call.
-    experimental::copy_init(InOp(in_cb.read_address()));
+    experimental::copy_src_to_dest_init(InOp(in_cb.read_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         tile_regs_acquire();

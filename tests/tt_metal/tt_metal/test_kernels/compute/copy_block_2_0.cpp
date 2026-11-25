@@ -12,13 +12,14 @@
 
 // Id-free (2.0) copy_block kernel: process the input in blocks of BLOCK_TILES; per block, copy_block a run
 // of consecutive tiles c_0 -> DST, then pack each DST slot -> c_16. IDENTICAL to copy_block_legacy.cpp
-// except the copy uses experimental::copy_block[_init] built from an LLKOperand (no CB id). pack_tile and
+// except the copy uses experimental::copy_src_to_dest_block[_init] built from an LLKOperand (no CB id). pack_tile and
 // compute_kernel_hw_startup stay the legacy CB-id API so the differential isolates copy_block. Output must be
 // bit-for-bit identical to the legacy kernel.
 constexpr std::uint32_t BLOCK_TILES = 4;  // fits DST for both fp32 and non-fp32 dest
 
 void kernel_main() {
-    std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    static_assert(per_core_tile_cnt % BLOCK_TILES == 0, "copy_src_to_dest_block takes no tails");
 
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
@@ -28,16 +29,16 @@ void kernel_main() {
     using InOp = experimental::LLKOperand<static_cast<DataFormat>(in_desc.format), in_desc.shape>;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    experimental::copy_init(InOp(in_cb.read_address()));
+    experimental::copy_src_to_dest_init(InOp(in_cb.read_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; b += BLOCK_TILES) {
-        std::uint32_t ntiles = (per_core_tile_cnt - b) < BLOCK_TILES ? (per_core_tile_cnt - b) : BLOCK_TILES;
+        constexpr std::uint32_t ntiles = BLOCK_TILES;
 
         tile_regs_acquire();
         cb0.wait_front(ntiles);
         cb16.reserve_back(ntiles);
 
-        experimental::copy_block(InOp(in_cb.read_address()), 0, 0, ntiles);
+        experimental::copy_src_to_dest_block<ntiles, 1>(InOp(in_cb.read_address()), 0);
 
         tile_regs_commit();
         tile_regs_wait();
