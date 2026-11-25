@@ -105,6 +105,28 @@ public:
         return connection_manager;
     }
 
+    // Builds a manager from two optional Metal 2.0 fabric connection bindings: a forward connection if `forward` is
+    // not nullptr, and a backward connection if `backward` is not nullptr.
+    // A kernel source that runs on every device of a line passes fabric::get_token_if_present for each side, and each
+    // device binds only the sides that it has.
+    // precondition: each token that is not nullptr has exactly one target.
+    template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
+    static FabricConnectionManager build_from_optional_bindings(
+        const FabricConnectionBindingToken* forward, const FabricConnectionBindingToken* backward) {
+        ASSERT(forward == nullptr || forward->num_targets() == 1);
+        ASSERT(backward == nullptr || backward->num_targets() == 1);
+        FabricConnectionManager connection_manager;
+        connection_manager.connection_flags = 0;
+        if (forward != nullptr) {
+            connection_manager.add_forward_connection<build_mode>(*forward, 0);
+        }
+        if (backward != nullptr) {
+            connection_manager.add_backward_connection<build_mode>(*backward, 0);
+        }
+        connection_manager.finish_open<build_mode>();
+        return connection_manager;
+    }
+
     inline void open_finish() {
         if (has_forward_connection()) {
             forward_fabric_sender.open_finish();

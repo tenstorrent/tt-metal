@@ -59,6 +59,11 @@ namespace tt::tt_metal::experimental {
 //     WorkerToFabricEdmSender::build_from_binding(fabric::<accessor_name>)
 //     FabricConnectionManager::build_from_binding(fabric::<accessor_name>)
 //     RoutingPlaneConnectionManager::build_from_binding(fabric::<accessor_name>)
+//   At the end of a line, where a device has only one of a forward and a backward neighbour, each side is its own
+//   one-target binding, and the kernel builds the connection manager from the sides that are bound:
+//     FabricConnectionManager::build_from_optional_bindings(
+//         fabric::get_token_if_present<"<forward accessor_name>">(),
+//         fabric::get_token_if_present<"<backward accessor_name>">())
 //
 // ============================================================================
 
