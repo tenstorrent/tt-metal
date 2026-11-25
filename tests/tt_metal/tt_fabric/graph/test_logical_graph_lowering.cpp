@@ -1178,5 +1178,73 @@ TEST(FabricGraphInterDomain, ChannelIndexing) {
     }
 }
 
+// ---------------------------------------------------------------- routing plane mismatch, scenario 2 (#65597)
+// The receive side of a down link: the live router that a down one relays into also lands the domain's traffic on the
+// down one's plane (its scatter partner), by destination chip.
+
+// The routers whose VC2 receivers feed `router`'s VC2 sender for traffic from `from`
+std::set<std::string> vc2_producers(const LogicalGraph& g, const std::string& router, const std::string& from) {
+    std::set<std::string> ids;
+    const auto r = *g.find_router(router);
+    for (const auto& e : g.edges) {
+        const auto& to = g.channels[e.to];
+        if (e.transport == Transport::Noc && to.router == r && to.vc == 2 && channel_name(to) == from) {
+            ids.insert(g.routers[g.channels[e.from].router].id);
+        }
+    }
+    return ids;
+}
+
+size_t vc2_turns_out(const LogicalGraph& g, const std::string& router) {
+    const auto rx = g.receiver(*g.find_router(router), 2);
+    return std::count_if(
+        g.edges.begin(), g.edges.end(), [&](const LogicalEdge& e) { return e.transport == Transport::Noc && e.from == *rx; });
+}
+
+TEST(FabricGraphScatter, LiveRouterLandsOnItsPartnersPlane) {
+    const auto [ports, g, rules] = lower_with_perimeter({unused(0, 8, 7), down(0, 9, 7)});
+    // plane 1's domain router takes VC2 from N on plane 1 from the live router on plane 0
+    EXPECT_EQ(vc2_producers(g, "m0.c0.E.p1", "N"), (std::set<std::string>{"m0.c0.N.p0"}));
+    EXPECT_EQ(vc2_producers(g, "m0.c0.E.p0", "N"), (std::set<std::string>{"m0.c0.N.p0"}));
+    EXPECT_EQ(vc2_turns_out(g, "m0.c0.N.p1"), 0u) << "the relaying router lands nothing";
+    EXPECT_EQ(vc2_turns_out(g, "m0.c0.N.p0"), 2u) << "own plane and partner plane";
+    EXPECT_TRUE(find_problems(g, *rules, ValidationLimits{}).empty());
+}
+
+TEST(FabricGraphScatter, NoDownLinkNoScatter) {
+    const auto [ports, g, rules] = lower_with_perimeter(kQuietBoxSplit);
+    for (const std::string plane : {"0", "1"}) {
+        EXPECT_EQ(vc2_producers(g, "m0.c0.E.p" + plane, "N"), (std::set<std::string>{"m0.c0.N.p" + plane}));
+        EXPECT_EQ(vc2_turns_out(g, "m0.c0.N.p" + plane), 1u);
+    }
+}
+
+TEST(FabricGraphScatter, OnlyTheRouterRelayingDirectlyIsAPartner) {
+    // p1 relays into p0, p2 into p1 (the domain has planes 0 and 1): p0 scatters onto plane 1 only, p2 lands nothing
+    const auto [ports, g, rules] = lower_with_perimeter(chip0_north({true, false, false}));
+    EXPECT_EQ(vc2_producers(g, "m0.c0.E.p1", "N"), (std::set<std::string>{"m0.c0.N.p0"}));
+    EXPECT_EQ(vc2_turns_out(g, "m0.c0.N.p0"), 2u);
+    EXPECT_EQ(vc2_turns_out(g, "m0.c0.N.p1"), 0u);
+    EXPECT_EQ(vc2_turns_out(g, "m0.c0.N.p2"), 0u);
+    EXPECT_TRUE(find_problems(g, *rules, ValidationLimits{}).empty());
+}
+
+TEST(FabricGraphScatter, ValidationRejectsLandingOffThePartnerPlane) {
+    // both links live: no partner, so p0 may not land on plane 1
+    auto [ports, g, rules] = lower_with_perimeter(chip0_north({true, true}));
+    const auto p0_rx = *g.receiver(*g.find_router("m0.c0.N.p0"), 2);
+    const auto p1_rx = *g.receiver(*g.find_router("m0.c0.N.p1"), 2);
+    for (auto& e : g.edges) {
+        if (e.transport == Transport::Noc && e.from == p1_rx) {
+            e.from = p0_rx;
+            break;
+        }
+    }
+    const auto problems = find_problems(g, *rules, ValidationLimits{});
+    EXPECT_TRUE(std::any_of(problems.begin(), problems.end(), [](const std::string& p) {
+        return p.find("leaves its chip or routing plane") != std::string::npos;
+    }));
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric::graph

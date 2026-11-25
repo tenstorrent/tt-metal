@@ -842,11 +842,14 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
             }
 
             if (services_receivers) {
+                // an inter-domain router's peer sends only into its VC2 receiver: its VC0 receiver stays idle
+                const bool inter_domain_router = graph_inputs != nullptr && graph_inputs->inter_domain;
                 size_t receiver_offset = 0;
                 for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
                     size_t num_channels = receiver_counts[vc];
                     for (size_t i = 0; i < num_channels; ++i) {
-                        this->is_receiver_channel_serviced_[risc_id][receiver_offset + i] = true;
+                        this->is_receiver_channel_serviced_[risc_id][receiver_offset + i] =
+                            !(inter_domain_router && vc == 0);
                     }
                     receiver_offset += num_channels;
                 }
@@ -1389,6 +1392,21 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             my_eth_channel);
         named_args["INTER_DOMAIN_RELAY_CREDIT_STREAM_ID"] =
             stream_assignment.id(StreamRole::DOWNSTREAM_FREE_SLOTS, 0, 0);
+    }
+    if (inter_domain_scatter_) {
+        TT_FATAL(
+            !inter_domain_relay_,
+            "inter-domain router {} chan {} both relays and scatters",
+            local_fabric_node_id,
+            my_eth_channel);
+        // the scatter bank mirrors the router's own VC2 downstreams on the partner plane
+        TT_FATAL(
+            receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(0) ==
+                receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(2),
+            "inter-domain router {} chan {} scatters into directions it does not land in on its own plane",
+            local_fabric_node_id,
+            my_eth_channel);
+        named_args["INTER_DOMAIN_SCATTER"] = 1;
     }
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
@@ -2140,9 +2158,11 @@ tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_le
     }
     // Os (optimize for size) where the router would not fit in code space at O3, with VC1 and VC2 both active; O3
     // (optimize for performance) otherwise.
+    // An inter-domain router that scatters (a second VC2 forward path, its scatter bank) is Os too.
     const bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
     const bool vc2_active = this->config.num_used_receiver_channels_per_vc[2] > 0;
-    return vc1_active && vc2_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+    return (vc1_active && vc2_active) || inter_domain_scatter_ ? tt::tt_metal::KernelBuildOptLevel::Os
+                                                               : tt::tt_metal::KernelBuildOptLevel::O3;
 }
 
 void FabricEriscDatamoverBuilder::teardown_from_host(

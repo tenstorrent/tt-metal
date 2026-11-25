@@ -38,7 +38,9 @@ std::vector<std::string> find_problems(
             link_out[e.from].push_back(&e);
         }
     }
-    // every relay chain ends at a router whose link is up
+    // every relay chain ends at a router whose link is up; a live perimeter router's scatter partner is the plane of
+    // the router on its side that relays into it
+    std::map<RouterIndex, uint32_t> partner_plane;
     {
         std::map<std::tuple<FabricNodeId, PortDirection, uint32_t>, RouterIndex> by_key;
         for (RouterIndex r = 0; r < g.routers.size(); ++r) {
@@ -59,6 +61,13 @@ std::vector<std::string> find_problems(
             }
             if (g.routers[at].port.relay_plane) {
                 problems.push_back(g.routers[r].id + ": relay chain does not end at a live link");
+            }
+            const auto& p = g.routers[r].port;
+            if (p.relay_plane) {
+                const auto it = by_key.find({p.node, p.direction, *p.relay_plane});
+                if (it != by_key.end() && !g.routers[it->second].port.relay_plane) {
+                    partner_plane.emplace(it->second, p.plane);
+                }
             }
         }
     }
@@ -143,7 +152,10 @@ std::vector<std::string> find_problems(
         if (from.router == to.router) {
             problems.push_back(what + ": U-turn into its own router");
         }
-        if (up.node != down.node || up.plane != down.plane) {
+        // a live perimeter router's VC2 receiver also lands on its scatter partner's plane
+        const auto partner = partner_plane.find(from.router);
+        const bool scatters = from.vc == 2 && partner != partner_plane.end() && down.plane == partner->second;
+        if (up.node != down.node || (up.plane != down.plane && !scatters)) {
             problems.push_back(what + ": noc edge leaves its chip or routing plane");
         }
         if (from.vc != to.vc) {
