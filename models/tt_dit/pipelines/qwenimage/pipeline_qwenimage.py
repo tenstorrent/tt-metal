@@ -22,6 +22,7 @@ import ttnn
 from models.tt_dit.models.transformers.transformer_qwenimage import (
     QwenImageCarry,
     QwenImageCheckpoint,
+    QwenImageLoRA,
     QwenImageTransformer,
 )
 from models.tt_dit.models.vae.vae_wan_2d import WanVaeDecoder2DAdapter, WanVaeEncoder2DAdapter
@@ -126,6 +127,25 @@ _MODES = {
 }
 
 
+# The Lightning step distillations of Qwen-Image-Edit-2511. They are distilled with CFG, so they
+# run without it (cfg_enabled=False, cfg_scale=1), in 4 or 8 steps. They were trained with a
+# constant shift of 3 and without a terminal shift, as in ModelTC/Qwen-Image-Lightning's
+# generate_with_diffusers.py.
+_LIGHTNING_SCHEDULER_CONFIG = {"base_shift": math.log(3), "max_shift": math.log(3), "shift_terminal": None}
+LIGHTNING_EDIT_2511_4STEPS = QwenImageLoRA(
+    base="Qwen/Qwen-Image-Edit-2511",
+    repo_id="lightx2v/Qwen-Image-Edit-2511-Lightning",
+    weight_name="Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors",
+    scheduler_config=_LIGHTNING_SCHEDULER_CONFIG,
+)
+LIGHTNING_EDIT_2511_8STEPS = QwenImageLoRA(
+    base="Qwen/Qwen-Image-Edit-2511",
+    repo_id="lightx2v/Qwen-Image-Edit-2511-Lightning",
+    weight_name="Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors",
+    scheduler_config=_LIGHTNING_SCHEDULER_CONFIG,
+)
+
+
 def _mode(checkpoint_name: str) -> _Mode:
     class_name = diffusers.DiffusionPipeline.load_config(checkpoint_name)["_class_name"]
     if class_name not in _MODES:
@@ -192,6 +212,27 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 }
 
 
+def _runs_on_whole_mesh(
+    mesh_shape: ttnn.MeshShape,
+    resolutions: Sequence[tuple[int, int]],
+    encoder_parallel_config: EncoderParallelConfig,
+    vae_parallel_config: VaeHWParallelConfig | None,
+) -> bool:
+    """Whether a pass without CFG can run on the whole mesh rather than on a CFG submesh.
+
+    The default VAE config splits the latents' height along axis 1 and their width along axis 0,
+    which the whole mesh may not divide evenly at every resolution. And the text encoder, which
+    runs on the first submesh, would be reshaped where its tensor parallelism does not span axis 1.
+    """
+    rows, columns = tuple(mesh_shape)
+    tp = encoder_parallel_config.tensor_parallel
+    if tp.mesh_axis == 1 and tp.factor != columns:
+        return False
+    if vae_parallel_config is not None:
+        return True
+    return all((h // _VAE_SCALE_FACTOR) % columns == 0 and (w // _VAE_SCALE_FACTOR) % rows == 0 for w, h in resolutions)
+
+
 @dataclass(frozen=True, kw_only=True)
 class QwenImagePipelineConfig:
     topology: ttnn.Topology
@@ -220,6 +261,8 @@ class QwenImagePipelineConfig:
     dbcache: DBCacheConfig | None
 
     checkpoint_name: str
+    # A LoRA fused into the transformer, such as LIGHTNING_EDIT_2511_4STEPS.
+    lora: QwenImageLoRA | None
 
     @classmethod
     def default(
@@ -243,6 +286,7 @@ class QwenImagePipelineConfig:
         max_images: int | None = None,
         dbcache: DBCacheConfig | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        lora: QwenImageLoRA | None = None,
     ) -> QwenImagePipelineConfig:
         """The preset for ``mesh_shape``.
 
@@ -253,19 +297,33 @@ class QwenImagePipelineConfig:
         preset = preset_dict.get(tuple(mesh_shape), {})
         mode = _mode(checkpoint_name)
 
-        if dit_parallel_config is None:
-            dit_parallel_config = DiTParallelConfig.from_tuples(cfg=preset["cfg"], sp=preset["sp"], tp=preset["tp"])
+        if resolutions is None:
+            resolutions = preset.get("resolutions", mode.resolutions)
 
         if encoder_parallel_config is None:
             encoder_parallel_config = EncoderParallelConfig.from_tuples(
                 tp=preset["encoder_tp"], sp=None, fsdp=preset["encoder_fsdp"]
             )
 
+        if dit_parallel_config is None:
+            cfg, sp, tp = preset["cfg"], preset["sp"], preset["tp"]
+            # Without CFG there is one pass. Where the whole mesh can run it, the mesh axis of the
+            # CFG submeshes goes to sequence parallelism, or to tensor parallelism if that is on it.
+            # Otherwise each CFG submesh runs the same pass.
+            if (
+                not cfg_enabled
+                and cfg[0] > 1
+                and _runs_on_whole_mesh(mesh_shape, resolutions, encoder_parallel_config, vae_parallel_config)
+            ):
+                if tp[1] == cfg[1] and sp[1] != cfg[1]:
+                    tp = (tp[0] * cfg[0], tp[1])
+                else:
+                    sp = (sp[0] * cfg[0], cfg[1])
+                cfg = (1, cfg[1])
+            dit_parallel_config = DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp)
+
         if vae_parallel_config is None:
             vae_parallel_config = VaeHWParallelConfig.from_axes(submesh_shape(dit_parallel_config), h_axis=1, w_axis=0)
-
-        if resolutions is None:
-            resolutions = preset.get("resolutions", mode.resolutions)
 
         if max_images is None:
             max_images = mode.max_images
@@ -305,6 +363,7 @@ class QwenImagePipelineConfig:
             max_images=max_images,
             dbcache=dbcache,
             checkpoint_name=checkpoint_name,
+            lora=lora,
         )
 
 
@@ -376,11 +435,13 @@ class QwenImagePipeline(PipelineAPIMixin):
         mesh_device: ttnn.MeshDevice,
         cfg_enabled: bool = True,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        lora: QwenImageLoRA | None = None,
     ) -> QwenImagePipeline:
         config = QwenImagePipelineConfig.default(
             mesh_shape=mesh_device.shape,
             cfg_enabled=cfg_enabled,
             checkpoint_name=checkpoint_name,
+            lora=lora,
         )
         return cls(device=mesh_device, config=config)
 
@@ -402,7 +463,7 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         self._mode = _mode(config.checkpoint_name)
         self._max_images = config.max_images
-        self._checkpoint = QwenImageCheckpoint(config.checkpoint_name)
+        self._checkpoint = QwenImageCheckpoint(config.checkpoint_name, lora=config.lora)
         self._image_sizes = {(w, h): self._image_size(w, h) for w, h in config.resolutions}
 
         # Only the spatial buckets that some resolution, or with edits some number of input images
@@ -425,7 +486,10 @@ class QwenImagePipeline(PipelineAPIMixin):
         ]
         self._combiner = CFGCombiner(self._devices, rescale=True)
 
-        scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(config.checkpoint_name, subfolder="scheduler")
+        scheduler_config = FlowMatchEulerDiscreteScheduler.load_config(config.checkpoint_name, subfolder="scheduler")
+        if config.lora is not None:
+            scheduler_config = {**scheduler_config, **config.lora.scheduler_config}
+        scheduler = FlowMatchEulerDiscreteScheduler.from_config(scheduler_config)
         self._solvers = [EulerSolver(scheduler=scheduler) for _ in self._devices]
         # One tracer per submesh, prompt bucket and spatial bucket. DBCache traces by itself.
         self._tracers = (
@@ -764,6 +828,9 @@ class QwenImagePipeline(PipelineAPIMixin):
             images=self._vision_images(images, conditions) if edit else (),
         )
         on_event(SectionEnd("encoder"))
+        if not self._cfg_enabled:
+            # Where the CFG submeshes stay without CFG, each runs the one pass.
+            torch_contexts = torch_contexts * len(self._devices)
         prompt_sequence_lengths = [c.shape[1] for c in torch_contexts]
 
         logger.info("preparing timesteps...")

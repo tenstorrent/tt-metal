@@ -4,12 +4,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import NamedTuple
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import PurePath
+from typing import Any, NamedTuple
 
 import diffusers
 import torch
 from diffusers.configuration_utils import FrozenDict
+from diffusers.loaders import QwenImageLoraLoaderMixin
 from diffusers.models.transformers.transformer_qwenimage import QwenEmbedRope
 
 import ttnn
@@ -399,14 +402,33 @@ def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
 
 
+@dataclass(frozen=True, kw_only=True)
+class QwenImageLoRA:
+    """A LoRA that is fused into the transformer's weights, such as a Lightning step distillation."""
+
+    # The checkpoint the LoRA was trained on.
+    base: str
+    # The Hugging Face repository and the file in it that hold the LoRA weights.
+    repo_id: str
+    weight_name: str
+    # The scheduler config entries the LoRA was trained with, replacing the base checkpoint's.
+    scheduler_config: Mapping[str, Any] = field(default_factory=dict)
+
+
 class QwenImageCheckpoint:
     """A QwenImage checkpoint: fetches weights and builds loaded transformers.
 
     Reads only ``config.json`` in ``__init__``; the torch weights are loaded on a cache miss only.
+    With ``lora``, the LoRA is fused into the weights, which are cached apart from the base ones.
     """
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, lora: QwenImageLoRA | None = None) -> None:
+        if lora is not None and lora.base != name:
+            msg = f"the LoRA {lora.repo_id}/{lora.weight_name} is for {lora.base}, not {name}"
+            raise ValueError(msg)
         self._name = name
+        self._lora = lora
+        self._cache_name = name if lora is None else f"{name}+{lora.repo_id}/{PurePath(lora.weight_name).stem}"
         self._config = FrozenDict(diffusers.QwenImageTransformer2DModel.load_config(name, subfolder="transformer"))
 
         self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=list(self._config["axes_dims_rope"]), scale_rope=True)
@@ -495,7 +517,7 @@ class QwenImageCheckpoint:
         cache.load_model(
             tt_model=model,
             get_torch_state_dict=self._load_state_dict,
-            model_name=self._name,
+            model_name=self._cache_name,
             subfolder="transformer",
             parallel_config=parallel_config,
             mesh_shape=tuple(device.shape),
@@ -505,9 +527,22 @@ class QwenImageCheckpoint:
         return model
 
     def _load_state_dict(self) -> dict[str, torch.Tensor]:
+        # With a LoRA, the weights are fused in float32: in bfloat16 the parts of the LoRA's update
+        # below half a bfloat16 step of the base weight would be lost, which the reference, keeping
+        # the LoRA unfused, does not lose.
         torch_transformer = diffusers.QwenImageTransformer2DModel.from_pretrained(
             self._name,
             subfolder="transformer",
-            torch_dtype=torch.bfloat16,
+            torch_dtype=torch.bfloat16 if self._lora is None else torch.float32,
         )
+        if self._lora is not None:
+            # Converts the LoRA from the formats diffusers knows, such as that of lightx2v, and
+            # folds its alphas into the weights.
+            lora_state, metadata = QwenImageLoraLoaderMixin.lora_state_dict(
+                self._lora.repo_id, weight_name=self._lora.weight_name, return_lora_metadata=True
+            )
+            torch_transformer.load_lora_adapter(lora_state, metadata=metadata)
+            torch_transformer.fuse_lora()
+            torch_transformer.unload_lora()
+            torch_transformer.to(torch.bfloat16)
         return torch_transformer.state_dict()

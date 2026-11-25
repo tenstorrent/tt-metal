@@ -14,9 +14,12 @@ from loguru import logger
 from PIL import Image, ImageFilter
 
 import ttnn
+from models.tt_dit.models.transformers.transformer_qwenimage import QwenImageLoRA
 from models.tt_dit.pipelines.events import SectionEnd, SectionStart
 from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import (
     DEFAULT_DBCACHE,
+    LIGHTNING_EDIT_2511_4STEPS,
+    LIGHTNING_EDIT_2511_8STEPS,
     QwenImagePipeline,
     QwenImagePipelineConfig,
 )
@@ -257,6 +260,51 @@ def test_qwenimage_edit(
     diff = np.abs(after - before).mean()
     logger.info(f"mean absolute change {diff:.2f}")
     # An edit keeps the composition and changes some of it.
+    assert 1 < diff < 40
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), EDIT_MESH_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize(
+    ("lora", "num_inference_steps"),
+    [
+        pytest.param(LIGHTNING_EDIT_2511_4STEPS, 4, id="lightning_4steps"),
+        pytest.param(LIGHTNING_EDIT_2511_8STEPS, 8, id="lightning_8steps"),
+    ],
+)
+def test_qwenimage_edit_lightning(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    lora: QwenImageLoRA,
+    num_inference_steps: int,
+    is_ci_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Edit-2511 with a Lightning step distillation, which runs without CFG."""
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
+    # A single input image, so that the warm-up skips two and three, which run out of DRAM in the
+    # vision tower on WH 2x4.
+    config = QwenImagePipelineConfig.default(
+        mesh_shape=mesh_device.shape, cfg_enabled=False, checkpoint_name=lora.base, lora=lora, max_images=1
+    )
+    pipeline = QwenImagePipeline(device=mesh_device, config=config)
+
+    image = Image.open(DOG_IMAGE_PATH).convert("RGB")
+    (edited,) = pipeline(
+        prompts=["Make the dog wear a red knitted scarf."],
+        num_inference_steps=num_inference_steps,
+        cfg_scale=1,
+        seed=0,
+        image=image,
+    )
+    edited.save(f"qwenimage_edit-2511_lightning_{num_inference_steps}steps_output.png")
+
+    assert edited.size == (1024, 1024)
+    before = np.asarray(image.resize(edited.size), dtype=np.float32)
+    after = np.asarray(edited, dtype=np.float32)
+    diff = np.abs(after - before).mean()
+    logger.info(f"mean absolute change {diff:.2f}")
     assert 1 < diff < 40
 
 
