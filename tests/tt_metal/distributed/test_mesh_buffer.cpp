@@ -64,6 +64,8 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/distributed/mesh_event_impl.hpp"
+#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -106,6 +108,39 @@ public:
 
 private:
     size_t previous_limit_bytes_;
+};
+
+// Tells a transfer's copy path from its pinned path by how many bytes pass through a device's command queue. The copy
+// path moves the payload through the queue: a write puts it in the issue queue during the enqueue call, and a read
+// returns it through the completion queue. The pinned path has the device access the host memory directly, so only
+// commands and events pass through. (PinnedMemory::lock_may_block() can't tell the paths apart: it is false once the
+// transfer has completed.) The counts are taken modulo the queue size, so they only distinguish payloads smaller than
+// the queue.
+class CommandQueueTraffic {
+public:
+    CommandQueueTraffic(MeshDevice& mesh_device, const MeshCoordinate& coord, const MeshCommandQueue& cq) :
+        sysmem_(mesh_device.impl().get_device(coord)->sysmem_manager()),
+        cq_id_(static_cast<uint8_t>(cq.id())),
+        issue_wr_ptr_(sysmem_.get_issue_queue_write_ptr(cq_id_)),
+        completion_rd_ptr_(sysmem_.get_completion_queue_read_ptr(cq_id_)) {}
+
+    // Bytes the host has written to the issue queue since construction.
+    uint32_t issue_bytes() const {
+        const uint32_t size = sysmem_.get_issue_queue_size(cq_id_);
+        return (sysmem_.get_issue_queue_write_ptr(cq_id_) + size - issue_wr_ptr_) % size;
+    }
+
+    // Bytes the host has popped from the completion queue since construction. Call it after the read has completed.
+    uint32_t completion_bytes() const {
+        const uint32_t size = sysmem_.get_completion_queue_size(cq_id_);
+        return (sysmem_.get_completion_queue_read_ptr(cq_id_) + size - completion_rd_ptr_) % size;
+    }
+
+private:
+    SystemMemoryManager& sysmem_;
+    uint8_t cq_id_;
+    uint32_t issue_wr_ptr_;
+    uint32_t completion_rd_ptr_;
 };
 
 struct DeviceLocalShardedBufferTestConfig {
@@ -1233,7 +1268,9 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
                              .host_data(static_cast<void*>(dst_ptr_aligned))
                              .region(BufferRegion(0, bytes_per_device));
     experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_shared);
+    CommandQueueTraffic traffic(*mesh_device_, coord, mesh_device_->mesh_command_queue());
     mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    EXPECT_LT(traffic.completion_bytes(), bytes_per_device) << "the read went through the completion queue";
 
     std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
 
@@ -1288,8 +1325,10 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
     distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
 
     // Read back using enqueue_read with DistributedHostBuffer
+    CommandQueueTraffic traffic(*mesh_device_, coord, mesh_device_->mesh_command_queue());
     mesh_device_->mesh_command_queue().enqueue_read(
         mesh_buffer, distributed_host_buffer, std::nullopt, /*blocking=*/true);
+    EXPECT_LT(traffic.completion_bytes(), bytes_per_device) << "the read went through the completion queue";
 
     std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
 
@@ -1499,7 +1538,9 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
         log_info(tt::LogTest, "Testing writing from pinned memory to shard at coord {}", coord);
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+        CommandQueueTraffic traffic(*mesh_device_, coord, mesh_device_->mesh_command_queue());
         mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        EXPECT_LT(traffic.issue_bytes(), bytes_per_device) << "the write went through the issue queue";
 
         // Read back via hugepage
         std::fill(dst.begin(), dst.end(), 0);
@@ -1508,8 +1549,6 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
                                  .region(BufferRegion(0, bytes_per_device));
         mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
         EXPECT_EQ(*src, dst);
-        // Pinned memory should have been used, so locking may block.
-        EXPECT_TRUE(pinned_shared->lock_may_block());
     }
 }
 
@@ -1554,9 +1593,9 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryWaitsOnClose) {
 
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+        CommandQueueTraffic traffic(*mesh_device_, coord, mesh_device_->mesh_command_queue());
         mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
-
-        EXPECT_TRUE(pinned_shared->lock_may_block());
+        EXPECT_LT(traffic.issue_bytes(), bytes_per_device) << "the write went through the issue queue";
     }
 
     auto read_transfer = distributed::ShardDataTransfer{coord}
@@ -1612,7 +1651,9 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
 
+        CommandQueueTraffic traffic(*mesh_device_, coord, mesh_device_->mesh_command_queue());
         mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        EXPECT_LT(traffic.issue_bytes(), bytes_per_device) << "the write went through the issue queue";
 
         // Read back via hugepage
         std::fill(dst.begin(), dst.end(), 0);
@@ -1621,8 +1662,6 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
                                  .region(BufferRegion(0, bytes_per_device));
         mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
         EXPECT_EQ(*src, dst);
-        // Pinned memory should have been used, so locking may block.
-        EXPECT_TRUE(pinned_shared->lock_may_block());
     }
 }
 
@@ -1713,8 +1752,13 @@ TEST_F(MeshBufferTest1x2MultiCQ, EnqueueWriteShardsWithRemotePinnedMemoryAndAlig
     auto& traffic_cq = mesh_device_->mesh_command_queue(1);
     traffic_cq.enqueue_write_shards(traffic_buffer, {traffic_write}, /*blocking=*/false);
 
-    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, write_transfers, /*blocking=*/false);
-    EXPECT_TRUE(pinned_sources.at(remote_source_index.value())->lock_may_block());
+    // The payload is larger than the issue queue, so CommandQueueTraffic can't tell the paths apart. A non-blocking
+    // write records a barrier event only when a transfer took the pinned path, so check that it used an event id.
+    auto& cq = mesh_device_->mesh_command_queue();
+    const uint32_t event_id_before = cq.enqueue_record_event().impl().id();
+    cq.enqueue_write_shards(mesh_buffer, write_transfers, /*blocking=*/false);
+    const uint32_t event_id_after = cq.enqueue_record_event().impl().id();
+    EXPECT_EQ(event_id_after, event_id_before + 2) << "the write recorded no barrier event for its pinned memory";
 
     AlignedByteVector dst(bytes_per_device, 0);
     auto read_transfer = distributed::ShardDataTransfer{remote_coord}
@@ -1788,7 +1832,12 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
             log_info(tt::LogTest, "Testing writing from pinned memory to shard at coord {}", coord);
             auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
             distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+            CommandQueueTraffic traffic(*mesh_device_, coord, mesh_device_->mesh_command_queue());
             mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+            if (aligned_byte_shift % 16 == 0) {
+                // Pinned memory should have been used.
+                EXPECT_LT(traffic.issue_bytes(), bytes_per_device) << "the write went through the issue queue";
+            }
 
             // Read back via hugepage
             std::fill(dst.begin(), dst.end(), 0);
@@ -1797,10 +1846,6 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
                                      .region(BufferRegion(0, bytes_per_device));
             mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
             EXPECT_EQ(src_vector, dst);
-            if (aligned_byte_shift % 16 == 0) {
-                // Pinned memory should have been used, so locking may block.
-                EXPECT_TRUE(pinned_shared->lock_may_block());
-            }
         }
     }
 }
@@ -1967,8 +2012,9 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         std::function<HostBuffer()> produce_buffer = [&host_buffer]() { return host_buffer; };
         distributed_host_buffer.emplace_shard(coord, produce_buffer);
+        CommandQueueTraffic traffic(*mesh_device_, coord, mesh_device_->mesh_command_queue());
         mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/false);
-        EXPECT_TRUE(pinned_shared->lock_may_block());
+        EXPECT_LT(traffic.issue_bytes(), buf_size) << "the write went through the issue queue";
 
         // Read back and verify
         std::vector<uint32_t> dst_vec = {};
@@ -2047,8 +2093,9 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalWidthShardedBufferWithPinnedM
     auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
     distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
     tt::tt_metal::test::HostTransferStatsScope transfer_stats;
+    CommandQueueTraffic traffic(*mesh_device_, coord, mesh_device_->mesh_command_queue());
     mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/false);
-    EXPECT_TRUE(pinned_shared->lock_may_block());
+    EXPECT_LT(traffic.issue_bytes(), buf_size) << "the write went through the issue queue";
 
     std::vector<uint32_t> dst;
     ReadShard(mesh_device_->mesh_command_queue(), dst, buf, coord);
