@@ -1,0 +1,7 @@
+#!/bin/bash
+# usage: [NODE_JOB=<jobid>] on-node <command...>
+# Runs a command as a Slurm step inside the reserved node job (no ssh to the node, so no extra watcher threads).
+JOB="${NODE_JOB:-$(squeue -u "$USER" -h -t RUNNING -n lb-a10u28-dstoiljkovic -o %i | head -1)}"
+[ -n "$JOB" ] || { echo "no running reservation job found (set NODE_JOB=<jobid>)"; exit 2; }
+. "$(dirname "$(readlink -f "$0")")/env.sh"
+exec srun --jobid="$JOB" --overlap -N1 bash -c "cd /data/dstoiljkovic/tt-metal && $*"
