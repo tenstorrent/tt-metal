@@ -33,12 +33,12 @@ constexpr std::string_view ALLOWED_REDUCTIONS[] = {"add", "multiply"};
 // native (amax, amin) does not route a string to codegen that scatter_reduction_mode() cannot map.
 // codegen_can_serve() routes any other string native, where validate_inputs() raises the one error
 // for it; widen together with scatter_reduction_mode() below.
-constexpr std::string_view CODEGEN_REDUCTIONS[] = {"add", "multiply"};
+constexpr std::string_view kCodegenReductions[] = {"add", "multiply"};
 
 bool codegen_serves_reduction(const std::optional<std::string>& opt_reduction_string) {
     return !opt_reduction_string.has_value() ||
-           std::find(std::begin(CODEGEN_REDUCTIONS), std::end(CODEGEN_REDUCTIONS), *opt_reduction_string) !=
-               std::end(CODEGEN_REDUCTIONS);
+           std::find(std::begin(kCodegenReductions), std::end(kCodegenReductions), *opt_reduction_string) !=
+               std::end(kCodegenReductions);
 }
 
 // validate dimension constraints before sending down to device operation working on the last dimension
@@ -304,7 +304,7 @@ bool codegen_can_serve(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::string>& opt_reduction_string) {
     const auto output_mem_config = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
-    // A reduce string outside CODEGEN_REDUCTIONS routes native, which raises the one error for it on
+    // A reduce string outside kCodegenReductions routes native, which raises the one error for it on
     // every architecture.
     if (!codegen_serves_reduction(opt_reduction_string)) {
         return false;

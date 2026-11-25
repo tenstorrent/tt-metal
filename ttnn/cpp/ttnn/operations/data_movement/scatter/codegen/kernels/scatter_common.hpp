@@ -17,7 +17,7 @@
 // present only when every page coordinate lies inside the compact index/source
 // prefix.  In that case this maps the full-input ordinal to the compact prefix
 // ordinal; otherwise the caller copies input through without reading index/src.
-constexpr uint32_t SCATTER_MAX_PAGE_RANK = 8;
+constexpr uint32_t scatter_max_page_rank = 8;
 
 template <uint32_t runtime_offset>
 FORCE_INLINE bool map_scatter_input_page(const uint32_t input_page, uint32_t& index_page) {
@@ -29,7 +29,7 @@ FORCE_INLINE bool map_scatter_input_page(const uint32_t input_page, uint32_t& in
     for (int32_t axis = static_cast<int32_t>(rank) - 1; axis >= 0; --axis) {
         const uint32_t input_extent = get_arg_val<uint32_t>(runtime_offset + 1 + static_cast<uint32_t>(axis));
         const uint32_t index_extent =
-            get_arg_val<uint32_t>(runtime_offset + 1 + SCATTER_MAX_PAGE_RANK + static_cast<uint32_t>(axis));
+            get_arg_val<uint32_t>(runtime_offset + 1 + scatter_max_page_rank + static_cast<uint32_t>(axis));
         const uint32_t coordinate = remaining % input_extent;
         remaining /= input_extent;
         if (coordinate >= index_extent) {

@@ -162,8 +162,8 @@ def test_scatter_codegen_tile_dram_input_l1_output_runs_tile_factory(device):
 @pytest.mark.parametrize("dim", [-2, 2])
 def test_scatter_codegen_small_row_major_off_axis_scatter_stays_native(device, shape, index_shape, dim):
     # A ROW_MAJOR scatter off the last axis whose input, index and source together are at most
-    # 48 KiB is dispatch-bound: a tie on device that loses host wall clock, so is_demoted() keeps it
-    # native. The rule reads the normalized axis, so both spellings of the dim route the same way.
+    # 48 KiB is dispatch-bound: its device win of a few microseconds does not show on wall clock, so
+    # is_demoted() keeps it native. The rule reads the normalized axis, so both spellings of the dim route the same way.
     # The three cases carry 10240 B, 40960 B and exactly 49152 B of operands.
     xt, it, st = _make_case(shape, index_shape, dim, ttnn.ROW_MAJOR_LAYOUT, device)
     _, added = _run_auto_against_native(device, xt, it, st, dim)

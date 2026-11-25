@@ -670,10 +670,9 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     };
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Buffer addresses are common (per-kernel) runtime args, so a program-cache hit rebinds four
-    // slots in total rather than four per core. Per-core RT is the contiguous [start, n) stick range
-    // (offset before count). Kernel ABI: reader common [index_addr, src_addr], per-core [start, n,
-    // page_map...]; writer common [in_addr, out_addr], per-core [start, n].
+    // Per-core RT is the contiguous [start, n) stick range (offset before count). Kernel ABI: reader
+    // common [index_addr, src_addr], per-core [start, n, page_map...]; writer common [in_addr,
+    // out_addr], per-core [start, n].
     reader_desc.emplace_common_runtime_args({index_t.buffer(), src_t.buffer()});
     writer_desc.emplace_common_runtime_args({in_t.buffer(), output_tensor.buffer()});
     const auto page_map_vec = to_vector(attributes.page_map);

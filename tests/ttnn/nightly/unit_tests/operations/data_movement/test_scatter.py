@@ -470,9 +470,7 @@ def test_scatter_reduction_high_rank_unequal_leading_dims(
         ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR, 3),
         ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 1),
         ([50, 20], 0, [50, 20], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 4),
-        # bfloat16 TILE rows with an int32 or uint32 index route to codegen (ttnn::scatter() in
-        # scatter.cpp; the gate is codegen/scatter_codegen_supported.hpp): TILE stays TILE, so
-        # native's to_layout legs never run and the count is lower than native's: (native, codegen).
+        # (native, codegen), as for the bfloat16 TILE rows of test_scatter_partial.
         ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, (6, 3)),
         ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 3),
         ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, (6, 3)),
@@ -652,7 +650,6 @@ def test_scatter_reduction_row_major_int32_with_callback_and_sub_cores(
             assert_allclose(torch_result_from_ttnn, torch_result)
         if iteration == 0:
             entries_after_first_call = device.num_program_cache_entries()
-    # The second call hits every program the first one cached, whichever route served it.
     assert device.num_program_cache_entries() == entries_after_first_call
     assert device.num_program_cache_entries() == expected_num_cache_entries
 

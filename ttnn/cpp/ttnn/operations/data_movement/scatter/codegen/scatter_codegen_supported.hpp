@@ -103,8 +103,8 @@ bool prefers_row_major_strategy(
 // true: true means fall back to native despite codegen support. Three rules, each with the mechanism
 // in the definition: a TILE unit row the detour declines (32x padding), a TILE row too wide for the
 // row split that the detour declines while the column split would rescan more than the row split
-// (quadratic where native is linear), and a small ROW_MAJOR call off the last axis (dispatch-bound,
-// a tie on device that loses wall clock). `dim` is the caller's raw
+// (quadratic where native is linear), and a small ROW_MAJOR call off the last axis (dispatch-bound:
+// its device win of a few microseconds does not show on wall clock). `dim` is the caller's raw
 // (pre-normalization) scatter axis, matching supported_by_codegen()'s convention; it is normalized
 // once inside, so the same axis spelled positive or negative demotes identically. `output_mem_config`
 // is the placement the call will write to (the caller's memory_config, else the input's own), which

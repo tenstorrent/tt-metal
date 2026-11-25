@@ -27,8 +27,6 @@
 
 void kernel_main() {
     // Runtime args
-    // Buffer addresses are common (per-kernel) runtime args: a program-cache hit then rebinds two
-    // slots per kernel instead of two per core.
     const uint32_t index_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t src_addr = get_common_arg_val<uint32_t>(1);
     // Per-core runtime args
