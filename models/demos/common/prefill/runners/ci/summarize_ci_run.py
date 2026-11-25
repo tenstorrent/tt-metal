@@ -187,24 +187,23 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None, chunks_p
 
     out.append(f"throughput = tokens / wall time across up to {_TPUT_WINDOW} chunk retires centred on the probe")
     if cpf > 1:
-        out.append("  (a packed forward's chunks retire together: windows span full forwards; a short final one is left out)")
-    # A packed forward retires all its chunks at once, so only the last chunk of a forward marks a point
-    # where the rate is known. A short final forward (n % cpf chunks) is padded to a full one and runs at
-    # nearly a full forward's cost, so its rate is padding waste, not depth: windows stop at the last full
-    # forward, and use the short one only when it is the whole request.
-    forward_ends = [i for i in range(cpf - 1, n, cpf)] or [n - 1]
+        out.append("  (a packed forward's chunks retire together: windows span whole forwards)")
+    # A packed forward retires all its chunks at once, so only the last chunk of a forward (or the
+    # request's last chunk, which closes a short final forward) marks a point where the rate is known.
+    # A short final forward counts: whatever it costs beyond its share is time the request really spends.
+    forward_ends = [i for i in range(n) if (i + 1) % cpf == 0 or i == n - 1]
     for lbl, d in probes((0, 50000, max_seq // 2, max_seq)):
         # The rate is the retire cadence. A chunk's own latency covers every stage at once and so
         # carries no information about how many chunks are in flight; only the interval between
         # retires does. The window absorbs one slow chunk while staying short enough that the
         # attention cost, which grows with depth, barely drifts across it.
         lo, hi = max(0, d - _TPUT_WINDOW // 2), min(n - 1, d + _TPUT_WINDOW // 2)
-        # Snap to full-forward ends: credit exactly the chunks retired in (end[lo], end[hi]]. Otherwise a
+        # Snap to forward ends: credit exactly the chunks retired in (end[lo], end[hi]]. Otherwise a
         # window edge inside a forward counts chunks that retired at the window's start, e.g. 4 chunks
         # against the time of a 2-chunk tail forward. One chunk per forward leaves lo and hi as they are.
         lo = max((i for i in forward_ends if i <= lo), default=forward_ends[0])
         hi = min((i for i in forward_ends if i >= hi), default=forward_ends[-1])
-        if hi <= lo:  # both ends on one forward end (the first, or the last full one): take a neighbour
+        if hi <= lo:  # both ends on one forward end (the first probe, cpf > window): take a neighbour
             later = [i for i in forward_ends if i > lo]
             earlier = [i for i in forward_ends if i < lo]
             lo, hi = (lo, later[0]) if later else ((earlier[-1], lo) if earlier else (lo, hi))

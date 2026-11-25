@@ -52,16 +52,16 @@ def _packed_spans(num_chunks, chunks_per_forward, forward_s, tail_s):
     return spans
 
 
-# A packed forward's chunks retire together. The throughput window must span full forwards: an edge inside
-# a forward credits chunks that retired at the window's start, and a padded short final forward reports
-# padding waste rather than the rate at depth.
+# A packed forward's chunks retire together. The throughput window must span whole forwards: an edge
+# inside a forward credits chunks that retired at the window's start against a later forward's time.
 @pytest.mark.parametrize("cpf", [2, 4, 8])
 def test_packed_throughput_windows_span_full_forwards(cpf):
     from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics
 
     chunk, forward_s = 2560, 0.2
     rate = cpf * chunk / forward_s
-    spans = _packed_spans(410, cpf, forward_s, tail_s=0.9 * forward_s)  # 410 % 4 == 2, % 8 == 2: a short tail
+    # 410 % 4 == 2 and 410 % 8 == 2: a short final forward, here costing its share of a full one.
+    spans = _packed_spans(410, cpf, forward_s, tail_s=forward_s * (410 % cpf or cpf) / cpf)
     probes = {0, 19, 39, 100, 204, 409}
 
     _, rec = _perf_metrics(spans, chunk, 2, probes, chunks_per_forward=cpf)
@@ -82,10 +82,20 @@ def test_packed_throughput_without_forward_grouping_overcounts_the_tail():
     assert abs(rec["throughput_tok_s"]["@1M"] / (4 * 2560 / 0.2) - 2.0) < 1e-9
 
 
+def test_packed_tail_probe_includes_the_short_final_forward():
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics
+
+    # A padded 2-chunk final forward costing a full forward: @1M spans the last full forward and the tail,
+    # 6 chunks over 2 forwards' time, so the padding shows up in the number.
+    spans = _packed_spans(410, 4, 0.2, tail_s=0.2)
+    _, rec = _perf_metrics(spans, 2560, 2, {409}, chunks_per_forward=4)
+    assert abs(rec["throughput_tok_s"]["@1M"] - 6 * 2560 / 0.4) < 1e-6
+
+
 def test_packed_request_of_one_forward_reports_no_rate():
     from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics
 
-    for n in (3, 4, 6):  # one short forward, one full forward, one full and one short
+    for n in (3, 4):  # one short forward, one full forward
         _, rec = _perf_metrics(_packed_spans(n, 4, 0.2, tail_s=0.2), 2560, 1, {0, n - 1}, chunks_per_forward=4)
         assert rec["throughput_tok_s"] == {}, n
 
