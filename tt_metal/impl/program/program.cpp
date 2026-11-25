@@ -265,7 +265,8 @@ void generate_kernel_source_files(
 
 // Returns true if every expected ELF for this kernel is already present locally and still valid, so
 // the client can skip the remote round-trip (preprocess + RPC + ELF transfer) entirely and let
-// read_binaries() load the cached ELF.
+// read_binaries() load the cached ELF. The reuse sidecar lists the kernel's generated sources as
+// dependencies, so call this only after generate_kernel_source_files().
 bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
     uint32_t core_type = MetalContext::instance(kernel->get_context_id())
                              .hal()
@@ -463,7 +464,10 @@ std::optional<std::string> ensure_kernel_binaries(
 
 namespace experimental {
 
-void ClearKernelCache() { jit_build_cache_clear(); }
+void ClearKernelCache() {
+    jit_build_cache_clear();
+    RemoteCompileCoordinator::clear_dedup_cache();
+}
 
 }  // namespace experimental
 
@@ -3489,15 +3493,20 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                // Skip the remote round-trip when the ELF is already validly cached locally.
-                if (!remote_kernel_cached(device, kernel)) {
-                    coordinator.submit(kernel_hash, [&]() {
-                        generate_kernel_source_files(device, build_options, kernel);
-                        return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
-                    });
-                    if (preprocess_and_ship) {
-                        preprocessed_kernels.push_back(kernel);
+                const auto result = coordinator.submit(kernel_hash, [&]() -> std::optional<KernelCompileDescriptor> {
+                    // Generate first, as the local path does before build(): the reuse check
+                    // validates the generated sources too, and a cache that was warmed elsewhere
+                    // ships only the ELFs and their sidecars.
+                    generate_kernel_source_files(device, build_options, kernel);
+                    // Skip the remote round-trip when the ELF is already validly cached locally.
+                    if (remote_kernel_cached(device, kernel)) {
+                        return std::nullopt;
                     }
+                    return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                });
+                // The reuse sidecar is written once, by the submission that sent the kernel.
+                if (result == RemoteCompileCoordinator::SubmitResult::Sent && preprocess_and_ship) {
+                    preprocessed_kernels.push_back(kernel);
                 }
                 // Always recorded: cached kernels still need read_binaries() to load the on-disk ELF.
                 submitted_kernels.emplace_back(kernel, std::move(build_options));
