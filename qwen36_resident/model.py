@@ -157,6 +157,8 @@ SEM_m1, SEM_PART1 = 14, 15  # (O-2: the odd iterations' row-max / partial semaph
 # all sent before the first is summed (mlp_hub.cpp kSlots); bf16 slots: four do not fit L1
 HUB_SLOTS = int(os.environ.get("RESIDENT_HUB_SLOTS", "2"))
 SEM_GATHER2 = 14  # (O-1d: the second gather word, streamers + hub — not attention cores, which use 14 for O-2)
+# O-2b (default on): the leader's q pass prep staged over the previous pass's users (attn_common.hpp kLeadStaged)
+ATTN_STAGED = os.environ.get("RESIDENT_ATTN_STAGED", "1") == "1"
 KV_ROW = (HD // TILE) * TILE_BYTES[K_DT]  # one position tile of a K cache page (bf8; bfp4 with K_BFP4)
 # Strata S0 step 1 (RESIDENT_KV_V_BFP4, default off): the V caches / pool in bfp4 tiles, K stays bf8 (V tolerates 4-bit
 # mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
@@ -1806,6 +1808,7 @@ class ResidentModel:
                 ("sem_gather2", SEM_GATHER2),
                 ("tok_x0", TOK_X0),
                 ("attn_pipe", int(self.attn_pipe)),  # (attn_common.hpp kAttnPipe, O-2)
+                ("lead_staged", int(ATTN_STAGED)),  # (attn_common.hpp kLeadStaged, O-2b)
                 ("sem_m1", SEM_m1),
                 ("sem_part1", SEM_PART1),
                 ("kv_k_rot", int(K_BFP4)),  # (attn_common.hpp kKRot: q / k rotated by HAD after RoPE, S0-8)

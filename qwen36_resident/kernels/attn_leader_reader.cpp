@@ -250,15 +250,22 @@ void kernel_main() {
             noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));
             mark(l, 1);
             place_user(0);
-            if (kAttnPipe && n_act > 1) {
+            if (!kLeadStaged && kAttnPipe && n_act > 1) {
                 place_user(1);  // (O-2: q two users ahead)
             }
             mark(l, 2);
         }
-        // the next user's rows go in before this user's partials arrive, so compute prepares its q meanwhile
-        constexpr uint32_t ahead = kAttnPipe ? 2 : 1;
-        if (k + ahead < n_act) {
-            place_user(k + ahead);
+        if constexpr (kLeadStaged) {
+            // (O-2b: pass p + 1's rows at pass p's start, for compute's staged prep)
+            if (k % kQPerPass == 0 && k + kQPerPass < n_act) {
+                place_user(k + kQPerPass);
+            }
+        } else {
+            // the next user's rows go in before this user's partials arrive, so compute prepares its q meanwhile
+            constexpr uint32_t ahead = kAttnPipe ? 2 : 1;
+            if (k + ahead < n_act) {
+                place_user(k + ahead);
+            }
         }
         if constexpr (kGatePass) {
             extract_gs(k);

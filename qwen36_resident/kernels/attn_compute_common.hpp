@@ -216,10 +216,9 @@ FORCE_INLINE void row_rsqrt(uint32_t in_cb) {
     cb_push_back(cb_rs, 1);
 }
 
-// out = rope(in * rs * w[w_base ..]) into out_a (and out_b if given), rope tables at tile rope of cb_rope;
-// pops in_cb
-FORCE_INLINE void norm_rope(
-    uint32_t in_cb, uint32_t w_cb, uint32_t w_base, uint32_t out_a, uint32_t out_b, uint32_t rope = 0) {
+// norm_rope's stages (O-2b: the leader runs a q pass's stages spread over the previous pass's users):
+// norm_stage: cb_sq = in * rs * w[w_base ..]; pops in_cb
+FORCE_INLINE void norm_stage(uint32_t in_cb, uint32_t w_cb, uint32_t w_base) {
     cb_wait_front(in_cb, Dt);
     row_rsqrt(in_cb);
     cb_wait_front(cb_rs, 1);
@@ -240,7 +239,10 @@ FORCE_INLINE void norm_rope(
     cb_push_back(cb_sq, Dt);
     cb_pop_front(cb_rs, 1);
     cb_pop_front(in_cb, Dt);
+}
 
+// rope_stage: rope(cb_sq) into out_a (and out_b) — S0-8 kKRot: into cb_rotx for the rotation stages; pops cb_sq
+FORCE_INLINE void rope_stage(uint32_t out_a, uint32_t out_b, uint32_t rope) {
     // rotate_half on the first 64 dims: t0' = t0 cos - t1 sin, t1' = t1 cos + t0 sin
     // (S0-8 kKRot: into cb_rotx, then rotated by HAD into out_a / out_b below)
     const uint32_t rope_a = kKRot ? cb_rotx : out_a, rope_b = kKRot ? cb_rotx : out_b;
@@ -293,10 +295,14 @@ FORCE_INLINE void norm_rope(
         cb_push_back(rope_b, Dt);
     }
     cb_pop_front(cb_sq, Dt);
+}
+
+// S0-8 kKRot: HAD = (H8 x H32) / 16 (tile index x column in tile): y_i = x_i @ (H32 / 16) (cb_had, one tile), then H8's
+// +-1 across the Dt tiles as three butterfly stages (stride s: tile j <- y_j + y_j+s, tile j + s <- y_j - y_j+s),
+// ping-ponging cb_rotx -> cb_rot2 -> cb_rotx -> cb_rot2 -> out_a / out_b (8 tile matmuls instead of 64)
+// had_mm_stage: cb_rot2 = cb_rotx @ (H32 / 16)
+FORCE_INLINE void had_mm_stage() {
     if constexpr (kKRot) {
-        // HAD = (H8 x H32) / 16 (tile index x column in tile): y_i = x_i @ (H32 / 16) (cb_had, one tile), then H8's +-1
-        // across the Dt tiles as three butterfly stages (stride s: tile j <- y_j + y_j+s, tile j + s <- y_j - y_j+s),
-        // ping-ponging cb_rotx -> cb_rot2 -> cb_rotx -> cb_rot2 -> out_a / out_b (8 tile matmuls instead of 64)
         cb_wait_front(cb_rotx, Dt);
         cb_reserve_back(cb_rot2, Dt);
         reconfig_data_format(cb_had, cb_rotx);
@@ -312,6 +318,12 @@ FORCE_INLINE void norm_rope(
         }
         cb_push_back(cb_rot2, Dt);
         cb_pop_front(cb_rotx, Dt);
+    }
+}
+
+// had_bfly_stage: H8's butterflies, cb_rot2 -> .. -> out_a (and out_b)
+FORCE_INLINE void had_bfly_stage(uint32_t out_a, uint32_t out_b) {
+    if constexpr (kKRot) {
         uint32_t src = cb_rot2, dst = cb_rotx;
         for (uint32_t s = 1; s < Dt; s <<= 1) {
             const bool last = (s << 1) >= Dt;
@@ -360,6 +372,16 @@ FORCE_INLINE void norm_rope(
         }
         reconfig_data_format(cb_sq, cb_sq);  // (the unpack formats norm_rope leaves without the rotation)
     }
+}
+
+// out = rope(in * rs * w[w_base ..]) into out_a (and out_b if given), rope tables at tile rope of cb_rope (S0-8: then
+// rotated by HAD); pops in_cb
+FORCE_INLINE void norm_rope(
+    uint32_t in_cb, uint32_t w_cb, uint32_t w_base, uint32_t out_a, uint32_t out_b, uint32_t rope = 0) {
+    norm_stage(in_cb, w_cb, w_base);
+    rope_stage(out_a, out_b, rope);
+    had_mm_stage();
+    had_bfly_stage(out_a, out_b);
 }
 
 // row r of the tail tiles <- the new k / v row (row 0 of cb_knew / cb_vraw), kBatch tiles per DST pass;

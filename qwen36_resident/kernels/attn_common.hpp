@@ -216,6 +216,11 @@ constexpr uint32_t kRopeTail = kRopePages + (kTailBatched ? 3 : 0);  // the tail
 // writer extracts each user's heads rows into cb_qstage (rows 0 .. heads - 1) and multicasts that
 constexpr bool kLeadBatched = rows_mode && groups > 1 && !verify;
 constexpr uint32_t kQPerPass = 32 / heads;
+// O-2b: a pass's q prep (norm, rope, S0-8 rotation, the gates' sigmoid) all at once cost the per-user loop a ~30 us
+// stall every kQPerPass users; the leader instead runs pass p + 1's prep as three stages before its pass p's first
+// three users' outputs (each hidden in that user's wait for its partials), the reader placing pass p + 1's rows at pass
+// p's start. (Passes of fewer than four users keep the one-shot prep.)
+constexpr bool kLeadStaged = kLeadBatched && kQPerPass >= 4 && get_named_compile_time_arg_val("lead_staged") != 0;
 constexpr uint32_t kQPasses = (kUsers + kQPerPass - 1) / kQPerPass;
 constexpr uint32_t kRopeQPass = 3 * batch * groups;
 constexpr uint32_t kRopeLead = kRopePages + (kLeadBatched ? 3 * kQPasses : 0);  // the leader's cb_rope pages

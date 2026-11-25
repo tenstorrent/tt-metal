@@ -103,7 +103,7 @@ void kernel_main() {
     for (uint32_t l = 0; l < layers && n_act > 0; l++) {
         // the next user's q and gate are prepared before this user's output, while the workers run this user
         cb_wait_front(cb_qw, Dt);
-        auto prep = [&](uint32_t k) __attribute__((noinline)) {
+        [[maybe_unused]] auto prep = [&](uint32_t k) __attribute__((noinline)) {
             const uint32_t u = act.row[k];
             if constexpr (kLeadBatched) {
                 // the pass of active users k .. k + kQPerPass - 1 at once (the writer takes each user's rows)
@@ -124,17 +124,47 @@ void kernel_main() {
                 cb_pop_front(cb_qw, Dt);
             }
         };
-        // (O-2: q two users ahead, as the writer sends it)
-        constexpr uint32_t ahead = kAttnPipe ? 2 : 1;
-        for (uint32_t k = 0; k < ahead && k < n_act; k++) {
-            prep(k);
-        }
-        for (uint32_t k = 0; k < n_act; k++) {
-            if (k + ahead < n_act) {
-                prep(k + ahead);
+        if constexpr (kLeadStaged) {
+            // (O-2b, attn_common.hpp kLeadStaged: pass p + 1's prep in three stages before pass p's users 0, 1, 2)
+            const uint32_t n_pass = (n_act + kQPerPass - 1) / kQPerPass;
+            auto stage = [&](uint32_t p, uint32_t s) __attribute__((noinline)) {
+                if (s == 0) {
+                    norm_stage(cb_qraw, cb_qw, 0);
+                    rope_stage(cb_q_mc, cb_q_mc, kRopeQPass + 3 * p);
+                    if (p + 1 == n_pass) {
+                        cb_pop_front(cb_qw, Dt);
+                    }
+                } else if (s == 1) {
+                    had_mm_stage();
+                } else {
+                    had_bfly_stage(cb_q_mc, cb_q_mc);
+                    gate_sigmoid(cb_gs_pass);  // (the pass's users; the reader extracts each one's rows)
+                }
+            };
+            for (uint32_t s = 0; s < 3; s++) {
+                stage(0, s);
             }
-            sum_partials<false>(children);
-            normalize_gate();
+            for (uint32_t k = 0; k < n_act; k++) {
+                const uint32_t p = k / kQPerPass, j = k % kQPerPass;
+                if (j < 3 && p + 1 < n_pass) {
+                    stage(p + 1, j);
+                }
+                sum_partials<false>(children);
+                normalize_gate();
+            }
+        } else {
+            // (O-2: q two users ahead, as the writer sends it)
+            constexpr uint32_t ahead = kAttnPipe ? 2 : 1;
+            for (uint32_t k = 0; k < ahead && k < n_act; k++) {
+                prep(k);
+            }
+            for (uint32_t k = 0; k < n_act; k++) {
+                if (k + ahead < n_act) {
+                    prep(k + ahead);
+                }
+                sum_partials<false>(children);
+                normalize_gate();
+            }
         }
     }
 }
