@@ -245,6 +245,17 @@ def test_a_failed_chunk_is_recorded_and_its_layers_still_complete_it():
     assert d.total_layers == 2 * NUM_LAYERS
 
 
+def test_a_failed_chunk_record_may_follow_some_of_its_layers():
+    completed = []
+    ring = FakeRing(per_layer(range(2)) + [msg(0, 0, flags=CHUNK_FAILED)] + per_layer(range(2, NUM_LAYERS)))
+    d = LayerCompletionRingReader(
+        ring, num_layers=NUM_LAYERS, on_chunk_complete=lambda key, cov: completed.append((key, cov.failed))
+    )
+    while d.step():
+        pass
+    assert completed == [((0, 0, 128), True)]
+
+
 def test_unknown_flags_raise():
     d = LayerCompletionRingReader(FakeRing([msg(0, 1, flags=CHUNK_FAILED + 1)]), num_layers=NUM_LAYERS)
     with pytest.raises(ValueError, match="unknown flags 2"):  # allow-pytest.raises: host-only, no device error

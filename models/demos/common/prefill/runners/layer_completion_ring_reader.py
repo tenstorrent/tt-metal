@@ -160,7 +160,9 @@ class LayerCompletionRingReader:
         *fields, flags = msg
         c = Completion(*fields)
         if flags == CHUNK_FAILED:
-            # The request failed; its layers still arrive as usual and complete the chunk.
+            # The request failed; its layers still arrive as usual and complete the chunk. The runner sends the record
+            # no later than its own last layer of the chunk; one sent after the chunk completed would mark the key's
+            # next use as failed.
             logger.warning(f"[ring-reader] chunk {chunk_key(c)} failed")
             self._coverage(c).failed = True
             return True

@@ -27,6 +27,12 @@ def make(producer, **kw):
     return writer_mod.LayerCompletionRingWriter(producer, **kw)
 
 
+def test_null_sink_takes_both_calls():
+    sink = writer_mod.NullLayerCompletionSink()
+    sink.layers_completed(**EVENT)
+    sink.chunk_failed(slot_id=5, pos_start=5120, pos_end=10213)
+
+
 def test_sink_pushes_one_message_per_span():
     producer = FakeProducer()
     sink = make(producer)
