@@ -560,7 +560,7 @@ def poll(d: Path, watch: int, args, step: str) -> None:
     bmc, stop, bdfs, sweep, nxt = Bmc(args.ipmitool, args.i2c_lock), d / "poll.stop", chips(), 0, 0.0
     rate, nxt_aer = _AerRate(), time.time() + AER_S
     bricks = bool(args.brick_mux and bmc.cmd and _brick_host(args))
-    nxt_brick, modes = time.time() + BRICK_LOAD_S, _brick_modes(d)
+    nxt_brick, modes, said = time.time() + BRICK_LOAD_S, _brick_modes(d), set()
     signal.signal(
         signal.SIGTERM, lambda *_: sys.exit(143)
     )  # a stop past its wait: the brick pass still restores its mux
@@ -596,7 +596,9 @@ def poll(d: Path, watch: int, args, step: str) -> None:
             nxt_brick = time.time() + BRICK_LOAD_S
             _brick_rows(d, f"during {step}", rows)
             for n in notes + fails:
-                log(n)
+                if n not in said:  # a fault that stays is said once per stage, not on every pass
+                    said.add(n)
+                    log(n)
         time.sleep(0.05)
     rate.sample(fa)  # the stage's last minute
     for f in files:

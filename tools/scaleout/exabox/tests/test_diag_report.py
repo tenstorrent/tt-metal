@@ -69,13 +69,13 @@ def test_whole_tray_power_loss(tmp_path):
 
 
 def test_pcie_bandwidth_line_gives_a_pcie_cause(tmp_path):  # pcie_lines' own line, through the report
-    from quiet_clock import pcie_lines
+    from quiet_clock import PCIE_FLOOR_GBS, PCIE_WARN_FRAC, pcie_lines
 
     def row(b, h):
         return dict(chip=f"{b} (tray 2, ASIC 1, device id 0)", mb=32, h2d_gbs=h, d2h_gbs=20, bad="")
 
     rs = [row("41:00.0", 0.1), *(row(f"4{i}:00.0", 20) for i in (2, 3, 4))]
-    line = pcie_lines(rs, 0.25, 0.5, "h", sysfs="/nonexistent")[0]
+    line = pcie_lines(rs, PCIE_FLOOR_GBS, PCIE_WARN_FRAC, "h", sysfs="/nonexistent")[0]
     out = run(tmp_path, [line], rc=8, verdict="FAIL (exit 8)")
     assert out[1] == "FAIL tray 2 (1 finding)" and "cause: PCIe path (PCIE/LINK)" in out[2], out
     assert "Final verdict: FAIL: 1 fault: low PCIe bandwidth or wrong read back" in out, out

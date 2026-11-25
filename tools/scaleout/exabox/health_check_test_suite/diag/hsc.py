@@ -146,9 +146,9 @@ class Bmc:
         return int.from_bytes(bytes(b), "little") if b is not None and len(b) == nbytes else None
 
     def block(self, bus: int, addr: int, code: int, lock: bool = True) -> bytes | None:
-        """A PMBus block read: the length byte, then that many bytes; None when it did not answer."""
+        """A PMBus block read: the length byte, then that many bytes; None when it did not answer or sent none."""
         b = self.raw(0x06, 0x52, bus, addr, 33, code, lock=lock)
-        return bytes(b[1 : 1 + b[0]]) if b and b[0] < len(b) else None
+        return bytes(b[1 : 1 + b[0]]) if b and 0 < b[0] < len(b) else None
 
     def hsc(self, tray: int, addr: int, name: str) -> int | None:
         return self.i2c(HSC_BUS[tray], addr, *REG[name])

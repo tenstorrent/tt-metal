@@ -329,11 +329,40 @@ class TestBricks(unittest.TestCase):
         mux = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")]
         self.assertEqual(mux[-1], "0x05")  # restored, also when the stop came mid-pass
 
+    def test_poller_says_a_failing_brick_read_once_per_stage(self):
+        f = Fake(self)
+        f.regs["0x09 0xec 0x01"] = None  # the mux cannot be read, on every pass
+        site, d = f.d / "site.tsv", f.d / "out" / "captures"
+        site.write_text("brick_mux * every box\n")
+        d.mkdir(parents=True)
+        a = _args(ipmitool=str(f.ipmi), i2c_lock=str(f.d / "lock"), brick_mux=True, site_data=str(site))
+        backstop = threading.Timer(30, (d / "poll.stop").touch)  # only if the second pass never comes
+        backstop.start()
+        self.addCleanup(backstop.cancel)
+        passes, real_brick_pass = [], hsc.brick_pass
+
+        def brick_pass_then_stop(*args, **kwargs):
+            passes.append(1)
+            out = real_brick_pass(*args, **kwargs)
+            if len(passes) == 2:  # stop once the second pass is done, however slow the host is
+                (d / "poll.stop").touch()
+            return out
+
+        with mock.patch.object(captures, "PCI", f.pci), mock.patch.object(captures, "BRICK_LOAD_S", 0.2), f.raw_patch():
+            with mock.patch.object(captures.signal, "signal"), mock.patch.object(captures, "log") as log:
+                with mock.patch.object(hsc, "brick_pass", brick_pass_then_stop):
+                    captures.poll(d, os.getpgrp(), a, "busbar")
+        said = [c.args[0] for c in log.call_args_list if c.args[0].startswith("brick mux read or select failed")]
+        self.assertGreaterEqual(len(passes), 2)
+        self.assertEqual(len(said), 4)  # one line per channel from the first pass, none from the later ones
+
     def test_no_mux_write_without_the_flag_and_a_site_row(self):
         f = Fake(self)
         f.run("stage-start")  # the run-start pass reads the bricks on every box; the stage passes need flag and row
         f.calls.clear()
+        f.run("stage-start")
         f.run("stage-end")
+        self.assertFalse([c for c in f.calls if " 0x09 0xec " in c])  # no flag: no stage pass after the run-start one
         site = f.d / "site.tsv"
         site.write_text("# rows\nbrick_mux other-host why\n")
         f.run("stage-start", brick_mux=True, site_data=str(site))
@@ -345,7 +374,7 @@ class TestBricks(unittest.TestCase):
     def test_run_start_pass_reads_every_brick_once_idle_with_one_line_each(self):
         f = Fake(self)
         f.regs.update({"0x09 0xec 0x01": "05", "0x09 0xc0 0x20": "16", "0x09 0xc0 0x21": "00 30"})
-        for code, text in ((0x99, "DELTA"), (0x9E, "SN0001")):
+        for code, text in ((0x99, "DELTA"), (0x9A, "Q54"), (0x9B, "R1"), (0x9D, "2026"), (0x9E, "SN0001")):
             f.regs[f"0x09 0xc0 {code:#04x}"] = " ".join(f"{b:02x}" for b in [len(text), *text.encode()] + [0] * 20)
         with mock.patch.object(captures, "log") as log:
             f.run("stage-start")
@@ -354,7 +383,7 @@ class TestBricks(unittest.TestCase):
         bricks = [ln for ln in said if ln.startswith("brick U")]
         self.assertEqual([ln.split()[1] for ln in bricks], [f"U{n}" for n in range(1, 9)])
         self.assertIn(
-            "MFR_ID DELTA, MFR_MODEL , MFR_REVISION , MFR_DATE , MFR_SERIAL SN0001, VOUT_MODE 0x16", bricks[0]
+            "MFR_ID DELTA, MFR_MODEL Q54, MFR_REVISION R1, MFR_DATE 2026, MFR_SERIAL SN0001, VOUT_MODE 0x16", bricks[0]
         )
         self.assertIn("VOUT_COMMAND 12.0000 V", bricks[0])
         self.assertEqual(len([ln for ln in said if ln.startswith("54 V rail at run start")]), 1)
@@ -371,7 +400,9 @@ class TestBricks(unittest.TestCase):
             ["brick reads skipped: /nonexistent/ipmitool not found"],
         )
         f = Fake(self)
-        f.regs.update({"0x09 0xec 0x01": "05", "0x09 0xc0 0x99": None, "0x09 0xc2 0x21": None})
+        f.regs.update(
+            {"0x09 0xec 0x01": "05", "0x09 0xc0 0x99": None, "0x09 0xc2 0x21": None, "0x09 0xc0 0x9a": "00"}
+        )  # the last: a block read that answers with a zero length
         with mock.patch.object(captures, "log") as log:
             f.run("stage-start")
         said = [c.args[0] for c in log.call_args_list]
@@ -379,6 +410,8 @@ class TestBricks(unittest.TestCase):
         self.assertEqual(len(warn), 1)
         self.assertIn("U1 bus 0x09 addr 0xc0 code 0x99", warn[0])
         self.assertIn("U2 bus 0x09 addr 0xc2 code 0x21", warn[0])
+        self.assertIn("U1 bus 0x09 addr 0xc0 code 0x9a", warn[0])  # an empty answer is not a value
+        self.assertIn("MFR_MODEL not read", next(ln for ln in said if ln.startswith("brick U1")))
         self.assertEqual(len([ln for ln in said if ln.startswith("brick U")]), 8)  # the run went on
         with tempfile.TemporaryDirectory() as t, mock.patch.object(
             hsc.Bmc, "listed", return_value=False

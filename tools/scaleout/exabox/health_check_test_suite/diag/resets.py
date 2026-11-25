@@ -26,7 +26,7 @@ from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 from .naming import blamed
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import pcie_enum_check, validate_snapshot
-from quiet_clock import PCIE_FLOOR_GBS, PCIE_WARN_FRAC  # noqa: E402  busbar.py put galaxy/ on sys.path
+from quiet_clock import PCIE_FLOOR_GBS, PCIE_WARN_FRAC  # busbar.py put galaxy/ on sys.path
 
 # The tt-smi flags a tier's reset plan may name.
 RESET_FLAGS = ("-glx_reset",)
