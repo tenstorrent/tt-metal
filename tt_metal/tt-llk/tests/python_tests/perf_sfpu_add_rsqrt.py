@@ -25,7 +25,9 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     addend=list(ADDENDS),
     approx=[ApproximationMode.No, ApproximationMode.Yes],
-    typed_bf16_store=[False, True],
+    # FAST_APPROX drops the negative-input guard, so it changes the SFPU code.
+    # typed_bf16_store does not change timing, so it stays False here.
+    fast_approx=[False, True],
     **PERF_MEASUREMENT_AXES,
 )
 def test_perf_sfpu_add_rsqrt(
@@ -34,7 +36,7 @@ def test_perf_sfpu_add_rsqrt(
     dest_acc,
     addend,
     approx,
-    typed_bf16_store,
+    fast_approx,
     run_types,
     loop_factor,
     is_perf,
@@ -44,7 +46,8 @@ def test_perf_sfpu_add_rsqrt(
         dest_acc,
         addend,
         approx,
-        typed_bf16_store,
+        False,  # typed_bf16_store
+        fast_approx=fast_approx,
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,
