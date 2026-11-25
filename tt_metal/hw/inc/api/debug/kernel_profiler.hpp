@@ -221,6 +221,10 @@ inline __attribute__((always_inline)) bool bufferHasRoom(uint32_t additional_slo
 
 #if defined(ARCH_QUASAR)
 inline __attribute__((always_inline)) uint64_t quasar_read_wall_clock_64() {
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    // Dispatch engines don't have Neos, so they can't read a Neo wall clock.
+    return get_timestamp();
+#else
 #if defined(COMPILE_FOR_TRISC)
     // The wall clock counter is per-Neo. Empirically the four Neo wall clocks are synchronized and
     // cycle-aligned, so a TRISC reading its own Neo's clock stays on the same timeline as the others.
@@ -237,6 +241,7 @@ inline __attribute__((always_inline)) uint64_t quasar_read_wall_clock_64() {
     uint32_t time_low = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(wall_clock_0_addr);
     uint32_t time_high = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(wall_clock_1_at_addr);
     return (static_cast<uint64_t>(time_high) << 32) | time_low;
+#endif
 }
 #endif
 
@@ -766,6 +771,24 @@ struct profileScope {
     }
 };
 
+// DeviceZoneScopedNIf: a zone that exists only when `active`, decided at compile time. `active` true is
+// profileScope itself (an alias, not a derived type, so the zone's code is exactly DeviceZoneScopedN's);
+// `active` false is an empty type, so an inactive zone leaves no code and no marker in the kernel. A
+// condition that is not a constant expression does not compile: the DRAM backend records no zone decided at
+// run time (the streaming backend's DeviceZoneScopedNIf does).
+template <bool active, uint32_t timer_id, DoingDispatch dispatch>
+struct profileScopeIfSelect {
+    using type = profileScope<timer_id, dispatch>;
+};
+
+template <uint32_t timer_id, DoingDispatch dispatch>
+struct profileScopeIfSelect<false, timer_id, dispatch> {
+    struct type {};
+};
+
+template <uint32_t timer_id, DoingDispatch dispatch, bool active>
+using profileScopeIf = typename profileScopeIfSelect<active, timer_id, dispatch>::type;
+
 template <uint32_t timer_id, uint32_t index>
 struct profileScopeGuaranteed {
     static constexpr uint32_t start_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_1_H;
@@ -1009,6 +1032,14 @@ __attribute__((noinline)) void trace_only_init() {
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
+// A zone that exists only when `active`, a constant expression (a template or compile-time arg): false
+// compiles the zone out of the kernel entirely.
+#define DeviceZoneScopedNIf(name, active)                                                                \
+    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                         \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));                           \
+    kernel_profiler::profileScopeIf<hash, kernel_profiler::DoingDispatch::NOT_DISPATCH, (active)> zone = \
+        kernel_profiler::profileScopeIf<hash, kernel_profiler::DoingDispatch::NOT_DISPATCH, (active)>();
+
 #define DeviceTimestampedData(name, data)                                          \
     {                                                                              \
         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
@@ -1027,6 +1058,12 @@ __attribute__((noinline)) void trace_only_init() {
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
+#define DeviceZoneScopedNIf(name, active)                                                            \
+    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                     \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));                       \
+    kernel_profiler::profileScopeIf<hash, kernel_profiler::DoingDispatch::DISPATCH, (active)> zone = \
+        kernel_profiler::profileScopeIf<hash, kernel_profiler::DoingDispatch::DISPATCH, (active)>();
+
 #define DeviceTimestampedData(name, data)                                                            \
     {                                                                                                \
         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                 \
@@ -1040,6 +1077,8 @@ __attribute__((noinline)) void trace_only_init() {
 #else
 
 #define DeviceZoneScopedN(name) (void(sizeof(name)))
+
+#define DeviceZoneScopedNIf(name, active) (void(sizeof(name) + sizeof(active)))
 
 #define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
@@ -1130,6 +1169,8 @@ __attribute__((noinline)) void trace_only_init() {
 
 #define DeviceZoneScopedN(name) (void(name))
 
+#define DeviceZoneScopedNIf(name, active) (void(name), void(sizeof(active)))
+
 #define DeviceZoneScopedSumN1(name) (void(name))
 
 #define DeviceZoneScopedSumN2(name) (void(name))
@@ -1167,8 +1208,4 @@ __attribute__((noinline)) void trace_only_init() {
 #define SYNC_SIGNAL_NOC_ADDR(name, addr, noc) (void(sizeof(addr) + sizeof(noc)))
 
 #endif
-#endif
-
-#ifndef DeviceZoneScopedNIf
-#define DeviceZoneScopedNIf(name, active) DeviceZoneScopedN(name)
 #endif

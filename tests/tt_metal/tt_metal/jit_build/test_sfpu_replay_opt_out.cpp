@@ -21,11 +21,11 @@
 #include <memory>
 #include <string>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <internal/kernel_build_options.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -62,7 +62,7 @@ class SfpuReplayOptOutMockBlackholeFixture : public MockBlackholeMeshDispatchFix
 protected:
     std::shared_ptr<Kernel> compile_blank(bool disable_sfpu_replay_optimization) {
         distributed::MeshDevice* device = devices_.at(0).get();
-        Program program = CreateProgram();
+        Program program = CreateProgram(*device);
         KernelHandle handle = CreateKernel(
             program,
             kBlankComputeKernel,
@@ -111,7 +111,7 @@ TEST_F(SfpuReplayOptOutMockBlackholeFixture, ProgramDescriptorCarriesTheDefine) 
         .defines = {{kNoReplayDefine, "1"}},
         .config = ComputeConfigDescriptor{},
     });
-    Program program(descriptor);
+    Program program(*devices_.at(0), descriptor);
     program.impl().compile(devices_.at(0).get());
     auto kernel = program.impl().get_kernel(0);
     EXPECT_NE(recipe_cflags(kernel, 1).find(kNoReplayFlag), std::string::npos);

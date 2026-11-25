@@ -1,0 +1,97 @@
+# Wormhole and Blackhole perf specifics
+
+Read with `perf-test`. Wormhole and Blackhole share the files in
+`tests/python_tests/` and `tests/sources/`; `CHIP_ARCH` selects the
+architecture at import and build time.
+
+## Stand-ins
+
+Helpers are in `tests/helpers/include/perf.h`:
+
+- `_perf_unpack_stream_set_valid<set_a, set_b, PERF_RUN_TYPE>(count)` stands
+  in for unpack in `MATH_ISOLATE`.
+- `_perf_math_stream_clear_valid<clear_a, clear_b, PERF_RUN_TYPE>(count)`
+  stands in for math in `UNPACK_ISOLATE`.
+
+On Wormhole isolate runs these drive the handshakes through the MOP expander
+(`perf_mock_mop`), so the stand-in does not set the measured value. Elsewhere
+they fall back to the `_perf_*_loop_*` RISC-V loop themselves, so call the
+`_stream_` names on both architectures. Several older kernels still call the
+`_loop_` names directly; move them to `_stream_` when you touch them.
+
+## Handshake counts
+
+`_perf_src_handshake_iters_(tilize_en, num_tiles, num_faces)` in
+`tests/helpers/include/llk_lib_unpack_wrappers.h` is the count shared by
+unpack and math for unary unpack paths. Multiply it by `LOOP_FACTOR`.
+
+- `unpack_A` posts one source dvalid per face.
+- Tilize posts architecture-specific dvalids: one per tile on Blackhole, one
+  per face on Wormhole (`_llk_unpack_tilize_num_dvalids_wrapper_`, which
+  `_perf_src_handshake_iters_` calls; call the shared helper rather than the
+  wrapper).
+- `unpack_A` with `BroadcastType::NONE` (no `acc_to_dest`, not
+  unpack-to-dest) posts a zeroed SrcB with every SrcA dvalid, whatever
+  `dest_acc` is, so the datacopy's `ELWADD` branch (32-bit Dest, integer FPU,
+  UInt8 output) reads zeros. Tilize does the same: one per face on Wormhole,
+  one per tile on Blackhole, where math's tilize datacopy also runs a single
+  iteration. `MOVA2D` never waits on SrcB, which is why kernels that post
+  SrcB only when math uses `ELWADD` still run.
+- Math ends each datacopy iteration with `CLR_AB`, clearing both banks. So a
+  math stand-in in `UNPACK_ISOLATE` clears `<true, true>`, and in
+  `MATH_ISOLATE` an unpack stand-in that posts `<true, true>` matches the real
+  unpack.
+- Unpack-to-dest writes Dest directly. The handshake is the math-to-unpack
+  mailbox (math's Dest index, read in `set_dst_write_addr`) plus the
+  `UNPACK_TO_DEST` semaphore. Unary unpack-to-dest posts no source dvalids,
+  but on Blackhole a broadcast with 32-bit input also posts one SrcB dvalid
+  per tile, which math's broadcast datacopy consumes.
+  - `UNPACK_ISOLATE`: math keeps its real unpack-to-dest path (the block
+    helper, no source wait) as the stand-in.
+  - `MATH_ISOLATE`: a plain unpack-to-dest copy has no math stage to
+    measure; leave that run type out, or report it as empty. A broadcast
+    does real `MOVD2B`/`MOVB2D` work: measure it with an unpack stand-in that
+    services the mailbox, the semaphore and the Blackhole SrcB, as
+    `tests/sources/unpack_A_bcast_test.cpp` does.
+
+## Dest clearing in the measured loop
+
+In `SyncHalf`, `_llk_pack_dest_section_done_` waits for pack, clears the
+packed Dest half before math receives it again, and flips the packer's Dest
+bank. `SyncFull` clears all of Dest and does not flip. Wormhole always
+clears; Blackhole clears unless `clear_dest=false`, in which case math must
+clear after acquiring each section. Before adding an explicit section clear, `ZEROACC`, or a second
+`set_dst_write_addr` inside `TILE_LOOP`, trace that implicit release path for
+the active run type. An extra clear adds instructions and can add a stall to
+the published operation cost even when it does not change correctness.
+
+An operation that does not intrinsically clear Dest should normally initialize
+Dest once in `INIT` and rely on the functional pack-release behavior during
+`L1_TO_L1`. Isolates may omit that release by design; do not add compensating
+work unless the measured operation itself requires it.
+
+## Sweep and build
+
+- The datacopy `tilize` argument exists only on Blackhole (a software
+  workaround for a hardware bug), and never with a `Bfp8_b` input; see
+  `get_valid_tilize_datacopy` in `test_eltwise_unary_datacopy.py`. Blackhole
+  then builds variants that Wormhole skips: compile both.
+- Run the coverage comparer once per architecture: the same file imports
+  differently under each `CHIP_ARCH`.
+- Two-face tiles (16x32) need the pack tile size computed as
+  `FACE_R_DIM * FACE_C_DIM * num_faces`, not `TILE_WIDTH * TILE_HEIGHT`. On
+  Wormhole, `_llk_pack_mop_config_` asserts four faces when `num_tiles > 1`;
+  on Blackhole it ignores `num_tiles`, so there is no multi-tile pack MOP. On
+  both, a two-face pack issues one tile per call, as `pack_l1_acc_test.cpp`
+  does.
+
+## Measured relations (pack L1 accumulate, Wormhole)
+
+These are examples of healthy numbers, not limits:
+
+- `L1_TO_L1` is about 1.5–1.8× the slowest isolate for one-tile blocks and
+  about 1.1–1.4× for 4–8 tile blocks; the gap is the cross-thread handshake.
+- Repeated runs of one build: 0% spread.
+- Unrelated idle-thread changes moved single configs ±8–12% between two
+  levels (about 39 and 42 cycles per tile for pack) while the pack ELF was
+  identical.

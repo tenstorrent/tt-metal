@@ -459,7 +459,7 @@ class SingularitySide(Enum):
 
 _BOTH, _ABOVE, _BELOW = SingularitySide
 
-# Ops with a pole at every non-positive integer; `ulp_sweep.claimed_lanes` excludes the
+# Ops with a pole at every non-positive integer; `ulp_sweep.Swept.claimed` excludes the
 # lattice, and every fp32 value of magnitude 2**23 or more is an integer.
 _NONPOSITIVE_INTEGER_POLES = frozenset(
     {MathOperation.Digamma, MathOperation.Lgamma, MathOperation.Polygamma}
@@ -1152,11 +1152,16 @@ BINARY_SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
 _BINARY_SPECIALS_NOT_READY: frozenset[MathOperation] = frozenset(
     {
         MathOperation.SfpuElwdiv,
+        # At these special pairs (gate, up) the kernel and its golden differ: (-100, +inf) gives nan where
+        # the golden gives -inf; (-100, -inf) gives nan where the golden gives +inf.
+        MathOperation.SfpuSiluGlu,
         MathOperation.SfpuXlogy,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuBinaryFmod,
         MathOperation.SfpuBinaryRemainder,
         MathOperation.SfpuAtan2,
+        # A Blackhole kernel only: the nightly edges sweep builds every board.
+        MathOperation.SfpuGegluTanh,
         MathOperation.SfpuLogaddexp,
         MathOperation.SfpuLogaddexp2,
         MathOperation.SfpuMask,

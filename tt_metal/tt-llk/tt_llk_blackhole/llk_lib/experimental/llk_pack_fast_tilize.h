@@ -123,7 +123,7 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim)
     ckernel::ckernel_template tmp(
         unit_dim, // outerloop: one iteration per tile
         1,        // innerloop: single tile body
-        lltt::replay_insn(REPLAY_TILE_OFFSET, REPLAY_TILE_LEN),
+        TT_OP_REPLAY(REPLAY_TILE_OFFSET, REPLAY_TILE_LEN, 0, 0),
         TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 1, 0, 0b0010 /* CH0_W */));
 
     // start_op: restore Z/W from CR shadows. W_Cr accumulates across tiles.
@@ -136,7 +136,7 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim)
     tmp.set_last_outer_loop_instr(TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 1, 0, 0b0010));
 
     // end_ops: L1 address advance via replay (runs per outer iteration = per tile).
-    tmp.set_end_ops(lltt::replay_insn(REPLAY_ADDR_UPDATE_OFFSET, REPLAY_ADDR_UPDATE_LEN), TT_OP_NOP);
+    tmp.set_end_ops(TT_OP_REPLAY(REPLAY_ADDR_UPDATE_OFFSET, REPLAY_ADDR_UPDATE_LEN, 0, 0), TT_OP_NOP);
 
     tmp.program();
 }
@@ -147,7 +147,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t unit_dim,
     [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const std::uint32_t pack_src_format            = (std::uint32_t)DataFormat::Float16_b)
+    const std::uint32_t pack_src_format            = static_cast<std::uint32_t>(DataFormat::Float16_b))
 {
     // DEST remap (remap_addrs + swizzle_32b) is set by _llk_math_fast_tilize_init_
     // on the math thread (mirrors pack_untilize_dest_init; tracked by
@@ -280,7 +280,7 @@ inline void _llk_pack_fast_tilize_uninit_(
     const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t face_r_dim,
     [[maybe_unused]] const std::uint32_t num_faces,
-    const std::uint32_t pack_src_format = (std::uint32_t)DataFormat::Float16_b)
+    const std::uint32_t pack_src_format = static_cast<std::uint32_t>(DataFormat::Float16_b))
 {
     if constexpr (is_fp32_dest_acc_en)
     {

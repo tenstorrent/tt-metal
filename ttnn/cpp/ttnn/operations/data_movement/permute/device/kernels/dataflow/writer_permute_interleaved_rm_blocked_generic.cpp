@@ -50,6 +50,7 @@ void kernel_main() {
 
     // Interleaved address configuration for the destination
     const auto s0 = TensorAccessor(tensor::output);
+    constexpr bool fast_path = get_arg(args::fast_path) != 0 && decltype(s0)::DSpec::is_interleaved;
 
     // Input shape, permutation, and destination strides.
     // Rank-length arrays (count = N, a CTA) delivered as runtime varargs:
@@ -153,14 +154,30 @@ void kernel_main() {
             }
 
             uint32_t l1_addr = transposed_buffer_read_addr + (w - w_start) * output_cb_page_size;
-            tt::data_movement::common::noc_async_write_sharded(
-                noc, l1_addr, s0, dest_linear_idx, x_offset, x_read_size_bytes);
+            if constexpr (fast_path) {
+                noc.async_write<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    CoreLocalMem<uint32_t>(l1_addr),
+                    s0,
+                    x_read_size_bytes,
+                    {},
+                    {.page_id = dest_linear_idx, .offset_bytes = x_offset});
+            } else {
+                tt::data_movement::common::noc_async_write_sharded(
+                    noc, l1_addr, s0, dest_linear_idx, x_offset, x_read_size_bytes);
+            }
         }
 
-        // Wait until all writes are completed before proceeding to the next block
-        noc.async_write_barrier();
+        // Wait for this block's writes before popping it
+        if constexpr (fast_path) {
+            noc.async_writes_flushed();
+        } else {
+            noc.async_write_barrier();
+        }
 
         // Pop the block from the input circular buffer, as we're done writing it
         dfb_in.pop_front(w_block_size);
+    }
+    if constexpr (fast_path) {
+        noc.async_write_barrier();
     }
 }

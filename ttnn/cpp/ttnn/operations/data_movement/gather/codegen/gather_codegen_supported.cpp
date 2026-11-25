@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "gather_codegen_program_factory.hpp"

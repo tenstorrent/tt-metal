@@ -15,7 +15,7 @@
 
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -78,10 +78,8 @@ void ValidateProgramSpec(
     ValidateNodeCapacity(ctx, arch, max_slots_per_core);
 
     // NOTE:
-    // Placement consistency between kernels, DFBs, and WorkUnitSpecs is now structural,
-    // not validated:
-    //  - Kernels' effective node sets ARE the union of their containing WorkUnitSpecs' target_nodes
-    //  - DFBs' allocation node sets are the union of their binding kernels' node sets
+    // Kernels' node sets are the union of their containing WorkUnitSpecs' target_nodes.
+    // DFB endpoint coverage and scratchpad override coverage are validated above.
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

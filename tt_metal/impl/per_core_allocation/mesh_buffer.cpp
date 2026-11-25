@@ -6,8 +6,8 @@
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include "impl/allocator/allocator.hpp"
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "distributed/mesh_device_impl.hpp"

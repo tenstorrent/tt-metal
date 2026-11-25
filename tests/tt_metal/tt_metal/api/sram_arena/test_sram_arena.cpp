@@ -11,7 +11,7 @@
 #include <type_traits>
 #include <utility>
 
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"

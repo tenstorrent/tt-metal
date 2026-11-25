@@ -303,6 +303,20 @@ __attribute__((naked)) void l1_ecc_irq_entry() {
         "mret_loop: mret\n"
         "j mret_loop\n");
 }
+
+// After a power cycle, flops in the L1 ECC error logic hold stale banks that no reset clears, and while they do, a
+// false error from an unpopulated row is logged at a stale bank's last access: a populated row, so the core halts.
+// Only an ECC error on the read-modify-write path flushes them, so this stores 4 B (a read-modify-write) into each
+// word of the first unpopulated row.
+void flush_l1_ecc_error_banks() {
+    for (uint32_t bank = 0; bank < l1_ecc_banks; bank++) {
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_SIZE + bank * l1_ecc_word_bytes) = 0;
+    }
+    // A fence alone lets a later store to another region (ECC_CTRL) land first. L1 processes this core's requests in
+    // order, so reading back the last word waits for every store, and the fence waits for the read.
+    (void)*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_SIZE + (l1_ecc_banks - 1) * l1_ecc_word_bytes);
+    asm volatile("fence" ::: "memory");
+}
 #endif
 
 void arm_l1_ecc_halt() {
@@ -314,6 +328,8 @@ void arm_l1_ecc_halt() {
     if (*ecc_ctrl & ~(ECC_CTRL_VIEW_MASK | ecc_ctrl_armed | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR)) {
         return;
     }
+    // Only once ECC_CTRL is ours: the clear below drops the errors the flush raises.
+    flush_l1_ecc_error_banks();
     // Arm in this order: clear stale state, enable the ECC sources, install the handler, and enable BRISC at the
     // PIC last. Only that last write lets BRISC take IRQ 3, so the handler is always installed first (both PIC
     // writes land in order), and an ECC error raised before it stays latched until then.
@@ -371,6 +387,11 @@ void device_setup() {
     // Invalidate tensix icache for all 4 risc cores
     cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
         RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
+
+#ifdef RISC_PREFETCH_CTRL_VALUE
+    // The I$ prefetchers reset to off. This is a global config register, so one write at boot covers every launch.
+    cfg_regs[RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32] = RISC_PREFETCH_CTRL_VALUE;
+#endif
 
     // Clear destination registers
     core.ex_zeroacc(instrn_buf[0]);

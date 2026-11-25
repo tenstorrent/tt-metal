@@ -17,7 +17,8 @@ void kernel_main() {
     uint32_t num_sticks_per_core_read = get_arg(args::num_sticks_per_core_read);
     uint32_t num_read_per_barrier = get_arg(args::num_read_per_barrier);
     uint32_t start_id = get_arg(args::start_id);
-    // Per-shard page size: shard_W on B/W-sharded outputs, full row otherwise.
+    // Per-shard page size: unaligned shard_W on B/W-sharded outputs, aligned page size on HEIGHT/ND-sharded
+    // outputs, full row on interleaved.
     // Feeds `noc_async_write_sharded`'s multi-shard split via `get_aligned_page_size()`.
     uint32_t page_size_override = get_arg(args::page_size_override);
 
