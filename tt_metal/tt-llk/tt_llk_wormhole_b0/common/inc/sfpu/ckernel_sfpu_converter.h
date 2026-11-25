@@ -36,3 +36,4 @@ public:
 };
 
 } // namespace ckernel::sfpu
+// smoke-ci trial
