@@ -45,4 +45,7 @@ void kernel_main() {
     // DEVICE_PRINT("Reordered args: {3} {2} {1} {0}\n", i64, i32, i16, b);
     DEVICE_PRINT("Reordered args: {} {} {} {}\n", b, i16, i32, i64);
     DEVICE_PRINT("Reordered args: {0} {1} {2} {3}\n", b, i16, i32, i64);
+
+    // An argument that several placeholders print is sent to the host only once.
+    DEVICE_PRINT("Repeated args: {0} {1} {0:#x} {1}\n", u32, i16);
 }

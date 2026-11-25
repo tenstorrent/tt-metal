@@ -5,10 +5,10 @@
 #include "topology.hpp"
 
 #include "device/device_manager.hpp"
-#include <host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include <experimental/fabric/mesh_graph.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <cstdint>
 #include <map>
 #include <typeinfo>
@@ -20,13 +20,13 @@
 
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
-#include "core_coord.hpp"
-#include "device.hpp"
-#include "dispatch_core_common.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "tt-metalium/mesh/legacy/device.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_config/tensor_prefetcher.hpp"
 #include "program/program_impl.hpp"
-#include "program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include <experimental/fabric/fabric.hpp>
 #include "system_memory_manager.hpp"
 #include <tt-umd/types/core_coordinates.hpp>

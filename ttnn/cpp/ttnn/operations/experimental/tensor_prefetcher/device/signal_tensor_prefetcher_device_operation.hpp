@@ -9,7 +9,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/device_operation.hpp"

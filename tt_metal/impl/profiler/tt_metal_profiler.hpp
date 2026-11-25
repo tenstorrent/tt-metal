@@ -8,9 +8,9 @@
 #include <optional>
 #include <string>
 
-#include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/observability/profiler/profiler_optional_metadata.hpp>
 
-#include "profiler_types.hpp"
+#include "impl/profiler/profiler_types.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

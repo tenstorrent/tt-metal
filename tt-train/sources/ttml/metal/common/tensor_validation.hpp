@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <optional>
 #include <string_view>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <vector>
 
 #include "metal/ttnn_all_includes.hpp"

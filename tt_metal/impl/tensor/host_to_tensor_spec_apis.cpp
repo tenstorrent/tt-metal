@@ -6,15 +6,15 @@
 #include <limits>
 #include <type_traits>
 
-#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
-#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
 
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>

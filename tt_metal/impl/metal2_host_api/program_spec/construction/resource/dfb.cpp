@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
+#include <tt-metalium/data_formats/data_format.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
