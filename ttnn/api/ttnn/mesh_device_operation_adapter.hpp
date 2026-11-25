@@ -1013,7 +1013,8 @@ public:
     // MeshTensor reachable from tensor_args / tensor_return_value, or one of the
     // MeshTensors the factory placed in ProgramArtifacts::op_owned_tensors. Every
     // GlobalSemaphoreArgument must reference a GlobalSemaphore in
-    // operation_attributes_t::global_semaphores.
+    // operation_attributes_t::global_semaphores, unless the factory's
+    // override_runtime_arguments supplies its run args on every hit.
     // Binding machinery shared by every spec-path adapter: it depends only on the op's tensor
     // types, not on which factory concept produced the artifacts.
     struct SpecBindingSupport {
@@ -1315,12 +1316,15 @@ public:
 
         // Match each GlobalSemaphoreArgument to one of the factory's parked GlobalSemaphores (nothing to rebind)
         // or to its index in operation_attributes_t::global_semaphores, so that every cache hit rebinds it
-        // (refresh_global_semaphore_args). Throws when an argument's semaphore is in neither: a hit could not
-        // supply it, and a semaphore the factory kept for itself is freed once it returns. Cache-miss path only.
+        // (refresh_global_semaphore_args). An argument in neither is the factory's own business if its
+        // override_runtime_arguments supplies the run args on every hit (generic_op passes its caller's run args
+        // through this way), and an error otherwise: the hit would keep a semaphore that may since have been freed.
+        // Cache-miss path only.
         static std::vector<ResolvedGlobalSemaphoreBinding> resolve_global_semaphore_bindings(
             const tt::tt_metal::Table<GlobalSemaphoreParamName, GlobalSemaphoreArgument>& factory_semaphore_args,
             const operation_attributes_t& attrs,
-            const std::vector<tt::tt_metal::GlobalSemaphore>* parked_semaphores) {
+            const std::vector<tt::tt_metal::GlobalSemaphore>* parked_semaphores,
+            bool hit_overrides_run_args) {
             std::vector<ResolvedGlobalSemaphoreBinding> bindings;
             for (const auto& [semaphore_parameter_name, semaphore_arg] : factory_semaphore_args) {
                 const auto* target = &semaphore_arg.get();
@@ -1339,11 +1343,13 @@ public:
                         continue;
                     }
                 }
-                TT_THROW(
+                TT_FATAL(
+                    hit_overrides_run_args,
                     "GlobalSemaphoreArgument '{}' must reference a GlobalSemaphore in "
                     "operation_attributes_t::global_semaphores, which a cache hit rebinds it from, or (for a "
                     "MeshWorkloadSpecFactoryConcept factory) one in MeshWorkloadArtifacts::global_semaphores, which "
-                    "the program cache keeps allocated",
+                    "the program cache keeps allocated; or the factory's override_runtime_arguments must supply it on "
+                    "every cache hit",
                     semaphore_parameter_name.get());
             }
             return bindings;
@@ -1402,7 +1408,10 @@ public:
                 .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
                     artifacts.run_params.advanced_options.prefetcher_pipe_args, attrs),
                 .global_semaphore_bindings = SpecBindingSupport::resolve_global_semaphore_bindings(
-                    artifacts.run_params.global_semaphore_args, attrs, /*parked_semaphores=*/nullptr),
+                    artifacts.run_params.global_semaphore_args,
+                    attrs,
+                    /*parked_semaphores=*/nullptr,
+                    /*hit_overrides_run_args=*/detail::HasSpecRuntimeArgsOverride<SpecFactory>),
                 .num_caller_global_semaphores = SpecBindingSupport::num_caller_global_semaphores(attrs),
                 .op_owned_tensors =
                     std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors))};
@@ -1656,7 +1665,10 @@ public:
                     .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
                         per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs),
                     .global_semaphore_bindings = SpecBindingSupport::resolve_global_semaphore_bindings(
-                        per_coord.run_params.global_semaphore_args, attrs, parked_semaphores.get()),
+                        per_coord.run_params.global_semaphore_args,
+                        attrs,
+                        parked_semaphores.get(),
+                        /*hit_overrides_run_args=*/has_override_runtime_arguments()),
                     .num_caller_global_semaphores = SpecBindingSupport::num_caller_global_semaphores(attrs),
                     .global_semaphores = parked_semaphores,
                     .per_device = state};
@@ -1837,7 +1849,10 @@ public:
                     .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
                         per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs),
                     .global_semaphore_bindings = SpecBindingSupport::resolve_global_semaphore_bindings(
-                        per_coord.run_params.global_semaphore_args, attrs, parked_semaphores.get()),
+                        per_coord.run_params.global_semaphore_args,
+                        attrs,
+                        parked_semaphores.get(),
+                        /*hit_overrides_run_args=*/has_override_runtime_arguments()),
                     .num_caller_global_semaphores = SpecBindingSupport::num_caller_global_semaphores(attrs),
                     .global_semaphores = parked_semaphores};
                 sv.cmd_list_bindings = SpecBindingSupport::template make_cmd_list_bindings<WorkloadSpecFactory>(

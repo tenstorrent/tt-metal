@@ -17,14 +17,16 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/memory/cross_program/global_semaphore.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <internal/mesh_device.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "ttnn/command_list.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
@@ -72,8 +74,9 @@ struct Attrs {
     uint32_t call = 0;  // not hashed
     // The caller's GlobalSemaphores, bound by position: not hashed, rebound on every cache hit.
     std::vector<GlobalSemaphore> global_semaphores;
-    // When set, the factory binds this instead of global_semaphores[0]. It is in neither place a binding may come
-    // from, so the cache miss throws. Hashed (by presence).
+    // When set, the factory binds this instead of global_semaphores[0]. It is in neither place the adapter rebinds
+    // from, so the cache miss throws unless the factory's override supplies its run args on every hit. Hashed (by
+    // presence).
     std::optional<GlobalSemaphore> stray;
 };
 struct Args {
@@ -219,21 +222,24 @@ protected:
         tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
     }
 
-    // The semaphore's value on kCore of every device.
-    std::vector<uint32_t> values(const GlobalSemaphore& semaphore) {
+    // The word at `address` on kCore of every device.
+    std::vector<uint32_t> values_at(tt::tt_metal::DeviceAddr address) {
         std::vector<uint32_t> out;
         for (const auto& coord : ttnn::MeshCoordinateRange(mesh_device_->shape())) {
             std::vector<uint32_t> word;
             tt::tt_metal::detail::ReadFromDeviceL1(
                 tt::tt_metal::internal::get_device(*mesh_device_, coord),
                 kCore,
-                static_cast<uint32_t>(semaphore.address()),
+                static_cast<uint32_t>(address),
                 sizeof(uint32_t),
                 word);
             out.push_back(word.at(0));
         }
         return out;
     }
+
+    // The semaphore's value on kCore of every device.
+    std::vector<uint32_t> values(const GlobalSemaphore& semaphore) { return values_at(semaphore.address()); }
 
     std::vector<uint32_t> all(uint32_t value) const {
         return std::vector<uint32_t>(mesh_device_->shape().mesh_size(), value);
@@ -296,6 +302,19 @@ protected:
         EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 0u);
         EXPECT_EQ(values(stray), all(0));
     }
+
+    // A factory whose override_runtime_arguments supplies its run args on every hit (as generic_op does) may bind a
+    // GlobalSemaphore the adapter cannot rebind: keeping it valid is the factory's business, as in legacy factories.
+    template <typename Factory>
+    void run_override_owned() {
+        const GlobalSemaphore caller = make_semaphore();
+        const GlobalSemaphore stray = make_semaphore();
+        launch<Factory>(Attrs{.global_semaphores = {caller}, .stray = stray});
+        launch<Factory>(Attrs{.call = 1, .global_semaphores = {caller}, .stray = stray});
+        EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1u);
+        EXPECT_EQ(values(stray), all(2));
+        EXPECT_EQ(values(caller), all(0));
+    }
 };
 
 TEST_F(SpecGlobalSemaphoresTest, SpmdHitRebindsCallerSemaphore) { run_rebinding<SpmdFactory, false>(); }
@@ -313,6 +332,36 @@ TEST_F(SpecGlobalSemaphoresTest, PerDeviceOverrideHitRebindsCallerAndKeepsParked
 
 TEST_F(SpecGlobalSemaphoresTest, SpmdMissRejectsStraySemaphore) { run_stray<SpmdFactory>(); }
 TEST_F(SpecGlobalSemaphoresTest, MeshMissRejectsStraySemaphore) { run_stray<MeshFactory>(); }
+TEST_F(SpecGlobalSemaphoresTest, CustomSpmdOverrideMayBindItsOwnSemaphore) { run_override_owned<CustomSpmdFactory>(); }
+TEST_F(SpecGlobalSemaphoresTest, MeshOverrideMayBindItsOwnSemaphore) { run_override_owned<MeshOverrideFactory>(); }
+
+// A recorded command list replays the parked semaphore's address, so it keeps the semaphore allocated until the list
+// is deallocated, even after the program cache that parked it is cleared.
+TEST_F(SpecGlobalSemaphoresTest, CommandListKeepsParkedSemaphoreAlive) {
+    const GlobalSemaphore caller = make_semaphore();
+    const Attrs attrs{.global_semaphores = {caller}};
+    const Args args = input();
+    ttnn::command_list::CommandListBuilder builder(*mesh_device_);
+    {
+        auto recording = builder.record_scope();
+        (void)ttnn::device_operation::launch<GlobalSemaphoreOp<MeshFactory>>(attrs, args);
+    }
+    const tt::tt_metal::DeviceAddr parked_address = parked_semaphore<MeshFactory>(attrs).address();
+    ttnn::command_list::CommandList command_list = builder.build(ttnn::QueueId{0});
+    builder.deallocate();
+    mesh_device_->clear_program_cache();
+
+    command_list.enqueue(/*blocking=*/true);
+    EXPECT_EQ(values(caller), all(1));
+    EXPECT_EQ(values_at(parked_address), all(1));
+
+    const auto l1_allocated = [&] {
+        return mesh_device_->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    };
+    const size_t l1_held = l1_allocated();
+    command_list.deallocate();
+    EXPECT_LT(l1_allocated(), l1_held) << "The list should hold the parked semaphore until it is deallocated";
+}
 
 // The caller's GlobalSemaphores are bound by position, so a hit must supply as many as the miss did.
 TEST_F(SpecGlobalSemaphoresTest, HitWithAnotherNumberOfCallerSemaphoresThrows) {

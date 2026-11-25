@@ -159,7 +159,8 @@ concept MeshWorkloadSpecFactoryConcept = requires {
 // in operation_attributes_t::prefetcher_pipes, which the cache hit rebinds them from. Likewise its
 // GlobalSemaphoreArguments name GlobalSemaphores in operation_attributes_t::global_semaphores (a
 // std::vector<GlobalSemaphore>), or, for a MeshWorkloadSpecFactoryConcept factory only, ones it allocates
-// in MeshWorkloadArtifacts::global_semaphores, which the program cache keeps allocated.
+// in MeshWorkloadArtifacts::global_semaphores, which the program cache keeps allocated. A factory whose
+// override_runtime_arguments supplies its run args on every hit (as generic_op does) may bind others.
 template <typename T>
 concept ProgramSpecFactoryConcept =
     requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&
