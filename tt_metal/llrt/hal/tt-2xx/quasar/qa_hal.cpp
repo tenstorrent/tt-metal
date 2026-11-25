@@ -371,9 +371,8 @@ public:
         if (hal_.quasar_arch_variant_ == IpVariant::HORIZON) {
             defines.push_back("IP_VARIANT_HORIZON");
         }
-        // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
-        // emulation by the same .so test. A mock device ignores the simulator path.
-        if (params.rtoptions.get_simulator_enabled() && params.rtoptions.get_simulator_path().extension() == ".so") {
+        // ttsim does not model the tensix global semaphore registers.
+        if (params.rtoptions.is_ttsim_simulator()) {
             defines.push_back("TT_METAL_TTSIM");
         }
         // The map comes from RunTimeOptions (TT_METAL_NOC_ATT, or the qsr.s1 default MetalEnvImpl

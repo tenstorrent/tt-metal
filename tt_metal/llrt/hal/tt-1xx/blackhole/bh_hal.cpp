@@ -175,9 +175,8 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_BLACKHOLE");
-        // ttsim does not model every config register (PACK_GLOBAL_CFG_CTL). UMD picks ttsim over RTL emulation by
-        // the same .so test.
-        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+        // ttsim does not model every config register (PACK_GLOBAL_CFG_CTL).
+        if (params.rtoptions.is_ttsim_simulator()) {
             defines.push_back("TT_METAL_TTSIM");
         }
         // Push back the physical erisc id
