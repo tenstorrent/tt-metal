@@ -1,0 +1,42 @@
+{
+  "op": "all_gather_rms_norm",
+  "cases": {
+    "73e2c368790d": {
+      "label": "indexer_k_640x32",
+      "inputs": [[1, 1, 640, 32]],
+      "axes": {
+        "dtype": "DataType.BFLOAT16",
+        "fp32_dest_acc_en": false,
+        "layout": "Layout.TILE",
+        "gamma_mode": "gamma",
+        "gamma_dtype": "DataType.BFLOAT16",
+        "gamma_layout": "Layout.TILE",
+        "norm_type": "layer_norm",
+        "beta_mode": "beta",
+        "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+        "output_placement": "dram_interleaved",
+        "cluster_axis": 1,
+        "topology": "Topology.Ring",
+        "num_links": 2
+      },
+      "placement": {"fabric_config": "FabricConfig.FABRIC_2D_TORUS_XY", "mesh_shape": [1, 4]},
+      "compute": {"epsilon": 1e-06, "math_approx_mode": false, "math_fidelity": "MathFidelity.HiFi2"},
+      "data": {"gamma_dist": "randn", "ln_row_offset_scale": 2.0, "seed": 0, "x_dist": "randn"},
+      "pass": {"pcc": null, "rel_rms": null}
+    }
+  },
+  "results": [
+    {
+      "case": "73e2c368790d",
+      "date": "2026-11-25",
+      "board": {"arch": "blackhole", "dram_channels": 8, "grid": [11, 10]},
+      "method": "device_kernel",
+      "k": 5,
+      "ns_median": 32011.5,
+      "ns_min": 31310.7,
+      "ns_max": 33947.8,
+      "pcc": null,
+      "sol_ns": null
+    }
+  ]
+}
