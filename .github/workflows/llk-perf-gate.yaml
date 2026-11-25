@@ -495,7 +495,10 @@ jobs:
           LLK_PERF_PHASE=compile LLK_PERF_COMPILE_WORKERS="$(nproc)" "./tests/run_llk_perf_${CHIP_ARCH}.sh" 1 1
           python3 perf/merge_gate_cover.py --map "$LLK_PERF_COVER_MAP" --arch "$CHIP_ARCH" \
             --prod perf/merge_gate_prod_configs.json --list "perf/merge_gate_nodes_${CHIP_ARCH}.txt" \
-            --out "$RUNNER_TEMP/cover/merge_gate_nodes_${CHIP_ARCH}.txt"
+            --out "$RUNNER_TEMP/cover/merge_gate_nodes_${CHIP_ARCH}.txt" || {
+            echo "::error::The merge gate's node list misses tests. Commit merge-gate-nodes-${CHIP_ARCH} as tt_metal/tt-llk/perf/merge_gate_nodes_${CHIP_ARCH}.txt."
+            exit 1
+          }
       - name: Upload the refreshed list
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
