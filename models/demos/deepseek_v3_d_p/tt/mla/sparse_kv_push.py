@@ -162,6 +162,34 @@ class SparseKvPushPlanner:
             )
         return self._managers[query_rows]
 
+    def q_stem_grids(self):
+        """(q stem, push) core grids for a shared layer's rest push beside its q stem: the push on one link's cores in
+        the bottom rows of the last columns (where the prefix push runs beside attention), the q stem on every other
+        core. q_stem_columns is how many whole columns the q stem keeps, for rectangular matmul grids."""
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        push_cores = self.prefetch_links * PUSH_CORES_PER_LINK
+        push_cols = divup(push_cores, grid.y)
+        push_rows = divup(push_cores, push_cols)
+        x0, y0 = grid.x - push_cols, grid.y - push_rows
+        push = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        q_stem = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x0 - 1, grid.y - 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(x0, 0), ttnn.CoreCoord(grid.x - 1, y0 - 1)),
+            ]
+        )
+        self.q_stem_columns = x0
+        return q_stem, push
+
+    def q_stem_manager(self):
+        """Sub-device manager of q_stem_grids (q stem on sub-device 0, push on 1), created on first use."""
+        if "q_stem" not in self._managers:
+            q_stem, push = self.q_stem_grids()
+            self._managers["q_stem"] = self.mesh_device.create_sub_device_manager(
+                [ttnn.SubDevice([q_stem]), ttnn.SubDevice([push])], 0
+            )
+        return self._managers["q_stem"]
+
     def release(self):
         """Unregister the sub-device managers before the mesh closes."""
         if self._managers:

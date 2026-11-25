@@ -455,6 +455,7 @@ class ttMLA:
         # Optional segmented-trace controller. Sparse MLA uses it to split capture around the
         # top-k/KV-gather sub-device-manager load and clear, which cannot occur inside one trace.
         self._trace_controller = None
+        self._stem_cores = None  # the q stem's cores while a shared layer's rest push runs beside it
         self.layer_idx = layer_idx
         self._first_layer_idx = first_layer_idx or 0  # this pipeline stage's first layer
         self.kv_only = kv_only
@@ -1100,6 +1101,42 @@ class ttMLA:
             "compute_kernel_config": self._tuned_compute_kernel_config(cfg),
         }
 
+    def _stem_mm_kwargs(self, kwargs: dict) -> dict:
+        """kwargs, with the program fitted to the q stem's columns while a rest push runs beside it (_stem_cores):
+        the same per-core blocks over fewer columns, so each core reduces K exactly as before."""
+        pc = kwargs.get("program_config")
+        if self._stem_cores is None or pc is None:
+            return kwargs
+        cols = self._push.q_stem_columns
+        grid = ttnn.CoreCoord(cols, pc.compute_with_storage_grid_size.y)
+        if isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig):  # 2D: N spread over the columns
+            per_core_n = -(-pc.per_core_N * pc.compute_with_storage_grid_size.x // cols)
+            # The widest subblock (no wider than before) that divides the new width, so no column idles.
+            subblock_w = max(w for w in range(1, pc.out_subblock_w + 1) if per_core_n % w == 0)
+            pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid,
+                in0_block_w=pc.in0_block_w,
+                out_subblock_h=pc.out_subblock_h,
+                out_subblock_w=subblock_w,
+                per_core_M=pc.per_core_M,
+                per_core_N=per_core_n,
+                transpose_mcast=pc.transpose_mcast,
+                fuse_batch=pc.fuse_batch,
+                fused_activation=pc.fused_activation,
+            )
+        elif isinstance(pc, ttnn.MatmulMultiCoreReuseProgramConfig):  # batched: blocks dealt over the grid
+            pc = ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=grid,
+                in0_block_w=pc.in0_block_w,
+                out_subblock_h=pc.out_subblock_h,
+                out_subblock_w=pc.out_subblock_w,
+                per_core_M=pc.per_core_M,
+                per_core_N=pc.per_core_N,
+            )
+        else:
+            raise ValueError(f"no q-stem column fit for {type(pc).__name__}")
+        return {**kwargs, "program_config": pc}
+
     def _tuned_compute_kernel_config(self, cfg: dict):
         """HiFi2 bf16 dest by default; ``fp32_dest_acc`` -> fp32 dest; ``math_fidelity`` HiFi3 (fp32 dest only)."""
         fidelity = cfg.get("math_fidelity", ttnn.MathFidelity.HiFi2)
@@ -1234,6 +1271,7 @@ class ttMLA:
             row_major_output=row_major_output,
             compute_kernel_config=compute_kernel_config,
             memory_config=memory_config,
+            sub_core_grids=self._stem_cores,
         )
 
     def _apply_rope_none(
@@ -1595,9 +1633,7 @@ class ttMLA:
                 ttnn.deallocate(qr)
             qr, qr_borrowed = scaled, False
         tt_q = ttnn.linear(
-            qr,
-            self.q_b_proj_weight,
-            **self._get_mm_kwargs("q_b_proj", seq_len_local),
+            qr, self.q_b_proj_weight, **self._stem_mm_kwargs(self._get_mm_kwargs("q_b_proj", seq_len_local))
         )
         if not qr_borrowed:
             ttnn.deallocate(qr)
@@ -1660,10 +1696,13 @@ class ttMLA:
             num_heads=self.num_heads,
             split_head_dim=self.qk_nope_head_dim,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sub_core_grids=self._stem_cores,
         )
         ttnn.deallocate(q_seq)
         # wkv_b1 holds every head here (replicate_wkv_b1).
-        prefix = ttnn.linear(nope_seq, self.wkv_b1_weight, **self._early_q_wkv_b1_kwargs(seq_len_local))
+        prefix = ttnn.linear(
+            nope_seq, self.wkv_b1_weight, **self._stem_mm_kwargs(self._early_q_wkv_b1_kwargs(seq_len_local))
+        )
         ttnn.deallocate(nope_seq)
         if self._use_nope:
             # Identity rotation: the scalar start 0 indexes the one-slab table on every chunk, so no metadata.
@@ -2258,19 +2297,43 @@ class ttMLA:
         if qr_local is not None:
             qr = self._gather_tp_rows(qr_local, seq_len_local)
             ttnn.deallocate(qr_local)
-        tt_q = self._q_stem(
-            qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata, qr_borrowed=self._is_q_gather_buffer(qr)
-        )
-        tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
-            hidden_states,
-            rope_tensors,
-            kv_actual_isl,
-            seq_len_local,
-            return_kv_intermediates,
-            kvpe_cache,
-            metadata=metadata,
-            kv_a=kv_a,
-        )
+        pushed = None
+        if indexer_indices is not None and self._push_own_layer and self._push.prefetched.get(self.layer_idx):
+            # The previous step pre-sent this layer's prefix: push the rest beside the q stem.
+            tt_q, tt_kvpe, tt_kv_nope, kv_intermediates, pushed = self._stems_with_rest_push(
+                hidden_states=hidden_states,
+                qr=qr,
+                rope_tensors=rope_tensors,
+                indices=indexer_indices,
+                kvpe_cache=kvpe_cache,
+                kv_actual_isl=kv_actual_isl,
+                cache_layer_idx=cache_layer_idx,
+                cache_user_id=cache_user_id,
+                seq_len_local=seq_len_local,
+                actual_end=actual_end,
+                metadata=metadata,
+                return_kv_intermediates=return_kv_intermediates,
+                kv_a=kv_a,
+            )
+        else:
+            tt_q = self._q_stem(
+                qr,
+                rope_tensors,
+                kv_actual_isl,
+                seq_len_local,
+                metadata=metadata,
+                qr_borrowed=self._is_q_gather_buffer(qr),
+            )
+            tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
+                hidden_states,
+                rope_tensors,
+                kv_actual_isl,
+                seq_len_local,
+                return_kv_intermediates,
+                kvpe_cache,
+                metadata=metadata,
+                kv_a=kv_a,
+            )
 
         attention_kwargs = dict(
             tt_q=tt_q,
@@ -2286,6 +2349,7 @@ class ttMLA:
             metadata=metadata,
             injected=indexer_indices is not None,
             next_step=next_step,
+            pushed=pushed,
         )
         if selection_state is not None:
             attn_out, indices = self._sparse_chunked_attn_overlapped(
@@ -2392,11 +2456,13 @@ class ttMLA:
         metadata=None,
         injected=False,
         next_step=SAME_CHUNK_NEXT_LAYER,
+        pushed=None,
         **_,
     ):
         assert indices is not None, "sparse MLA forward requires indexer top-k indices"
         if injected and self._push is not None:  # fed another layer's top-k: a shared layer
             return self._sparse_pushed_attn(
+                pushed=pushed,
                 next_step=next_step,
                 tt_q=tt_q,
                 tt_kvpe=tt_kvpe,
@@ -2434,6 +2500,77 @@ class ttMLA:
             seq_len_local=seq_len_local,
         )
 
+    def _stems_with_rest_push(
+        self,
+        *,
+        hidden_states,
+        qr,
+        rope_tensors,
+        indices,
+        kvpe_cache,
+        kv_actual_isl,
+        cache_layer_idx,
+        cache_user_id,
+        seq_len_local,
+        actual_end,
+        metadata,
+        return_kv_intermediates,
+        kv_a,
+    ):
+        """A shared layer's stems when the previous step pre-sent its prefix: the KV stem and its cache write first,
+        then the rest push (one link, on the prefix push's cores) beside the q stem (every other core). The rest
+        push needs only this chunk's KV and the cached plan, and the q stem needs neither. Returns the stems'
+        outputs and _push_own_rows' result for _sparse_pushed_attn."""
+        tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
+            hidden_states,
+            rope_tensors,
+            kv_actual_isl,
+            seq_len_local,
+            return_kv_intermediates,
+            kvpe_cache,
+            metadata=metadata,
+            kv_a=kv_a,
+        )
+        cache_batch_idx, _ = self._prepare_sparse_kv_prefix(
+            tt_kvpe=tt_kvpe,
+            kvpe_cache=kvpe_cache,
+            cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
+            kv_actual_isl=kv_actual_isl,
+            seq_len_local=seq_len_local,
+            actual_end=actual_end,
+            metadata=metadata,
+        )
+        q_cores, push_cores = self._push.q_stem_grids()
+        with self._sub_device_manager(self._push.q_stem_manager()):
+            pushed = self._push_own_rows(
+                tt_kvpe=None,
+                indices=indices,
+                kvpe_cache=kvpe_cache,
+                kv_actual_isl=kv_actual_isl,
+                cache_layer_idx=cache_layer_idx,
+                cache_user_id=cache_user_id,
+                seq_len_local=seq_len_local,
+                actual_end=actual_end,
+                metadata=metadata,
+                core_grid=push_cores,
+                num_links=self._push.prefetch_links,
+                cache_batch_idx=cache_batch_idx,
+            )
+            self._stem_cores = q_cores
+            try:
+                tt_q = self._q_stem(
+                    qr,
+                    rope_tensors,
+                    kv_actual_isl,
+                    seq_len_local,
+                    metadata=metadata,
+                    qr_borrowed=self._is_q_gather_buffer(qr),
+                )
+            finally:
+                self._stem_cores = None
+        return tt_q, None, tt_kv_nope, kv_intermediates, pushed
+
     def _sparse_pushed_attn(
         self,
         *,
@@ -2448,19 +2585,75 @@ class ttMLA:
         actual_end=None,
         metadata=None,
         next_step=SAME_CHUNK_NEXT_LAYER,
+        pushed=None,
     ):
         """Sparse attention over only the KV rows `indices` reference, pushed by their owners into a compact buffer.
-        Trace-safe on the metadata path: the KV write, chunk start and pushed slot are all read on device."""
-        cache_batch_idx, _ = self._prepare_sparse_kv_prefix(
-            tt_kvpe=tt_kvpe,
+        Trace-safe on the metadata path: the KV write, chunk start and pushed slot are all read on device.
+
+        pushed: what _push_own_rows returned when it already ran (beside the q stem); else it runs here."""
+        if pushed is None:
+            pushed = self._push_own_rows(
+                tt_kvpe=tt_kvpe,
+                indices=indices,
+                kvpe_cache=kvpe_cache,
+                kv_actual_isl=kv_actual_isl,
+                cache_layer_idx=cache_layer_idx,
+                cache_user_id=cache_user_id,
+                seq_len_local=seq_len_local,
+                actual_end=actual_end,
+                metadata=metadata,
+            )
+        cache_batch_idx, plan, parity, compact = pushed
+        return self._finish_sparse_chunked_attn(
+            tt_q=tt_q,
+            kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry),
+            indices=plan.compact_indices,
             kvpe_cache=kvpe_cache,
-            cache_user_id=cache_user_id,
-            cache_layer_idx=cache_layer_idx,
-            kv_actual_isl=kv_actual_isl,
             seq_len_local=seq_len_local,
-            actual_end=actual_end,
-            metadata=metadata,
+            prefetch=self._presend(
+                next_step,
+                own_indices=indices,
+                own_parity=parity,
+                kvpe_cache=kvpe_cache,
+                cache_batch_idx=cache_batch_idx,
+                cache_layer_idx=cache_layer_idx,
+                cache_user_id=cache_user_id,
+                kv_actual_isl=kv_actual_isl,
+                metadata=metadata,
+            ),
+            compact=True,
         )
+
+    def _push_own_rows(
+        self,
+        *,
+        tt_kvpe,
+        indices,
+        kvpe_cache,
+        kv_actual_isl,
+        cache_layer_idx,
+        cache_user_id,
+        seq_len_local,
+        actual_end=None,
+        metadata=None,
+        core_grid=None,
+        num_links=None,
+        cache_batch_idx=None,
+    ):
+        """Writes this chunk's KV (unless cache_batch_idx says it is written) and pushes the rows `indices` need that
+        the previous step's pre-send did not (the rest), or all of them. Returns (cache slot, plan, buffer parity,
+        compact buffer)."""
+        if cache_batch_idx is None:
+            cache_batch_idx, _ = self._prepare_sparse_kv_prefix(
+                tt_kvpe=tt_kvpe,
+                kvpe_cache=kvpe_cache,
+                cache_user_id=cache_user_id,
+                cache_layer_idx=cache_layer_idx,
+                kv_actual_isl=kv_actual_isl,
+                seq_len_local=seq_len_local,
+                actual_end=actual_end,
+                metadata=metadata,
+            )
         # The plan takes this chip's query rows as they are; injected indices covering more rows would overflow the
         # compact buffer sized from them.
         expected_shape = self.indexer_indices_shape()
@@ -2482,31 +2675,14 @@ class ttMLA:
             stripe_chunk=plan.stripe_chunk,
             max_rows=plan.max_rows,
             part=part,
-            num_links=self.ccl_num_links,
+            num_links=num_links or self.ccl_num_links,
             sp_axis=self.sp_axis,
             **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
             ready_semaphore=self._push.ready_semaphore,
             done_semaphore=self._push.done_semaphore,
+            **({"core_grid": core_grid} if core_grid is not None else {}),
         )
-        return self._finish_sparse_chunked_attn(
-            tt_q=tt_q,
-            kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry),
-            indices=plan.compact_indices,
-            kvpe_cache=kvpe_cache,
-            seq_len_local=seq_len_local,
-            prefetch=self._presend(
-                next_step,
-                own_indices=indices,
-                own_parity=parity,
-                kvpe_cache=kvpe_cache,
-                cache_batch_idx=cache_batch_idx,
-                cache_layer_idx=cache_layer_idx,
-                cache_user_id=cache_user_id,
-                kv_actual_isl=kv_actual_isl,
-                metadata=metadata,
-            ),
-            compact=True,
-        )
+        return cache_batch_idx, plan, parity, compact
 
     def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata):
         """Cache slot of a push. On the metadata path it is recomposed on device from the user id tensor, so a captured
