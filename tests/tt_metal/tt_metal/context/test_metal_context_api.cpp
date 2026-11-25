@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 #include <thread>
+#include <cstdio>
 #include <cstdlib>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -261,6 +262,40 @@ TEST_F(MetalContextTest, MaxContexts) {
     for (auto id : context_ids) {
         MetalContext::destroy_instance(false, id);
     }
+}
+
+// Stands in for a static that opening a silicon cluster constructs and ~Cluster still uses, such as UMD's per-arch TLB
+// tables (built by the first PCIDevice). At exit, MetalContext's teardown must run before its destructor.
+struct StaticBuiltBySiliconOpen {
+    ~StaticBuiltBySiliconOpen() {
+        if (MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+            std::fputs("silicon MetalContext outlived a static built when its cluster opened\n", stderr);
+            std::_Exit(3);
+        }
+    }
+};
+
+// A mock context created first registers the exit teardown before any silicon cluster opens. The teardown must still
+// run before the statics that the later silicon open constructs.
+TEST_F(MetalContextTest, ExitTeardownRunsBeforeStaticsBuiltBySiliconOpenAfterMock) {
+    // A fresh image: the exit handlers are registered once per process, and a forked child of this multithreaded
+    // process must not open silicon.
+    const auto death_test_style = GTEST_FLAG_GET(death_test_style);
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    auto mock_then_silicon_then_exit = []() {
+        MetalEnv mock_env(
+            {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
+        MetalContext::destroy_instance(false, MetalContext::create_instance(mock_env));
+
+        // Constructed after the statics its cluster builds, so it is destroyed before them, and after the exit
+        // teardown has destroyed its context: ~Cluster then runs with UMD's statics still alive.
+        static const auto silicon_env = std::make_unique<MetalEnv>();
+        [[maybe_unused]] static const StaticBuiltBySiliconOpen built_by_silicon_open;
+        MetalContext::create_instance(*silicon_env);
+        std::exit(0);
+    };
+    EXPECT_EXIT(mock_then_silicon_then_exit(), ::testing::ExitedWithCode(0), "");
+    GTEST_FLAG_SET(death_test_style, death_test_style);
 }
 
 TEST_F(MetalContextTest, ReuseEnvAfterDestroy) {

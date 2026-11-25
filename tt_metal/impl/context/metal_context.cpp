@@ -67,8 +67,23 @@ std::atomic<MetalEnv*> g_default_env =
     nullptr;  // used for implicit creation of the default context -- legacy behaviour
 std::mutex g_instance_mutex;
 bool registered_handlers = false;
+// Whether the exit teardown was registered while a silicon cluster was open (see register_handlers_locked).
+bool teardown_registered_after_silicon_open = false;
 
 namespace {
+
+// Destroys every MetalContext still alive at exit. atexit handlers and static destructors run in reverse order of
+// registration and construction, so this runs before the destructors of statics that already exist now.
+void register_exit_teardown() {
+    std::atexit([]() {
+        // Don't check device count because the destruction order is complicated and we can't guarantee that the
+        // client isn't holding onto devices on process exit.
+        MetalContext::destroy_all_instances(false);
+    });
+    // Registered after the teardown so it runs before it, and a signal arriving during that teardown bounds it
+    // instead of starting a second exit.
+    install_simulator_exit_guard();
+}
 
 void check_context_id(ContextId context_id) {
     TT_FATAL(context_id.get() >= 0, "context_id {} is invalid.", context_id);
@@ -429,8 +444,8 @@ MetalContext& MetalContext::instance(ContextId context_id) {
             }
         }
         create_default_instance_implicit_locked();
-        register_handlers_locked();
         instance = g_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire);
+        register_handlers_locked(/*silicon_cluster_open=*/!instance->rtoptions().get_mock_enabled());
     }
     return *instance;
 }
@@ -456,10 +471,12 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
 
 ContextId MetalContext::create_instance(MetalEnv& env_to_use) {
     std::lock_guard lock(g_instance_mutex);
-    register_handlers_locked();
+    // The env's cluster is already open: MetalEnv opens it on construction.
+    const bool silicon = !MetalEnvAccessor(env_to_use).impl().get_rtoptions().get_mock_enabled();
+    register_handlers_locked(/*silicon_cluster_open=*/silicon);
 
     // Allow only one instance connected to a silicon cluster
-    if (!MetalEnvAccessor(env_to_use).impl().get_rtoptions().get_mock_enabled()) {
+    if (silicon) {
         if (g_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire) != nullptr) {
             TT_THROW("Only one silicon MetalContext instance may exist; context_id 0 is already in use.");
         }
@@ -499,20 +516,21 @@ void MetalContext::destroy_all_instances(bool check_device_count) {
     }
 }
 
-void MetalContext::register_handlers_locked() {
+void MetalContext::register_handlers_locked(bool silicon_cluster_open) {
     if (!registered_handlers) {
-        // Registered first so it runs after destroy_all_instances.
+        // Registered first so it runs after every exit teardown.
         install_simulator_termination_handler();
-        std::atexit([]() {
-            // Don't check device count because the destruction order is complicated and we can't guarantee that the
-            // client isn't holding onto devices on process exit.
-            MetalContext::destroy_all_instances(false);
-        });
-        // Registered last so it runs before destroy_all_instances, and a signal arriving during that
-        // teardown bounds it instead of starting a second exit.
-        install_simulator_exit_guard();
+        register_exit_teardown();
         registered_handlers = true;
+    } else if (silicon_cluster_open && !teardown_registered_after_silicon_open) {
+        // A mock context registered the teardown before any silicon cluster was opened. Opening one constructs
+        // statics that ~Cluster still uses, such as UMD's per-arch TLB tables (built by the first PCIDevice), and
+        // those would be destroyed before that teardown runs: ~Cluster then fails in PCIDevice::configure_tlb ("No
+        // TLB window with index 1") and terminates the process. Register the teardown again so it runs first.
+        // destroy_all_instances is idempotent, so the earlier registration then finds nothing left to destroy.
+        register_exit_teardown();
     }
+    teardown_registered_after_silicon_open = teardown_registered_after_silicon_open || silicon_cluster_open;
 }
 
 void MetalContext::teardown_dispatch_state() {

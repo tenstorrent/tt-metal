@@ -36,7 +36,6 @@ AtomicFlag exit_in_progress{0};
 AtomicFlag teardown_tid{0};
 sem_t shutdown_semaphore;
 bool handlers_installed = false;
-bool exit_guard_installed = false;
 bool installed_sigint = false;
 bool installed_sigterm = false;
 
@@ -294,11 +293,11 @@ void install_simulator_termination_handler() {
 }
 
 void install_simulator_exit_guard() {
-    if (exit_guard_installed || !simulator_configured()) {
+    if (!simulator_configured()) {
         return;
     }
-    exit_guard_installed = true;
-    // Registered after MetalContext's teardown, so it runs before it.
+    // Registered after each MetalContext teardown handler, so one runs before each of them. Running it
+    // more than once is harmless.
     std::atexit(note_exit_started);
 }
 
