@@ -57,7 +57,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
 
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         static_assert(!acc_to_dest, "acc_to_dest is supported only for unary broadcast");
-        // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
+        // Unpack-to-dest: the unpacker writes Dest under a loan, so math has nothing to do.
         if constexpr (!unpack_to_dest) {
             _llk_math_eltwise_unary_datacopy_init_<type, EN_32BIT_DEST>(
                 num_rows /*num_rows_per_matrix*/, 1 /*num_matrices*/);
@@ -80,7 +80,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
  * @brief Performs an eltwise unary datacopy for a single tile.
  *
  * For the non-broadcast path, when `unpack_to_dest` is true the unpacker writes DEST directly and
- * math is a sync-only forwarder; no MOP is run.
+ * this call does nothing. The kernel must wrap the copy in tile_regs_borrow and tile_regs_return.
  *
  * @tparam type sets which src register to copy from, values = <A2D, B2D>
  * @tparam EN_32BIT_DEST set if math destination register is set to Float32/Int32 mode
@@ -108,7 +108,7 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
             "llk_math_eltwise_unary_datacopy: dst_index exceeds dest capacity");
         _llk_math_eltwise_unary_broadcast_<false /*unpack_to_dest*/>(dst_index);
     } else {
-        // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
+        // Unpack-to-dest: the unpacker writes Dest under a loan, so math has nothing to do.
         if constexpr (!unpack_to_dest) {
             LLK_ASSERT(
                 (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
@@ -121,8 +121,8 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
 /**
  * @brief Performs an eltwise unary datacopy for a block of tiles.
  *
- * When `unpack_to_dest` is true the unpacker writes DEST directly and math is a sync-only forwarder;
- * no MOP is run.
+ * When `unpack_to_dest` is true the unpacker writes DEST directly and this call does nothing. The
+ * kernel must wrap the copy in tile_regs_borrow and tile_regs_return.
  *
  * @param start_dst_index Starting tile index in the destination register.
  * @param ntiles Number of tiles to copy to the destination register.
@@ -140,7 +140,7 @@ inline void llk_math_eltwise_unary_datacopy_block(
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const std::uint32_t num_rows = num_faces * face_r_dim;
 
-    // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
+    // Unpack-to-dest: the unpacker writes Dest under a loan, so math has nothing to do.
     if constexpr (!unpack_to_dest) {
         LLK_ASSERT(
             (start_dst_index + ntiles <= get_dest_max_tiles<DST_SYNC_MODE, EN_32BIT_DEST>()),
