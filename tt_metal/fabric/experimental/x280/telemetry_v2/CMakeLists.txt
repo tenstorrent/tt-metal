@@ -5,6 +5,7 @@
 # Firmware image. Produces ${X280_IMAGE_DIR}/firmware-telemetry-v2.bin.
 # x280_add_image resolves relative SOURCES against x280/, so pass an absolute path.
 x280_add_image(NAME firmware-telemetry-v2 STANDALONE SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/telemetry_firmware.c)
+x280_add_image(NAME firmware-telemetry-socket STANDALONE SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/telemetry_firmware_socket.c)
 
 # Host loader for the standalone telemetry firmware.
 add_executable(x280_telemetry_v2_loader host/loader.cpp)
@@ -54,6 +55,26 @@ target_link_libraries(
         TT::Metalium
 )
 
+# Socket test app: host side of the D2HSocket push experiment.
+add_executable(x280_telemetry_host_socket host/telemetry_host_socket.cpp)
+
+target_include_directories(
+    x280_telemetry_host_socket
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/device
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+)
+
+target_link_libraries(
+    x280_telemetry_host_socket
+    PRIVATE
+        x280_device
+        TT::Metalium
+)
+	    
+
 # FTXUI for the terminal UI. Only x280_telemetry_tui links it; nothing else in Metal does.
 if(NOT TARGET ftxui::screen)
     CPMAddPackage(
@@ -97,3 +118,4 @@ target_compile_definitions(x280_telemetry_v2_loader PRIVATE X280_IMAGE_DIR="${X2
 
 # Building the loader also builds the firmware image it will load.
 add_dependencies(x280_telemetry_v2_loader x280_image_firmware-telemetry-v2)
+add_dependencies(x280_telemetry_v2_loader x280_image_firmware-telemetry-socket)
