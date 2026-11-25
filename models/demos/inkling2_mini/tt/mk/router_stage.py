@@ -65,12 +65,35 @@ class RouterStage:
             lay.moe.router = _Call(self, lay.moe.router)
         self.prev = OV._orig_generic_op
         OV._orig_generic_op = self._op
+        self._held = None  # (L1 address, host copy, memory config, shape) at a step boundary, from the first suspend()
+        self.suspended = False
 
     def uninstall(self):
         OV._orig_generic_op = self.prev
         for lay in self.layers:
             lay.moe.router = self.calls[lay.L]
+        if not self.suspended:
+            ttnn.deallocate(self.stage)
+
+    def suspend(self):
+        """As Overlap.suspend (the hooks go off there): free the stage's L1 between two decode steps."""
+        if self._held is None:
+            st = self.stage
+            self._held = (st.buffer_address(), ttnn.from_device(st), st.memory_config(), st.shape)
+        self.suspended = True
         ttnn.deallocate(self.stage)
+
+    def resume(self, retake):
+        """As Overlap.resume: the stage back at its address with its step-boundary content, or False."""
+        addr, host, mem, shape = self._held
+        dev = self.model.device
+        make = lambda: ttnn.allocate_tensor_on_device(shape, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, dev, mem)  # noqa: E731
+        stage = retake(make, lambda t: t.buffer_address(), ttnn.deallocate, addr)
+        if stage is None:
+            return False
+        ttnn.copy_host_to_device_tensor(host, stage)
+        self.stage, self.suspended = stage, False
+        return True
 
     def fill_kernels(self, router):
         """The router's W tiles of every core: k 0..kt/2-1 on the reader RISC, the rest on the writer RISC."""

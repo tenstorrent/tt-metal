@@ -70,7 +70,9 @@ class ExpertOverlap:
         layers = sorted({L for L, _ in self.apps})
         self.orig = {L: model.layers[L].moe.fused for L in layers}
         assert all(getattr(e, "pf", False) for e in self.orig.values()), "needs a PF-layout cache"
-        self.ep = ExpertPipe(dev, list(self.orig.values()), ring_kb << 10)
+        self.ring_bytes, self.mpfe = ring_kb << 10, dict(mpfe or {})
+        self._at = None  # (ring, config) L1 addresses while suspended
+        self.ep = ExpertPipe(dev, list(self.orig.values()), self.ring_bytes)
         b8 = ttnn.bfloat8_b
         g = {"BFP8": 2, "BFP4": 2, **(guesses or {})}
         self.n_guess = {}
@@ -90,7 +92,7 @@ class ExpertOverlap:
             prev = [b for b in range(a) if self.apps[b][0] == L]
             self.src.append(prev[-1] if prev and mode == "pass" else a)
         self.i, self.n = 0, 0
-        self.ep.start(**(mpfe or {}))
+        self.ep.start(**self.mpfe)
         ttnn.synchronize_device(dev)
         self._request(0)
         for L in layers:
@@ -132,6 +134,49 @@ class ExpertOverlap:
 
     def uninstall(self, model):
         assert self.i == 0, "uninstall between decode steps only"
+        if self.ep is not None:
+            self._drain(model)
+        for L, e in self.orig.items():
+            model.layers[L].moe.fused = e
+            e.ring = None
+        for L, lin in self.wrapped.items():
+            setattr(model.layers[L].attn, self.proj, lin)
+        for st in self.staged:
+            st.signal = None
+        for t in self.masks:
+            ttnn.deallocate(t)
+        if self.ep is not None:
+            self.ep.release()
+
+    # Between two decode steps, around a chunked prefill (which needs the ring's L1): suspend() takes the queued
+    # request and frees the ring, resume() makes the pipes again at the same L1 addresses (the traces' expert
+    # steps and prefetch requests carry them), starts the prefetcher and queues app 0's request as __init__ does.
+    def suspend(self, model):
+        assert self.i == 0, "suspend between decode steps only"
+        self._drain(model)
+        self._at = (self.ep.space.buffer_address(), self.ep.space.config_address())
+        for e in self.orig.values():
+            e.ring = None
+        self.ep.release()
+        self.ep = None
+
+    def resume(self, retake):
+        """retake: see tt/mk/overlap.Overlap.resume. False: the ring is not back (still suspended)."""
+        make = lambda: ExpertPipe(self.device, list(self.orig.values()), self.ring_bytes)  # noqa: E731
+        at = lambda p: (p.space.buffer_address(), p.space.config_address())  # noqa: E731
+        ep = retake(make, at, lambda p: p.release(), self._at)
+        if ep is None:
+            for e in self.orig.values():
+                e.ring = None
+            return False
+        self.ep = ep
+        ep.start(**self.mpfe)
+        ttnn.synchronize_device(self.device)
+        self._request(0)
+        return True
+
+    def _drain(self, model):
+        """Take the queued request for app 0 and stop the prefetcher."""
         # the queued request for app 0: run app 0's step once more (output dropped) so its slabs are popped
         L = self.apps[0][0]
         ex = self.orig[L]
@@ -153,16 +198,6 @@ class ExpertOverlap:
         self.ep.stop()
         for t in (x, w, ids):
             ttnn.deallocate(t)
-        for L, e in self.orig.items():
-            model.layers[L].moe.fused = e
-            e.ring = None
-        for L, lin in self.wrapped.items():
-            setattr(model.layers[L].attn, self.proj, lin)
-        for st in self.staged:
-            st.signal = None
-        for t in self.masks:
-            ttnn.deallocate(t)
-        self.ep.release()
 
     def abort(self, model):
         """After an error mid-step: try to drain the queued request and stop the prefetcher, so the device can close

@@ -1740,6 +1740,19 @@ class Inkling2Prefill:
         self._traces.clear()
         self._warm.clear()
 
+    def drop_buffers(self):
+        """Release the chunk traces and the per-shape input buffers (made again on their next use). A process
+        whose decode traces stay across a prefill calls it after each prefill: a buffer kept from one prefill to
+        the next can sit where a decode replay writes (memory the decode capture freed again)."""
+        self.release_traces()
+        for b in self._in.values():
+            for v in b.values():
+                for t in v if isinstance(v, list) else [v]:
+                    if isinstance(t, ttnn.Tensor):
+                        ttnn.deallocate(t)
+        self._in.clear()
+        self._cur = None
+
     def _mem_print(self):
         views = [ttnn.get_memory_view(self.device, bt) for bt in (ttnn.BufferType.DRAM, ttnn.BufferType.L1)]
         return tuple(v.total_bytes_allocated_per_bank for v in views)

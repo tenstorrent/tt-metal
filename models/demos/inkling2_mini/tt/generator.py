@@ -10,8 +10,12 @@ from __future__ import annotations
 import os
 import time
 
+from loguru import logger
+
 import ttnn
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv as ShortConv
+
+L1_UNIT = 64  # the L1 allocator's size unit on a p100a (a 48 B request takes 64 B)
 
 
 def _pf_cache(model):
@@ -40,6 +44,8 @@ class Generator:
         self.out = None  # [phase] -> output dict
         self.overlap = None  # tt/mk/overlap.Overlap while installed (capture .. release)
         self.router_stage = None  # tt/mk/router_stage.RouterStage, same lifetime
+        self.suspended = False  # between suspend() and a resume() that returned True
+        self._pads = []  # L1 tensors that keep the room of what suspend() freed and resume() did not take again
 
     def capture(self):
         """Compile eagerly once (program cache), then capture one full decode step per conv phase."""
@@ -119,11 +125,133 @@ class Generator:
         ttnn.execute_trace(self.device, self.trace[ph], cq_id=0, blocking=False)
         return self.out[ph]
 
+    # A chunked prefill with the traces kept. Its programs need the L1 of the staging, the expert prefetch ring
+    # and the expert steps' output rows, and a trace carries the L1 addresses it was captured with. So:
+    #     gen.suspend(); prefill; if not gen.resume(): gen.release(); gen.begin_live() (as above)
+    # suspend() frees that L1 between two steps (the queued expert request is taken, the prefetcher stopped).
+    # resume() takes the same L1 ranges again, puts back what the staging tensors hold at a step boundary and
+    # starts the prefetcher: the next replay then runs as any step does. The L1 allocator hands out the top of
+    # the highest free range that fits, so resume() first fills all free L1 above the lowest range it wants
+    # with pad tensors, top down, then frees the pads that sit on one part's ranges and lets that part allocate
+    # again. The expert rows' L1 stays under a pad: no step reads a row before it writes it. False: an address
+    # did not come back (nothing ran on the card; the caller releases and captures again).
+    def suspend(self):
+        assert self.trace is not None and not self.live and not self.suspended
+        self._want = []  # [(part, its L1 ranges)] in install order
+        for part in (self.experts, self.router_stage, self.overlap):  # (the experts' last step still uses the hooks)
+            if part is not None:
+                before = self._l1()
+                part.suspend(*((self.model,) if part is self.experts else ()))
+                self._want.insert(0, (part, sorted(before - self._l1())))
+        self._free_rows()
+        for t in self._pads:
+            ttnn.deallocate(t)
+        self._pads = []
+        self.model.overlap = None  # (the prefill checks that no staging is installed)
+        self.suspended = True
+
+    def resume(self):
+        held = {}  # range -> the pad on it until its part allocates again
+        ok = self._fill(held)
+        for part, ranges in self._want:
+            if not ok:
+                break
+            for r in ranges:
+                ttnn.deallocate(held.pop(r))
+            ok = part.resume(self._check)
+        for t in held.values():
+            ttnn.deallocate(t)
+        if not ok:
+            for t in self._pads:
+                ttnn.deallocate(t)
+            self._pads = []
+            return False
+        self.model.overlap = self.overlap
+        self.suspended = False
+        return True
+
+    def _l1(self):
+        """{(address, bytes per bank)} of the L1 buffers."""
+        return {
+            (int(b.address), int(b.max_size_per_bank))
+            for b in ttnn._ttnn.reports.get_buffers(self.device)
+            if b.buffer_type == ttnn.BufferType.L1
+        }
+
+    def _pad(self, n):
+        one = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(one, (1, n // 4), ttnn.ShardOrientation.ROW_MAJOR),
+        )  # (one core's shard: the L1 allocator takes the range on every core)
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 1, n // 4]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.device, mem
+        )
+
+    def _fill(self, held):
+        """Pads on every free L1 byte from the lowest wanted range up, top down; those on wanted ranges in held."""
+        want = sorted({r for _, rs in self._want for r in rs})
+        if not want:
+            return True
+        v = ttnn.get_memory_view(self.device, ttnn.BufferType.L1)
+        top = ttnn._ttnn.device.GetAllocatorBaseAddress(self.device, ttnn.BufferType.L1) + v.total_bytes_per_bank
+        used = sorted(self._l1())
+        cuts = sorted({a for a, _ in want} | {a + n for a, n in want})
+        segs, hi = [], top  # free [lo, hi) pieces, top down, split at the wanted ranges' edges
+        for a, n in reversed(sorted(used + [(want[0][0], 0)])):
+            if a + n < hi:
+                lo = max(a + n, want[0][0])
+                edges = [lo] + [c for c in cuts if lo < c < hi] + [hi]
+                segs += [(edges[i], edges[i + 1]) for i in reversed(range(len(edges) - 1))]
+            hi = min(hi, a)
+            if hi <= want[0][0]:
+                break
+        for lo, hi in segs:
+            if (lo, hi - lo) not in want:  # (the allocator rounds sizes up to 64 B: a smaller rest is never used)
+                lo = hi - (hi - lo) // L1_UNIT * L1_UNIT
+                if lo == hi:
+                    continue
+            t = self._pad(hi - lo)
+            if t.buffer_address() != lo:
+                logger.warning(f"resume: a pad for L1 [{lo}, {hi}) landed at {t.buffer_address()}")
+                ttnn.deallocate(t)
+                return False
+            if (lo, hi - lo) in want:
+                held[(lo, hi - lo)] = t
+            else:
+                self._pads.append(t)
+        if set(held) != set(want):
+            logger.warning(f"resume: wanted L1 {want}, free were {sorted(held)}")
+            return False
+        return True
+
+    def _check(self, make, address_of, free, want):
+        """make()'s object if its L1 is at `want`, else None."""
+        obj = make()
+        if address_of(obj) == want:
+            return obj
+        logger.warning(f"resume: L1 at {address_of(obj)}, the traces want {want}")
+        free(obj)
+        return None
+
+    def _free_rows(self):
+        """The expert steps' last output rows (L1, one per layer; no step reads one before it writes it)."""
+        for lay in self.model.layers:
+            for name in ("release_last", "release_rows"):
+                free = getattr(getattr(lay.moe, "fused", None), name, None)
+                if free is not None:
+                    free()
+
     def release(self):
         for t in self.trace or []:
             if t is not None:
                 ttnn.release_trace(self.device, t)
         self.trace = None
+        self.suspended = False
+        for t in self._pads:
+            ttnn.deallocate(t)
+        self._pads = []
         if self.router_stage is not None:
             self.router_stage.uninstall()
             self.router_stage = None
@@ -133,12 +261,7 @@ class Generator:
         if self.overlap is not None:
             self.overlap.uninstall(self.model)
             self.overlap = self.model.overlap = None
-        # the expert steps' last output rows (L1, one per layer): no trace writes them any more, and a chunked
-        # prefill needs their L1
-        for lay in self.model.layers:
-            free = getattr(getattr(lay.moe, "fused", None), "release_last", None)
-            if free is not None:
-                free()
+        self._free_rows()  # no trace writes them any more, and a chunked prefill needs their L1
 
     def decode(self, token, pos, traced=True):
         """One step. Returns device result dict (logits, token)."""

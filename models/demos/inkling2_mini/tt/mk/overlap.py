@@ -28,6 +28,7 @@ from models.demos.inkling2_mini.tt.mk.gate_stage import GateStage
 from models.demos.inkling2_mini.tt.mk.stage import StagedBankLinear, coalesce, program_cores, range_bytes, resplit
 
 _orig_generic_op = ttnn.generic_op
+_ttnn_generic_op = ttnn.generic_op  # ttnn's own (tt/mk/router_stage.py chains itself into _orig_generic_op)
 _STREAMS = "bank_"  # bank_linear_*, moe_bank_*: weight streams
 
 # Budget mode (Overlap(budget=...), the default): DRAM-light programs that may carry a fill, with the bytes per core
@@ -208,6 +209,8 @@ class Overlap:
         self.queue = []  # [(proxy, part index)]: pieces still to attach, oldest first
         self.in_own = False
         self.seen = {"programs": 0, "too_wide": 0, "clash": 0, "attached": 0}
+        self._held = None  # (L1 address, host copy) of the staging tensor at a step boundary, from the first suspend()
+        self._hooks = None  # (AF.SDPA_HOST, ttnn.generic_op) while suspended
         ttnn.generic_op = self._generic_op
 
     def uninstall(self, model):
@@ -217,7 +220,40 @@ class Overlap:
             t.restore()
         for g in dict.fromkeys(self.gorder):
             del g._combine
+        if self._hooks is None:
+            ttnn.deallocate(self.stage)
+
+    # Between two decode steps, around a chunked prefill (which needs this L1 and runs generic_op programs of its
+    # own): suspend() frees the staging tensor and takes the hooks off, resume() puts both back. Traces captured
+    # before stay valid when the tensor is back at its address with what it holds at a step boundary: the weights
+    # staged for the next step's first applications, the same at every boundary (saved at the first suspend()).
+    def suspend(self):
+        if self._held is None:
+            st = self.stage
+            self._held = (st.buffer_address(), ttnn.from_device(st), st.memory_config(), st.shape, st.device())
+        self._hooks = (AF.SDPA_HOST, ttnn.generic_op)
+        AF.SDPA_HOST = None
+        ttnn.generic_op = _ttnn_generic_op
         ttnn.deallocate(self.stage)
+
+    def resume(self, retake):
+        """retake(make, address_of, free, address) -> make()'s tensor at that L1 address, or None. False: the
+        staging is not back (still suspended; the caller uninstalls)."""
+        addr, host, mem, shape, dev = self._held
+        make = lambda: ttnn.allocate_tensor_on_device(shape, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, dev, mem)  # noqa: E731
+        stage = retake(make, lambda t: t.buffer_address(), ttnn.deallocate, addr)
+        if stage is None:
+            return False
+        ttnn.copy_host_to_device_tensor(host, stage)
+        self.stage = stage
+        for t in self.tracks:
+            for p in t.proxies.values():
+                p.st.stage = stage
+                p.st.fill_io = [p.st.bl.weight, stage]
+        for gs in self.gstages.values():
+            gs.stage = stage
+        (AF.SDPA_HOST, ttnn.generic_op), self._hooks = self._hooks, None
+        return True
 
     def consume(self, proxy, x, out):
         t = proxy.track

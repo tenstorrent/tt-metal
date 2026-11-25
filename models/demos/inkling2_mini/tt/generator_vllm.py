@@ -36,9 +36,10 @@ Weights: the run mode's decode cache (modes.py; ``$INKLING_MODE``, ``$INKLING_CA
 Chunked prefill (opt-in, ``INKLING_VLLM_PREFILL=<tokens>``, Inkling2ForCausalLM only): a new prompt of at least
 that many tokens runs through tt/prefill_model.py in chunks instead of token by token. The process keeps the one
 (PF-layout) decode cache: the prefill rebuilds each layer's plain expert tensors on the card for the layer's expert
-step (tt/pf_tiles.py). The decode's L1 weight staging and the prefill's programs do not fit together: the decode
-traces are released before the prefill, and the reply's first six steps run eagerly and capture them again
-(Generator.begin_live). It needs
+step (tt/pf_tiles.py). The decode's L1 weight staging and the prefill's programs do not fit together: the
+staging gives its L1 to the prefill and takes the same addresses back after it (Generator.suspend / resume), so
+the decode traces stay (if an address does not come back, the reply's first six steps run eagerly and capture
+them again: Generator.begin_live). It needs
 - DRAM: about 1.05 GiB for the prefill's own tensors, 2 GiB of room for a layer's rebuilt experts and 0.26 GiB per
   1024 tokens of a pass, so a ``--max-model-len`` below the largest. With a 128 MiB trace region: passes of 8192
   tokens up to about 94K, of 4096 up to about 151K, of 2048 up to about 180K; at 196608 about 0.3 GiB is short
@@ -411,29 +412,33 @@ class Inkling2ForCausalLM:
 
     def _prefill_chunked(self, ids):
         """The whole prompt through the chunked prefill, which hands its state to the decode step. The decode's
-        L1 weight staging gives way to it: the traces are released before it, and afterwards the staging goes in
-        again and the traces are captured from the reply's own first steps (Generator.begin_live), which run
-        eagerly: no step runs on the card but the sequence's."""
+        L1 weight staging gives way to it: Generator.suspend() frees that L1 between two steps and resume() takes
+        the same addresses again, so the decode traces stay. If an address does not come back, the traces are
+        released and captured again from the reply's own first steps (Generator.begin_live)."""
         t0 = time.perf_counter()
-        if self.tail is not None:  # (its row tensors go too; captured again below)
-            ttnn.release_trace(self.device, self.tail)
-            for t in self.rows:
-                ttnn.deallocate(t)
-        self.gen.release()
-        gc.collect()  # (the staging's L1 goes with its last reference)
+        self.gen.suspend()
         t1 = time.perf_counter()
         self.pf.n_rebuilt = 0
         one = len(ids) <= self.PF_ONE and self.pf.chunk > self.pf_chunk
         self._pf_logits = self.pf.prefill(ids, chunk=self.pf.chunk if one else self.pf_chunk)[0].float()
+        self.pf.drop_buffers()  # (nothing of the prefill stays where a decode replay writes)
         t2 = time.perf_counter()
-        self.gen.begin_live()
-        if self.tail is not None:
-            self.tail = self._capture_tail(self._lg, check=False)
+        kept = self.gen.resume()
+        if not kept:
+            if self.tail is not None:  # (its row tensors go too; captured again below)
+                ttnn.release_trace(self.device, self.tail)
+                for t in self.rows:
+                    ttnn.deallocate(t)
+            self.gen.release()
+            gc.collect()
+            self.gen.begin_live()
+            if self.tail is not None:
+                self.tail = self._capture_tail(self._lg, check=False)
         self._out, self._pos_ready = None, None
         return (
-            f"prefilled in chunks (traces released {t1 - t0:.2f} s, prefill {t2 - t1:.2f} s with "
-            f"{self.pf.n_rebuilt} expert rebuilds, {len(self.pf._traces)} chunk traces kept, dropped "
-            f"{self.pf.n_dropped} times; the next steps capture the decode traces again)"
+            f"prefilled in chunks (decode L1 freed in {t1 - t0:.2f} s, prefill {t2 - t1:.2f} s with "
+            f"{self.pf.n_rebuilt} expert rebuilds; decode traces "
+            f"{'kept' if kept else 'released, the next steps capture them again'})"
         )
 
     def _request_log(self):
