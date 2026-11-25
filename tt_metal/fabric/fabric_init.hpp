@@ -9,8 +9,8 @@
 #include <optional>
 #include <vector>
 
-#include "device.hpp"
-#include "tt_metal.hpp"
+#include "tt-metalium/mesh/legacy/device.hpp"
+#include "tt-metalium/execution/slow_dispatch.hpp"
 #include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 
 namespace tt::tt_metal {

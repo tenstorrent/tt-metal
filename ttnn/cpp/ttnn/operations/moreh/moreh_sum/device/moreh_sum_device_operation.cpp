@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"

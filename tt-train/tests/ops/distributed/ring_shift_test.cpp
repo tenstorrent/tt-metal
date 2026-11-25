@@ -15,7 +15,7 @@
 #include <array>
 #include <core/xtensor_utils.hpp>
 #include <optional>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-umd-workload/cluster.hpp>
 #include <vector>
 

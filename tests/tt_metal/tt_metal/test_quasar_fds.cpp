@@ -11,8 +11,8 @@
 
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "llrt/rtoptions.hpp"
 
 #include <algorithm>
