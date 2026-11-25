@@ -57,6 +57,7 @@ from models.common.sampling.generator import (
     format_sampling_params,
 )
 from models.common.sampling.sampling_params import SamplingParams
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.spec_argmax_fused import all_gather_dim3
 
 SAMPLER_ROWS = 32  # one ttnn.sampling call: a row per core, B * T <= 32 verify rows
@@ -322,9 +323,9 @@ class VerifySampler:
             pad = [(0, 0), (0, 0), (0, self.rows - rows), (0, self.topk_width - self.chunk_width)]
             padded = ttnn.pad(x, pad, value=PAD_LOGIT)
             if owned is not None:
-                ttnn.deallocate(owned)
+                tpc.free_unless_view(owned, padded)
         v, i = ttnn.topk(padded, k=SAMPLER_TOP_K, dim=-1, largest=True, sorted=True, stable=True)
-        if padded is not logits:
+        if not tpc.aliases(padded, logits):  # a pad of the caller's logits may be a view of them
             ttnn.deallocate(padded)
         idx = ttnn.typecast(i, ttnn.int32)
         ttnn.deallocate(i)

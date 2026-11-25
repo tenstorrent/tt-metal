@@ -1139,8 +1139,9 @@ class TPAttention:
             keys, values = self.paged_k, self.paged_v
             k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
+            # NKV < 32 rows already fill their tiles, so the pad is a view of k / v; the KV write frees it.
+            tpc.free_unless_view(k, k_p)
+            tpc.free_unless_view(v, v_p)
             if alias_kv_write and B > 1:
                 self._write_kv_aliased(
                     keys,
@@ -1237,8 +1238,8 @@ class TPAttention:
                 v_h = ttnn.slice(v, (0, 0, h, 0), (1, B, h + 1, HD))
                 k_hp = ttnn.pad(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
                 v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-                ttnn.deallocate(k_h)
-                ttnn.deallocate(v_h)
+                tpc.free_unless_view(k_h, k_hp)
+                tpc.free_unless_view(v_h, v_hp)
                 _kv_cfg = self._kv_shard_cfg(B)
                 k_sh = ttnn.to_memory_config(k_hp, _kv_cfg)
                 v_sh = ttnn.to_memory_config(v_hp, _kv_cfg)

@@ -49,14 +49,27 @@ class Mesh:
 
 
 class MT:
-    """A mesh tensor of the torch model: one torch tensor per device, its dtype and layout, whether it was freed."""
+    """A mesh tensor of the torch model: one torch tensor per device, its dtype and layout, and its device buffer, which
+    a view shares and which records whether it was freed."""
 
     def __init__(self, parts, dtype=None, layout=None):
-        self.parts, self.dtype, self.layout, self.freed = [p.clone() for p in parts], dtype, layout, False
+        self.parts, self.dtype, self.layout = [p.clone() for p in parts], dtype, layout
+        self.buf = SimpleNamespace(freed=False)
 
     @property
     def shape(self):
         return tuple(self.parts[0].shape)
+
+    @property
+    def freed(self):
+        return self.buf.freed
+
+    @freed.setter
+    def freed(self, value):
+        self.buf.freed = value
+
+    def buffer_address(self):
+        return id(self.buf)
 
 
 def _sharded(t, mesh, dtype="bf16"):
@@ -117,7 +130,12 @@ class Ops:
     def pad(self, x, padding, value):
         self._live(x)
         flat = [n for before_after in reversed(padding) for n in before_after]
-        return self._each(x, lambda p: torch.nn.functional.pad(p, flat, value=value))
+        out = self._each(x, lambda p: torch.nn.functional.pad(p, flat, value=value))
+        # As ttnn.pad does: a pad that adds no tile fills the tile padding in place and returns a view of x's buffer.
+        tile = ttnn.TILE_SIZE
+        if all(n + after <= -(-n // tile) * tile for n, (_, after) in zip(x.shape[-2:], padding[-2:])):
+            out.buf = x.buf
+        return out
 
     def topk(self, x, k, dim=-1, largest=True, sorted=True, stable=False):
         self._live(x)
@@ -334,14 +352,17 @@ def test_replicated_logits_give_the_candidates_of_their_shards(monkeypatch, kind
         assert all(torch.equal(a, b) for a, b in zip(gc, wc)) and torch.equal(gd, wd)
 
 
+@pytest.mark.parametrize("vocab", [VOCAB, 8 * TOPK_MAX_WIDTH], ids=["pad_adds_tiles", "row_pad_is_a_view"])
 @pytest.mark.parametrize("shards, replicated", [(8, False), (2, False), (8, True), (1, False)])
 @pytest.mark.parametrize("rows", [32, 8])
-def test_the_sampler_frees_every_intermediate(monkeypatch, shards, replicated, rows):
-    """Every tensor made while drawing is freed, the logits and the sampler's own buffers are not."""
+def test_the_sampler_frees_every_intermediate(monkeypatch, shards, replicated, rows, vocab):
+    """Every tensor made while drawing is freed, the logits and the sampler's own buffers are not, and no op reads a
+    freed buffer. With a power-of-two chunk width the top-k input needs only row padding, which ttnn.pad returns as a
+    view of its input: of the caller's logits, or of the sampler's own shard copy."""
     made = []
     ops = Ops()
     ops.install(monkeypatch)
-    sampler = _sampler(ops, 8, 4, VOCAB, shards)
+    sampler = _sampler(ops, 8, 4, vocab, shards)
     own = {id(t) for t in vars(sampler).values() if isinstance(t, MT)}
     real_init = MT.__init__
 
@@ -350,12 +371,12 @@ def test_the_sampler_frees_every_intermediate(monkeypatch, shards, replicated, r
         made.append(self)
 
     monkeypatch.setattr(MT, "__init__", tracked)
-    t = _logits("bf16", rows, VOCAB, shards, seed=5).reshape(1, 1, rows, -1)
+    t = _logits("bf16", rows, vocab, shards, seed=5).reshape(1, 1, rows, -1)
     logits = _replicated(t, Mesh(shards)) if replicated else _sharded(t, Mesh(shards))
     sampler.stage(_plan(8, 4, 0, live=rows // 4))
     made.clear()
     sampler.body(logits)
-    left = [t.shape for t in made if not t.freed and id(t) not in own]
+    left = [t.shape for t in made if not t.freed and id(t) not in own and t.buf is not logits.buf]
     assert left == [] and not logits.freed
 
 

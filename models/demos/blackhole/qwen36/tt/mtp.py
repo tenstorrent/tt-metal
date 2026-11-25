@@ -350,7 +350,7 @@ class Qwen36MTP:
         # 4. One tile-wide value block per row: lane 0 carries the real max, the rest a floor that can
         #    never win. ttnn.pad is pure data movement, so the fp32 max survives bit-exact.
         valp = ttnn.pad(val, [(0, 0), (0, 0), (0, 0), (0, lanes - 1)], value=self._NEG_FLOOR)  # [1,1,B,lanes]
-        ttnn.deallocate(val)
+        tpc.free_unless_view(val, valp)
 
         # 5. The two gathers, issued back to back so they overlap. Mirrors Qwen36Model._lm_head's
         #    call exactly (same helper, same tt_ccl, same topology). dtype is passed explicitly
