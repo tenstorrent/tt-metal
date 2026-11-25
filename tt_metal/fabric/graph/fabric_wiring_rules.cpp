@@ -39,6 +39,9 @@ public:
 
     // stock skips the VC2 receiver on the inter-mesh Z router, so it gets no VC2 at all here
     bool carries(const Port& port, uint32_t vc) const override {
+        if (port.capability == EdgeCapability::INTRADOMAIN) {
+            return vc == 2;
+        }
         if (vc == 2 && options_.vc_config.vc2_forwards) {
             return port.capability == EdgeCapability::INTERDOMAIN || vc2_direction(port).has_value();
         }

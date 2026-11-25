@@ -363,6 +363,7 @@ struct RouterGraphInputs {
     bool inter_domain = false;
     bool on_domain_edge = false;
     std::optional<Vc2DomainInputs> vc2_domain;
+    std::optional<std::pair<FabricNodeId, chan_id_t>> link_peer;  // a link the control plane does not know
 };
 
 /*
@@ -583,6 +584,7 @@ public:
     bool inter_domain_ = false;
     bool on_domain_edge_ = false;
     std::optional<Vc2DomainInputs> vc2_domain_;
+    std::optional<std::pair<FabricNodeId, chan_id_t>> link_peer_;
 
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;

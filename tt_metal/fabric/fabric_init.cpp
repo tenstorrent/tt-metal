@@ -172,6 +172,14 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
             }
         }
     }
+    if (builder_context.get_intermesh_vc_config().vc2_forwards) {
+        for (const auto& l : fabric_context.get_inter_domain_mesh().vc2_links) {
+            if (l.a == fabric_node_id || l.b == fabric_node_id) {
+                router_chans_and_direction.insert(
+                    {l.a == fabric_node_id ? l.a_chan : l.b_chan, eth_chan_directions::COUNT});
+            }
+        }
+    }
     const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
     const auto& router_config = builder_context.get_fabric_router_config();
     std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);

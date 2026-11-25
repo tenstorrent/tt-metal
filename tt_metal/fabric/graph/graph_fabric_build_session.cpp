@@ -94,18 +94,33 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     // logical: topology and turns
     const auto mgd_ports = ports_from_mesh_graph(control_plane.get_mesh_graph(), express_axis);
     auto ports = with_live_planes(mgd_ports, control_plane);
+    std::vector<ChannelPort> domain_ports;
     if (inter_domain) {
+        auto taken = mgd_ports;
+        if (fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards) {
+            domain_ports = ports_from_domain_links(
+                fabric_context.get_inter_domain_mesh().vc2_links, mgd_ports, control_plane.get_mesh_graph());
+            for (const auto& p : domain_ports) {
+                ports.push_back(p.port);
+                taken.push_back(p.port);
+            }
+        }
         perimeter_ = perimeter_ports(
             unused_links(
                 control_plane,
                 fabric_context.get_cluster(),
                 rtoptions.has_factory_system_descriptor_path() ? rtoptions.get_factory_system_descriptor_path() : ""),
-            mgd_ports,
+            taken,
             control_plane.get_mesh_graph(),
             topology);
         const auto down =
             std::count_if(perimeter_.begin(), perimeter_.end(), [](const auto& p) { return !p.link_trained; });
-        log_info(tt::LogFabric, "fabric graph: {} perimeter ports, {} untrained", perimeter_.size(), down);
+        log_info(
+            tt::LogFabric,
+            "fabric graph: {} perimeter ports, {} untrained, {} VC2-only ports",
+            perimeter_.size(),
+            down,
+            domain_ports.size());
         for (const auto& p : perimeter_) {
             if (*p.direction == RoutingDirection::Z) {
                 log_warning(
@@ -160,6 +175,9 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     std::map<std::pair<FabricNodeId, RoutingDirection>, std::vector<chan_id_t>> perimeter_chans;
     for (const auto& p : perimeter_) {
         perimeter_chans[{p.node, *p.direction}].push_back(p.eth_chan);
+    }
+    for (const auto& p : domain_ports) {
+        perimeter_chans[{p.port.node, *p.port.direction}].push_back(p.eth_chan);
     }
     graph_->eth_chans = bind_eth_channels(graph_->logical, [&](const FabricNodeId& node, RoutingDirection d) {
         const auto it = perimeter_chans.find({node, d});

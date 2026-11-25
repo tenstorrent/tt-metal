@@ -1,5 +1,5 @@
-# An inter-domain domain of two 2x4 meshes (half a Blackhole Galaxy), one process each, mesh 0's last row cabled to
-# mesh 1's first. VC2 spans all 16 chips as one 4x4 mesh.
+# An inter-domain domain of two 2x4 meshes (half a Blackhole Galaxy), one process each. VC2 spans all 16 chips as one
+# 4x4 mesh, on the links the workload leaves unused where it needs them.
 
 mesh_descriptors {
   name: "M0"
@@ -16,24 +16,9 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
 
   connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 4 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
-    channels { count: 2 }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 5 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
-    channels { count: 2 }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 6 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
-    channels { count: 2 }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 7 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 3 } }
-    channels { count: 2 }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
   }
 }
 
