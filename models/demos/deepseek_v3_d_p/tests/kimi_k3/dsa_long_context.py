@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Kimi-K3.1 DSA layer 3 against the FP64 chain golden over long context: the FP64 attention the device is scored
-against, which rows are scored, and the per-window measures and bars of ``test_k31_dsa_long_context.py``.
+against, which rows are scored, and the per-window measures and bars of ``test_kimi_k3_1_dsa_long_context.py``.
 
 CPU only; imports no device code. The golden (``k31_chain_golden.K31_CHAIN_1M``) holds, for every row, layer 3's
 input ``dsa_input_3`` (the AttnRes read), its FP64 keys (``latent``, ``kpe``, ``index_key``) and its FP64 indexer

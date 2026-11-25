@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host contracts of ``dsa_long_context.py``, the scoring of ``test_k31_dsa_long_context.py``: hand-checked FP64
+"""Host contracts of ``dsa_long_context.py``, the scoring of ``test_kimi_k3_1_dsa_long_context.py``: hand-checked FP64
 attention, the near-tie baseline's selection, scored rows, fail-closed bars, and the recompute check of a whole run
 (``RunScorer``, on a stub golden). CPU only, tiny dimensions."""
 

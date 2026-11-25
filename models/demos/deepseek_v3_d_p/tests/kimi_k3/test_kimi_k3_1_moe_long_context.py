@@ -15,7 +15,7 @@ state across chunks, so there is no context-growth bar; the rungs show that the 
 Run on one tray half of a Blackhole Galaxy (skips without the 4x4 binding or the weight cache):
 
     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \\
-        "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_moe_long_context.py::test_k31_moe_long_context[blackhole-5k-layer1-4x4-sp1]"
+        "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_moe_long_context.py::test_k31_moe_long_context[blackhole-5k-layer1-4x4-sp1]"
 """
 
 from __future__ import annotations

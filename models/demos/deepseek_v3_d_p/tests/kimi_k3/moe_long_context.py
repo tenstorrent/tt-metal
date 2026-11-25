@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Kimi-K3.1 MoE long-context accuracy against the FP64 chain: the device routing readback, the per-chunk scoring and
-the bars of ``test_k31_moe_long_context.py``.
+the bars of ``test_kimi_k3_1_moe_long_context.py``.
 
 Every row is scored (``tests/accuracy``): the MoE output's absolute and relative error (``windowed.errors``: RMS error,
 the reference's RMS, pooled NRMSE, PCC) and the median per-row NRMSE, and the routing against the FP64 top-16
