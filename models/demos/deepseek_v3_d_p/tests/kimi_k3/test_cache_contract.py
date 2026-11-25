@@ -45,7 +45,7 @@ def test_block_cache_check_forwards_the_output_gate(monkeypatch, tmp_path, model
     caller that passes no config at all."""
     seen = {}
 
-    def _spy(cache_path, prefix, has_indexer=False, has_output_gate=False):
+    def _spy(cache_path, prefix, has_indexer=False, has_output_gate=False, kv_only=False):
         seen["has_output_gate"] = has_output_gate
         return False  # short-circuit: this test is about the argument, not the files
 
@@ -95,7 +95,8 @@ def _write_kda_cache(root, layer_idx, *, version, projection_dtype, decay_dtype,
 
 _LEGACY_BF16 = dict(version=2, projection_dtype=ttnn.bfloat16, decay_dtype=ttnn.bfloat16)
 _BF16_DECAY = dict(version=2, projection_dtype=KIMI_K3_PROJECTION_DTYPE, decay_dtype=ttnn.bfloat16)
-_CURRENT = dict(version=3, projection_dtype=KIMI_K3_PROJECTION_DTYPE, decay_dtype=ttnn.float32)
+_FP32_DECAY = dict(version=3, projection_dtype=KIMI_K3_PROJECTION_DTYPE, decay_dtype=ttnn.float32)
+_CURRENT = dict(version=4, projection_dtype=KIMI_K3_PROJECTION_DTYPE, decay_dtype=ttnn.float32)
 
 
 @pytest.mark.parametrize(
@@ -103,10 +104,11 @@ _CURRENT = dict(version=3, projection_dtype=KIMI_K3_PROJECTION_DTYPE, decay_dtyp
     [
         ((_LEGACY_BF16,), False),
         ((_BF16_DECAY,), False),
+        ((_FP32_DECAY,), False),
         ((_CURRENT,), True),
-        ((_LEGACY_BF16, _BF16_DECAY, _CURRENT), True),
+        ((_LEGACY_BF16, _BF16_DECAY, _FP32_DECAY, _CURRENT), True),
     ],
-    ids=["legacy_bf16", "bf16_decay_terms", "current", "current_with_legacy_leftovers"],
+    ids=["legacy_bf16", "bf16_decay_terms", "fp32_decay_terms", "current", "current_with_legacy_leftovers"],
 )
 def test_kda_layer_cache_requires_the_current_format(tmp_path, formats, cached):
     mark_layer_cached(tmp_path, _KDA_LAYER)

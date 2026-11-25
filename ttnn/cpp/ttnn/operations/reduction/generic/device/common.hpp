@@ -11,7 +11,7 @@
 #include <string_view>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 
 #include "ttnn/tensor/tensor.hpp"

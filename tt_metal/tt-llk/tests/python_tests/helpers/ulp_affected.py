@@ -24,8 +24,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .llk_params import MathOperation
-from .ulp_budget_diff import resolve
-from .ulp_table import BudgetKey, Row, from_plain, load_table, measured_arch, to_plain
+from .ulp_table import (
+    BudgetKey,
+    Row,
+    from_plain,
+    load_table,
+    measured_arch,
+    most_specific,
+    to_plain,
+)
 
 # Set by --ulp-variants.
 VARIANTS_PATH: Path | None = None
@@ -49,11 +56,15 @@ class Built:
     build: str
 
     def describe(self) -> str:
-        k = self.key
-        return (
-            f"{self.op.name} {k.input_format.name}->{k.output_format.name} "
-            f"approx={k.approx_mode.name} dest_acc={k.dest_acc.name}"
-        )
+        return describe(self.op, self.key)
+
+
+def describe(op: MathOperation, key: BudgetKey) -> str:
+    """A sweep cell by name, as the check's summary and the sweep's failures print it."""
+    return (
+        f"{op.name} {key.input_format.name}->{key.output_format.name} "
+        f"approx={key.approx_mode.name} dest_acc={key.dest_acc.name}"
+    )
 
 
 def record_built(node: str, op: MathOperation, key: BudgetKey, build: str) -> None:
@@ -103,7 +114,7 @@ def build_digest(root: Path, build: str) -> str | None:
 def _judged_by(table, cell: Built) -> Row | None:
     """The row the sweep judges *cell* by: resolved under this session's architecture,
     as the sweep resolves it, and with no ``note``, which judges nothing."""
-    row = resolve(table, cell.op, replace(cell.key, arch=measured_arch()))
+    row = most_specific(table.get(cell.op, ()), replace(cell.key, arch=measured_arch()))
     return None if row is None else replace(row, note=None)
 
 

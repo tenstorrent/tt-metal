@@ -267,7 +267,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
 # 3.4 - storage_type on tensors; buffer_type is NULL for host tensors instead of 0 (DRAM)
 # 3.5 - sub-device topology and operation/program execution placement: sub_device_managers, sub_devices, operation_executions, execution_sub_devices
-DATABASE_SCHEMA_VERSION = "3.5"
+# 3.6 - rank_metadata: every rank's capture metadata; report_metadata holds the lowest rank's instead of the last file's (#66704)
+DATABASE_SCHEMA_VERSION = "3.6"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
@@ -294,7 +295,11 @@ def _report_rank(report, path: Path) -> int:
     r = meta.get("rank")
     if r is None:
         raise ValueError(f"Graph report metadata missing required field rank: {path}")
-    return int(r)
+    rank = int(r)
+    if rank < 0:
+        # It would sort ahead of rank 0 everywhere ranks are ordered, e.g. as the rank report_metadata is taken from.
+        raise ValueError(f"Graph report metadata has negative rank {rank}: {path}")
+    return rank
 
 
 class _ReportFile(NamedTuple):
@@ -1250,6 +1255,18 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         CREATE TABLE IF NOT EXISTS report_metadata (
             key text UNIQUE,
             value text
+        )
+    """
+    )
+
+    # Each rank's capture metadata. report_metadata holds the lowest rank's, for readers of a single report.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rank_metadata (
+            key text NOT NULL,
+            value text,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(key, rank)
         )
     """
     )
@@ -2634,12 +2651,29 @@ def _load_comparison_records_sidecar(report_file: Path, include_fallback: bool) 
     return None, False
 
 
-def import_metadata(cursor: sqlite3.Cursor, metadata: dict) -> None:
-    """Import report metadata using batch insert."""
+def import_metadata(cursor: sqlite3.Cursor, metadata: dict, rank: int = 0) -> None:
+    """Import one capture's metadata into rank_metadata under ``rank``.
+
+    When several captures share a rank, the last one imported wins for each key it has.
+    ``_fill_report_metadata`` copies one rank's into report_metadata once every capture is in.
+    """
     if not metadata:
         return
-    batch = [(key, str(value)) for key, value in metadata.items()]
-    cursor.executemany("""INSERT OR REPLACE INTO report_metadata VALUES (?, ?)""", batch)
+    cursor.executemany(
+        """INSERT OR REPLACE INTO rank_metadata (key, value, rank) VALUES (?, ?, ?)""",
+        [(key, str(value), rank) for key, value in metadata.items()],
+    )
+
+
+def _fill_report_metadata(cursor: sqlite3.Cursor) -> None:
+    """Copy the lowest imported rank's capture metadata (rank 0's in a full multi-rank import) into report_metadata,
+    which holds one value per key, then write the schema version, so a capture's own key of that name can't
+    replace it. Run after every capture is imported: loose captures arrive in file-name order, not rank order."""
+    cursor.execute(
+        """INSERT OR REPLACE INTO report_metadata (key, value)
+        SELECT key, value FROM rank_metadata WHERE rank = (SELECT MIN(rank) FROM rank_metadata)"""
+    )
+    save_database_schema_version(cursor)
 
 
 def extract_total_duration_from_graph(graph: list) -> float:
@@ -2783,7 +2817,6 @@ def _import_report(report_path: Path, output_dir: Path, db_path: Path, generate_
         cursor = conn.cursor()
 
         create_database_schema(cursor)
-        save_database_schema_version(cursor)
 
         total_stats = {
             "files": 0,
@@ -2939,7 +2972,7 @@ def _import_report(report_path: Path, output_dir: Path, db_path: Path, generate_
                 total_stats["tensors"] += comparison_stats["tensors"]
 
             if "metadata" in report:
-                import_metadata(cursor, report["metadata"])
+                import_metadata(cursor, report["metadata"], rank)
 
             # Stage the cluster descriptor and mesh mapping YAMLs; published with the database.
             yaml_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
@@ -3076,6 +3109,7 @@ def _import_report(report_path: Path, output_dir: Path, db_path: Path, generate_
         if total_stats["files"] == 0:
             # Publishing would replace an earlier import's database with an empty one.
             raise ValueError(_no_capture_imported_message(report_path, skipped_for_version))
+        _fill_report_metadata(cursor)
         cursor.execute(
             "INSERT OR REPLACE INTO report_metadata VALUES (?, ?)",
             (_YAML_FILES_METADATA_KEY, json.dumps(staged.yaml_names())),

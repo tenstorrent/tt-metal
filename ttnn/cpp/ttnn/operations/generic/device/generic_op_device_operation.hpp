@@ -5,7 +5,7 @@
 #pragma once
 
 #include <variant>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include <tt_stl/reflection.hpp>  // ttsl::hash::hash_t
 

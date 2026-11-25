@@ -17,13 +17,13 @@
 #include <optional>
 #include <tuple>
 #include <vector>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/quasar/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 namespace ttnn::operations::experimental::quasar::deepseek_prefill::hybrid_routed_expert_ffn {
 // The worker rectangle both passes run on. Rows 0-1 are reserved for the combine op and one

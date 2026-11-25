@@ -13,12 +13,14 @@ namespace tt::tt_metal {
 
 std::span<const TensorPrefetcherKernelInfo> tensor_prefetcher_kernels() {
     // The reader stages weight blocks from DRAM into the dispatch engine's L1, keeping a group selector's mask
-    // in its own state; the pusher sends them on to the receivers. Constant-initialized, so the topology's
-    // static node tables may read it.
+    // in its own state, with up to four passes of reads in flight; the pusher sends them on to the receivers with
+    // up to six writes in flight, at most six divided by the tensor's receivers (rounded up) to any one of them.
+    // Constant-initialized, so the topology's static node tables may read it.
     static constexpr std::array<TensorPrefetcherKernelInfo, 2> kKernels = {{
         {.file = "tt_metal/impl/buffers/kernels/tensor_prefetcher_reader.cpp",
-         .state_bytes = kTensorPrefetcherSelectorScratchBytes},
-        {.file = "tt_metal/impl/buffers/kernels/tensor_prefetcher_pusher.cpp"},
+         .state_bytes = kTensorPrefetcherSelectorScratchBytes,
+         .trids = 4},
+        {.file = "tt_metal/impl/buffers/kernels/tensor_prefetcher_pusher.cpp", .trids = 6},
     }};
     return kKernels;
 }

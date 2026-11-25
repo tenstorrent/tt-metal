@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
@@ -104,6 +104,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case ISCLOSE:
         // Fused SFPU kernel only: there is no FPU form, so every float dtype routes here.
         case SITU_GLU: return true;
+        case SILU_GLU:
         case GEGLU_TANH: return a == b && (a == BFLOAT16 || a == BFLOAT8_B);
         default: return false;
     }
@@ -392,6 +393,20 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             attributes.lhs_activations.empty() && attributes.rhs_activations.empty(),
             "Input activations are not supported for 8-bit subtract (including subalpha)");
+    }
+
+    // These pairs have no conversion into a UINT8 output yet, so the packer would write DEST's raw bits.
+    const auto output_dtype =
+        output_tensor.has_value() ? output_tensor->dtype() : attributes.dtype.value_or(input_tensor_a.dtype());
+    if (output_dtype == DataType::UINT8) {
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::UINT16,
+            "A UINT8 output is not supported for UINT16 inputs of binary operation {}",
+            attributes.binary_op_type);
+        TT_FATAL(
+            !(attributes.binary_op_type == BinaryOpType::DIV && input_tensor_a.dtype() == DataType::INT32 &&
+              input_tensor_b.has_value() && input_tensor_b->dtype() == DataType::INT32),
+            "A UINT8 output is not supported for INT32 integer division");
     }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);

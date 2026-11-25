@@ -142,9 +142,7 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
-    QUASAR_VECTOR_MARCH: ClassVar[str] = (
-        "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb"
-    )
+    QUASAR_VECTOR_MCPU: ClassVar[str] = "-mcpu=tt-qsr32-vector-tensix"
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -615,11 +613,11 @@ class TestConfig:
                 "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
             # The variant's register headers, as the JIT build picks them (qa_hal.cpp).
-            # Saturn has none yet.
             register_header_version = {
                 "": "2.0.0",
                 "horizon": "2.0.1",
                 "trinity": "2.0.2",
+                "saturn": "2.0.3",
             }.get(quasar_variant())
             if register_header_version:
                 hw_specific_includes.append(
@@ -1587,9 +1585,17 @@ class TestConfig:
             )
 
             if TestConfig.WITH_COVERAGE:
-                compile_command = (  # coverage.o : coverage.cpp
-                    f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {local_non_coverage} "
-                    f'-fno-strict-aliasing -c -o {shared_obj_dir / "coverage.o"} {TestConfig.RISCV_SOURCES / "coverage.cpp"}'
+                compile_command = TestConfig._argv(  # coverage.o : coverage.cpp
+                    [TestConfig.GXX],
+                    TestConfig.ARCH_NON_COMPUTE,
+                    TestConfig.OPTIONS_ALL,
+                    local_non_coverage,
+                    "-fno-strict-aliasing -c",
+                    [
+                        "-o",
+                        shared_obj_dir / "coverage.o",
+                        TestConfig.RISCV_SOURCES / "coverage.cpp",
+                    ],
                 )
                 logger.trace(compile_command)
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
@@ -1599,12 +1605,22 @@ class TestConfig:
                 perf_cnt_flag = ""
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     perf_cnt_flag = f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
-                compile_command = (  # brisc.elf : brisc.cpp
-                    f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
-                    f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
-                    f"{perf_cnt_flag}"
-                    f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
-                    f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
+                compile_command = TestConfig._argv(  # brisc.elf : brisc.cpp
+                    [TestConfig.GXX],
+                    TestConfig.ARCH_NON_COMPUTE,
+                    TestConfig.OPTIONS_ALL,
+                    TestConfig.OPTIONS_LINK,
+                    local_non_coverage,
+                    "-DCOVERAGE" if TestConfig.WITH_COVERAGE else "",
+                    perf_cnt_flag,
+                    [
+                        f"-T{local_memory_layout_ld}",
+                        f'-T{TestConfig.LINKER_SCRIPTS / "brisc.ld"}',
+                        f'-T{TestConfig.LINKER_SCRIPTS / "sections.ld"}',
+                        "-o",
+                        shared_elf_dir / "brisc.elf",
+                        TestConfig.RISCV_SOURCES / "brisc.cpp",
+                    ],
                 )
                 logger.trace(compile_command)
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
@@ -1930,7 +1946,7 @@ class TestConfig:
                 # Only TRISC0 has the vector unit on Quasar. The flag is after
                 # ARCH_COMPUTE so it overrides the march implied by -mcpu.
                 if self.requires_vector_ext and name == "unpack":
-                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
+                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MCPU}"
 
                 # Only counters on compiles counter code, with its L1 selection (mux group on tt-1xx, l1_client
                 # event on Quasar); counters off keeps each zone's rendezvous alone (counters.h).
@@ -2664,7 +2680,7 @@ def process_coverage_run_artefacts() -> bool:
 
             if merged_stream:
                 run_shell_command(
-                    f"{TestConfig.GCOV_TOOL} merge-stream",
+                    [TestConfig.GCOV_TOOL, "merge-stream"],
                     TestConfig.TESTS_WORKING_DIR,
                     merged_stream,
                     text=False,
@@ -2672,12 +2688,18 @@ def process_coverage_run_artefacts() -> bool:
 
                 # Generate single .info file per variant
                 info_hash = sha256(str(variant).encode()).hexdigest()
-                command = (
-                    f"lcov --gcov-tool {TestConfig.GCOV} --capture "
-                    f"--directory {variant}/elf/ "
-                    f"--output-file {TestConfig.COVERAGE_INFO_DIR}/{info_hash}.info "
-                    "--rc lcov_branch_coverage=1"
-                )
+                command = [
+                    "lcov",
+                    "--gcov-tool",
+                    TestConfig.GCOV,
+                    "--capture",
+                    "--directory",
+                    f"{variant}/elf/",
+                    "--output-file",
+                    f"{TestConfig.COVERAGE_INFO_DIR}/{info_hash}.info",
+                    "--rc",
+                    "lcov_branch_coverage=1",
+                ]
                 run_shell_command(command, TestConfig.TESTS_WORKING_DIR)
 
     worker_num = 20
@@ -2722,7 +2744,15 @@ def process_coverage_run_artefacts() -> bool:
     def combine_files(index, info_files):
         merged_path = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{index}.info"
         for info_file in info_files:
-            cmd = f"lcov -a {merged_path} -a {info_file} -o {merged_path}"
+            cmd = [
+                "lcov",
+                "-a",
+                str(merged_path),
+                "-a",
+                str(info_file),
+                "-o",
+                str(merged_path),
+            ]
             result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
             if result.returncode:
@@ -2743,7 +2773,15 @@ def process_coverage_run_artefacts() -> bool:
 
     for i in range(1, worker_num):
         info_file = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{i}.info"
-        cmd = f"lcov -a {merged_path} -a {info_file} -o {merged_path}"
+        cmd = [
+            "lcov",
+            "-a",
+            str(merged_path),
+            "-a",
+            str(info_file),
+            "-o",
+            str(merged_path),
+        ]
         result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
         if result.returncode:

@@ -26,6 +26,7 @@ from placement_check import (  # noqa: E402
     read_candidates,
     read_window_map,
     render,
+    write_blocking,
 )
 
 _BASE = 2000.0
@@ -180,6 +181,24 @@ def test_nodes_maps_candidates_to_their_test(tmp_path):
 
     assert nodes(_candidates(tmp_path), window_map, cap=10) == ([_NODE], [])
     assert nodes(_candidates(tmp_path), window_map, cap=0) == ([], [0])
+
+
+def test_a_column_the_stage1_baseline_lacks_still_matches(tmp_path):
+    base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb")
+    path = tmp_path / "s1.regressions.csv"
+    _candidates(tmp_path)
+    pd.read_csv(path).drop(columns="dest_acc").to_csv(path, index=False)
+    candidates = read_candidates(path)
+
+    assert nodes(
+        candidates, read_window_map([cur / "p0" / "perf_x.1.windowhash"]), cap=10
+    ) == ([_NODE], [])
+    [result] = decide(
+        candidates, base, cur, threshold=0.05, min_cycles=30, module_thresholds={}
+    )
+    assert result["outcome"] == "regression"
+    assert result["threads"] == ["pack"]
 
 
 def test_the_cap_is_shared_across_modules():
@@ -449,3 +468,30 @@ def test_gate_blocks_when_a_leg_left_no_baseline_record(tmp_path):
     _, notes = gate([rows, []], 2, _candidates(tmp_path), "abc", ["abc"])
 
     assert notes == ["1 leg(s) left no record of their baseline."]
+
+
+def test_slack_lists_only_the_rows_the_gate_blocks_on(tmp_path):
+    rows = _cleared(tmp_path)
+    stage1 = _candidates(tmp_path, init=True)
+    out = tmp_path / "blocking.csv"
+
+    results, notes = gate([rows], 1, stage1, "abc", ["abc"])
+    write_blocking(tmp_path / "s1.regressions.csv", results, notes, out)
+    assert pd.read_csv(out)["marker"].tolist() == ["INIT"]
+
+    results, notes = gate([rows], 2, stage1, "abc", ["abc"])
+    write_blocking(tmp_path / "s1.regressions.csv", results, notes, out)
+    assert pd.read_csv(out)["marker"].tolist() == ["INIT", "TILE_LOOP"]
+
+
+def test_slack_lists_confirmed_regressions_first(tmp_path):
+    stage1 = _candidates(tmp_path, init=True)
+    results = [
+        dict(stage1[0], outcome="unmeasured"),
+        dict(stage1[1], outcome="regression"),
+    ]
+    out = tmp_path / "blocking.csv"
+
+    write_blocking(tmp_path / "s1.regressions.csv", results, [], out)
+
+    assert pd.read_csv(out)["marker"].tolist() == ["INIT", "TILE_LOOP"]
