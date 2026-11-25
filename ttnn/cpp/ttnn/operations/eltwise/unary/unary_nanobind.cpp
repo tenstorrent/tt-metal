@@ -861,7 +861,7 @@ void bind_tanh_like(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none()});
 }
 
-// Forwarding binding: warns Python callers and keeps calling the deprecated C++ ttnn::sigmoid_accurate.
+// Warn Python callers, then call the deprecated C++ ttnn::sigmoid_accurate until its removal.
 Tensor sigmoid_accurate_with_deprecation_warning(
     const Tensor& input,
     bool fast_and_approximate_mode,

@@ -32,7 +32,7 @@ Apply these rules to deprecations a PR adds or changes. Some existing deprecatio
 ### Same-PR migration
 
 - The PR that adds the deprecation migrates every in-repo caller: TT-Metalium, TTNN, tests, models and tt-train. Only compatibility tests may keep calling the deprecated interface. They assert the warning with `pytest.warns(FutureWarning)`.
-- No PR adds new uses of an already-deprecated interface. A forwarding binding, the Python binding of a deprecated C++ interface, is exempt: it keeps calling that interface during the grace period.
+- No PR adds new uses of an already-deprecated interface. The exception is the Python binding of a deprecated C++ function. It keeps calling that function during the grace period.
 
 ### Grace period and removal
 
@@ -75,7 +75,7 @@ Until the reaper can find the first release, it counts every entry from the merg
   A pragma does not change the build result. It only hides the call from the deprecation report.
 - A binding is not a compatibility shim. The exception for warning suppressions in `scripts/validate_api/README.md` covers the Metal host API only, not binding code.
 - Do not flag a pragma that is already on `main` in lines the PR does not change. A PR that edits such a binding can remove the pragma.
-- Deprecating a Python function or argument also deprecates the C++ interface it binds to, when one exists. The same PR marks that C++ function, or the overload that takes the argument, `[[deprecated]]` under [`metal-api.instructions.md`](metal-api.instructions.md); the binding then becomes a forwarding binding. Flag a PR that deprecates a Python function or argument while the corresponding C++ interface stays undeprecated, and warn the author. This doesn't apply when the Python function or argument exists only in the binding and has no C++ counterpart.
+- Deprecating a Python function or argument also deprecates the C++ interface it binds to, when one exists. The same PR marks that C++ function, or the overload that takes the argument, `[[deprecated]]` under [`metal-api.instructions.md`](metal-api.instructions.md). The Python binding then warns the caller and still calls the deprecated C++ function. Flag a PR that deprecates a Python function or argument while the corresponding C++ interface stays undeprecated, and warn the author. This doesn't apply when the Python function or argument exists only in the binding and has no C++ counterpart.
 
 ### Moving an existing deprecation to the helper
 
@@ -139,7 +139,7 @@ The C++ wrapper has no dedicated test. Its logic is a GIL acquire and one call; 
 - [ ] The helper runs before any work for the deprecated function or argument, and its exception isn't swallowed
 - [ ] Only binding code calls the C++ wrapper; no code in `TTNN::CPP` emits a Python warning
 - [ ] Every in-repo caller is migrated; the remaining callers are compatibility tests using `pytest.warns(FutureWarning)`
-- [ ] No new uses of an already-deprecated interface, except a forwarding binding
+- [ ] No new uses of an already-deprecated interface, except the binding of a deprecated C++ function
 - [ ] The docstring has `.. deprecated:: <minor version>` with the version from the latest `-dev` tag on `main`
 - [ ] `.github/deprecations.json` has one entry with the existing fields and a grace of at least `4w`
 - [ ] A removal is in its own PR, after the removal window opens: four weeks after the PyPI upload of the first release, or the `earliest_removal_date` if that is later
