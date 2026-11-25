@@ -5,7 +5,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/allocator/allocator_state.hpp"
@@ -88,7 +88,6 @@ MockAllocatorState MockAllocatorState::with_allocations(const std::vector<Alloca
     auto states = impl_->state.get_states_per_buffer_type();  // copy: config kept, regions reset below
     for (auto& [buffer_type, bts] : states) {
         bts.allocated_regions.clear();
-        bts.region_source_allocator_ids.clear();
     }
 
     for (const auto& record : live) {
@@ -106,7 +105,7 @@ MockAllocatorState MockAllocatorState::with_allocations(const std::vector<Alloca
     }
 
     MockAllocatorState result;
-    result.impl_->state = AllocatorState(std::move(states), /*all_allocated_buffers=*/{});
+    result.impl_->state = AllocatorState(std::move(states));
     return result;
 }
 

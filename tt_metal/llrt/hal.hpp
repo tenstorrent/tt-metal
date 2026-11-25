@@ -11,7 +11,7 @@
 
 #include <cstddef>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt_stl/enum.hpp>
 #include <cstdint>
 #include <functional>
@@ -36,7 +36,7 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/io_window_config.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
 #include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
 enum class AddressableCoreType : uint8_t;
@@ -100,6 +100,7 @@ enum class HalL1MemAddrType : uint8_t {
     FABRIC_CONNECTION_LOCK,
     ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)
     L1_ECC_HALT,    // L1 ECC halt record and BRISC release code, l1_ecc_halt_slot_t (Blackhole Tensix only)
+    RING_BUF_HEAD,  // Watcher MPSC ring buffer head, outside the mailbox (Quasar dispatch only)
     COUNT           // Keep this last so it always indicates number of enum options
 };
 
@@ -448,6 +449,7 @@ private:
     uint64_t pcie_addr_lower_bound_{};
     uint64_t pcie_addr_upper_bound_{};
     uint32_t num_nocs_{};
+    uint32_t noc_addr_local_bits_{};
     uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
     uint32_t noc_node_id_mask_ = 0;
@@ -507,6 +509,7 @@ private:
     uint32_t eth_interrupt_mode_base_reg_{};
     uint32_t eth_interrupt_num_vecs_{};
     uint32_t noc_max_burst_size_bytes_{};
+    uint32_t noc_max_bytes_in_packet_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -571,6 +574,7 @@ public:
     uint32_t get_num_nocs() const { return num_nocs_; }
     uint32_t get_noc_node_id() const { return noc_node_id_; }
     uint32_t get_noc_node_id_mask() const { return noc_node_id_mask_; }
+    uint32_t get_noc_addr_local_bits() const { return noc_addr_local_bits_; }
     uint32_t get_noc_addr_node_id_bits() const { return noc_addr_node_id_bits_; }
     uint32_t get_noc_coord_reg_offset() const { return noc_coord_reg_offset_; }
     uint32_t get_noc_encoding_reg() const { return noc_encoding_reg_; }
@@ -635,6 +639,7 @@ public:
     uint32_t get_num_dataflow_buffers() const { return num_dataflow_buffers_; }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
+    uint32_t get_noc_max_bytes_in_packet() const { return noc_max_bytes_in_packet_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const

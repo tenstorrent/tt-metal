@@ -283,10 +283,6 @@ find_package(
     REQUIRED
 )
 
-foreach(lib ${BoostPackages})
-    target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
-endforeach()
-
 # Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
@@ -324,8 +320,6 @@ target_link_libraries(
         xtensor
         xtensor-blas
         xtl
-        Boost::core
-        Boost::container
         tt-logger
         simde::simde
         FlatBuffers::FlatBuffers
@@ -427,8 +421,6 @@ target_link_libraries(
         xtensor
         xtensor-blas
         xtl
-        Boost::core
-        Boost::container
         tt-logger
         simde::simde
         FlatBuffers::FlatBuffers
@@ -513,11 +505,7 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
 )
-nanobind_add_module(
-    _ttml
-    STABLE_ABI NB_STATIC
-    ${TTML_SRC_NANOBIND}
-)
+nanobind_add_module(_ttml STABLE_ABI NB_STATIC ${TTML_SRC_NANOBIND})
 target_link_libraries(
     _ttml
     PRIVATE
@@ -550,6 +538,25 @@ install(
 )
 
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
+
+# Device kernels are JIT-compiled from paths relative to the tt-metalium root, so an installed
+# ttml needs the kernel sources and the headers they include under that root. They ship in
+# ttml-validation only because ttml_tests is the sole packaged consumer (the ttml component is
+# excluded from CPACK_COMPONENTS_ALL); a ttml runtime package must ship them itself.
+# TODO: move them to a runtime component (https://github.com/tenstorrent/tt-metal/issues/63795).
+install(
+    DIRECTORY
+        ${CMAKE_CURRENT_SOURCE_DIR}/metal/
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt-train/sources/ttml/metal
+    COMPONENT ttml-validation
+    FILES_MATCHING
+    PATTERN
+    "*.h"
+    PATTERN
+    "*.hpp"
+    REGEX
+    "/kernels/.*\\.cpp$"
+)
 
 # CPack configuration for creating ttml deb package
 set(CPACK_GENERATOR "DEB")

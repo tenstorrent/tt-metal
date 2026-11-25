@@ -252,6 +252,8 @@ class CMakeBuild(build_ext):
                     "-DWITH_PYTHON_BINDINGS=ON",
                     "-DTT_USE_SYSTEM_SFPI=ON",
                     "-DENABLE_CCACHE=TRUE",
+                    # The wheel leaves out the matmul config model blob (ttnn/ttnn/matmul_model/__init__.py)
+                    "-DTT_MATMUL_MODEL_FETCH=OFF",
                 ]
 
                 # Add Tracy flags if enabled
@@ -336,9 +338,9 @@ class CMakeBuild(build_ext):
         ]
         ttnn_cpp_patterns = [
             "ttnn/kernel/**/*",
-            "ttnn/operations/**/kernels/**/*",
-            "ttnn/operations/**/kernels_ng/**/*",
-            "ttnn/operations/**/kernels_dfb/**/*",
+            # Every per-op kernel directory (kernels/, kernels_ng/, kernels_dfb/, kernels_qsr/, ...), as the Quasar
+            # ops' CMake kernels FILE_SET globs them: in a wheel, kernel includes resolve against this copy.
+            "ttnn/operations/**/kernels*/**/*",
             "ttnn/operations/**/shared_with_host/**/*",
             "ttnn/operations/**/hostdevcommon/**/*",
             "ttnn/operations/kernel_helper_functions/*",
@@ -351,6 +353,8 @@ class CMakeBuild(build_ext):
             # the same header tree in an installed wheel as it does in a source checkout.
             "ttnn/kernel_lib/**/*.{hpp,inl}",
             "ttnn/operations/normalization/kernel_util/**/*",
+            # The matmul config model pin (ttnn/ttnn/matmul_model/__init__.py)
+            "ttnn/operations/matmul/device/config/model/matmul_model.json",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
@@ -368,9 +372,10 @@ class CMakeBuild(build_ext):
             "fabric/impl/kernels/tt_fabric_mux_v2_kernel_common.hpp",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
-            # The DRISC tensor-prefetcher kernel and the host/device shared header it includes:
+            # The Tensor prefetcher kernels and the host/device shared headers they include:
             # a wheel run resolves kernel includes against the wheel, not TT_METAL_HOME.
             "impl/buffers/kernels/**/*",
+            "impl/buffers/tensor_prefetcher_fifo.hpp",
             "impl/buffers/tensor_prefetcher_request.hpp",
             "impl/dispatch/kernels/**/*",
             "impl/streaming_profiler/kernels/**/*",
@@ -389,6 +394,10 @@ class CMakeBuild(build_ext):
         )
         copy_tree_with_patterns(source_dir / "ttnn", self.build_lib + "/ttnn", ttnn_patterns)
         copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/ttnn/cpp", ttnn_cpp_patterns)
+        matmul_model_pin = (
+            Path(self.build_lib) / "ttnn/ttnn/cpp/ttnn/operations/matmul/device/config/model/matmul_model.json"
+        )
+        assert matmul_model_pin.is_file(), f"{matmul_model_pin} is missing: ttnn can't download the matmul config model"
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel

@@ -3,15 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_scatter_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
 
@@ -88,7 +88,7 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterDeviceOperation::ReduceScatterProg
         const std::vector<tt::tt_metal::GlobalSemaphore> op_semaphores(
             multidevice_semaphores.begin(), multidevice_semaphores.begin() + 3);
         if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-            ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
+            ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_descriptor(
                 program,
                 tensor_args.input_tensor,
                 tensor_return_value.at(0),
@@ -113,7 +113,7 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterDeviceOperation::ReduceScatterProg
                 first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
                 operation_attributes.compute_kernel_config);
         } else {
-            ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts(
+            ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_descriptor(
                 program,
                 tensor_args.input_tensor,
                 tensor_return_value.at(0),

@@ -17,7 +17,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -69,8 +69,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             l1_addr_16B = L1_ADDRESS(buffer_A[0]);
         }
 
-        const auto bfd_unpack =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(TENSOR_SHAPE_FROM_PARAMS(params), l1_addr_16B, formats.unpack_A_src);
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(TENSOR_SHAPE_FROM_PARAMS(params), l1_addr_16B, formats.unpack_A_src);
+        constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
             // If Dest is in 32bit mode and operation is Mov2D, we need both SrcA/B fmts to be configured since Mov2D will be implemented via ELWADD
@@ -181,7 +181,7 @@ inline void run_datacopy_transpose_loop(
             {
                 // Datacopy and transpose both use bank0's instruction buffer, so
                 // each operation must program its MOP immediately before execution.
-                _configure_default_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
+                _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
                 _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * face_r_dim /*num_rows_per_matrix*/, 1 /*num_matrices*/);
 
                 for (std::uint32_t i = 0; i < tiles_in_block; ++i)
@@ -191,7 +191,7 @@ inline void run_datacopy_transpose_loop(
             }
 
             // Int32/Float32 transpose dest requires non-default SrcA/SrcB format settings
-            _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
+            _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
             _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
             for (std::uint32_t i = 0; i < tiles_in_block; ++i)
             {
@@ -250,7 +250,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
@@ -285,7 +285,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -307,9 +307,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
+        // PACK_ISOLATE packs without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -325,8 +325,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            TENSOR_SHAPE_FROM_PARAMS(params), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(TENSOR_SHAPE_FROM_PARAMS(params), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, output_tiles_in_block);
         PROFILER_SYNC();
@@ -336,7 +336,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)

@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
     CoreCoord core = {0, 0};
     const auto device_coord = distributed::MeshCoordinate(0, 0);

@@ -16,7 +16,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Kernel -> ComputeEngineMask map (Gen2/Quasar only).
 // DM masks flow through KernelCouplingGroup (equivalence class) rather than per-KernelSpec, so the DM
@@ -473,4 +473,4 @@ KernelRiscMaskMap SolveKernelRiscMasks(const ProgramSpec& spec, const CollectedS
     return is_gen2_arch(hal) ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

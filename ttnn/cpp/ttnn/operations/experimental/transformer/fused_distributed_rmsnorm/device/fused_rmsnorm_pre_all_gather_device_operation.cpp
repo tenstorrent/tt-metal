@@ -5,7 +5,7 @@
 #include "fused_rmsnorm_pre_all_gather_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device_operation.hpp"
@@ -18,6 +18,10 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& tensor = tensor_args.input_tensor;
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", tensor.layout());
+    TT_FATAL(
+        tensor.padded_shape()[-1] > 0 && tensor.padded_shape()[-2] > 0,
+        "Input must have non-zero height and width, got shape {}",
+        tensor.padded_shape());
     TT_FATAL(
         tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input tensor must use INTERLEAVED memory layout, got: {}",

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "llrt/tt_target_device.hpp"
 
 namespace tt::llrt {

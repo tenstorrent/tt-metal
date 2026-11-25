@@ -9,9 +9,9 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -57,7 +57,8 @@ struct SliceReshardAsyncParams {
         topology(topology),
         ring_size(ring_size) {}
 
-    // Program-cache hash / canonical-key fields.
+    // Reflection / printing fields. The program-cache key is
+    // SliceReshardAsyncDeviceOperation::compute_program_hash.
     static constexpr auto attribute_names = std::make_tuple(
         "dim",
         "output_dim_offset",

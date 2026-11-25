@@ -3,12 +3,12 @@
 
 #include "pool_utils.hpp"
 #include <limits>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "tt-metalium/constants.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn::operations::pool {
@@ -109,6 +109,10 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
 }
 
 DataType get_index_data_type(uint32_t in_h, uint32_t in_w) {
+    // Quasar has no UInt16/UInt32 formats and its SFPU integer add is Int32-only.
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR) {
+        return DataType::INT32;
+    }
     uint32_t hw = in_h * in_w;
     if (hw <= std::numeric_limits<uint16_t>::max()) {
         return DataType::UINT16;
@@ -130,13 +134,12 @@ FactoryParameters get_factory_parameters(
     bool return_indices,
     uint32_t in_h,
     uint32_t in_w,
-    const Layout& output_layout,
-    bool single_reader_stream) {
+    const Layout& output_layout) {
     uint32_t multi_buffering_factor = 2;
-    bool split_reader = !single_reader_stream;
-    TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
     const bool is_quasar = tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR;
-    TT_FATAL(!(is_quasar && split_reader), "split reader is not supported on Quasar");
+    // Quasar has no split reader: its MPWI reader0/reader1 pair is an input producer plus a writer
+    // sharing one input CB, and non-MPWI uses one multi-threaded reader.
+    const bool split_reader = !is_quasar;
     // SPMD threads per cluster: symmetric STRIDED pairs reader thread i with compute thread i into
     // private (DM, NEO) lanes; Gen1 stays 1. Any per-core stick count is legal — the reader deals
     // sticks round-robin and each compute lane derives its own share, so remainders just shorten
@@ -247,7 +250,8 @@ PoolCBSizes calculate_pool_cb_sizes(
     const std::array<uint32_t, 2>& output_shard_shape,
     bool config_tensor_in_dram,
     std::optional<uint32_t> reader_indices_actual_page_size,
-    std::optional<uint32_t> scalar_config_actual_page_size) {
+    std::optional<uint32_t> scalar_config_actual_page_size,
+    uint32_t pre_tilize_tile_rows) {
     PoolCBSizes sizes;
     const bool is_output_tiled = output_layout == Layout::TILE;
 
@@ -293,7 +297,7 @@ PoolCBSizes calculate_pool_cb_sizes(
     sizes.has_pre_tilize = is_output_tiled;
     if (is_output_tiled) {
         sizes.pre_tilize_cb_pagesize = tt::constants::TILE_WIDTH * params.nbytes;
-        sizes.pre_tilize_cb_npages = tt::constants::TILE_HEIGHT * params.in_ntiles_c;
+        sizes.pre_tilize_cb_npages = pre_tilize_tile_rows * tt::constants::TILE_HEIGHT * params.in_ntiles_c;
     } else {
         sizes.pre_tilize_cb_pagesize = 0;
         sizes.pre_tilize_cb_npages = 0;
@@ -360,7 +364,8 @@ pool_op_l1_usage calculate_L1_usage(
     std::optional<int32_t> divisor_override,
     const Layout& output_layout,
     const DataType& output_dtype,
-    bool config_tensor_in_dram) {
+    bool config_tensor_in_dram,
+    uint32_t pre_tilize_tile_rows) {
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -384,9 +389,7 @@ pool_op_l1_usage calculate_L1_usage(
         return_indices,
         in_h,
         in_w,
-        output_layout,
-        // Quasar runs a single reader stream (split reader is unsupported there); mirror the factory.
-        /*single_reader_stream=*/tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR);
+        output_layout);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
@@ -399,7 +402,10 @@ pool_op_l1_usage calculate_L1_usage(
         output_layout,
         output_dtype,
         {output_shard_shape[0], output_shard_shape[1]},
-        config_tensor_in_dram);
+        config_tensor_in_dram,
+        /*reader_indices_actual_page_size=*/std::nullopt,
+        /*scalar_config_actual_page_size=*/std::nullopt,
+        pre_tilize_tile_rows);
 
     log_trace(
         tt::LogOp,
@@ -422,7 +428,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     bool return_indices,
     const Layout& output_layout,
     const DataType& output_dtype,
-    bool config_tensor_in_dram) {
+    bool config_tensor_in_dram,
+    uint32_t pre_tilize_tile_rows) {
     uint32_t batch_size = sliding_window_config.batch_size;
     uint32_t channels = sliding_window_config.channels;
     auto output_shape = sliding_window_config.get_output_shape();
@@ -491,7 +498,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             divisor_override,
             output_layout,
             output_dtype,
-            config_tensor_in_dram);
+            config_tensor_in_dram,
+            pre_tilize_tile_rows);
 
         return {.l1_usage = l1_usage, .config = input_parallel_config};
     };
@@ -632,7 +640,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     Layout output_layout,
     const tt::tt_metal::MemoryConfig& input_memory_config,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
-    bool config_tensor_in_dram) {
+    bool config_tensor_in_dram,
+    uint32_t pre_tilize_tile_rows) {
     // The input_memory_config passed in is already computed for the SLICED input dimensions
     // (see get_input_memory_config in generic_pools.cpp which calls get_pool_input_memory_config
     // with the sliced shape). So we can use its shard_spec directly.
@@ -774,7 +783,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         divisor_override,
         output_layout,
         dtype,
-        config_tensor_in_dram);
+        config_tensor_in_dram,
+        pre_tilize_tile_rows);
     uint32_t pool_cb_usage = pool_l1.total();
 
     // Calculate actual pool output tensor size for memory tracking

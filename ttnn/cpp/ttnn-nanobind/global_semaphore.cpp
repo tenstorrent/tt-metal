@@ -11,7 +11,7 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
 #include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
 #include <nanobind/stl/optional.h>
 
@@ -31,12 +31,11 @@ void py_module(nb::module_& mod) {
             using namespace tt::tt_metal;
             TT_FATAL(buffer_type == BufferType::L1, "Address-based semaphores require ordinary SRAM");
             return tt::tt_metal::experimental::CreateGlobalSemaphore(
-                mesh,
+                ttnn::core::current_mesh_command_queue(mesh),
                 cores,
                 initial_value,
                 buffer_type,
-                address,
-                ttnn::core::get_current_command_queue_id_for_thread().get());
+                address);
         },
         nb::arg("mesh_device"),
         nb::arg("cores"),

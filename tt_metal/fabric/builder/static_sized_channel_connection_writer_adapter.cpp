@@ -23,6 +23,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     const SenderWorkerAdapterSpec& adapter_spec,
     uint32_t inbound_vc_idx,
     uint32_t sender_channel_idx,
+    uint32_t sender_channel_vc_relative_idx,
     eth_chan_directions downstream_direction,
     tt::tt_metal::CoreCoord downstream_noc_xy,
     bool is_2D_routing) {
@@ -41,6 +42,8 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
         this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) |= (1 << compact_index);
         this->downstream_sender_channel_ids.at(inbound_vc_idx).at(compact_index) = sender_channel_idx;
+        this->downstream_sender_vc_relative_channel_ids.at(inbound_vc_idx).at(compact_index) =
+            sender_channel_vc_relative_idx;
 
         // Store addresses indexed by [vc_idx][compact_index]
         // NOTE: For single-target turns, this works fine (one connection per compact_index)
@@ -55,6 +58,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
             adapter_spec.buffer_index_semaphore_id;
     } else {
         this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) = 1;
+        this->downstream_sender_vc_relative_channel_ids.at(inbound_vc_idx).at(0) = sender_channel_vc_relative_idx;
 
         // For 1D, store at compact index 0
         this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(0) = adapter_spec.edm_buffer_base_addr;
@@ -66,6 +70,16 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
             adapter_spec.buffer_index_semaphore_id;
     }
 
+    // The router keeps one downstream buffer count per VC (router_downstream.hpp, DownstreamTraits::num_slots): every
+    // sender channel this VC forwards into must have the same number of buffers.
+    const size_t vc_num_buffers = this->downstream_sender_channels_num_buffers.at(inbound_vc_idx);
+    TT_FATAL(
+        vc_num_buffers == 0 || vc_num_buffers == adapter_spec.num_buffers_per_channel,
+        "VC{} forwards into downstream sender channels of {} and {} buffers, but the router keeps one downstream buffer "
+        "count per VC: every forwarding channel of a VC must have the same number of buffers",
+        inbound_vc_idx,
+        vc_num_buffers,
+        adapter_spec.num_buffers_per_channel);
     this->downstream_sender_channels_num_buffers.at(inbound_vc_idx) = adapter_spec.num_buffers_per_channel;
     this->downstream_edms_connected_by_vc_set.insert(inbound_vc_idx);
 }
@@ -91,6 +105,48 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::get_packed_downstream_sender
                                      << (compact_idx * sender_channel_id_width_bits);
     }
     return packed_sender_channel_ids;
+}
+
+uint32_t StaticSizedChannelConnectionWriterAdapter::get_packed_downstream_sender_fabric_positions(
+    uint32_t vc_idx, uint32_t vc_fabric_position_start) const {
+    constexpr uint32_t position_width_bits = 4;
+    constexpr size_t num_2d_entries = builder_config::num_downstream_edms_2d_vc1_wide;
+    static_assert(
+        num_2d_entries * position_width_bits <= 32, "Packed downstream sender positions must fit in one word");
+    static_assert(
+        builder_config::num_max_sender_channels <= (1u << position_width_bits),
+        "A fabric sender position must fit in a packed field");
+
+    const size_t num_entries = this->is_2D_routing ? num_2d_entries : 1;
+    const uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
+    uint32_t packed_positions = 0;
+    for (size_t entry = 0; entry < num_entries; entry++) {
+        uint32_t vc_relative_channel = 0;
+        if ((mask & (1u << entry)) != 0) {
+            const auto connected_channel = this->downstream_sender_vc_relative_channel_ids.at(vc_idx).at(entry);
+            TT_FATAL(connected_channel.has_value(), "Missing downstream sender channel for downstream entry {}", entry);
+            vc_relative_channel = static_cast<uint32_t>(*connected_channel);
+        } else {
+            // No downstream router here: the router never forwards to this entry, but its kernel still names a
+            // register for it at compile time. Give it the channel the direction ranking assigns.
+            const auto downstream_direction = this->is_2D_routing
+                                                  ? builder::direction_from_compact_index(this->my_direction, entry)
+                                                  : this->my_direction;
+            vc_relative_channel = builder::get_downstream_sender_channel_for_vc(
+                this->is_2D_routing, vc_idx, this->my_direction, downstream_direction);
+        }
+        const uint32_t position = vc_fabric_position_start + vc_relative_channel;
+        TT_FATAL(
+            position < (1u << position_width_bits),
+            "Downstream sender position {} (VC{} base {} + channel {}) does not fit in {} bits",
+            position,
+            vc_idx,
+            vc_fabric_position_start,
+            vc_relative_channel,
+            position_width_bits);
+        packed_positions |= position << (entry * position_width_bits);
+    }
+    return packed_positions;
 }
 
 void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(

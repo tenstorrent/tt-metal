@@ -10,7 +10,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "dispatch_fabric2d.hpp"
@@ -116,7 +116,7 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::arg("seq_len_per_chip"),
         nb::arg("cluster_axis") = 0,
         nb::arg("num_links") = 1,
-        nb::arg("fwd_vc_pages") = 64,
+        nb::arg("fwd_vc_pages"),
         nb::arg("topology"),
         nb::arg("memory_config"),
         nb::arg("subdevice_id") = nb::none(),
@@ -137,9 +137,9 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("emb_dim"),
         nb::arg("seq_len_per_chip"),
+        nb::arg("fwd_vc_pages"),
         nb::arg("cluster_axis") = 0,
-        nb::arg("num_links") = 1,
-        nb::arg("fwd_vc_pages") = 64);
+        nb::arg("num_links") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d::detail

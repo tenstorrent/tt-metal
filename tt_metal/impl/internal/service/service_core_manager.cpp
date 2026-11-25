@@ -12,13 +12,13 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "impl/allocator/algorithms/free_list_opt.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 #include <llrt/hal.hpp>

@@ -11,6 +11,9 @@
 # slow dispatch. Tracking issue for the one exclusion: #45483.
 - name: LLK SD wormhole (full suite, nightly)
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-MeshDeviceFixture.Top32RmDevPipelineCompletes'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 40
@@ -24,6 +27,9 @@
 
 - name: LLK SD blackhole (full suite, nightly)
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-MeshDeviceFixture.Top32RmDevPipelineCompletes'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_p150b_civ2_viommu:
       timeout: 40
