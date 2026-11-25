@@ -1281,3 +1281,23 @@ def test_unpaired_zone_records_are_rejected(entries):
         ValueError, match="buffer corruption"
     ):
         Profiler._parse_thread("unpack", _zone_words(entries), _ZONE_META)
+
+
+def test_each_code_position_dumps_only_its_own_rows(tmp_path, monkeypatch):
+    from helpers import llk_pytest_plugin as plugin
+
+    monkeypatch.setattr(plugin, "_MODULE_REPORTS", {})
+    for position, tile_cnt in (("p0", 4), ("p4", 8)):
+        monkeypatch.setattr(
+            TestConfig, "PERF_DATA_DIR", tmp_path / position, raising=False
+        )
+        (tmp_path / position).mkdir()
+        frame = _build(_fake_formats())
+        frame["tile_cnt"] = tile_cnt
+        report = PerfReport()
+        report.append(frame)
+        plugin._dump_perf_report("perf_x", "gw0", report)
+
+    for position, tile_cnt in (("p0", 4), ("p4", 8)):
+        rows = pd.read_csv(tmp_path / position / "perf_x.gw0.csv")
+        assert rows["tile_cnt"].tolist() == [tile_cnt] * len(rows)

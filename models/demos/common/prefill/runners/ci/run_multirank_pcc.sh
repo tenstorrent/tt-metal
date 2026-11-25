@@ -92,6 +92,8 @@ PERF_GATE="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py"
 # Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
 # on nothing.
 REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-0}"
+# The perf_baselines.json key under the model when a gated variant sets its own (below); else CONFIG.
+PERF_CONFIG=""
 RUNNER_ENV=""
 PRODUCER_ENV=""
 PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
@@ -238,6 +240,16 @@ case "${MODEL}" in
     # The adapter's defaults already name the K3.1 weights and golden, so only the 4x4 cache is resolved here.
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
+    if [ "${VARIANT}" = _packed ]; then
+      # Four 2,560-token chunks per forward (kimi_k3_1_packed.json), the production shape, traced with D2H acks; one
+      # slot fewer than kimi_k3_1.json, for the traced packed forward's scratch slot. Same golden and PCC gate. 4x4
+      # only: on the 8x4 layout's 5,120-token chunks the budget would pack two, not the four production runs.
+      case "${CONFIG}" in
+        sc1|sc4) ;;
+        *) echo "${MODEL} --variant packed runs the 4x4 configs (sc1, sc4) only" >&2; exit 2 ;;
+      esac
+      MANIFEST="${MANIFEST_DIR}/kimi_k3_1_packed.json"
+    fi
     SC1_NUM_LAYERS=24
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # The cache root is the adapter's ttnn_cache_default; 76 slots measured for the 8x4 stage.
@@ -285,9 +297,16 @@ if [ -n "${VARIANT}" ]; then
   # takes none.
   [ "${TAIL_GOLDEN}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
   PRODUCER_ENV+=" export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
-  PERF_BASELINES=""
-  REQUIRE_TPS=0
   EXPECTED_TPS=""
+  if [ "${VARIANT}" = _packed ]; then
+    # Packed is gated on its own baseline (perf_baselines.json <model>/<config>_packed), and must measure
+    # something even before it has one.
+    PERF_CONFIG="${CONFIG}${VARIANT}"
+    REQUIRE_TPS=1
+  else
+    PERF_BASELINES=""
+    REQUIRE_TPS=0
+  fi
 fi
 PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
 
@@ -577,6 +596,14 @@ WATCHDOG_PID=$!
 # shallower models nothing. Keep it below the leg's job timeout, or the container is killed first
 # and this diagnostic never prints.
 TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-${TABLE_WAIT_DEFAULT}}"
+# A CI job running several launches sets PREFILL_JOB_DEADLINE (epoch seconds) once: each launch then waits no longer
+# than the job has left, less a margin, so a stuck bringup in a later launch still prints the line below before the
+# container is killed.
+if [ -n "${PREFILL_JOB_DEADLINE:-}" ]; then
+  JOB_LEFT=$(( PREFILL_JOB_DEADLINE - $(date +%s) - 120 ))
+  [ "${JOB_LEFT}" -lt 5 ] && JOB_LEFT=5
+  [ "${JOB_LEFT}" -lt "${TABLE_WAIT_SECS}" ] && TABLE_WAIT_SECS=${JOB_LEFT}
+fi
 WAITED=0
 while [ "${WAITED}" -lt "${TABLE_WAIT_SECS}" ]; do
   [ -f "${TABLE_PATH}" ] && break
@@ -771,7 +798,7 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
   fi
   env ${GATE_ENV[@]+"${GATE_ENV[@]}"} python3 "${PERF_GATE}" \
     "${PREFILL_SUMMARIES}/perf_json/${RUN_NAME}_${CONFIG}.json" \
-    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
+    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${PERF_CONFIG:-${CONFIG}}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
     --require "${REQUIRE_TPS}" 2>&1 | tee -a "${GATE_LOG}" || PERF_GATE_RC=$?
 fi

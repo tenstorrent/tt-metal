@@ -6,24 +6,24 @@
 
 #include "program_command_sequence.hpp"
 
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_constants.h"
-#include "tt-metalium/circular_buffer_config.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer_constants.h"
+#include "tt-metalium/workload/legacy/circular_buffer_config.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt_stl/optional_reference.hpp>
-#include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
-#include "tt-metalium/kernel_types.hpp"  // KernelHandle
-#include "tt-metalium/program.hpp"       // KernelGroup
-#include "tt-metalium/mesh_workload.hpp"
+#include "tt-metalium/vocabulary/core_coord.hpp"
+#include "tt-metalium/vocabulary/hal_types.hpp"          // HalProgrammableCoreType
+#include "tt-metalium/workload/legacy/kernel_types.hpp"  // KernelHandle
+#include "tt-metalium/workload/program.hpp"              // KernelGroup
+#include "tt-metalium/workload/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/metal2_host_api/sram_arena_support.hpp"
-#include "tt-metalium/sub_device_types.hpp"
-#include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
+#include "tt-metalium/mesh/sub_device_types.hpp"
+#include "tt-metalium/memory/tensor/spec/tensor_spec.hpp"                  // Metal 2.0 TensorParameter registry
 #include "tt-metalium/workload/specification/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt-metalium/experimental/sram_arena/sram_arena_properties.hpp"
 #include "tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp"
@@ -251,6 +251,7 @@ public:
     ProgramId get_id() const;
     std::size_t num_kernels() const;
     std::span<const std::shared_ptr<CircularBufferImpl>> circular_buffers() const;
+    void check_circular_buffers_bound();
     const std::vector<Semaphore>& semaphores() const;
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers()
         const;
@@ -960,6 +961,8 @@ private:
     // invalidate_*_allocation hooks and the CB/DFB creation paths set this back to true. Recorded
     // per device, since the layout steps also register the program against the device.
     bool compile_and_allocate_needed_{true};
+    // Set once a check finds every CB bound.
+    bool circular_buffers_bound_{false};
     const IDevice* compile_and_allocate_device_{nullptr};
     // For lockstep allocation, a single live L1 frontier check covers every static CB and DFB
     // region validated during layout. Service-core claims only add checks for CB regions that sit

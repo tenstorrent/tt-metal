@@ -11,12 +11,12 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tests/ttnn/unit_tests/gtests/accessor/common.hpp"
 
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/api/ttnn/distributed/api.hpp"

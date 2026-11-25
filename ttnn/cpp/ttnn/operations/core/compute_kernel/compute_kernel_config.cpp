@@ -4,7 +4,7 @@
 
 #include <atomic>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/specification/compute_hardware_config.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "compute_kernel_config.hpp"

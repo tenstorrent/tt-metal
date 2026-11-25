@@ -17,12 +17,11 @@ GATE_CASES, each at its model's fabric packet size: K3.1 (last DSA layer's slot 
 layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's top-k). Untraced: fastest of 10 after 10 warm-up
 (tests/measure). Traced: one timed replay of the captured trace. Each (case, box, scenario, mode) is gated two-sided
 against PERF_TARGETS_MS ± MARGIN[mode] (a case without targets only reports), and the traced output must match the
-untraced one (one extra untimed run of each, for triage). Each layer runs standalone (no
-next-layer KV prefetch overlapped with its attention); the shared layer reuses its push plan, as it would inside a
-stage.
+untraced one (one extra untimed run of each, for triage). GLM-5.3 layers run inside a stage, as in the model, with the
+sparse KV push plan and the next layer's prefix push where the fabric supports the push; one layer is timed.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
-GLM-5.3 (last full indexer layer, 21-slot index cache) and K3.1 x warm/cold/long x sparse with a BF16 or
+GLM-5.3 (last full indexer layer, as a stage) and K3.1 x warm/cold/long x sparse with a BF16 or
 scaled-FP8 cache / dense ring-MLA baseline. Narrow with -k, e.g. -k "glm_5_3 and cold and kv_scaled_fp8".
 """
 
@@ -60,15 +59,21 @@ MODES = ("untraced", "traced")
 # process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox, Galaxy and Galaxy 4x4: CI
 # hosts; Galaxy and Galaxy 4x4 then scaled by the q-in-L1 change's measured speedup (3 interleaved runs each of main and
 # the change on one Galaxy; ratios under 1% left unapplied), LoudBox by Galaxy's (same 160 q rows per chip, not
-# measured). Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
+# measured). Then re-centred on CI runs after that change: each value is the mean over runs of that run's measurement
+# (fastest untraced sample, traced replay). Galaxy 8x4 K3.1 warm and GLM-5.3: 2-3 runs; Galaxy 4x4 K3.1 warm and
+# LoudBox K3.1: 1 run; deltas under 1% left as is. Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled
+# Galaxy (3 runs), unscaled. Galaxy 8x4 GLM-5.3: re-measured with the stage cases on a CI host (1 run). LoudBox
+# GLM-5.3 (both cases): first measured on CI LoudBoxes (6 processes on 3 hosts, 10 readings per value with in-process
+# repeats): the mean of the readings, every reading within the band; one warm untraced reading (+18%, a third repeat in
+# one process, traced replay normal) left out.
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (2.88, 2.54, 6.47, 6.18),
-        "glm_5_3": (2.91, 2.44, 6.46, 6.01),
-        "glm_5_3-no_indexer": (2.34, 2.00, 2.39, 2.07),
+        "kimi_k3_1": (2.93, 2.63, 6.47, 6.18),
+        "glm_5_3": (3.13, 2.70, 6.73, 6.32),
+        "glm_5_3-no_indexer": (2.29, 1.97, 2.36, 2.05),
     },
     "Galaxy 4x4": {
-        "kimi_k3_1": (3.25, 3.00, 7.21, 6.98),
+        "kimi_k3_1": (3.21, 3.05, 7.21, 6.98),
         "glm_5_3": (2.91, 2.69, 6.81, 6.53),
         "glm_5_3-no_indexer": (2.29, 2.23, 4.72, 4.56),
     },
@@ -78,9 +83,9 @@ _TARGETS_MS = {
         "glm_5_3-no_indexer": (2.14, 1.98, 2.22, 2.08),
     },
     "LoudBox": {
-        "kimi_k3_1": (2.57, 2.38, 3.82, 3.71),
-        "glm_5_3": (2.36, 2.20, 3.62, 3.46),
-        "glm_5_3-no_indexer": (1.97, 1.92, 2.71, 2.67),
+        "kimi_k3_1": (2.65, 2.51, 3.87, 3.71),
+        "glm_5_3": (2.31, 2.11, 3.47, 3.26),
+        "glm_5_3-no_indexer": (1.87, 1.83, 2.59, 2.55),
     },
 }
 PERF_TARGETS_MS = {

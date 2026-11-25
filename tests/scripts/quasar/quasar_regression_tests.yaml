@@ -580,10 +580,10 @@ unit_tests_llk:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  # Matmul cases on LLKMeshDeviceFixture that do not skip on Quasar.
+  # Matmul cases on LLKMeshDeviceFixture that do not skip on Quasar, plus the Quasar int8 matmul suite.
   # No-MOP and MxFp4x2 are on LLKQuasarMeshDeviceSingleCardFixture. Single-tile and single-block
   # single-tile matmul skip on Quasar.
-  - filter: "LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul:LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockL1AccComputeMatmul"
+  - filter: "LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul:LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockL1AccComputeMatmul:QuasarMatmulInt8/LLKQuasarMatmulInt8Fixture.*"
     config: 1x3
     back2back: true
     env:

@@ -9,7 +9,7 @@
 #include <utility>
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -31,7 +31,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <cstdint>
 
 namespace ttnn {
@@ -1706,6 +1706,17 @@ std::vector<Tensor> cosh_bw(
 // #         )
 std::vector<Tensor> logiteps_bw(
     const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves at the
+    // fitted scalar values; every other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config) && std::bit_cast<uint32_t>(eps) == 0x00000000u) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::LOGITEPS_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     const float low = eps < 0.0f ? 0.0f : eps;
     const float high = 1.0f - low;

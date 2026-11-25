@@ -8,7 +8,7 @@
 
 #include "ttnn/device_operation.hpp"
 
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
 
 namespace ttnn::operations::experimental::quasar::high_bw_all_gather {
 
