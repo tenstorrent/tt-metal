@@ -19,14 +19,15 @@
 
 #include <fmt/core.h>
 #include <fmt/format.h>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 using namespace tt::constants;
 using namespace tt;
@@ -473,7 +474,7 @@ int main(int argc, char* argv[]) {
                 work_per_core1 = wpc1; work_per_core2 = wpc2;
             }
 
-            Program program{};
+            Program program = CreateProgram(*mesh_device);
             constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
             distributed::DeviceLocalBufferConfig dram_config{

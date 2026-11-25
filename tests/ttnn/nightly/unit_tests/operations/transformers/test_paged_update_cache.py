@@ -1442,3 +1442,33 @@ def test_paged_update_cache_preserves_fp32_neighbors(input_dtype, device):
             expected[user, 0, index, :] = 3.0
         assert torch.equal(ttnn.to_torch(cache_tt), expected)
     assert device.num_program_cache_entries() - entries_before == 1
+
+
+@pytest.mark.parametrize("bad_position", [256, 300])
+def test_update_cache_decode_attr_idxs_rejects_position_past_sequence(device, bad_position, expect_error):
+    """A position in the update_idxs list past the cache's sequence length used to be accepted and
+    written into the next user's rows or past the end of the cache. The first, valid call builds the
+    program, so the rejected one is a program-cache hit: compute_program_hash excludes the positions."""
+    num_users, num_heads, max_seq_len, head_dim = 4, 1, 256, 128
+    input_shape = [1, num_users, num_heads, head_dim]
+    cache = torch.randn([num_users, num_heads, max_seq_len, head_dim]).bfloat16().float()
+    cachett = ttnn.Tensor(cache, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    x = torch.randn(input_shape).bfloat16().float()
+    x_pad = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_heads), "constant", 0)
+    xt = ttnn.reshape(ttnn.Tensor(x_pad, ttnn.bfloat16).to(ttnn.TILE_LAYOUT), ttnn.Shape(input_shape))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_users, device.compute_with_storage_grid_size(), True)
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [xt.volume() // xt.padded_shape[-1] // num_users, xt.padded_shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    xt = xt.to(device, input_mem_config)
+
+    # The last valid position is accepted.
+    ttnn.experimental.paged_update_cache(cachett, xt, update_idxs=[max_seq_len - 1] * num_users)
+    expected = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+    with expect_error(RuntimeError, "must be less than cache tensor sequence length"):
+        ttnn.experimental.paged_update_cache(cachett, xt, update_idxs=[0, 1, bad_position, 2])
+    assert torch.equal(cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch(), expected)

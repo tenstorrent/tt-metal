@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/int8.hpp>
+#include <tt-metalium/data_formats/int8.hpp>
 
 #include <random>
 #include <tt_stl/assert.hpp>

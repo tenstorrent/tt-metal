@@ -16,25 +16,24 @@
 #include "optional"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <vector>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // Per-core reader/writer arg vectors (geometry unchanged from the shared RM factory). Reader vector:
 //   [0]=src abs addr (aligned-down)+width_offset, [1]=unpadded_stick, [2]=stick_offset, [3]=num_dims,
@@ -79,10 +78,10 @@ get_padded_slice_runtime_args_rm_sharded_output(
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
 
@@ -92,7 +91,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     const int slice_row_size_bytes = static_cast<int>(actual_output_shape[-1] * input_tensor.element_size());
 
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
-    uint32_t start_addr = input_tensor.buffer()->address();
+    uint32_t start_addr = input_tensor.mesh_buffer().address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,
         output_row_size_bytes,
@@ -216,13 +215,13 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     uint32_t slice_row_size_bytes = (actual_output_shape[-1] * a.element_size()) / num_cores_channels;
 
     TT_FATAL(
-        output.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+        output.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
         "padded_slice output buffer must be L1 (sharded).");
 
-    auto src_buffer_alignment = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = a.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     TT_FATAL(
@@ -333,7 +332,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     auto per_core = get_padded_slice_runtime_args_rm_sharded_output(
         a, output, output_tensor_start, actual_output_shape, iter_cores);
 
-    const uint32_t start_addr = a.buffer()->address();
+    const uint32_t start_addr = a.mesh_buffer().address();
     const uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
     ProgramRunArgs run_args;

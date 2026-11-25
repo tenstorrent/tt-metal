@@ -29,7 +29,7 @@ from helpers.test_variant_parameters import (
     WELFORDS,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 WELFORDS_FORMATS = [
     InputOutputFormat(fmt, fmt) for fmt in (DataFormat.Float16_b, DataFormat.Float32)
@@ -294,7 +294,7 @@ def test_sfpu_welfords_quasar(formats, scenario_name):
 
     res_from_L1 = configuration.run().result
     res = untilize_block(
-        torch.tensor(res_from_L1, dtype=format_dict[formats.output_format]),
+        result_tensor(res_from_L1, formats.output_format),
         formats.output_format,
         dims,
     ).to(torch.float64)

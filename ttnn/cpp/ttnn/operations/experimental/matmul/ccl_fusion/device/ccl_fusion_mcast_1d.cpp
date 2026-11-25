@@ -17,19 +17,18 @@
 // which matmul's legacy 1D builder binds too. Copy them here before matmul deletes them.
 
 #include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_1d.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
 #include <map>
 #include <utility>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

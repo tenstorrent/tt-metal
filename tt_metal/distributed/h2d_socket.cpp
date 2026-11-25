@@ -6,16 +6,19 @@
 #include "tt_metal/distributed/h2d_socket_impl.hpp"
 #include <internal/mesh_device.hpp>
 #include <internal/service/service_core_manager.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <internal/l1_ecc_halt.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include <tt-metalium/experimental/sockets/named_shm.hpp>
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include <tt-umd/driver_atomics.hpp>
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/dispatch/host_transfer_stats.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -23,16 +26,17 @@
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"  // emule::pump_device
 #endif
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-umd/io_window/io_window.hpp>
+#include "tt_metal/distributed/core_writer.hpp"
+#include "tt_metal/distributed/noc_pinned_buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
-#include <sys/mman.h>
 #include <unistd.h>
 
 namespace tt::tt_metal::distributed {
@@ -96,22 +100,17 @@ H2DSocketImpl::PinnedBufferInfo H2DSocketImpl::init_bytes_acked_buffer(
         "System Memory Allocation Error: Bytes_acked buffer must be aligned to the PCIe alignment.");
     // NamedShm::create zero-initializes the region; no explicit memset needed.
     host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
-    tt::tt_metal::HostBuffer bytes_acked_buffer_view(
-        ttsl::Span<uint32_t>(host_buffer_.get(), 1), tt::tt_metal::MemoryPin(host_buffer_));
-    pinned_memory_ =
-        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, bytes_acked_buffer_view, true);
-
-    const auto& noc_addr =
-        pinned_memory_->get_noc_addr(internal::get_device(*mesh_device, recv_core_.device_coord)->id());
-    TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for bytes_acked pinned memory.");
-    TT_FATAL(
-        noc_addr.value().device_id == internal::get_device(*mesh_device, recv_core_.device_coord)->id(),
-        "Pinned Memory used for H2D sockets must be mapped to the same device as the receiver core. H2D Sockets cannot "
-        "communicate with remote devices");
+    const NocPinnedBuffer pinned = pin_host_memory_for_noc(
+        *mesh_device,
+        device_range,
+        ttsl::Span<uint32_t>(host_buffer_.get(), 1),
+        internal::get_device(*mesh_device, recv_core_.device_coord)->id(),
+        "H2D socket bytes_acked");
+    pinned_memory_ = pinned.pinned_memory;
     return PinnedBufferInfo{
-        .pcie_xy_enc = noc_addr.value().pcie_xy_enc,
-        .addr_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull),
-        .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
+        .pcie_xy_enc = pinned.pcie_xy_enc,
+        .addr_lo = static_cast<uint32_t>(pinned.addr & 0xFFFFFFFFull),
+        .addr_hi = static_cast<uint32_t>(pinned.addr >> 32)};
 }
 
 H2DSocketImpl::PinnedBufferInfo H2DSocketImpl::init_host_data_buffer(
@@ -135,19 +134,17 @@ H2DSocketImpl::PinnedBufferInfo H2DSocketImpl::init_host_data_buffer(
         "System Memory Allocation Error: Host data buffer must be aligned to the PCIe alignment.");
     host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
 
-    tt::tt_metal::HostBuffer host_buffer_view(
-        ttsl::Span<uint32_t>(host_buffer_.get(), host_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
-    pinned_memory_ =
-        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
-
-    const auto& noc_addr =
-        pinned_memory_->get_noc_addr(internal::get_device(*mesh_device, recv_core_.device_coord)->id());
-    TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for data pinned memory.");
-
+    const NocPinnedBuffer pinned = pin_host_memory_for_noc(
+        *mesh_device,
+        device_range,
+        ttsl::Span<uint32_t>(host_buffer_.get(), host_buffer_size_words),
+        internal::get_device(*mesh_device, recv_core_.device_coord)->id(),
+        "H2D socket data");
+    pinned_memory_ = pinned.pinned_memory;
     return PinnedBufferInfo{
-        .pcie_xy_enc = noc_addr.value().pcie_xy_enc,
-        .addr_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull),
-        .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
+        .pcie_xy_enc = pinned.pcie_xy_enc,
+        .addr_lo = static_cast<uint32_t>(pinned.addr & 0xFFFFFFFFull),
+        .addr_hi = static_cast<uint32_t>(pinned.addr >> 32)};
 }
 
 void H2DSocketImpl::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
@@ -327,7 +324,7 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
     // Receiver core type is recorded explicitly at construction (the DRAM-recv
     // ctor sets Dram, every other path is Tensix). Used to resolve the virtual
     // coordinate — logical coords overlap across core types, so this can't be
-    // inferred from coordinates here — and to pick the window's ordering below.
+    // inferred from coordinates here.
     const CoreType recv_umd_core_type = (recv_core_type_ == RecvCoreType::Dram) ? CoreType::DRAM : CoreType::TENSIX;
 
     uint32_t recv_device_id;
@@ -371,65 +368,18 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
         return;
     }
 
-    // Write through a window of our own only when our actual write target lives inside one — ask for
-    // the window and test it rather than assuming based on core type. The window is anchored where
-    // the receiver's L1 starts in its NOC address space: 0 for a Tensix/Eth core, l1_offset (a high
-    // DRAM-L1 NOC address, e.g. 0x2000000000) for a DRAM core. Writes through it are plain stores;
-    // cluster.write_core may reconfigure a driver window on every write, which costs the Tensor
-    // prefetcher's request sockets microseconds per page. Gated on a real device and Blackhole — on
-    // Wormhole B0 the device address space isn't fully mapped this way and a write may still need a
-    // per-write driver reconfig. The window holds one of the device's TLBs until the socket is destroyed;
-    // when none is free, the socket writes through cluster.write_core, which holds none.
-    //
-    // A DRAM core acknowledges a NOC write only once its L1 has taken the write over AXI, and a Strict
-    // window holds each write until the one before it is acknowledged, so it moves one write per round
-    // trip (about 0.4 us per 128 B page). A DRAM receiver's window posts its writes instead, on a static
-    // write VC: a NOC packet on a dynamic VC may switch VCs at each router, and a DRAM core gives each VC
-    // its own AXI ID, so a bytes_sent update could overtake the pages it counts; on one VC, writes to the
-    // receiver arrive in the order they were made.
-    const bool dram_receiver = recv_core_type_ == RecvCoreType::Dram;
-    if (!cluster.is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE) {
-        std::unique_ptr<tt::umd::IoWindow> window;
-        try {
-            window = cluster.get_driver()->create_io_window(
-                recv_device_id,
-                cluster.get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
-                /*addr=*/l1_offset,
-                /*host=*/{},
-                dram_receiver ? tt::umd::IoOrdering::Posted : tt::umd::IoOrdering::Strict,
-                /*core_end=*/std::nullopt,
-                dram_receiver ? tt::umd::WindowFlags::UnicastWrite : tt::umd::WindowFlags::None);
-        } catch (const std::runtime_error& e) {
-            log_warning(
-                LogMetal,
-                "H2DSocket: no TLB window for receiver core {} on device {}; its writes go through the driver, "
-                "which is slower: {}",
-                recv_virtual_core.str(),
-                recv_device_id,
-                e.what());
-        }
-        // The window is addressed from its anchor, so a local L1 address is its offset into the window.
-        const uint64_t fifo_end = static_cast<uint64_t>(aligned_data_buf_start_) + fifo_size_;
-        const uint64_t config_end = static_cast<uint64_t>(config_buffer_address_) + sizeof(receiver_socket_md);
-        if (window != nullptr && std::max(fifo_end, config_end) <= window->get_size()) {
-            receiver_core_window_ = std::move(window);
-        }
-    }
-
-    if (receiver_core_window_ != nullptr) {
-        pcie_writer = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
-            receiver_core_window_->write_block(device_addr, data, num_bytes);
-        };
-    } else {
-        // Non-Blackhole, no TLB free, or no window reaches the target: write through UMD instead
-        // (the driver may reconfigure a window per write). Covers Wormhole B0, mock and
-        // emulated devices.
-        pcie_writer = [&cluster, recv_device_id, recv_virtual_core, l1_offset](
-                          void* data, uint32_t num_bytes, uint64_t device_addr) {
-            cluster.write_core(
-                data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr + l1_offset);
-        };
-    }
+    // Writes go through a window of the socket's own where one reaches the config buffer and the FIFO, anchored where
+    // the receiver's L1 starts in its NOC address space (0 for a Tensix/Eth core, l1_offset for a DRAM core); else
+    // through cluster.write_core (CoreWriter). A plain store per write through the window, where cluster.write_core may
+    // reconfigure a driver window on every write, which costs the Tensor prefetcher's request sockets microseconds per
+    // page.
+    const uint64_t fifo_end = static_cast<uint64_t>(aligned_data_buf_start_) + fifo_size_;
+    const uint64_t config_end = static_cast<uint64_t>(config_buffer_address_) + sizeof(receiver_socket_md);
+    core_writer_ = std::make_unique<CoreWriter>(
+        cluster, recv_device_id, recv_virtual_core, std::max(fifo_end, config_end), l1_offset, "H2DSocket");
+    pcie_writer = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
+        core_writer_->write(data, num_bytes, device_addr);
+    };
 }
 
 H2DSocketImpl::H2DSocketImpl(
@@ -445,6 +395,7 @@ H2DSocketImpl::H2DSocketImpl(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(mesh_device.get()),
+    transfer_stats_(&mesh_device->impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)) {
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
@@ -506,6 +457,7 @@ H2DSocketImpl::H2DSocketImpl(
     pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     mesh_device_(mesh_device.get()),
+    transfer_stats_(&mesh_device->impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)),
     dram_l1_noc_offset_(dram_l1_noc_offset),
     recv_core_type_(RecvCoreType::Dram) {
@@ -570,6 +522,7 @@ H2DSocketImpl::H2DSocketImpl(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(&mesh_device),
+    transfer_stats_(&mesh_device.impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(&mesh_device, recv_l2cpu)),
     is_l2cpu_(true) {
     // Helpers below still take a shared_ptr; the socket itself stores only a raw
@@ -759,7 +712,9 @@ H2DSocketImpl::~H2DSocketImpl() noexcept {
 
 void H2DSocketImpl::reserve_bytes(uint32_t num_bytes) {
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_free < num_bytes) {
+        ecc_watch.poll();
         advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
         tt_driver_atomics::mfence();
         volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
@@ -802,6 +757,12 @@ bool H2DSocketImpl::acked_past(uint32_t watermark) {
     volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
     bytes_acked_ = bytes_acked_value;
     return bytes_sent_ - bytes_acked_ <= bytes_since_watermark;
+}
+
+void H2DSocketImpl::count_staged_bytes(uint32_t num_bytes) {
+    if (transfer_stats_ != nullptr && transfer_stats_->enabled()) {
+        transfer_stats_->add_bytes(HostTransferCategory::SocketPull, num_bytes);
+    }
 }
 
 void H2DSocketImpl::push_bytes(uint32_t num_bytes) {
@@ -865,17 +826,20 @@ void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
     if (mesh_device_ && !mesh_device_->is_local(recv_core_.device_coord)) {
         return;
     }
-    // Re-sync bytes_sent_ from connector SHM each iteration (mirrors D2HSocket::barrier).
+    // Re-sync bytes_sent_ and write_ptr_ from connector SHM each iteration (mirrors D2HSocket::barrier).
     auto refresh_connector_write_state = [this]() {
         if (connector_state_) {
             tt_driver_atomics::mfence();
             bytes_sent_ = connector_state_->bytes_sent;
+            write_ptr_ = connector_state_->write_ptr;
         }
     };
     refresh_connector_write_state();
     volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
     auto start_time = std::chrono::high_resolution_clock::now();
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_sent_ - bytes_acked_value != 0) {
+        ecc_watch.poll();
         refresh_connector_write_state();
         advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
         tt_driver_atomics::mfence();
@@ -885,6 +849,7 @@ void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
                                   std::chrono::high_resolution_clock::now() - start_time)
                                   .count();
             if (elapsed_ms > timeout_ms.value()) {
+                ecc_watch.check_now();
                 TT_THROW(
                     "Timeout waiting for device to send acknowledgement over H2D socket. Bytes sent: {}, Bytes "
                     "acknowledged: {}",
@@ -893,6 +858,8 @@ void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
             }
         }
     }
+    // The next write's free-space check starts from bytes_acked_.
+    bytes_acked_ = bytes_acked_value;
 }
 
 void H2DSocketImpl::write(void* data, uint32_t num_pages) {
@@ -904,11 +871,13 @@ void H2DSocketImpl::write(void* data, uint32_t num_pages) {
     this->reserve_bytes(num_bytes);
 
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
+        this->count_staged_bytes(num_bytes);
     }
     this->push_bytes(num_bytes);
     this->notify_receiver();
@@ -935,11 +904,13 @@ bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
 
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
+        this->count_staged_bytes(num_bytes);
     }
     this->push_bytes(num_bytes);
     this->notify_receiver();
@@ -972,9 +943,15 @@ uint32_t H2DSocketImpl::try_stage(const uint8_t* const* pages, uint32_t num_page
         if (h2d_mode_ == H2DMode::HOST_PUSH) {
             stage_buffer_.resize(num_bytes);
             gather(stage_buffer_.data());
+            ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
             pcie_writer(stage_buffer_.data(), num_bytes, aligned_data_buf_start_ + write_ptr_);
+            // publish_staged() fences the pages later. With stats on, fence here so the timed push includes it.
+            if (transfer_stats_ != nullptr && transfer_stats_->enabled()) {
+                tt_driver_atomics::sfence();
+            }
         } else {
             gather(reinterpret_cast<uint8_t*>(host_buffer_.get()) + write_ptr_);
+            this->count_staged_bytes(num_bytes);
         }
         this->push_bytes(num_bytes);
         staged += run;
@@ -1182,6 +1159,10 @@ void H2DSocketTryWriteAccess::publish_staged(ttsl::Span<distributed::H2DSocket* 
         socket->notify_receiver_unfenced();
     }
     tt_driver_atomics::sfence();
+}
+
+bool H2DSocketTryWriteAccess::writes_through_window(const distributed::H2DSocket& socket) {
+    return socket.pimpl_->writes_through_window();
 }
 
 std::unique_ptr<distributed::H2DSocket> H2DSocketDramRecvAccess::create(

@@ -40,8 +40,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
+#include "profiler.h"
 
 using namespace ckernel;
 
@@ -104,57 +107,70 @@ static constexpr bool CLEAR_DEST = true;
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
+static inline void run_unpack_iteration(
+    const Operand& buffer_A, const Operand& buffer_B, const FormatConfig& formats, const ckernel::TensorShape& tensor_shape, std::uint32_t face_r_dim)
+{
+    _llk_unpack_A_init_<BroadcastType::NONE>(
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+    _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
+    _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(buffer_B[1]), formats.unpack_A_src, formats.unpack_A_dst);
+
+    _llk_unpack_A_sdpa_init_<NUM_TILES, BroadcastType::NONE>(
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, face_r_dim, num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+    // The preamble waits for this SrcB token before reading the column sources from Dest.
+    _llk_unpack_A_sdpa_set_srcb_dummy_valid_();
+    _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
+    _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(buffer_A[NUM_TILES]), formats.unpack_A_src, formats.unpack_A_dst);
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TEST_FACE_R_DIM = params.in0_face_r_dim;
+    const Operand& buffer_A             = params.buffer_A;
+    const Operand& buffer_B             = params.buffer_B;
+#else
+    constexpr std::uint32_t TEST_FACE_R_DIM = in0_face_r_dim;
+#endif
     // 8x32 tile: one face-row (num_faces_r_dim == 1) of two 8x16 faces (num_faces_c_dim == 2).
     // The op writes 8 rows per face, so 8 is the natural face_r_dim -- see the SDPA_TILE_R_DIM note above.
     const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(params.in0_face_r_dim), static_cast<std::uint8_t>(FACE_C_DIM), 1 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+        static_cast<std::uint8_t>(TEST_FACE_R_DIM), static_cast<std::uint8_t>(FACE_C_DIM), 1 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        params.in0_face_r_dim /* unpA_face_r_dim */,
-        params.in0_face_r_dim /* unpB_face_r_dim */,
-        num_faces /* unpA_num_faces */,
-        num_faces /* unpB_num_faces */);
-
-    // Step 1: seed the two column sources into DEST. Plain unpack_A -> SrcA, math datacopy A2D.
-    // P1 goes to DEST[SRC_INDEX] (the preamble MOVD2Bs its rows 0-7 into SrcB rows 0-7) and P2 to
-    // DEST[SRC_INDEX + 1] (the preamble's third/fourth MOVD2B read DEST rows 64-71, i.e. the first
-    // 8 rows of the next 32x32 DEST tile, into SrcB rows 8-15).
-    _llk_unpack_A_init_<BroadcastType::NONE>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
-    _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
-    _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[1]), formats.unpack_A_src, formats.unpack_A_dst);
-
-    // Step 2: SDPA SrcA-only unpack init programs the MOP; the base unpack_A execute then streams the operand tiles
-    // into SrcA. set_srcb_dummy_valid injects the stall + SrcB SET_DVALID (no real data) that the math preamble
-    // STALLWAIT(SRCB_VLD) waits on before it MOVD2Bs DEST into SrcB.
-    _llk_unpack_A_sdpa_init_<NUM_TILES, BroadcastType::NONE>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, params.in0_face_r_dim, num_faces, formats.unpack_A_src, formats.unpack_A_dst);
-
-    // The dummy SrcB valid MUST be issued BEFORE the operand unpacks, matching the demo call order
-    // (sdpa.h: sdpa_bcast_col_reuse_preamble() runs before sdpa_bcast_col_reuse_tiles()). Its leading
-    // STALLWAIT(STALL_UNPACK, UNPACK) drains the unpacker, and the two operand unpacks below fill both
-    // SrcA banks and then block until the math execute frees one. If the dummy valid came after them the
-    // unpacker would be blocked on banks only the execute frees while math sat in the preamble's
-    // STALLWAIT(SRCB_VLD) waiting for this instruction -- a deadlock.
-    _llk_unpack_A_sdpa_set_srcb_dummy_valid_();
-
-    // Two operand groups, not one. _llk_math_sdpa_bcast_col_srcb_reuse_ runs the MOP twice (two consecutive
-    // if-constexpr blocks) and every eltwise op carries CLR_A, so the execute retires 2 * NUM_TILES * num_faces
-    // SrcA dvalids while one unpack call under the SDPA MOP supplies NUM_TILES * num_faces (it walks NUM_TILES
-    // consecutive tiles from its base address). The demo pairs the same way: compute_kernel_api/sdpa.h:56-57
-    // issues two llk_unpack_A calls per math call, computing cb_l1 * P1 + cb_l2 * P2. Supplying one group stalls
-    // MATH forever on the second run.
-    _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
-    _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[NUM_TILES]), formats.unpack_A_src, formats.unpack_A_dst);
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, TEST_FACE_R_DIM, TEST_FACE_R_DIM, num_faces, num_faces);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // The two generic unpack_A seed copies publish paired SrcA and zero-SrcB valids per face.
+                _perf_unpack_stream_set_valid<true /* set_a */, true /* set_b */, PERF_RUN_TYPE>(2 * num_faces);
+                _perf_unpack_set_valid(ckernel::SrcB);
+                _perf_unpack_stream_set_valid<true /* set_a */, false /* set_b */, PERF_RUN_TYPE>(2 * NUM_TILES * num_faces);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                run_unpack_iteration(buffer_A, buffer_B, formats, tensor_shape, TEST_FACE_R_DIM);
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -176,34 +192,69 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // ELTWISE_BINARY_OP is the per-variant op the python driver emits into the build header (MATH_OP template).
 static constexpr EltwiseBinaryType SDPA_OP = ELTWISE_BINARY_OP;
 
+static inline void run_math_iteration(const FormatConfig& formats, const ckernel::TensorShape& tensor_shape)
+{
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX, formats.math, formats.math, tensor_shape);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX + 1, formats.math, formats.math, tensor_shape);
+    _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(num_faces);
+    _llk_math_sdpa_bcast_col_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, CLEAR_DEST>();
+    _llk_math_sdpa_bcast_col_srcb_reuse_<SDPA_OP, NUM_TILES, DST_SYNC, is_fp32_dest_acc_en, SDPA_FIDELITY, CLEAR_DEST>(DST_INDEX);
+    _llk_math_sdpa_bcast_col_srcb_reuse_postamble_();
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TEST_FACE_R_DIM = params.in0_face_r_dim;
+#else
+    constexpr std::uint32_t TEST_FACE_R_DIM = in0_face_r_dim;
+#endif
+    // Same 8x32 shape as the unpack side.
+    const ckernel::TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(TEST_FACE_R_DIM), static_cast<std::uint8_t>(FACE_C_DIM), 1 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
 
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
-
-    // Step 1: copy the two column sources (unpacked into SrcA by unpack step 1) into DEST[SRC_INDEX] and
-    // DEST[SRC_INDEX + 1]. The preamble's four MOVD2Bs read DEST rows 0-7 and 64-71, i.e. the first 8 rows
-    // of each of these two 32x32 DEST tiles, into SrcB rows 0-7 (P1) and 8-15 (P2).
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(num_faces, formats.math);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX, formats.math, formats.math, num_faces);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX + 1, formats.math, formats.math, num_faces);
-
-    // Step 2: SDPA column-broadcast SrcB-reuse eltwise.
-    //   init      -> program addr_mods + the SRCB_BCAST_COL eltwise MOP for SDPA_OP.
-    //   preamble  -> STALLWAIT(SRCB_VLD) on the unpacker's dummy SrcB valid, then MOVD2B DEST rows -> SrcB.
-    //   execute   -> DEST[DST_INDEX] = SrcA(operand) op broadcast_col(scale), accumulated over the two passes.
-    //   postamble -> SETRWC CLR_B (release the reused SrcB).
-    _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(num_faces);
-    _llk_math_sdpa_bcast_col_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, CLEAR_DEST>();
-    _llk_math_sdpa_bcast_col_srcb_reuse_<SDPA_OP, NUM_TILES, DST_SYNC, is_fp32_dest_acc_en, SDPA_FIDELITY, CLEAR_DEST>(DST_INDEX);
-    _llk_math_sdpa_bcast_col_srcb_reuse_postamble_();
-
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(2 * num_faces);
+                _perf_math_stream_clear_valid<true /* clear_a */, false /* clear_b */, PERF_RUN_TYPE>(2 * NUM_TILES * num_faces);
+                _perf_math_clear_valid(ckernel::SrcB);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                }
+                run_math_iteration(formats, tensor_shape);
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -213,26 +264,59 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
+static inline void run_pack_iteration(const Operand& buffer_Res, std::uint32_t tile_cnt)
+{
+    for (std::uint32_t tile = 0; tile < tile_cnt; ++tile)
+    {
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
+    }
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Partial-face pack: the op's output tile is 8x32 (two 8x16 faces), and each face still occupies a full
-    // 16-row DEST slot (the MOP's ADDR_MOD_0 steps dest by 16 between the two eltwise ops). Configuring the packer
-    // with face_r_dim == in0_face_r_dim / num_faces == 2 / partial_face makes it read 8 rows out of each of the
-    // two 16-row DEST faces. With the default full-tile config it instead reads DEST rows 0-15 as one face, so
-    // the second half of the buffer comes back as the ZEROACC'd rows 8-15 rather than output columns 16-31.
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, num_faces, true /* partial_face */);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, num_faces);
-    _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_packer_wait_for_math_done_();
-    for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t TILE_SIZE_PACK  = params.TILE_SIZE_PACK;
+    const std::uint32_t TEST_FACE_R_DIM = params.in0_face_r_dim;
+    const Operand& buffer_Res           = params.buffer_Res;
+#else
+    constexpr std::uint32_t TEST_FACE_R_DIM = in0_face_r_dim;
+#endif
     {
-        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        START_PERF_MEASURE("INIT")
+        // Partial-face packing preserves the two 8-row faces in this 8x32 tile.
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            formats.pack_src, formats.pack_dst, TILE_SIZE_PACK, TEST_FACE_R_DIM, TILE_C_DIM, num_faces, true /* partial_face */);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
     }
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
+                run_pack_iteration(buffer_Res, TILE_CNT);
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif

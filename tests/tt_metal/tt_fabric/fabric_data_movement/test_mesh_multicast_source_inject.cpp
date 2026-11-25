@@ -21,14 +21,14 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "fabric_fixture.hpp"
 #include "impl/context/metal_context.hpp"
@@ -591,6 +591,7 @@ void run_source_inject_test(BaseFabricFixture* fixture, SourceInjectCoverage cov
                 0};
             const size_t connection_count_index = sender_runtime_args.size() - 1;
             const uint32_t connection_count = append_routing_plane_connection_manager_rt_args(
+                *device,
                 candidate->source,
                 connection_directions,
                 {},

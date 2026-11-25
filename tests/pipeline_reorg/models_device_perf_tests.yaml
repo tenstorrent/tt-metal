@@ -18,8 +18,8 @@
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
     export HF_MODEL={hf_model}
     export TT_CACHE_PATH={tt_cache_path}
-    pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
-    pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
+    pytest --timeout 600 models/ttt_compat/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
+    pytest --timeout 600 models/ttt_compat/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
   model: llama3.1-8b
   skus:
     wh_n150:
@@ -30,7 +30,10 @@
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
-      timeout: 20
+      # Same as wh_n150: the profiled prefill run is ~140 s on most P150 VMs but 306-430 s on some nights
+      # (vm-302 10-25, vm-304 10-27, vm-309 10-31, vm-307 11-03), and tracy post-processing varies too;
+      # 20 minutes cut the leg off on 10-25, 10-27 and 11-03.
+      timeout: 30
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_quietbox_2:
@@ -50,8 +53,8 @@
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
     export HF_MODEL={hf_model}
     export TT_CACHE_PATH={tt_cache_path}
-    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
-    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
+    pytest --timeout 900 models/ttt_compat/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
+    pytest --timeout 900 models/ttt_compat/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
   model: llama3.3-70b
   skus:
     bh_quietbox_2:
@@ -67,8 +70,8 @@
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
     export HF_MODEL={hf_model}
     export TT_CACHE_PATH={tt_cache_path}
-    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-32768-2-2-1-1-False"
-    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-32768-2-10-1-1-False"
+    pytest --timeout 900 models/ttt_compat/tests/test_device_perf.py -k "prefill-qwen3_32b-2-32768-2-2-1-1-False"
+    pytest --timeout 900 models/ttt_compat/tests/test_device_perf.py -k "decode-qwen3_32b-2-32768-2-10-1-1-False"
   model: qwen3-32b
   skus:
     bh_quietbox_2:

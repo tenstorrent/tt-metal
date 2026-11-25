@@ -14,12 +14,8 @@ import transformers
 
 import ttnn
 
-from ....encoders.qwen3vl.vision_qwen3vl import (
-    Qwen3VlVisionModel,
-    fixed_length_cu_window,
-    pad_patches_for_sp,
-    vision_cu_seqlens,
-)
+from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_patches_for_sp
+from ....encoders.vision import fixed_length_cu_window, vision_cu_seqlens
 from ....utils import tensor
 from ....utils.check import assert_quality
 from .common import (

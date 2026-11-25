@@ -4,14 +4,13 @@
 
 #pragma once
 
-#include <cstddef>
 #include <optional>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <hal_types.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 
 namespace tt::tt_metal::allocator {
 

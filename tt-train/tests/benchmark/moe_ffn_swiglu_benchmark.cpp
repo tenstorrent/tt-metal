@@ -10,7 +10,7 @@
 #include <random>
 #include <sstream>
 #include <string>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"

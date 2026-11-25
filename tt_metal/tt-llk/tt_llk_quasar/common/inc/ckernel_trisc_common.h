@@ -40,18 +40,21 @@ using ckernel::TILE_C_DIM;
 using ckernel::TILE_R_DIM;
 
 // Default number of faces
-constexpr static std::uint32_t NUM_FACES = 4;
+constexpr std::uint32_t NUM_FACES = 4;
 
 // Default number of tiles processed per one _llk_* execute call
-static constexpr std::uint32_t NUM_TILES = 1;
+constexpr std::uint32_t NUM_TILES = 1;
 
 // SET_SRC/DST_TILE_FACE_ROW_IDX carry an 18-bit value, but under FACE_SEL only 11 bits reach the counter: a larger face
 // index aliases back to an earlier tile.
 constexpr std::uint32_t FACE_SEL_IDX_LIMIT = 1u << 11;
 
+// The TILE_SEL counter is 18 bits and wraps, so INC can step it back with a negative value.
+constexpr std::uint32_t TILE_SEL_IDX_LIMIT = 1u << 18;
+
 // Number of rows that can fit into Dest
-static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
-static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE >> 1;
+constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
+constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE >> 1;
 
 // Number of bits used to represent data format in unpacker/packer config.
 // The reason we keep only the bottom 4 bits is because the HW only has 4 bits to represent the dataformat.
@@ -68,7 +71,11 @@ constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
 constexpr std::uint32_t NUM_WORDS_TILE_CNT      = 8;
 
-typedef struct
+// MxFp4_2x exists only on the base/8-row variant, Int8_2x only on the 4-row variant.
+constexpr bool HAS_MXFP4_2X_SRC_FORMAT = MATH_ROWS == 8;
+constexpr bool HAS_INT8_2X_SRC_FORMAT  = MATH_ROWS == 4;
+
+struct tile_counter_t
 {
     std::uint32_t reserved0                    : 32;
     std::uint32_t reset                        : 32;
@@ -78,24 +85,35 @@ typedef struct
     std::uint32_t reserved1                    : 32;
     std::uint32_t tiles_avail_interrupt_thresh : 32;
     std::uint32_t space_avail_interrupt_thresh : 32;
-} tile_counter_t;
+};
 
 static_assert(sizeof(tile_counter_t) == NUM_WORDS_TILE_CNT * sizeof(std::uint32_t), "tile_counter_t must be 96b!");
 
-typedef union
+union tile_counter_u
 {
     std::uint32_t words[NUM_WORDS_TILE_CNT];
     tile_counter_t f;
-} tile_counter_u;
+};
 
 // Points to the tile counters
-tile_counter_u volatile* const tile_counters = (tile_counter_u volatile* const)TILE_COUNTERS_BASE;
+tile_counter_u volatile* const tile_counters = reinterpret_cast<tile_counter_u volatile*>(TILE_COUNTERS_BASE);
 
 // Destination register offset, offset = 0 -> targets dest bank 0, offset = 512 for 16bit dest, 256 for 32bit dest -> targets dest bank 1
 #ifdef ENV_LLK_INFRA
 static std::uint32_t dest_register_offset = 0;
 #else
 extern thread_local std::uint32_t dest_register_offset;
+#endif
+
+// Tile-shape index (log2 Dest rows per tile) recorded by the last math init (_set_tile_shape_idx_gpr_) and read by the
+// per-tile Dest addressing (_set_dst_write_addr_by_rows_, get_dest_max_tiles, _llk_math_matmul_block_). Kept in TRISC
+// local memory because a RISC-V read of the TILE_SHAPE_IDX GPR stalls the math thread on every tile. Per TRISC like
+// dest_register_offset (tt-llk#1678): ENV_LLK_INFRA uses a plain static; the metal build defines it in
+// tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
+#ifdef ENV_LLK_INFRA
+static std::uint32_t dest_tile_shape_idx = 0;
+#else
+extern thread_local std::uint32_t dest_tile_shape_idx;
 #endif
 
 /**
@@ -148,8 +166,8 @@ constexpr std::uint32_t get_dest_max_tiles()
 
 /**
  * @brief Maximum number of tiles that fit in the math destination region, at the per-tile stride
- * the last math init programmed into the TILE_SHAPE_IDX GPR. Only valid for ops that address dest
- * by rows (_set_dst_write_addr_by_rows_) and whose init programs the GPR.
+ * the last math init recorded with _set_tile_shape_idx_gpr_ (dest_tile_shape_idx). Only valid for ops that
+ * address dest by rows (_set_dst_write_addr_by_rows_) and whose init calls _set_tile_shape_idx_gpr_.
  *
  * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
  * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
@@ -160,7 +178,7 @@ inline std::uint32_t get_dest_max_tiles()
 {
     constexpr std::uint32_t DEST_REGISTER_SIZE = get_dest_max_tiles<SYNC_MODE, EN_32BIT_DEST, DstTileShape::Tile32x32>()
                                                  << get_dest_tile_size_log2(DstTileShape::Tile32x32);
-    return DEST_REGISTER_SIZE >> ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
+    return DEST_REGISTER_SIZE >> dest_tile_shape_idx;
 }
 
 /**
@@ -231,12 +249,12 @@ inline std::uint32_t _get_dest_buffer_base_()
     return dest_register_offset;
 }
 
-inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
+inline constexpr std::uint32_t masked_data_format(std::uint32_t data_format)
 {
     return data_format & DATA_FORMAT_CONFIG_MASK;
 }
 
-constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
+constexpr std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
 {
     switch (masked_data_format(format))
     {

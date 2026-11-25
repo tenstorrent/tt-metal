@@ -116,7 +116,7 @@ BH_SCRIPT="$TT_EMULE_PATH/scripts/run_regression_blackhole.sh"
 log "Initializing tt-metal submodules (umd, tracy)"
 git -C "$TT_METAL_HOME" submodule update --init --depth=1 tt_metal/third_party/umd tt_metal/third_party/tracy
 
-CLUSTER_EXAMPLES="$TT_METAL_HOME/tt_metal/third_party/umd/tests/cluster_descriptor_examples"
+CLUSTER_EXAMPLES="$TT_METAL_HOME/tt_metal/third_party/umd/descriptors/cluster_descriptor_examples"
 [ -f "$CLUSTER_EXAMPLES/wormhole_N150.yaml" ] || warn "wormhole_N150.yaml not found under $CLUSTER_EXAMPLES"
 [ -f "$CLUSTER_EXAMPLES/blackhole_P100.yaml" ] || warn "blackhole_P100.yaml not found under $CLUSTER_EXAMPLES"
 

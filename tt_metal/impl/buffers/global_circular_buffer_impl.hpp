@@ -10,10 +10,10 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 
 namespace tt::tt_metal {
 
@@ -22,15 +22,16 @@ class IDevice;
 
 namespace experimental {
 
-// Impl-only backing state for tt-metalium/global_circular_buffer.hpp's GlobalCircularBuffer.
+// Impl-only backing state for tt-metalium/memory/cross_program/global_circular_buffer.hpp's GlobalCircularBuffer.
 // The public type holds a unique_ptr to this impl and copies by value (deep-copy of *impl_).
 // MeshBuffer members still share device resources across copies.
 // Callers inside tt_metal/ that need the INTERNAL-only surface (all_cores(), get_device())
 // go through GlobalCircularBuffer::impl().
 class GlobalCircularBufferImpl {
 public:
+    // The buffer is created on `mesh_cq`'s device.
     GlobalCircularBufferImpl(
-        distributed::MeshDevice& device,
+        distributed::MeshCommandQueue& mesh_cq,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type);
@@ -58,7 +59,8 @@ public:
     }
 
 private:
-    void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
+    void setup_cb_buffers(
+        BufferType buffer_type, uint32_t max_num_receivers_per_sender, distributed::MeshCommandQueue& mesh_cq);
 
     // GlobalCircularBufferImpl is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions

@@ -14,11 +14,11 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt_stl/span.hpp>

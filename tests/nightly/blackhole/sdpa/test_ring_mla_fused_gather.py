@@ -14,6 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa import (
@@ -792,7 +793,10 @@ def test_ring_mla_split_kv_perf_check(
         f"split-KV vs classic {model_name}: {split:.2f}% vs {classic:.2f}% "
         f"({(split / classic - 1) * 100:+.2f}%, classic expected {expected_util:.2f}%)"
     )
-    assert split >= classic * (1 - SPLIT_KV_RELATIVE_PERF_MARGIN), (
-        f"Split-KV math utilization {split:.2f}% is more than {SPLIT_KV_RELATIVE_PERF_MARGIN * 100:.1f}% "
-        f"below the classic SP ring's {classic:.2f}%"
+    assert_perf_gate(
+        split >= classic * (1 - SPLIT_KV_RELATIVE_PERF_MARGIN),
+        (
+            f"Split-KV math utilization {split:.2f}% is more than {SPLIT_KV_RELATIVE_PERF_MARGIN * 100:.1f}% "
+            f"below the classic SP ring's {classic:.2f}%"
+        ),
     )

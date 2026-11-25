@@ -3,15 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
-#include <mesh_device.hpp>
-#include <mesh_device_view.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
 #include "mesh_device_view_impl.hpp"
 #include <cstddef>
 #include <functional>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
-#include <stack>
 #include <vector>
 #include <algorithm>
 
@@ -19,12 +18,12 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include <climits>
-#include "device.hpp"
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
-#include "shape2d.hpp"
-#include "shape_base.hpp"
-#include <tt-metalium/maybe_remote.hpp>
+#include "tt-metalium/mesh/legacy/device.hpp"
+#include "tt-metalium/mesh/mesh_config.hpp"
+#include "tt-metalium/vocabulary/mesh_coord.hpp"
+#include "tt-metalium/vocabulary/shape2d.hpp"
+#include "tt-metalium/vocabulary/shape_base.hpp"
+#include <tt-metalium/vocabulary/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {

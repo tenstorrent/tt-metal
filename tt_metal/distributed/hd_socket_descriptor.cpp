@@ -7,7 +7,7 @@
 #include "hd_socket_descriptor_generated.h"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <internal/mesh_device.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"

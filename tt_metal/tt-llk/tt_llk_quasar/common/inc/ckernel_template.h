@@ -269,6 +269,12 @@ public:
 };
 #endif
 
+inline void assert_mop_loops_nonzero(const std::uint32_t outer_loop_len, const std::uint32_t inner_loop_len)
+{
+    LLK_ASSERT(outer_loop_len > 0, "MOP outer loop length must be non-zero");
+    LLK_ASSERT(inner_loop_len > 0, "MOP inner loop length must be non-zero");
+}
+
 ckernel_template::ckernel_template(std::uint32_t outer_loop_len, std::uint32_t inner_loop_len, std::uint32_t loop_op) :
     m_outer_loop_len(outer_loop_len),
     m_inner_loop_len(inner_loop_len),
@@ -280,8 +286,7 @@ ckernel_template::ckernel_template(std::uint32_t outer_loop_len, std::uint32_t i
 {
     m_loop0_last_instr = loop_op;
     m_loop1_last_instr = loop_op;
-    // MM Oct 14 2022: Seems like this assertion is unwanted, zero OUTER_LOOP_LEN is supported in HW
-    // FWASSERT("MOP OUTER LOOP LENGTH should be non-zero", (m_outer_loop_len > 0));
+    assert_mop_loops_nonzero(m_outer_loop_len, m_inner_loop_len);
 }
 
 ckernel_template::ckernel_template(std::uint32_t outer_loop_len, std::uint32_t inner_loop_len, std::uint32_t loop_op0, std::uint32_t loop_op1) :
@@ -295,17 +300,18 @@ ckernel_template::ckernel_template(std::uint32_t outer_loop_len, std::uint32_t i
 {
     m_loop0_last_instr = loop_op1;
     m_loop1_last_instr = loop_op1;
-    // MM Oct 14 2022: Seems like this assertion is unwanted, zero OUTER_LOOP_LEN is supported in HW
-    // FWASSERT("MOP OUTER LOOP LENGTH should be non-zero", (m_outer_loop_len > 0));
+    assert_mop_loops_nonzero(m_outer_loop_len, m_inner_loop_len);
 }
 
 void ckernel_template::set_outer_loop_len(std::uint32_t len)
 {
+    LLK_ASSERT(len > 0, "MOP outer loop length must be non-zero");
     m_outer_loop_len = len;
 }
 
 void ckernel_template::set_inner_loop_len(std::uint32_t len)
 {
+    LLK_ASSERT(len > 0, "MOP inner loop length must be non-zero");
     m_inner_loop_len = len;
 }
 
@@ -375,6 +381,7 @@ void ckernel_template::run_bank1_sw_cntl([[maybe_unused]] volatile std::uint32_t
 
 void ckernel_template::program([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
+    assert_mop_loops_nonzero(m_outer_loop_len, m_inner_loop_len);
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
     //  In hardware control mode, a write to a MOP Config bank that is
@@ -395,6 +402,7 @@ void ckernel_template::program([[maybe_unused]] volatile std::uint32_t *instrn_b
 
 void ckernel_template::program_bank0_sw_cntl([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
+    assert_mop_loops_nonzero(m_outer_loop_len, m_inner_loop_len);
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
     mop_sync(); // wait until previous mops have completed
@@ -414,6 +422,7 @@ void ckernel_template::program_bank0_sw_cntl([[maybe_unused]] volatile std::uint
 
 void ckernel_template::program_bank1_sw_cntl([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
+    assert_mop_loops_nonzero(m_outer_loop_len, m_inner_loop_len);
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
     mop_sync(); // wait until previous mops have completed

@@ -254,6 +254,24 @@ def test_quasar_padded_slice_rm_unaligned_start(
     assert_equal(expected, ttnn.to_torch(actual))
 
 
+# Sliced last dim narrower than the output shard: Quasar pad-row path zero-fills the rest of each row.
+@pytest.mark.parametrize(
+    "begins, ends, shard_shape",
+    (
+        ([0, 0, 0, 16], [1, 1, 64, 64], (8, 64)),
+        ([0, 0, 0, 0], [1, 1, 64, 40], (8, 48)),
+    ),
+)
+def test_quasar_padded_slice_rm_last_dim_pads_sliced_row(device, begins, ends, shard_shape):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    tt_input, output_mem_config, expected = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
+    actual = ttnn.experimental.quasar.padded_slice(
+        tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config
+    )
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message
+
+
 # The row-major pad writer zero-filled its scratch page only for 2- and 4-byte elements, so a uint8
 # output copied stale L1 into the padding columns.
 @pytest.mark.requires_grid_size((8, 1))

@@ -24,9 +24,11 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
+    flat_axes,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
     select_perf_input_dimensions,
@@ -117,7 +119,7 @@ def generate_qsr_transpose_dest_combinations(
         ],
     }
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
     transpose_faces_modes = (Transpose.No, Transpose.Yes)
     combinations = []
     for fmt in formats_list:
@@ -188,26 +190,37 @@ PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
 )
 
 
+# Column names of the tuples ``generate_qsr_transpose_dest_combinations`` returns.
+TRANSPOSE_DEST_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "math_transpose_faces",
+    "input_dimensions",
+)
+ALL_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
+    TRANSPOSE_DEST_FORMATS
+)
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
-        TRANSPOSE_DEST_FORMATS
-    ),
+    **flat_axes(TRANSPOSE_DEST_FLAT_NAMES, ALL_TRANSPOSE_DEST_COMBINATIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_transpose_dest_quasar(
-    formats_dest_acc_sync_transpose_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    math_transpose_faces,
+    input_dimensions,
     run_types,
     loop_factor,
     *,
     is_perf=False,
     perf_report=None,
 ):
-    (formats, dest_acc, dest_sync, math_transpose_faces, input_dimensions) = (
-        formats_dest_acc_sync_transpose_dims
-    )
-
     data_copy_type = DataCopyType.A2D
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(

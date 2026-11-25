@@ -23,33 +23,33 @@
 #include <gtest/gtest.h>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt_stl/span.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
-#include "buffer_types.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
@@ -522,7 +522,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
                 .target_nodes = cr_set,
             }},
         };
-        program = MakeProgramFromSpec(*mesh_device, spec);
+        program = Program(*mesh_device, spec);
 
         ProgramRunArgs run_args;
         for (const auto& [name, args] :
@@ -537,7 +537,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
             }
             run_args.kernel_run_args.push_back(std::move(kernel_run_args));
         }
-        SetProgramRunArgs(program, run_args);
+        program.set_program_run_args(run_args);
     } else {
         for (const CoreRange& core_range : program_config.cr_set.ranges()) {
             for (const CoreCoord& core_coord : core_range) {
@@ -642,7 +642,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
 
     std::vector<KernelHandle> kernels;
     // Gen2 kernel names, indexed [core range][result base].
-    std::vector<std::vector<experimental::KernelSpecName>> gen2_kernels;
+    std::vector<std::vector<KernelSpecName>> gen2_kernels;
 
     if (is_quasar) {
         using namespace tt::tt_metal::experimental;
@@ -704,7 +704,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
             .kernels = kernel_specs,
             .work_units = work_units,
         };
-        program = MakeProgramFromSpec(*mesh_device, spec);
+        program = Program(*mesh_device, spec);
     } else {
         kernels = {
             CreateKernel(
@@ -765,9 +765,9 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
                 }
             }
             if (iter == 0) {
-                SetProgramRunArgs(program_, run_args);
+                program_.set_program_run_args(run_args);
             } else {
-                UpdateProgramRunArgs(program_, run_args);
+                program_.update_program_run_args(run_args);
             }
         } else {
             for (const CoreCoord& core_coord : core_range_0) {
@@ -1034,7 +1034,7 @@ bool test_increment_runtime_args_sanity(
             .kernels = kernel_specs,
             .work_units = work_units,
         };
-        program = MakeProgramFromSpec(*mesh_device, spec);
+        program = Program(*mesh_device, spec);
 
         ProgramRunArgs run_args;
         for (size_t i = 0; i < kernel_specs.size(); i++) {
@@ -1047,7 +1047,7 @@ bool test_increment_runtime_args_sanity(
             kernel_run_args.advanced_options.common_runtime_varargs = common_runtime_args;
             run_args.kernel_run_args.push_back(std::move(kernel_run_args));
         }
-        SetProgramRunArgs(program, run_args);
+        program.set_program_run_args(run_args);
     } else {
         auto configured_kernels = create_increment_kernels(
             mesh_device.get(), program, program_configs, processor, num_unique_rt_args, num_common_rt_args);
@@ -1122,7 +1122,7 @@ Program make_gen2_program(
     const std::string& kernel_path,
     const CoreRangeSet& cr_set,
     HalProcessorClassType processor_class,
-    tt::tt_metal::experimental::KernelSpec::CompileTimeArgs compile_time_args = {}) {
+    KernelSpec::CompileTimeArgs compile_time_args = {}) {
     using namespace tt::tt_metal::experimental;
 
     std::variant<DataMovementHardwareConfig, ComputeHardwareConfig> hw_config;
@@ -1150,7 +1150,7 @@ Program make_gen2_program(
         }},
     };
 
-    return MakeProgramFromSpec(mesh_device, spec);
+    return Program(mesh_device, spec);
 }
 
 // Quasar's grid is smaller than {2, 2}-{6, 6} and starts at logical y = 1, so take the cores from the device.
@@ -2312,7 +2312,7 @@ Program make_gen2_random_program(
             .target_nodes = cr_set,
         }},
     };
-    Program program = MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs run_args;
     for (const KernelPlan& plan : plans) {
@@ -2329,7 +2329,7 @@ Program make_gen2_random_program(
         run_args.kernel_run_args.push_back(std::move(kernel_run_args));
     }
     if (!run_args.kernel_run_args.empty()) {
-        SetProgramRunArgs(program, run_args);
+        program.set_program_run_args(run_args);
     }
     return program;
 }
@@ -2381,7 +2381,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
             continue;
         }
 
-        Program program = CreateProgram(*this->devices_[0]);
+        Program program = CreateProgram(*device_);
         workload.add_program(this->device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(this->device_range_);
 

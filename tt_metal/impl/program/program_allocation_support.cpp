@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include <tt_align.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::detail {

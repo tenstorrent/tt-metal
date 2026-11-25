@@ -6,7 +6,12 @@
 
 #pragma once
 
-#include <tt-metalium/buffer_types.hpp>
+// Compiled by both host and device: pick the matching buffer_types header for each side.
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "api/buffer_types.hpp"
+#else
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#endif
 
 namespace shard_addr_gen_consts {
 

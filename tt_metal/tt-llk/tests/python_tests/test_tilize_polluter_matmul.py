@@ -42,7 +42,7 @@ from dataclasses import dataclass
 import pytest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity
+from helpers.llk_params import ALL_MATH_FIDELITIES, DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
@@ -103,12 +103,7 @@ class POLLUTER_CT_DIM(TemplateParameter):
         same=False,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     # Polluter (run-0) tilize face row count: 16 == regular (control), <16 == tiny.
     polluter_face_r_dim=[16, 4, 1],
     do_restore=[True, False],

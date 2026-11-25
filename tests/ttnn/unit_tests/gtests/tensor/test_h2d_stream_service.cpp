@@ -11,22 +11,22 @@
 
 #include "gtest/gtest.h"
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <ttnn/distributed/distributed_configs.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -125,7 +125,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
         const uint32_t consumed_counter_addr =
             static_cast<uint32_t>(service.get_consumed_counter_addr(coord));
 
-        auto program = tt::tt_metal::CreateProgram();
+        auto program = tt::tt_metal::CreateProgram(*mesh_device);
 
         auto cb_cfg = tt::tt_metal::CircularBufferConfig(
                           page_size, {{scratch_cb_index, tt::DataFormat::UInt32}})

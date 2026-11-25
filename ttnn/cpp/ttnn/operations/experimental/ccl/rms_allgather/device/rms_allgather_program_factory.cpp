@@ -5,21 +5,21 @@
 #include "rms_allgather_program_factory.hpp"
 
 #include <algorithm>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
@@ -1040,14 +1040,26 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
             if (forward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device_fabric_node_id, forward_fabric_node_id.value(), i, desc, core, all_gather_rts);
+                    *mesh_device,
+                    target_device_fabric_node_id,
+                    forward_fabric_node_id.value(),
+                    i,
+                    desc,
+                    core,
+                    all_gather_rts);
             }
 
             all_gather_rts.push_back(backward_fabric_node_id.has_value());
             if (backward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device_fabric_node_id, backward_fabric_node_id.value(), i, desc, core, all_gather_rts);
+                    *mesh_device,
+                    target_device_fabric_node_id,
+                    backward_fabric_node_id.value(),
+                    i,
+                    desc,
+                    core,
+                    all_gather_rts);
             }
         }
         // Set writer runtime args
@@ -1268,7 +1280,7 @@ void RMSAllGatherProgramFactory::override_runtime_arguments(
     }
     uint32_t gamma_address = 0;
     if (tensor_args.weight.has_value()) {
-        Buffer* const gamma_buffer = tensor_args.weight.value().buffer();
+        const auto* const gamma_buffer = &tensor_args.weight.value().mesh_buffer();
         TT_FATAL(gamma_buffer != nullptr, "rms_allgather weight (gamma) tensor buffer is null");
         gamma_address = static_cast<uint32_t>(gamma_buffer->address());
     }

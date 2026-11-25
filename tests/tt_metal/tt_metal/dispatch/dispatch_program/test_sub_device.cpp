@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -23,29 +23,30 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/runtime_args_data.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_test_utils.hpp"
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"
@@ -508,7 +509,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
 
     // Helper functions to create fresh programs each time
     auto create_program_1 = [&]() {
-        tt_metal::Program program = tt_metal::CreateProgram(*this->devices_[0]);
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         // On sub device 1.
         tt_metal::CreateKernel(
             program,
@@ -520,7 +521,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     };
 
     auto create_program_2 = [&]() {
-        tt_metal::Program program = tt_metal::CreateProgram(*this->devices_[0]);
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         // On sub device 2.
         tt_metal::CreateKernel(
             program,

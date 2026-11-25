@@ -7,9 +7,9 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
@@ -37,12 +37,12 @@ void AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_miss(
     validate_tensor_on_device(input_tensor, "input_tensor");
     validate_tensor_on_device(buffer_tensor, "buffer_tensor");
 
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer().page_size();
     TT_FATAL(
-        page_size % input_tensor.buffer()->alignment() == 0,
+        page_size % input_tensor.mesh_buffer().alignment() == 0,
         "All Gather currently requires aligned pages. page_size={}, alignment={}",
         page_size,
-        input_tensor.buffer()->alignment());
+        input_tensor.mesh_buffer().alignment());
 
     TT_FATAL(
         operation_attributes.ring_size % 2 == 0,

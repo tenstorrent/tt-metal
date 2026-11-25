@@ -12,9 +12,9 @@ from tracy.process_model_log import post_process_ops_log, run_device_profiler
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
-from tests.tests_common.cache_entries_counter import CacheEntriesCounter
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+from tt_py_test_utils_common.cache_entries_counter import CacheEntriesCounter
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.sdpa_test_utils import fa_rand
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -311,6 +311,7 @@ def run_ring_joint_sdpa(
     fp32_dest_acc_en: bool = False,
     # logical_n as a device tensor instead of a host int (logical_l stays defaulted). Pure transport change.
     logical_as_tensor: bool = False,
+    min_blocked_pack_tiles: int | None = None,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -362,6 +363,7 @@ def run_ring_joint_sdpa(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
+        min_blocked_pack_tiles=min_blocked_pack_tiles,
     )
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -496,6 +498,7 @@ def run_ring_joint_sdpa(
         logger.info("Run without trace")
         run_iters(tt_out_list, tt_joint_out_list)
 
+    outputs = None
     if not skip_check:
         pt_Q = torch.cat([Q, joint_Q], dim=2)
         pt_K = torch.cat([K, joint_K], dim=2)
@@ -549,6 +552,12 @@ def run_ring_joint_sdpa(
                     passing = passing and out_pass
 
             assert passing
+        outputs = tt_out, tt_joint_out
+
+    submesh.reset_sub_device_stall_group()
+    submesh.clear_loaded_sub_device_manager()
+    submesh.remove_sub_device_manager(sub_device_manager)
+    return outputs
 
 
 def run_test_ring_joint_sdpa(
@@ -566,7 +575,9 @@ def run_test_ring_joint_sdpa(
     pcc_threshold=0.994,
     max_mse=None,
     fp32_dest_acc_en: bool = False,
+    min_blocked_pack_tiles: int | None = None,
 ):
+    """Returns the last iteration's (spatial, joint) torch outputs when checked, else None."""
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
     rp_axis, rp_factor, up_axis, up_factor = parallel_config
     import math
@@ -589,7 +600,7 @@ def run_test_ring_joint_sdpa(
     logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
     logger.debug(f"submesh: {submesh.shape}")
 
-    run_ring_joint_sdpa(
+    return run_ring_joint_sdpa(
         submesh,
         b,
         nh,
@@ -610,6 +621,7 @@ def run_test_ring_joint_sdpa(
         pcc_threshold,
         max_mse=max_mse,
         fp32_dest_acc_en=fp32_dest_acc_en,
+        min_blocked_pack_tiles=min_blocked_pack_tiles,
     )
 
 
@@ -1023,6 +1035,7 @@ def test_ring_joint_sdpa_dit_wh_t3k(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+        min_blocked_pack_tiles=2,
     )
 
 
@@ -1101,6 +1114,7 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+        min_blocked_pack_tiles=2,
     )
 
 
@@ -1183,6 +1197,7 @@ def test_ring_joint_sdpa_dit_wh_glx(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+        min_blocked_pack_tiles=2,
     )
 
 
@@ -1265,7 +1280,68 @@ def test_ring_joint_sdpa_dit_bh_glx(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+        min_blocked_pack_tiles=2,
     )
+
+
+@pytest.mark.parametrize(
+    "chunk_sizes", [(256, 512), (256, 256), (128, 512)], ids=["q256_k512", "q256_k256", "q128_k512"]
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line"],
+)
+@pytest.mark.parametrize(
+    "mesh_name, mesh_device, num_links",
+    [
+        pytest.param(
+            name,
+            *mesh_device_map[name],
+            id=name,
+            marks=pytest.mark.skipif(
+                name.startswith("bh") != is_blackhole()
+                or mesh_device_map[name][0][0] * mesh_device_map[name][0][1] != ttnn.get_num_devices(),
+                reason=f"{name} needs a machine of exactly that architecture and size",
+            ),
+        )
+        for name in mesh_device_map
+    ],
+    indirect=["mesh_device"],
+)
+def test_ring_joint_sdpa_min_blocked_pack_tiles(
+    mesh_name, mesh_device, num_links, chunk_sizes, all_gather_topology, reset_seeds
+):
+    """tt_dit's min_blocked_pack_tiles=2 gives bit-identical outputs to the architecture default."""
+    q_chunk_size, k_chunk_size = chunk_sizes
+    outputs = []
+    for min_blocked_pack_tiles in (None, 2):
+        torch.manual_seed(0)
+        outputs.append(
+            run_test_ring_joint_sdpa(
+                mesh_device,
+                benchmark_model_input_shapes["flux"],
+                parallel_config_map[mesh_name]["flux"],
+                q_chunk_size,
+                k_chunk_size,
+                1,
+                False,
+                num_links,
+                all_gather_topology,
+                False,
+                ttnn.bfloat16,
+                pcc_threshold=0.999,
+                min_blocked_pack_tiles=min_blocked_pack_tiles,
+            )
+        )
+    for default, opted_in in zip(*outputs):
+        assert torch.equal(default, opted_in)
 
 
 def run_ring_joint_sdpa_sharded_prompt(

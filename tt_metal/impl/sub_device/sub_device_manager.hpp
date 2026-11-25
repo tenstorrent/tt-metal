@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
 #include <atomic>
@@ -13,17 +12,16 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
-#include "allocator.hpp"
+#include "tt-metalium/mesh/allocator.hpp"
 #include "impl/allocator/persistent_l1_arena.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "llrt/hal_types.hpp"
-#include "sub_device.hpp"
-#include "sub_device_types.hpp"
+#include "tt-metalium/mesh/sub_device.hpp"
+#include "tt-metalium/mesh/sub_device_types.hpp"
 #include <impl/context/context_types.hpp>
-#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
 
 namespace tt::tt_metal::distributed {
 struct MeshTraceBuffer;

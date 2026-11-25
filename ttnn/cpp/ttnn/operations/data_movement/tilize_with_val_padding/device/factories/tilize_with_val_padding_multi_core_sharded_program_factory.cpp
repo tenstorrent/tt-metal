@@ -6,16 +6,15 @@
 
 #include <cmath>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -172,6 +171,11 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
         ComputeHardwareConfig compute_gen2;
         compute_gen2.enable_32_bit_dest = compute_gen1.enable_32_bit_dest;
         compute_gen2.unpack_modes = compute_gen1.unpack_modes;  // TODO(#52269): copied from WH/BH
+        // Quasar unpacks Int32 only into DEST.
+        if (a.dtype() == DataType::INT32) {
+            compute_gen2.enable_32_bit_dest = true;
+            compute_gen2.unpack_modes.insert({STAGE, UnpackMode::UnpackToDest});
+        }
         compute_hw = compute_gen2;
     }
 

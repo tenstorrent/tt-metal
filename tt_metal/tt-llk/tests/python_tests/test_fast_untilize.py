@@ -29,11 +29,10 @@ from fast_untilize_common import (
     fast_untilize_dest_acc_modes,
     fast_untilize_formats,
 )
-from helpers.device_io import read_from_device
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, DestSync, PerfRunType, format_dict
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -46,6 +45,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.utils import passed_test, result_tensor
+from ttexalens.tt_exalens_lib import read_from_device
 
 pytestmark = blackhole_only
 
@@ -202,7 +202,8 @@ def _run_fast_untilize_correctness(
     dest_acc=fast_untilize_dest_acc_modes,
     dimensions=FAST_UNTILIZE_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
-    stimulus_kind=["row_id", "random"],
+    # Picks the input data only, so it does not change the compiled kernel.
+    stimulus_kind=runtime(["row_id", "random"]),
 )
 def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
     _run_fast_untilize_correctness(

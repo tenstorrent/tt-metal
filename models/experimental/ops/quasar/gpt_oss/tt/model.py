@@ -9,7 +9,12 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import nearest_32
 from models.experimental.ops.quasar.gpt_oss.config import MeshConfig, Mode, ModeConfig
-from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
+from models.experimental.ops.quasar.gpt_oss.utils.general_utils import (
+    get_cache_file_name,
+    get_compute_grid_size,
+    get_default_num_links,
+)
+from models.experimental.ops.quasar.gpt_oss.utils import pcc_log
 from models.experimental.ops.quasar.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
@@ -119,7 +124,7 @@ class Model:
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
-        self.core_grid = ttnn.CoreCoord(8, 8)
+        self.core_grid = get_compute_grid_size(mesh_device)
         self.head_dim = hf_config.head_dim
         self.max_local_batch_size = max_local_batch_size
         self.users_row_sharded = users_row_sharded
@@ -371,6 +376,9 @@ class Model:
                 f"but model has {len(self.layers)} layers"
             )
 
+        if pcc_log.is_enabled():
+            pcc_log.reset_op_log()
+
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -415,7 +423,9 @@ class Model:
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
+        pcc_log.log_op("norm", hidden_states, self.mesh_device)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        pcc_log.log_op("lm_head", logits, self.mesh_device)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False
         # TP all-gather is deferred to process_output_prefill / process_output_decode

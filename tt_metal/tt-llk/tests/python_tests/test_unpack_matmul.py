@@ -9,9 +9,9 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    DestAccumulation,
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
     DestSync,
-    MathFidelity,
     StochasticRounding,
     Transpose,
 )
@@ -44,7 +44,6 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 STOCHASTIC_ROUNDING_MODES = [
     StochasticRounding.No,
     StochasticRounding.Fpu,
@@ -73,12 +72,7 @@ TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
 
 @pytest.mark.nightly
 @parametrize(
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     matmul_config=MATMUL_COMBINATIONS + TINY_TILES_MATMUL_COMBINATIONS,
 )
 def test_unpack_matmul(

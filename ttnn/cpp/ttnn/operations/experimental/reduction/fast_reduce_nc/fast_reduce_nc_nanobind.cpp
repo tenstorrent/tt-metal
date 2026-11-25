@@ -26,14 +26,18 @@ ttnn::Tensor fast_reduce_nc_wrapper(
     const std::optional<const ttnn::Tensor>& output,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    bool fast_and_approximate_mode) {
     return ttnn::experimental::reduction::fast_reduce_nc(
         input,
         ttsl::Span<const int32_t>(dims.data(), dims.size()),
         output,
         memory_config,
         compute_kernel_config,
-        sub_core_grids);
+        sub_core_grids,
+        /*output_dtype=*/std::nullopt,
+        /*fp32_intermediate_stages=*/false,
+        fast_and_approximate_mode);
 }
 
 }  // namespace
@@ -54,6 +58,8 @@ void bind_fast_reduce_nc(nb::module_& mod) {
         mod,
         R"doc(
               Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.
+              FLOAT32 input sums at full precision when fp32_dest_acc_en is set; fast_and_approximate_mode=True
+              uses the faster FPU path, which truncates FLOAT32 to tf32.
         )doc",
         fast_reduce_nc_wrapper,
         nb::arg("input").noconvert(),
@@ -62,7 +68,8 @@ void bind_fast_reduce_nc(nb::module_& mod) {
         nb::arg("output").noconvert() = nb::none(),
         nb::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("sub_core_grids").noconvert() = nb::none());
+        nb::arg("sub_core_grids").noconvert() = nb::none(),
+        nb::arg("fast_and_approximate_mode") = false);
 }
 
 }  // namespace ttnn::operations::experimental::reduction::detail
