@@ -194,6 +194,10 @@ class SpecGenerator(Generator):
                                              layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)  # fmt: skip
         m.set_inputs(0, 0)
         m.step()
+        for V in Vs:  # one eager pass per row count before the staging: the L1 buffers a pass keeps from its
+            V.set_inputs([0] * V.R, p_shared)  # first run on sit above the staging, not below it (a chunked
+            V.step()  # prefill between two steps needs the L1 below the staging for its circular buffers)
+        ttnn.synchronize_device(self.device)
         if self.use_overlap and self.overlap is None:
             # decode staging first (as Generator.capture), so every verify program is compiled in its final form
             # before any capture; Generator.capture below then only settles and captures

@@ -13,9 +13,8 @@
 #   CTX                --max-model-len, the context the far KV cache is allocated for (196608)
 #   SPEC=0             no speculative decode (it is on: greedy and sampled requests; needs the drafter weights)
 #   FAST=1             fast mode (own3-l8 experts)
-#   PREFILL=<tokens>   chunked prefill for new prompts of at least that many tokens (off). It implies SPEC=0, decodes
-#                      a little slower, and needs DRAM that a smaller CTX frees: about 0.3 GiB is short at 196608;
-#                      CTX=131072 runs passes of 4096 tokens (the server says at start what it uses or lacks)
+#   PREFILL=<tokens>   chunked prefill for new prompts of at least that many tokens (off). It needs DRAM that a
+#                      smaller CTX frees (the server says at start what it uses or lacks)
 # and the model's own: INKLING_MODE, INKLING_CACHE_DIR, INKLING_CACHE, INKLING_SPEC_MAX_CTX (modes.py).
 set -e
 : "${INKLING_CKPT:?set INKLING_CKPT to the checkpoint directory (tokenizer, chat template)}"
@@ -28,7 +27,6 @@ spec=(--no-async-scheduling --speculative-config
       '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 2}')
 if [ -n "$PREFILL" ] && [ "$PREFILL" != 0 ]; then
     export INKLING_VLLM_PREFILL=$PREFILL
-    SPEC=0
     ring='"worker_l1_size": 1411136, '  # 48 KB: the prefill's largest program needs the rest
 fi
 if [ "${SPEC:-1}" = 0 ]; then

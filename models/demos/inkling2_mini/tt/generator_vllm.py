@@ -137,9 +137,7 @@ class Inkling2ForCausalLM:
 
         why = None
         base = ttnn._ttnn.device.GetAllocatorBaseAddress(self.device, ttnn.BufferType.L1)
-        if type(self) is not Inkling2ForCausalLM:
-            why = "the speculative class feeds prompts token by token"
-        elif base > tt_device.DEFAULT_L1_BASE + (48 << 10):
+        if base > tt_device.DEFAULT_L1_BASE + (48 << 10):
             why = f'its programs need "worker_l1_size": {tt_device.worker_l1_size(48)} (a 48 KB ring) or more L1'
         chunk, spare = self._prefill_chunk()
         if why is None and chunk is None:
@@ -154,6 +152,7 @@ class Inkling2ForCausalLM:
         self.pf_chunk = chunk  # tokens per pass; the prefill is built for one pass of PF_ONE when that fits too
         one = spare >= self.PF_GIB[2] * (self.PF_ONE - chunk) / 1024 > 0
         pf = Inkling2Prefill(self.model, root=cache, chunk=-(-self.PF_ONE // 1024) * 1024 if one else chunk)
+        pf.drafter = getattr(self, "drafter", None)  # (the speculative class: the prompt's drafter context too)
         logger.info(
             f"chunked prefill on for prompts of {self.pf_min}+ tokens: passes of {chunk}"
             f"{f', one pass up to {self.PF_ONE}' if one else ''}; built in {time.time() - t0:.0f} s"
@@ -697,6 +696,15 @@ class Inkling2SpecForCausalLM(Inkling2ForCausalLM):
             self._hit += i < a
         if k == 0:
             self._sp[2] += 1
+
+    def _prefill_chunked(self, ids):
+        """As Inkling2ForCausalLM._prefill_chunked; the prefill also writes the drafter's context of the prompt
+        (Inkling2Prefill.drafter: DSparkDrafter.commit_chunk) while the prompt lies inside the drafter's positions."""
+        d = self.drafter
+        self.pf.drafter = d if d is not None and len(ids) + self.pf.chunk <= d.S else None
+        how = super()._prefill_chunked(ids)
+        self._stash, self._pending, self._next = False, 0, len(ids)
+        return how
 
     def _request_log(self):
         (passes, tokens, declined), self._sp, last = self._sp, [0, 0, 0], super()._request_log()

@@ -317,9 +317,9 @@ released around the prefill and the reply's first six steps capture them again (
 - It costs DRAM, so context: 1.05 GiB for the prefill's own tensors, 2 GiB of room for a layer's rebuilt experts,
   0.26 GiB per 1024 tokens of a pass. By that rule passes of 8192 tokens fit up to about a 94K context, 4096 up to
   151K, 2048 up to 180K (measured: 36864 and 131072); the server says at start what it uses, or how much is short.
-- It costs decode speed: the plain class only (no speculative decode: 64 against 77 tok/s on predictable text).
-  The decode traces and the expert prefetch stay across a prefill (their L1 is freed and taken back at the same
-  addresses): 14.9 ms a step, as the plain launch, and no slow steps after a prefill.
+- Decode keeps its speed: speculative decode runs with it (the prefill also writes the drafter's context of the
+  prompt), and the decode traces and the expert prefetch stay across a prefill (their L1 is freed and taken back
+  at the same addresses): no slow steps after a prefill.
 - The reply after a prefill is the demo's prefill reply, not the token-by-token one: for that prompt they part at
   token 30 (in a TILE-cache process too).
 
