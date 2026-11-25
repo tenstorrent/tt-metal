@@ -7,11 +7,11 @@
 #include <map>
 #include <string>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -63,6 +63,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     TT_FATAL(operation_attributes.output_dtype.has_value(), "Output dtype should have been provided");
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Bcast batch should have been provided");
+    TT_FATAL(
+        tensor_args.optional_input_tensors.empty() || !tensor_args.optional_input_tensors.at(0).has_value(),
+        "MatmulMultiCoreReuseProgramConfig has no fused bias; linear adds the bias after the matmul for this config");
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
@@ -474,6 +477,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
 
     ComputeHardwareConfig compute_hw_config =
         ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
+    // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode, and cb_intermed0 holds 32-bit
+    // partials under fp32 accumulation. UnpackToSrc, as in the 1D/2D factories: on Quasar UnpackToDest deadlocks
+    // (#62102). The reload between K blocks rounds the partials through SrcA (TF32).
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        compute_hw_config.unpack_modes.emplace(RO_INTERM0_DFB, UnpackMode::UnpackToSrc);
+    }
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group block-count CTA ----
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_blocks_per_core_group) {

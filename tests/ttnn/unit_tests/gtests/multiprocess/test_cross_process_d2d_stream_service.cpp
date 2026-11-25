@@ -71,19 +71,19 @@
 
 #include "gtest/gtest.h"
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -373,7 +373,7 @@ MeshWorkload make_relay_like_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -461,7 +461,7 @@ MeshWorkload make_d2h_relay_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -550,7 +550,7 @@ MeshWorkload make_stress_compute_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -651,7 +651,7 @@ MeshWorkload make_stress_d2h_compute_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -722,7 +722,7 @@ MeshWorkload make_stress_signal_workload(D2DStreamServiceSender* outbound, const
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto kernel = CreateKernel(
             program,
             "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_stress_relay.cpp",
@@ -759,7 +759,7 @@ MeshWorkload make_gate_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         CreateKernel(
             program,
             "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_sync.cpp",
@@ -795,7 +795,7 @@ MeshWorkload make_stub_fabric_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const tt::tt_fabric::FabricNodeId downstream_node(
             down_mesh_id, mesh_graph.coordinate_to_chip(down_mesh_id, coord, down_host_rank));
@@ -837,7 +837,7 @@ MeshWorkload make_stress_fabric_workload(
 
     MeshWorkload workload;
     for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const auto fabric_core_phys = device->worker_core_from_logical_core(fabric_core);

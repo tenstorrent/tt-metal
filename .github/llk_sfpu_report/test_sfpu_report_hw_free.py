@@ -293,6 +293,36 @@ def test_the_binary_accuracy_driver_hooks_names_that_exist():
     assert hooked | builders <= module_names(runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py")
 
 
+def test_the_unary_accuracy_driver_builds_through_the_functional_builder():
+    """The driver lists no template or runtime of its own: a hand-written TestConfig
+    stopped compiling when eltwise_unary_sfpu_test.cpp gained parameters, and only
+    showed up on hardware, as a report with no accuracy. It calls the functional
+    driver's builder, with keywords that builder takes."""
+    import ast
+
+    driver = ast.parse(accuracy.DRIVER_SOURCE.read_text())
+    calls = [
+        node
+        for node in ast.walk(driver)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id.endswith("_config")
+    ]
+    assert [call.func.id for call in calls] == ["build_eltwise_unary_sfpu_config"]
+    assert not [
+        node
+        for node in ast.walk(driver)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "TestConfig"
+    ]
+    functional = ast.parse((runner.PYTHON_TESTS / "test_eltwise_unary_sfpu.py").read_text())
+    (builder,) = [
+        node
+        for node in functional.body
+        if isinstance(node, ast.FunctionDef) and node.name == "build_eltwise_unary_sfpu_config"
+    ]
+    accepted = {arg.arg for arg in builder.args.args + builder.args.kwonlyargs}
+    assert {keyword.arg for keyword in calls[0].keywords} <= accepted
+    assert len(calls[0].args) <= len(builder.args.args)
+
+
 @pytest.mark.parametrize(
     "unary_exit,typecast_exit,builds",
     [

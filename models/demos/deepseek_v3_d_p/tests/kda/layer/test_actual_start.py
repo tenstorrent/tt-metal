@@ -41,6 +41,9 @@ _ON_DISTRIBUTED_MESHES = pytest.mark.parametrize(
         pytest.param((2, 4), kda_device_params((2, 4)), 0, id="2x4-tp0"),
         pytest.param((2, 4), kda_device_params((2, 4)), 1, id="2x4-tp1"),
         pytest.param((4, 4), kda_device_params((4, 4)), 0, marks=_ON_4X4_STAGE, id="4x4-torus-x-tp0"),
+        pytest.param(
+            (4, 4), kda_device_params((4, 4), wrap_both_axes=True), 0, marks=_ON_4X4_STAGE, id="4x4-torus-xy-tp0"
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -106,6 +109,17 @@ _SP4_SPLITS = tuple(rank * 320 + split for rank in range(4) for split in (0, 32,
         ),
         pytest.param(
             (4, 4),
+            kda_device_params((4, 4), wrap_both_axes=True),
+            0,
+            10240,
+            (0, 2560, 32, 640, 1312, 2528, 6432),
+            20,
+            0.65,
+            marks=_ON_4X4_STAGE,
+            id="xy4-SP4-four-groups",
+        ),
+        pytest.param(
+            (4, 4),
             kda_device_params((4, 4)),
             0,
             1280,
@@ -114,6 +128,17 @@ _SP4_SPLITS = tuple(rank * 320 + split for rank in range(4) for split in (0, 32,
             0.6,
             marks=_ON_4X4_STAGE,
             id="4x4-SP4-boundaries-and-splits",
+        ),
+        pytest.param(
+            (4, 4),
+            kda_device_params((4, 4), wrap_both_axes=True),
+            0,
+            1280,
+            _SP4_SPLITS,
+            5,
+            0.6,
+            marks=_ON_4X4_STAGE,
+            id="xy4-SP4-boundaries-and-splits",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -211,14 +236,37 @@ def test_actual_start_is_deterministic_and_matches_reference(
     )
 
 
-@_ON_DISTRIBUTED_MESHES
-def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int) -> None:
-    """Two replays of the complete split layer must produce identical outputs and carries."""
+# 5120-token cases use state_peak 0.65, as in test_actual_start_matches_natural_order.
+@pytest.mark.parametrize(
+    "mesh_device,device_params,tensor_parallel_axis,sequence,state_peak",
+    [
+        pytest.param((2, 4), kda_device_params((2, 4)), 0, SEQUENCE, 0.6, id="2x4-tp0"),
+        pytest.param((2, 4), kda_device_params((2, 4)), 1, SEQUENCE, 0.6, id="2x4-tp1"),
+        pytest.param((4, 4), kda_device_params((4, 4)), 0, SEQUENCE, 0.6, marks=_ON_4X4_STAGE, id="4x4-torus-x-tp0"),
+        pytest.param(
+            (8, 4),
+            kda_device_params((8, 4)),
+            1,
+            5120,
+            0.65,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="8x4-SP8xTP4-torus-xy",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_split_trace_replay_is_bit_identical(
+    mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int, sequence: int, state_peak: float
+) -> None:
+    """Two replays of the complete split layer must produce identical outputs and carries.
+
+    Rank 1 starts mid-range, so the relay and the entry correction run inside the captured trace.
+    """
     sp_axis = 1 - tensor_parallel_axis
     sp_size = tuple(mesh_device.shape)[sp_axis]
-    local_rows = SEQUENCE // sp_size
+    local_rows = sequence // sp_size
     actual_start = local_rows + local_rows // 2
-    config, weights, hidden, expected_output, expected_state = reference_case()
+    config, weights, hidden, expected_output, expected_state = reference_case(sequence)
     layer = build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis, active_seq_len=hidden.shape[1])
     permutation = mla_row_permutation(actual_start, sp_size, local_rows)
     hidden_tt = to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
@@ -256,6 +304,7 @@ def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice, tenso
                 page_channels=layer.convolution_page_channels,
                 label=f"split trace replay={replay}",
                 nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
+                state_linf_threshold=state_peak,
             )
             current = [
                 ttnn.to_torch(shard).clone()

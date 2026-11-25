@@ -10,8 +10,8 @@
 #include <optional>
 #include <variant>
 #include <vector>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/distributed/types.hpp"
 
@@ -24,6 +24,13 @@ struct SparseSDPAOperation {
     using tensor_return_value_t = Tensor;
 
     struct SparseSDPAProgramFactory {
+        // The split-K choice depends on the free L1, so compute_program_hash hashes it.
+        struct Plan {
+            bool split_k = false;
+            uint32_t num_used = 0;  // cores that get work
+        };
+        static Plan select_plan(const operation_attributes_t& attrs, const tensor_args_t& t);
+
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& attrs, const tensor_args_t& t, tensor_return_value_t& output);
 

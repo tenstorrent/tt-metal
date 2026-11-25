@@ -53,6 +53,18 @@ constexpr bool reduce_swaps_operands()
     return REDUCE_DIMENSION == ReduceDim::REDUCE_ROW && POOL_TYPE != PoolType::MAX;
 }
 
+/**
+ * @brief Whether the reduce moves pooled Dest rows back into the source registers (MOVD2B) for a second pool.
+ *
+ * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
+ * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ */
+template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION>
+constexpr bool reduce_moves_dest_to_src()
+{
+    return REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR || (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW && POOL_TYPE == PoolType::MAX);
+}
+
 enum class DataCopyType : std::uint8_t
 {
     A2D,
@@ -130,6 +142,8 @@ enum class SfpuType : std::uint32_t
     gt,
     le,
     ge,
+    eq,
+    ne,
     lt_int,
     gt_int,
     le_int,
@@ -247,6 +261,9 @@ enum class SfpuType : std::uint32_t
     unary_max_int32,
     unary_min_int32,
     dropout,
+    quant_int32,
+    requant_int32,
+    dequant_int32,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its

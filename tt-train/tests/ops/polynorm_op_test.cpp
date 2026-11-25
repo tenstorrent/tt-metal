@@ -18,7 +18,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tuple>
 #include <vector>
 

@@ -7,11 +7,11 @@
 #include <algorithm>
 #include <set>
 
-#include "tt-metalium/allocator.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
-#include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/work_split.hpp"
+#include "tt-metalium/mesh/allocator.hpp"
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt-metalium/utils/work_split.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <internal/mesh_device.hpp>

@@ -9,7 +9,7 @@
 #include "optional"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
@@ -17,11 +17,11 @@
 #include <algorithm>
 #include <cstdint>
 #include <ranges>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <vector>
 
@@ -366,7 +366,7 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*a.device());
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::distributed::MeshDevice* device = a.device();

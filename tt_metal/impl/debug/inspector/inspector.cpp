@@ -14,11 +14,11 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "distributed/mesh_socket_utils.hpp"
-#include "program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include <map>
 #include <memory>
 #include <optional>

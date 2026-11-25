@@ -38,6 +38,7 @@ does not fit the device actually under test.
     pytest models/experimental/ops/quasar/tests/panoptic_deeplab_ops/ -m emulator
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,11 @@ _ELEM_BYTES = {
     "BFLOAT4_B": 0.5625,
     "UINT8": 1,
 }
+
+# TTNN_GRAPH_OPS_BF8_AS_BF16 builds block-float cases as bfloat16 (see graph_case.BF8_AS_BF16; read
+# here directly so collection does not import ttnn), so size them as what is actually built.
+if os.environ.get("TTNN_GRAPH_OPS_BF8_AS_BF16", "") not in ("", "0", "false", "False"):
+    _ELEM_BYTES["BFLOAT8_B"] = _ELEM_BYTES["BFLOAT4_B"] = 2
 
 
 def _elems_of(shape) -> int:

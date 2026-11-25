@@ -301,7 +301,8 @@ Tensor full_like_impl(
             (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 ||
              dtype_value == DataType::FLOAT32) &&
             tensor.storage_type() == StorageType::DEVICE && dtype_value == tensor.dtype()) {
-            return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
+            // Gated on BFLOAT8_B / BFLOAT16 / FLOAT32 above, so float is lossless here.
+            return ttnn::fill(tensor, static_cast<float>(fill_value), memory_config, optional_output_tensor);
         }
         return full_impl(
             tensor.logical_shape(),
@@ -343,7 +344,7 @@ Tensor ones(
 }
 
 template <typename FillValueType>
-    requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
+    requires std::integral<FillValueType> or std::is_same_v<FillValueType, float>
 Tensor full(
     const ttnn::Shape& shape,
     const FillValueType fill_value,
@@ -352,9 +353,11 @@ Tensor full(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    // Widen integral fills to int64_t so uint32 values above INT32_MAX skip the lossy float path.
+    using ForwardType = std::conditional_t<std::is_same_v<FillValueType, float>, float, int64_t>;
     return full_impl(
         shape,
-        fill_value,
+        static_cast<ForwardType>(fill_value),
         dtype,
         layout,
         device.has_value() ? &device->get() : nullptr,
@@ -407,7 +410,7 @@ Tensor from_buffer(
 }
 
 template <typename FillValueType>
-    requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
+    requires std::integral<FillValueType> or std::is_same_v<FillValueType, float>
 Tensor full_like(
     const Tensor& tensor,
     const FillValueType fill_value,
@@ -416,7 +419,9 @@ Tensor full_like(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+    using ForwardType = std::conditional_t<std::is_same_v<FillValueType, float>, float, int64_t>;
+    return full_like_impl(
+        tensor, static_cast<ForwardType>(fill_value), dtype, layout, device, memory_config, optional_output_tensor);
 }
 
 Tensor zeros_like(
@@ -449,6 +454,12 @@ Tensor empty_like(
     DataType dtype_value = dtype.value_or(tensor.dtype());
     MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
     MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
+    tt::tt_metal::TensorSpec spec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
+
+    // A host input with no device requested stays on host, as full_like / zeros_like / ones_like do.
+    if (device_ptr == nullptr) {
+        return Tensor(tt::tt_metal::HostTensor::allocate_for_overwrite(spec));
+    }
 
     std::optional<tt::tt_metal::TensorTopology> topology = std::nullopt;
     if (is_device_tensor(tensor) &&
@@ -456,10 +467,7 @@ Tensor empty_like(
         topology = tensor.tensor_topology();
     }
 
-    return create_device_tensor(
-        tt::tt_metal::TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-        device_ptr,
-        std::move(topology));
+    return create_device_tensor(spec, device_ptr, std::move(topology));
 }
 
 Tensor arange(
@@ -505,9 +513,9 @@ template Tensor full_impl<float>(
     MeshDevice* device,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor);
-template Tensor full_impl<int>(
+template Tensor full_impl<int64_t>(
     const ttnn::Shape& shape,
-    const int fill_value,
+    const int64_t fill_value,
     const std::optional<DataType>& dtype,
     const std::optional<Layout>& layout,
     MeshDevice* device,
@@ -522,9 +530,9 @@ template Tensor full_like_impl<float>(
     std::optional<std::reference_wrapper<MeshDevice>> device_arg,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor);
-template Tensor full_like_impl<int>(
+template Tensor full_like_impl<int64_t>(
     const Tensor& tensor,
-    const int fill_value,
+    const int64_t fill_value,
     const std::optional<DataType>& dtype,
     const std::optional<Layout>& layout,
     std::optional<std::reference_wrapper<MeshDevice>> device_arg,
@@ -539,6 +547,15 @@ template Tensor full<int>(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor);
+template Tensor full<int64_t>(
+    const ttnn::Shape& shape,
+    const int64_t fill_value,
+    const std::optional<DataType>& dtype,
+    const std::optional<Layout>& layout,
+    std::optional<std::reference_wrapper<MeshDevice>> device,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor);
+
 template Tensor full<float>(
     const ttnn::Shape& shape,
     const float fill_value,
@@ -556,6 +573,15 @@ template Tensor full_like<int>(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor);
+template Tensor full_like<int64_t>(
+    const Tensor& tensor,
+    const int64_t fill_value,
+    const std::optional<DataType>& dtype,
+    const std::optional<Layout>& layout,
+    std::optional<std::reference_wrapper<MeshDevice>> device,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor);
+
 template Tensor full_like<float>(
     const Tensor& tensor,
     const float fill_value,

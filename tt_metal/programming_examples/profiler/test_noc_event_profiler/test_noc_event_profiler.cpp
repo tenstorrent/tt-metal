@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 using namespace tt::tt_metal;
 
@@ -63,7 +65,7 @@ int main() {
             .kernels = {dram_copy_kernel},
             .work_units = {wu},
         };
-        Program program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+        Program program(*mesh_device, spec);
 
         // boilerplate setup for reading and writing multiple tiles from DRAM
         constexpr uint32_t single_tile_size = 2 * (32 * 32);
@@ -100,7 +102,7 @@ int main() {
                            output_bank_id,
                            static_cast<uint32_t>(l1_buffer->size())}}}},
         });
-        tt::tt_metal::experimental::SetProgramRunArgs(program, params);
+        program.set_program_run_args(params);
 
         workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);

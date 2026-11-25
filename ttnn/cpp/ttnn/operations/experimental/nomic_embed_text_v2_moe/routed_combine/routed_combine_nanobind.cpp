@@ -24,32 +24,39 @@ void bind_routed_combine(nb::module_& mod) {
         and round to bf16 once. Padding tokens carry weight 0 on a real row, so the output's tile
         padding holds exactly the bias. Nothing is read back to the host, so the call is trace-safe.
 
+        Without combine_weights and bias it gathers: top_k 1, out[t] = expert_rows[combine_index[0, t]],
+        tilized with no arithmetic, bit for bit what ttnn.embedding returns. Their shared pack turns
+        -0.0 into 0.0, NaN into inf and denormals into 0.
+
         Args:
             expert_rows (ttnn.Tensor): (1, 1, rows, hidden) BFLOAT16, ROW_MAJOR, interleaved: the
-                routed experts' output rows, as grouped_matmul writes them. At least one row per
-                slot: rows >= top_k * num_tokens, rounded up to 32.
+                rows combine_index picks from, such as the routed experts' output rows as
+                grouped_matmul writes them. A combine takes at least one row per slot, rows >= top_k *
+                num_tokens rounded up to 32; a gather any count.
             combine_index (ttnn.Tensor): (top_k, padded_tokens) UINT32, ROW_MAJOR, interleaved, from
                 routing_metadata. top_k is 1 to 16. Every entry must be a row of expert_rows; the
                 kernel does not check them.
-            combine_weights (ttnn.Tensor): (1, top_k, padded_tokens, 1) FLOAT32, TILE, interleaved,
-                from routing_metadata.
-            bias (ttnn.Tensor): (1, 1, 1, hidden) BFLOAT16, TILE, interleaved: added once per token.
+            combine_weights (ttnn.Tensor, optional): (1, top_k, padded_tokens, 1) FLOAT32, TILE,
+                interleaved, from routing_metadata. Given with bias, or neither for a gather.
+            bias (ttnn.Tensor, optional): (1, 1, 1, hidden) BFLOAT16, TILE, interleaved: added once per
+                token.
 
         Keyword Args:
             num_tokens (int): tokens in the window; padded_tokens must be num_tokens rounded up to 32.
-            memory_config (ttnn.MemoryConfig, optional): interleaved DRAM or L1. Defaults to
-                expert_rows'.
+            memory_config (ttnn.MemoryConfig, optional): interleaved or sharded, DRAM or L1; the writer
+                addresses tiles by page id. Defaults to expert_rows'.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): fp32_dest_acc_en
                 must be on. Defaults to HiFi4 with fp32 accumulation.
 
         Returns:
-            ttnn.Tensor: (1, 1, num_tokens, hidden) BFLOAT16, TILE, its tile padding the bias.
+            ttnn.Tensor: (1, 1, num_tokens, hidden) BFLOAT16, TILE, its tile padding the bias, or a
+            gather's rows.
         )doc",
         &ttnn::experimental::nomic_embed_text_v2_moe::routed_combine,
         nb::arg("expert_rows"),
         nb::arg("combine_index"),
-        nb::arg("combine_weights"),
-        nb::arg("bias"),
+        nb::arg("combine_weights") = nb::none(),
+        nb::arg("bias") = nb::none(),
         nb::kw_only(),
         nb::arg("num_tokens"),
         nb::arg("memory_config") = nb::none(),

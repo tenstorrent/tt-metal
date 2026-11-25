@@ -2457,6 +2457,7 @@ class UnarySFPUGolden:
             MathOperation.UnaryBitwiseOr: self._unary_bitwise_or,
             MathOperation.UnaryBitwiseXor: self._unary_bitwise_xor,
             MathOperation.RsubScalarInt32: self._rsub_scalar_int32,
+            MathOperation.QuickGelu: self._quick_gelu,
             MathOperation.RemainderUint32: self._remainder_uint32,
             MathOperation.SumIntCol: self._sum_int_col,
             MathOperation.SumIntRow: self._sum_int_row,
@@ -3550,6 +3551,12 @@ class UnarySFPUGolden:
         cdf = 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
         return cdf + x * phi
 
+    def _quick_gelu(self, x):
+        # The exact value of the leaf in float64,
+        # at the input as the SFPU reads it (a subnormal as 0).
+        x = 0.0 if abs(float(x)) < 2.0**-126 else x
+        return self._in_fp64(x, lambda a: (a / (1 + torch.exp(-1.702 * a))))
+
     def _rand(self, x):
         # No element-wise golden exists: the midpoint is only valid ahead of a downstream op whose
         # result is the same for every draw. test_rand_quasar checks rand statistically.
@@ -3637,14 +3644,36 @@ class UnarySFPUGolden:
         )
 
     def _i1_bessel(self, x):
-        # Modified Bessel I1; the kernel poly approx is valid on |x| <= ~3.75. Same torch
-        # limitation as _i0, with the sign kept: I1 is odd, so I1(+/-inf) = +/-inf. I1 stays
-        # outside SPECIALS_READY_OPS because the kernel saturates a non-finite input.
+        if isinstance(x, (int, float)):
+            return self._i1_bessel_scalar(x)
+        values = [self._i1_bessel_scalar(value) for value in x.flatten().tolist()]
+        return torch.tensor(values, dtype=x.dtype).reshape(x.shape)
+
+    def _i1_bessel_scalar(self, x):
+        # Torch's result at its special inputs, else i1(x), rounded once onto Dest's grid.
         if math.isnan(x):
-            return x
+            return self._infinite(math.nan)
         if math.isinf(x):
-            return math.copysign(self.handle_infinite_numbers(math.inf), x)
-        return self._torch_unary(x, torch.special.i1)
+            return self._infinite(math.nan) if x > 0 else self._infinite(math.nan)
+        if x == 0.0:
+            return (
+                self._infinite(0.0)
+                if math.copysign(1.0, x) > 0
+                else self._infinite(0.0)
+            )
+        fast = None
+        bits = struct.unpack("<I", struct.pack("<f", x))[0]
+        if bits & 0xFFFF == 0 and struct.unpack("<f", struct.pack("<f", x))[0] == x:
+            try:
+                fast = self._bf16_table("torch.special.i1(x)")[bits >> 16]
+            except (ArithmeticError, ValueError):
+                fast = None
+        rounded = self._round_fast(fast, 1.9571240437549286e-14)
+        if rounded is not None:
+            return self._infinite(rounded)
+        with mpmath.workprec(320):
+            x = mpmath.mpf(x)
+            return self._infinite(self._round_once_to_dest(mpmath.besseli(1, x)))
 
     def _sign(self, x):
         # Matches calculate_sign: -1 for x<0, 0 for x==0, +1 otherwise.
@@ -4365,8 +4394,10 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuRemainderUint32: self._remainder_int,
                 MathOperation.SfpuLgammaStirlingFp32: self._lgamma_stirling_fp32,
                 MathOperation.SfpuFmodInt32: self._fmod_int,
+                MathOperation.SfpuGegluTanh: self._geglu_tanh,
                 MathOperation.SfpuIntSumAdd: self._int_sum_add,
                 MathOperation.SfpuClampedSiluGlu: self._clamped_silu_glu,
+                MathOperation.SfpuSiluGlu: self._silu_glu,
                 MathOperation.SfpuSituGlu: self._situ_glu,
             }
         )
@@ -4776,6 +4807,26 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     def _lt(self, t1, t2):
         return (t1 < t2).to(torch.float32)
 
+    def _geglu_tanh(self, t1, t2):
+        # The exact product of the leaves in float64,
+        # each at its input as the SFPU reads it (a subnormal as 0).
+        a, b = (
+            torch.tensor(
+                0.0 if abs(float(t)) < 2.0**-126 else float(t), dtype=torch.float64
+            )
+            for t in (t1, t2)
+        )
+        return float(
+            (
+                a
+                / (
+                    1
+                    + torch.exp(-(1.5957691216057308 * a + 0.07135481627260025 * a**3))
+                )
+            )
+            * (b)
+        )
+
     def _gt(self, t1, t2):
         return (t1 > t2).to(torch.float32)
 
@@ -4917,6 +4968,17 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         gate = torch.tensor(sfpu_min(float(t1), limit), dtype=torch.float32)
         up = sfpu_max(sfpu_min(float(t2), limit), -limit)
         return float(gate * torch.sigmoid(gate) * up)
+
+    def _silu_glu(self, t1, t2):
+        # The exact product of the leaves in float64,
+        # each at its input as the SFPU reads it (a subnormal as 0).
+        a, b = (
+            torch.tensor(
+                0.0 if abs(float(t)) < 2.0**-126 else float(t), dtype=torch.float64
+            )
+            for t in (t1, t2)
+        )
+        return float((a / (1 + torch.exp(-a))) * (b))
 
     def _situ_glu(self, t1, t2):
         # calculate_situ_glu: softcap(gate, beta_gate) * sigmoid(gate) * softcap(up, beta_up), gate
@@ -5573,6 +5635,15 @@ class UntilizeGolden:
         from helpers.tilize_untilize import untilize_block
 
         operand = quantize_input_to_unpack_format(operand, input_format)
+
+        # untilize_block's cast wraps where the packer clamps to sign-magnitude, so a modelled pack
+        # saturates first; a caller that omits input_format is reshaping a device result, not packing.
+        if (
+            input_format is not None
+            and input_format.is_integer()
+            and data_format.is_integer()
+        ):
+            operand = saturate_integer(operand, data_format)
 
         result = untilize_block(
             operand,

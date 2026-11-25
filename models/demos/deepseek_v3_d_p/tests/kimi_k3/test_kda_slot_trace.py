@@ -18,21 +18,20 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_plain_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import all_zero_bits, assert_bit_identical, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     build_layer,
+    kda_device_params,
     mla_row_permutation,
     random_weights,
     read_slab_layer,
     reconstruct_sp_tp_tensor,
     to_sp_input,
 )
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import fill_slabs_with_noise, run_kda_chunk, zero_state_like
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import fill_slabs_with_noise, run_kda_chunk
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
     KdaStates,
-    allocate_native_state,
     deallocate_state,
     device_scalar,
 )
@@ -42,6 +41,8 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import TtK3KdaAttention
 pytestmark = run_for_blackhole()
 
 LAYER = 1
+# A second slab layer ahead of LAYER, so LAYER sits at position 1 of 2: the ops address slot * 2 + 1.
+OTHER_LAYER = 0
 NUM_SLOTS = 2
 # (slot, actual_start, length): users A (slot 0) and B (slot 1) alternate, each continuing its own carry; then
 # user C starts a new request on slot 0, over A's carry.
@@ -55,14 +56,13 @@ def _host(tensor: ttnn.Tensor) -> list[torch.Tensor]:
 @pytest.mark.parametrize(
     "mesh_device,sp_axis,tp_axis,device_params",
     [
-        pytest.param((1, 8), 0, 1, fabric_1d_plain_device_params(), id="sp1tp8"),
-        pytest.param((2, 4), 0, 1, fabric_1d_plain_device_params(), id="sp2tp4"),
+        pytest.param((2, 4), 0, 1, kda_device_params((2, 4)), id="sp2tp4"),
         # Galaxy runs only the production 8x4 TorusXY mesh.
         pytest.param(
             (8, 4),
             0,
             1,
-            torus_xy_device_params(),
+            kda_device_params((8, 4)),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="sp8tp4-torus-xy",
         ),
@@ -88,9 +88,8 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
         convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
     )
     geometry = KdaContractGeometry.from_kda_config(config, mesh_shape=mesh_shape, sp_axis=sp_axis, tp_axis=tp_axis)
-    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(LAYER,), num_slots=NUM_SLOTS)
-    scratch = allocate_native_state(mesh_device, geometry)
-    attention = TtK3KdaAttention(layer, LAYER, tp_axis, 1, ttnn.Topology.Linear, scratch)
+    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(OTHER_LAYER, LAYER), num_slots=NUM_SLOTS)
+    attention = TtK3KdaAttention(layer, LAYER, tp_axis, 1, ttnn.Topology.Linear)
     dims = [None, None]
     dims[sp_axis], dims[tp_axis] = 2, 3
 
@@ -107,10 +106,10 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
         hidden = torch.randn(1, capacity, config.hidden_size, generator=torch.Generator().manual_seed(300 + index))
         return hidden.bfloat16()[:, mla_row_permutation(start, sp, local_rows)]
 
-    def carries():
+    def carries(layer_idx=LAYER):
         snapshots = []
         for slot in range(NUM_SLOTS):
-            state = read_slab_layer(mesh_device, slabs, slot, LAYER)
+            state = read_slab_layer(mesh_device, slabs, slot, layer_idx)
             snapshots.append(_host(state.recurrent) + _host(state.convolution))
             deallocate_state(state)
         return snapshots
@@ -123,7 +122,7 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
     def fresh_head(index, start, length):
         """The head chunk run by ttKDA itself from a zero carry: what a never-used slot would produce."""
         hidden = to_sp_input(chunk_input(index, start), mesh_device, sp_axis)
-        zero = zero_state_like(scratch)
+        zero = layer.allocate_state()
         bounds = [make_actual_start(mesh_device, value) for value in (start, start + length)]
         output, state = layer.forward(hidden, zero, *bounds)
         result = [valid_output(output, start, length)] + _host(state.recurrent) + _host(state.convolution)
@@ -163,6 +162,7 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
 
     # A stale slot must not pass for a zeroed one: noise in every slot before any request starts.
     fill_slabs_with_noise(mesh_device, slabs, seed=17)
+    other_layer = carries(OTHER_LAYER)
     trace = None
     traced_output = None
     try:
@@ -201,12 +201,23 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
             check_chunk("traced", index, slot, start, before, after)
             for shard, (want, got) in enumerate(zip(eager[index], observed, strict=True)):
                 assert_bit_identical(want, got, name=f"traced chunk {index} slot {slot} shard {shard}")
+
+        # A slot past the slabs (mid-request, so the carry would be read) reads and writes no slab byte.
+        before = carries()
+        stage(0, NUM_SLOTS, capacity, capacity)
+        ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
+        for slot, (got_slot, want_slot) in enumerate(zip(carries(), before, strict=True)):
+            for got, want in zip(got_slot, want_slot, strict=True):
+                assert_bit_identical(want, got, name=f"out-of-range slot wrote slot {slot}")
+        # No chunk touched the other layer's entries.
+        for slot, (got_slot, want_slot) in enumerate(zip(carries(OTHER_LAYER), other_layer, strict=True)):
+            for got, want in zip(got_slot, want_slot, strict=True):
+                assert_bit_identical(want, got, name=f"layer {OTHER_LAYER} slot {slot} was written")
     finally:
         if trace is not None:
             ttnn.release_trace(mesh_device, trace)
         if traced_output is not None:
             ttnn.deallocate(traced_output)
-        deallocate_state(scratch)
         slabs.deallocate()
         for tensor in (input_tt, *metadata):
             ttnn.deallocate(tensor)

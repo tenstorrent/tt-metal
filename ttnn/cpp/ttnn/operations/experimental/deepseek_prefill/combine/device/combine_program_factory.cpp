@@ -10,16 +10,16 @@
 #include <unordered_set>
 #include <utility>
 #include <limits>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <ttnn/global_semaphore.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
@@ -113,7 +113,7 @@ std::vector<uint32_t> compute_per_neighbor_forwarding_links(
             axis_label,
             src_fabric_node_id,
             dst_node,
-            tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node).value(),
+            tt::tt_fabric::get_eth_forwarding_direction(mesh_device, src_fabric_node_id, dst_node).value(),
             core_link,
             links.size(),
             links[core_link % links.size()]);
@@ -193,7 +193,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
     // first-hop direction) for multi-hop combine-axis forwarding; FABRIC_1D keeps the legacy
     // per-direction array connection. Must match the writer kernel's #ifdef FABRIC_2D gating.
-    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device));
     TT_FATAL(
         !is_2d_fabric || (operation_attributes.axis.has_value() && operation_attributes.axis.value() < 2),
         "FABRIC_2D combine requires cluster_axis 0 or 1; got {}",
@@ -1315,7 +1315,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                         continue;
                     }
                     const auto peer_node = mesh_device->get_fabric_node_id(peer_coordinate);
-                    const auto direction = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, peer_node);
+                    const auto direction =
+                        tt::tt_fabric::get_eth_forwarding_direction(*mesh_device, src_fabric_node_id, peer_node);
                     TT_FATAL(
                         direction.has_value(),
                         "No Fabric2D forwarding direction from combine source {} to peer {}",

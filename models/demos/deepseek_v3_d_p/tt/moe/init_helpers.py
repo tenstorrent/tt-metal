@@ -150,7 +150,7 @@ def fabric2d_setup_error(
             f"fabric2d dispatch/combine need an even ring of at least 4 chips on cluster_axis {cluster_axis}, "
             f"got {extent}"
         )
-    fabric_config = ttnn.get_fabric_config()
+    fabric_config = ttnn.get_fabric_config(mesh_device)
     # FABRIC_1D_RING wraps axis 0 too, but the ops build 2D fabric routes, so it does not work.
     wraps = (
         fabric_config != ttnn.FabricConfig.FABRIC_1D_RING
@@ -202,7 +202,8 @@ def check_axis_wired_into_ring(tensor, cluster_axis: int) -> None:
     if not axis_wired_into_ring(tensor, cluster_axis):
         raise ValueError(
             f"fabric2d dispatch/combine need cluster_axis {cluster_axis} wired into a ring, but the fabric "
-            f"{ttnn.get_fabric_config()} came up without a wrap link on that axis; check the wrap cabling"
+            f"{ttnn.get_fabric_config(tensor.device())} came up without a wrap link on that axis; "
+            "check the wrap cabling"
         )
 
 
@@ -886,7 +887,7 @@ def load_captured_routing(
     What the capture contains
     -------------------------
     `expert_routing.safetensors[expert_ids_layer_<L>]` holds one tensor per MoE layer
-    of shape `(total_tokens=5120, top_k=num_experts_per_tok)` int32, with values in `[0, num_routed_experts)`.
+    of shape `(total_tokens=<chunk>, top_k=num_experts_per_tok)` int32, with values in `[0, num_routed_experts)`.
     Those are **Galaxy-global expert IDs**. We `view` it into the worker's expected
     `(dispatch_group_size=8, seq_len_per_chip=640, top_k=num_experts_per_tok)` layout.
 

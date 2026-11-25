@@ -7,9 +7,9 @@
 #include <functional>
 #include <optional>
 
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -17,7 +17,7 @@
 
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill {
 
-// One program per mesh coordinate. Kernels in
+// The program of one mesh coordinate (the mesh workload merges a range's into one program). Kernels in
 // ::matmul_reduce_scatter_prefill::kernel_index order: reader, compute, writer, port reader, port sender.
 struct MatmulReduceScatterPrefillProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -27,7 +27,8 @@ struct MatmulReduceScatterPrefillProgramFactory {
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 
-// The mesh workload: a program per coordinate from create_descriptor, with what a cache hit writes kept at creation
+// The mesh workload: one program per range, the coordinates' create_descriptor programs merged with per-device runtime
+// args (a program per coordinate where they do not merge), with what a cache hit writes kept at creation
 // (the four kernels' common-arg objects), so a hit computes the
 // call's addresses once and writes them into each program, with no lookup per program.
 struct MatmulReduceScatterPrefillMeshWorkloadFactory {

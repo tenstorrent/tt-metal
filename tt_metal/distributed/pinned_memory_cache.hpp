@@ -99,7 +99,7 @@ public:
 private:
     PinnedMemoryCache() = default;
 
-    // ChipId = int (matches tt_metal/api/tt-metalium/mesh_config.hpp)
+    // ChipId = int (matches tt_metal/api/tt-metalium/mesh/mesh_config.hpp)
     struct CacheEntry {
         std::shared_ptr<PinnedMemory> pinned_memory;
         const void* host_address = nullptr;

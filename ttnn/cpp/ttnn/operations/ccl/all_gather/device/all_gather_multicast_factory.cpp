@@ -4,10 +4,10 @@
 
 #include "all_gather_multicast_factory.hpp"
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/descriptor_runtime_args.hpp"
@@ -98,7 +98,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
     auto physical_slot = [&](const MeshCoordinate& neighbor) {
         const auto dir = tt::tt_fabric::get_eth_forwarding_direction(
-            sender_fabric_node_id, mesh_device->get_fabric_node_id(neighbor));
+            *mesh_device, sender_fabric_node_id, mesh_device->get_fabric_node_id(neighbor));
         TT_FATAL(
             dir.has_value() && static_cast<uint32_t>(dir.value()) < tt::tt_fabric::eth_chan_directions::Z,
             "AllGather expected a cardinal (E/W/N/S) fabric forwarding direction to a mesh neighbor");
