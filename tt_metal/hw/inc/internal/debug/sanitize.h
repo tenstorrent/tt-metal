@@ -45,6 +45,9 @@
 #if defined(NOC_ATT_ENABLED)
 #include "internal/tt-2xx/quasar/noc/att/att_config.h"
 #endif
+#if defined(KERAUNOS_CCE_NOC)
+#include "internal/tt-2xx/quasar/cce_noc.h"
+#endif
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -72,6 +75,13 @@ inline bool debug_l1_access_within_single_view(uint64_t addr, uint64_t len) {
 
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
+#if defined(KERAUNOS_CCE_NOC)
+    // A Keraunos CCE serves exactly the coordinates its channel record resolves, in either form (cce_noc.h lookup()).
+    if (keraunos_noc_core(internal_::cce_noc::latched.channels, x, y) >= 0) {
+        is_virtual_coord = true;
+        return AddressableCoreType::ETH;
+    }
+#endif
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
     // Check if the target NOC endpoint is a valid non-Tensix core in the Physical Coordinate Space
     for (uint32_t idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
