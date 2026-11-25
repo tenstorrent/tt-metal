@@ -14,6 +14,8 @@ On the ``[2, 2]`` mesh with axes ``("dp", "fsdp")`` that ``train.py`` builds for
 devices count different tokens along both axes. After the update the bias is the one computed from the counts of the
 whole batch on every device, and both buffers are still labelled replicated. The counts are integers, but their average
 over the devices is not, and near the mean its fraction decides the sign of the update: the counts are kept in FP32.
+Each device routes ``SEQ`` tokens, enough for counts above 256, past the integers BF16 holds exactly, so counts that
+dropped to BF16 anywhere (the sum of a forward, the add or the reset) show.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
 SEED = 2026
 DIM = 64
-SEQ = 32
+SEQ = 1024  # tokens per device: counts above 256, which BF16 cannot hold exactly
 N_EXPERTS = 8
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE  # the counts' own FP32, not the default BF16 copy
 
@@ -66,7 +68,12 @@ def test_expert_bias_update_uses_the_counts_of_the_whole_batch(hsdp_mesh):
     x = ttml.autograd.Tensor.from_numpy(tokens, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, batch_mapper)
     layer(x)
     ctx.reset_graph()
-    counts = [copy.reshape(-1) for copy in device_slices(layer._token_counts.tensor.get_value(NATIVE))]
+    stored = layer._token_counts.tensor.get_value(NATIVE)
+    assert stored.dtype == ttnn.DataType.FLOAT32, f"token counts are {stored.dtype} after the forward"
+    counts = [copy.reshape(-1) for copy in device_slices(stored)]
+    assert max(c.max() for c in counts) > 256, "precondition: counts past the integers BF16 holds exactly"
+    for device, c in enumerate(counts):
+        assert c.sum() == _Cfg.n_activated_experts * SEQ, f"device {device} counted {c.sum()} expert selections"
     # Precondition: devices 0 and 1 are neighbours along "fsdp", devices 0 and 2 along "dp".
     for other, axis in ((1, "fsdp"), (2, "dp")):
         assert not np.array_equal(counts[0], counts[other]), f"precondition: the {axis} neighbours routed alike"
@@ -81,9 +88,9 @@ def test_expert_bias_update_uses_the_counts_of_the_whole_batch(hsdp_mesh):
     expected = coeff * np.sign(whole.mean() - whole)
     expected -= expected.mean()
     np.testing.assert_allclose(bias, expected, atol=1e-5)
-    assert not any(
-        c.any() for c in device_slices(layer._token_counts.tensor.get_value(NATIVE))
-    ), "token counts not reset"
+    reset = layer._token_counts.tensor.get_value(NATIVE)
+    assert reset.dtype == ttnn.DataType.FLOAT32, f"token counts are {reset.dtype} after the update"
+    assert not any(c.any() for c in device_slices(reset)), "token counts not reset"
     # Both buffers keep their replicated label, not the batch-sharded one of the activations the counts came from:
     # whatever reads one copy as the value (a checkpoint, a gather) reads the bias every device holds.
     for name in ("_expert_bias", "_token_counts"):
