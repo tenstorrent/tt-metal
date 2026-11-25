@@ -12,10 +12,10 @@ boundary joining a one-host and a two-host stage cannot be one service over the 
 service's row block, the seam hosts forward what they drain, the last rank drains both halves and checks the
 reassembled tensor against what the first rank sent.
 
-Launch with a binding from models/demos/deepseek_v3_d_p/utils/rr_pipeline_binding.py (sc2 template, 4 ranks):
+Launch with tt-run on two neighbouring Galaxies (4 ranks):
 
-    tt-run --rank-binding <binding.yaml> --mpi-args "--map-by rankfile:file=<rankfile>" \\
-        pytest models/demos/deepseek_v3_d_p/tests/test_rr_prefill_d2d_seam.py
+    tt-run --force-rediscovery --mesh-graph-descriptor models/demos/common/prefill/runners/topology_configuration/ci/sc2_4x4_rr_mgd.textproto \\
+        --hosts <h0,h1> pytest models/demos/deepseek_v3_d_p/tests/test_rr_prefill_d2d_seam.py
 """
 
 import pytest

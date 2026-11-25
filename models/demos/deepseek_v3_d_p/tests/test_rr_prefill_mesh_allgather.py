@@ -9,10 +9,10 @@ rank, a seam torus by two ranks on two hosts. Run alone (one rank), it checks th
 a ring all-gather along each axis must return the blocks of the whole row or column in mesh order, on
 every chip the rank owns.
 
-Launch with a binding from models/demos/deepseek_v3_d_p/utils/rr_pipeline_binding.py:
+Launch with tt-run, which solves the descriptor against the live cabling:
 
-    tt-run --rank-binding <binding.yaml> --mpi-args "--map-by rankfile:file=<rankfile> --bind-to none" \\
-        pytest models/demos/deepseek_v3_d_p/tests/test_rr_prefill_mesh_allgather.py
+    tt-run --force-rediscovery --mesh-graph-descriptor models/demos/common/prefill/runners/topology_configuration/ci/sc4_4x4_rr_mgd.textproto \\
+        --hosts <h0,h1,h2,h3> pytest models/demos/deepseek_v3_d_p/tests/test_rr_prefill_mesh_allgather.py
 """
 
 import numpy as np

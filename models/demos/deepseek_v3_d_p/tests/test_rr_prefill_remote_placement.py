@@ -9,8 +9,7 @@ one host, rows 2-3 on the other) needs each host to learn where the other's chip
 shards it holds against the torch reference for those chip positions. Run on one rank (a single Galaxy) it checks
 every chip.
 
-Launch like test_rr_prefill_mesh_allgather.py, with a binding from
-models/demos/deepseek_v3_d_p/utils/rr_pipeline_binding.py.
+Launch like test_rr_prefill_mesh_allgather.py.
 """
 
 import pytest

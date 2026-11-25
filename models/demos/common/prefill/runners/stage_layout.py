@@ -5,7 +5,7 @@
 
 A stage is one mesh. Usually one host (one rank) owns it, so rank == stage. A [RING,RING] seam torus spans two
 neighbouring Galaxies: one stage, two ranks (mesh_host_rank 0 and 1 of the same mesh_id). Ranks are numbered
-mesh-major, host-rank-minor, the order rr_pipeline_binding.py writes them in.
+mesh-major, host-rank-minor, the order the control plane assigns them in.
 
 The host split of a stage cuts mesh axis 0 into contiguous row blocks, one per host (host_topology dims
 [hosts, 1] in the mesh graph descriptor). Mesh coordinates keep the same (row, col) across a stage boundary,
