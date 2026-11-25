@@ -457,15 +457,9 @@ jobs:
             export OMP_NUM_THREADS=2
             export MKL_NUM_THREADS=2
             export OMP_WAIT_POLICY=passive
-            # Dump every thread's Python stack when one test runs past this, so a hang is
-            # attributable: timeout-minutes kills the step without naming the test, and the
-            # serial --lf re-run below is never reached. pytest's built-in faulthandler only
-            # prints and leaves the test running, so a slow-but-correct test costs a log dump
-            # and nothing else. It fires from a C thread that needs no GIL, which is where
-            # pytest-timeout cannot: a test stuck in a ttsim C++ call holds the GIL and starves
-            # both of that plugin's methods. 80% of the step budget, clamped to [60s, 20min];
-            # the cap keeps the dump landing when a hang starts late in a long step, since sim
-            # budgets run from 10 to ~700 minutes.
+            # Dump every thread's stack if one test runs past 80% of the step budget (clamped
+            # to [60s, 20min]), so a hang killed by timeout-minutes names the test. It only
+            # prints, and unlike pytest-timeout it fires while a ttsim C++ call holds the GIL.
             sim_step_minutes="${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}"
             faulthandler_timeout=$(( ${sim_step_minutes:-30} * 48 ))
             if (( faulthandler_timeout > 1200 )); then faulthandler_timeout=1200; fi
