@@ -505,7 +505,8 @@
 #define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE 32
 #define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE (MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_FABRIC_ETH_LINK_SIZE)
 // Unreserved L1 of an idle Ethernet core: above the regions both Ethernet slots have.
-#define MEM_IERISC_UNRESERVED_BASE ((MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_FABRIC_ETH_LINK_SIZE + 63) & ~63)
+#define MEM_IERISC_UNRESERVED_BASE \
+    ((MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE + 63) & ~63)
 // Fabric router regions on a linked Keraunos CCE (ACTIVE_ETH), after the routing table. Router state and command
 // alias the routing table head, as on Blackhole.
 #define MEM_IERISC_ROUTING_TABLE_SIZE MEM_ROUTING_TABLE_SIZE
