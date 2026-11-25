@@ -45,8 +45,8 @@ constexpr uint32_t kInlineValueBits = 52;
 
 // Keraunos local address of an HSIO tile's CCE SRAM: base + tile * stride + offset. The command buffer takes this
 // view for the source, and for the destination on an Ethernet link. The Keraunos-E100
-// spec (v1.0.9, ch. 12) says a CCE issues Grendel system addresses and the HSIO remap translates them; the two have not
-// been reconciled.
+// spec (v1.0.9, ch. 12) says a CCE issues Grendel system addresses and the HSIO remap translates them, which this
+// view contradicts.
 constexpr uint64_t kHsioLocalBase = 0x20000000;
 constexpr uint64_t kHsioTileStride = 0x4000000;
 constexpr uint64_t kHsioCceSramOffset = 0x2800000;
