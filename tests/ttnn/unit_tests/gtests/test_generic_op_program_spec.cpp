@@ -21,7 +21,7 @@
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>

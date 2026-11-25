@@ -1332,7 +1332,8 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
         E.generic_op([first_input, first_output], spec, mesh_run_args.programs[0][1])
 
     # The check reads the tensors from the run args' instance dict, so a subclass's property or __getattribute__
-    # cannot hide them from it, in either form.
+    # cannot hide them from it, in either form. Each subclass shows no tensors, one empty dict per program in the mesh
+    # form, which a read through getattr would have checked and passed.
     class RunArgsWithTensorProperty(E.ProgramRunArgs):
         _tensor_args = property(lambda self: {}, lambda self, value: None)
 
@@ -1340,11 +1341,18 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
         def __getattribute__(self, name):
             return {} if name == "_tensor_args" else super().__getattribute__(name)
 
+    class MeshRunArgsWithTensorProperty(E.MeshProgramRunArgs):
+        _tensor_args = property(lambda self: [{}], lambda self, value: None)
+
+    class MeshRunArgsHidingTensors(E.MeshProgramRunArgs):
+        def __getattribute__(self, name):
+            return [{}] if name == "_tensor_args" else super().__getattribute__(name)
+
     for run_args_type in (RunArgsWithTensorProperty, RunArgsHidingTensors):
         hiding = run_args_type(kernel_run_args=run_args.kernel_run_args, tensor_args=run_args.tensor_args)
         with expect_error(RuntimeError, message):
             E.generic_op([first_input, first_output], spec, hiding)
-    for mesh_run_args_type in (MeshRunArgsWithOwnerProperties, MeshRunArgsHidingOwners):
+    for mesh_run_args_type in (MeshRunArgsWithTensorProperty, MeshRunArgsHidingTensors):
         with expect_error(RuntimeError, message):
             E.generic_op(
                 [input_tensor, output_tensor], mesh_spec, mesh_run_args_type(programs=[(one_device(0), run_args)])

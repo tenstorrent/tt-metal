@@ -338,12 +338,12 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter,
                 GlobalSemaphore parameter or DFB at fault; if a tensor or a GlobalSemaphore is on another MeshDevice,
-                or a tensor misses a device the program runs on; if the MeshProgramSpec has no programs, its ranges
-                overlap or reach outside the mesh, or the run args' ranges differ from the spec's; if a tensor
-                argument misses a device its program runs on, such as a per-device view; if io_tensors is empty or
-                holds a tensor that is not allocated on a device, or one allocated per core; if Metal rejects the run
-                args, such as a DFB size it cannot take; or, on a first call, if Metal rejects the spec, a kernel does
-                not compile or the program does not fit the kernel-configuration buffer.
+                or a tensor in io_tensors misses a device the program runs on; if the MeshProgramSpec has no
+                programs, its ranges overlap or reach outside the mesh, or the run args' ranges differ from the
+                spec's; if a tensor argument misses a device its program runs on, such as a per-device view; if
+                io_tensors is empty or holds a tensor that is not allocated on a device, or one allocated per core; if
+                Metal rejects the run args, such as a DFB size it cannot take; or, on a first call, if Metal rejects
+                the spec, a kernel does not compile or the program does not fit the kernel-configuration buffer.
 
         Example:
             See the TT-NN guide "Running your own kernels with generic_op and a ProgramSpec", and
