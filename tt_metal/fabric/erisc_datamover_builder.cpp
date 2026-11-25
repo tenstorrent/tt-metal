@@ -1379,7 +1379,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["INTER_DOMAIN_CTRL_ADDR"] = static_cast<uint32_t>(config.inter_domain_ctrl_address);
     }
     if (inter_domain_relay_) {
-        named_args["INTER_DOMAIN_RELAY"] = 1;
+        named_args[inter_domain_relay_->split ? "INTER_DOMAIN_SPLIT" : "INTER_DOMAIN_RELAY"] = 1;
         named_args["INTER_DOMAIN_RELAY_NUM_SLOTS"] = inter_domain_relay_->num_slots;
         named_args["INTER_DOMAIN_RELAY_SENDER_POSITION"] =
             stream_assignment.sender_flat_base(0) + inter_domain_relay_->vc_relative_channel;
@@ -1396,7 +1396,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     if (inter_domain_scatter_) {
         TT_FATAL(
             !inter_domain_relay_,
-            "inter-domain router {} chan {} both relays and scatters",
+            "inter-domain router {} chan {} both relays (or splits) and scatters",
             local_fabric_node_id,
             my_eth_channel);
         // the scatter bank mirrors the router's own VC2 downstreams on the partner plane

@@ -108,6 +108,21 @@ void legacy_stock_sender_counts(ChannelGraph& cg, const WiringOptions& options) 
         for (ChannelIndex c : g.channels_of(r, ChannelKind::Sender)) {
             used.emplace(g.channels[c].vc, cg.index_in_vc[c]);
         }
+        // every perimeter router has the relay sender's slot, used or not: the two ends of an inter-domain link must
+        // lay out L1 the same (each writes into the other's VC2 receiver at its own layout's address). Only where the
+        // fabric sizes VC0 for it (FabricBuilderContext::compute_max_channel_counts): 2D, no VC1.
+        if (port.capability == EdgeCapability::INTERDOMAIN) {
+            if (is_2D_topology(options.topology) && !options.vc_config.requires_vc1) {
+                counts[0] = std::max<uint32_t>(counts[0], builder_config::num_sender_channels_2d_vc0_inter_domain);
+            } else {
+                TT_FATAL(
+                    !used.contains({0, builder_config::inter_domain_relay_sender_channel}),
+                    "fabric graph: {} plane {} takes a relay or split on its relay sender, which a fabric with VC1 "
+                    "can't (#67139)",
+                    port.node,
+                    port.plane);
+            }
+        }
         for (uint32_t vc = 0; vc < counts.size(); ++vc) {
             counts[vc] = std::max(counts[vc], shape.sender_counts[vc]);
             // no stock layout to match (a forwarding VC2, an inter-domain router): padding keeps positions, not service
@@ -116,7 +131,10 @@ void legacy_stock_sender_counts(ChannelGraph& cg, const WiringOptions& options) 
                 continue;
             }
             for (uint32_t i = 0; i < counts[vc]; ++i) {
-                if (!used.contains({vc, i})) {
+                // an unused relay sender slot keeps its layout but is not serviced (no code for it)
+                const bool relay_slot = port.capability == EdgeCapability::INTERDOMAIN && vc == 0 &&
+                                        i == builder_config::inter_domain_relay_sender_channel;
+                if (!used.contains({vc, i}) && !relay_slot) {
                     cg.legacy_slots.push_back(LegacySlot{.router = r, .vc = vc, .index = i});
                 }
             }

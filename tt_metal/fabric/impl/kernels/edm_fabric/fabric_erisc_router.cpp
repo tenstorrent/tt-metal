@@ -223,8 +223,9 @@ void kernel_main() {
         sender::set_up_channels(args.connection_semaphores);
     }
     [[maybe_unused]] relay::Target relay_target;
-    if constexpr (is_inter_domain_relay && is_sender_role) {
+    if constexpr (has_inter_domain_relay_target && is_sender_role) {
         relay::init(relay_target, args.inter_domain_relay);
+        sender::split_target = &relay_target;
     }
     finish_phase<Phase::SETUP_DONE>();
 
@@ -239,7 +240,7 @@ void kernel_main() {
     if constexpr (is_receiver_role) {
         receiver::open_connections(args);
     }
-    if constexpr (is_inter_domain_relay && is_sender_role) {
+    if constexpr (has_inter_domain_relay_target && is_sender_role) {
         relay::open(args.inter_domain_relay);
     }
     finish_phase<Phase::DOWNSTREAMS_OPEN>();

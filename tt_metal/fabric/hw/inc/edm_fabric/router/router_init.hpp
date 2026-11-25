@@ -342,7 +342,7 @@ __attribute__((noinline)) void read_runtime_args(RuntimeArgs& a) {
         v = get_arg_val<uint32_t>(i++);
     }
     read_relay_args(a.relay, i);
-    if constexpr (is_inter_domain_relay) {
+    if constexpr (has_inter_domain_relay_target) {
         if constexpr (!udm_mode) {
             i++;  // the UDM block's "no relay" flag, which only a UDM router reads
         }

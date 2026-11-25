@@ -99,8 +99,8 @@ std::vector<std::string> find_problems(
             }
             continue;
         }
-        if (relays_out[c] != 0) {
-            problems.push_back(where(c) + ": relay edge from a router whose link is up");
+        if (relays_out[c] > 1) {
+            problems.push_back(where(c) + ": more than one split edge");
         }
         const bool perimeter = router.port.capability == EdgeCapability::INTERDOMAIN;
         const Transport link = perimeter ? Transport::Dynamic : Transport::Eth;
@@ -133,6 +133,21 @@ std::vector<std::string> find_problems(
         const auto& up = g.routers[from.router].port;
         const auto& down = g.routers[to.router].port;
         const std::string what = where(e.from) + " -> " + where(e.to);
+        if (from.kind == ChannelKind::Sender && !up.relay_plane) {
+            // a split: from a live perimeter router owning a plane into the relay sender of a same-side aux router
+            // (a live one whose plane has no domain router)
+            bool aux = down.capability == EdgeCapability::INTERDOMAIN && !down.relay_plane;
+            for (const auto& r : g.routers) {
+                aux = aux && !(r.port.node == down.node && r.port.plane == down.plane &&
+                               r.port.capability != EdgeCapability::INTERDOMAIN);
+            }
+            if (up.capability != EdgeCapability::INTERDOMAIN || !aux || up.node != down.node ||
+                up.direction != down.direction || up.plane == down.plane || to.vc != 0 || to.injection ||
+                !is_relay_sender(g, to)) {
+                problems.push_back(what + ": noc edge must run receiver -> sender (or be a relay or split)");
+            }
+            continue;
+        }
         if (from.kind == ChannelKind::Sender && up.relay_plane) {
             // a relay: from a down perimeter router into the relay sender of its side's router on its relay plane
             if (down.capability != EdgeCapability::INTERDOMAIN || up.node != down.node ||

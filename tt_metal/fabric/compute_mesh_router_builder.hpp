@@ -94,7 +94,7 @@ public:
      * This inter-domain router's link is down: relay everything it sends into `target`'s VC0 sender
      * channel `channel` (a same-side router on another plane) over the NoC.
      */
-    void connect_inter_domain_relay(ComputeMeshRouterBuilder& target, uint32_t channel);
+    void connect_inter_domain_relay(ComputeMeshRouterBuilder& target, uint32_t channel, bool split = false);
 
     /**
      * This inter-domain router's VC2 receiver also lands traffic on its scatter partner's plane: connect it to

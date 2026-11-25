@@ -56,19 +56,20 @@ struct Target {
         }
         return static_cast<uint8_t>(NUM_NOC_CMD_BUFS);
     }();
-    // A transaction ID for the copies: receiver channel 0's first; the receiver ERISC here never issues one.
+    // A transaction ID for the copies: receiver channel 0's first. Receiver channel 0 (VC0) is never serviced on an
+    // inter-domain router (its peer sends only into VC2), so no receiver write carries it.
     static constexpr uint8_t trid = RX_CH_TRID_STARTS[0];
 
-    static_assert(!is_inter_domain_relay || (num_slots > 0 && num_slots <= stream_count_mask));
-    static_assert(!is_inter_domain_relay || local_credit_stream != tt::tt_fabric::k_unused_stream_id);
+    static_assert(!has_inter_domain_relay_target || (num_slots > 0 && num_slots <= stream_count_mask));
+    static_assert(!has_inter_domain_relay_target || local_credit_stream != tt::tt_fabric::k_unused_stream_id);
     // a slot is credited once its packet leaves this router: no first-level acks (rings and tori with deadlock
     // avoidance), whose worker credits count acks
     static_assert(
-        !is_inter_domain_relay ||
+        !has_inter_domain_relay_target ||
             !(is_vc_first_level_ack_enabled[0] || is_vc_first_level_ack_enabled[1] || is_vc_first_level_ack_enabled[2]),
         "an inter-domain relay does not take first-level acks");
     static_assert(
-        !is_inter_domain_relay || !is_sender_role || data_cmd_buf < NUM_NOC_CMD_BUFS,
+        !has_inter_domain_relay_target || !is_sender_role || data_cmd_buf < NUM_NOC_CMD_BUFS,
         "no free command buffer for the relay");
 
     uint64_t noc_base;     // the target's NoC coordinate, as a NoC address's high bits
