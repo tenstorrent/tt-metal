@@ -1,0 +1,9 @@
+set(FIRMWARE_JIT_API_FILES
+    quasar/noc.c
+    quasar/noc_address_translation_tables.cpp
+    dispatch_dm.cc
+    dm.cc
+    dmk.cc
+    trisc.cc
+    trisck.cc
+)
