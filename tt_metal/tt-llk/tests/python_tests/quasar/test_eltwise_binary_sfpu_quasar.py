@@ -1304,16 +1304,15 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
 # call runs ITERATIONS=8 unrolled rows, covering the whole 1024-element dst tile.
 _PROCESSED_ELEMS = MAX_TILE_ELEMENTS
 
-# The round is a magic-constant add and the saturation an SFPSWAP clamp, both in two's complement,
-# so the full int8 range is representable. SIGN_MAGNITUDE_FORMAT still picks the Dest
-# representation; on that path the kernel casts this result back to sign-magnitude.
+# The round and the SFPSWAP clamp both run in two's complement, so the full int8 range is
+# representable; SIGN_MAGNITUDE_FORMAT only picks how the result is stored in Dest.
 _QUANT_INT8_MIN = -128
 _QUANT_INT8_MAX = 127
 
 # Pinned lanes per tile (two per face) that discriminate the SFPCAST SM<->2's-comp mod1 values.
 _QUANT_PINNED_LANES = 8
-# Rounder input on the pinned lanes: a negative whose magnitude rounds to zero. The result has to
-# come out +0, not a sign-magnitude -0 (0x80000000).
+# Rounder input on the pinned lanes: a negative whose magnitude rounds to zero, so the round has to
+# give +0 and not sign-magnitude -0 (0x80000000). Quant adds its zero point after, landing on 3.
 _QUANT_NEG_ZERO_PROD = -0.25
 
 
@@ -1351,10 +1350,8 @@ def _run_quant(
     # Zero-point: a small fp32 offset.
     zero_point = 3.0
 
-    # Pinned lanes: SFPCAST Mod1 2 and Mod1 3 differ from each other only at 0x80000000.
-    # Even entries of `pinned` put _QUANT_NEG_ZERO_PROD on the rounder input -- quant rounds the
-    # bare product, requant the product plus the zero point. Odd entries hold INT32_MIN (int,
-    # 2's-comp only), which is what exercises the input cast.
+    # Pinned lanes: SFPCAST Mod1 2 and Mod1 3 differ only at 0x80000000. Even entries of `pinned`
+    # put _QUANT_NEG_ZERO_PROD on the rounder input; odd entries hold INT32_MIN (2's-comp only).
     pinned = torch.arange(0, n, n // _QUANT_PINNED_LANES)
     neg_zero_lanes, int32_min_lanes = pinned[0::2], pinned[1::2]
     rounder_bias = 0.0 if binary_op == "QUANT" else zero_point
