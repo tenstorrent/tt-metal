@@ -273,6 +273,14 @@ void directed_ideal_test(
     CoreCoord mst_grid_size,
     bool read,
     bool write) {
+    const CoreCoord grid = mesh_device.compute_with_storage_grid_size();
+    const uint32_t required_x = mst_start_coord.x + mst_grid_size.x;
+    const uint32_t required_y = mst_start_coord.y + mst_grid_size.y;
+    if (grid.x < required_x || grid.y < required_y) {
+        GTEST_SKIP() << "Skipping: grid " << grid.x << "x" << grid.y << " too small (need " << required_x << "x"
+                     << required_y << ").";
+    }
+
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -310,6 +318,14 @@ void packet_sizes_test(
     CoreCoord mst_grid_size,
     bool read,
     bool write) {
+    const CoreCoord grid = mesh_device.compute_with_storage_grid_size();
+    const uint32_t required_x = mst_start_coord.x + mst_grid_size.x;
+    const uint32_t required_y = mst_start_coord.y + mst_grid_size.y;
+    if (grid.x < required_x || grid.y < required_y) {
+        GTEST_SKIP() << "Skipping: grid " << grid.x << "x" << grid.y << " too small (need " << required_x << "x"
+                     << required_y << ").";
+    }
+
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
