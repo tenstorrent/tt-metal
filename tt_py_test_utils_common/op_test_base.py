@@ -20,6 +20,10 @@ class OpParameter:
 
 
 class OpTestBase:
+    # VF sweep settings for tests that do not pass them to the constructor. tests/didt/conftest.py fills these from
+    # --didt-vf-sweep / --sweep-iterations for each test, so every didt test gets the sweep without signature changes.
+    vf_sweep_defaults = {"freqs": None, "sweep_iterations": None}
+
     def __init__(
         self,
         mesh_device,
@@ -33,6 +37,8 @@ class OpTestBase:
         determinism_check_enabled=False,
         determinism_check_interval=False,
         sync_every_iteration=True,
+        vf_sweep_freqs=None,
+        sweep_iterations=None,
     ):
         self.mesh_device = mesh_device
         # This will be removed once we rebase onto new main with the new open_mesh_device API
@@ -55,6 +61,24 @@ class OpTestBase:
         self.determinism_check_enabled = determinism_check_enabled
         self.determinism_check_interval = determinism_check_interval
         self.sync_every_iteration = sync_every_iteration
+
+        # VF sweep: run sweep_iterations iterations at each forced AICLK in vf_sweep_freqs, in that order.
+        if vf_sweep_freqs is None:
+            vf_sweep_freqs = OpTestBase.vf_sweep_defaults["freqs"]
+        if sweep_iterations is None:
+            sweep_iterations = OpTestBase.vf_sweep_defaults["sweep_iterations"]
+        self.vf_sweep_freqs = list(vf_sweep_freqs) if vf_sweep_freqs else None
+        self.sweep_iterations = sweep_iterations
+        if self.vf_sweep_freqs:
+            if not self.sweep_iterations or self.sweep_iterations <= 0:
+                raise ValueError("VF sweep needs a positive sweep_iterations (--sweep-iterations)")
+            self.loop_count = len(self.vf_sweep_freqs) * self.sweep_iterations
+            # Telemetry is read at every determinism check; without checks (hang/stress tests) about 20x per clock.
+            self.vf_sample_interval = (
+                self.determinism_check_interval
+                if self.determinism_check_enabled
+                else max(1, self.sweep_iterations // 20)
+            )
 
         # Weights and activations tensors are needed for subclasses to run the operation
         self.activations = None
@@ -113,6 +137,35 @@ class OpTestBase:
         self.activations.deallocate(True)
 
     def run_op_test(self):
+        clock = None
+        if self.vf_sweep_freqs:
+            from tt_py_test_utils_common.aiclk_control import AiclkController
+
+            clock = AiclkController(self.device_ids)
+            logger.info(
+                f"VF sweep: AICLK {self.vf_sweep_freqs} MHz, {self.sweep_iterations} iterations each "
+                f"({self.loop_count} in total), determinism check every {self.determinism_check_interval}"
+            )
+        try:
+            self._run_op_test(clock)
+        finally:
+            if clock is not None:
+                clock.release()
+                logger.info(f"VF sweep: released the forced AICLK on devices {list(self.device_ids)}")
+
+    def _set_sweep_clock(self, clock, mhz, label):
+        """Drain the devices, force AICLK and wait until every device reports it."""
+        for device_idx in self.device_ids:
+            ttnn.device.synchronize_device(self.get_device(device_idx))
+        readings = clock.set_clock(mhz)
+        aiclk = sorted({r[0] for r in readings.values()})
+        vcore = [r[1] for r in readings.values()]
+        logger.info(
+            f"VF sweep: {label}: AICLK forced to {mhz} MHz, telemetry AICLK {aiclk} MHz on all "
+            f"{len(readings)} devices, VCORE (idle) {min(vcore)}-{max(vcore)} mV"
+        )
+
+    def _run_op_test(self, clock):
         num_devices = len(self.device_ids)
         with ThreadPoolExecutor(num_devices) as pool:
             self.set_seed()
@@ -148,6 +201,10 @@ class OpTestBase:
 
             reference_out = None
             if self.determinism_check_enabled:
+                if clock is not None:
+                    # A chip that is non-deterministic at its default clock can also corrupt the reference, which
+                    # would then fail every sweep step. Take the reference at the lowest sweep clock instead.
+                    self._set_sweep_clock(clock, min(self.vf_sweep_freqs), "reference outputs")
                 # One reference run per activation; we then cycle through them and compare output to
                 # reference_out[act]. Deallocate only for L1 due to memory constraints.
                 # For DRAM we keep all a_t[act] live; we still switch self.activations each time, so
@@ -166,11 +223,44 @@ class OpTestBase:
             out = [None] * num_devices
             self.activations = self.convert_activations_to_memory_config(a_t[0])
 
+            sweep_steps = []  # one record per VF sweep clock
             logger.debug("Starting iterations")
             for i in range(self.loop_count):
+                if clock is not None and i % self.sweep_iterations == 0:
+                    step_idx = i // self.sweep_iterations
+                    mhz = self.vf_sweep_freqs[step_idx]
+                    self._set_sweep_clock(
+                        clock,
+                        mhz,
+                        f"step {step_idx + 1}/{len(self.vf_sweep_freqs)} "
+                        f"(iterations {i}-{i + self.sweep_iterations - 1})",
+                    )
+                    step = {
+                        "mhz": mhz,
+                        "checks": 0,
+                        "samples": 0,
+                        "nd": [0] * num_devices,
+                        "clock_off": [0] * num_devices,
+                        "vcore": [[] for _ in range(num_devices)],
+                    }
+                    sweep_steps.append(step)
+
                 out = self.run_device_operation()
 
                 check_iteration = self.determinism_check_enabled and i % self.determinism_check_interval == 0
+                if clock is not None and i % self.vf_sample_interval == 0:
+                    # Read while the op is still running, so AICLK and VCORE are taken under load.
+                    step["samples"] += 1
+                    readings = clock.read()
+                    for output_id, device_idx in enumerate(self.device_ids):
+                        aiclk, vcore = readings[device_idx]
+                        step["vcore"][output_id].append(vcore)
+                        if abs(aiclk - step["mhz"]) > clock.tolerance_mhz:
+                            step["clock_off"][output_id] += 1
+                            logger.warning(
+                                f"VF sweep: device {device_idx} AICLK {aiclk} MHz while forced to {step['mhz']} MHz"
+                            )
+
                 if self.sync_every_iteration or check_iteration or i == self.loop_count - 1:
                     for device_idx in self.device_ids:
                         logger.debug(f"Start sync device id: {device_idx}")
@@ -181,6 +271,9 @@ class OpTestBase:
                 if check_iteration:
                     outputs = list(pool.map(ttnn.to_torch, ttnn.get_device_tensors(out.cpu())))
                     matches = list(pool.map(torch.equal, reference_out[current_act_tensor], outputs))
+                    at_clock = f" (VF sweep AICLK {step['mhz']} MHz)" if clock is not None else ""
+                    if clock is not None:
+                        step["checks"] += 1
 
                     for output_id in range(num_devices):
                         device_idx = self.device_ids[output_id]
@@ -191,8 +284,10 @@ class OpTestBase:
                             # part of the code that replaces nans/infs with zeros starts leaking memory, even if deallocation is forced,
                             # so we call it only in case we see tensors are not equal
                             _, pcc = comp_pcc(reference_out[current_act_tensor][output_id], outputs[output_id])
-                            logger.warning(f"Device {device_idx} PCC: {pcc}")
+                            logger.warning(f"Device {device_idx} PCC: {pcc}{at_clock}")
                             num_nd_outputs[output_id] += 1
+                            if clock is not None:
+                                step["nd"][output_id] += 1
 
                     current_act_tensor = (current_act_tensor + 1) % num_activation_tensors
                     logger.debug("Switching activation tensor for new determinism iterations...")
@@ -203,6 +298,9 @@ class OpTestBase:
                 out.deallocate(True)
 
                 logger.debug(f"Iteration = {i}, done!")
+
+        if clock is not None:
+            self._log_sweep_summary(sweep_steps)
 
         catch_nd_on_fail = True
         if self.determinism_check_enabled:
@@ -218,6 +316,35 @@ class OpTestBase:
                         f"Number of non-deterministic outputs on device {device_idx} is {num_nd_outputs[nd_output_id]}"
                     )
         assert catch_nd_on_fail
+
+    def _log_sweep_summary(self, sweep_steps):
+        """One line per clock: checks, which devices failed and how often, clock held, VCORE under load."""
+        lines = [
+            "VF sweep summary (AICLK/VCORE read under load "
+            + (
+                "at each determinism check):"
+                if self.determinism_check_enabled
+                else "about 20 times per clock; no determinism checks):"
+            )
+        ]
+        for step in sweep_steps:
+            failing = [f"dev {self.device_ids[o]}: {n}/{step['checks']}" for o, n in enumerate(step["nd"]) if n > 0]
+            off = sum(step["clock_off"])
+            samples = step["samples"] * len(self.device_ids)
+            vcore = sorted(v for per_dev in step["vcore"] for v in per_dev)
+            vcore_txt = f"{vcore[0]}/{vcore[len(vcore) // 2]}/{vcore[-1]} mV" if vcore else "n/a"
+            lines.append(
+                f"  AICLK {step['mhz']:>5} MHz | checks {step['checks']:>4} | "
+                + (f"ND {', '.join(failing) if failing else 'none'} | " if self.determinism_check_enabled else "")
+                + f"clock held {samples - off}/{samples} samples | VCORE min/median/max {vcore_txt}"
+            )
+            for o, n in enumerate(step["nd"]):
+                if n > 0 and step["vcore"][o]:
+                    v = sorted(step["vcore"][o])
+                    lines.append(
+                        f"      dev {self.device_ids[o]} VCORE min/median/max {v[0]}/{v[len(v) // 2]}/{v[-1]} mV"
+                    )
+        logger.info("\n".join(lines))
 
 
 def get_mesh_grid_size(mesh_device):

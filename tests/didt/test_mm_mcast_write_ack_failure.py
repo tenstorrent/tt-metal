@@ -48,6 +48,14 @@ Knobs:
     watchdog  TT_METAL_OPERATION_TIMEOUT_SECONDS per chip in seconds, default 30
     work_dir  holds each chip's cache and pytest.log
 
+VF sweep (from OpTestBase): instead of MATMUL_ITERS, each chip runs --sweep-iterations iterations at every
+--didt-vf-sweep clock, with AICLK forced and read back before that clock's iterations start:
+
+    TT_METAL_HOME=$PWD python_env/bin/python tests/didt/test_mm_mcast_write_ack_failure.py \
+      --didt-vf-sweep --sweep-iterations=50
+
+Add --determinism-check-interval=5 to also compare outputs against a reference at the lowest clock.
+
 These env vars override the shape and grid: MATMUL_HEADS (default 64), MATMUL_SEQ (default 5120),
 MATMUL_GRID (default is the compute grid less its dispatch column, so 11x10 on a Blackhole galaxy).
 
@@ -74,6 +82,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import skip_for_wormhole_b0
+from tt_py_test_utils_common.op_test_base import OpParameter, OpTestBase
 
 # In the PCIe bus byte the high nibble selects the tray and the low nibble the slot within it,
 # matching the T<tray>:N<slot> label tt-smi prints for the card.
@@ -154,6 +163,34 @@ def describe(runtime_id, identity, asics=None):
     return f"chip {chip} (runtime id {runtime_id}): BusDeviceFunction={bdf} /dev/tenstorrent/{minor} {slot}{asic}"
 
 
+class McastWriteAckTest(OpTestBase):
+    """The wkv_b1 multicast matmul on the OpTestBase loop, so it gets determinism checks and the VF sweep."""
+
+    def __init__(self, *args, gx, gy, per_core_m, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gx, self.gy, self.per_core_m = gx, gy, per_core_m
+
+    def run_device_operation(self):
+        return ttnn.linear(
+            self.activations,
+            self.inputs[0],
+            memory_config=self.out_mem_config,
+            dtype=self.out_dtype,
+            program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(self.gx, self.gy),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                per_core_M=self.per_core_m,
+                per_core_N=16,
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=False,
+            ),
+            compute_kernel_config=self.compute_config,
+        )
+
+
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [
@@ -163,7 +200,7 @@ def describe(runtime_id, identity, asics=None):
 )
 @skip_for_wormhole_b0("shapes and program config are tuned for Blackhole")
 @pytest.mark.timeout(0)
-def test_mm_mcast_write_ack_failure_scan(mesh_device):
+def test_mm_mcast_write_ack_failure_scan(mesh_device, determinism_check_interval):
     if float(os.environ.get(WATCHDOG_ENV, 0)) <= 0:
         pytest.fail(f"{WATCHDOG_ENV} is non-positive, which disables hang detection entirely")
 
@@ -182,43 +219,32 @@ def test_mm_mcast_write_ack_failure_scan(mesh_device):
     logger.info(f"matmul [1,{heads},{seq},128] @ [1,{heads},128,512] on {gx}x{gy} cores, per_core_M={per_core_m}")
 
     dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    to_mesh = dict(
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=dram,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    mm_test = McastWriteAckTest(
+        mesh_device,
+        OpParameter([1, heads, seq, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, dram),  # in0, activations
+        [OpParameter([1, heads, 128, 512], ttnn.bfloat8_b, ttnn.TILE_LAYOUT, dram)],  # in1
+        out_mem_config=dram,
+        out_dtype=ttnn.bfloat16,
+        program_config=None,  # built in run_device_operation
+        compute_config=ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
+        loop_count=int(os.environ.get("MATMUL_ITERS", 20)),
+        determinism_check_enabled=determinism_check_interval > 0,
+        determinism_check_interval=determinism_check_interval,
+        gx=gx,
+        gy=gy,
+        per_core_m=per_core_m,
     )
-    in0 = ttnn.from_torch(torch.randn([1, heads, seq, 128]), dtype=ttnn.bfloat16, **to_mesh)
-    in1 = ttnn.from_torch(torch.randn([1, heads, 128, 512]), dtype=ttnn.bfloat8_b, **to_mesh)
 
     try:
-        for _ in range(int(os.environ.get("MATMUL_ITERS", 20))):
-            out = ttnn.linear(
-                in0,
-                in1,
-                memory_config=dram,
-                dtype=ttnn.bfloat16,
-                program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(gx, gy),
-                    in0_block_w=4,
-                    out_subblock_h=1,
-                    out_subblock_w=8,
-                    per_core_M=per_core_m,
-                    per_core_N=16,
-                    fuse_batch=False,
-                    fused_activation=None,
-                    mcast_in0=False,
-                ),
-                compute_kernel_config=ttnn.init_device_compute_kernel_config(
-                    mesh_device.arch(),
-                    math_fidelity=ttnn.MathFidelity.HiFi2,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=False,
-                    packer_l1_acc=True,
-                ),
-            )
-            ttnn.synchronize_device(mesh_device)
-            ttnn.deallocate(out)
+        mm_test.run_op_test()
+    except AssertionError:
+        raise  # non-deterministic outputs (with --determinism-check-interval): the op finished, so not a hang
     except Exception:
         # The runtime blames a renumbered runtime id, not the physical chip, so name the card here.
         asics = asic_ids()
@@ -228,14 +254,16 @@ def test_mm_mcast_write_ack_failure_scan(mesh_device):
     logger.success(f"no hang on chips {[to_physical(r) for r in mesh_device.get_device_ids()]}")
 
 
-def scan_all_chips(iters=None, watchdog=30, work_dir=None):
+def scan_all_chips(iters=None, watchdog=30, work_dir=None, pytest_args=()):
     """Run this test once per chip of the host, one process each with its own cold cache, and report
     which chips hang. Returns the list of hung chip ids.
 
     Triage is disabled in the children because it halts cores and would disturb the other
     processes; re-run a failing chip on its own to triage it. This gate detects a hang but cannot
     clear one, so the failing chip stays wedged: reset the box (tt-smi -glx_reset_auto) before any
-    re-run, or the wedged chip will fail its neighbours and they will look faulty too."""
+    re-run, or the wedged chip will fail its neighbours and they will look faulty too.
+
+    pytest_args are appended to every child's pytest command, e.g. ["--didt-vf-sweep", "--sweep-iterations=50"]."""
     work_dir = Path(work_dir or Path(tempfile.gettempdir()) / "mm_mcast_write_ack_failure")
     shutil.rmtree(work_dir, ignore_errors=True)
     chips = sorted(chip_identity())
@@ -254,6 +282,7 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None):
             env["MATMUL_ITERS"] = str(iters)
         log = (out / "pytest.log").open("w")
         cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--timeout=0", __file__, "-k", "1x1"]
+        cmd += list(pytest_args)
         running[chip] = (subprocess.Popen(cmd, env=env, stdout=log, stderr=log), log)
     logger.info(f"scanning {len(chips)} chips, dispatch watchdog={watchdog}s, logs under {work_dir}")
 
@@ -300,4 +329,5 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None):
 
 
 if __name__ == "__main__":
-    sys.exit(1 if scan_all_chips() else 0)
+    # Extra arguments go to every chip's pytest run, e.g. --didt-vf-sweep --sweep-iterations=50
+    sys.exit(1 if scan_all_chips(pytest_args=sys.argv[1:]) else 0)

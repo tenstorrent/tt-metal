@@ -1035,6 +1035,22 @@ def pytest_addoption(parser):
         help="Run didt workload iterations back-to-back, syncing devices only on determinism-check iterations",
     )
     parser.addoption(
+        "--didt-vf-sweep",
+        action="store",
+        nargs="?",
+        const="800,1000,1200,1350",
+        default=None,
+        help="Run didt tests as a VF sweep: force AICLK (MHz, comma separated, run in this order; "
+        "no value = 800,1000,1200,1350) for --sweep-iterations iterations each, through ARC messages",
+    )
+    parser.addoption(
+        "--sweep-iterations",
+        action="store",
+        type=int,
+        default=None,
+        help="Iterations to run at each --didt-vf-sweep clock (default 1000)",
+    )
+    parser.addoption(
         "--grid-size",
         action="store",
         default=None,
