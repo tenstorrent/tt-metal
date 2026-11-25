@@ -6,11 +6,11 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/tensor/types.hpp"

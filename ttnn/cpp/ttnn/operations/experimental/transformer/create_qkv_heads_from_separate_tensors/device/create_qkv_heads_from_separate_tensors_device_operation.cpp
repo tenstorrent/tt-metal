@@ -4,7 +4,7 @@
 
 #include "create_qkv_heads_from_separate_tensors_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {

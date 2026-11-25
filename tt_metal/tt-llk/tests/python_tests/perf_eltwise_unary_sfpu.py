@@ -37,7 +37,6 @@ _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Hardsigmoid,
     MathOperation.Log,
     MathOperation.Neg,
-    MathOperation.Silu,
     MathOperation.Sin,
     MathOperation.Square,
     MathOperation.Threshold,
@@ -250,6 +249,8 @@ _INT32_UNARY_OPS = [
     MathOperation.BitwiseNot,
     MathOperation.LogicalNot,
     MathOperation.Fill,
+    MathOperation.UnaryEq,
+    MathOperation.UnaryNe,
 ]
 
 # uint16 (calculate_comp_uint16) and uint32 (calculate_eqz/nez_uint32) only support

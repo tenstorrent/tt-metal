@@ -26,14 +26,14 @@ Path pattern for ttnn ops:
 `tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_state/device_name/my_sweep.yaml` 
 Various test variants:
   1.1) state: a) working - Passes in all cases b)broken - Fails at least in one test case for any reason - Low PCC, specified or unspecified error
-  1.2) device_name - Variant of the sweeps for specific device: a) grayskull b) wormhole
+  1.2) device_name - Variant of the sweeps for specific device (currently only `wormhole`)
 
 2) output_dir - Optional folder name to dump result CSV's in. If not specified, it will default to `pytorch_test_folder`. If this folder (or any folder specified) already exists, the tests will not run. In case if provided - after sweep run, here we can find the test results within the generated CSV file as outcome.
 
 
 example:
 
-`pytest tests/ttnn/python_api_testing/sweep_tests/run_sweep_test.py --input-path tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/grayskull/ttnn_eltwise_add_test.yaml --input-method cli --cli-input results_ttnn_add`
+`pytest tests/ttnn/python_api_testing/sweep_tests/run_sweep_test.py --input-path tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/ttnn_eltwise_add_test.yaml --input-method cli --cli-input results_ttnn_add`
 
 ## multi YAML files
 
@@ -49,7 +49,7 @@ This script has two crucial parameters:
 
 example:
 
-`python tests/ttnn/python_api_testing/sweep_tests/run_sweep_tests.py -d tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/grayskull/ -r result_sweeps`
+`python tests/ttnn/python_api_testing/sweep_tests/run_sweep_tests.py -d tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/ -r result_sweeps`
 
 
 ## Adding test configs

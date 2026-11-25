@@ -29,12 +29,9 @@ inline void calculate_sign(const std::uint32_t /*exponent_size_8*/) {
         // SFPSETCC is unspecified for -0.0 (VectorUnit.md), so a bare compare can miss it.
         // SFPSETSGN overwrites its sign operand, so abs comes first to let copysgn reuse
         // v's register without a copy.
-        sfpi::vFloat a0 = sfpi::abs(v0);
-        sfpi::vFloat a1 = sfpi::abs(v1);
-        // copysgn stamps v's sign bit onto 1.0, which is exactly the v < 0 arm. Only the
-        // zero case is left for a branch, so the v_elseif and its predicate-complement
-        // disappear. That result is stored straight away and the zero arm overwrites it
-        // under the predicate: two SFPSTOREs instead of a store plus two SFPMOVs.
+        const sfpi::vFloat a0 = sfpi::abs(v0);
+        const sfpi::vFloat a1 = sfpi::abs(v1);
+        // copysgn(1.0, v) yields +-1, stored first; the zero arm overwrites it under the predicate.
         sfpi::dst_reg[0] = sfpi::copysgn(sfpi::vFloat(1.0f), v0);
         sfpi::dst_reg[1] = sfpi::copysgn(sfpi::vFloat(1.0f), v1);
         v_if(a0 == 0.0F) { sfpi::dst_reg[0] = 0.0f; }
