@@ -23,7 +23,7 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
-from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass, _timed
+from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass
 
 # Ring SDPA chunk pair of the dynamic-length path per device compute grid and length class, one program each.
 # Blackhole 4x8, measured per block: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
@@ -596,7 +596,6 @@ class MiniMaxH3Attention(Module):
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
         cu_window_seqlens: ttnn.Tensor | None = None,
-        timings: dict[str, float] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured hidden_size on TP; fractured N on SP when `is_sequence_parallel`,
@@ -610,7 +609,6 @@ class MiniMaxH3Attention(Module):
             epilogue instead of running as separate ops. Both must be TP-fractured like the output.
         cu_window_seqlens: cumulative block-diagonal window boundaries `[0, ..., N]` (1-D int device
             tensor), plain-SDPA (non-ring) path only.
-        timings: when given, receives each section's host wall time in ms, the device drained at the end of each.
 
         Returns the attention output with the same distribution as the input.
         """
@@ -684,9 +682,8 @@ class MiniMaxH3Attention(Module):
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
         if self.vsa_prepass is not None:
-            routing = self.vsa_prepass(q_BHNE, k_BHNE, v_BHNE, timings=timings)
-            with _timed(timings, "vsa fine", sync=self.mesh_device):
-                spatial_BHNE = self._sparse_attention(q_BHNE, k_BHNE, v_BHNE, routing)
+            routing = self.vsa_prepass(q_BHNE, k_BHNE, v_BHNE)
+            spatial_BHNE = self._sparse_attention(q_BHNE, k_BHNE, v_BHNE, routing)
             coarse_1BND = routing["coarse_out"]
             ttnn.deallocate(routing["block_mask"])
         elif exp_program_config is not None:

@@ -1517,7 +1517,6 @@ def test_minimax_h3_transformer_block_vsa_perf(
     del torch_block
 
     host_ms = {}
-    update_ms = {}
     logical_n = seq_len
     if geometry is not None:
         prepass = VSAPrepass(
@@ -1540,7 +1539,7 @@ def test_minimax_h3_transformer_block_vsa_perf(
         host_ms["build_vsa_geometry"] = (time.perf_counter() - t0) * 1e3
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
-        prepass.update(geometry, traced=False, timings=update_ms)
+        prepass.update(geometry, traced=False)
         host_ms["prepass.update"] = (time.perf_counter() - t0) * 1e3
         t0 = time.perf_counter()
         tt_block.attn.set_vsa_prepass(prepass)
@@ -1588,7 +1587,7 @@ def test_minimax_h3_transformer_block_vsa_perf(
 
     local = local_device_to_torch(tt_out).float()
     assert torch.isfinite(local).all(), "block output contains NaN or Inf"
-    logger.info(f"{attention} host times:\n" + format_host_times(host_ms, {"prepass.update": update_ms}))
+    logger.info(f"{attention} host times:\n" + format_host_times(host_ms))
 
 
 # ---- the token refiner ----

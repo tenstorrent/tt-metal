@@ -664,7 +664,6 @@ def test_vsa_attention(
     tt_model.load_torch_state_dict(state)
 
     host_ms = {}
-    update_ms = {}
     if vsa:
         geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=sp, padded_len=rung)
         prepass = VSAPrepass(
@@ -703,7 +702,7 @@ def test_vsa_attention(
         host_ms["build_vsa_geometry"] = (time.perf_counter() - t0) * 1e3
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
-        prepass.update(geometry, traced=False, timings=update_ms)
+        prepass.update(geometry, traced=False)
         host_ms["prepass.update"] = (time.perf_counter() - t0) * 1e3
         t0 = time.perf_counter()
         tt_model.set_vsa_prepass(prepass)
@@ -728,24 +727,20 @@ def test_vsa_attention(
     )
     tt_logical_n = logical_length_tensor(mesh_device, logical_n)
 
-    def run_attention(timings: dict[str, float] | None = None) -> ttnn.Tensor:
-        out = tt_model(tt_x, logical_n=tt_logical_n, rope_cos=tt_cos, rope_sin=tt_sin, timings=timings)
+    def run_attention() -> ttnn.Tensor:
+        out = tt_model(tt_x, logical_n=tt_logical_n, rope_cos=tt_cos, rope_sin=tt_sin)
         ttnn.synchronize_device(mesh_device)
         return out
 
     ttnn.deallocate(run_attention())
     ttnn.synchronize_device(mesh_device)
     # Warm run only, so the profile excludes setup and kernel compilation.
-    attention_ms = {}
     signpost("start")
     t0 = time.perf_counter()
-    tt_out = run_attention(attention_ms)
+    tt_out = run_attention()
     host_ms["warm run"] = (time.perf_counter() - t0) * 1e3
     signpost("stop")
-    logger.info(
-        f"{attention} host times:\n"
-        + format_host_times(host_ms, {"prepass.update": update_ms, "warm run": attention_ms})
-    )
+    logger.info(f"{attention} host times:\n" + format_host_times(host_ms))
     if perf_only:
         return
 

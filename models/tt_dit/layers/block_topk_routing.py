@@ -34,8 +34,6 @@ from __future__ import annotations
 import math
 import os
 import struct
-from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 
 import torch
@@ -615,12 +613,10 @@ class BlockTopKRouting:
         v: ttnn.Tensor,
         *,
         coarse: bool = True,
-        section: Callable[[str], AbstractContextManager] = lambda name: nullcontext(),
     ) -> dict:
         """``block_mask`` uint32 [1, H, nb_pad, S * nb_pad], ``block_counts`` uint32 [1, 1, 1, S * nb_pad] and
         ``coarse_out`` [1, 1, rows, H * D] (each block's coarse output on all its rows, heads concatenated; None
-        without ``coarse``). The caller owns and deallocates ``block_mask`` and ``coarse_out``. ``section(name)`` wraps
-        the one program, section ``routing`` (for timing).
+        without ``coarse``). The caller owns and deallocates ``block_mask`` and ``coarse_out``.
 
         The gathered ``kv_g`` is the CCL manager's ping-pong buffer, fetched per call: consecutive calls alternate
         between its two buffers, so a peer's push for the next call never lands in a buffer this device still reads
@@ -630,8 +626,7 @@ class BlockTopKRouting:
         if self._q_bar is None:
             self._q_bar = self._alloc([1, H, self.nb_pad, D])
         kv_g = self.ccl_manager.get_ag_ping_pong_buffer((1, 2 * H, self.nb_pad, D), 2, self.sp_axis)
-        with section("routing"):
-            mask, coarse_out = self._run(q, k, v, self._q_bar, kv_g, coarse)
+        mask, coarse_out = self._run(q, k, v, self._q_bar, kv_g, coarse)
         return {
             "block_mask": mask,
             "block_counts": self.block_counts.value,

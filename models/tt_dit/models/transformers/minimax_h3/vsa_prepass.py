@@ -25,9 +25,6 @@ sparse op's mask and counts and the coarse branch output; this class derives its
 from __future__ import annotations
 
 import math
-import os
-import time
-from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
 import torch
@@ -49,30 +46,6 @@ class MiniMaxH3VSAConfig:
 def compute_topk(sparsity: float, num_candidates: int) -> int:
     """Candidate tiles to keep; FastVideo's compute_topk, clamped to [1, n]."""
     return max(1, min(math.ceil((1 - sparsity) * num_candidates), num_candidates))
-
-
-_TIME_VSA = os.environ.get("TIME_VSA", "").lower() in ("1", "true")
-
-
-def _timed(timings: dict[str, float] | None, name: str, sync: ttnn.MeshDevice | None = None):
-    """Record the block's host wall time in ms when `TIME_VSA` is "1" or "true" (read at import); otherwise a no-op
-    that neither reads the clock nor drains the device. With `sync`, the device is drained before the clock stops so
-    the time includes the block's device work."""
-    if not _TIME_VSA:
-        return nullcontext()
-    return _timed_section(timings, name, sync)
-
-
-@contextmanager
-def _timed_section(timings: dict[str, float] | None, name: str, sync: ttnn.MeshDevice | None):
-    if timings is None:
-        yield
-        return
-    t0 = time.perf_counter()
-    yield
-    if sync is not None:
-        ttnn.synchronize_device(sync)
-    timings[name] = (time.perf_counter() - t0) * 1e3
 
 
 def _round_up(value: int, multiple: int) -> int:
@@ -143,19 +116,13 @@ class VSAPrepass:
         )
 
     @cap_torch_threads_to_half_the_cpus()
-    def update(self, geometry: MiniMaxH3VSAGeometry, *, traced: bool, timings: dict[str, float] | None = None) -> None:
-        """Write one request's geometry into the rung's buffers; in place when `traced`, so a captured trace replays.
-
-        `timings`, when given, receives each step's host wall time in ms.
-        """
+    def update(self, geometry: MiniMaxH3VSAGeometry, *, traced: bool) -> None:
+        """Write one request's geometry into the rung's buffers; in place when `traced`, so a captured trace replays."""
         sp = self.sp_factor
         assert geometry.padded_len == self.rung and geometry.sp_factor == sp, "the geometry must fill this rung"
 
-        with _timed(timings, "host masks"):
-            k = compute_topk(self.sparsity, int(geometry.is_candidate.sum()))
-
-        with _timed(timings, "upload routing constants", sync=self.mesh_device):
-            self.routing.update(vsa_routing_request(geometry, self.nb_pad, k), traced=traced)
+        k = compute_topk(self.sparsity, int(geometry.is_candidate.sum()))
+        self.routing.update(vsa_routing_request(geometry, self.nb_pad, k), traced=traced)
 
     def __call__(
         self,
@@ -164,11 +131,6 @@ class VSAPrepass:
         v: ttnn.Tensor,
         *,
         coarse: bool = True,
-        timings: dict[str, float] | None = None,
     ) -> dict:
-        """`timings`, when given, receives each routing sub-section's host wall time in ms, device work included."""
         assert q.shape[2] == self.rows and q.shape[1] == self.num_heads, (q.shape, self.rows, self.num_heads)
-        sync = self.mesh_device
-        return self.routing(
-            q, k, v, coarse=coarse, section=lambda name: _timed(timings, f"vsa fused: {name}", sync=sync)
-        )
+        return self.routing(q, k, v, coarse=coarse)
