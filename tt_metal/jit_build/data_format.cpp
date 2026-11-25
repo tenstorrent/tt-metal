@@ -270,6 +270,11 @@ DataFormat get_single_pack_src_format(
     } else if (fp32_dest_acc_en) {
         if (arch == tt::ARCH::QUASAR && !tt::is_integer_format(data_format)) {
             pack_src_format = DataFormat::Float32;
+        } else if (arch == tt::ARCH::QUASAR && (data_format == DataFormat::Int8 || data_format == DataFormat::UInt8)) {
+            // A 32-bit Dest holds an 8-bit integer as a sign-magnitude word split across two rows, so
+            // the packer has to read it as Int32 and let the gasket narrow to the L1 datum. Naming the
+            // L1 format here reads a single row and loses the magnitude.
+            pack_src_format = DataFormat::Int32;
         } else if (is_bfp_format(data_format)) {
             if (bfp8_pack_precise) {
                 pack_src_format = DataFormat::Float32;
