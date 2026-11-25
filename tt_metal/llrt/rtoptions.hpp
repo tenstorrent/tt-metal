@@ -213,6 +213,8 @@ class RunTimeOptions {
     // reroute traffic around broken links.
     // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
     std::string factory_system_descriptor_path;
+    // Retrain rounds for factory cables missing at control plane startup. 0 disables retraining.
+    uint32_t fsd_link_retrain_attempts = 0;
 
     bool build_map_enabled = false;
 
@@ -932,6 +934,8 @@ public:
     bool has_factory_system_descriptor_path() const { return !factory_system_descriptor_path.empty(); }
     const std::string& get_factory_system_descriptor_path() const { return factory_system_descriptor_path; }
     void set_factory_system_descriptor_path(const std::string& path) { factory_system_descriptor_path = path; }
+    uint32_t get_fsd_link_retrain_attempts() const { return fsd_link_retrain_attempts; }
+    void set_fsd_link_retrain_attempts(uint32_t attempts) { fsd_link_retrain_attempts = attempts; }
 
     bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
 

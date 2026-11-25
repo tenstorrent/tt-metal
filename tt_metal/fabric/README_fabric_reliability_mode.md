@@ -45,6 +45,19 @@ After init:
 const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 ```
 
+## Retraining missing cables at startup
+
+```bash
+export TT_METAL_FSD_LINK_RETRAIN_ATTEMPTS=3
+```
+
+With this set, the first control plane in the process retrains every missing factory cable before the mesh is placed, for up to that many rounds, and rediscovers after each round. Only cables that come back are routed. The rest are recorded as usual.
+
+- Blackhole silicon with ETH FW >= 1.9.0 only. If any rank cannot retrain, or did not set the variable, no rank retrains.
+- A round takes about 15 seconds when every link trains, and over a minute when one does not.
+- Rank 0 writes the cables that did not come back to `generated/fabric/unretrainable_channels.yaml` under the logs directory, in the format `run_cluster_validation` uses.
+- Later control plane rebuilds in the same process do not retrain.
+
 ## Rules
 
 A missing cable is one the factory system descriptor (FSD) lists and the live physical system descriptor (PSD) does not. Each cable is stored twice, once from each end. The mesh graph descriptor (MGD) decides which of those cables fabric still routes.

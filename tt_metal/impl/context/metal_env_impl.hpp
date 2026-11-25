@@ -24,6 +24,7 @@
 
 namespace tt::tt_fabric {
 class ControlPlane;
+class LinkRetrainer;
 struct FabricTensixSessionInputs;
 }  // namespace tt::tt_fabric
 
@@ -176,6 +177,9 @@ private:
 
     // --- Control plane / system mesh ---
     std::mutex control_plane_mutex_;
+    // Handed to the first control plane only, which takes it. Later builds can run with devices open and
+    // fabric up, where retraining a link would pull it out from under a running workload.
+    std::unique_ptr<tt::tt_fabric::LinkRetrainer> link_retrainer_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     std::unique_ptr<distributed::SystemMesh> system_mesh_;
 

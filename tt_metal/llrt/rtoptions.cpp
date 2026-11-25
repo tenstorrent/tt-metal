@@ -64,6 +64,7 @@ enum class EnvVarID {
     TT_MESH_ID,                               // Mesh this process binds to in the mesh graph descriptor
     TT_MESH_HOST_RANK,                        // Host rank of this process within its mesh
     TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
+    TT_METAL_FSD_LINK_RETRAIN_ATTEMPTS,       // Retrain rounds for FSD cables missing at startup
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
 
     // ========================================
@@ -618,6 +619,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
         case EnvVarID::TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH:
             this->factory_system_descriptor_path = std::string(value);
+            break;
+
+        // TT_METAL_FSD_LINK_RETRAIN_ATTEMPTS
+        // Retrain rounds for cables the Factory System Descriptor lists but live discovery did not find. The
+        // control plane retrains them when it first comes up, before fabric is placed on the topology.
+        // Every rank must call into the control plane, and each round can take minutes on Blackhole.
+        // Only used with TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH, on Blackhole silicon with ETH FW >= 1.9.0.
+        // Default: 0 (no retraining)
+        // Usage: export TT_METAL_FSD_LINK_RETRAIN_ATTEMPTS=3
+        case EnvVarID::TT_METAL_FSD_LINK_RETRAIN_ATTEMPTS:
+            this->fsd_link_retrain_attempts = static_cast<uint32_t>(std::stoul(value));
             break;
 
         // TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE

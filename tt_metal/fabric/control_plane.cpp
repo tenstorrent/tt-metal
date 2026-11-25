@@ -5,6 +5,7 @@
 #include <iostream>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -55,6 +56,7 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/fsd_host_filter.hpp"
+#include "tt_metal/fabric/link_retrainer.hpp"
 #include "tt_metal/fabric/mcast_reverse_tree.hpp"
 #include "tt_metal/fabric/routing_2d_table_builder.hpp"
 #include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
@@ -711,8 +713,14 @@ ControlPlane::ControlPlane(
     const ::tt::llrt::RunTimeOptions& rtoptions,
     const ::tt::tt_metal::Hal& hal,
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
-    const tt_metal::FabricSettings& config) :
-    cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
+    const tt_metal::FabricSettings& config,
+    LinkRetrainer* link_retrainer) :
+    cluster_(cluster),
+    rtoptions_(rtoptions),
+    hal_(hal),
+    distributed_context_(distributed_context),
+    link_retrainer_(link_retrainer),
+    config_(config) {
     init_control_plane_auto_discovery();
     initialize_fabric_context();
 }
@@ -723,8 +731,14 @@ ControlPlane::ControlPlane(
     const ::tt::tt_metal::Hal& hal,
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
     const std::string& mesh_graph_desc_file,
-    const tt_metal::FabricSettings& config) :
-    cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
+    const tt_metal::FabricSettings& config,
+    LinkRetrainer* link_retrainer) :
+    cluster_(cluster),
+    rtoptions_(rtoptions),
+    hal_(hal),
+    distributed_context_(distributed_context),
+    link_retrainer_(link_retrainer),
+    config_(config) {
     init_control_plane(mesh_graph_desc_file, std::nullopt);
     initialize_fabric_context();
 }
@@ -736,8 +750,14 @@ ControlPlane::ControlPlane(
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-    const tt_metal::FabricSettings& config) :
-    cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
+    const tt_metal::FabricSettings& config,
+    LinkRetrainer* link_retrainer) :
+    cluster_(cluster),
+    rtoptions_(rtoptions),
+    hal_(hal),
+    distributed_context_(distributed_context),
+    link_retrainer_(link_retrainer),
+    config_(config) {
     init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
     initialize_fabric_context();
 }
@@ -1022,6 +1042,88 @@ void ControlPlane::ingest_factory_system_descriptor() {
     // that hang off the chips it is missing.
     fsd_ingest::throw_on_fsd_chips_absent_from_live(
         *this->fsd_physical_system_descriptor_, *this->physical_system_descriptor_);
+
+    this->retrain_missing_fsd_links();
+}
+
+void ControlPlane::retrain_missing_fsd_links() {
+    const auto& rtoptions = this->rtoptions_.get();
+    const auto& distributed_context = this->distributed_context_.get();
+    const uint32_t requested = rtoptions.get_fsd_link_retrain_attempts();
+    const bool able = this->link_retrainer_ != nullptr && this->link_retrainer_->can_retrain();
+
+    // Every rank with a factory descriptor reaches this, and the host filter already agreed that they all
+    // have one. A rank that skipped the agreement because it alone was not asked to retrain would strand
+    // the others in it.
+    std::array<std::uint64_t, 1> local{able ? requested : 0u};
+    std::array<std::uint64_t, 1> agreed{};
+    using tt::tt_metal::distributed::multihost::ReduceOp;
+    distributed_context.all_reduce(ttsl::Span<std::uint64_t>(local), ttsl::Span<std::uint64_t>(agreed), ReduceOp::MIN);
+    const auto max_rounds = static_cast<uint32_t>(agreed[0]);
+    if (max_rounds == 0) {
+        // A null retrainer is a rebuild of an earlier control plane, which already had its chance.
+        if (requested > 0 && this->link_retrainer_ != nullptr) {
+            log_warning(
+                tt::LogFabric,
+                "TT_METAL_FSD_LINK_RETRAIN_ATTEMPTS={} is set, but missing factory cables will not be retrained: {}",
+                requested,
+                able ? "another rank cannot retrain, or did not ask to"
+                     : "retraining needs Blackhole silicon with ETH FW >= 1.9.0");
+        }
+        return;
+    }
+
+    namespace fsd_ingest = tt::tt_metal::experimental::tt_fabric;
+    const auto result = retrain_missing_factory_cables(
+        *this->link_retrainer_,
+        distributed_context,
+        *this->fsd_physical_system_descriptor_,
+        this->physical_system_descriptor_,
+        max_rounds);
+    this->fsd_link_retrain_rounds_ = result.rounds;
+    if (result.rounds > 0) {
+        // The live descriptor was rediscovered, so the factory one takes its ranks from the new one.
+        fsd_ingest::align_factory_descriptor_with_live(
+            *this->fsd_physical_system_descriptor_, *this->physical_system_descriptor_);
+        fsd_ingest::throw_on_fsd_chips_absent_from_live(
+            *this->fsd_physical_system_descriptor_, *this->physical_system_descriptor_);
+    }
+
+    std::vector<MissingCable> recovered;
+    std::set_difference(
+        result.missing_before.begin(),
+        result.missing_before.end(),
+        result.missing_after.begin(),
+        result.missing_after.end(),
+        std::back_inserter(recovered));
+    log_info(
+        tt::LogFabric,
+        "Factory link retrain: {} missing cable(s) found, {} recovered in {} round(s), {} still missing",
+        result.missing_before.size(),
+        recovered.size(),
+        result.rounds,
+        result.missing_after.size());
+
+    if (*distributed_context.rank() != 0) {
+        return;
+    }
+    const auto report_path =
+        std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" / "unretrainable_channels.yaml";
+    try {
+        if (result.missing_after.empty()) {
+            std::filesystem::remove(report_path);
+        } else {
+            write_unretrainable_channels(
+                report_path, result.missing_after, *this->physical_system_descriptor_, result.rounds);
+            log_warning(
+                tt::LogFabric,
+                "{} factory cable(s) did not come back after retraining, see {}",
+                result.missing_after.size(),
+                report_path.string());
+        }
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Failed to export unretrainable channels: {}", e.what());
+    }
 }
 
 void ControlPlane::construct_link_health_after_intermesh() {
@@ -1094,9 +1196,10 @@ void ControlPlane::check_fsd_compatibility_and_downed_fraction() {
         tally(this->link_health_->get_unused_downed_links());
         TT_THROW(
             "STRICT system health: the live physical system descriptor does not match the factory "
-            "descriptor, intramesh={} intermesh={} missing cable(s).",
+            "descriptor, intramesh={} intermesh={} missing cable(s) after {} retrain round(s).",
             intra,
-            inter);
+            inter,
+            this->fsd_link_retrain_rounds_);
     }
 
     if (fraction > kMaxDownedConnectionFraction) {

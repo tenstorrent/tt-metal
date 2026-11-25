@@ -55,6 +55,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_physical_node_id.cpp
     fabric_router/test_physical_system_descriptor_diff.cpp
     fabric_router/test_link_health.cpp
+    fabric_router/test_link_retrainer.cpp
     graph/test_logical_graph_lowering.cpp
     graph/test_graph_fabric_mock_compile.cpp
 )
