@@ -234,6 +234,20 @@ jobs:
         env:
           PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
         run: |
+          # Dump every thread's Python stack when one test runs past this, so a hang is
+          # attributable: timeout-minutes kills the step without naming the test, and the
+          # serial --lf re-run below is never reached. pytest's built-in faulthandler only
+          # prints and leaves the test running, so a slow-but-correct test costs a log dump
+          # and nothing else. It fires from a C thread that needs no GIL, which is where
+          # pytest-timeout cannot: a test stuck in a ttsim C++ call holds the GIL and starves
+          # both of that plugin's methods. 80% of the step budget, clamped to [60s, 20min];
+          # the cap keeps the dump landing when a hang starts late in a long step, since sim
+          # budgets run from 10 to ~700 minutes.
+          sim_step_minutes="${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}"
+          faulthandler_timeout=$(( ${sim_step_minutes:-30} * 48 ))
+          if (( faulthandler_timeout > 1200 )); then faulthandler_timeout=1200; fi
+          if (( faulthandler_timeout < 60 )); then faulthandler_timeout=60; fi
+          export PYTEST_ADDOPTS="-o faulthandler_timeout=$faulthandler_timeout ${PYTEST_ADDOPTS:-}"
           # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
           # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
           # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
@@ -244,7 +258,7 @@ jobs:
             exit 0
           fi
           echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-          export PYTEST_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
+          export PYTEST_ADDOPTS="-p no:timeout -o faulthandler_timeout=$faulthandler_timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
           eval "$cmd --lf --lfnf=all --tb=long -v" || true
           exit 1
 
