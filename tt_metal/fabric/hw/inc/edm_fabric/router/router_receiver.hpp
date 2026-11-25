@@ -335,6 +335,11 @@ __attribute__((noinline)) void sparse_multicast_hop(
 // (one plane per destination keeps each destination's packets in order). Out of line: perimeter routers only.
 __attribute__((noinline)) bool scatters_to_partner_plane(tt_l1_ptr PACKET_HEADER_TYPE* header) {
     const volatile PACKET_HEADER_TYPE* const volatile_header = header;
+    constexpr uint32_t address_bit = NAMED_CT_ARG_OR("INTER_DOMAIN_SCATTER_ADDRESS_BIT", 0);  // test only
+    if constexpr (address_bit != 0) {
+        const uint64_t address = volatile_header->command_fields.unicast_write.noc_address;
+        return ((address >> (address_bit - 1)) & 1u) != 0;
+    }
     return (volatile_header->dst_start_chip_id & 1u) != 0;
 }
 

@@ -663,6 +663,13 @@ void check_scatter(
                 const uint64_t on_partner = *partner_count;
                 const uint64_t on_own = *own_count;
                 const bool odd = (other.chip_id & 1u) != 0;
+                if (MetalContext::instance().rtoptions().get_fabric_inter_domain_scatter_address_bit()) {
+                    // scattered by write address: every landing router forwards on both planes
+                    EXPECT_GT(on_partner, 0u) << landing << " plane " << down[k] << ": partner plane carried nothing";
+                    EXPECT_GT(on_own, 0u) << landing << " plane " << live[k] << ": own plane carried nothing";
+                    ++checked;
+                    continue;
+                }
                 log_info(
                     tt::LogTest,
                     "{} toward chip {}: plane {} (live) sent {}, plane {} (its partner) sent {}",

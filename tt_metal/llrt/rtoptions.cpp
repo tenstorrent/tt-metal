@@ -114,6 +114,7 @@ enum class EnvVarID {
     TT_METAL_FABRIC_GRAPH_BUILDER,                      // Build fabric routers from the fabric graph
     TT_METAL_FABRIC_INTER_DOMAIN,                       // Inter-domain routers on unused links leaving the domain
     TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES,           // Test: treat these perimeter planes' links as down
+    TT_METAL_FABRIC_INTER_DOMAIN_SCATTER_ADDRESS_BIT,   // Test: scatter by a write-address bit, not the chip
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
@@ -880,6 +881,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_FABRIC_INTER_DOMAIN=1
         case EnvVarID::TT_METAL_FABRIC_INTER_DOMAIN: this->fabric_inter_domain = is_env_enabled(value); break;
+
+        // TT_METAL_FABRIC_INTER_DOMAIN_SCATTER_ADDRESS_BIT
+        // TEST ONLY: an inter-domain receiver picks its partner plane by this bit of a unicast write's address
+        // instead of the destination chip's low bit, so a small domain's traffic crosses both planes.
+        // Default: unset (scatter by destination chip)
+        // Usage: export TT_METAL_FABRIC_INTER_DOMAIN_SCATTER_ADDRESS_BIT=4
+        case EnvVarID::TT_METAL_FABRIC_INTER_DOMAIN_SCATTER_ADDRESS_BIT:
+            this->fabric_inter_domain_scatter_address_bit = static_cast<uint32_t>(std::stoul(std::string(value)));
+            break;
 
         // TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES
         // TEST ONLY: treat the inter-domain links on these perimeter planes as down, whatever their training state.

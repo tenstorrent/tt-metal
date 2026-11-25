@@ -400,6 +400,7 @@ class RunTimeOptions {
 
     bool fabric_inter_domain = false;
     std::set<uint32_t> fabric_inter_domain_down_planes;
+    std::optional<uint32_t> fabric_inter_domain_scatter_address_bit;
 
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
@@ -996,6 +997,9 @@ public:
     bool get_fabric_inter_domain() const { return fabric_inter_domain; }
     void set_fabric_inter_domain(bool enable) { fabric_inter_domain = enable; }
     const std::set<uint32_t>& get_fabric_inter_domain_down_planes() const { return fabric_inter_domain_down_planes; }
+    std::optional<uint32_t> get_fabric_inter_domain_scatter_address_bit() const {
+        return fabric_inter_domain_scatter_address_bit;
+    }
     void set_fabric_inter_domain_down_planes(std::set<uint32_t> planes) {
         fabric_inter_domain_down_planes = std::move(planes);
     }
