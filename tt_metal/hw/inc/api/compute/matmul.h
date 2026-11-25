@@ -21,6 +21,7 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
+#include "llk_unpack_AB_matmul_main.h"
 #include "llk_unpack_common_api.h"
 #endif
 PACK_MATMUL_API(1)
@@ -1711,6 +1712,31 @@ ALWI void matmul_fe_phase_init(
 }
 #endif
 
+// True when a CB of the kernel holds Bfp8_b (a Bfp4_b mask CB does not count)
+constexpr bool matmul_fe_kernel_has_bfp8_cb() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    for (const std::uint8_t f : unpack_src_format) {
+        if (f == static_cast<std::uint8_t>(DataFormat::Bfp8_b)) {
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+// sdpa's matmul_blocks (run-time cbs in a kernel of 12 or more CBs: the attention kernels, not bmm) with no Bfp8_b CB
+// at HiFi2, half sync and a 16-bit DEST: main's unpack and math; the matmul forms read 0.7-0.8 % slower there on p100a
+// (joint sdpa k128 q32 bf16)
+template <std::uint32_t in0_cb, std::uint32_t in1_cb>
+constexpr bool matmul_fe_main_runtime() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    return in0_cb == 0xFFu && in1_cb == 0xFFu && !matmul_fe_kernel_has_bfp8_cb() &&
+           MATH_FIDELITY == MathFidelity::HiFi2 && DST_SYNC_MODE == DstSync::SyncHalf && !DST_ACCUM_MODE &&
+           MM_THROTTLE == 0 && !LLK_SIZE_MODE && ::ckernel::llk_configured_cbs(unpack_src_format) >= 12;
+#else
+    return false;
+#endif
+}
+
 // mark: MATMUL_FE_MARK() from the unpack and pack macros; fkey: the kernel's forms key decision (MATMUL_FE_KDEC)
 template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::size_t mark = 0, bool fkey = false>
 ALWI void matmul_block_init_fe(
@@ -1721,6 +1747,17 @@ ALWI void matmul_block_init_fe(
     std::uint32_t ct_dim = 1,
     std::uint32_t rt_dim = 1,
     std::uint32_t kt_dim = 1) {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    if constexpr (matmul_fe_main_runtime<in0_cb, in1_cb>()) {
+        LLK_SAN_FUNCTION();
+        state_configure(in1_cb_id, in0_cb_id, call_line);
+        UNPACK((mm_main::llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+        MATH((mm_main::llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(
+            in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+        MATH((throttled_mop_status = 0));
+        return;
+    }
+#endif
     // a kernel bound by the kernel config buffer runs main's direction and math
     constexpr DataFormat f = LLK_SIZE_MODE ? DataFormat::Invalid : matmul_fe_phase_format<in0_cb, in1_cb>();
     constexpr std::uint32_t AUTO = LLK_SIZE_MODE ? 0 : MATMUL_REUSE_DIR_AUTO;
@@ -1776,6 +1813,16 @@ ALWI void matmul_block_fe(
     std::uint32_t ct_dim,
     std::uint32_t rt_dim,
     std::uint32_t kt_dim) {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    if constexpr (matmul_fe_main_runtime<in0_cb, in1_cb>()) {
+        LLK_SAN_FUNCTION();
+        state_configure(in1_cb_id, in0_cb_id, call_line);
+        UNPACK((mm_main::llk_unpack_AB_matmul(
+            in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+        MATH((mm_main::matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+        return;
+    }
+#endif
     // a kernel bound by the kernel config buffer runs main's direction and math
     constexpr DataFormat f = LLK_SIZE_MODE ? DataFormat::Invalid : matmul_fe_phase_format<in0_cb, in1_cb>();
     constexpr std::uint32_t AUTO = LLK_SIZE_MODE ? 0 : MATMUL_REUSE_DIR_AUTO;
