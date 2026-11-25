@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 // Named rather than anonymous: unity builds merge this file with the other typecast factories.
 namespace layout_change {
 
-// Bounds L1 use: the IN and OUT DFBs each hold two blocks.
+// Bounds per-core L1: IN and OUT hold two blocks each and MID one, at most 40 tiles (160 KB for 4-byte formats).
 constexpr uint32_t kMaxBlockWidthTiles = 8;
 
 constexpr const char* kComputeSource =
@@ -39,8 +39,8 @@ uint32_t element_size(DataType dtype) { return tt::datum_size(datatype_to_datafo
 
 uint32_t width_tiles(const ttnn::Shape& shape) { return tt::div_up(shape[-1], tt::constants::TILE_WIDTH); }
 
-// Each row of a block is read from or written to a stick at offset block_index * row bytes, which
-// must keep the stick's buffer alignment. Returns 0 when no block width qualifies.
+// Largest width <= kMaxBlockWidthTiles that divides the row's tile count and keeps each block's stick
+// offset (block_index * row bytes) on the stick's buffer alignment. Returns 0 when no width qualifies.
 uint32_t select_block_width_tiles(uint32_t num_width_tiles, uint32_t row_major_element_size, uint32_t alignment) {
     for (auto width = std::min(num_width_tiles, kMaxBlockWidthTiles); width > 0; --width) {
         const auto block_row_bytes = width * tt::constants::TILE_WIDTH * row_major_element_size;
@@ -252,8 +252,6 @@ ttnn::device_operation::ProgramArtifacts TypecastLayoutChangeProgramFactory::cre
         const auto cast_dfb = cast_first ? IN_DFB : MID_DFB;
         if (args.preserve_fp32_precision) {
             unpack_modes.emplace(cast_dfb, UnpackMode::UnpackToDest);
-        } else if (input_format == tt::DataFormat::Float32) {
-            unpack_modes.emplace(cast_dfb, UnpackMode::UnpackToSrc);
         }
     }
     const ComputeHardwareConfig compute_config{

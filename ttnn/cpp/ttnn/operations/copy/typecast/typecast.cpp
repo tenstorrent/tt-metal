@@ -40,13 +40,14 @@ Tensor typecast_on_device(
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<Layout>& output_layout = std::nullopt) {
+    const std::optional<Layout>& output_layout = std::nullopt,
+    const bool tile_padding_is_zero = false) {
     const DataType input_dtype = input_tensor.dtype();
     // Zero the implicit tile padding before packing to a block-float format: the pack reads whole
     // 16-lane blocks, padding included. The fill writes in place, so it must run on a copy to keep
     // the caller's tensor untouched. Block-aligned widths take the direct path unchanged.
     Tensor typecast_input = input_tensor;
-    if (needs_zeroed_tile_padding(input_tensor, output_dtype)) {
+    if (!tile_padding_is_zero && needs_zeroed_tile_padding(input_tensor, output_dtype)) {
         typecast_input = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt, sub_core_grids);
         typecast_input = ttnn::fill_implicit_tile_padding(typecast_input, 0.0f, std::nullopt, sub_core_grids);
     }
@@ -134,7 +135,16 @@ Tensor typecast_layout_change(
         return typecast_on_device(
             input_tensor, output_dtype, output_memory_config, optional_output_tensor, sub_core_grids, output_layout);
     }
-    // tilize / untilize take no sub_core_grids.
+    // The tile-to-tile typecast below addresses pages as 32x32 tiles.
+    const auto is_32x32 = [](const tt::tt_metal::Tile& tile) {
+        return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    };
+    TT_FATAL(
+        is_32x32(input_tensor.tensor_spec().tile()) && is_32x32(output_spec.tile()),
+        "Typecast with a layout change supports only 32x32 tiles; input {} -> output {}",
+        input_tensor.tensor_spec(),
+        output_spec);
+    // Row-major typecast, used below for some inputs, takes no sub_core_grids.
     TT_FATAL(
         !sub_core_grids.has_value(),
         "Typecast with a layout change supports sub_core_grids only when it runs in one pass; input {} -> output {}",
@@ -146,10 +156,19 @@ Tensor typecast_layout_change(
             tilize_dtype == input_tensor.dtype()
                 ? input_tensor
                 : typecast_device(input_tensor, tilize_dtype, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, std::nullopt);
+        // to_layout pads with zeros, so the block-float padding fill is skipped.
         const auto tiled = ttnn::to_layout(tilize_input, Layout::TILE, std::nullopt, ttnn::DRAM_MEMORY_CONFIG);
-        return typecast_device(tiled, output_dtype, output_memory_config, optional_output_tensor, std::nullopt);
+        return typecast_on_device(
+            tiled, output_dtype, output_memory_config, optional_output_tensor, std::nullopt, std::nullopt, true);
     }
     const auto cast = typecast_device(input_tensor, output_dtype, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, std::nullopt);
+    if (output_dtype == DataType::INT8) {
+        // Device untilize of INT8 turns -128 into 0; untilize the exact INT32 widening instead.
+        const auto widened =
+            typecast_device(cast, DataType::INT32, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, std::nullopt);
+        const auto untiled = ttnn::to_layout(widened, Layout::ROW_MAJOR, std::nullopt, ttnn::DRAM_MEMORY_CONFIG);
+        return typecast_device(untiled, output_dtype, output_memory_config, optional_output_tensor, std::nullopt);
+    }
     if (!optional_output_tensor.has_value()) {
         return ttnn::to_layout(cast, Layout::ROW_MAJOR, std::nullopt, output_memory_config);
     }
@@ -205,6 +224,14 @@ inline Tensor typecast_impl(
                                           ? optional_output_tensor.value().memory_config()
                                           : memory_config.value_or(input_tensor.memory_config());
     if (output_layout != input_tensor.layout()) {
+        TT_FATAL(
+            !optional_output_tensor.has_value() ||
+                (optional_output_tensor->logical_shape() == input_tensor.logical_shape() &&
+                 optional_output_tensor->dtype() == output_dtype),
+            "Preallocated output tensor must be {} with shape {}, got {}",
+            output_dtype,
+            input_tensor.logical_shape(),
+            optional_output_tensor.has_value() ? optional_output_tensor->tensor_spec() : input_tensor.tensor_spec());
         return typecast_layout_change(
             input_tensor, output_dtype, output_layout, output_memory_config, optional_output_tensor, sub_core_grids);
     }

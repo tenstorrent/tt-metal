@@ -29,7 +29,7 @@ _TORCH_SOURCE_DTYPE = {
 
 
 def _values(shape, seed=0):
-    # Small non-negative integers are exact in every supported dtype, so all casts must be bit-exact.
+    # Small non-negative integers are exact in every non-block-float dtype, so those casts must be bit-exact.
     generator = torch.Generator().manual_seed(seed)
     return torch.randint(0, 200, shape, generator=generator, dtype=torch.int32)
 
@@ -55,6 +55,7 @@ def _check(output, values, dtype, layout, memory_config=None):
             assert output.memory_config().shard_spec == memory_config.shard_spec
     result = ttnn.to_torch(output)
     if dtype in BFP_DTYPES:
+        # Block-float shares one exponent per 16 values; bfloat4_b keeps 3 mantissa bits, hence the lower bar.
         assert_with_pcc(values.to(torch.float32), result.to(torch.float32), 0.999 if dtype == ttnn.bfloat8_b else 0.98)
     else:
         assert torch.equal(result.to(torch.int64), values.to(torch.int64))
@@ -134,7 +135,7 @@ def test_typecast_memory_config_change(device, input_dtype, output_dtype, layout
 
 
 @pytest.mark.parametrize("output_memory", ["dram", "l1", "height", "width", "block"])
-@pytest.mark.parametrize("input_memory", ["dram", "l1", "height", "block"])
+@pytest.mark.parametrize("input_memory", ["dram", "l1", "height", "width", "block"])
 @pytest.mark.parametrize("input_layout, output_layout", [(TILE, RM), (RM, TILE)], ids=["tile_to_rm", "rm_to_tile"])
 @pytest.mark.parametrize(
     "input_dtype, output_dtype",
@@ -215,6 +216,7 @@ def test_typecast_layout_change_preallocated_output(device, input_layout, output
     "input_dtype, output_dtype", [(ttnn.bfloat16, ttnn.float32), (ttnn.int32, ttnn.uint16)], ids=str
 )
 def test_typecast_layout_change_sub_core_grids(device, input_dtype, output_dtype, input_layout, output_layout):
+    # Two disjoint ranges, 7 cores.
     sub_core_grids = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2)),
@@ -227,17 +229,12 @@ def test_typecast_layout_change_sub_core_grids(device, input_dtype, output_dtype
     _check(output, values, output_dtype, output_layout, ttnn.DRAM_MEMORY_CONFIG)
 
 
+# Width-sharded row-major pages hold part of a row, so this input cannot run in one pass.
 def test_typecast_layout_change_sub_core_grids_without_one_pass_rejected(device, expect_error):
-    input_tensor = ttnn.from_torch(
-        _values((1, 1, 32, 64)).to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=TILE,
-        device=device,
-        tile=ttnn.Tile((16, 32)),
-    )
+    input_tensor = _to_device(_values(SHARDED_SHAPE), ttnn.bfloat16, RM, device, _memory_config("width"))
     sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
     with expect_error(RuntimeError, "sub_core_grids only when it runs in one pass"):
-        ttnn.typecast(input_tensor, ttnn.float32, sub_core_grids=sub_core_grids, output_layout=RM)
+        ttnn.typecast(input_tensor, ttnn.float32, sub_core_grids=sub_core_grids, output_layout=TILE)
 
 
 LAYOUT_DIRECTIONS = [(TILE, RM), (RM, TILE)]
@@ -320,15 +317,16 @@ def test_typecast_layout_change_program_cache_entries(device, input_layout, outp
     assert device.num_program_cache_entries() > entries
 
 
-# A non-32x32 tile cannot use the one-pass path and must still give the right values.
-@pytest.mark.xfail(strict=True, reason="tile-to-tile typecast sizes pages as 32x32 tiles, ignoring the tile shape")
-def test_typecast_tiny_tile_to_rm(device):
-    values = _values((1, 1, 32, 64))
+def test_typecast_layout_change_tiny_tile_rejected(device, expect_error):
     input_tensor = ttnn.from_torch(
-        values.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=TILE, device=device, tile=ttnn.Tile((16, 32))
+        _values((1, 1, 32, 64)).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=TILE,
+        device=device,
+        tile=ttnn.Tile((16, 32)),
     )
-    output = ttnn.typecast(input_tensor, ttnn.float32, output_layout=RM)
-    _check(output, values, ttnn.float32, RM)
+    with expect_error(RuntimeError, "only 32x32 tiles"):
+        ttnn.typecast(input_tensor, ttnn.float32, output_layout=RM)
 
 
 def test_typecast_output_layout_and_output_tensor_mismatch_rejected(device, expect_error):
@@ -336,3 +334,124 @@ def test_typecast_output_layout_and_output_tensor_mismatch_rejected(device, expe
     output_tensor = _to_device(_values((1, 1, 32, 32)), ttnn.int32, TILE, device, ttnn.DRAM_MEMORY_CONFIG)
     with expect_error(RuntimeError, "must match the output layout"):
         ttnn.typecast(input_tensor, ttnn.int32, output_tensor=output_tensor, output_layout=RM)
+
+
+_FULL_RANGE_TORCH_DTYPE = {**_TORCH_SOURCE_DTYPE, ttnn.int8: torch.int8}
+
+
+def _full_range_values(dtype, shape, seed=0):
+    generator = torch.Generator().manual_seed(seed)
+    if dtype == ttnn.float32:
+        values = torch.randn(shape, generator=generator) * 1000
+        values.view(-1)[::7] = 1 + 2**-20  # needs more mantissa than bfloat16 / tf32 hold
+        return values
+    if dtype == ttnn.bfloat16:
+        return (torch.randn(shape, generator=generator) * 100).to(torch.bfloat16)
+    low, high = {
+        ttnn.int32: (-(2**31), 2**31 - 1),
+        ttnn.uint32: (0, 2**31 - 1),
+        ttnn.uint16: (0, 2**16),
+        ttnn.uint8: (0, 2**8),
+        ttnn.int8: (-(2**7), 2**7),
+    }[dtype]
+    return torch.randint(low, high, shape, generator=generator, dtype=torch.int64).to(_FULL_RANGE_TORCH_DTYPE[dtype])
+
+
+# Full-range values (large and negative integers, fp32 beyond bfloat16 precision) must come out exactly
+# as from the same-layout typecast, so 32-bit Dest and unpack modes are exercised.
+@pytest.mark.parametrize("shape", [(1, 1, 64, 128), (1, 2, 45, 70)], ids=["aligned", "unaligned"])
+@pytest.mark.parametrize("input_layout, output_layout", LAYOUT_DIRECTIONS, ids=LAYOUT_DIRECTION_IDS)
+@pytest.mark.parametrize("output_dtype", DTYPES + [ttnn.int8], ids=str)
+@pytest.mark.parametrize("input_dtype", DTYPES + [ttnn.int8], ids=str)
+def test_typecast_layout_change_full_range(device, input_dtype, output_dtype, input_layout, output_layout, shape):
+    values = _full_range_values(input_dtype, shape)
+    input_tensor = ttnn.from_torch(
+        values, dtype=input_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    expected = ttnn.to_torch(ttnn.typecast(input_tensor, output_dtype))
+    output = ttnn.typecast(input_tensor, output_dtype, output_layout=output_layout)
+    assert output.dtype == output_dtype and output.layout == output_layout
+    result = ttnn.to_torch(output)
+    if output_dtype in (ttnn.float32, ttnn.bfloat16):
+        assert torch.equal(
+            result.view(torch.int32 if output_dtype == ttnn.float32 else torch.int16),
+            expected.view(torch.int32 if output_dtype == ttnn.float32 else torch.int16),
+        )
+    else:
+        assert torch.equal(result.to(torch.int64), expected.to(torch.int64))
+
+
+# Same layout, preallocated output in a different memory config.
+@pytest.mark.parametrize(
+    "layout, input_memory, output_memory", [(TILE, "dram", "block"), (RM, "width", "height"), (RM, "dram", "l1")]
+)
+def test_typecast_memory_config_change_preallocated_output(device, layout, input_memory, output_memory):
+    values = _values(SHARDED_SHAPE)
+    output_memory_config = _memory_config(output_memory)
+    input_tensor = _to_device(values, ttnn.bfloat16, layout, device, _memory_config(input_memory))
+    output_tensor = _to_device(torch.zeros_like(values), ttnn.float32, layout, device, output_memory_config)
+    output = ttnn.typecast(input_tensor, ttnn.float32, output_tensor=output_tensor)
+    assert output.buffer_address() == output_tensor.buffer_address()
+    _check(output_tensor, values, ttnn.float32, layout, output_memory_config)
+
+
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype, shape, input_memory, output_memory",
+    [
+        (ttnn.bfloat8_b, ttnn.bfloat16, SHARDED_SHAPE, "height", "block"),
+        (ttnn.bfloat16, ttnn.bfloat8_b, SHARDED_SHAPE, "width", "dram"),
+        (ttnn.bfloat16, ttnn.bfloat8_b, (1, 1, 64, 70), "dram", "l1"),
+    ],
+    ids=["bfp8_height_to_bf16_block", "bf16_width_to_bfp8_dram", "bf16_dram_to_bfp8_l1_w70"],
+)
+def test_typecast_block_float_memory_config_change(
+    device, input_dtype, output_dtype, shape, input_memory, output_memory
+):
+    values = _values(shape)
+    output_memory_config = _memory_config(output_memory)
+    input_tensor = _to_device(values, input_dtype, TILE, device, _memory_config(input_memory))
+    output = ttnn.typecast(input_tensor, output_dtype, memory_config=output_memory_config)
+    expected = ttnn.to_torch(input_tensor).to(torch.float32)
+    assert output.dtype == output_dtype and output.memory_config().memory_layout == output_memory_config.memory_layout
+    assert_with_pcc(expected, ttnn.to_torch(output).to(torch.float32), 0.999)
+
+
+# 8-bit row-major data in L1 can use one-tile-wide blocks (32 and 11 tiles wide have no other block width).
+@pytest.mark.parametrize("width", [32, 352])
+@pytest.mark.parametrize("input_layout, output_layout", LAYOUT_DIRECTIONS, ids=LAYOUT_DIRECTION_IDS)
+def test_typecast_layout_change_uint8_l1_narrow_blocks(device, input_layout, output_layout, width):
+    values = _values((1, 1, 64, width))
+    input_tensor = _to_device(values, ttnn.uint8, input_layout, device, ttnn.L1_MEMORY_CONFIG)
+    output = ttnn.typecast(input_tensor, ttnn.uint8, memory_config=ttnn.L1_MEMORY_CONFIG, output_layout=output_layout)
+    _check(output, values, ttnn.uint8, output_layout, ttnn.L1_MEMORY_CONFIG)
+    output = ttnn.typecast(input_tensor, ttnn.int32, memory_config=ttnn.L1_MEMORY_CONFIG, output_layout=output_layout)
+    _check(output, values, ttnn.int32, output_layout, ttnn.L1_MEMORY_CONFIG)
+
+
+# Columns past the logical width are padding inside a block-float exponent group; a large value in the next
+# row must not leak into them and coarsen the small values that share the group.
+def test_typecast_rm_to_bfp8_padding_isolated(device):
+    values = torch.randint(0, 8, (1, 1, 64, 45), generator=torch.Generator().manual_seed(0), dtype=torch.int32)
+    values[..., 0] = 2**14
+    input_tensor = _to_device(values, ttnn.bfloat16, RM, device, ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.typecast(input_tensor, ttnn.bfloat8_b, output_layout=TILE)
+    tiled = ttnn.to_layout(input_tensor, TILE)
+    expected = ttnn.to_torch(ttnn.typecast(tiled, ttnn.bfloat8_b))
+    assert torch.equal(ttnn.to_torch(output), expected)
+    assert torch.equal(ttnn.to_torch(output)[..., 32:].to(torch.int64), values[..., 32:].to(torch.int64))
+
+
+@pytest.mark.parametrize("input_layout, output_layout", LAYOUT_DIRECTIONS, ids=LAYOUT_DIRECTION_IDS)
+def test_typecast_layout_change_empty(device, input_layout, output_layout):
+    values = torch.zeros((1, 1, 0, 32), dtype=torch.int32)
+    input_tensor = _to_device(values, ttnn.bfloat16, input_layout, device, ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.typecast(input_tensor, ttnn.float32, output_layout=output_layout)
+    assert output.dtype == ttnn.float32 and output.layout == output_layout
+    assert list(output.shape) == [1, 1, 0, 32]
+
+
+def test_typecast_layout_change_preallocated_wrong_shape_rejected(device, expect_error):
+    input_tensor = _to_device(_values((1, 1, 32, 64)), ttnn.bfloat16, TILE, device, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = _to_device(_values((1, 1, 32, 32)), ttnn.float32, RM, device, ttnn.DRAM_MEMORY_CONFIG)
+    with expect_error(RuntimeError, "Preallocated output tensor must be"):
+        ttnn.typecast(input_tensor, ttnn.float32, output_tensor=output_tensor, output_layout=RM)
