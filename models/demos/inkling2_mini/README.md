@@ -248,15 +248,16 @@ INKLING_CKPT=<checkpoint dir> models/demos/inkling2_mini/vllm/serve.sh [more vll
 
 Any OpenAI client then works with base URL `http://127.0.0.1:8000/v1` (any API key) and model `Inkling-2-Mini`.
 `vllm/serve.sh` is the launch line below with its switches as environment variables: `HOST`, `PORT`, `CTX`
-(`--max-model-len`), `SPEC=0` (the plain class), `FAST=1`, `PREFILL=<tokens>` (see "Chunked prefill" below). What
+(`--max-model-len`), `SPEC=0` (the plain class), `FAST=1`, `PREFILL=<tokens>` (128; see "Chunked prefill" below). What
 it runs with `SPEC=0`:
 
 ```
+export INKLING_VLLM_PREFILL=128
 export TT_MODEL_CLASS_OVERRIDES=Inkling2ForCausalLM=models.demos.inkling2_mini.tt.generator_vllm:Inkling2ForCausalLM
 vllm serve models/demos/inkling2_mini/vllm --tokenizer $INKLING_CKPT --served-model-name Inkling-2-Mini \
     --max-model-len 196608 --max-num-seqs 1 --shutdown-timeout 60 \
     --reasoning-parser inkling --enable-auto-tool-choice --tool-call-parser inkling \
-    --additional-config '{"tt": {"worker_l1_size": 1394752, "trace_region_size": 134217728, "sample_on_device_mode": "all"}}'
+    --additional-config '{"tt": {"worker_l1_size": 1411136, "trace_region_size": 134217728, "sample_on_device_mode": "all"}}'
 ```
 
 | argument | what it is for |
@@ -300,8 +301,11 @@ vllm serve ... (as above, with "trace_region_size": 536870912) --no-async-schedu
 - It needs the drafter weights (`convert.mtp`) and DRAM for them; when they are missing it says so and decodes
   plain.
 
-Chunked prefill (`PREFILL=<tokens>` in `serve.sh`, i.e. `INKLING_VLLM_PREFILL`; off by default): a new prompt of
-at least that many tokens runs through the chunked prefill instead of token by token. The process keeps the one
+Chunked prefill (`PREFILL=<tokens>` in `serve.sh`, i.e. `INKLING_VLLM_PREFILL`; on by default from 128 tokens,
+`PREFILL=0` or an empty `PREFILL=` turns it off): a new prompt of at least that many tokens runs through the
+chunked prefill instead of token by token. The reply after such a prompt comes from the prefill's numerics, not the
+token-by-token feed's. With speculative decode above a 131072 context (so in the default launch) `serve.sh` leaves
+it off until the prefill needs less DRAM, and says so at start; `SPEC=0`, or `CTX=131072` or less, turns it on. The process keeps the one
 PF-layout decode cache: the prefill's expert op reads its expert tensors in place (`gate_up_extra` /
 `down_extra`; a build without them rebuilds the plain tensors per layer with `tt/pf_tiles.py`, about 10 ms a
 layer). The prefill's logits are bit-equal to a TILE-cache process's.
@@ -311,7 +315,7 @@ compiles its kernels: 8.4 s for 8,424 tokens):
 
 | launch | `--max-model-len` | tokens per pass | 8,424-token prompt | 33,000-token prompt | reply |
 |---|---:|---:|---:|---:|---:|
-| token by token (no `PREFILL`) | any | | 126.5 s | about 500 s | 64 / 77 tok/s |
+| token by token (`PREFILL=0`) | any | | 126.5 s | about 500 s | 64 / 77 tok/s |
 | plain (`SPEC=0`) | 196608 | 4096 | 2.63 s | 16.6 s | 62.3 tok/s; 14.88 ms a step |
 | speculative | 131072 | 2048 | 3.8 to 4.0 s | 29.9 s (first time) | 74 to 81 tok/s |
 | speculative | 163840, 196608 | off: DRAM short | 127.8 s | | 72 to 75 tok/s |
