@@ -24,7 +24,7 @@
  * Uses llk_math_custom_mm.h as the low-level implementation.
  *************************************************************************/
 
-template <bool transpose = false, CustomMmDestLayout layout = CustomMmDestLayout::Default>
+template <bool transpose = false, CustomMmDestLayout layout = CustomMmDestLayout::Default, bool clear_src = true>
 inline void llk_math_custom_mm_init(
     const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());
@@ -37,7 +37,7 @@ inline void llk_math_custom_mm_init(
         (custom_mm_legal_in1_shape<transpose>(get_operand_tensor_shape(operandA_id))),
         "custom_mm: in1 must be a [32, 32] tile, or [32, 16] ([16, 32] with transpose)");
 
-    _llk_math_custom_mm_init_<transpose, layout>(operandB_face_r_dim, ct_dim, operandA_num_faces);
+    _llk_math_custom_mm_init_<transpose, layout, clear_src>(operandB_face_r_dim, ct_dim, operandA_num_faces);
 }
 
 // Shared by the CB-id execute below and the LLKOperand one (experimental/2_0/llk_math_custom_mm.h), which

@@ -75,15 +75,15 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_()
  * SrcA tile-size increments (SCRATCH_SEC0-2) and tile descriptors (GPRs PERF_UNPACK_NUM_TILES_1-3) the execute uses.
  *
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
- * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>, default false. Power only: SrcB rows
- *                    past unpB_face_r_dim reach only DEST rows that are never packed.
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>, default true. Power only. Must match the
+ *                    clear_src of the math init, which gives back the first cleared bank.
  * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
  * @note Call this before @ref _llk_unpack_AB_compressed_custom_mm_, and again after any other op has run, in
  *       particular one that writes SrcB, SCRATCH_SEC0-2 or those GPRs (a custom_mm execute rewrites SCRATCH_SEC0/1):
  *       the execute relies on all of them and sets none.
  * @note On the math thread, pair with @ref _llk_math_compressed_custom_mm_init_.
  */
-template <bool transpose = false, bool clear_src = false>
+template <bool transpose = false, bool clear_src = true>
 inline void _llk_unpack_AB_compressed_custom_mm_init_(const std::uint32_t unpB_face_r_dim)
 {
     volatile std::uint32_t* cfg = get_cfg_pointer();
@@ -99,12 +99,11 @@ inline void _llk_unpack_AB_compressed_custom_mm_init_(const std::uint32_t unpB_f
 
     if constexpr (clear_src)
     {
-        // Clear SrcB as we only unpack into 1/8 FPU rows so zeroing them gives power savings
-        // This particular instruction clears both banks after waiting for both of them to be free
-        // It must run alone: a both-bank SrcB clear drops SrcA writes that unpacker 0 makes while it runs
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
+        // Zero both SrcB banks: only unpB_face_r_dim rows per face are unpacked, so the FPU multiplies zeros in the
+        // rest (power only). One bank at a time: the first clear hands its bank to math, whose init gives it back,
+        // and the second clear waits for that and zeroes the other bank.
+        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::CLR_SRC);
     }
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);

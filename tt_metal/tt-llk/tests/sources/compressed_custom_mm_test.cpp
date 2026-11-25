@@ -180,7 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // compressed_custom_mm is LoFi-only; init takes no MathFidelity template.
         // The Dense layout brings the DEST tile-to-tile stride down from 64 rows to 32, matching the partial-tile packer
         // below and the silicon-validated matmul_custom_compressed_test.cpp.
-        _llk_math_compressed_custom_mm_init_<false /* transpose */, CustomMmDestLayout::Dense>();
+        _llk_math_compressed_custom_mm_init_<false /* transpose */, CustomMmDestLayout::Dense, CUSTOM_MM_CLEAR_SRC>();
         PROFILER_SYNC();
     }
     {

@@ -150,7 +150,7 @@ def _run_compressed_custom_mm(
     run_types=None,
     loop_factor=1,
     max_ulp=None,
-    clear_src=False,
+    clear_src=True,
 ):
     ct_dim, kt_dim, in0_rows = ct_kt_rows
     rt_dim = 1  # compressed_custom_mm contract: rt_dim is always 1
@@ -264,15 +264,10 @@ def _run_compressed_custom_mm(
     ), "Assert against golden failed"
 
 
-# clear_src defaults to false; this keeps the init's both-bank SrcB clear covered on silicon. That clear is
-# UnsupportedFunctionality in the ISA documentation (UNPACR_NOP with BothBanks), so the simulator rejects it.
+# Every other case runs the default clear_src = true; this one covers the init without the SrcB clear.
 @blackhole_only
-def test_compressed_custom_mm_clear_src(request):
-    if request.config.getoption("--run-simulator"):
-        pytest.skip(
-            "clear_src = true uses a both-bank SrcB clear, which the simulator does not support"
-        )
-    _run_compressed_custom_mm(COMPRESSED_MM_FORMATS[0], (2, 2, 1), clear_src=True)
+def test_compressed_custom_mm_no_clear_src():
+    _run_compressed_custom_mm(COMPRESSED_MM_FORMATS[0], (2, 2, 1), clear_src=False)
 
 
 @blackhole_only

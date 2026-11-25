@@ -88,7 +88,7 @@ constexpr bool transpose = CUSTOM_MM_TRANSPOSE;
 constexpr bool read_transposed = CUSTOM_MM_READ_TRANSPOSED;
 static_assert(!read_transposed || num_calls == 1, "read_transposed needs a single call");
 
-// CUSTOM_MM_CLEAR_SRC: the init's both-bank SrcB clear (power only). Simulator runs keep it false.
+// CUSTOM_MM_CLEAR_SRC: the inits' SrcB clear (power only); the unpack and math inits must agree on it.
 constexpr bool clear_src = CUSTOM_MM_CLEAR_SRC;
 
 #ifdef LLK_TRISC_UNPACK
@@ -209,7 +209,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             math::_configure_preserve_zero_flag_state_();
         }
 
-        _llk_math_custom_mm_init_<transpose, dest_layout>(in0_face_r_dim, CT_DIM, num_faces_B);
+        _llk_math_custom_mm_init_<transpose, dest_layout, clear_src>(in0_face_r_dim, CT_DIM, num_faces_B);
 
         LLK_ASSERT((custom_mm_fits_dest<dest_sync, dest_layout>(0 /* dst_index */, CT_DIM)), "custom_mm: CT_DIM output tiles overrun the DEST sync region");
         PROFILER_SYNC();

@@ -22,11 +22,14 @@
  * Uses llk_math_custom_mm.h as the low-level implementation.
  *************************************************************************/
 
-template <bool transpose = false, ckernel::CustomMmDestLayout layout = ckernel::CustomMmDestLayout::Default>
+template <
+    bool transpose = false,
+    ckernel::CustomMmDestLayout layout = ckernel::CustomMmDestLayout::Default,
+    bool clear_src = true>
 inline void llk_math_compressed_custom_mm_init(const std::uint32_t operand0, const std::uint32_t operand1) {
     SAN_HOOK(unsupported());
     // The math thread needs nothing from the operands: unlike plain custom_mm, it has no face-row-dependent setup.
-    _llk_math_compressed_custom_mm_init_<transpose, layout>();
+    _llk_math_compressed_custom_mm_init_<transpose, layout, clear_src>();
 }
 
 // Shared by the CB-id execute below and the LLKOperand ones (api/compute/experimental/2_0/compressed_custom_mm.h).

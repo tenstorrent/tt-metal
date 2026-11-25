@@ -184,7 +184,7 @@ def _build_custom_mm(
     tile_c=DEFAULT_TILE_C_DIM,
     transpose=False,
     read_transposed=False,
-    clear_src=False,
+    clear_src=True,
     *,
     is_perf=False,
     run_types=None,
@@ -346,7 +346,7 @@ def _run_custom_mm(
     tile_c=DEFAULT_TILE_C_DIM,
     transpose=False,
     read_transposed=False,
-    clear_src=False,
+    clear_src=True,
     *,
     is_perf=False,
     perf_report=None,
@@ -450,16 +450,11 @@ def test_custom_mm_fp32_dest(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.Yes)
 
 
-# clear_src defaults to false; this keeps the init's both-bank SrcB clear covered on silicon. That clear is
-# UnsupportedFunctionality in the ISA documentation (UNPACR_NOP with BothBanks), so the simulator rejects it.
+# Every other case runs the default clear_src = true; this one covers the init without the SrcB clear.
 @blackhole_only
-def test_custom_mm_clear_src(request):
-    if request.config.getoption("--run-simulator"):
-        pytest.skip(
-            "clear_src = true uses a both-bank SrcB clear, which the simulator does not support"
-        )
+def test_custom_mm_no_clear_src():
     formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
-    _run_custom_mm(1, 2, 2, formats, DestAccumulation.No, clear_src=True)
+    _run_custom_mm(1, 2, 2, formats, DestAccumulation.No, clear_src=False)
 
 
 # A Float16_b output from a 32-bit DEST packs from a Float16_b source. The packer counts its DEST strides in pack

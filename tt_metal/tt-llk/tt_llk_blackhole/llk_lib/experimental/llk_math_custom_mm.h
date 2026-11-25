@@ -244,6 +244,7 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
  * @tparam transpose: Transpose in1 faces during the multiply.
  * @tparam layout: DEST layout of the output tiles, see CustomMmDestLayout. Pack with the same layout through
  *                 @ref _llk_pack_custom_mm_init_.
+ * @tparam clear_src: Must match the clear_src of the unpack init: give back the SrcB bank its first clear hands over.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param ct_dim: Number of output column tiles, 1 to 34.
  * @param in1_num_faces: Faces in an in1 (SrcA) tile: 4 for [32, 32], 2 for [32, 16] ([16, 32] with transpose),
@@ -252,7 +253,7 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
  *       under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_custom_mm_init_, giving it the same face count.
  */
-template <bool transpose = false, CustomMmDestLayout layout = CustomMmDestLayout::Default>
+template <bool transpose = false, CustomMmDestLayout layout = CustomMmDestLayout::Default, bool clear_src = true>
 inline void _llk_math_custom_mm_init_(
     const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1, const std::uint32_t in1_num_faces = TILE_NUM_FACES)
 {
@@ -267,6 +268,14 @@ inline void _llk_math_custom_mm_init_(
     else
     {
         custom_mm_configure_mop<custom_mm_split_acc(layout)>(operandB_face_r_dim, ct_dim);
+    }
+
+    if constexpr (clear_src)
+    {
+        // Give back the SrcB bank that the unpack init's first clear handed over.
+        // MATH first, so the previous op's last SrcB flip has landed before SRCB_VLD is tested.
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
     }
 
     math::reset_counters(p_setrwc::SET_ABD_F);
