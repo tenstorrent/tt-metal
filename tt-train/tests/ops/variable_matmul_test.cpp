@@ -4,6 +4,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <limits>
+
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -26,6 +29,9 @@ float max_abs_error(const ttnn::Tensor& a, const ttnn::Tensor& b) {
 
     float max_err = 0.0F;
     for (size_t i = 0; i < a_vec.size(); ++i) {
+        if (!std::isfinite(a_vec[i]) || !std::isfinite(b_vec[i])) {
+            return std::numeric_limits<float>::infinity();
+        }
         max_err = std::max(max_err, std::abs(a_vec[i] - b_vec[i]));
     }
     return max_err;
@@ -148,6 +154,41 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     auto ref = expert_k_reference(in0_km, in1, k_lo, K_active, M, N, kConfig);
 
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA) vs minimal not bit-exact";
+}
+
+TEST_F(VariableMatmulTest, MinimalParity_DstFullSyncUsesFullDestinationCapacity) {
+    const uint32_t K_parent = 512, M = 128, N = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto in0_km = create_random_device_tensor(K_parent, M, device, /*seed=*/142U);
+    auto in1 = create_random_device_tensor(K_parent, N, device, /*seed=*/143U);
+    auto offsets = make_offsets({0U, 128U, 512U}, device);
+
+    auto cfg = kConfig;
+    cfg.compute_with_storage_grid_size = {2U, 2U};
+    cfg.subblock_w = 4U;
+    auto compute_config = ttml::core::ComputeKernelConfig::matmul();
+    compute_config.dst_full_sync_en = true;
+
+    // fp32 accumulation leaves four destination tiles in half-sync mode and eight in full-sync
+    // mode. This eight-tile subblock therefore exercises the extra capacity that validation grants
+    // only when dst_full_sync_en is propagated to the compute kernel.
+    auto result = ttml::metal::variable_matmul_k_sliced(
+        /*input_tensor=*/in0_km,
+        /*weight_tensor=*/in1,
+        /*config=*/cfg,
+        /*offsets_tensor=*/offsets,
+        /*offsets_start_index=*/0U,
+        /*transpose_a=*/true,
+        /*transpose_b=*/false,
+        /*compute_kernel_config=*/compute_config);
+
+    auto reference_cfg = cfg;
+    reference_cfg.subblock_w = 2U;
+    auto minimal_ref = expert_k_reference(in0_km, in1, 0U, 128U, M, N, reference_cfg);
+
+    EXPECT_EQ(max_abs_error(result, minimal_ref), 0.0F)
+        << "full-sync 2x4 variable_matmul differs from half-sync 2x2 minimal_matmul";
 }
 
 // Verifies the partial last M-tile (176 logical / 192 padded) is clipped correctly and its pad
@@ -474,6 +515,55 @@ TEST_F(VariableMatmulTest, CacheHit_InputAndWeightK_VaryingK) {
             << "variable(InputAndWeightK) cache-hit result wrong at offsets_start_index=" << s
             << " (K_active=" << K_active << ")";
     }
+}
+
+TEST_F(VariableMatmulTest, ProgramCacheKeysOffsetsAccessorPageSize) {
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    const uint32_t K_parent = 512, M = 128, N = 256;
+    auto in0_km = create_random_device_tensor(K_parent, M, device, /*seed=*/56U);
+    auto in1 = create_random_device_tensor(K_parent, N, device, /*seed=*/57U);
+    auto ref = expert_k_reference(in0_km, in1, /*k_lo=*/0U, /*K_active=*/64U, M, N, kConfig);
+    (void)ttml::core::to_vector<float>(ref);  // Complete setup before isolating the cache census.
+
+    auto offsets_with_length = [device](uint32_t length) {
+        std::vector<uint32_t> values(length, 64U);
+        values.front() = 0U;
+        return make_offsets(values, device);
+    };
+    auto offsets_64b = offsets_with_length(16U);
+    auto offsets_128b_a = offsets_with_length(17U);
+    auto offsets_128b_b = offsets_with_length(32U);
+
+    ASSERT_EQ(offsets_64b.buffer()->aligned_page_size(), 64U);
+    ASSERT_EQ(offsets_128b_a.buffer()->aligned_page_size(), 128U);
+    ASSERT_EQ(offsets_128b_b.buffer()->aligned_page_size(), 128U);
+    ASSERT_EQ(offsets_64b.memory_config().buffer_type(), offsets_128b_a.memory_config().buffer_type());
+    ASSERT_EQ(offsets_128b_a.memory_config().buffer_type(), offsets_128b_b.memory_config().buffer_type());
+
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    auto run_and_check = [&](const ttnn::Tensor& offsets, uint32_t expected_new_entries) {
+        const auto entries_before = device->num_program_cache_entries();
+        auto result = ttml::metal::variable_matmul_k_sliced(
+            /*input_tensor=*/in0_km,
+            /*weight_tensor=*/in1,
+            /*config=*/kConfig,
+            /*offsets_tensor=*/offsets,
+            /*offsets_start_index=*/0U,
+            /*transpose_a=*/true,
+            /*transpose_b=*/false);
+        const auto entries_after = device->num_program_cache_entries();
+
+        EXPECT_EQ(entries_after, entries_before + expected_new_entries)
+            << "unexpected cache behavior for offsets aligned page size " << offsets.buffer()->aligned_page_size();
+        EXPECT_EQ(max_abs_error(result, ref), 0.0F);
+    };
+
+    run_and_check(offsets_64b, /*expected_new_entries=*/1U);
+    run_and_check(offsets_128b_a, /*expected_new_entries=*/1U);
+    run_and_check(offsets_128b_b, /*expected_new_entries=*/0U);
 }
 
 TEST_F(VariableMatmulTest, CacheHit_InputAndOutputRow_VaryingM) {

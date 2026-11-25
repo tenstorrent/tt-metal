@@ -53,6 +53,9 @@
 #include "api/scratchpad.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
+#ifdef BATCH_BROADCAST
+#include "ttnn/operations/matmul/device/kernels/dataflow/batch_broadcast_offset.hpp"
+#endif
 
 void kernel_main() {
 #ifdef FUSE_OP
@@ -226,7 +229,16 @@ void kernel_main() {
     constexpr bool in0_reread_per_batch = in0_reuse_in_dfb && !in0_replay_in_buffer;
     constexpr uint32_t in0_num_batches_read = in0_reread_per_batch ? in1_B : in0_B;
 
+#ifdef BATCH_BROADCAST
+    // Each batch starts at the broadcast offset from this core's batch-0 tile, replacing the MtKt advance.
+    const uint32_t in0_core_start_tile_id = in0_tensor_start_tile_id;
+    constexpr auto batch_dims = get_arg(args::batch_dims);
+    constexpr auto in0_batch_strides = get_arg(args::in0_batch_strides);
+#endif
     for (uint32_t b = 0; b < in0_num_batches_read; ++b) {
+#ifdef BATCH_BROADCAST
+        in0_tensor_start_tile_id = in0_core_start_tile_id + batch_broadcast_offset(b, batch_dims, in0_batch_strides);
+#endif
         [[maybe_unused]] const uint32_t in0_batch_start_tile_id = in0_tensor_start_tile_id;
 #ifdef SPARSITY
         if constexpr (batchB > 0 && !use_indices) {

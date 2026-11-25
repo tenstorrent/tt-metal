@@ -8,9 +8,13 @@
 // to a DRAM output buffer. The host compares this with buffer->aligned_page_size().
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 
 #include <cstdint>
+#include <string>
+#include <map>
 #include <set>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -126,10 +130,13 @@ void verify_default_page_size(
                                           << ", Buffer page_size: " << output_device_buffer->page_size();
 }
 
+// With a nonzero crta_offset, the input's common runtime args come after that many decoys, the kernel gives its
+// TensorAccessorArgs the offset at runtime, and builds the accessor with the 2-arg constructor.
 void verify_runtime_page_size(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const distributed::MeshBuffer& input_buffer,
-    uint32_t sentinel_page_size) {
+    uint32_t sentinel_page_size,
+    uint32_t crta_offset = 0) {
     auto& cq = mesh_device->mesh_command_queue();
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -145,17 +152,24 @@ void verify_runtime_page_size(
         CircularBufferConfig(OUTPUT_PAGE_SIZE, {{0, tt::DataFormat::RawUInt32}}).set_page_size(0, OUTPUT_PAGE_SIZE);
     CreateCircularBuffer(prog, KERNEL_CORE, cb_config);
 
-    // Forge the input accessor's compile-time args: the args_config word with the RuntimePageSize
-    // bit set, and NO aligned-page-size word (A-collapse). The legacy TensorAccessorArgs(buffer)
-    // path never sets this bit -- only the Metal 2.0 resolver does -- so we build the word by hand.
+    // Under RuntimePageSize, the input accessor's compile-time args are only the args_config word, with
+    // NO aligned-page-size word (A-collapse); the page size is its only common runtime arg.
     // The output accessor is appended normally (static); the kernel reads it at the post-A-collapse
     // offset, which only resolves correctly if the input consumed exactly one CTA word.
     std::vector<uint32_t> compile_time_args;
+    std::vector<uint32_t> common_runtime_args;
+    TensorAccessorArgs(input_buffer, tensor_accessor::ArgConfig::RuntimePageSize)
+        .append_to(compile_time_args, common_runtime_args);
     const uint32_t input_config_word =
         (tensor_accessor::ArgConfig::IsDram | tensor_accessor::ArgConfig::RuntimePageSize).raw();
-    compile_time_args.push_back(input_config_word);
+    EXPECT_EQ(compile_time_args, std::vector<uint32_t>{input_config_word});
+    EXPECT_EQ(common_runtime_args, std::vector<uint32_t>{static_cast<uint32_t>(input_buffer.aligned_page_size())});
     TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
+    std::map<std::string, std::string> defines;
+    if (crta_offset != 0) {
+        defines["RUNTIME_CRTA_OFFSET"] = std::to_string(crta_offset);
+    }
     auto kernel = CreateKernel(
         prog,
         RUNTIME_PAGE_SIZE_KERNEL_PATH,
@@ -163,12 +177,17 @@ void verify_runtime_page_size(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
+            .compile_args = compile_time_args,
+            .defines = defines});
 
     SetRuntimeArgs(prog, kernel, KERNEL_CORE, {input_buffer.address(), output_buffer->address()});
     // The input's dynamic page size rides common runtime arg 0 -- the channel the device accessor
-    // reads via get_aligned_page_size() when the RuntimePageSize bit is set.
-    SetCommonRuntimeArgs(prog, kernel, {sentinel_page_size});
+    // reads via get_aligned_page_size() when the RuntimePageSize bit is set. Replace it with the
+    // sentinel, so a passing check can only mean the kernel read the runtime value.
+    common_runtime_args[0] = sentinel_page_size;
+    // Decoys in front of the page size: an accessor that ignores the runtime offset reads one of them.
+    common_runtime_args.insert(common_runtime_args.begin(), crta_offset, 0xDEAD);
+    SetCommonRuntimeArgs(prog, kernel, common_runtime_args);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
@@ -284,6 +303,14 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDram) 
     }
 }
 
+// The 2-arg accessor reads the runtime page size at the common runtime arg offset its args were given.
+TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDramAtRuntimeOffset) {
+    for (auto& mesh_device : devices_) {
+        auto input = create_interleaved_buffer(*mesh_device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
+        verify_runtime_page_size(mesh_device, *input, RUNTIME_PAGE_SIZE_SENTINEL, /*crta_offset=*/1);
+    }
+}
+
 // --- Legacy Sharded ---
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDramRowMajor) {
@@ -331,6 +358,24 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1Ti
 }
 
 // --- ND Sharded ---
+
+// A sharded accessor reads its page size at compile time; the host rejects RuntimePageSize for it.
+TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeRejectedForShardedBuffer) {
+    for (auto& mesh_device : devices_) {
+        auto buffer = create_nd_sharded_buffer(
+            *mesh_device,
+            RM_PAGE_SIZE,
+            RM_TOTAL_SIZE,
+            BufferType::DRAM,
+            Shape({RM_NUM_ROWS, RM_NUM_COLS}),
+            Shape({RM_NUM_ROWS, RM_NUM_COLS}),
+            Shape2D(1, RM_NUM_COLS));
+        EXPECT_THAT(
+            [&]() { TensorAccessorArgs(*buffer, tensor_accessor::ArgConfig::RuntimePageSize); },
+            ::testing::ThrowsMessage<std::runtime_error>(
+                ::testing::HasSubstr("RuntimePageSize is not supported for a sharded buffer")));
+    }
+}
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeNdShardedDramRowMajor) {
     for (auto& mesh_device : devices_) {
