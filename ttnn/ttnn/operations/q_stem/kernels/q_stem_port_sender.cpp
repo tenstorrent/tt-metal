@@ -118,6 +118,8 @@ void kernel_main() {
     };
 
     // ---- ready fence ----------------------------------------------------------------------------------------------
+    {
+    MaybeDeviceZoneScope("PORT_FENCE");
     for (uint32_t k = 0; k < n_ready_out; ++k) {
         const uint32_t t = ready_idx + 3 * k;
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = next_header(get_arg_val<uint32_t>(t));
@@ -132,6 +134,7 @@ void kernel_main() {
         noc_semaphore_inc(get_noc_addr(ready_addr), 0u - n_ready_wait);
         noc_async_atomic_barrier();
     }
+    }
 
     // ---- segments -------------------------------------------------------------------------------------------------
     uint32_t total = 0;
@@ -143,6 +146,7 @@ void kernel_main() {
         });
     }
     uint32_t sent = 0, unflushed = 0;
+    MaybeDeviceZoneScope("PORT_SEND");  // segments: waits on the port reader's pulls + fabric sends
     if (total > 0) {
         q_stem::for_each_block(B, qrt, m, G, p, rorder, [&](uint32_t, uint32_t b, uint32_t d, uint32_t r0) {
             if (d == p || dirmap[d] != my_dir) {

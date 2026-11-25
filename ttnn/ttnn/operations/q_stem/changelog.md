@@ -348,3 +348,90 @@ init + fp32 pack overheads).
 - Issues encountered: the port block-ready race above (pre-existing, fixed).
 - Tests added: `tests/ttnn/unit_tests/operations/q_stem/test_q_stem_ksplit.py` (6 cases pinning the parked knob);
   `test_q_stem_ksplit_debug.py` (per-head error map across repeated calls — the first-call-only symptom).
+
+## Perf 1
+- Date: 2026-11-25. Focus: LOOSE_CASES[0] (PERF FOCUS: Kimi S=640, latent L1 bf16, q_b bfloat8_b, wkv_b1 bf16, NoPE,
+  HiFi2, 16-bit DEST, ROW_MAJOR out, 2 links, Ring) — every knob is in SUPPORTED. Fused CCL op, 4 chips; headline
+  numbers from `perf_measure.py` (ccl_perf, 5 exp), fastest chip per call.
+- **Instrumentation (permanent)**: new `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (`MaybeDeviceZoneScope`,
+  alias of `DeviceZoneScopedN`, free with the profiler off), included through `q_stem_common.hpp`. Stage zones:
+  compute `S1` / `S3` (were `DeviceZoneScopedN`); reader `RD_QB_READ`, `RD_X_RECV`, `RD_WKV_PREFETCH_TAIL`,
+  `RD_S3_LAND`; writer `WR_S1_HANDOFF`, `WR_S3_OUT`; port `PORT_PULL`, `PORT_FENCE`, `PORT_SEND`; injector
+  `INJ_X_READ`, `INJ_X_MCAST`. Stage-level only (≤ 10 user markers per RISC per call, far from the 250 cap; zones
+  cover each kernel's span). Headline with zones 148.10 µs (vs 147.69 without, Refinement 7: within noise).
+  Summary tool `tests/ttnn/unit_tests/operations/q_stem/zone_stages.py` (per zone × RISC start/end/duration per chip).
+- **Measured breakdown** (cumulative peel, `perf_ablate.py`, 3 exp, fastest / slowest chip, µs):
+
+  | run (stubbed cumulatively) | fastest | slowest | Δ fastest |
+  |---|---|---|---|
+  | full | 148.10 | 161.01 | |
+  | − OUT_WRITE | 135.47 | 146.12 | −12.6 |
+  | − S3, WKV_READ | 119.17 | 130.59 | −16.3 |
+  | − SEND_PAYLOAD | 93.61 | 98.32 | −25.6 |
+  | − QB_READ | 74.17 | 78.77 | −19.4 |
+  | − S1_COMPUTE | 69.96 | 71.38 | −4.2 |
+  | − X_READ (everything stubbed) | 69.49 | 70.79 | (x multicast + scaffold) |
+
+  Solo: SEND_PAYLOAD 158.7 (noisy, stdev 5.9: exchange hidden in the full op), S1_COMPUTE 149.4 (hidden).
+  Zones (1 call): stage 1 on the 72-core rect 0 → 100–109 µs, x-supply paced (~4.2 µs per round, compute ~3.9 µs per
+  block); `RD_QB_READ` ends 11–22 µs with no x round moving meanwhile; busiest `PORT_SEND` ends 113 (chip 0) – 140
+  (chips 1, 3) µs; stage-3 tail on the stage-1 cores ~105 → 126 median / 145–160 max.
+  Part SOLs: x multicast ~23 µs (1.97 MB, one tree) vs 69.5 alone; q_b read 7.5 MB ≈ 15 µs vs 16.5 median (at SOL,
+  but **exposed**: nothing overlaps it); stage-1 matmul ~45 µs on 72 cores (hidden); busiest link ~17 GB/s measured.
+  **Ranked**: (1) x supply floor, (2) exchange exposure, (3) stage-3 tail after S1, (4) q_b startup exposure. All four
+  are links of one chain (q_b → x rounds → busiest-link backlog → stage-3 tail), so a gain on one link can be absorbed
+  by the next.
+- **Calculator**: `estimate.py sweep` phase "Perf 1" (`a433488d`, current schedule fixed): no one-injector x
+  multicast schedule beats the current one beyond its 10% band (best 77.0 vs 83.3 µs est, path-reservation bound), so
+  no schedule knob was fanned out; x supply went out as an implementation idea. Measured current schedule (op, all
+  payloads stubbed) 69.5 µs. `estimate.py report`: Perf 1 evaluated 15, shortlisted 6, built 1 (the current one);
+  predicted best `x_mcast_1inj batch=24` not built (inside the band). The x_supply subagent's 2-injector split-round
+  scheme (outside the swept family) measured 51.7 µs op-alone, recorded against `6a1261ad` with a note.
+- **Portfolio and verdicts** (one perf-part-optimizer each; artifacts in `perf_experiments/<slug>/`):
+
+  | idea | kind | verdict | numbers (fastest / slowest µs) | domain / notes |
+  |---|---|---|---|---|
+  | `s3_interleave`: stage-3 rows on the stage-1 cores during stage 1 (L2), ± X_INJECTORS=2, placement | OVERLAP | REGRESSION | base 148.1 / 161.6; best 154.7 / 167.5; default 157.4 / 197.2 | compute is NOT idle in stage 1 (3.9 µs matmul per block vs 4.2 µs x round); a 3.25 µs stage-3 row delays the lockstep chip; early wkv residency alone +4.4 / +10.4. Correct on LC0–LC2. |
+  | `x_supply`: x-round multicast pipeline | local DM | NULL (fastest) / REGRESSION (slowest) | bench 20 rounds 54.0 → 27.9 µs (2 injectors each half of every round on NoC0+NoC1, credits 2 ahead); op x-alone 69.5 → 51.7; full op 147.99 / 160.90 → 148.35 / 185.70 | the per-round cost is ~0.8 µs credit round trip (Flag signalling = one round in flight) + ~1.86 µs one-tree multicast; path reservation / posted writes ~4%. Crediting 3 ahead corrupts (≈1 in 8 chip-calls, PCC 0.997 still inside tolerance) through the port block-ready ring (8 slots) — a latent port-protocol weakness, see finding. |
+  | `transport`: antipodal balance + send-loop variants | TRANSPORT | REGRESSION in op | isolated exchange 100.6 → 88.4 µs (balanced antipodal split, −12%); op 148.05 / 160.5 → 150.04 / 165.75 | the 1×4 ring is physically a 2×2 fabric (ring 0,1,3,2), the route table already alternates the antipodal direction: every directed link carries 2 crossings, not 3. ~17 GB/s per link at 2 links whatever the send loop (flush cadence, headers, blocking, posted: flat). |
+  | `qb_startup`: x pre-delivery during the q_b load (+ first block K-blocked) | OVERLAP | **WIN** | copy: 147.8 / 160.4 → xpre3 144.5 / 158.5 → xpre3+fk3 143.3 / 157.95 | applies everywhere (clamped); LC1 −3.6%, LC2 −0.8%, LC3 −3.1%; bit-identical output for xpre. |
+
+- **Graduated**: x pre-delivery (`qb_startup` xpre3) as the op's one path — `X_PRE_ROUNDS = 3` (clamped in the kernel
+  to `X_ROUND_DEPTH` and the round count; it is not a dual path: the stage-1 reader always runs
+  `load_with_x_rounds`). The stage-1 reader reads its q_b slice in `pre` K-row parts and credits / receives x round
+  p around part p (receiver pipes built once before the first credit — the pipe constructor clears the data-ready
+  flag); `receive_x_rounds` continues from `first_round = pre`; the wkv prefetch is spread over the remaining rounds;
+  the old monolithic slice loop is deleted. Domain: every stage-1 core of every cell (x_injectors 1/2, K-split, K-
+  blocked deep Q, m_non_aligned all run it; golden green). **Not graduated**: the first-block K-blocking (`fk3`):
+  −1.1 µs on top (0.8%, inside the noise rule) for a second stage-1 matmul call site, a `cb_q_partial` on every
+  stage-1 core and a (tolerance-safe) rel-RMS change on fp32 DEST (2.3225e-3 → 2.3247e-3) — recorded as an option.
+  No carve-outs.
+- **Whole-op result** (`perf_measure.py`, 5 exp): fastest 148.10 → **144.44 µs** (−3.66, noise 0.50), slowest
+  161.01 → 159.79 (−1.2, inside noise); `ccl_perf compare` verdict **win**; not dispatch-bound. −2.5% on the focus
+  case is at the edge of the 2–3% noise rule; it reproduced in three independent runs (−3.30, −3.67, −3.66) and the
+  zones explain it (stage 1 and the x multicast end ~8 µs earlier).
+- **Guard set** (all 4 perf cases, `CCL_PERF_CASES=all`, 5 exp; old schedule = `X_PRE_ROUNDS = 0` in the same tree):
+
+  | case | old fastest / slowest | new fastest / slowest |
+  |---|---|---|
+  | LC0 PERF FOCUS (bfp8, 16-bit DEST, L1, RM) | 148.01 / 161.03 | 144.38 / 159.20 |
+  | LC1 Kimi Phase 0 (bf16, fp32 DEST, DRAM, TILE) | 179.94 / 195.42 | 174.79 / 190.30 |
+  | LC2 DSV3.2 RoPE | 228.15 / 232.81 | 227.54 / 231.37 |
+  | LC3 GLM RoPE | 154.41 / 171.12 | 148.92 / 170.21 |
+
+  No regression; the slowest chip is lower on every case.
+- **Golden**: full `eval/golden_tests/q_stem/` — 1103 / 1103 passed (12 chunks, `--precompile`).
+- **Findings for the next round** (what binds now): the chain. Stage 1 ends ~8 µs earlier, but the busiest port's
+  backlog and the stage-3 tail absorb most of it. (a) The x supply can be roughly halved in isolation (2 injectors ×
+  half round, credits ahead), but crediting ahead skews the stage-1 cores and the slowest chip loses up to +25 µs —
+  the port block-ready ring (`BLOCK_READY_RING` = 8, host bound `ring >= depth + 4` is not sound) must become exact
+  per owner before credits can run ahead. (b) Links run ~17 GB/s each; the exchange (88–100 µs isolated) is now the
+  wall behind stage 1. (c) Stage-1 compute is ~93% busy per round, so stage-3 work cannot ride in its gaps — a faster
+  stage-1 matmul per block is a prerequisite for L2.
+
+### Helper bypasses — none
+(The graduated path uses the kernel_lib Mcast receiver pipe and `matmul_block` unchanged. Not graduated, recorded for
+the helper library: the x_supply variant bypassed the Mcast helper for a `capability` gap — Flag signalling must be
+cleared before the next send, so only one round can be in flight, and Counter signalling pays a write + atomic
+barrier per round (Refinement 6: 147.7 → 172.6 µs); missing mode: a sender-published monotonic round count written
+behind the linked payload that receivers wait on without clearing. Helper 2.70 µs/round vs raw 1.39 µs/round (bench).)

@@ -5,6 +5,8 @@
 
 #include <cstdint>
 
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
 // x multicast family of this kernel (host define Q_STEM_X_FAMILY: the rotating injector index, or the K group under
 // K-split): named args "mcast<F>_ct_offset" / "mcast<F>_rt_offset"
 #ifndef Q_STEM_X_FAMILY

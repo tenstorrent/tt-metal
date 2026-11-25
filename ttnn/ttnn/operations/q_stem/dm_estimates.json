@@ -1602,6 +1602,353 @@
      "frozen_first": true,
      "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
      "note": ""
+    },
+    {
+     "group": "x_mcast_inj_b_noc1 batch=6 bytes=16384",
+     "measured_ns": 51700.0,
+     "measured_at": "2026-11-25T01:33:36.654972+00:00",
+     "recorded_utc": "2026-11-25T01:33:36.654985+00:00",
+     "estimate_ns": 46478.7037037037,
+     "error_pct": -10.099219141772341,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": "Perf 1 x_supply subagent: 2 injectors each HALF of every round (NoC0+NoC1), credits 2 ahead, op x-alone 51.7us (bench 27.9us/20 rounds); not the alternating-round schedule this estimate describes"
+    }
+   ]
+  },
+  {
+   "id": "a433488d",
+   "kind": "sweep",
+   "utc": "2026-11-24T23:45:58.380745+00:00",
+   "phase": "Perf 1",
+   "label": "x multicast",
+   "schedule": {
+    "op": "q_stem",
+    "case": "Perf 1 PERF FOCUS: x multicast one injector (5,0) -> stage-1 rect 9x8 (cols 0-8, rows 1-8), 20 rounds x 96 KiB bf16",
+    "work_bytes": 1966080,
+    "top": 6,
+    "max_l1_bytes": 393216,
+    "candidates": [
+     {
+      "name": "x_mcast_current",
+      "family": "multicast",
+      "sender": [
+       5,
+       0
+      ],
+      "rect": [
+       0,
+       1,
+       8,
+       8
+      ],
+      "bytes": 16384,
+      "batch": 6,
+      "noc": 0,
+      "vary": {}
+     },
+     {
+      "name": "x_mcast_1inj",
+      "family": "multicast",
+      "sender": [
+       5,
+       0
+      ],
+      "rect": [
+       0,
+       1,
+       8,
+       8
+      ]
+     }
+    ],
+    "vary": {
+     "bytes": [
+      8192,
+      16384
+     ],
+     "batch": [
+      6,
+      12,
+      24,
+      48
+     ],
+     "noc": [
+      0,
+      1
+     ]
+    }
+   },
+   "result": {
+    "op": "q_stem",
+    "case": "Perf 1 PERF FOCUS: x multicast one injector (5,0) -> stage-1 rect 9x8 (cols 0-8, rows 1-8), 20 rounds x 96 KiB bf16",
+    "work_bytes": 1966080,
+    "stats": {
+     "evaluated": 15,
+     "estimated": 15,
+     "refused": 0,
+     "over_l1_cap": 2,
+     "shortlisted": 6,
+     "wall_s": 2.04
+    },
+    "groups": [
+     {
+      "name": "x_mcast_1inj batch=24 bytes=16384 noc=0",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 77021.06481481482,
+      "details": {
+       "pass_cycles": 103978.4375,
+       "steady_cycles_per_pass": 103978.4375,
+       "binding": "path reservation (586 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 32,
+       "noc": 0,
+       "issue_cycles_per_request": 65.6875
+      },
+      "steady_ns_per_pass": 77021.06481481482,
+      "rank": 1,
+      "candidate_id": "9d3c8c1c8f95ed82",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 393216,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "batch": 24,
+       "bytes": 16384,
+       "noc": 0,
+       "name": "x_mcast_1inj batch=24 bytes=16384 noc=0",
+       "pages": 120
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_1inj batch=24 bytes=16384 noc=1",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 78639.35185185185,
+      "details": {
+       "pass_cycles": 106163.125,
+       "steady_cycles_per_pass": 106163.125,
+       "binding": "path reservation (604 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 33,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 78639.35185185185,
+      "rank": 2,
+      "candidate_id": "1872e391460a3333",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 393216,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "batch": 24,
+       "bytes": 16384,
+       "noc": 1,
+       "name": "x_mcast_1inj batch=24 bytes=16384 noc=1",
+       "pages": 120
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_1inj batch=12 bytes=16384 noc=0",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 79108.79629629629,
+      "details": {
+       "pass_cycles": 106796.875,
+       "steady_cycles_per_pass": 106796.875,
+       "binding": "path reservation (586 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 32,
+       "noc": 0,
+       "issue_cycles_per_request": 65.6875
+      },
+      "steady_ns_per_pass": 79108.79629629629,
+      "rank": 3,
+      "candidate_id": "b6a8f08a58f55d3b",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 196608,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "batch": 12,
+       "bytes": 16384,
+       "noc": 0,
+       "name": "x_mcast_1inj batch=12 bytes=16384 noc=0",
+       "pages": 120
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_1inj batch=12 bytes=16384 noc=1",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 80745.37037037036,
+      "details": {
+       "pass_cycles": 109006.25,
+       "steady_cycles_per_pass": 109006.25,
+       "binding": "path reservation (604 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 33,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 80745.37037037036,
+      "rank": 4,
+      "candidate_id": "0c968334f61f6edf",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 196608,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "batch": 12,
+       "bytes": 16384,
+       "noc": 1,
+       "name": "x_mcast_1inj batch=12 bytes=16384 noc=1",
+       "pages": 120
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_1inj batch=6 bytes=16384 noc=0",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 83284.25925925926,
+      "details": {
+       "pass_cycles": 112433.75,
+       "steady_cycles_per_pass": 112433.75,
+       "binding": "path reservation (586 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 32,
+       "noc": 0,
+       "issue_cycles_per_request": 65.6875
+      },
+      "steady_ns_per_pass": 83284.25925925926,
+      "rank": 5,
+      "candidate_id": "e8b3ec3e44c3ac44",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 98304,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "batch": 6,
+       "bytes": 16384,
+       "noc": 0,
+       "name": "x_mcast_1inj batch=6 bytes=16384 noc=0",
+       "pages": 120
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_current",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 83284.25925925926,
+      "details": {
+       "pass_cycles": 112433.75,
+       "steady_cycles_per_pass": 112433.75,
+       "binding": "path reservation (586 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 32,
+       "noc": 0,
+       "issue_cycles_per_request": 65.6875
+      },
+      "steady_ns_per_pass": 83284.25925925926,
+      "rank": 6,
+      "candidate_id": "3bae5666d3ac974f",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 98304,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "bytes": 16384,
+       "batch": 6,
+       "noc": 0,
+       "name": "x_mcast_current",
+       "pages": 120
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     }
+    ],
+    "refusals": {},
+    "cross_family": false,
+    "note": "One family: the order is as reliable as that family's ranking."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": [
+    {
+     "group": "x_mcast_current",
+     "measured_ns": 69494.0,
+     "measured_at": "2026-11-24T23:50:00+00:00",
+     "recorded_utc": "2026-11-25T01:33:36.612870+00:00",
+     "estimate_ns": 83284.25925925926,
+     "error_pct": 19.843812788527426,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": "Perf 1 coordinator: whole op with every payload stubbed (x pipeline + scaffold), fastest chip, 3 exp"
     }
    ]
   }

@@ -25,7 +25,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/cb_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
@@ -117,7 +117,7 @@ void kernel_main() {
 
     // ---- stage 1 ----------------------------------------------------------------------------------------------------
     if (cols > 0) {
-        DeviceZoneScopedN("S1");
+        MaybeDeviceZoneScope("S1");  // stage 1: x rounds (waited inside matmul_block) + matmul
         // resident in1 (NoWaitNoPop below: the lifecycle is mine), waited per K-block (QbKBlockWait)
         const auto shape = MatmulBlockShape::of(m, cols / sbw1, 1, sbw1, s1_kb, nkb);
         // kpart_combine_block: q block (m x cols) = sum of the K groups' partials, into cb_q_slice
@@ -192,7 +192,7 @@ void kernel_main() {
     // (n_r + k) * head tiles) and everything is popped at the end, else each local head is popped after its rows.
     const auto shape3 = MatmulBlockShape::of(1, s3n / sbw3, 1, sbw3, Dn_t, 1);
     constexpr uint32_t head_tiles = Dn_t * N_t;
-    DeviceZoneScopedN("S3");
+    MaybeDeviceZoneScope("S3");  // stage 3: landed rows (waited inside the helpers) + prefix matmul + rope + untilize
     CircularBuffer trans_buf(cb_trans), rope_tmp_buf(cb_rope_tmp);
     const auto shape_rot = MatmulBlockShape::of(Dr_t / sbh_rot, 1, sbh_rot, 1, 1, 1);
     constexpr uint32_t cs_tiles = qrt * Dr_t;

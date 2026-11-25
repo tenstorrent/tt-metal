@@ -1,0 +1,299 @@
+diff -ruN a/kernels/q_stem_compute.cpp b/kernels/q_stem_compute.cpp
+--- a/ttnn/ttnn/operations/q_stem/kernels/q_stem_compute.cpp
++++ b/ttnn/ttnn/operations/q_stem/kernels/q_stem_compute.cpp
+@@ -133,7 +133,51 @@
+                     PackTile<output(cb_q_slice)>{});
+             }
+         };
++        // qb_startup: the first block in first_nkb K-blocks over its one x round (m == 1: an in0 K-slice is
++        // contiguous), waited per q_b part, so its matmul runs under the tail of the q_b slice load.
++        constexpr uint32_t first_nkb = get_named_compile_time_arg_val("s1_first_nkb");
++        constexpr uint32_t fkb = s1_kb / first_nkb;
+         for (uint32_t j = 0; j < num_blocks; ++j) {
++#ifndef ABLATE_S1_COMPUTE
++            if constexpr (first_nkb > 1) {
++                if (j == 0) {
++                    matmul_block<
++                        false,
++                        false,
++                        LastBlockTarget::Out,
++                        OutputCBLayout::SubblockMajor,
++                        matmul_config::InitMode::Short,
++                        InputPolicy::WaitAndPopPerKBlock,
++                        InputPolicy::NoWaitNoPop,
++                        NoPostCompute,
++                        QbKBlockWait,
++                        NoPostKBlock,
++                        0,
++                        NoKBlockInnerDimFn,
++                        NoIn0Source,
++                        QbKBlockOffset>(
++                        x_buf,
++                        qb_buf,
++                        q_buf,
++                        q_partial_buf,
++                        MatmulBlockShape::of(m, cols / sbw1, 1, sbw1, fkb, first_nkb),
++                        {},
++                        QbKBlockWait{cb_qb_slice, fkb * cols},
++                        cols,
++                        0,
++                        {},
++                        {},
++                        {},
++                        QbKBlockOffset{fkb * cols});
++                    if constexpr (ksplit > 1) {
++                        if (kgroup == 0) {
++                            kpart_combine_block();
++                        }
++                    }
++                    continue;
++                }
++            }
++#endif
+ #ifdef ABLATE_S1_COMPUTE
+             for (uint32_t kb = 0; kb < nkb; ++kb) {
+                 cb_wait_front(cb_x_round, m * s1_kb);
+diff -ruN a/kernels/q_stem_reader.cpp b/kernels/q_stem_reader.cpp
+--- a/ttnn/ttnn/operations/q_stem/kernels/q_stem_reader.cpp
++++ b/ttnn/ttnn/operations/q_stem/kernels/q_stem_reader.cpp
+@@ -54,6 +54,7 @@
+     uint32_t cb_x_round,
+     uint32_t round_tiles,
+     uint32_t num_rounds,
++    uint32_t first_round,
+     uint32_t ahead,
+     const uint64_t* injector_credit,
+     F&& after_round,
+@@ -62,7 +63,7 @@
+         static_assert(NI == 1 || MC1::active, "a second injector needs its multicast family");
+         Noc noc;
+         auto pipe0 = mc0.receiver(noc);
+-        uint32_t acked = 0;
++        uint32_t acked = first_round;  // rounds < first_round were credited and received by the q_b prologue
+         auto credit = [&](uint32_t r, bool block_first) {
+             while (acked < num_rounds && acked < r + ahead) {
+                 const uint32_t pages = (acked - r + 1) * round_tiles;  // slots r .. acked free
+@@ -79,7 +80,7 @@
+         };
+         if constexpr (NI > 1) {
+             auto pipe1 = mc1.receiver(noc);
+-            for (uint32_t r = 0; r < num_rounds; ++r) {
++            for (uint32_t r = first_round; r < num_rounds; ++r) {
+                 credit(r, true);
+                 if (r % NI == 0) {
+                     pipe0.receive(r / NI);
+@@ -90,7 +91,7 @@
+                 after_round();
+             }
+         } else {
+-            for (uint32_t r = 0; r < num_rounds; ++r) {
++            for (uint32_t r = first_round; r < num_rounds; ++r) {
+                 credit(r, true);
+                 pipe0.receive(r);
+                 cb_push_back(cb_x_round, round_tiles);
+@@ -99,6 +100,56 @@
+         }
+     }
+ }
++// x pre-delivery during the q_b slice load: `load_part(p)` issues (and barriers) q_b part p of `parts`; x round p
++// (p < pre) is credited before part p and received after it. The receiver pipes are built ONCE, before the first
++// credit: their constructor clears the data-ready flag, so building one after a round landed would lose it.
++template <uint32_t NI, typename MC0, typename MC1, typename L>
++void load_with_x_rounds(
++    const MC0& mc0,
++    const MC1& mc1,
++    uint32_t cb_x_round,
++    uint32_t round_tiles,
++    uint32_t pre,
++    uint32_t parts,
++    const uint64_t* injector_credit,
++    L&& load_part) {
++    if constexpr (MC0::active) {
++        if (pre == 0) {
++            for (uint32_t p = 0; p < parts; ++p) {
++                load_part(p);
++            }
++            return;
++        }
++        Noc noc;
++        auto pipe0 = mc0.receiver(noc);
++        auto run = [&](auto&& recv) {
++            noc_semaphore_inc(injector_credit[0], 1);
++            for (uint32_t p = 0; p < parts; ++p) {
++                load_part(p);
++                if (p < pre) {
++                    recv(p);
++                    cb_push_back(cb_x_round, round_tiles);
++                    if (p + 1 < pre) {
++                        noc_semaphore_inc(injector_credit[(p + 1) % NI], 1);
++                    }
++                }
++            }
++        };
++        if constexpr (NI > 1) {
++            static_assert(MC1::active, "a second injector needs its multicast family");
++            auto pipe1 = mc1.receiver(noc);
++            run([&](uint32_t r) {
++                if (r % NI == 0) {
++                    pipe0.receive(r / NI);
++                } else {
++                    pipe1.receive(r / NI);
++                }
++            });
++        } else {
++            run([&](uint32_t r) { pipe0.receive(r); });
++        }
++    }
++}
+ }  // namespace
+ 
+ void kernel_main() {
+@@ -217,6 +268,20 @@
+     };
+ 
+     // ---- stage 1 --------------------------------------------------------------------------------------------------
++    uint64_t injector_credit[x_injectors];  // credit semaphore of every injector (packed virtual x/y in named args)
++    for (uint32_t i = 0; i < x_injectors; ++i) {
++        const uint32_t xy =
++            i == 0 ? get_named_compile_time_arg_val("x_inj0_xy") : get_named_compile_time_arg_val("x_inj1_xy");
++        injector_credit[i] = get_noc_addr(q_stem::unpack_x(xy), q_stem::unpack_y(xy), get_semaphore(sem_x_credit));
++    }
++    constexpr uint32_t num_rounds = num_blocks * nkb;
++    // x pre-delivery (qb_startup): the first `pre` x rounds are credited and received DURING the q_b slice load, one
++    // round per q_b part (the slice is read in `pre` K-row parts; round p is credited before part p is issued and
++    // received after it), so the x pipeline does not wait for the whole slice. Same credit protocol as
++    // receive_x_rounds (one outstanding round per injector; credit r+1 only after round r's flag was seen).
++    constexpr uint32_t x_pre_rounds = get_named_compile_time_arg_val("x_pre_rounds");
++    constexpr uint32_t pre0 = x_pre_rounds < x_round_depth ? x_pre_rounds : x_round_depth;
++    constexpr uint32_t pre = mc.active ? (pre0 < num_rounds ? pre0 : num_rounds) : 0;
+     uint32_t prefetched = 0;
+     if constexpr (mc.active) {
+         MaybeDeviceZoneScope("RD_QB_READ");
+@@ -226,26 +291,33 @@
+         // the slice read (the slice stays resident; reserved once).
+         const auto qb = TensorAccessor(qb_args, qb_addr, qb_tile_bytes);
+         constexpr uint32_t s1_kb = Q_t / nkb;
++        // pushed per K-block, or per first-block K-block (s1_first_nkb > 1: the compute's first block waits finer)
++        constexpr uint32_t push_kb = s1_kb / get_named_compile_time_arg_val("s1_first_nkb");
+         cb_reserve_back(cb_qb_slice, Q_t * cols);
+         uint32_t l1 = get_write_ptr(cb_qb_slice);
+         uint32_t n = 0;
+-        for (uint32_t k = 0; k < Q_t; ++k) {
+-            for (uint32_t c = 0; c < cols; ++c) {
++        constexpr uint32_t parts = pre > 0 ? pre : 1;
++        auto load_part = [&](uint32_t p) {
++            for (uint32_t k = p * Q_t / parts; k < (p + 1) * Q_t / parts; ++k) {
++                for (uint32_t c = 0; c < cols; ++c) {
+ #ifndef ABLATE_QB_READ
+-                noc_async_read(qb.get_noc_addr((k_off + k) * Cq_t + c0 + c), l1, qb_tile_bytes);
++                    noc_async_read(qb.get_noc_addr((k_off + k) * Cq_t + c0 + c), l1, qb_tile_bytes);
+ #endif
+-                l1 += qb_tile_bytes;
+-                if (++n == qb_batch) {
++                    l1 += qb_tile_bytes;
++                    if (++n == qb_batch) {
++                        noc_async_read_barrier();
++                        n = 0;
++                    }
++                }
++                if ((k + 1) % push_kb == 0) {
+                     noc_async_read_barrier();
+                     n = 0;
++                    cb_push_back(cb_qb_slice, push_kb * cols);
+                 }
+             }
+-            if ((k + 1) % s1_kb == 0) {
+-                noc_async_read_barrier();
+-                n = 0;
+-                cb_push_back(cb_qb_slice, s1_kb * cols);
+-            }
+-        }
++        };
++        load_with_x_rounds<x_injectors>(
++            mc, mc1, cb_x_round, round_tiles, pre, parts, injector_credit, load_part);
+     }
+ 
+     // wkv prefetch (`wkv_load_block` for the first units): they need no remote data. On a stage-1 core the reads are
+@@ -260,14 +332,8 @@
+         cb_reserve_back(cb_wkv, prefetch_tiles);
+         prefetch_l1 = get_write_ptr(cb_wkv);
+     }
+-    constexpr uint32_t num_rounds = num_blocks * nkb;
+-    const uint32_t per_round = mc.active ? (prefetch_tiles + num_rounds - 1) / num_rounds : prefetch_tiles;
+-    uint64_t injector_credit[x_injectors];  // credit semaphore of every injector (packed virtual x/y in named args)
+-    for (uint32_t i = 0; i < x_injectors; ++i) {
+-        const uint32_t xy =
+-            i == 0 ? get_named_compile_time_arg_val("x_inj0_xy") : get_named_compile_time_arg_val("x_inj1_xy");
+-        injector_credit[i] = get_noc_addr(q_stem::unpack_x(xy), q_stem::unpack_y(xy), get_semaphore(sem_x_credit));
+-    }
++    const uint32_t per_round =
++        mc.active && num_rounds > pre ? (prefetch_tiles + (num_rounds - pre) - 1) / (num_rounds - pre) : prefetch_tiles;
+     // kpart_recv_service state (K-split owners): per partner group, slots credited and blocks pushed so far
+     [[maybe_unused]] const uint32_t kblk = mc.active ? m_blk * cols : 1;
+     [[maybe_unused]] uint32_t credited[ksplit > 1 ? ksplit - 1 : 1];
+@@ -316,6 +382,7 @@
+         cb_x_round,
+         round_tiles,
+         num_rounds,
++        pre,
+         x_injectors < x_round_depth ? x_injectors : x_round_depth,
+         injector_credit,
+         [&]() {
+diff -ruN a/q_stem_program_descriptor.py b/q_stem_program_descriptor.py
+--- a/ttnn/ttnn/operations/q_stem/q_stem_program_descriptor.py
++++ b/ttnn/ttnn/operations/q_stem/q_stem_program_descriptor.py
+@@ -56,6 +56,8 @@
+ FREE_CORE_START = 0.35
+ X_ROUND_TILES_CAP = 64
+ X_ROUND_DEPTH = 3
++X_FIRST_KBLOCKS = 3  # qb_startup: K-blocks of the first stage-1 block's matmul (1 = off; nkb == 1, m == 1 only)
++X_PRE_ROUNDS = 3  # qb_startup: x rounds received during the q_b slice load (clamped to X_ROUND_DEPTH; 0 = off)
+ # x injectors (lamp L3/L9: free row-0 cores): injector i multicasts the global x rounds r % X_INJECTORS == i on NoC
+ # X_INJECTOR_NOCS[i % 2] (its DRAM/L1 half reads on the other NoC); receivers credit every free slot to its injector
+ # ahead of time, so the injectors' rounds overlap. 1 or 2.
+@@ -231,6 +233,11 @@
+         self.m = _largest_divisor_leq(self.qrt, S1_BLOCK_M_TILES)  # s1_block_m_tiles (no ragged block)
+         self.s1_kb = _largest_divisor_leq(self.Q_ks, max(1, X_ROUND_TILES_CAP // self.m))
+         self.nkb = self.Q_ks // self.s1_kb
++        # qb_startup: the FIRST stage-1 block's matmul runs in first_nkb K-blocks over its one x round (in0 slices of
++        # a 1-row round are contiguous), each waited on its q_b part, partials spilled through cb_q_partial
++        fk = X_FIRST_KBLOCKS
++        self.first_nkb = fk if (fk > 1 and self.nkb == 1 and self.m == 1 and self.s1_kb % fk == 0) else 1
++        self.has_partial = self.nkb > 1 or self.first_nkb > 1
+         self.round_tiles = self.m * self.s1_kb
+         self.blocks_per_image = (self.qrt // self.m) * G
+         self.num_blocks = B * self.blocks_per_image
+@@ -525,7 +532,7 @@
+         "cb_q_slice": q_slice,
+         "cb_x_round": X_ROUND_DEPTH * geo.round_tiles * geo.x_tile_bytes,
+         "cb_qb_slice": geo.Q_ks * geo.cols_max * geo.qb_tile_bytes,
+-        "cb_q_partial": geo.m * geo.cols_max * geo.partial_tile_bytes if geo.nkb > 1 else 0,
++        "cb_q_partial": geo.m * geo.cols_max * geo.partial_tile_bytes if geo.has_partial else 0,
+         "cb_q_kpart/recv": geo.ks * geo.kpart_tiles * geo.partial_tile_bytes if geo.ks > 1 else 0,
+         "cb_wkv": wkv_s1,
+         "cb_prefix/rope_out(+_rm)": s3_out,
+@@ -609,6 +616,7 @@
+     x_named = [
+         ("x_injectors", len(injectors)),
+         ("x_round_depth", X_ROUND_DEPTH),
++        ("x_pre_rounds", X_PRE_ROUNDS),
+         ("sem_x_credit", SEM_X_CREDIT),
+         ("x_inj0_xy", _pack(virt(injectors[0]))),
+         ("x_inj1_xy", _pack(virt(injectors[-1]))),
+@@ -724,7 +732,7 @@
+             _cb(CB_X_STAGE, x.dtype, geo.x_tile_bytes, 2 * geo.s1_kb if not geo.aligned else 1, inj_crs),
+             _cb(CB_QB_SLICE, q_b.dtype, geo.qb_tile_bytes, geo.Q_ks * geo.cols_max, s1_all_rect),
+         ]
+-        if geo.nkb > 1:
++        if geo.has_partial:
+             cbs.append(_cb(CB_Q_PARTIAL, geo.partial_dtype, geo.partial_tile_bytes, geo.m * geo.cols_max, s1_all_rect))
+         if ks > 1:  # declared on every group: one address per CB, so a partner writes into its owner's slot directly
+             for cbi in (CB_Q_KPART, CB_Q_RECV1, CB_Q_RECV2)[:ks]:
+@@ -895,6 +903,7 @@
+         reader_ct_other = reader_ct_for(geo.wkv_units_free if geo.wkv_resident else wkv_depth)
+         ks_named = [
+             ("ksplit", ks),
++            ("s1_first_nkb", geo.first_nkb),
+             ("cb_q_kpart", CB_Q_KPART),
+             ("cb_q_recv1", CB_Q_RECV1),
+             ("cb_q_recv2", CB_Q_RECV2),

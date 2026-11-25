@@ -54,6 +54,7 @@ void receive_x_rounds(
     uint32_t cb_x_round,
     uint32_t round_tiles,
     uint32_t num_rounds,
+    uint32_t first_round,
     uint32_t ahead,
     const uint64_t* injector_credit,
     F&& after_round,
@@ -62,7 +63,7 @@ void receive_x_rounds(
         static_assert(NI == 1 || MC1::active, "a second injector needs its multicast family");
         Noc noc;
         auto pipe0 = mc0.receiver(noc);
-        uint32_t acked = 0;
+        uint32_t acked = first_round;  // rounds < first_round were credited and received by the q_b prologue
         auto credit = [&](uint32_t r, bool block_first) {
             while (acked < num_rounds && acked < r + ahead) {
                 const uint32_t pages = (acked - r + 1) * round_tiles;  // slots r .. acked free
@@ -79,7 +80,7 @@ void receive_x_rounds(
         };
         if constexpr (NI > 1) {
             auto pipe1 = mc1.receiver(noc);
-            for (uint32_t r = 0; r < num_rounds; ++r) {
+            for (uint32_t r = first_round; r < num_rounds; ++r) {
                 credit(r, true);
                 if (r % NI == 0) {
                     pipe0.receive(r / NI);
@@ -90,12 +91,62 @@ void receive_x_rounds(
                 after_round();
             }
         } else {
-            for (uint32_t r = 0; r < num_rounds; ++r) {
+            for (uint32_t r = first_round; r < num_rounds; ++r) {
                 credit(r, true);
                 pipe0.receive(r);
                 cb_push_back(cb_x_round, round_tiles);
                 after_round();
             }
+        }
+    }
+}
+// x pre-delivery during the q_b slice load: `load_part(p)` issues (and barriers) q_b part p of `parts`; x round p
+// (p < pre) is credited before part p and received after it. The receiver pipes are built ONCE, before the first
+// credit: their constructor clears the data-ready flag, so building one after a round landed would lose it.
+template <uint32_t NI, typename MC0, typename MC1, typename L>
+void load_with_x_rounds(
+    const MC0& mc0,
+    const MC1& mc1,
+    uint32_t cb_x_round,
+    uint32_t round_tiles,
+    uint32_t pre,
+    uint32_t parts,
+    const uint64_t* injector_credit,
+    L&& load_part) {
+    if constexpr (MC0::active) {
+        if (pre == 0) {
+            for (uint32_t p = 0; p < parts; ++p) {
+                load_part(p);
+            }
+            return;
+        }
+        Noc noc;
+        auto pipe0 = mc0.receiver(noc);
+        auto run = [&](auto&& recv) {
+            noc_semaphore_inc(injector_credit[0], 1);
+            for (uint32_t p = 0; p < parts; ++p) {
+                load_part(p);
+                if (p < pre) {
+                    recv(p);
+                    cb_push_back(cb_x_round, round_tiles);
+                    if (p + 1 < pre) {
+                        noc_semaphore_inc(injector_credit[(p + 1) % NI], 1);
+                    }
+                }
+            }
+        };
+        if constexpr (NI > 1) {
+            static_assert(MC1::active, "a second injector needs its multicast family");
+            auto pipe1 = mc1.receiver(noc);
+            run([&](uint32_t r) {
+                if (r % NI == 0) {
+                    pipe0.receive(r / NI);
+                } else {
+                    pipe1.receive(r / NI);
+                }
+            });
+        } else {
+            run([&](uint32_t r) { pipe0.receive(r); });
         }
     }
 }
@@ -217,34 +268,55 @@ void kernel_main() {
     };
 
     // ---- stage 1 --------------------------------------------------------------------------------------------------
+    uint64_t injector_credit[x_injectors];  // credit semaphore of every injector (packed virtual x/y in named args)
+    for (uint32_t i = 0; i < x_injectors; ++i) {
+        const uint32_t xy =
+            i == 0 ? get_named_compile_time_arg_val("x_inj0_xy") : get_named_compile_time_arg_val("x_inj1_xy");
+        injector_credit[i] = get_noc_addr(q_stem::unpack_x(xy), q_stem::unpack_y(xy), get_semaphore(sem_x_credit));
+    }
+    constexpr uint32_t num_rounds = num_blocks * nkb;
+    // x pre-delivery (qb_startup): the first `pre` x rounds are credited and received DURING the q_b slice load, one
+    // round per q_b part (the slice is read in `pre` K-row parts; round p is credited before part p is issued and
+    // received after it), so the x pipeline does not wait for the whole slice. Same credit protocol as
+    // receive_x_rounds (one outstanding round per injector; credit r+1 only after round r's flag was seen).
+    constexpr uint32_t x_pre_rounds = get_named_compile_time_arg_val("x_pre_rounds");
+    constexpr uint32_t pre0 = x_pre_rounds < x_round_depth ? x_pre_rounds : x_round_depth;
+    constexpr uint32_t pre = mc.active ? (pre0 < num_rounds ? pre0 : num_rounds) : 0;
     uint32_t prefetched = 0;
     if constexpr (mc.active) {
+        MaybeDeviceZoneScope("RD_QB_READ");
         // qb_slice_load_block: pages (k_off + k) * Cq_t + c0 + c, k < Q_t (= the group's K slice), laid out [k][c]
         // (in1 width = cols). Pushed one K-block
         // (s1_kb rows) at a time: the compute waits per K-block, so the first block's matmul overlaps the rest of
         // the slice read (the slice stays resident; reserved once).
         const auto qb = TensorAccessor(qb_args, qb_addr, qb_tile_bytes);
         constexpr uint32_t s1_kb = Q_t / nkb;
+        constexpr uint32_t push_kb = s1_kb;  // pushed per K-block (the compute waits per K-block: QbKBlockWait)
         cb_reserve_back(cb_qb_slice, Q_t * cols);
         uint32_t l1 = get_write_ptr(cb_qb_slice);
         uint32_t n = 0;
-        for (uint32_t k = 0; k < Q_t; ++k) {
-            for (uint32_t c = 0; c < cols; ++c) {
+        constexpr uint32_t parts = pre > 0 ? pre : 1;
+        auto load_part = [&](uint32_t p) {
+            for (uint32_t k = p * Q_t / parts; k < (p + 1) * Q_t / parts; ++k) {
+                for (uint32_t c = 0; c < cols; ++c) {
 #ifndef ABLATE_QB_READ
-                noc_async_read(qb.get_noc_addr((k_off + k) * Cq_t + c0 + c), l1, qb_tile_bytes);
+                    noc_async_read(qb.get_noc_addr((k_off + k) * Cq_t + c0 + c), l1, qb_tile_bytes);
 #endif
-                l1 += qb_tile_bytes;
-                if (++n == qb_batch) {
+                    l1 += qb_tile_bytes;
+                    if (++n == qb_batch) {
+                        noc_async_read_barrier();
+                        n = 0;
+                    }
+                }
+                if ((k + 1) % push_kb == 0) {
                     noc_async_read_barrier();
                     n = 0;
+                    cb_push_back(cb_qb_slice, push_kb * cols);
                 }
             }
-            if ((k + 1) % s1_kb == 0) {
-                noc_async_read_barrier();
-                n = 0;
-                cb_push_back(cb_qb_slice, s1_kb * cols);
-            }
-        }
+        };
+        load_with_x_rounds<x_injectors>(
+            mc, mc1, cb_x_round, round_tiles, pre, parts, injector_credit, load_part);
     }
 
     // wkv prefetch (`wkv_load_block` for the first units): they need no remote data. On a stage-1 core the reads are
@@ -259,14 +331,8 @@ void kernel_main() {
         cb_reserve_back(cb_wkv, prefetch_tiles);
         prefetch_l1 = get_write_ptr(cb_wkv);
     }
-    constexpr uint32_t num_rounds = num_blocks * nkb;
-    const uint32_t per_round = mc.active ? (prefetch_tiles + num_rounds - 1) / num_rounds : prefetch_tiles;
-    uint64_t injector_credit[x_injectors];  // credit semaphore of every injector (packed virtual x/y in named args)
-    for (uint32_t i = 0; i < x_injectors; ++i) {
-        const uint32_t xy =
-            i == 0 ? get_named_compile_time_arg_val("x_inj0_xy") : get_named_compile_time_arg_val("x_inj1_xy");
-        injector_credit[i] = get_noc_addr(q_stem::unpack_x(xy), q_stem::unpack_y(xy), get_semaphore(sem_x_credit));
-    }
+    const uint32_t per_round =
+        mc.active && num_rounds > pre ? (prefetch_tiles + (num_rounds - pre) - 1) / (num_rounds - pre) : prefetch_tiles;
     // kpart_recv_service state (K-split owners): per partner group, slots credited and blocks pushed so far
     [[maybe_unused]] const uint32_t kblk = mc.active ? m_blk * cols : 1;
     [[maybe_unused]] uint32_t credited[ksplit > 1 ? ksplit - 1 : 1];
@@ -307,12 +373,15 @@ void kernel_main() {
         }
         return true;
     };
+    {
+    MaybeDeviceZoneScope("RD_X_RECV");  // x rounds received (incl. the spread wkv prefetch issue)
     receive_x_rounds<x_injectors>(
         mc,
         mc1,
         cb_x_round,
         round_tiles,
         num_rounds,
+        pre,
         x_injectors < x_round_depth ? x_injectors : x_round_depth,
         injector_credit,
         [&]() {
@@ -328,6 +397,7 @@ void kernel_main() {
                 kpart_recv_service();
             }
         });
+    }
     if (kowner) {
         while (!kpart_all_pushed()) {
             kpart_recv_service();
@@ -335,6 +405,7 @@ void kernel_main() {
         noc_async_atomic_barrier();
     }
     if (prefetched > 0) {
+        MaybeDeviceZoneScope("RD_WKV_PREFETCH_TAIL");
         issue_tiles(0, issued, prefetch_tiles, prefetch_l1);
         noc_async_read_barrier();
         cb_push_back(cb_wkv, prefetch_tiles);
@@ -403,6 +474,8 @@ void kernel_main() {
     // them once that row has landed), a local head's weights before its first row; R2: the row's N-block units right
     // after its credit. The own quarter comes from many stage-1 writers in any order, so wait for all of it once,
     // before the first local row.
+    {
+    MaybeDeviceZoneScope("RD_S3_LAND");  // stage-3 rows: arrival waits + wkv loads + landing credits
     for (uint32_t c = 0; c < order.total(); ++c) {
         uint32_t u, t;
         order.at(c, u, t);
@@ -435,6 +508,7 @@ void kernel_main() {
         if constexpr (!wkv_resident) {
             ensure_units((c + 1) * n_nb);
         }
+    }
     }
 
     // Re-arm: consume exactly what arrived (every wait above was cumulative).

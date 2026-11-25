@@ -43,6 +43,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* credit = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_x_credit));
     uint32_t base = 0;  // receivers' slot 0 (= this core's cb_x_round base: the CB is fresh at the first wait)
     uint32_t k = 0;
+    MaybeDeviceZoneScope("INJ_X_MCAST");  // x rounds multicast (waits on the injector reader and receiver credits)
     for (uint32_t r = idx; r < num_rounds; r += num_injectors, ++k) {
         cb_wait_front(cb_x_round, round_tiles);
         const uint32_t src = get_read_ptr(cb_x_round);

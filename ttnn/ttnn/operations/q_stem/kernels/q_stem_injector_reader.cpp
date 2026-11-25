@@ -90,6 +90,7 @@ void kernel_main() {
         noc_async_read_barrier();  // the stage is reused by the next realigned row tile
     };
 
+    MaybeDeviceZoneScope("INJ_X_READ");  // x rounds from DRAM/L1 (waits on free round slots)
     q_stem::for_each_block(B, qrt, m, G, p, rorder, [&](uint32_t j, uint32_t b, uint32_t d, uint32_t r0) {
         for (uint32_t kb = 0; kb < nkb; ++kb) {
             if ((j * nkb + kb) % num_injectors != inj_idx) {

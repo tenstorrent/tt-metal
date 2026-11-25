@@ -56,6 +56,10 @@ S3_COST_FACTOR = 2.5
 FREE_CORE_START = 0.35
 X_ROUND_TILES_CAP = 64
 X_ROUND_DEPTH = 3
+# x pre-delivery (Perf 1): the stage-1 reader reads its q_b slice in X_PRE_ROUNDS K-row parts and credits /
+# receives x round p around part p, so the x pipeline fills during the q_b load instead of after it (clamped to
+# X_ROUND_DEPTH and the round count in the kernel). Measured on the PERF FOCUS: 147.8 -> 144.5 us fastest chip.
+X_PRE_ROUNDS = 3
 # x injectors (lamp L3/L9: free row-0 cores): injector i multicasts the global x rounds r % X_INJECTORS == i on NoC
 # X_INJECTOR_NOCS[i % 2] (its DRAM/L1 half reads on the other NoC); receivers credit every free slot to its injector
 # ahead of time, so the injectors' rounds overlap. 1 or 2.
@@ -609,6 +613,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     x_named = [
         ("x_injectors", len(injectors)),
         ("x_round_depth", X_ROUND_DEPTH),
+        ("x_pre_rounds", X_PRE_ROUNDS),
         ("sem_x_credit", SEM_X_CREDIT),
         ("x_inj0_xy", _pack(virt(injectors[0]))),
         ("x_inj1_xy", _pack(virt(injectors[-1]))),

@@ -116,6 +116,7 @@ void kernel_main() {
 
     // ---- stage 1 hand-off -------------------------------------------------------------------------------------------
     if (cols > 0 && kgroup == 0) {
+        MaybeDeviceZoneScope("WR_S1_HANDOFF");  // q blocks: port block-ready reports + own-quarter local delivery
         const uint32_t q_base = get_read_ptr(cb_q_slice);  // never popped before the end: block j at j*m*cols tiles
         // block-ready ring on the ports (host BLOCK_READY_RING): my idx-th report for a direction -> semaphore
         // sem_block_ready_id + idx % ring, so a port waiting for report idx counts no later block of a faster owner
@@ -218,6 +219,7 @@ void kernel_main() {
         }
     };
     const q_stem::RowOrder order(n_r, hpc, rows_per_head, ts);
+    MaybeDeviceZoneScope("WR_S3_OUT");  // output rows (waits on compute inside store_*) + final barrier
     for (uint32_t c = 0; c < order.total(); ++c) {
         uint32_t u, t;
         order.at(c, u, t);

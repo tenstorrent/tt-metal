@@ -53,6 +53,7 @@ void kernel_main() {
     constexpr uint32_t ready_ring = get_named_compile_time_arg_val("ready_ring");
     const uint32_t big = cols_extra * (cols_base + 1);  // columns owned by the cores with one extra column
 
+    MaybeDeviceZoneScope("PORT_PULL");  // block-ready waits + q pulls from the stage-1 cores
     uint32_t mine = 0;
     uint32_t slot = 0;  // cb_port_stage write position in segments (mod cap): a batch never wraps past the CB end
     q_stem::for_each_block(B, qrt, m, G, p, rorder, [&](uint32_t j, uint32_t, uint32_t d, uint32_t) {
