@@ -23,7 +23,8 @@ class PfPages:
         self._idx = {}  # (id(bank), c0, c1) -> (bank, uint32 index tensor, K, N)
 
     def index(self, bank, cols):
-        """The device index tensor of column ranges cols (multiples of 32), built once per (bank, cols)."""
+        """The device index tensor of column ranges cols (multiples of 32), built once per (bank, cols). Build them
+        all before a decode capture: a tensor allocated after it can sit in DRAM the decode replays write."""
         key = (id(bank), tuple(cols))
         e = self._idx.get(key)
         if e is None or e[0] is not bank:

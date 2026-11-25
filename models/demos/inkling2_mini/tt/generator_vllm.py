@@ -40,10 +40,11 @@ step (tt/pf_tiles.py). The decode's L1 weight staging and the prefill's programs
 staging gives its L1 to the prefill and takes the same addresses back after it (Generator.suspend / resume), so
 the decode traces stay (if an address does not come back, the reply's first six steps run eagerly and capture
 them again: Generator.begin_live). It needs
-- DRAM: about 1.05 GiB for the prefill's own tensors, 2 GiB of room for a layer's rebuilt experts and 0.26 GiB per
-  1024 tokens of a pass, so a ``--max-model-len`` below the largest. With a 128 MiB trace region: passes of 8192
-  tokens up to about 94K, of 4096 up to about 151K, of 2048 up to about 180K; at 196608 about 0.3 GiB is short
-  (`_prefill_chunk` picks, or says how much);
+- DRAM: about 0.41 GiB for the prefill's own tensors (it reads the decode's attention weights; tt/fused/pf_pages.py),
+  0.26 GiB per 1024 tokens of a pass and room beside it (1 GiB beside an 8192-token pass, less for a smaller one;
+  2 GiB for the expert rebuild when the build's expert op can not read the PF tensors in place), and in the
+  speculative class the verify steps' DRAM after it. `_prefill_chunk` picks the largest pass that fits, or says
+  how much is short: speculative decode at 196608 gets passes of 1024;
 - L1: a 48 KB kernel-config ring, ``"worker_l1_size": 1411136`` (the prefill's largest program leaves 57 KB of
   L1 free under the 56 KB ring, and the decode modules keep 58 KB).
 """
@@ -111,27 +112,40 @@ class Inkling2ForCausalLM:
 
         return Inkling2Model(self.device, root=cache, max_ctx=self.max_ctx, log=lambda s: None)
 
-    # DRAM a chunked prefill needs in a decode process, GiB (a p100a's allocator, measured): its own tensors; free
-    # room it must find before a layer's expert rebuild (the rebuilt BFP8 tensors with the pieces of the last one
-    # take 1.43, in blocks of up to 0.36 that a fragmented pool does not have below about 2.0 free); its working
-    # set per 1024 tokens of a pass. PF_CHUNKS: tokens per pass, the first that fits. PF_ONE: a prompt of up to this
-    # many tokens goes in one pass when the largest chunk fits (every pass rebuilds each layer's experts).
-    # The fourth: the room kept free beside a pass when the expert op reads the PF tensors in place (an 8192-token
-    # pass at 196608 by the rule without it ran out of DRAM: the pool fragments).
-    PF_GIB = (1.05, 2.0, 0.26, 1.0)
-    PF_CHUNKS = (8192, 4096, 2048)
+    # DRAM a chunked prefill needs in a decode process, GiB (a p100a's allocator, measured): its own tensors (it
+    # reads the decode's attention weights; pf_attn_shared); free room it must find before a layer's expert rebuild
+    # (the rebuilt BFP8 tensors with the pieces of the last one take 1.43, in blocks of up to 0.36 that a fragmented
+    # pool does not have below about 2.0 free); its working set per 1024 tokens of a pass; the room kept free beside
+    # an 8192-token pass when the expert op reads the PF tensors in place, less for a smaller pass in proportion (an
+    # 8448-token pass at 196608 with no room ran out of DRAM: the pool fragments). PF_OWN_COPY_GIB: more own
+    # tensors with INKLING_PF_ATTN_SHARE=0. PF_CHUNKS: tokens per pass, the first that fits. PF_ONE: a prompt of up
+    # to this many tokens goes in one pass when it fits (every pass reads each layer's experts once).
+    PF_GIB = (0.41, 2.0, 0.26, 1.0)
+    PF_OWN_COPY_GIB = 0.64
+    PF_CHUNKS = (8192, 4096, 2048, 1024)
     PF_ONE = 8448
 
-    def _prefill_chunk(self):
-        """(tokens per prefill pass that fit in the DRAM free now or None, GiB left over for that pass or short).
-        The rebuild room only when the build's expert op can not read the PF tensors in place."""
+    def _pf_reserve_gib(self):
+        """DRAM the process still allocates after the prefill is built (the speculative class: its verify steps)."""
+        return 0.0
+
+    def _pf_need(self, tokens):
+        """DRAM a pass of `tokens` needs beside the built prefill: its working set and the room kept free."""
         from models.demos.inkling2_mini.tt.prefill_model import pf_inplace_op
 
+        room = self.PF_GIB[3] * tokens / 8192 if pf_inplace_op() else self.PF_GIB[1]
+        return self.PF_GIB[2] * tokens / 1024 + room
+
+    def _prefill_chunk(self):
+        """(tokens per prefill pass that fit in the DRAM free now or None, GiB left over beside that pass or short,
+        GiB left over beside one PF_ONE-token pass)."""
+        from models.demos.inkling2_mini.tt.prefill_model import pf_attn_shared
+
         v = ttnn.get_memory_view(self.device, ttnn.BufferType.DRAM)
-        room = v.num_banks * v.total_bytes_free_per_bank / 2**30 - self.PF_GIB[0]
-        room -= self.PF_GIB[3] if pf_inplace_op() else self.PF_GIB[1]
-        chunk = next((c for c in self.PF_CHUNKS if self.PF_GIB[2] * c / 1024 <= room), None)
-        return chunk, room - self.PF_GIB[2] * (chunk or self.PF_CHUNKS[-1]) / 1024
+        room = v.num_banks * v.total_bytes_free_per_bank / 2**30 - self.PF_GIB[0] - self._pf_reserve_gib()
+        room -= 0 if pf_attn_shared() else self.PF_OWN_COPY_GIB
+        chunk = next((c for c in self.PF_CHUNKS if self._pf_need(c) <= room), None)
+        return chunk, room - self._pf_need(chunk or self.PF_CHUNKS[-1]), room - self._pf_need(self.PF_ONE)
 
     def _prefill_init(self, cache):
         """The chunked prefill for prompts of at least $INKLING_VLLM_PREFILL tokens (unset or 0: off)."""
@@ -145,7 +159,7 @@ class Inkling2ForCausalLM:
         base = ttnn._ttnn.device.GetAllocatorBaseAddress(self.device, ttnn.BufferType.L1)
         if base > tt_device.DEFAULT_L1_BASE + (48 << 10):
             why = f'its programs need "worker_l1_size": {tt_device.worker_l1_size(48)} (a 48 KB ring) or more L1'
-        chunk, spare = self._prefill_chunk()
+        chunk, spare, spare_one = self._prefill_chunk()
         if why is None and chunk is None:
             why = (
                 f"{-spare:.2f} GiB of DRAM short at --max-model-len {self.max_ctx} (a smaller context frees 19,584 B "
@@ -156,7 +170,7 @@ class Inkling2ForCausalLM:
             return None
         t0 = time.time()
         self.pf_chunk = chunk  # tokens per pass; the prefill is built for one pass of PF_ONE when that fits too
-        one = spare >= self.PF_GIB[2] * (self.PF_ONE - chunk) / 1024 > 0
+        one = chunk == self.PF_CHUNKS[0] and spare_one >= 0
         pf = Inkling2Prefill(self.model, root=cache, chunk=-(-self.PF_ONE // 1024) * 1024 if one else chunk)
         pf.drafter = getattr(self, "drafter", None)  # (the speculative class: the prompt's drafter context too)
         logger.info(
@@ -591,6 +605,12 @@ class Inkling2SpecForCausalLM(Inkling2ForCausalLM):
         d.top_probs = True
         self.spec_ctx = ctx
         return m
+
+    def _pf_reserve_gib(self):
+        """The 2- and 3-row verify steps are built after the prefill: it leaves them their DRAM."""
+        from models.demos.inkling2_mini.tt.spec_generator import VERIFY_NEED_GIB
+
+        return VERIFY_NEED_GIB[1] if self.drafter is not None else 0.0
 
     def _make_gen(self):
         if self.drafter is None:

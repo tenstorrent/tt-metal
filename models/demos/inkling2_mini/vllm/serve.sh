@@ -15,8 +15,9 @@
 #   FAST=1             fast mode (own3-l8 experts)
 #   PREFILL=<tokens>   chunked prefill for new prompts of at least that many tokens (128). PREFILL=0 or PREFILL=
 #                      (empty) turns it off: every prompt is fed token by token. A reply after a prefilled prompt
-#                      comes from the prefill's numerics. It needs DRAM: with speculative decode above CTX=131072
-#                      (so in the default launch) it stays off; the server says at start what it uses or lacks
+#                      comes from the prefill's numerics. Its 48 KB kernel-config ring costs speculative
+#                      decode ~0.5 %; the server says at start what pass size the DRAM left allows, or that it
+#                      stays off
 # and the model's own: INKLING_MODE, INKLING_CACHE_DIR, INKLING_CACHE, INKLING_SPEC_MAX_CTX (modes.py).
 set -e
 : "${INKLING_CKPT:?set INKLING_CKPT to the checkpoint directory (tokenizer, chat template)}"
@@ -28,17 +29,10 @@ ring='"worker_l1_size": 1394752, '      # the 64 KB kernel-config ring (tt/devic
 spec=(--no-async-scheduling --speculative-config
       '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 2}')
 PREFILL=${PREFILL-128}  # (set and empty: off)
-# shortcut: speculative decode above a 131072 context leaves too little DRAM for the prefill, and the prefill's
-# 48 KB ring would cost such a launch decode speed for nothing (70 against 77 tok/s): it stays off there.
-# Upgrade when the prefill's DRAM need drops.
-if [ "${SPEC:-1}" != 0 ] && [ "${CTX:-196608}" -gt 131072 ] && [ -n "$PREFILL" ] && [ "$PREFILL" != 0 ]; then
-    echo "serve.sh: chunked prefill off: speculative decode at CTX=${CTX:-196608} leaves too little DRAM" \
-         "(SPEC=0, or CTX=131072 or less, turns it on)" >&2
-    PREFILL=0
-fi
 if [ -n "$PREFILL" ] && [ "$PREFILL" != 0 ]; then
     export INKLING_VLLM_PREFILL=$PREFILL
     ring='"worker_l1_size": 1411136, '  # 48 KB: the prefill's largest program needs the rest
+    trace=335544320     # the speculative traces take 265 MiB (the prefill runs eagerly): DRAM for the prefill
 fi
 if [ "${SPEC:-1}" = 0 ]; then
     class=Inkling2ForCausalLM

@@ -258,6 +258,12 @@ def _has_unified(dev, w_gate_up, w_down, fidelity, w_up=None, extra=None):
     return None
 
 
+def pf_attn_shared():
+    """True when the prefill reads the decode's attention projection weights (Inkling2Prefill.share_attn) instead
+    of loading its own copy (INKLING_PF_ATTN_SHARE=0)."""
+    return os.environ.get("INKLING_PF_ATTN_SHARE", "1") != "0"
+
+
 def pf_inplace_op():
     """Does this build's unified expert op read PF-layout expert tensors in place (gate_up_extra / down_extra)?
     INKLING_PF_INPLACE=0: no (the rebuild, tt/pf_tiles.py)."""
@@ -387,6 +393,8 @@ class _LayerPF:
         # the four projections: read from the decode's own bank-streamed weights when it has them (no second copy;
         # pf.share_attn), else loaded again from the cache in plain form
         self.attn_src = _attn_sources(lay.attn) if pf.share_attn else None
+        for bank, cols in (self.attn_src or {}).values():  # index tensors now: before any decode capture
+            pf._pfpages.index(bank, cols)
         skip = PROJ_NAMES if self.attn_src is not None else ()
         names = {f"attn.{n}" for n in ATTN_NAMES if n not in skip}
         names |= {"attn_res_q", "mlp_res_q", "post_attn_conv", "post_mlp_conv"}
@@ -555,7 +563,7 @@ class Inkling2Prefill:
             )
         # the projections read from the decode's attention weights (no second copy, ~0.65 GB at DRAM);
         # INKLING_PF_ATTN_SHARE=0 loads the plain copy from the cache as before (same tiles: same output)
-        self.share_attn = os.environ.get("INKLING_PF_ATTN_SHARE", "1") != "0"
+        self.share_attn = pf_attn_shared()
         self._pfpages = PfPages(dev)
         self.layers = [_LayerPF(self, lay, root) for lay in model.layers]
         # unified experts at HiFi2 when the build takes it, else at LoFi (fp32 DEST: more accurate than the sparse
