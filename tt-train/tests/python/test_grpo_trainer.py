@@ -2143,7 +2143,7 @@ def test_async_rollout_shuts_down_with_a_weight_push_in_flight_and_a_full_rollou
     assert sampler.installed == [0, 1, 2]
 
 
-@pytest.mark.parametrize("weight_sync_every, num_iterations, max_staleness", [(1, 1, 2), (2, 2, 4)])
+@pytest.mark.parametrize("weight_sync_every, num_iterations, max_staleness", [(1, 1, 0), (2, 2, 0)])
 def test_async_remote_source_trains_every_batch_over_a_full_rollout_queue(
     monkeypatch, async_rollout_over_blocking_sends, weight_sync_every, num_iterations, max_staleness
 ):
