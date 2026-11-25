@@ -2647,3 +2647,42 @@ def test_getitem_non_positive_step_raises(device, expect_error, layout, step, me
     tt_input = ttnn.from_torch(torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=layout, device=device)
     with expect_error(ValueError, message):
         tt_input[..., ::step]
+
+
+@pytest.mark.parametrize(
+    "heads, out_rows",
+    [(3, 128), (1, 32)],
+    ids=["fewer_tiles_than_cores", "one_tile"],
+)
+def test_tile_slice_small_output_one_program_over_input_rows(device, heads, out_rows):
+    """A tile slice whose output has fewer tiles than the grid has cores, and the same output at every input
+    row count, builds one program for all of them, and each output is exact."""
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    assert heads * out_rows * 128 // (32 * 32) < grid.x * grid.y, "the case needs fewer output tiles than cores"
+
+    def run(rows, start):
+        torch_input = torch.randn(1, heads, rows, 128, dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+        out = ttnn.slice(tt_input, [0, 0, start, 0], [1, heads, start + out_rows, 128])
+        assert torch.equal(ttnn.to_torch(out), torch_input[:, :, start : start + out_rows, :])
+
+    run(1152, 0)
+    entries = device.num_program_cache_entries()
+    for rows, start in [(1792, 0), (2176, 0), (3456, 64), (4224, 256)]:
+        run(rows, start)
+    assert device.num_program_cache_entries() == entries
+
+
+def test_tile_slice_small_outputs_of_different_sizes_get_their_own_programs(device):
+    """Small tile slice outputs follow their tile count in the core set, so one with another tile count builds
+    another program, and each output is exact."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, 1024, 128, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    entries = []
+    for out_rows in [32, 64, 96]:
+        out = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, out_rows, 128])
+        assert torch.equal(ttnn.to_torch(out), torch_input[:, :, :out_rows, :])
+        entries.append(device.num_program_cache_entries())
+    assert entries[0] < entries[1] < entries[2]

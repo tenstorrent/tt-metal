@@ -145,16 +145,23 @@ bool slice_tile_program_is_row_free(const SliceParams& args, const SliceInputs& 
         tensor_args.end_tensor.has_value() || tensor_args.preallocated_output.has_value()) {
         return false;
     }
-    uint64_t output_tiles = 1;
     for (uint32_t i = 0; i < rank; ++i) {
         if (args.step[i] != 1) {
             return false;
         }
+    }
+    // Every value that follows the input's shape and the row bounds is a runtime argument; only the core
+    // set follows the output's tile count (see slice_tile_program_fills_grid).
+    return true;
+}
+
+bool slice_tile_program_fills_grid(const SliceParams& args, const SliceInputs& tensor_args) {
+    uint64_t output_tiles = 1;
+    for (uint32_t i = 0; i < args.slice_start.rank(); ++i) {
         output_tiles *= args.slice_end[i] - args.slice_start[i];
     }
     output_tiles /= TILE_HW;
-    // Every core of the grid gets tiles, so the core set does not follow the row count.
-    const CoreCoord grid = input.device()->compute_with_storage_grid_size();
+    const CoreCoord grid = tensor_args.input.device()->compute_with_storage_grid_size();
     return output_tiles >= static_cast<uint64_t>(grid.x) * grid.y;
 }
 
@@ -262,8 +269,9 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    // A row-free program serves every row count (see slice_tile_program_is_row_free), so its tensors
-    // may differ from these in shape. Interleaved tiles keep their accessors at any shape.
+    // A row-free program serves every input row count, and every output row count where
+    // slice_tile_program_fills_grid holds, so its tensors may differ from these in shape. Interleaved
+    // tiles keep their accessors at any shape.
     TensorSpecRelaxations relaxations;
     relaxations.dynamic_tensor_shape = slice_tile_program_is_row_free(args, tensor_args);
 

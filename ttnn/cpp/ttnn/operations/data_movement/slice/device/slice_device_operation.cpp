@@ -462,12 +462,16 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
     auto factory = select_program_factory(operation_attributes, tensor_args);
     if (std::holds_alternative<SliceTileProgramFactory>(factory) &&
         slice_tile_program_is_row_free(operation_attributes, tensor_args)) {
-        // The program takes every row count and row bound at run time, so they stay out of the key.
+        // The program takes every row count and row bound at run time, so they stay out of the key. With
+        // fewer output tiles than cores the core set follows the output's tile count, so the output spec,
+        // rows included, stays in.
+        const bool fills_grid = slice_tile_program_fills_grid(operation_attributes, tensor_args);
         auto start = operation_attributes.slice_start;
         auto end = operation_attributes.slice_end;
         start[-2] = 0;
         end[-2] = 0;
         using ttnn::operations::common::hash_spec_without_rows;
+        const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
         return tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
             start,
             end,
@@ -475,8 +479,9 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
             operation_attributes.output_mem_config,
             operation_attributes.output_mem_config_inherited,
             factory.index(),
+            fills_grid,
             hash_spec_without_rows(tensor_args.input),
-            hash_spec_without_rows(compute_output_specs(operation_attributes, tensor_args)));
+            fills_grid ? hash_spec_without_rows(output_spec) : ttsl::hash::hash_objects_with_default_seed(output_spec));
     }
     auto hash = tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
         operation_attributes.slice_start,
