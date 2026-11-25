@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_host.hpp"
+#include "ttnn/operations/experimental/moe_block/common/kernels/quantized_row.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -14,11 +15,24 @@
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
-RowSlot row_slot(uint32_t W) {
+RowSlot row_slot(uint32_t W, uint32_t format, uint32_t producers) {
+    namespace qr = quantized_row;
+    const auto f = static_cast<qr::Format>(format);
+    TT_FATAL(
+        format <= 2 && qr::valid_shape(f, W, producers),
+        "routed_experts_combine: rows of {} values in format {} from {} producers (quantized_row.hpp)",
+        W,
+        format,
+        producers);
     RowSlot p;
-    p.row_bytes = W * 2;
-    p.row_tiles = (p.row_bytes + kTile - 1) / kTile;
+    p.format = format;
+    p.producers = qr::is_quantized(f) ? producers : 0;
+    p.row_bytes = qr::row_bytes(f, W, p.producers);
+    p.row_tiles = (W + qr::kFlatTileValues - 1) / qr::kFlatTileValues;
     p.slot_bytes = align64(align64(p.row_bytes) + 32);
+    p.row_page_bytes = qr::row_page_bytes(f);
+    p.factor_page_bytes = qr::factor_page_bytes(f);
+    p.cells_bytes = qr::cells_bytes(f, p.producers);
     return p;
 }
 
@@ -46,10 +60,12 @@ StateLayout state_layout(uint32_t N, uint32_t A, uint32_t grants_per_source) {
     return s;
 }
 
-uint32_t acc_cb_bytes(uint32_t S, uint32_t A, uint32_t NT, uint32_t rows, uint32_t tab) {
+uint32_t acc_cb_bytes(uint32_t S, uint32_t A, const RowSlot& row, uint32_t rows, uint32_t tab) {
     const uint32_t max_tokens_per_accumulator = (S + A - 1) / A;
-    return align64(tab) + align64(rows * NT * kTile) + align64(rows * 32) +
-           align64(max_tokens_per_accumulator * NT * 4096) + align64(2 * NT * kTile) + align64(rows * kTile);
+    const uint32_t NT = row.row_tiles;
+    return align64(tab) + align64(rows * NT * row.row_page_bytes) + align64(rows * 32) +
+           align64(max_tokens_per_accumulator * NT * 4096) + align64(2 * NT * kTile) + align64(rows * kTile) +
+           align64(rows * NT * row.factor_page_bytes) + align64((rows + 1) * row.cells_bytes);
 }
 
 CombineLayout combine_l1_layout(
@@ -71,7 +87,7 @@ CombineLayout combine_l1_layout(
     CombineLayout out;
     out.slot_bytes = pc.slot_bytes;
     out.accumulator_fp32_bytes = max_tokens_per_accumulator * pc.row_tiles * 4096;
-    out.accumulator_cb_bytes = acc_cb_bytes(S, A, pc.row_tiles, pool_slots > 0 ? kPoolRows : 2);
+    out.accumulator_cb_bytes = acc_cb_bytes(S, A, pc, pool_slots > 0 ? kPoolRows : 2);
     out.state_bytes = static_cast<uint32_t>(state_bytes);
     const int64_t arena = arena_bytes;
     int64_t accumulator_cb_bytes = out.accumulator_cb_bytes;
@@ -98,7 +114,7 @@ CombineLayout combine_l1_layout(
         std::min<int64_t>({static_cast<int64_t>(depth) * (N - 1), fit, landing_slots_cap});
     if (shared_landing && landing_on_flat_expert_cores) {  // (CB_TAB holds the pool's owners / free list: sized by it)
         out.accumulator_cb_bytes = acc_cb_bytes(
-            S, A, pc.row_tiles, kPoolRows, acc_tab_bytes(true, static_cast<uint32_t>(landing_slots_per_accumulator)));
+            S, A, pc, kPoolRows, acc_tab_bytes(true, static_cast<uint32_t>(landing_slots_per_accumulator)));
         accumulator_cb_bytes = out.accumulator_cb_bytes;
     }
     out.landing_slots_per_accumulator = static_cast<int32_t>(landing_slots_per_accumulator);

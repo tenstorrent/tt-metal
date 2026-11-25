@@ -118,6 +118,8 @@ void bind_config(nb::module_& mod) {
     )doc");
     def_kwargs_init(cfg);
     cfg.def_rw("combine_snap", &MoEBlockConfig::combine_snap)
+        .def_rw("routed_y_quant", &MoEBlockConfig::routed_y_quant)
+        .def_rw("routed_y_quant_block", &MoEBlockConfig::routed_y_quant_block)
         .def_rw("head_router_iterations", &MoEBlockConfig::head_router_iterations)
         .def_rw("num_links", &MoEBlockConfig::num_links)
         .def_rw("sp_axis", &MoEBlockConfig::sp_axis)

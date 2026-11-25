@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_program.hpp"
+#include "ttnn/operations/experimental/moe_block/common/kernels/quantized_row.hpp"
 #include <tuple>
 #include <optional>
 #include <map>
@@ -202,7 +203,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->row_elements = in.row_elements;
     const uint32_t N = mesh.topo.num_chips();
     TT_FATAL(N <= kMaxChips, "routed_experts_combine: {} chips > {}", N, kMaxChips);
-    plan->row_slot = row_slot(in.row_elements);
+    plan->row_slot = row_slot(in.row_elements, in.row_format, in.row_producers);
     // (the L1 hand-off's y writers write a row's columns at slot + column offset and its trailer at slot + row bytes:
     // one fabric packet a row, so the payload must hold a row + 32 B, else the combine waits for trailers that never
     // come)
@@ -426,7 +427,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->state = state_layout(N, A, plan->shared_landing ? kGrants : 0);
     const uint32_t slot_bytes = plan->row_slot.slot_bytes;
     plan->row_depth = landing_on_flat_expert_cores ? kPoolRows : 2u;
-    uint32_t accumulator_cb_bytes = acc_cb_bytes(in.home_tokens, A, plan->row_slot.row_tiles, plan->row_depth);
+    uint32_t accumulator_cb_bytes = acc_cb_bytes(in.home_tokens, A, plan->row_slot, plan->row_depth);
     const uint32_t injection_ring_slots_wanted = au.best->injection_ring_slots,
                    local_ring_slots_reserved = au.best->local_ring_slots_reserved;
     const int64_t kept =
@@ -450,7 +451,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->landing_slots_per_accumulator = static_cast<uint32_t>(landing_slots);
     plan->accumulator_table_cb_bytes = acc_tab_bytes(plan->shared_landing, plan->landing_slots_per_accumulator);
     accumulator_cb_bytes =
-        acc_cb_bytes(in.home_tokens, A, plan->row_slot.row_tiles, plan->row_depth, plan->accumulator_table_cb_bytes);
+        acc_cb_bytes(in.home_tokens, A, plan->row_slot, plan->row_depth, plan->accumulator_table_cb_bytes);
     plan->landing_slots_per_source = N > 1 ? plan->landing_slots_per_accumulator / (N - 1) : 0;
     plan->credit_policy = credit_policy(N, plan->landing_slots_per_source, plan->shared_landing, in.credit_batch);
     const uint32_t accumulator_area =
@@ -499,11 +500,14 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     };
     const uint32_t row_tiles = plan->row_slot.row_tiles;
     plan->accumulator_table_cb_offset = take(plan->accumulator_table_cb_bytes);
-    plan->row_cb_offset = take(plan->row_depth * row_tiles * kTile);
+    plan->row_cb_offset = take(plan->row_depth * row_tiles * plan->row_slot.row_page_bytes);
     plan->meta_cb_offset = take(plan->row_depth * 32);
     plan->accumulator_fp32_offset = take(plan->max_tokens_per_accumulator * row_tiles * 4096);
     plan->output_cb_offset = take(2 * row_tiles * kTile);
     plan->weight_cb_offset = take(plan->row_depth * kTile);
+    plan->factor_cb_offset = take(plan->row_depth * row_tiles * plan->row_slot.factor_page_bytes);
+    // (a row in flight's cells each, and one more for a row taken from this core's own L1 meanwhile)
+    plan->cells_scratch_offset = take((plan->row_depth + 1) * plan->row_slot.cells_bytes);
     plan->local_ring_offset = e;
     TT_FATAL(
         std::max(e, plan->accumulators_on_ports ? 0u : plan->port_table_cb_offset + kTabCbBytes) <= in.arena_bytes,
@@ -642,7 +646,22 @@ CombineHandles add_combine_program(
         plan.accumulator_table_cb_bytes,
         tt::DataFormat::UInt32,
         plan.accumulator_table_cb_bytes);
-    arena_cb(kCbRow, aset, plan.row_cb_offset, plan.row_depth * NT * kTile, tt::DataFormat::Float16_b, kTile);
+    {  // (the rows as flat tiles: bf16, e4m3, or int8 rows as Bfp8_b tiles - quantized_row.hpp)
+        const auto row_format = static_cast<quantized_row::Format>(pc.format);
+        const auto row_df = row_format == quantized_row::Format::Fp8E4m3 ? tt::DataFormat::Fp8_e4m3
+                            : row_format == quantized_row::Format::Int8  ? tt::DataFormat::Bfp8_b
+                                                                         : tt::DataFormat::Float16_b;
+        arena_cb(kCbRow, aset, plan.row_cb_offset, plan.row_depth * NT * pc.row_page_bytes, row_df, pc.row_page_bytes);
+        if (pc.factor_page_bytes) {  // (FP16 in the kernel: the JIT takes no FP16 CB next to the BF16 ones)
+            arena_cb(
+                kCbFac,
+                aset,
+                plan.factor_cb_offset,
+                plan.row_depth * NT * pc.factor_page_bytes,
+                tt::DataFormat::UInt16,
+                pc.factor_page_bytes);
+        }
+    }
     arena_cb(kCbMeta, aset, plan.meta_cb_offset, plan.row_depth * 32, tt::DataFormat::UInt32, 32);
     // (the sums: int32 counts of q with the snap - the packer's INT32 L1 accumulation, exact in any order - else fp32;
     // 4 B a value either way)
@@ -921,6 +940,11 @@ CombineHandles add_combine_program(
             {names::kRingsOffset, st.rings_offset},
             {names::kRingLayoutsToForwardOffset, st.ring_layouts_to_forward_offset},
             {names::kWeightCb, kCbW},
+            {names::kRowFormat, pc.format},
+            {names::kRowElements, plan.row_elements},
+            {names::kRowProducers, pc.producers},
+            {names::kFactorCb, kCbFac},
+            {names::kCellsScratchOffset, plan.cells_scratch_offset},
             {names::kLocalRingLandedWord, combine_formats::acc_landed_word(plan.accumulators_on_ports)},
             {names::kLocalRingHandoffBaseWord, combine_formats::acc_handoff_base_word(plan.accumulators_on_ports)},
             {names::kLocalRingOffset, plan.local_ring_offset},
@@ -953,6 +977,8 @@ CombineHandles add_combine_program(
             {names::kRowTiles, NT},
             {names::kMaxTokensPerAccumulator, plan.max_tokens_per_accumulator},
             {names::kWeightCb, kCbW},
+            {names::kRowFormat, pc.format},
+            {names::kFactorCb, kCbFac},
             {names::kSnapStepBits, plan.snap_step_bits}};
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;  // (ComputeConfig's default)
         compute_kernel.config = tt::tt_metal::ComputeConfigDescriptor{

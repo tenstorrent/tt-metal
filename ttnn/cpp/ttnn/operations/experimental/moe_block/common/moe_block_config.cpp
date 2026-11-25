@@ -149,6 +149,12 @@ uint32_t routed_activation_code(const ExpertActivation& act) {
 uint32_t MoEBlockConfig::snap_step_bits() const { return moe_block::snap_step_bits(combine_snap); }
 
 void MoEBlockConfig::check() const {
+    TT_FATAL(routed_y_quant <= 2, "moe_block: routed_y_quant {}: 0 bf16, 1 fp8 e4m3, 2 int8", routed_y_quant);
+    TT_FATAL(
+        routed_y_quant_block == 0 || routed_y_quant_block == 32 || routed_y_quant_block == 64 ||
+            routed_y_quant_block == 96,
+        "moe_block: routed_y_quant_block {}: 0 (the down pass width), 32, 64 or 96",
+        routed_y_quant_block);
     // The head hashes every token onto link 0 or 1 (route word link bit) and the dispatch ports only take their own
     // link's rows, so one link would drop about half the rows.
     TT_FATAL(num_links == 2, "moe_block: num_links {} (the head and the dispatch use both links: 2)", num_links);

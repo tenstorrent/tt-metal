@@ -61,6 +61,9 @@ fre::FlatRoutedExpertConfig base_flat_config(MoEBlockResources& res, uint32_t m,
         layout);
     cfg.activation = routed_activation_code(dims.routed_expert_activation);  // (the model's, from the resources)
     cfg.down_fp32 = true;
+    // (the rows' wire format: quantized on the down cores, quantized_row.hpp)
+    cfg.y_quant = res.config().routed_y_quant;
+    cfg.y_quant_block = res.config().routed_y_quant ? res.config().routed_y_quant_block : 0;
     return cfg;
 }
 
@@ -135,6 +138,8 @@ CombineL1Plan plan_routed_experts_combine_l1(
     CombinePlanInputs in;
     in.home_tokens = cfg.split_tokens() / N;
     in.row_elements = res.dims().routed_width();
+    in.row_format = out.flat.y_quant;
+    in.row_producers = static_cast<uint32_t>(fp->down_cores.size());
     in.free_cores = out.free_cores;
     in.accumulator_count = combine.accumulator_count;
     in.mode = combine.mode;

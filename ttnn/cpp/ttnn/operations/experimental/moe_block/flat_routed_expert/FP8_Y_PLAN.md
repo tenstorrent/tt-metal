@@ -211,3 +211,28 @@ family): bf16 today 5,090 cycles a row, fp8 4,400; both within 1 bf16 ulp of the
 log2(s) + 133 (bfp8_b's shared exponent), and the combine reads a flat tile as a native Bfp8_b tile (64 exponent
 bytes, then the 1024 values) - today's gate broadcast multiply unchanged. To verify: the packer's fp32 -> Int8 is
 sign-magnitude (and Int8 pack_untilize with a pass width of 3); the fidelity the gate x mantissa product needs.
+
+## Implemented (Nov 25): quantized routed rows, fp8 and int8, end to end
+
+**Format** (`common/kernels/quantized_row.hpp`): `[H values][16-byte cell a down core: one exponent byte a 16 values]`
+then the trailer; fp8 = e4m3 x e8m0 (subnormals flushed), int8 = sign-magnitude x a power of two (read as Bfp8_b).
+GLM: 6688 B a row (bf16 12320). Torch reference: `tests/.../moe_block/quantized_row_golden.py` (bit exact).
+
+**Producer** (flat expert): `y_quant.hpp` on the down cores' PACK thread, `flat_routed_expert(..., y_quant=1|2,
+y_quant_block=0|32|64|96)` -> y `[rows, H + 16 x down cores]` uint8. Checks: `test_flat_y_quant.py` (bit exact),
+`test_flat_routed_expert_checks.py -k quant` (accuracy, determinism, perf). GLM 8x4 / 4x4 5120 device time vs bf16
+row-major: int8 1x96 +3.5% / +4.2% (1.0% error vs the bf16 y), fp8 1x96 +8% (2.7%).
+
+**Consumer** (combine accumulators): `quantized_row_stage.hpp` (reader: `RowStager`, issue / finish for local or remote
+slots) and `quantized_row_weigh.hpp` (compute: `RowWeigher`); `accumulator_reader.cpp` / `accumulator_compute.cpp` use
+them when `row_format != 0`. Checks on one chip: `test_combine_quantized_row_bench.py` (bench compute and the real
+accumulator_compute.cpp; cycles a row: bf16 5090, fp8 4409, int8 4371). The accumulator reader compiles for every
+format (run without a combine around it); the fused op itself needs a Galaxy - not run yet.
+
+**Switch it on**: `MoEBlockConfig.routed_y_quant` (0 bf16, 1 fp8, 2 int8) and `routed_y_quant_block`; in the model
+`MoEBlockFfnOptions(routed_y_quant="int8", routed_y_quant_block=32)`, or for any block / combine test
+`MOE_ROUTED_Y_QUANT=int8 MOE_ROUTED_Y_QUANT_BLOCK=32` (read by `block_stages.py` and `moe_block_ffn.py`), e.g.
+
+    MOE_ROUTED_Y_QUANT=int8 pytest tests/ttnn/unit_tests/operations/experimental/moe_block/routed_experts_combine/test_experts_combine_checks.py
+
+Recommendation: int8 (1x32 or 1x96). fp8 is 2.5-4x the error of bfp8 (the old TtMoe y) and costlier on the producer.

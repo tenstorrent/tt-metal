@@ -57,14 +57,22 @@ inline constexpr uint32_t kPlanNinj = moe_block_plan_words::kPlanNinj, kPlanNret
 
 constexpr uint32_t align64(uint64_t v) { return static_cast<uint32_t>((v + 63) / 64 * 64); }
 
-// A W-wide bf16 row's landing slot: the row (one fabric packet), its 32 B trailer at row_bytes, 64 B aligned.
+// A W-wide row's landing slot: the row (one fabric packet), its 32 B trailer at row_bytes, 64 B aligned. The row is
+// bf16, or quantized (common/kernels/quantized_row.hpp: its W values a byte each, then a 16-byte cell per producer).
 struct RowSlot {
     uint32_t row_bytes = 0;
-    uint32_t row_tiles = 0;   // bf16 tiles a row (rows are handled as flat tiles)
+    uint32_t row_tiles = 0;   // flat tiles a row (1024 values: rows are handled as flat tiles)
     uint32_t slot_bytes = 0;  // the slot's stride: the row and its trailer, 64 B aligned
+    uint32_t format = 0;      // quantized_row::Format (0 bf16)
+    uint32_t producers = 0;   // (quantized) the cells a row: the flat expert's down cores
+    // the accumulator's CB pages: the row CB's (a flat tile: bf16 / e4m3 / Bfp8_b), the fp8 factor CB's (0: none), and
+    // the reader's cells scratch a row in flight (0: none)
+    uint32_t row_page_bytes = 0;
+    uint32_t factor_page_bytes = 0;
+    uint32_t cells_bytes = 0;
     bool operator==(const RowSlot&) const = default;
 };
-RowSlot row_slot(uint32_t W);
+RowSlot row_slot(uint32_t W, uint32_t format = 0, uint32_t producers = 0);
 
 // The per-core state block of every combine core: byte offsets from the core's arena. Each per-(chip, accumulator)
 // table holds N x AP uint32 words (AP: the accumulator count rounded up to 4). The kernels get these offsets as
@@ -107,7 +115,7 @@ struct StateLayout {
 StateLayout state_layout(uint32_t N, uint32_t A, uint32_t grants_per_source = 0);
 
 // _acc_cbs: an accumulator's CB bytes (CB_TAB, CB_ROW, CB_META, CB_ACC, CB_OUT, CB_W; each 64 B aligned).
-uint32_t acc_cb_bytes(uint32_t S, uint32_t A, uint32_t NT, uint32_t rows = 2, uint32_t tab = kTabCbBytes);
+uint32_t acc_cb_bytes(uint32_t S, uint32_t A, const RowSlot& row, uint32_t rows = 2, uint32_t tab = kTabCbBytes);
 // an accumulator's CB_TAB bytes: the shared landing's slot owners (1 B) and free list (2 B a slot) last
 // (accumulator_reader.cpp: plan words, grant queues, trailer probes, zeros, then them from 1600 B)
 inline uint32_t acc_tab_bytes(bool shared, uint32_t psl) {

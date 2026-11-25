@@ -44,6 +44,7 @@
 #include "api/compile_time_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "../combine_names.hpp"
+#include "quantized_row_weigh.hpp"
 #ifdef TRISC_MATH
 #include "sfpi.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -117,7 +118,17 @@ void kernel_main() {
     constexpr bool snap = snap_step_bits != 0;
     // (1 / q, a power of two too: its exponent field is 254 less q's)
     constexpr uint32_t inverse_snap_step_bits = snap ? 0x7F000000u - snap_step_bits : 0u;
-    compute_kernel_hw_startup(cb_row, cb_w, cb_acc);
+    // quantized rows (common/kernels/quantized_row.hpp): row x gate (and the snap) through quantized_row::RowWeigher -
+    // fp8 against its factor tiles (cb_fac), int8 read as Bfp8_b tiles; the gate on the SFPU (its bf16 bits from the
+    // gate tile's element 0)
+    constexpr auto row_format =
+        static_cast<quantized_row::Format>(get_named_compile_time_arg_val(combine_names::kRowFormat));
+    constexpr bool quantized_rows = quantized_row::is_quantized(row_format);
+    constexpr bool fp8_rows = row_format == quantized_row::Format::Fp8E4m3;
+    constexpr uint32_t cb_fac = get_named_compile_time_arg_val(combine_names::kFactorCb);
+    constexpr uint32_t cb_b = fp8_rows ? cb_fac : cb_w;
+    using Weigher = quantized_row::RowWeigher<row_format, cb_row, cb_b, inverse_snap_step_bits>;
+    compute_kernel_hw_startup(cb_row, cb_b, cb_acc);
     // (no runtime args: whether this core accumulates differs by chip, and one program for the mesh needs them alike)
     cb_wait_front(cb_meta, 1);
     const uint32_t first_page = read_tile_value(cb_meta, 0, 0);
@@ -126,7 +137,11 @@ void kernel_main() {
         return;
     }
     const uint32_t n_tokens = first_page & ~kMetaActive;
-    mul_bcast_scalar_init(cb_row, cb_w);
+    if constexpr (quantized_rows) {
+        Weigher::init();
+    } else {
+        mul_bcast_scalar_init(cb_row, cb_w);
+    }
     uint8_t has_rows[max_tokens];
     for (uint32_t i = 0; i < max_tokens; ++i) {
         has_rows[i] = 0;
@@ -141,17 +156,26 @@ void kernel_main() {
         }
         cb_wait_front(cb_row, tiles_per_row);
         cb_wait_front(cb_w, 1);
+        if constexpr (fp8_rows) {
+            cb_wait_front(cb_fac, tiles_per_row);
+        }
+        // (quantized rows: the gate's bf16 bits, element 0 of the gate tile)
+        const uint32_t gate_bits = quantized_rows ? read_tile_value(cb_w, 0, 0) & 0xFFFFu : 0u;
         pack_reconfig_l1_acc(has_rows[token] ? 1 : 0);
         for (uint32_t first = 0; first < tiles_per_row; first += kDestTiles) {
             const uint32_t count = tiles_per_row - first < kDestTiles ? tiles_per_row - first : kDestTiles;
             tile_regs_acquire();
-            if constexpr (snap) {
+            if constexpr (quantized_rows) {
+                Weigher::weigh(first, count, gate_bits);
+            } else if constexpr (snap) {
                 mul_bcast_scalar_init(cb_row, cb_w);
             }
-            for (uint32_t j = 0; j < count; ++j) {
-                mul_tiles_bcast_scalar(cb_row, cb_w, first + j, 0, j);
+            if constexpr (!quantized_rows) {
+                for (uint32_t j = 0; j < count; ++j) {
+                    mul_tiles_bcast_scalar(cb_row, cb_w, first + j, 0, j);
+                }
             }
-            if constexpr (snap) {  // every term to its int32 count of q
+            if constexpr (snap && !quantized_rows) {  // every term to its int32 count of q
                 snap_sfpu_init();
                 for (uint32_t j = 0; j < count; ++j) {
                     snap_to_sign_magnitude_count_tile<inverse_snap_step_bits>(j);
@@ -167,6 +191,9 @@ void kernel_main() {
         has_rows[token] = 1;
         cb_pop_front(cb_row, tiles_per_row);
         cb_pop_front(cb_w, 1);
+        if constexpr (fp8_rows) {
+            cb_pop_front(cb_fac, tiles_per_row);
+        }
     }
     pack_reconfig_l1_acc(0);
     cb_push_back(cb_acc, n_tokens * tiles_per_row);

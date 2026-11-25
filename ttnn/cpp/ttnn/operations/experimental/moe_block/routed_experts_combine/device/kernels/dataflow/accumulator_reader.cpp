@@ -31,6 +31,7 @@
 #include "combine_options.hpp"
 #include "../combine_names.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/combine_plan_words.hpp"
+#include "quantized_row_stage.hpp"
 
 // Compile-time args: all named (combine_names.hpp), the same whether this role runs alone or in a two-role kernel;
 // the device plan's accessor args are the only positional ones
@@ -51,6 +52,21 @@ constexpr uint32_t RET = get_named_compile_time_arg_val(combine_names::kCreditsT
                    RINGS = get_named_compile_time_arg_val(combine_names::kRingsOffset),
                    LAYO = get_named_compile_time_arg_val(combine_names::kRingLayoutsToForwardOffset);
 constexpr uint32_t cb_w = get_named_compile_time_arg_val(combine_names::kWeightCb);
+// The rows' format (common/kernels/quantized_row.hpp): quantized rows go through quantized_row::RowStager - the values
+// into the row CB (Int8: as Bfp8_b tiles), the cells into a scratch (CELLS_OFF, arena-relative: a row in flight's
+// each), then the exponents / fp8 factor tiles (cb_fac) once the reads landed
+constexpr auto row_format =
+    static_cast<quantized_row::Format>(get_named_compile_time_arg_val(combine_names::kRowFormat));
+constexpr bool quantized_rows = quantized_row::is_quantized(row_format);
+constexpr bool fp8_rows = row_format == quantized_row::Format::Fp8E4m3;
+constexpr uint32_t cb_fac = get_named_compile_time_arg_val(combine_names::kFactorCb);
+constexpr uint32_t CELLS_OFF = get_named_compile_time_arg_val(combine_names::kCellsScratchOffset);
+using RowStager = quantized_row::RowStager<
+    row_format,
+    get_named_compile_time_arg_val(combine_names::kRowElements),
+    get_named_compile_time_arg_val(combine_names::kRowProducers),
+    cb_row,
+    cb_fac>;
 constexpr uint32_t MTAKEN = combine_formats::kMiscTaken, MRTOT = combine_formats::kMiscRowsConsumed;
 // MISC words (combine_formats.hpp): the local ring's landed[] array and hand-off base; kMiscPortLanded /
 // kMiscPortHandoffBase on an accumulator's own core, kMiscAccLandedOnPort / kMiscAccHandoffBaseOnPort when ports
@@ -316,6 +332,12 @@ void kernel_main() {
         regrant();  // (the slots the first grants left: to whoever has rows still to grant)
     }
     auto ring_slot = [&](uint32_t k, uint32_t tk) { return area + RINGS + (rbase[k] + (tk - t0[k]) % rdep[k]) * SLOT; };
+    RowStager stager;
+    stager.init();
+    // the cells scratch: a row in flight's each (landing_reads_in_flight, at most the row CB's depth), then one for
+    // push_row's (a row in this core's L1, possibly taken while pool rows are in flight)
+    const uint32_t cells_scratch = area + CELLS_OFF;
+    const uint32_t push_row_cells = cells_scratch + landing_reads_in_flight * RowStager::kCellsBytes;
     auto push_row = [&](uint32_t slot) {  // a row in this core's L1: its gate weight (element 0), the row, its token
         volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + LASTPB);
         cb_reserve_back(cb_w, 1);
@@ -324,9 +346,24 @@ void kernel_main() {
         cb_push_back(cb_w, 1);
         cb_reserve_back(cb_row, NT);
         cb_reserve_back(cb_meta, 1);
-        noc_async_read(get_noc_addr(slot), get_write_ptr(cb_row), row_bytes);
+        uint32_t factor = 0;
+        if constexpr (fp8_rows) {
+            cb_reserve_back(cb_fac, NT);
+            factor = get_write_ptr(cb_fac);
+        }
+        if constexpr (quantized_rows) {
+            stager.issue(get_noc_addr(slot), get_write_ptr(cb_row), push_row_cells);
+        } else {
+            noc_async_read(get_noc_addr(slot), get_write_ptr(cb_row), row_bytes);
+        }
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_meta))[0] = local_token(tr);
         noc_async_read_barrier();
+        if constexpr (quantized_rows) {
+            stager.finish(get_write_ptr(cb_row), push_row_cells, factor);
+        }
+        if constexpr (fp8_rows) {
+            cb_push_back(cb_fac, NT);
+        }
         cb_push_back(cb_row, NT);
         cb_push_back(cb_meta, 1);
     };
@@ -391,13 +428,40 @@ void kernel_main() {
     constexpr uint32_t slots_probed_per_source = N > 16 ? 1 : (N > 8 ? 2 : 4);
     static_assert(N * slots_probed_per_source * fmt::kTrailerBytes <= 1024, "the trailer probes: 1 KB of CB_TAB");
     uint32_t inflight = 0;
+    // (quantized rows: each row in flight's row and factor pages, for its finish once the reads landed)
+    uint32_t inflight_row_l1[quantized_rows ? landing_reads_in_flight : 1];
+    uint32_t inflight_factor_l1[quantized_rows ? landing_reads_in_flight : 1];
     auto flush_rows = [&]() {
         noc_async_read_barrier();
         for (uint32_t i = 0; i < inflight; ++i) {  // (a row at a time: a push wraps the CB only at its exact end)
+            if constexpr (quantized_rows) {
+                stager.finish(inflight_row_l1[i], cells_scratch + i * RowStager::kCellsBytes, inflight_factor_l1[i]);
+            }
+            if constexpr (fp8_rows) {
+                cb_push_back(cb_fac, NT);
+            }
             cb_push_back(cb_row, NT);
             cb_push_back(cb_meta, 1);
         }
         inflight = 0;
+    };
+    // a row in flight's reads, from a slot on a flat expert core into the row CB's page rp (and its cells into the
+    // scratch, its factor pages reserved)
+    auto read_row = [&](uint64_t sn, uint32_t rp) {
+        if constexpr (quantized_rows) {
+            inflight_row_l1[inflight] = rp;
+            if constexpr (fp8_rows) {
+                cb_reserve_back(cb_fac, NT * (inflight + 1));
+                uint32_t fp = get_write_ptr(cb_fac) + inflight * NT * get_local_cb_interface(cb_fac).fifo_page_size;
+                if (fp >= get_local_cb_interface(cb_fac).fifo_limit) {
+                    fp -= get_local_cb_interface(cb_fac).fifo_size;
+                }
+                inflight_factor_l1[inflight] = fp;
+            }
+            stager.issue(sn, rp, cells_scratch + inflight * RowStager::kCellsBytes);
+        } else {
+            noc_async_read(sn, rp, row_bytes);
+        }
     };
     auto take_pool = [&](uint32_t k, volatile tt_l1_ptr uint32_t* tr) {
         const uint32_t tk = taken[k];
@@ -416,7 +480,7 @@ void kernel_main() {
         if (mp >= get_local_cb_interface(cb_meta).fifo_limit) {
             mp -= get_local_cb_interface(cb_meta).fifo_size;
         }
-        noc_async_read(sn, rp, row_bytes);  // the row
+        read_row(sn, rp);                   // the row
         mark_remote_slot_empty(sn);         // (the caller waits for both before the slot can be written again)
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mp)[0] = local_token(tr);
         taken[k] = tk + 1;
@@ -445,7 +509,7 @@ void kernel_main() {
         if (mp >= get_local_cb_interface(cb_meta).fifo_limit) {
             mp -= get_local_cb_interface(cb_meta).fifo_size;
         }
-        noc_async_read(sn, rp, row_bytes);  // the row
+        read_row(sn, rp);                   // the row
         mark_remote_slot_empty(sn);         // (the caller waits for both before the slot can be written again)
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mp)[0] = local_token(tr);
         own[i] = 0xFF;

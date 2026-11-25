@@ -82,6 +82,12 @@ struct MoEBlockConfig {
     // INT32 L1 accumulation), so the combine's sums are bit-identical in any landing order, exact up to (2^31 - 1) q
     // and saturating there (2^17 at 2^-14); 0: off (its one spelling) - fp32 sums, long chunks then nondeterministic
     float combine_snap = 0x1p-14f;
+    // The routed experts' output rows on the combine's wire (common/kernels/quantized_row.hpp): 0 bf16, 1 fp8 (e4m3 x
+    // a power-of-two scale), 2 int8 (sign-magnitude x a power-of-two scale) - quantized on the flat expert's down
+    // cores, consumed by the combine's accumulators; half the bf16 row's bytes. routed_y_quant_block: values a scale
+    // block (32, 64, 96; 0 the flat expert's down pass width, 96 for GLM-5.3).
+    uint32_t routed_y_quant = 0;
+    uint32_t routed_y_quant_block = 0;
     // the MoE head's router iterations (HeadLayout.router_iterations): 0 the planner's (by cost, each layout with the
     // fewest that fit), n at least n (tests: the iterated router where the planner would not pick it)
     uint32_t head_router_iterations = 0;
