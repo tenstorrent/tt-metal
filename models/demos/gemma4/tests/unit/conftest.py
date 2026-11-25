@@ -101,7 +101,11 @@ def _stub_runtime(patch):
         TILE_LAYOUT=object(),
         uint32=object(),
         int32=object(),
+        # Every KV dtype: the plugin's kv_layout keys a table by them at import.
         bfloat16=object(),
+        bfloat8_b=object(),
+        bfloat4_b=object(),
+        float32=object(),
     )
     patch.setitem(sys.modules, "ttnn", runtime)
     # generator_vllm imports vLLM's Gemma 4 processor classes and the multimodal
