@@ -61,7 +61,7 @@ def _sharded_placements(value) -> list:
 
 def test_expert_bias_update_uses_the_counts_of_the_whole_batch(hsdp_mesh):
     ctx = ttml.autograd.AutoContext.get_instance()
-    ctx.set_seed(SEED)
+    ttml.manual_seed(SEED)  # the C++ generator and ttml.init's, which draws the gate and expert weights
     layer = SparseMoEEP(_Cfg())
     tokens = np.random.default_rng(SEED).standard_normal((hsdp_mesh.num_devices(), 1, SEQ, DIM), dtype=np.float32)
     batch_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(ctx.get_device(), 0, None)
@@ -103,7 +103,7 @@ def test_the_update_compares_averages_bf16_cannot_hold(hsdp_mesh):
     against a mean of 300, averages of 300.5 and 299.5 must move the bias down and up, while BF16, two apart there,
     rounds both to the mean. Each device's counts are set directly, to even numbers BF16 holds exactly."""
     ctx = ttml.autograd.AutoContext.get_instance()
-    ctx.set_seed(SEED)
+    ttml.manual_seed(SEED)  # the C++ generator and ttml.init's, which draws the gate and expert weights
     layer = SparseMoEEP(_Cfg())
     local = np.full((hsdp_mesh.num_devices(), 1, 1, N_EXPERTS), 300.0, dtype=np.float32)
     local[0, 0, 0] = [302, 298, 300, 302, 298, 300, 302, 298]
@@ -128,7 +128,7 @@ def test_the_layers_share_one_synchronization_of_their_counts(hsdp_mesh, monkeyp
     """A model's MoE layers update their biases together: their counts are averaged over the mesh in one
     synchronization rather than one per layer, and each layer moves as it would alone."""
     ctx = ttml.autograd.AutoContext.get_instance()
-    ctx.set_seed(SEED)
+    ttml.manual_seed(SEED)  # the C++ generator and ttml.init's, which draws the gate and expert weights
     layers = [SparseMoEEP(_Cfg()) for _ in range(2)]
     tokens = np.random.default_rng(SEED).standard_normal((hsdp_mesh.num_devices(), 1, SEQ, DIM), dtype=np.float32)
     batch_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(ctx.get_device(), 0, None)
