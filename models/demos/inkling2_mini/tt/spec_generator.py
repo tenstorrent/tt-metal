@@ -495,7 +495,7 @@ class SpecGenerator(Generator):
 
 
 # DRAM free (GiB) after the model and the drafter that the verify steps need with their traces: 2-row passes;
-# 2- and 3-row passes. The far KV and the drafter context grow with max_ctx (19,584 + 12,288 B per token).
+# 2- and 3-row passes. The far KV and the drafter context grow with max_ctx (17,408 + 12,288 B per token).
 VERIFY_NEED_GIB = (0.46, 0.74)
 
 

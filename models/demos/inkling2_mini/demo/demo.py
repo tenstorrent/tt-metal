@@ -74,8 +74,8 @@ def main(argv=None):
         "--max-ctx",
         type=int,
         default=196608,
-        help="context limit. The far KV cache takes 19,584 B per token of it: 196608 leaves ~2.4 GiB of DRAM free "
-        "(decode only); 327680 is the largest that fits (0.05 GiB free). Decode cost follows the position, not this.",
+        help="context limit. The far KV cache takes 17,408 B per token of it: 196608 leaves 2.84 GiB of DRAM free "
+        "(decode only); 368640 is the largest that fits (0.05 GiB free). Decode cost follows the position, not this.",
     )
     ap.add_argument("--trace-mib", type=int, default=512)
     ap.add_argument("--gen", type=int, default=64)

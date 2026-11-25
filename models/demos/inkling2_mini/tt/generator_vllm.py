@@ -164,7 +164,7 @@ class Inkling2ForCausalLM:
         chunk, spare, spare_one = self._prefill_chunk()
         if why is None and chunk is None:
             why = (
-                f"{-spare:.2f} GiB of DRAM short at --max-model-len {self.max_ctx} (a smaller context frees 19,584 B "
+                f"{-spare:.2f} GiB of DRAM short at --max-model-len {self.max_ctx} (a smaller context frees 17,408 B "
                 "per token)"
             )
         if why is not None:

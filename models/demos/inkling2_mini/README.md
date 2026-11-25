@@ -8,8 +8,8 @@ Batch-1 decode (and chunked prefill) of
 | | |
 |---|---|
 | card | one Blackhole p100a: 28 GB DRAM in 7 banks, no Ethernet, opened as a 1x1 mesh |
-| DRAM use | weights ~20.5 GiB; the far KV cache takes 19,584 B per token of `--max-ctx` |
-| context | `--max-ctx 196608` (the demo's default) leaves ~2.4 GiB of DRAM free; 327680 is the largest that fits |
+| DRAM use | weights ~20.5 GiB; the far KV cache takes 17,408 B per token of `--max-ctx` |
+| context | `--max-ctx 196608` (the demo's default) leaves 2.84 GiB of DRAM free; 368640 is the largest that fits (0.05 GiB free) |
 | host | conversion peaks at ~3 GB RSS; the checkpoint is ~19 GB on disk and each weight cache ~21 GB |
 
 Every number in this file was measured on a p100a. The expert layouts are made for the card's DRAM bank count
@@ -264,7 +264,7 @@ vllm serve models/demos/inkling2_mini/vllm --tokenizer $INKLING_CKPT --served-mo
 |---|---|
 | `models/demos/inkling2_mini/vllm` | a small config.json in place of the checkpoint's: the transformers release vLLM 0.32 pins does not know its model type. The tokenizer and the chat template are the checkpoint's (`--tokenizer`) |
 | `TT_MODEL_CLASS_OVERRIDES` | registers the class with the plugin (the plugin itself is not changed) |
-| `--max-model-len` | the context: the far KV cache is allocated for it (19,584 B per token), as `--max-ctx` in the demo |
+| `--max-model-len` | the context: the far KV cache is allocated for it (17,408 B per token), as `--max-ctx` in the demo |
 | `--max-num-seqs 1` | the model is batch 1 and keeps one sequence of state on the card |
 | `--shutdown-timeout` | lets the engine close the card on Ctrl-C (vLLM kills it at once otherwise) |
 | `--reasoning-parser`, `--tool-call-parser` | vLLM's parsers for the model's reply format: the reasoning comes apart from the answer, also when streamed (that needs both) |
@@ -394,15 +394,16 @@ file each part should hold, and `INKLING_CARD_RESET` to a command to run after a
 
 ## Measured numbers
 
-One p100a, batch 1, the GPTQ-rounded caches of the two run modes. Decode: the traced step, median of 5 x 10
-steps, token read not included. Prefill: one traced call over the whole prompt, second replay.
+One p100a, batch 1, the GPTQ-rounded caches of the two run modes, a Release build of this tree on upstream
+`5ca42d6a6c0` (2026-11-25). Decode: the traced step, median of 5 x 10 steps, token read not included. Prefill:
+one traced call over the whole prompt, after the capture call; 32768 tokens: median of 6 replays.
 
 | | default mode | fast mode |
 |---|---:|---:|
-| decode step at position 2048 (4K context) | 14.6 ms (68 tok/s) | 13.0 ms (77 tok/s) |
-| decode step at position 122880 (128K context) | 19.8 ms (51 tok/s) | 18.2 ms (55 tok/s) |
-| chunked prefill, 8424-token prompt | 1.60 s (5280 tok/s) | 1.58 s (5340 tok/s) |
-| chunked prefill, 32768 tokens | 7.27 s (4510 tok/s) | 7.19 s (4560 tok/s) |
+| decode step at position 2048 (4K context) | 14.5 ms (69 tok/s) | 13.1 ms (76 tok/s) |
+| decode step at position 122880 (128K context) | 19.7 ms (51 tok/s) | 18.3 ms (55 tok/s) |
+| chunked prefill, 8424-token prompt | 1.61 s (5250 tok/s) | 1.58 s (5330 tok/s) |
+| chunked prefill, 32768 tokens | 7.31 s (4480 tok/s) | 7.23 s (4530 tok/s) |
 
 Quality against the CPU golden (bf16 Hugging Face model), four short prompts, 143 positions:
 
@@ -462,7 +463,7 @@ These rows were measured before the stash steps and the expert prefetch beside t
 plain step beside the drafter from 15.46 to 14.80 ms at 4K) and were not timed again in that harness.
 
 - DRAM: a drafter that covers N positions keeps 4,608 B per position (two of its three layers read the last 1,032
-  positions only and keep rings), beside the far KV's 19,584 B per token of `--max-ctx`.
+  positions only and keep rings), beside the far KV's 17,408 B per token of `--max-ctx`.
   `spec_generator.build(..., spec_ctx=N)` sizes it; past N the tapped model runs its quiet step with the same
   tokens, so spec decode does not lower the context limit. `modes.SPEC_MAX_CTX` (143,360;
   `INKLING_SPEC_MAX_CTX`) is the N a caller should use. The demo's `--spec` covers its whole `--max-ctx`, which
