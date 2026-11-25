@@ -1184,7 +1184,11 @@ class GRPOTrainer:
             with exit_on_error():
                 autograd_ctx = ttml.autograd.AutoContext.get_instance()
                 autograd_ctx.initialize_distributed_context(*sys.argv)
-                self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
+                # init_distributed_training already pinned the fabric config on both ranks.
+                autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
+                self.model, self.tokenizer = setup_ttml_model(
+                    transformer_config, device_config, self.model_source, device=autograd_ctx.get_device()
+                )
                 self._batch_layout = resolve_batch_layout()
                 bridge = HostWeightBridge.init_sender(mesh=autograd_ctx.get_device(), peer_rank=TTT_RANK)
                 self._rollout_client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
