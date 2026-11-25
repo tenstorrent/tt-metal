@@ -140,9 +140,9 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
                     *domain.mesh_graph, MeshId{0}, static_cast<int>(chip / cols), static_cast<int>(chip % cols));
                 vc2_route_table.resize(sizeof(table) / sizeof(uint32_t));
                 std::memcpy(vc2_route_table.data(), &table, sizeof(table));
-                // several meshes: each mesh's offset, then its chips' domain ids, in exit_node_table
+                // each mesh's offset, then its chips' domain ids, in exit_node_table
                 const auto meshes = control_plane.get_mesh_graph().get_mesh_ids();
-                if (meshes.size() > 1) {
+                if (domain.translates()) {
                     std::vector<uint8_t> map(**std::max_element(meshes.begin(), meshes.end()) + 1);
                     for (const auto& [node, domain_chip] : domain.domain_chip) {
                         if (node.chip_id == 0) {

@@ -123,6 +123,12 @@ std::optional<InterDomainMesh> embed(
 
 }  // namespace
 
+bool InterDomainMesh::translates() const {
+    return std::any_of(domain_chip.begin(), domain_chip.end(), [&](const auto& c) {
+        return c.first.mesh_id != domain_chip.begin()->first.mesh_id || c.first.chip_id != c.second;
+    });
+}
+
 std::optional<RoutingDirection> InterDomainMesh::direction(const FabricNodeId& a, const FabricNodeId& b) const {
     const auto ia = domain_chip.find(a);
     const auto ib = domain_chip.find(b);
@@ -136,13 +142,16 @@ std::optional<RoutingDirection> InterDomainMesh::direction(const FabricNodeId& a
 
 InterDomainMesh make_inter_domain_mesh(const MeshGraph& workload, const std::vector<DomainLink>& physical) {
     const auto meshes = workload.get_mesh_ids();
+    // one mesh already as square as any grid over its chips: it is the domain's mesh, chip for chip
     if (meshes.size() == 1) {
         const auto shape = workload.get_mesh_shape(meshes.front());
-        InterDomainMesh domain{.mesh_graph = line_mesh_graph(shape[0], shape[1])};
-        for (ChipId chip = 0; chip < shape.mesh_size(); ++chip) {
-            domain.domain_chip[FabricNodeId(meshes.front(), chip)] = chip;
+        if (std::min(shape[0], shape[1]) == squarest_first(shape.mesh_size()).front()) {
+            InterDomainMesh domain{.mesh_graph = line_mesh_graph(shape[0], shape[1])};
+            for (ChipId chip = 0; chip < shape.mesh_size(); ++chip) {
+                domain.domain_chip[FabricNodeId(meshes.front(), chip)] = chip;
+            }
+            return domain;
         }
-        return domain;
     }
 
     const auto workload_link = workload_links(workload);

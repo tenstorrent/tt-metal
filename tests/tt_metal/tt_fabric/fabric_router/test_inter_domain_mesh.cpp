@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <set>
 #include <string>
 
@@ -100,12 +101,38 @@ TEST(InterDomainMesh, OneMeshIsTheWorkloads) {
     const auto workload = stacked(1, 4, 4);
     const auto domain = make_inter_domain_mesh(workload);
     EXPECT_EQ(domain.shape(), MeshShape(4, 4));
+    EXPECT_FALSE(domain.translates());
     for (const auto& [node, chip] : domain.domain_chip) {
         EXPECT_EQ(node.chip_id, chip);
     }
     EXPECT_EQ(domain.direction(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 1)), RoutingDirection::E);
     EXPECT_EQ(domain.direction(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 4)), RoutingDirection::S);
     EXPECT_FALSE(domain.direction(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 2)).has_value());
+}
+
+TEST(InterDomainMesh, OneLineMeshTakesTheSquareOnItsPhysicalLinks) {
+    // a 1x16 mesh snaking over a 4x4 grid of chips
+    const auto workload = stacked(1, 1, 16);
+    auto at = [](ChipId i) { return std::pair(i / 4, (i / 4) % 2 == 0 ? i % 4 : 3 - i % 4); };
+    std::vector<DomainLink> physical;
+    for (ChipId a = 0; a < 16; ++a) {
+        for (ChipId b = a + 1; b < 16; ++b) {
+            const auto [ya, xa] = at(a);
+            const auto [yb, xb] = at(b);
+            if (std::abs(static_cast<int>(ya) - static_cast<int>(yb)) +
+                    std::abs(static_cast<int>(xa) - static_cast<int>(xb)) ==
+                1) {
+                physical.push_back(DomainLink{.a = FabricNodeId(MeshId{0}, a), .b = FabricNodeId(MeshId{0}, b)});
+            }
+        }
+    }
+    const auto domain = make_inter_domain_mesh(workload, physical);
+    EXPECT_EQ(domain.shape(), MeshShape(4, 4));
+    EXPECT_TRUE(domain.translates());
+    EXPECT_EQ(domain.vc2_links.size(), physical.size() - 15);
+    for (const auto& l : domain.vc2_links) {
+        EXPECT_TRUE(domain.direction(l.a, l.b).has_value());
+    }
 }
 
 TEST(InterDomainMesh, TwoMeshesOfTwoByFourAreOneFourByFour) {
