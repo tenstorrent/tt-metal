@@ -482,6 +482,7 @@
 #define MEM_IERISC_FABRIC_ROUTING_PATH_END (MEM_IERISC_FABRIC_ROUTING_PATH_BASE + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE)
 #define MEM_IERISC_EXIT_NODE_TABLE_BASE MEM_IERISC_FABRIC_ROUTING_PATH_END
 #define MEM_IERISC_EXIT_NODE_TABLE_END (MEM_IERISC_EXIT_NODE_TABLE_BASE + MEM_EXIT_NODE_TABLE_SIZE)
+#define MEM_IERISC_ROUTING_TABLE_SIZE MEM_ROUTING_TABLE_SIZE
 // KeraunosNocChannels (hostdev/keraunos_noc_channels.h), written by the host before launch. One 64-byte line, so the
 // regions behind it keep their alignment.
 #define MEM_IERISC_NOC_CHANNELS_SIZE 64
@@ -507,9 +508,8 @@
 // Unreserved L1 of an idle Ethernet core: above the regions both Ethernet slots have.
 #define MEM_IERISC_UNRESERVED_BASE \
     ((MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE + 63) & ~63)
-// Fabric router regions on a linked Keraunos CCE (ACTIVE_ETH), after the routing table. Router state and command
-// alias the routing table head, as on Blackhole.
-#define MEM_IERISC_ROUTING_TABLE_SIZE MEM_ROUTING_TABLE_SIZE
+// Fabric router regions on a linked Keraunos CCE (ACTIVE_ETH), after the regions both Ethernet slots have. Router
+// state and command alias the routing table head, as on Blackhole.
 #define MEM_IERISC_FABRIC_ROUTER_STATE_BASE MEM_IERISC_ROUTING_TABLE_BASE
 #define MEM_IERISC_FABRIC_ROUTER_COMMAND_BASE (MEM_IERISC_ROUTING_TABLE_BASE + 16)
 // sizeof(FabricTelemetry), including the postcode (4 B) and scratch (28 B) words at its end.
