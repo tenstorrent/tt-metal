@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 
@@ -81,10 +81,13 @@ ProgramResources RegisterResources(
         program_impl.register_sram_arena_parameter(parameter.unique_id.get(), parameter.properties, mesh_device);
     }
     resources.tensor_parameters = RegisterTensorParameters(spec, mesh_device, program_impl);
+    for (const auto& parameter : spec.global_semaphore_parameters) {
+        program_impl.register_global_semaphore_parameter(parameter.unique_id.get(), mesh_device);
+    }
     resources.dfbs = RegisterDataflowBuffers(spec, collected, risc_masks, program_impl);
 
     // Reserve PrefetcherPipe slots (one per kernel accessor group) from the spec geometry, register
-    // relay DFBs against them, and record each parameter's placement for SetProgramRunArgs. Must
+    // relay DFBs against them, and record each parameter's placement for Program::set_program_run_args. Must
     // precede kernel creation: the slot id is baked into the kernel's `pipe::<accessor>` token and
     // a relay DFB's `dfb::` token.
     resources.prefetcher_pipes =

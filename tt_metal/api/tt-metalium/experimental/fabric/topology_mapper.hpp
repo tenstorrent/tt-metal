@@ -20,9 +20,9 @@
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
-#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
 
 namespace tt {
 class Cluster;

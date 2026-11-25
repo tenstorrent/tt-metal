@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/services/h2d_socket_service.hpp"
+#include "ttnn/core.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -17,25 +18,25 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
 #include <internal/l1_ecc_halt.hpp>
 #include <internal/service/service_core_manager.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/memory_pin.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/memory/utils/memory_pin.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-umd/driver_atomics.hpp>
 
 #include "socket_service_common.hpp"
@@ -746,7 +747,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         ++completion_index;
     }
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    EnqueueMeshWorkload(ttnn::core::current_mesh_command_queue(*mesh_device_), *workload_, /*blocking=*/false);
     start_host_push_workers();
 }
 
@@ -828,7 +829,7 @@ H2DStreamService::~H2DStreamService() {
         signal_termination();
 
         if (mesh_device_) {
-            distributed::Finish(mesh_device_->mesh_command_queue());
+            distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device_));
         }
 
         // Wait for each kernel to actually return (RUN_MSG_DONE), not just for

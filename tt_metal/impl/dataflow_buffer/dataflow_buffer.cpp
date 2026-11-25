@@ -15,11 +15,11 @@
 #include <string>
 #include <type_traits>
 
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
@@ -39,6 +39,35 @@ static bool dfb_dm_side_credits_split(const DataflowBufferImpl& dfb, bool is_pro
     const bool side_blocked = (is_producer ? config.pap : config.cap) == ::dfb::AccessPattern::BLOCKED;
     const uint32_t other_side_count = is_producer ? config.num_consumers : config.num_producers;
     return dfb_is_blocked_strided(config) && side_blocked && other_side_count > 1;
+}
+
+// Entries one implicit-sync op moves on a DM of this side: DataflowBuffer::side_share(). A BLOCKED side
+// moves the block size written into every hart's interface, which is the producer block when both sides
+// are BLOCKED. The STRIDED side of a mixed ring moves block / stride_in_entries entries, or 1 when the
+// block is no larger than that stride. A DM on that STRIDED side keeps stride_in_entries; the widened
+// hops belong to the BLOCKED DM side, and that side does not divide. Every issuer on a side gets the same
+// value, so DM0 reads it from the txn descriptor instead of from each hart's exit record.
+static uint32_t dfb_dm_side_op_entries(const DataflowBufferImpl& dfb, bool is_producer) {
+    const DataflowBufferConfig& config = dfb.config;
+    const bool producer_blocked = config.pap == ::dfb::AccessPattern::BLOCKED;
+    const bool consumer_blocked = config.cap == ::dfb::AccessPattern::BLOCKED;
+    const bool this_blocked = is_producer ? producer_blocked : consumer_blocked;
+    const bool peer_blocked = is_producer ? consumer_blocked : producer_blocked;
+    uint32_t block = 1u;
+    if (producer_blocked) {
+        block = std::max<uint32_t>(config.producer_block_size, 1u);
+    } else if (consumer_blocked) {
+        block = std::max<uint32_t>(config.consumer_block_size, 1u);
+    }
+    if (this_blocked) {
+        return block;
+    }
+    if (!peer_blocked) {
+        return 1u;
+    }
+    const uint32_t stride = dfb.stride_in_entries;
+    TT_FATAL(stride != 0, "DFB {}: stride_in_entries is 0", dfb.id);
+    return block > stride ? block / stride : 1u;
 }
 
 namespace {
@@ -91,7 +120,7 @@ uint32_t align_dfb_config_transfer_size(const Hal& hal, uint32_t payload_bytes) 
 dfb_dm0_txn_descriptor_image_t build_dm0_txn_descriptor_image(
     uint8_t num_tcs,
     const std::vector<::dfb::PackedTileCounter>& tcs,
-    uint8_t tiles_to_post_or_ack,
+    uint16_t tiles_to_post_or_ack,
     const dfb_dm0_finish_info_t& finish) {
     TT_FATAL(
         num_tcs <= ::dfb::MAX_TCS_PER_TXN,
@@ -128,7 +157,7 @@ std::vector<uint8_t> serialize_dm0_isr_txn_hw_pool_for_core(
 
     const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
     std::vector<uint8_t> pool(hw_bytes, 0);
-    auto write_threshold = [&](uint8_t txn_id, uint8_t threshold) {
+    auto write_threshold = [&](uint8_t txn_id, uint16_t threshold) {
         dfb_dm0_isr_txn_threshold_t entry = {};
         entry.threshold = threshold;
         std::memcpy(
@@ -215,6 +244,10 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
 
         prod_finish.num_txn_ids = dfb->producer_txn_descriptor.num_txn_ids;
         cons_finish.num_txn_ids = dfb->consumer_txn_descriptor.num_txn_ids;
+        prod_finish.op_entries = dfb_narrow_field<uint8_t>(
+            dfb_dm_side_op_entries(*dfb, /*is_producer=*/true), dfb->id, "producer op_entries");
+        cons_finish.op_entries = dfb_narrow_field<uint8_t>(
+            dfb_dm_side_op_entries(*dfb, /*is_producer=*/false), dfb->id, "consumer op_entries");
         const uint8_t num_prod_tcs = static_cast<uint8_t>(blob_producer_tcs.size());
         const uint8_t num_cons_tcs = static_cast<uint8_t>(blob_consumer_tcs.size());
         const auto prod_desc = producer_live ? build_dm0_txn_descriptor_image(
@@ -537,6 +570,17 @@ static uint32_t dfb_effective_block_entries(const DataflowBufferImpl& dfb, bool 
     return std::max<uint32_t>(is_producer ? config.producer_block_size : config.consumer_block_size, 1u);
 }
 
+// NoC packets in one implicit-sync transaction: its bytes over the HAL's max bytes per packet, rounded up.
+// Quasar's overlay splits a transaction into packets of at most that size, and the tiles-to-process
+// counters count one per packet, so the ISR threshold must be in packets.
+static uint32_t dfb_packets_per_txn(const DataflowBufferImpl& dfb, bool is_producer) {
+    const uint32_t max_bytes_in_packet =
+        MetalContext::instance(dfb.get_context_id()).hal().get_noc_max_bytes_in_packet();
+    TT_ASSERT(max_bytes_in_packet != 0, "HAL does not report the NoC max bytes per packet");
+    const uint32_t txn_bytes = dfb_effective_block_entries(dfb, is_producer) * dfb.config.entry_size;
+    return std::max<uint32_t>(tt::div_up(txn_bytes, max_bytes_in_packet), 1u);
+}
+
 // BLOCKED <-> STRIDED rings: every (producer, consumer) pair shares one tile counter.
 // Transactions a DM hart does on one counter before moving to the next (0 = split: every
 // transaction touches all counters).
@@ -555,40 +599,6 @@ static uint32_t dfb_dm_side_counter_share(const DataflowBufferImpl& dfb, bool is
         }
     }
     return dfb_dm_side_credits_split(dfb, is_producer) ? 0u : 1u;
-}
-
-// A block must fit one NoC packet, or the ISR would fire on the first fragment.
-static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& dfb) {
-    const auto& hal = MetalContext::instance(dfb.get_context_id()).hal();
-    if (!hal.has_tile_counter_registers()) {
-        return;
-    }
-    const DataflowBufferConfig& config = dfb.config;
-    if (!config.enable_producer_implicit_sync && !config.enable_consumer_implicit_sync) {
-        return;
-    }
-    const uint32_t noc_max_burst_bytes = hal.get_noc_max_burst_size_bytes();
-    const auto check_side = [&](bool is_producer) {
-        const bool implicit_sync =
-            is_producer ? config.enable_producer_implicit_sync : config.enable_consumer_implicit_sync;
-        const bool has_dm = has_dm_risc(is_producer ? config.producer_risc_mask : config.consumer_risc_mask);
-        const uint32_t burst = dfb_effective_block_entries(dfb, is_producer);
-        if (!(implicit_sync && has_dm && burst > 1)) {
-            return;
-        }
-        TT_FATAL(
-            burst * config.entry_size <= noc_max_burst_bytes,
-            "DFB {}: implicit-sync BLOCKED {} requires block_size * entry_size <= {} bytes (one NoC "
-            "packet); got {} B ({} x {}). Use explicit sync for larger blocks.",
-            dfb.id,
-            is_producer ? "producer" : "consumer",
-            noc_max_burst_bytes,
-            burst * config.entry_size,
-            burst,
-            config.entry_size);
-    };
-    check_side(/*is_producer=*/true);
-    check_side(/*is_producer=*/false);
 }
 
 size_t serialize_dfb_config_for_core(
@@ -914,14 +924,16 @@ size_t serialize_dfb_config_for_core(
             flags |= static_cast<uint8_t>(dfb->tensix_trisc_mask & DFB_HART_FLAG_TRISC_MASK);
             entry.flags = flags;
 
-            // Txn descriptor (DM harts 0-7 only; TRISC leaves zero).
+            // Txn descriptor (DM harts 0-7 only; TRISC leaves zero). The 16-bit counts go straight into the DM
+            // scalar pack below, not through `entry`.
+            uint16_t num_entries_per_txn_id = 0;
+            uint16_t num_entries_per_txn_id_per_tc = 0;
             if (is_dm_hart) {
                 const dfb_txn_id_descriptor_t& txn =
                     rc.is_producer ? dfb->producer_txn_descriptor : dfb->consumer_txn_descriptor;
                 entry.num_txn_ids = txn.num_txn_ids;
-                entry.threshold = txn.num_entries_to_process_threshold;
-                entry.num_entries_per_txn_id = txn.num_entries_per_txn_id;
-                entry.num_entries_per_txn_id_per_tc = txn.num_entries_per_txn_id_per_tc;
+                num_entries_per_txn_id = txn.num_entries_per_txn_id;
+                num_entries_per_txn_id_per_tc = txn.num_entries_per_txn_id_per_tc;
                 for (uint8_t t = 0; t < txn.num_txn_ids && t < ::dfb::NUM_TXN_IDS; t++) {
                     entry.txn_ids[t] = txn.txn_ids[t];
                 }
@@ -939,20 +951,18 @@ size_t serialize_dfb_config_for_core(
             // Write fixed header.
             std::memcpy(out.data() + offset, &entry, sizeof(entry));
 
-            // DM harts: mirror bytes [12,24) in LocalDFBInterface DTCM order so
-            // dfb_unpack_entry_header_dm stays consistent with on-disk layout.
+            // DM harts: bytes [12,24) carry the txn-id scalars in the layout
+            // dfb_unpack_entry_header_dm reads.
             if (is_dm_hart) {
                 dfb_write_dm_scalar_pack_to_blob(
                     out.data() + offset,
-                    num_tcs,
+                    entry.remapper_pair_index,
                     producer_signal_bit[di][h],
                     entry.txn_ids,
-                    entry.threshold,
-                    entry.num_entries_per_txn_id,
-                    entry.num_entries_per_txn_id_per_tc,
+                    num_entries_per_txn_id,
+                    num_entries_per_txn_id_per_tc,
                     entry.num_txn_ids,
-                    static_cast<uint8_t>((flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u),
-                    entry.remapper_pair_index);
+                    static_cast<uint8_t>((flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u));
             }
 
             // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 32B header,
@@ -1329,7 +1339,8 @@ static std::optional<std::string> dfb_txn_descriptor_violation(
     bool consumes_all,
     uint32_t block_size,
     bool credits_split,
-    uint32_t counter_share) {
+    uint32_t counter_share,
+    uint32_t packets_per_txn) {
     const uint32_t required_divisor = consumes_all
                                           ? static_cast<uint32_t>(num_txn_ids) * num_tcs_per_risc
                                           : static_cast<uint32_t>(num_txn_ids) * num_prods_or_cons * num_tcs_per_risc;
@@ -1349,15 +1360,23 @@ static std::optional<std::string> dfb_txn_descriptor_violation(
             entry_threshold,
             block_size);
     }
-    if (entry_threshold / block_size > 0xFFu || per_txn_all > 0xFFu) {
+    if (entry_threshold / block_size * packets_per_txn > 0xFFFFu || per_txn_all > 0xFFFFu) {
         return fmt::format(
-            "Implicit-sync DFB descriptor overflow: threshold {} / per_txn {} exceed uint8_t (num_entries {}, "
-            "num_txn_ids {}, num_prods_or_cons {}). Reduce num_entries or use explicit sync.",
-            entry_threshold / block_size,
+            "Implicit-sync DFB descriptor overflow: threshold {} (NoC packets) / per_txn {} exceed uint16_t "
+            "(num_entries {}, num_txn_ids {}, num_prods_or_cons {}). Reduce num_entries or use explicit sync.",
+            entry_threshold / block_size * packets_per_txn,
             per_txn_all,
             num_entries,
             num_txn_ids,
             num_prods_or_cons);
+    }
+    // DM0's finish info stores the op size in one byte (dfb_dm0_finish_info_t::op_entries).
+    if (std::max<uint32_t>(block_size, counter_share) > 0xFFu) {
+        return fmt::format(
+            "Implicit-sync DFB op size overflow: block_size {} / counter_share {} exceed uint8_t. Use explicit "
+            "sync on this side or a smaller block.",
+            block_size,
+            counter_share);
     }
     if (!consumes_all && entry_threshold % num_prods_or_cons != 0) {
         return fmt::format(
@@ -1369,6 +1388,24 @@ static std::optional<std::string> dfb_txn_descriptor_violation(
     if (per_txn % num_tcs_per_risc != 0) {
         return fmt::format(
             "num_entries_per_txn_id {} must be divisible by num_tcs_per_risc {}", per_txn, num_tcs_per_risc);
+    }
+    // One uncredited batch moves per_tc entries on a counter. prepare_implicit_* and
+    // dfb_dm0_flush_side read that gap as a signed 16-bit distance, so it must be below
+    // 32768: 32768 is int16's minimum and every larger gap looks non-negative. The wait then
+    // returns as if the counter had caught up, and the exit top-up skips the increment and
+    // clears the count, so the other side waits forever.
+    const uint32_t per_tc = per_txn / num_tcs_per_risc;
+    if (per_tc >= 0x8000u) {
+        return fmt::format(
+            "Implicit-sync DFB per-counter batch {} is at least 32768 entries (num_entries {}, num_txn_ids {}, "
+            "num_prods_or_cons {}, num_tcs_per_risc {}). The tile counters are 16-bit and these credit checks are "
+            "signed, so an uncredited batch this large is lost. Reduce num_entries so it divides into smaller "
+            "batches, or use explicit sync on this side.",
+            per_tc,
+            num_entries,
+            num_txn_ids,
+            num_prods_or_cons,
+            num_tcs_per_risc);
     }
     if (counter_share > 1 && per_txn % (counter_share * num_tcs_per_risc) != 0) {
         return fmt::format(
@@ -1413,7 +1450,8 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
     ::dfb::AccessPattern access_pattern,
     uint32_t block_size,
     bool credits_split,
-    uint32_t counter_share) {
+    uint32_t counter_share,
+    uint32_t packets_per_txn) {
     const uint8_t num_prods_or_cons = is_producer ? num_producers : num_consumers;
     const uint8_t num_txn_ids = static_cast<uint8_t>(txn_ids.size());
     const bool consumes_all = !is_producer && (access_pattern == ::dfb::AccessPattern::ALL);
@@ -1425,7 +1463,8 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
         consumes_all,
         block_size,
         credits_split,
-        counter_share);
+        counter_share,
+        packets_per_txn);
     TT_FATAL(!violation, "{}", *violation);
 
     // The threshold counts transactions (one per block), credits count entries. ALL consumers
@@ -1435,10 +1474,11 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
 
     dfb_txn_id_descriptor_t desc = {};
     desc.num_txn_ids = num_txn_ids;
-    desc.num_entries_to_process_threshold = static_cast<uint8_t>(entry_threshold / block_size);
+    // The hardware counts NoC packets, so a transaction larger than one packet counts packets_per_txn times.
+    desc.num_entries_to_process_threshold = static_cast<uint16_t>(entry_threshold / block_size * packets_per_txn);
     // Transactions each DM producer/consumer contributes per txn id, and each of its TCs.
-    desc.num_entries_per_txn_id = static_cast<uint8_t>(consumes_all ? per_txn_all : per_txn_all / num_prods_or_cons);
-    desc.num_entries_per_txn_id_per_tc = static_cast<uint8_t>(desc.num_entries_per_txn_id / num_tcs_per_risc);
+    desc.num_entries_per_txn_id = static_cast<uint16_t>(consumes_all ? per_txn_all : per_txn_all / num_prods_or_cons);
+    desc.num_entries_per_txn_id_per_tc = static_cast<uint16_t>(desc.num_entries_per_txn_id / num_tcs_per_risc);
     for (uint8_t i = 0; i < num_txn_ids; i++) {
         desc.txn_ids[i] = txn_ids[i];
     }
@@ -1456,7 +1496,8 @@ static uint8_t compute_optimal_txn_id_count(
     bool consumes_all,
     uint32_t block_size,
     bool credits_split,
-    uint32_t counter_share) {
+    uint32_t counter_share,
+    uint32_t packets_per_txn) {
     for (uint8_t n = 2; n <= ::dfb::NUM_TXN_IDS; n++) {
         if (!dfb_txn_descriptor_violation(
                 num_entries,
@@ -1466,7 +1507,8 @@ static uint8_t compute_optimal_txn_id_count(
                 consumes_all,
                 block_size,
                 credits_split,
-                counter_share)) {
+                counter_share,
+                packets_per_txn)) {
             return n;
         }
     }
@@ -1680,7 +1722,8 @@ static dfb_txn_id_descriptor_t make_txn_descriptor(
         is_producer ? config.pap : config.cap,
         effective_block_size,
         dfb_dm_side_credits_split(dfb, is_producer),
-        dfb_dm_side_counter_share(dfb, is_producer));
+        dfb_dm_side_counter_share(dfb, is_producer),
+        dfb_packets_per_txn(dfb, is_producer));
 }
 
 uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_producer) {
@@ -1860,7 +1903,6 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
 
     std::tie(capacity, stride_in_entries) = compute_capacity_and_stride(*this);
     validate_ring_extent(*this);
-    validate_implicit_burst_fits_one_packet(*this);
 
     if (configs_finalized && MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         const bool producer_is_tensix_only =
@@ -2536,8 +2578,6 @@ void ProgramImpl::finalize_single_dfb_config(
             std::max(config.producer_block_size, config.consumer_block_size));
     }
 
-    validate_implicit_burst_fits_one_packet(*dfb);
-
     // TRISC pack/unpack store ring extent in uint32_t L1-aligned units; host rejects rings > L1 / uint32.
     validate_ring_extent(*dfb);
 
@@ -2944,7 +2984,8 @@ void ProgramImpl::finalize_single_dfb_config(
                 /*consumes_all=*/false,
                 producer_block_size,
                 producer_credits_split,
-                producer_counter_share);
+                producer_counter_share,
+                dfb_packets_per_txn(*dfb, /*is_producer=*/true));
             auto producer_txn_ids = txn_id_allocator_.allocate(num_prod_txn_ids);
             dfb->producer_txn_descriptor = compute_txn_descriptor(
                 config.num_entries,
@@ -2956,7 +2997,8 @@ void ProgramImpl::finalize_single_dfb_config(
                 config.pap,
                 producer_block_size,
                 producer_credits_split,
-                producer_counter_share);
+                producer_counter_share,
+                dfb_packets_per_txn(*dfb, /*is_producer=*/true));
             log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: producer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
@@ -2979,7 +3021,8 @@ void ProgramImpl::finalize_single_dfb_config(
                 /*consumes_all=*/consumes_all,
                 consumer_block_size,
                 consumer_credits_split,
-                consumer_counter_share);
+                consumer_counter_share,
+                dfb_packets_per_txn(*dfb, /*is_producer=*/false));
             auto consumer_txn_ids = txn_id_allocator_.allocate(num_cons_txn_ids);
             dfb->consumer_txn_descriptor = compute_txn_descriptor(
                 config.num_entries,
@@ -2991,7 +3034,8 @@ void ProgramImpl::finalize_single_dfb_config(
                 config.cap,
                 consumer_block_size,
                 consumer_credits_split,
-                consumer_counter_share);
+                consumer_counter_share,
+                dfb_packets_per_txn(*dfb, /*is_producer=*/false));
             log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: consumer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
@@ -3141,7 +3185,7 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
                 "Aliased DFB {} was not overridden in alias group with "
                 "primary DFB {}. Aliased DFBs must have the same total size (entry_size * num_entries): when "
                 "one member is resized, every member of the group must be overridden to the same new total size "
-                "in one SetProgramRunArgs call.",
+                "in one Program::set_program_run_args call.",
                 member_id,
                 primary_id);
             if (!agreed_total.has_value()) {
@@ -3152,7 +3196,7 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
                 "Aliased DFBs in the alias group (primary DFB {}) have different total sizes ({} vs {} bytes) "
                 "after the requested override. Aliased DFBs must have the same total size (entry_size * "
                 "num_entries): every member of the group must be overridden to the same new total size in one "
-                "SetProgramRunArgs call.",
+                "Program::set_program_run_args call.",
                 primary_id,
                 agreed_total.value(),
                 it->second);

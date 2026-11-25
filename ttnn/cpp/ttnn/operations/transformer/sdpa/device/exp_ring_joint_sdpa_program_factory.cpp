@@ -13,12 +13,12 @@
 #include <cmath>
 #include <string>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include "ttnn/operations/math.hpp"
@@ -709,6 +709,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (args.program_config.has_value() && args.program_config->min_blocked_pack_tiles.has_value()) {
+        defines["SDPA_MIN_BLOCKED_PACK_TILES"] = std::to_string(*args.program_config->min_blocked_pack_tiles);
+    }
 
     // NOTE: KernelDescriptor construction is deferred until after chain construction
     // so that the mcast_enabled compile-time arg can be determined first.

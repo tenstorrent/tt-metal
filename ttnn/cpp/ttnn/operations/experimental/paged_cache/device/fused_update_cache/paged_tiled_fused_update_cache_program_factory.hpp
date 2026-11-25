@@ -6,7 +6,7 @@
 
 #include "paged_fused_update_cache_device_operation_types.hpp"
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -36,6 +36,11 @@ struct PagedTiledFusedUpdateCacheProgramFactory {
     // create_program_artifacts on a cache miss and override_runtime_arguments on a cache hit). Returns
     // empty in index-tensor mode (positions read on-device).
     static std::vector<PerIndexOffsets> compute_tiled_fused_offsets(
+        const PagedFusedUpdateCacheParams& operation_attributes, const PagedFusedUpdateCacheInputs& tensor_args);
+
+    // Bytes of program L1 (dataflow buffers not backed by a tensor) that the program needs on each core,
+    // from the same buffer sizes as create_program_artifacts.
+    static uint64_t program_l1_bytes_per_core(
         const PagedFusedUpdateCacheParams& operation_attributes, const PagedFusedUpdateCacheInputs& tensor_args);
 
     // Cache-hit hook: re-applies every tensor binding plus the hash-excluded cache_start_id /

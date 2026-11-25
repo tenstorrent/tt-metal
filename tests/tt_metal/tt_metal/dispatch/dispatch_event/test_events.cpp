@@ -6,16 +6,16 @@
 #include <fmt/base.h>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "tt_metal/distributed/mesh_event_impl.hpp"
 #include <memory>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "allocator/allocator.hpp"
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device/device_manager.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"

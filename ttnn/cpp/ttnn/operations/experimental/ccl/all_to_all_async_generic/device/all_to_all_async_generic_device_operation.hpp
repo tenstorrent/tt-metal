@@ -12,7 +12,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "all_to_all_async_generic_device_operation_types.hpp"
 #include "all_to_all_async_generic_program_factory.hpp"

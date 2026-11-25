@@ -75,7 +75,7 @@ def test_ccl_ddr_smoke_test(
     enable_trace,
     num_iters,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     # Check all the rows and columns independantly within the device
     submesh_device = bh_1d_mesh_device.create_submesh(
         ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, 0)
@@ -174,7 +174,7 @@ def test_ccl_other_smoke_test(
     enable_trace,
     num_iters,
 ):
-    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis, mesh_device=bh_2d_mesh_device)
     submesh_device = bh_2d_mesh_device.create_submesh(
         ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, 0)
     )

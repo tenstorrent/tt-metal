@@ -11,10 +11,11 @@
 #include "common/device_fixture.hpp"
 #include "context/metal_context.hpp"
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
 
@@ -95,7 +96,7 @@ void expect_flat_write_lands(
         }},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {KERNEL}, .target_nodes = node}},
     };
-    Program program = experimental::MakeProgramFromSpec(device, spec);
+    Program program(device, spec);
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KERNEL,
@@ -107,7 +108,7 @@ void expect_flat_write_lands(
              {"size", FLAT_WRITE_BYTES},
              {"posted", posted ? 1u : 0u}}),
     }};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(device.shape()), std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

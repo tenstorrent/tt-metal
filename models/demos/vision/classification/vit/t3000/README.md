@@ -19,25 +19,25 @@ https://huggingface.co/docs/transformers/en/model_doc/vit
 ## How to Run
 This demo includes two performance tests:
 
-#### Full ImageNet Inference Test
+#### Inference Test
 ```bash
-# Run with ImageNet validation data (requires ImageNet dataset)
-pytest models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
+# Synthetic images, or a labelled image folder given by VIT_IMAGE_DIR (one subfolder per class index)
+pytest models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_inference.py::test_run_vit_trace_2cqs_inference
 ```
 
 #### Performance Benchmark Test
 ```bash
 # Run with random inputs for performance measurement
-pytest models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference_with_random_inputs
+pytest models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_inference.py::test_run_vit_trace_2cqs_inference_with_random_inputs
 ```
 
 ## Testing
 Understand the tests:
-### 1. Full ImageNet Inference Test (`test_run_vit_trace_2cqs_inference`)
-- **Purpose**: Complete end-to-end inference on ImageNet-1k validation dataset
+### 1. Inference Test (`test_run_vit_trace_2cqs_inference`)
+- **Purpose**: Complete end-to-end inference on synthetic images or a labelled image folder
 - **Features**:
-  - Processes actual ImageNet images with preprocessing
-  - Calculates accuracy metrics
+  - Processes the images with preprocessing
+  - Calculates accuracy metrics for a labelled image folder
   - Provides detailed per-sample predictions
   - Measures both inference time and accuracy
 - **Use Case**: Validation and accuracy verification
@@ -65,4 +65,4 @@ Both tests report:
 - **Inference Time**: Average time per iteration (wall-clock time)
 - **FPS**: Frames per second (total samples processed per second)
 - **Compile Time**: Time for initial model compilation
-- **Accuracy**: (Full test only) Classification accuracy on ImageNet validation set
+- **Accuracy**: Classification accuracy, for a labelled image folder only

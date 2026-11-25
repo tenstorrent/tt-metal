@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <core/xtensor_utils.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
@@ -54,6 +54,24 @@ public:
 
     void SetUp() override {
         SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
+    }
+};
+
+// CP2 ring attention on a 1x2 mesh.
+class Mesh1x2RingSDPATest : public ttml::test_utils::Mesh1x2SuiteFixture {
+protected:
+    static void SetUpTestSuite() {
+        Mesh1x2SuiteFixture::SetUpTestSuite();
+        if (ttml::test_utils::system_supports_mesh(mesh_shape())) {
+            if (!ttml::autograd::ctx().is_distributed_context_initialized()) {
+                ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            }
+            ttml::autograd::ctx().set_seed(42);
+            ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
+            // A 1x2 mesh is a line, so CP takes its only non-trivial axis: cp_axis = 1, ring size 2.
+            ttml::autograd::ctx().initialize_parallelism_context(
+                {.enable_ddp = false, .enable_tp = false, .enable_cp = true});
+        }
     }
 };
 
@@ -485,6 +503,36 @@ TEST_F(GalaxyRingSDPATest, LargerSequenceCausalMaskBackward) {
         /*batch=*/2,
         /*num_heads=*/4,
         /*seq_len=*/256,
+        /*head_dim=*/64,
+        /*test_backward=*/true);
+}
+
+// CP2: step 0 is the diagonal block on both devices; at step 1 device 0 skips (its K/V come from later in the
+// sequence) while device 1 attends to device 0's chunk without a mask.
+TEST_F(Mesh1x2RingSDPATest, WithCausalMask) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/128,
+        /*head_dim=*/64,
+        /*test_backward=*/false);
+}
+
+TEST_F(Mesh1x2RingSDPATest, WithCausalMaskBackward) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/128,
+        /*head_dim=*/64,
+        /*test_backward=*/true);
+}
+
+// 256 rows per device, so each step's SDPA spans several tile rows, heads and batch entries.
+TEST_F(Mesh1x2RingSDPATest, LargerBatchSequenceBackward) {
+    TestRingAttention(
+        /*batch=*/2,
+        /*num_heads=*/8,
+        /*seq_len=*/512,
         /*head_dim=*/64,
         /*test_backward=*/true);
 }

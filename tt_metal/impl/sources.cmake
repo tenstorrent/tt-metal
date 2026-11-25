@@ -51,6 +51,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/prefetcher_pipe_dram_sender.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/drisc_service/seat_lock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp
@@ -179,6 +180,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_capture_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/event/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types_from_flatbuffer.cpp

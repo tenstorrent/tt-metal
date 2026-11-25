@@ -71,6 +71,10 @@ constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
 constexpr std::uint32_t NUM_WORDS_TILE_CNT      = 8;
 
+// MxFp4_2x exists only on the base/8-row variant, Int8_2x only on the 4-row variant.
+constexpr bool HAS_MXFP4_2X_SRC_FORMAT = MATH_ROWS == 8;
+constexpr bool HAS_INT8_2X_SRC_FORMAT  = MATH_ROWS == 4;
+
 struct tile_counter_t
 {
     std::uint32_t reserved0                    : 32;
@@ -99,6 +103,17 @@ tile_counter_u volatile* const tile_counters = reinterpret_cast<tile_counter_u v
 static std::uint32_t dest_register_offset = 0;
 #else
 extern thread_local std::uint32_t dest_register_offset;
+#endif
+
+// Tile-shape index (log2 Dest rows per tile) recorded by the last math init (_set_tile_shape_idx_gpr_) and read by the
+// per-tile Dest addressing (_set_dst_write_addr_by_rows_, get_dest_max_tiles, _llk_math_matmul_block_). Kept in TRISC
+// local memory because a RISC-V read of the TILE_SHAPE_IDX GPR stalls the math thread on every tile. Per TRISC like
+// dest_register_offset (tt-llk#1678): ENV_LLK_INFRA uses a plain static; the metal build defines it in
+// tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
+#ifdef ENV_LLK_INFRA
+static std::uint32_t dest_tile_shape_idx = 0;
+#else
+extern thread_local std::uint32_t dest_tile_shape_idx;
 #endif
 
 /**
@@ -151,8 +166,8 @@ constexpr std::uint32_t get_dest_max_tiles()
 
 /**
  * @brief Maximum number of tiles that fit in the math destination region, at the per-tile stride
- * the last math init programmed into the TILE_SHAPE_IDX GPR. Only valid for ops that address dest
- * by rows (_set_dst_write_addr_by_rows_) and whose init programs the GPR.
+ * the last math init recorded with _set_tile_shape_idx_gpr_ (dest_tile_shape_idx). Only valid for ops that
+ * address dest by rows (_set_dst_write_addr_by_rows_) and whose init calls _set_tile_shape_idx_gpr_.
  *
  * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
  * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
@@ -163,7 +178,7 @@ inline std::uint32_t get_dest_max_tiles()
 {
     constexpr std::uint32_t DEST_REGISTER_SIZE = get_dest_max_tiles<SYNC_MODE, EN_32BIT_DEST, DstTileShape::Tile32x32>()
                                                  << get_dest_tile_size_log2(DstTileShape::Tile32x32);
-    return DEST_REGISTER_SIZE >> ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
+    return DEST_REGISTER_SIZE >> dest_tile_shape_idx;
 }
 
 /**
