@@ -101,6 +101,7 @@ void compute_schedule() {
     // The schedule page (schedule_meta.hpp, from down_core_writer.cpp)
     cb_wait_front(schedule_cb, 1);
     [[maybe_unused]] const uint32_t zz_start = ZZ_NOW();
+    [[maybe_unused]] uint32_t zz_last_h = 0;
     auto page_word = [](uint32_t word) { return read_tile_value(schedule_cb, 0, word); };
     const uint32_t entries = page_word(schedule_page::kEntries);
     const uint32_t total_sub_blocks = page_word(schedule_page::kTotalSubBlocks);
@@ -123,6 +124,11 @@ void compute_schedule() {
         const uint32_t load = schedule_page::load_word_load(entry_load_word);
         const uint32_t region_first_slot = schedule_page::load_word_ring_region(entry_load_word) * blocks_per_expert;
         ZZ_WAIT(zz_h_wait, cb_wait_front(h_cb, h_tiles));
+        if constexpr (zz::on) {
+            if (done + 1 == total_sub_blocks) {
+                zz_last_h = ZZ_NOW() - zz_start;  // (the last h here)
+            }
+        }
         if constexpr (!row_major_y) {
             ZZ_WAIT(zz_out_wait, cb_reserve_back(out_cb, row_tiles * columns));
         }
@@ -193,6 +199,7 @@ void compute_schedule() {
     UNPACK((ZZ_EMIT("ZZ-DN-HWAIT", zz_h_wait)));
     UNPACK((ZZ_EMIT("ZZ-DN-WWAIT", zz_w_wait)));
     UNPACK((ZZ_EMIT("ZZ-DN-SPAN", ZZ_NOW() - zz_start)));
+    UNPACK((ZZ_EMIT("ZZ-DN-LASTH", zz_last_h)));
     PACK((ZZ_EMIT("ZZ-DN-OUTWAIT", zz_out_wait)));
 }
 

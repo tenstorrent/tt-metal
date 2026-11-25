@@ -166,9 +166,13 @@ void kernel_main() {
             // id reads "done" before its data has landed; the read-side twin: FLAT_COMBINE_OVERLAP_WORKLOG.md 6.14)
             while (fwd < iss && !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
             }
+            // (the acknowledged pieces counted into the successor's XARR with one increment)
+            const uint32_t fwd0 = fwd;
             while (fwd < iss && ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, 1 + fwd % depth)) {
-                noc_semaphore_inc(s_xarr, 1);
                 ++fwd;
+            }
+            if (fwd != fwd0) {
+                noc_semaphore_inc(s_xarr, fwd - fwd0);
             }
         }
         const uint32_t cons = *xcons;

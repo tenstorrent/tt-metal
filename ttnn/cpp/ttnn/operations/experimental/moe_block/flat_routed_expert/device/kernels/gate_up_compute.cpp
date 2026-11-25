@@ -102,6 +102,8 @@ ZZ_COUNTER(zz_w_wait);
 ZZ_COUNTER(zz_h_wait);
 ZZ_COUNTER(zz_acquire);
 ZZ_COUNTER(zz_pack);
+ZZ_COUNTER(zz_mm);     // (MATH: from the DEST acquire to the commit, a pass)
+ZZ_COUNTER(zz_tiles);  // (tile matmuls)
 FORCE_INLINE uint32_t weight_block(uint32_t block, uint32_t ring_slot) {
     if (block + 1 > weight_blocks_landed) {
         ZZ_WAIT(zz_w_wait, cb_wait_front(weight_cb, (block + 1 - weight_blocks_freed) * weight_block_tiles));
@@ -252,6 +254,7 @@ FORCE_INLINE void compute_sub_block_in_row_passes(
         const bool last_pass = pass + 1 == passes;
         matmul_rows_init(pass_rows);
         ZZ_WAIT(zz_acquire, tile_regs_acquire());
+        [[maybe_unused]] const uint32_t zz_m0 = ZZ_NOW();
         // (unpacker indices do not wrap: a block past the ring's end gets a negative offset from the read pointer)
         int32_t slot_offset = 0;  // block `block`'s slot - front, wrapped once past the ring's end
         // The load's weight blocks sit at ring slots first_slot .. in order, and a load is freed whole (in the last
@@ -286,6 +289,10 @@ FORCE_INLINE void compute_sub_block_in_row_passes(
                               : slot_offset + 1;
         }
         tile_regs_commit();
+        if constexpr (zz::on) {
+            zz_mm += ZZ_NOW() - zz_m0;
+            zz_tiles += blocks_per_load * x_block_k_tiles * pass_rows * row_width;
+        }
         tile_regs_wait();
         [[maybe_unused]] const uint32_t zz_p0 = ZZ_NOW();
         activate(pass_rows * row_width);
@@ -353,4 +360,6 @@ void kernel_main() {
     PACK((ZZ_EMIT("ZZ-GU-HWAIT", zz_h_wait)));
     PACK((ZZ_EMIT("ZZ-GU-PACKTIME", zz_pack)));
     MATH((ZZ_EMIT("ZZ-GU-ACQUIRE", zz_acquire)));
+    MATH((ZZ_EMIT("ZZ-GU-MM", zz_mm)));
+    MATH((ZZ_EMIT("ZZ-GU-MMTILES", zz_tiles * 1350)));  // (x 1350: the report divides by it)
 }
