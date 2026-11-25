@@ -1723,14 +1723,15 @@ constexpr bool matmul_fe_kernel_has_bfp8_cb() {
 #endif
     return false;
 }
-// sdpa's matmul_blocks (run-time cbs and block) in a kernel with no Bfp8_b CB at HiFi2, half sync and a 16-bit DEST:
-// main's unpack and math; the matmul forms read 0.7-0.8 % slower there on p100a (joint sdpa k128 q32 bf16)
+// sdpa's matmul_blocks (run-time cbs in a kernel of 12 or more CBs: the attention kernels, not bmm) with no Bfp8_b CB
+// at HiFi2, half sync and a 16-bit DEST: main's unpack and math; the matmul forms read 0.7-0.8 % slower there on p100a
+// (joint sdpa k128 q32 bf16)
 template <std::uint32_t in0_cb, std::uint32_t in1_cb>
 constexpr bool matmul_fe_main_runtime() {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
     return in0_cb == 0xFFu && in1_cb == 0xFFu && !matmul_fe_kernel_has_bfp8_cb() &&
            MATH_FIDELITY == MathFidelity::HiFi2 && DST_SYNC_MODE == DstSync::SyncHalf && !DST_ACCUM_MODE &&
-           MM_THROTTLE == 0 && !LLK_SIZE_MODE;
+           MM_THROTTLE == 0 && !LLK_SIZE_MODE && ::ckernel::llk_configured_cbs(unpack_src_format) >= 12;
 #else
     return false;
 #endif
