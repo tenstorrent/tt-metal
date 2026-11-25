@@ -72,7 +72,7 @@ python -m vllm.entrypoints.openai.api_server --model ornith-ai/Ornith-1.5-35B-A3
   without the override the plugin's builtin demo serves silently.
 - Prefix caching stays off (the model declares `supports_prefix_caching: False`; KV pages alone do not restore the
   recurrent state).
-- The KV pool comes from `doc/full_model/kv_capacity.json` (60,620 blocks, 1,938,816 schedulable tokens). The model
+- The KV pool comes from `doc/full_model/kv_capacity.json` (60,587 blocks, 1,937,760 schedulable tokens, measured at the pins). The model
   refuses to start when the hashed runtime sources differ from that record. A cold start, including trace capture,
   can take tens of minutes; allow a health timeout of at least 3600 s.
 - Card sampling: thinking on, temperature 1.0, top-p 0.95, top-k 20. GPQA needs `max_tokens` up to 262,144 minus the
@@ -94,9 +94,9 @@ base, vllm-tt-plugin 042a9486 + c018beb, vLLM 0.31.0, 32 slots):
 - **Prompts are prefilled one user at a time**; 32 simultaneous long prompts queue for their first token.
 - **Device sampling takes top_k 1..32.** The bring-up sampled up to top_k 64 on device with a widened
   `ttnn.sampling`, which is not shipped; requests with top_k 33..64 (and log-prob requests) sample on the host.
-- **The KV-capacity record was measured at the bring-up base**, not at the pinned tt-metal. Its source hashes were
-  updated to the vendored files (`measured_source_sha256` keeps the measured ones); re-measure at the pins before
-  relying on the full 60,620-block pool, and lower `--max-num-seqs` if the pool does not fit.
+- **The KV pool was re-measured at the pins** (`pin_measurement` in `doc/full_model/kv_capacity.json`): 60,587 blocks
+  pass and 60,588 run out of device memory (60,620 / 60,621 at the bring-up base). The pool leaves about 250 MB of
+  DRAM per chip after runtime; any change to the gated sources needs a new measurement.
 - **The bring-up ran 658 tt-metal commits newer than the pin.** Two of its op changes are not carried (the
   multicore `ttnn.topk` for the router, a perf-only change, and the separate expert down-projection format, unused by
   the selected BFP8 policy); kernels such as softplus and the sampler RNG differ at the pin. Accuracy and perf at the

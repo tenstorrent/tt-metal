@@ -90,9 +90,10 @@
   "modified_sha256": {
     "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
     "tt/generator.py": "9c4b22f2728aa9a10b128e5b62cdb424188673fd6f74862da7134d33d6aafad3",
-    "tt/generator_vllm.py": "df80fc17e39bba495568c1d549c019029c1c031b37c7830838ba77ad47c66e1c",
+    "tt/generator_vllm.py": "0cd71dca9b5ebded85e95279b3332ec0feba807d18bf9b9cc0c775b367a38906",
     "tt/model.py": "0d1601da71540b139778e2db48f64c4d0753c8d97aa473c74b303952efc2516f",
     "tt/multichip_decoder.py": "6b5788b9f706ec873f39cc9bc9df52ceeeac753aba2d779dc50df5d58b764996",
+    "tt/optimized_decoder.py": "623de15a65070045c404d1242071b27b03a6ac6038280ee1f313f9778d7244cb",
     "tt/sampling/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
     "tt/sampling/generator.py": "e7d72d2bf504293b00ed30555d0b7b66e71969aab6c28ee10b2f098c6659b2ff",
     "tt/sampling/tt_sampling.py": "ffa1b7a15b683cf4e47f40d7a664ef3240f7b635377f687711ddaaa641ae019f",
@@ -102,11 +103,12 @@
     "tt/__init__.py": "added (package marker)",
     "tt/sampling/__init__.py": "added (package marker)",
     "tt/generator.py": "Generator from the vendored tt/readiness_contract.py; SamplingGenerator, SamplingParams and _hash_request_seed_to_device_seed from the vendored tt/sampling; max_top_k 64 -> 32 at both SamplingGenerator sites (ttnn.sampling at the pin takes k <= 32)",
-    "tt/generator_vllm.py": "plugin contract at f6fe76b + patches.json plugin patches: supports_prefill_sampling_history -> supports_original_prompt_lens; preserve_prefill_state_slots True; prefix_cache_recurrent_state_in_model when QWEN_VLLM_PREFIX_CACHE > 0; max_device_top_k 64 -> 32; prefill kwarg prefill_sampling_mask (forwarded on every route) handed to the generator as sampling_mask on the device route only",
+    "tt/generator_vllm.py": "plugin contract at f6fe76b + patches.json plugin patches: supports_prefill_sampling_history -> supports_original_prompt_lens; preserve_prefill_state_slots True; prefix_cache_recurrent_state_in_model when QWEN_VLLM_PREFIX_CACHE > 0; max_device_top_k 64 -> 32; prefill kwarg prefill_sampling_mask (forwarded on every route) handed to the generator as sampling_mask on the device route only; spec_plan k_by_rows caps more than 16 live rows at 0 drafts instead of 1 (plugin patch: k_by_rows k=0 for supports_narrow_decode models), since f6fe76b carries a <=16-row proposal across the prefill of new peers and no [B>16, W>=2] verify shape exists",
     "tt/model.py": "Checkpoint path: prefer the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else the previous $HF_HOME resolution; config and tokenizer load from the same directory",
     "tt/multichip_decoder.py": "fused prefill matmul_reduce_scatter_prefill call passes dedicated_read_noc=True (tt_metal patch qwen3_6_27b-matmul-reduce-scatter-prefill-dedicated-read-noc, the validated NoC routing)",
     "tt/sampling/generator.py": "pin models/common/sampling/generator.py + m4 450c36d7 hunks (format_sampling_params(max_top_k=)); relative imports of _utils, tt_log_probs, tt_penalties made absolute models.common.sampling (pin); tt_sampling stays relative (vendored)",
     "tt/sampling/tt_sampling.py": "pin models/common/sampling/tt_sampling.py + m4 450c36d7 hunks (max_top_k validation, 64-candidate path; unused at max_top_k 32)",
-    "tt/tiled_prefill_conv_candidate.py": "reads the vendored tt/kernels/qkv_causal_conv1d_silu.cpp instead of parents[4] of the tt-metal tree"
+    "tt/tiled_prefill_conv_candidate.py": "reads the vendored tt/kernels/qkv_causal_conv1d_silu.cpp instead of parents[4] of the tt-metal tree",
+    "tt/optimized_decoder.py": "gate178 beta/decay compute kernel text: softplus_tile_init<true>() -> softplus_tile_init() (the tt-metal pin's API has no template argument; on Blackhole both are SFPU_UNARY_INIT(softplus))"
   }
 }

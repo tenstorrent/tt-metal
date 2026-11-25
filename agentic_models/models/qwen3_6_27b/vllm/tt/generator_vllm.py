@@ -73,10 +73,12 @@ class QwenVLLM:
                 reason="QWEN_VLLM_SPEC_K must be 1..3 and match num_speculative_tokens", supported_k=(1, 2, 3)
             )
         # B live rows x (1+k) candidate columns must fit the 32-row decode tile: k<=3 up to 8 rows,
-        # k=1 up to 16 rows; above 16 live rows the drafter declines (ordinary decode).
+        # k=1 up to 16 rows; above 16 live rows the drafter declines (ordinary decode). The cap there is 0
+        # (plugin patch: k_by_rows k=0 for narrow-decode models): plugin f6fe76b keeps a proposal made
+        # for <=16 rows across the prefill of new peers, and no [B>16, W>=2] verify shape exists.
         table = ((8, k), (16, 1)) if k > 1 else ((16, 1),)
         if max_num_seqs > table[-1][0]:
-            table += ((int(max_num_seqs), 1),)
+            table += ((int(max_num_seqs), 0),)
         return SpecPlan(
             effective_k=k,
             lanes_per_request=1,

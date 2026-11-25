@@ -122,6 +122,25 @@ def test_kv_cache_spec():
         NemotronForCausalLM.get_kv_cache_spec(config)
 
 
+def test_layer_kinds_accept_transformers_5_16_names():
+    """transformers 5.16 reports mamba/attention layers as linear_attention/full_attention."""
+    pytest.importorskip('vllm')
+    from agentic_models.models.nemotron_3_5_lightning_30b_a3b.vllm.tt.optimized_decoder import layer_kinds
+
+    hf = SimpleNamespace(num_key_value_heads=2, head_dim=128,
+                         layers_block_type=['linear_attention', 'full_attention', 'moe'] * 2)
+    assert layer_kinds(hf) == ['mamba', 'attention', 'moe'] * 2
+    config = SimpleNamespace(model_config=SimpleNamespace(hf_config=hf), cache_config=SimpleNamespace(block_size=32))
+    assert list(NemotronForCausalLM.get_kv_cache_spec(config)) == ['model.layers.0.self_attn', 'model.layers.1.self_attn']
+
+
+def test_initialize_restores_checkpoint_layer_names(monkeypatch):
+    """vLLM's get_num_layers_by_block_type(..., 'attention') must count the attention layers under transformers 5.16."""
+    hf = SimpleNamespace(layers_block_type=['linear_attention', 'full_attention', 'moe'] * 2)
+    NemotronForCausalLM.initialize_vllm_model(hf, mesh(), 32)
+    assert hf.layers_block_type == ['mamba', 'attention', 'moe'] * 2
+
+
 def test_generator_uses_vendored_modules():
     readiness = importlib.import_module(f'{PKG}.readiness_contract')
     assert issubclass(generator_module.NemotronGenerator, readiness.Generator)

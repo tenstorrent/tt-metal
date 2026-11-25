@@ -65,6 +65,26 @@ def test_capabilities_serving_spec():
         assert type(caps[key]) is bool, key
 
 
+def test_spec_plan_declines_drafts_above_16_live_rows():
+    """No [B>16, W>=2] verify shape exists, so k_by_rows caps 17..max_num_seqs rows at 0 drafts (needs the plugin
+    patch allowing k = 0 for supports_narrow_decode models; f6fe76b keeps proposals across a peer's prefill)."""
+    script = (
+        'import json, sys, types\n'
+        'm = types.ModuleType("vllm_tt_plugin.spec_decode")\n'
+        'm.SpecPlan = lambda **kw: kw\n'
+        'm.SpecReject = lambda **kw: kw\n'
+        'sys.modules["vllm_tt_plugin.spec_decode"] = m\n'
+        f'from {PKG}.tt.generator_vllm import QwenVLLM as Q\n'
+        'p = Q.spec_plan(None, 32, 3)\n'
+        'print(json.dumps({"k": p["effective_k"], "rows": p["k_by_rows"], "narrow": p["supports_narrow_decode"]}))'
+    )
+    full = {k: v for k, v in os.environ.items() if not k.startswith('QWEN_VLLM_')}
+    full['QWEN_VLLM_SPEC_K'] = '3'
+    out = subprocess.run([sys.executable, '-c', script], env=full, capture_output=True, text=True, check=True)
+    plan = json.loads(out.stdout.strip().splitlines()[-1])
+    assert plan == {'k': 3, 'rows': [[8, 3], [16, 1], [32, 0]], 'narrow': True}
+
+
 class FakeGenerator:
     def __init__(self):
         self.cache = object()
@@ -183,6 +203,13 @@ def test_kda_kernel_text_is_vendored():
     module.native_compute.cache_clear()
     source = module.native_compute()  # asserts the one template signature it rewrites is present
     assert 'void kernel_main()' in source and 'dfb::' not in source
+
+
+def test_beta_decay_kernel_uses_the_pin_softplus_init():
+    """At the tt-metal pin softplus_tile_init() takes no template argument (base 8c48b4e4's <true> fails to JIT)."""
+    from agentic_models.models.qwen3_6_27b.vllm.tt.optimized_decoder import _gate178_COMPUTE
+
+    assert 'softplus_tile_init();' in _gate178_COMPUTE and 'softplus_tile_init<' not in _gate178_COMPUTE
 
 
 def test_default_precision_is_config_p():

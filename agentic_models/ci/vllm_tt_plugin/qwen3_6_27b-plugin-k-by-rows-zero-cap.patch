@@ -1,0 +1,87 @@
+diff --git a/src/vllm_tt_plugin/model_runner.py b/src/vllm_tt_plugin/model_runner.py
+index 751a482..e4e47c5 100644
+--- a/src/vllm_tt_plugin/model_runner.py
++++ b/src/vllm_tt_plugin/model_runner.py
+@@ -1641,8 +1641,9 @@ class TTModelRunner:
+         """
+         if draft_cap is None:
+             draft_cap = num_drafts
+-        if not 1 <= draft_cap <= num_drafts:
+-            raise ValueError(f"draft_cap must be in [1, {num_drafts}], got {draft_cap}")
++        # 0 only from a k_by_rows entry of a supports_narrow_decode model.
++        if not 0 <= draft_cap <= num_drafts:
++            raise ValueError(f"draft_cap must be in [0, {num_drafts}], got {draft_cap}")
+         drafts = torch.full(
+             (len(row_req_ids), num_drafts), PLACEHOLDER_TOKEN_ID, dtype=torch.int32
+         )
+diff --git a/src/vllm_tt_plugin/spec_decode.py b/src/vllm_tt_plugin/spec_decode.py
+index bbf1b72..9bdea90 100644
+--- a/src/vllm_tt_plugin/spec_decode.py
++++ b/src/vllm_tt_plugin/spec_decode.py
+@@ -197,6 +197,9 @@ class SpecPlan:
+     # draft to a small batch and a short one to a large batch. The call shape
+     # stays ``1 + effective_k`` wide either way. Empty means ``effective_k`` at
+     # every batch size.
++    # A model that sets ``supports_narrow_decode`` may give k = 0: at that many
++    # rows it verifies no drafts, and a proposal made for a smaller batch is
++    # dropped when peers join before its verify (the step decodes narrow).
+     k_by_rows: tuple[tuple[int, int], ...] = ()
+ 
+     def __post_init__(self) -> None:
+@@ -261,10 +264,11 @@ class SpecPlan:
+                     "SpecPlan.k_by_rows max_rows must be positive integers in "
+                     f"strictly ascending order, got {k_by_rows!r}"
+                 )
+-            if not _is_int(k) or not 1 <= k <= self.effective_k:
++            min_k = 0 if self.supports_narrow_decode else 1
++            if not _is_int(k) or not min_k <= k <= self.effective_k:
+                 raise ValueError(
+                     "SpecPlan.k_by_rows draft caps must be integers in "
+-                    f"[1, effective_k={self.effective_k}], got {entry!r}"
++                    f"[{min_k}, effective_k={self.effective_k}], got {entry!r}"
+                 )
+             previous_max_rows = max_rows
+         # effective_k is what the platform publishes as num_speculative_tokens
+diff --git a/tests/spec/test_contract_conformance.py b/tests/spec/test_contract_conformance.py
+index 5017039..60cd285 100644
+--- a/tests/spec/test_contract_conformance.py
++++ b/tests/spec/test_contract_conformance.py
+@@ -103,6 +103,13 @@ def test_k_by_rows_selects_the_first_cap_covering_the_live_rows():
+         plan.draft_cap(9)
+ 
+ 
++def test_a_narrow_decode_model_may_cap_a_large_batch_at_zero_drafts():
++    plan = _plan(effective_k=3, supports_narrow_decode=True, k_by_rows=((8, 3), (16, 1), (32, 0)))
++    assert [plan.draft_cap(rows) for rows in (8, 9, 16, 17, 32)] == [3, 1, 1, 0, 0]
++    with pytest.raises(ValueError, match="k_by_rows"):
++        _plan(effective_k=3, k_by_rows=((8, 3), (32, 0)))
++
++
+ @pytest.mark.parametrize("live_rows", [0, -1, True, 2.0])
+ def test_draft_cap_refuses_a_row_count_that_is_not_a_positive_integer(live_rows):
+     with pytest.raises(ValueError, match="live_rows"):
+diff --git a/tests/spec/test_spec_greedy_e2e.py b/tests/spec/test_spec_greedy_e2e.py
+index 2a989a5..e409178 100644
+--- a/tests/spec/test_spec_greedy_e2e.py
++++ b/tests/spec/test_spec_greedy_e2e.py
+@@ -341,7 +341,19 @@ def test_the_draft_cap_drops_only_the_suffix_of_a_proposal():
+     assert counts.tolist() == [4, 1, 1]
+ 
+ 
+-@pytest.mark.parametrize("draft_cap", [0, 4])
++def test_a_zero_draft_cap_drops_every_proposal_and_keeps_the_counts():
++    # k_by_rows k = 0 (supports_narrow_decode models): peers joined after the
++    # proposal, so this step verifies no drafts and an unresolved commit stays.
++    drafts, num_valid, counts = TTModelRunner._spec_row_state(
++        {"a": 4}, {"a": [10, 11, 12], "b": [20]}, ["a", "b"], 3, 0
++    )
++
++    assert drafts.tolist() == [[-1, -1, -1], [-1, -1, -1]]
++    assert num_valid.tolist() == [0, 0]
++    assert counts.tolist() == [4, 1]
++
++
++@pytest.mark.parametrize("draft_cap", [-1, 4])
+ def test_a_draft_cap_outside_the_block_width_is_refused(draft_cap):
+     with pytest.raises(ValueError, match="draft_cap"):
+         TTModelRunner._spec_row_state({}, {}, ["a"], 3, draft_cap)

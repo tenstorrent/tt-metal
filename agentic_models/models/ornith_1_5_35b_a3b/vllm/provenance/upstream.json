@@ -56,12 +56,12 @@
     }
   },
   "modified_sha256": {
-    "doc/full_model/kv_capacity.json": "7b915873b276465daa40491a43036ed076f683e8a3e4a44d1425b08c70d02ddb",
-    "tt/generator.py": "89e5bbf585680c00be22525a89530deaf1b83f046b903454127369395fac4f0a",
+    "doc/full_model/kv_capacity.json": "cad5510bc770a1d431fc6f4c31db645e5a1461516c32aebe65a80730c2bc0da6",
+    "tt/generator.py": "d1f2069b41436fc9ac20aee1888388303317d89dfe467b841596ce350269b27b",
     "tt/generator_vllm.py": "68ed43ab531d47ce2cc2213b773f0562c539eb9d3985cd650c685cd32cec805f",
     "tt/model.py": "71f52290aaa6a36c8243346372ca9485ee9e4e518d5a933019220f8db2619d76",
-    "tt/multichip_decoder.py": "d281b8fb1743ec4014f21484b691bb3496c16cfd0c8c698fe1ced625b417d573",
-    "tt/optimized_decoder.py": "29a3c08428496422c1f115b1d58ecb840468b91db650ffbe999942de7c21b8c1"
+    "tt/multichip_decoder.py": "27cb1b98911a37af4aba6c332550f950fc66b2a75f70685a4a3019d2a8f32187",
+    "tt/optimized_decoder.py": "16220009139b860340026c02567e9bccb794cfb26137196a68198b43e26307bb"
   },
   "modifications": [
     "tt/generator.py: readiness_check.contract and the absolute model import become relative imports.",
@@ -69,6 +69,9 @@
     "tt/generator_vllm.py: model_capabilities gains preserve_prefill_state_slots=True (plugin patch P1).",
     "tt/multichip_decoder.py, tt/optimized_decoder.py: moe_fused_swiglu and post_combine_reduce call the ttnn.bringup forks (tt_metal patches tt-metal-bringup-moe-fused-swiglu / -post-combine-reduce).",
     "doc/full_model/kv_capacity.json: source_sha256 of the 5 gated runtime files set to the vendored bytes (measured_source_sha256 keeps the bring-up hashes); the 60620-block measurement is from the bring-up base and must be re-measured at the pins.",
-    "tt/model.py: resolve_checkpoint() prefers the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else $HF_HOME as before; kv_capacity.json source_sha256 tracks the edited file."
+    "tt/model.py: resolve_checkpoint() prefers the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else $HF_HOME as before; kv_capacity.json source_sha256 tracks the edited file.",
+    "tt/multichip_decoder.py, tt/optimized_decoder.py: the masked_bincount expert histogram pads its token rows to a multiple of 64 (expert id 256, which the op skips) because the pinned op splits rows over a fixed 64-core grid; the bring-up base op needed a multiple of 8 (tt-metal ddc05756f49). Counts are unchanged; kv_capacity.json source_sha256 tracks both files.",
+    "tt/generator.py: _remap_penalties reshapes the penalty buffers in TILE layout instead of row-major, because the pinned row-major reshape sizes its circular buffers by the 1 MiB row page and exceeds L1 for the replicated 262144-wide buffer (the bring-up base uses the codegen row-major reshape, tt-metal d7f23025721). Same rows are moved (checked exact on device for all four buffers); kv_capacity.json source_sha256 tracks the file.",
+    "doc/full_model/kv_capacity.json: pool re-measured at the pins (60587 pass / 60588 OOM, was 60620 / 60621 at the base); physical_num_blocks, physical_token_capacity, max_tokens_all_users and the pass/fail pair updated, method and probes recorded under pin_measurement."
   ]
 }

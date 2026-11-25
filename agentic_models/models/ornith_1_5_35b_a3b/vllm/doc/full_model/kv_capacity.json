@@ -9,9 +9,9 @@
   "fixed_slot_capacity": 32,
   "logical_context_per_request": 262144,
   "page_size": 32,
-  "physical_num_blocks": 60620,
-  "physical_token_capacity": 1939840,
-  "max_tokens_all_users": 1938816,
+  "physical_num_blocks": 60587,
+  "physical_token_capacity": 1938784,
+  "max_tokens_all_users": 1937760,
   "plugin_output_reservation_tokens": 1024,
   "plugin_output_reservation_blocks": 32,
   "plugin_output_reservation_batch": 32,
@@ -20,15 +20,15 @@
   "plugin_budget_formula": "ceil((max_tokens_all_users + max(block_size, output_tokens_per_step) * per_lane_max_batch) / block_size); pinned worker.py:795-833",
   "plugin_change": "No plugin edit by this promotion; verified clean checkout at the supplied current pin.",
   "null_block_note": "The physical pool includes upstream null-block accounting. The model hook budget is not raw schedulable payload; one physical page is unavailable to payload.",
-  "measured_largest_passing_blocks": 60620,
-  "measured_smallest_failing_blocks": 60621,
+  "measured_largest_passing_blocks": 60587,
+  "measured_smallest_failing_blocks": 60588,
   "hardware_bracket_attempts": 2,
   "source_sha256": {
     "tests/validate_full_capacity.py": "3c3df37b8668b8b678b742f24e723c14829db6a73291ff7933b48ebe1f7eeb0b",
     "tt/model.py": "71f52290aaa6a36c8243346372ca9485ee9e4e518d5a933019220f8db2619d76",
-    "tt/generator.py": "89e5bbf585680c00be22525a89530deaf1b83f046b903454127369395fac4f0a",
-    "tt/multichip_decoder.py": "d281b8fb1743ec4014f21484b691bb3496c16cfd0c8c698fe1ced625b417d573",
-    "tt/optimized_decoder.py": "29a3c08428496422c1f115b1d58ecb840468b91db650ffbe999942de7c21b8c1",
+    "tt/generator.py": "d1f2069b41436fc9ac20aee1888388303317d89dfe467b841596ce350269b27b",
+    "tt/multichip_decoder.py": "27cb1b98911a37af4aba6c332550f950fc66b2a75f70685a4a3019d2a8f32187",
+    "tt/optimized_decoder.py": "16220009139b860340026c02567e9bccb794cfb26137196a68198b43e26307bb",
     "tt/precision.py": "609bc75ab9dfb151032da03c2bd5dcb8ad9e5c01ff935b5cd39ae382eaa3bcb2"
   },
   "measured_source_sha256": {
@@ -7936,5 +7936,41 @@
   "evidence_packaging": {
     "scope": "Required runtime evidence paths use compact measured summaries for a portable local commit; original raw captures remain local and authoritative for re-running promotion. No numerical/policy/source guard changed.",
     "manifest": "doc/optimized_vllm/native_tail_capacity/portable_evidence.json"
+  },
+  "pin_measurement": {
+    "note": "Re-measured at the agentic-models QB2 pins (integration plan section 5, risk R7). physical_num_blocks, physical_token_capacity, max_tokens_all_users and the measured pass/fail pair are this measurement; the other fields (bytes, memory_measurements, program_cache, evidence) describe the bring-up base measurement and are kept for reference.",
+    "tt_metal": "58afa8579450ba8afd6df45d05ad01b2860cd32b + agentic-models patches 1-16 (carrier vkovacevic/agm-qb2-stopgap-v2)",
+    "vllm_tt_plugin": "f6fe76b63366053b648a7152e087daa3a507d033 + P1-P7",
+    "vllm": "0.32.0",
+    "host": "QB2 (4x Blackhole P300, 1x4 mesh), 2026-11-25",
+    "method": "Fresh process per size: open the 1x4 mesh (FABRIC_1D, worker_l1_size 1441792, trace_region_size 134217728), build this package's generator for 32 slots and 262144 context with an explicit shared full-attention pool of N blocks, run prepare() (every prefill bucket and the decode traces) and a 2100-token prompt + 64-token traced B32 decode. Pass = no device OOM. Bisected from 56000 (pass) and 60620 (fail).",
+    "largest_passing_blocks": 60587,
+    "smallest_failing_blocks": 60588,
+    "probes": {
+      "56000": "pass",
+      "58310": "pass",
+      "59465": "pass",
+      "60042": "pass",
+      "60331": "pass",
+      "60475": "pass",
+      "60547": "pass",
+      "60583": "pass",
+      "60587": "pass",
+      "60588": "oom",
+      "60589": "oom",
+      "60592": "oom",
+      "60601": "oom",
+      "60620": "oom"
+    },
+    "dram_after_state_free_bytes_per_bank": 59710400,
+    "dram_after_runtime_free_bytes_per_chip": 254568448,
+    "dram_after_runtime_largest_free_span_bytes_per_bank": 27476608,
+    "base_measurement": {
+      "physical_num_blocks": 60620,
+      "physical_token_capacity": 1939840,
+      "max_tokens_all_users": 1938816,
+      "measured_largest_passing_blocks": 60620,
+      "measured_smallest_failing_blocks": 60621
+    }
   }
 }

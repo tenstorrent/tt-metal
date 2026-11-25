@@ -32,8 +32,10 @@
   ],
   "modified_sha256": {
     "tt/generator.py": "60ac612c1a8df73308cbc5ac17d588fb4adb1cf9e28ba4c28e6e3e97619aa9f9",
-    "tt/generator_vllm.py": "e196daf2e751511f2ee142c58f6ca31ccd16d3865d1df72e24f65b22da446ecc",
+    "tt/generator_vllm.py": "a04a1007ffc70b0939347147362b7ad27064c96e38d3768008bfed11d6067f52",
     "tt/model.py": "b8ff57f5c8423e19f30839c9bba29275dcc0cea3d971779ae1d7103aa20920e4",
+    "tt/multichip_decoder.py": "2ad537d8ae052c76dea8e3ab5864f18791a6ab40d26ba4899e2c9daa8627b989",
+    "tt/optimized_decoder.py": "30c77313f7edfd51105444f33e63ba23e40fec3015aca5c0fb9ab1bbc8036af3",
     "tt/readiness_contract.py": "6603e75c8a2d7fddb52b675949f9b96a8fbdd95356e57e1e6b95f8a4df328297",
     "tt/tt_ccl.py": "1805fb9aa5907004c239ed685f5432125db005d6845d9a808b2af2e63fcf0430"
   },
@@ -54,6 +56,9 @@
     }
   },
   "edits": {
-    "tt/model.py": "Checkpoint path: prefer the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else the previous $HF_HOME resolution; config and tokenizer load from the same directory"
+    "tt/generator_vllm.py": "Layer kinds through optimized_decoder.layer_kinds(), which maps the transformers 5.16 NemotronH names (linear_attention, full_attention) back to the checkpoint names (mamba, attention) the port keys on (KV cache spec and per-layer cache allocation); initialize_vllm_model writes the checkpoint layer names back onto the vLLM hf_config, because vLLM 0.32 get_num_layers_by_block_type (the plugin KV-cache layer count) matches \"attention\" literally and counts 0 attention layers under the 5.16 names",
+    "tt/model.py": "Checkpoint path: prefer the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else the previous $HF_HOME resolution; config and tokenizer load from the same directory",
+    "tt/multichip_decoder.py": "Layer kinds through optimized_decoder.layer_kinds(), which maps the transformers 5.16 NemotronH names (linear_attention, full_attention) back to the checkpoint names (mamba, attention) the port keys on; 2-4 row indexed MoE decode flattens the routed expert ids as UINT32 then casts to UINT16, because the pin reshape rejects UINT16 tensors; the MoE decode combine matmul (NEMOTRON_MOE_COMBINE_MATMUL) zeroes non-finite routing weights first (unused rows of a partly filled 32-row decode bucket carried NaN weights and the 0 * NaN products in the selection matrix corrupted every live row: 17-31 concurrent requests decoded garbage)",
+    "tt/optimized_decoder.py": "Layer kinds through optimized_decoder.layer_kinds(), which maps the transformers 5.16 NemotronH names (linear_attention, full_attention) back to the checkpoint names (mamba, attention) the port keys on (new helper)"
   }
 }

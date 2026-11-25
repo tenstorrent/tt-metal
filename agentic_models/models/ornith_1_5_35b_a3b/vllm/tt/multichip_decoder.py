@@ -724,10 +724,13 @@ class MultichipDecoder(OptimizedDecoder):
             ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=self.compute), ttnn.bfloat16
         )
         ids = ttnn.typecast(ids, ttnn.uint16)
-        hist_ids = ttnn.pad(ids, ((0, 0), (0, 0), (0, physical - t), (0, 0)), value=256) if physical != t else ids
+        # The pinned masked_bincount splits rows over a fixed 64-core grid (rows % 64 == 0). Pad rows carry
+        # expert id 256, which the op skips (expert_idx < n_routed_experts), so the counts are unchanged.
+        hist_rows = (t + 63) // 64 * 64
+        hist_ids = ttnn.pad(ids, ((0, 0), (0, 0), (0, hist_rows - t), (0, 0)), value=256) if hist_rows != t else ids
         counts = ttnn.reshape(
             ttnn.experimental.deepseek_prefill.masked_bincount(
-                ttnn.reshape(hist_ids, (physical, 8)), self.route_mask, 256, 8
+                ttnn.reshape(hist_ids, (hist_rows, 8)), self.route_mask, 256, 8
             ),
             (1, 256),
         )

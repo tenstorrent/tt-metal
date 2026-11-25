@@ -287,6 +287,9 @@ class SlotState:
             owner.register_packed(name, getattr(generator, name))
         sampling = generator.sampler.tt_sampling
         for name in ("seeds_tt_tensor", "k_tensor", "p_tensor", "temp_tensor", "_greedy_col", "_scale_logprobs"):
+            # _scale_logprobs (per-row logprob temperature) is newer than the pinned models.common.sampling; absent there.
+            if name == "_scale_logprobs" and not hasattr(sampling, name):
+                continue
             owner.register_packed("sampling." + name, getattr(sampling, name))
         penalties = generator.sampler.tt_penalties
         for name in (

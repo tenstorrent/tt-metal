@@ -6026,7 +6026,7 @@ void kernel_main() {
     // source-register conversion, instead of silently upgrading this boundary.
     add_tiles(0,2,0,0,0);
     if constexpr(stage!=1) {
-        softplus_tile_init<true>();native_fp32_softplus_row(0);
+        softplus_tile_init();native_fp32_softplus_row(0);
     }
     reconfig_data_format_srca(0,3);copy_init(3);
     if constexpr(stage==0) {

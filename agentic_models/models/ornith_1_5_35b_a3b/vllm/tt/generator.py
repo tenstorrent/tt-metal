@@ -384,15 +384,15 @@ class OrnithGenerator(Generator):
         sources = remap + list(range(self.batch_size, 32))
         for name in ("prompt_mask", "output_mask", "output_counts", "output_counts_gathered"):
             target = getattr(self.penalties, name)
-            source = ttnn.to_layout(target, ttnn.ROW_MAJOR_LAYOUT)
             # A replicated 262144-int row is a 1MiB row-major page: clone's
             # double-buffered page CB exceeds L1. Keep each logical request
             # as 32 narrow rows while slicing/cloning/concatenating, then
-            # restore its exact original shape before tilizing into storage.
-            source = ttnn.reshape(source, (32, 32, target.shape[-1] // 32))
+            # restore its exact original shape. The reshapes stay in TILE
+            # layout (32 x W/32 is tile aligned): the pinned row-major reshape
+            # also sizes its buffers by the 1MiB input page and exceeds L1.
+            source = ttnn.reshape(target, (32, 32, target.shape[-1] // 32))
             rows = [ttnn.clone(source[i : i + 1, :, :]) for i in sources]
             moved = ttnn.reshape(ttnn.concat(rows, dim=0), target.shape)
-            moved = ttnn.to_layout(moved, ttnn.TILE_LAYOUT)
             ttnn.copy(moved, target)
         shadow = self.penalties._prompt_tokens_host
         if shadow is not None:

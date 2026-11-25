@@ -11,6 +11,7 @@ import torch
 
 import ttnn
 from agentic_models.models.nemotron_3_5_lightning_30b_a3b.vllm.tt.generator import NemotronGenerator
+from agentic_models.models.nemotron_3_5_lightning_30b_a3b.vllm.tt.optimized_decoder import layer_kinds
 from agentic_models.models.nemotron_3_5_lightning_30b_a3b.vllm.tt.precision import SELECTED, load_precision
 
 
@@ -54,6 +55,11 @@ class NemotronForCausalLM:
         obj = cls()
         obj.mesh = mesh_device
         obj.hf_config = hf_config
+        if getattr(hf_config, "layers_block_type", None) is not None:
+            # The plugin counts KV-cache layers with vLLM's get_num_layers_by_block_type(..., "attention"), which
+            # matches layers_block_type entries literally; transformers 5.16 reports them as full_attention, giving 0.
+            # Restore the names config.json holds (mamba / attention / moe) on this process's config.
+            hf_config.layers_block_type = layer_kinds(hf_config)
         obj.max_batch_size = max_batch_size
         obj.max_seq_len = max_seq_len
         # perf/multiuser: one decode trace per bucket (must match NemotronGenerator.decode_buckets).
@@ -103,7 +109,7 @@ class NemotronForCausalLM:
                 head_size=config.head_dim,
                 dtype=torch.bfloat16,
             )
-            for i in range(config.layers_block_type.count("attention"))
+            for i in range(layer_kinds(config).count("attention"))
         }
 
     def event(self, kind, **fields):
@@ -116,7 +122,7 @@ class NemotronForCausalLM:
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         if self.generator is not None:
             raise RuntimeError("The serving cache is allocated exactly once")
-        indices = [i for i, kind in enumerate(self.hf_config.layers_block_type) if kind == "attention"]
+        indices = [i for i, kind in enumerate(layer_kinds(self.hf_config)) if kind == "attention"]
         if len(per_layer_specs) != len(indices):
             raise ValueError("vLLM must supply one cache spec per attention layer")
         specs = []

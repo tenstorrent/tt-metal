@@ -2398,10 +2398,13 @@ class OptimizedDecoder(LightweightModule):
         capacity = (8 * t + 31 * min(256, 8 * t) + 31) // 32 * 32
         ids16 = ttnn.typecast(ids, ttnn.uint16)
         histogram_ids = ids16
-        if physical != t:
-            histogram_ids = ttnn.pad(ids16, ((0, 0), (0, 0), (0, physical - t), (0, 0)), value=256)
+        # The pinned masked_bincount splits rows over a fixed 64-core grid (rows % 64 == 0). Pad rows carry
+        # expert id 256, which the op skips (expert_idx < n_routed_experts), so the counts are unchanged.
+        hist_rows = (t + 63) // 64 * 64
+        if hist_rows != t:
+            histogram_ids = ttnn.pad(ids16, ((0, 0), (0, 0), (0, hist_rows - t), (0, 0)), value=256)
         hist = ttnn.experimental.deepseek_prefill.masked_bincount(
-            ttnn.reshape(histogram_ids, (physical, 8)),
+            ttnn.reshape(histogram_ids, (hist_rows, 8)),
             self.route_mask,
             256,
             8,

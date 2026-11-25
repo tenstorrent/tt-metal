@@ -271,3 +271,47 @@ def test_prefill_rejects_multimodal_inputs():
         adapter.prefill_forward(
             torch.zeros(1, 32, dtype=torch.int64), pixel_values=[torch.zeros(1)], prompt_lens=[32], start_pos=[0]
         )
+
+
+class FakeSpecGenerator:
+    """Records the ordinary decode the verify fallback runs; spec_verify must not be reached."""
+
+    def __init__(self):
+        self.spec = SimpleNamespace(U=8)
+        self.calls = []
+
+    def decode_forward_v1(self, tokens, start_pos, **kwargs):
+        self.calls.append((tokens.clone(), start_pos.clone(), dict(kwargs), dict(self._spec_pending_accepted)))
+        return (tokens.reshape(-1) + 1).to(torch.int64).reshape(-1, 1)
+
+    def spec_verify(self, *args):
+        raise AssertionError("the verify graph serves slots < 8 only")
+
+
+def test_verify_with_live_rows_past_the_verify_graph_decodes_narrow():
+    """Plugin f6fe76b keeps proposals across a prefill step: a verify can arrive with live rows in slots >= 8."""
+    from vllm_tt_plugin.spec_decode import accept_greedy_drafts
+
+    g = FakeSpecGenerator()
+    adapter = bare_adapter(g)
+    B, K = 11, 3
+    tokens = torch.arange(B * (1 + K), dtype=torch.int64).reshape(B, 1 + K)
+    start_pos = torch.arange(B).unsqueeze(1) * 100 + torch.arange(1 + K)
+    accepted = torch.ones(B, dtype=torch.int32)
+    accepted[0] = 3
+    num_valid = torch.zeros(B, dtype=torch.int32)
+    num_valid[:4] = K
+    out = adapter.decode_forward(
+        tokens, start_pos, spec_mode="argmax_ids", num_valid_drafts=num_valid, accepted_counts=accepted,
+        draft_token_ids=tokens[:, 1:], read_from_device=False,
+    )
+    assert len(g.calls) == 1
+    col0, pos0, kwargs, pending = g.calls[0]
+    assert torch.equal(col0, tokens[:, :1]) and torch.equal(pos0, start_pos[:, 0])
+    assert kwargs["read_from_device"] is True and pending[0] == 3
+    assert g._spec_pending_accepted is None and adapter._spec_last == ("ordinary", None)
+    assert out.spec_mode == "argmax_ids" and out.argmax_ids.shape == (B, 1)
+    # the walk reads the narrow answer as one committed token per row, whatever drafts were scheduled
+    committed, counts = accept_greedy_drafts(out.argmax_ids, tokens[:, 1:][:, :0].to(torch.int32), num_valid)
+    assert torch.equal(counts, torch.ones(B, dtype=torch.int32))
+    assert torch.equal(committed, (tokens[:, :1] + 1).to(torch.int32))

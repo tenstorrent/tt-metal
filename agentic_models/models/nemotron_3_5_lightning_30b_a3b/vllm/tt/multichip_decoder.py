@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 
 import ttnn
 
-from .optimized_decoder import DecoderState, OptimizedDecoder
+from .optimized_decoder import DecoderState, OptimizedDecoder, layer_kinds
 from .precision import load_precision
 
 DRAM = ttnn.DRAM_MEMORY_CONFIG
@@ -174,7 +174,7 @@ class MultichipDecoder(OptimizedDecoder):
         if self.policy.dram_readers not in (1, 2) or not 1 <= self.policy.prefill_chunk <= 8192:
             raise ValueError("Unsupported DRAM readers or prefill chunk")
         self.config, self.layer_idx, self.device = hf_config, layer_idx, mesh_device
-        self.kind = hf_config.layers_block_type[layer_idx]
+        self.kind = layer_kinds(hf_config)[layer_idx]
         self._inside_prefill = False
         # Keep the scan partition stable across tile-aligned prefix-cache hits.
         # Larger Mamba chunks change recurrence rounding at a 32-token resume.
@@ -810,6 +810,9 @@ class MultichipDecoder(OptimizedDecoder):
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
                 )
             w_row = ttnn.reshape(weights[:, :, :rows, :], (1, 1, 1, 6 * rows))
+            # Unused rows of a partly filled 32-row decode bucket (position -1) get non-finite routing weights; in the
+            # selection matrix 0 * NaN would reach every output row, so zero them (finite weights are unchanged).
+            w_row = ttnn.where(ttnn.isfinite(w_row), w_row, 0.0)
             out = ttnn.matmul(
                 ttnn.multiply(self._combine_sel[rows], w_row),
                 g,
@@ -843,8 +846,10 @@ class MultichipDecoder(OptimizedDecoder):
                 memory_config=DRAM,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
             )
-        ids = ttnn.to_layout(ttnn.typecast(indices, ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT)
-        ids = ttnn.reshape(ids, (1, 1, 1, n))
+        # The tt_metal pin's reshape rejects UINT16 (bf16/fp32/int32/uint32 only): flatten as UINT32, then UINT16 for
+        # sparse_matmul (exact: expert ids < 128).
+        ids = ttnn.to_layout(ttnn.typecast(indices, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+        ids = ttnn.typecast(ttnn.reshape(ids, (1, 1, 1, n)), ttnn.uint16)
         up = ttnn.sparse_matmul(
             x,
             self.up,

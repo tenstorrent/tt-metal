@@ -70,12 +70,13 @@
     "tt/fast_generator.py": "300cceb38a9bbb20442df01c59b97f2ac1091189775ea004648d4e0f1af18632",
     "tt/fast_mtp.py": "cd62ff9152caef62b0539c818436659a8444620baa1e77739a50d429b44c5c4f",
     "tt/generator.py": "7970bdf133abb61e15750520c44d15bc3d23aa0fea1916a50e3ae040ef3f1b67",
-    "tt/generator_vllm.py": "fea34b2331d2fb3be3e25070c8dbc89e47a9b62c439ea500f8e3b03009a1cfaa",
+    "tt/generator_vllm.py": "f02a11a6dd6c73848f7bf5a7215a05bc518602d1ca605fda3179c6cb21573487",
     "tt/model.py": "a5a6bd0b4b225c68498f79f5edd57b9f9504ba8d6b1c53627814f89287ac35ee",
     "tt/multichip_decoder.py": "74504930610adab87e823c76085a68dc6e7c19de4e47f8ca100123a6123918c9",
     "tt/readiness_contract.py": "271560d25df6ef64ffeefbf316d1cf74a0ffa79b42fef907dfa091c7154c53c3",
     "tt/serving.py": "a17aae8505e7f19c410b14cfe1c769ecd9f1aa0fe2e4502972f374872b8bb771",
-    "tt/serving_capabilities.py": "17137aaa00f39edfc4a1f90efd4b4596b4d50017d074099d927086f4d9f4c69c"
+    "tt/serving_capabilities.py": "17137aaa00f39edfc4a1f90efd4b4596b4d50017d074099d927086f4d9f4c69c",
+    "tt/serving_state.py": "4597d8d10048eba42f957a4067366022c5c9182afa639991114b9626f180636f"
   },
   "edits": {
     "tt/fast_gdn.py": [
@@ -94,7 +95,8 @@
       "vendored readiness_check.contract (tt-model-bringup 0.1.24) as tt/readiness_contract.py"
     ],
     "tt/generator_vllm.py": [
-      "declare preserve_prefill_state_slots (plugin patch P1)"
+      "declare preserve_prefill_state_slots (plugin patch P1)",
+      "speculative verify with a live row in a slot the verify graph does not serve (>= 8; plugin f6fe76b keeps proposals across a prefill step): drop the drafts, ordinary decode of column 0, narrow [B, 1] argmax_ids answer"
     ],
     "tt/model.py": [
       "Checkpoint path: prefer the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else the previous $HF_HOME resolution; config and tokenizer load from the same directory"
@@ -114,6 +116,9 @@
     "tt/serving_capabilities.py": [
       "advertise max_device_top_k 32 to the plugin",
       "serving limit matches the 32-wide sampler"
+    ],
+    "tt/serving_state.py": [
+      "slot-state registration skips sampling._scale_logprobs when the pinned TTSampling has no such tensor (it postdates tt-metal 58afa857)"
     ]
   }
 }

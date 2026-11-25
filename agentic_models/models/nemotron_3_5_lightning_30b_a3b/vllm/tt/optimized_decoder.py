@@ -17,6 +17,15 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 
+# transformers >= 5.13 (5.16 with vLLM 0.32) reports NemotronH layer types under the new names
+# (mamba -> linear_attention, attention -> full_attention); this port keys on the checkpoint's names.
+_LEGACY_LAYER_KIND = {"linear_attention": "mamba", "full_attention": "attention"}
+
+
+def layer_kinds(hf_config):
+    return [_LEGACY_LAYER_KIND.get(kind, kind) for kind in hf_config.layers_block_type]
+
+
 @dataclass
 class DecoderState:
     key: object = None
@@ -94,7 +103,7 @@ class OptimizedDecoder(LightweightModule):
         self.projection_configs = {}
         self.config = hf_config
         self.layer_idx = layer_idx
-        self.kind = hf_config.layers_block_type[layer_idx]
+        self.kind = layer_kinds(hf_config)[layer_idx]
         self.fusions |= {"explicit_batch_readout"} if self.kind == "mamba" else {"packed_request_io"}
         self.device = mesh_device
         self.compute = ttnn.init_device_compute_kernel_config(

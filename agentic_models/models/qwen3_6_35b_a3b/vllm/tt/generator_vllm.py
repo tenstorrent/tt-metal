@@ -280,6 +280,24 @@ class QwenForCausalLM:
             raise ValueError("Qwen3.6 speculative verify expects the front-packed row = slot layout")
         accepted = torch.ones(len(rows), dtype=torch.int32) if accepted is None else torch.as_tensor(accepted)
         g._spec_pending_accepted = {r: int(accepted[r]) for r in range(len(rows))}
+        if any(r >= g.spec.U for r in range(len(start_pos)) if int(start_pos[r, 0]) >= 0):
+            # vllm-tt-plugin f6fe76b keeps proposals across a prefill step, so drafts made at <= QWEN_SPEC_MAX_ROWS
+            # live rows can reach a step whose new peers sit in slots the verify graph does not serve. Drop the
+            # drafts: decode column 0 the ordinary way (committing the pending accepted counts first) and answer
+            # narrow, [B, 1], which the plugin's accept walk commits as one token per row.
+            kwargs = dict(kwargs)
+            kwargs["read_from_device"] = True
+            try:
+                host = self.generator.decode_forward_v1(
+                    tokens[:, :1].contiguous(), start_pos[:, 0].contiguous(), **kwargs
+                )
+            finally:
+                g._spec_pending_accepted = None
+            host = torch.as_tensor(host)
+            if host.is_floating_point() or host.numel() != len(rows):
+                raise ValueError("Qwen3.6 verify fallback requires device-sampled token ids")
+            self._spec_last = ("ordinary", None)
+            return VerifyOutput(spec_mode="argmax_ids", argmax_ids=host.reshape(-1, 1).to(torch.int32), hidden=None)
         result = {}
 
         def forward():
