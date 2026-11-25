@@ -23,8 +23,10 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 
 #include "router_utils.hpp"
@@ -73,9 +75,14 @@ static_assert(stream_count_mask <= ((1u << REMOTE_DEST_WORDS_FREE_WIDTH) - 1));
 
 // The Ethernet firmware's heartbeat word. While the router runs instead of the base firmware, each loop keeps it moving
 // every HEARTBEAT_INTERVAL rounds, the count in the lower half and UMD's fabric signature in the upper half (the host's
-// contract: hostdevcommon/fabric_common.h).
+// contract: hostdevcommon/fabric_common.h). Without base Ethernet firmware the word is in the core's own memory map,
+// which names it (dev_mem_map.h).
+#if defined(MEM_FABRIC_KERNEL_HEARTBEAT)
+constexpr uint32_t heartbeat_addr = MEM_FABRIC_KERNEL_HEARTBEAT;
+#else
 constexpr uint32_t heartbeat_addr =
     is_blackhole_arch ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE;
+#endif
 constexpr uint32_t HEARTBEAT_INTERVAL = FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS;  // rounds
 constexpr uint32_t HEARTBEAT_SIGNATURE = FABRIC_KERNEL_HEARTBEAT_MAGIC;
 static_assert((HEARTBEAT_INTERVAL & (HEARTBEAT_INTERVAL - 1)) == 0, "the round count is tested with a mask");
@@ -91,17 +98,29 @@ FORCE_INLINE volatile tt::tt_fabric::TerminationSignal* termination_signal() {
 
 // The routing table in this router's L1 (written by the host).
 FORCE_INLINE const tt::tt_fabric::routing_l1_info_t& l1_routing_table() {
-    return *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    return *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(router_l1(ROUTING_TABLE_BASE));
 }
 
 // The FabricTelemetry block the host reads (static info, router state, heartbeats, the dynamic bandwidth).
 FORCE_INLINE volatile tt_l1_ptr FabricTelemetry* telemetry_block() {
-    return reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+    return reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(
+        router_l1(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Stream registers
 // ---------------------------------------------------------------------------------------------------------------------
+
+// Without stream registers (stream_registers_available false: a Keraunos CCE) every count a stream register would hold
+// is a software counter in L1: a free-running total its one writer publishes, and what the reader has taken of it, kept
+// by the reader. The sender and receiver programs name each count where they use it; the forwards then keep no presets
+// (their doorbells are stream-register writes), and the UDM relay and the Tensix muxes have no software-counter form.
+static_assert(
+    tt::tt_fabric::connection_interface::kernel_stream_registers_available == stream_registers_available,
+    "FABRIC_STREAM_REGISTERS_AVAILABLE must equal the router's STREAM_REGISTERS_AVAILABLE");
+static_assert(
+    stream_registers_available || !udm_mode,
+    "the UDM tensix relay keeps stream-register credits; it has no software-counter form");
 
 // Initialize a stream register that this router uses; k_unused_stream_id marks one it does not (a VC whose credits
 // travel through L1 counters), and is out of register range.
@@ -179,6 +198,10 @@ FORCE_INLINE bool txq_busy(uint32_t status) { return ((status >> ETH_TXQ_STATUS_
 #elif defined(ARCH_WORMHOLE)
 FORCE_INLINE uint32_t read_txq_status(uint8_t q) { return eth_txq_reg_read(q, ETH_TXQ_CMD); }
 FORCE_INLINE bool txq_busy(uint32_t status) { return status != 0; }
+#elif defined(ARCH_QUASAR)
+// A Keraunos CCE has no TX-queue registers: the status is whether the queue's command buffer is full.
+FORCE_INLINE uint32_t read_txq_status(uint8_t q) { return internal_::eth_txq_is_busy(q); }
+FORCE_INLINE bool txq_busy(uint32_t status) { return status != 0; }
 #endif
 
 // Byte enables of a whole-word inline write (credit registers and words).
@@ -232,6 +255,11 @@ constexpr bool any_forwards_on_vc(size_t vc) {
 // the preset. The atomics buffer keeps no preset and takes no write from L1 (atomics need the return address the
 // firmware keeps there); upstream-router credits, stateless forward credits, teardowns and inline register writes go on
 // it. Two ERISCs issue on different NoCs. Blackhole's emulated L1 inline write always uses write_cmd_buf (not listed).
+#if defined(ARCH_QUASAR)
+// Quasar's command buffers: two complex ones and the simple one, which takes the atomics (noc_nonblocking_api.h). A
+// Keraunos CCE issues every NoC call on its own buffer whatever the id (cce_noc.h).
+constexpr uint32_t NUM_NOC_CMD_BUFS = 3;
+#endif
 struct CommandBuffers {
     // The host's buffer of each kind.
     static constexpr uint8_t atomics = write_at_cmd_buf;
@@ -330,7 +358,8 @@ static_assert(
 // ---------------------------------------------------------------------------------------------------------------------
 // Supported configurations
 // ---------------------------------------------------------------------------------------------------------------------
-//   - Blackhole, two ERISCs (one role each, a TX queue each) or one ERISC (both roles); Wormhole, one ERISC;
+//   - Blackhole, two ERISCs (one role each, a TX queue each) or one ERISC (both roles); Wormhole, one ERISC; a Keraunos
+//     CCE (Quasar), one hart, without stream registers: software credits, no forward presets, UDM or Tensix mux;
 //   - 1D and 2D: lines, meshes, rings and tori (bubble flow control; first-level acks on VC0); strict atomics;
 //   - VC0; VC1 on 2D multi-mesh fabrics (intermesh landing, crossover and exits);
 //   - VC2 on 2D routers, with or without VC1: neighbour exchange (a worker channel into a receiver channel that only

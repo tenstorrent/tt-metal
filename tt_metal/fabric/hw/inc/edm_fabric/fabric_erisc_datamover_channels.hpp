@@ -508,6 +508,8 @@ struct EdmChannelWorkerInterface : EdmChannelWorkerConnection<WORKER_HANDSHAKE_N
         uint8_t edm_read_counter_initial_value) :
         Connection{worker_location_info_ptr, 0, connection_live_semaphore, sender_sync_noc_cmd_buf} {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
+        *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->credit_mode)) =
+            connection_interface::kernel_credit_mode;
         static_cast<DERIVED*>(this)->reset_counters();
     }
 
@@ -616,11 +618,12 @@ struct StaticSizedSenderChannelWorkerInterface
     // Write counter management methods
     template <bool SKIP_CONNECTION_LIVENESS_CHECK>
     FORCE_INLINE void update_write_counter_for_send() {
-        if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+        if constexpr (SKIP_CONNECTION_LIVENESS_CHECK && connection_interface::kernel_stream_registers_available) {
             // For persistent connections, only update buffer index
             local_write_counter.index = BufferIndex{wrap_increment<NUM_BUFFERS>(local_write_counter.index.get())};
         } else {
-            // For non-persistent connections, increment full counter
+            // For non-persistent connections, and every connection with software credits, increment
+            // full counter
             local_write_counter.increment();
         }
     }

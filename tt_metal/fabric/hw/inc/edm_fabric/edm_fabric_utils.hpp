@@ -6,6 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace tt::tt_fabric {
@@ -34,6 +35,7 @@ FORCE_INLINE constexpr uint8_t get_fabric_worker_noc() {
 
 enum EDM_IO_BLOCKING_MODE { FLUSH_BLOCKING, BLOCKING, NON_BLOCKING };
 
+// Writes from the router's own L1 at @p local_l1_address, in either view (router_l1() or a plain offset).
 template <bool stateful_api>
 FORCE_INLINE void send_chunk_from_address_with_trid(
     const uint32_t& local_l1_address,
@@ -52,10 +54,10 @@ FORCE_INLINE void send_chunk_from_address_with_trid(
 #endif
     if constexpr (stateful_api) {
         noc_async_write_one_packet_with_trid_with_state<update_counter, true>(
-            local_l1_address, remote_l1_write_addr_l, page_size * num_pages, trid, cmd_buf, noc);
+            router_l1_offset(local_l1_address), remote_l1_write_addr_l, page_size * num_pages, trid, cmd_buf, noc);
     } else {
         noc_async_write_one_packet_with_trid<update_counter, true>(
-            local_l1_address,
+            router_l1_offset(local_l1_address),
             get_noc_addr_helper(remote_l1_write_addr_h, remote_l1_write_addr_l),
             page_size * num_pages,
             trid,

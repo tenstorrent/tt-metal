@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace tt::tt_fabric {
@@ -81,7 +82,10 @@ struct EDMChannelWorkerLocationInfo {
 
     uint32_t edm_read_counter = 0;
     uint32_t align_pad_9{};  // Padding added for safe reading over noc
-    uint32_t align_pad_10{};
+    // How the router takes sender-channel credits, written by the router at bring-up:
+    // connection_interface::credit_mode_stream_registers or credit_mode_software_counters. A producer
+    // checks it against its own mode when it connects, reading it into SenderChannelProducerCursor::align_pad_0.
+    uint32_t credit_mode{};
     uint32_t align_pad_11{};
 };
 
@@ -89,8 +93,11 @@ static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);
 
 // Producer-owned cursor state for one sender channel, persisted in the *receiver's* L1
 // (router or mux) across connection open/close. The receiver only zeroes this at
-// bring-up; it never reads or writes it afterwards. The handoff is producer ->
-// producer, with the receiver's L1 acting only as the letterbox.
+// bring-up and never writes it afterwards. The handoff is producer -> producer,
+// with the receiver's L1 acting only as the letterbox. With software credits
+// (connection_interface::credit_mode_software_counters) the producer also writes
+// write_counter after every packet, and the router reads it as the channel's
+// written count.
 //
 // write_index is persisted rather than re-derived as `write_counter % num_buffers`,
 // because that derivation is only correct when num_buffers divides 2^32.
@@ -102,5 +109,8 @@ struct SenderChannelProducerCursor {
 };
 
 static_assert(sizeof(SenderChannelProducerCursor) == 16);
+// A NOC read needs its source and destination at the same offset within a 16-byte beat.
+static_assert(
+    offsetof(EDMChannelWorkerLocationInfo, credit_mode) % 16 == offsetof(SenderChannelProducerCursor, align_pad_0) % 16);
 
 }  // namespace tt::tt_fabric

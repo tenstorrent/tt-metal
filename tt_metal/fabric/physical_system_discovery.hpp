@@ -32,6 +32,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     bool run_live_discovery = true);
 
 // Free function to query local ethernet metrics
+// Empty when the architecture has no base Ethernet firmware (Hal::has_eth_base_firmware()), which keeps them.
 LocalEthernetMetrics query_local_ethernet_metrics(
     const PhysicalSystemDescriptor& psd, tt::umd::Cluster& cluster, const Hal* hal);
 

@@ -133,7 +133,8 @@ Comments use the code's names:
 ## Router <-> router flow control
 Flow control between routers counts whole slots. The counts live in stream registers (packets written into a channel)
 and in L1 counters that the remote router updates over Ethernet (slots it has freed). See `router/router_sender.hpp`
-and `router/router_receiver.hpp`.
+and `router/router_receiver.hpp`. A router without stream registers (a Keraunos CCE) keeps the register counts as
+software counters in L1; `router/router_common.hpp` says how.
 
 ### Sender Channel Flow Control
 * free-slots register (one per sender channel):
@@ -200,6 +201,9 @@ FORCE_INLINE void run_loop(Downstreams& downstreams) {
 
 void kernel_main() {
     using namespace fabric_router;
+#if defined(ARCH_QUASAR)
+    static_assert(experimental::keraunos::my_eth_cce() == 0, "The router's Ethernet send handles CCE0 only (eth_cce_send.h)");
+#endif
     init_router();
 
     // Phase: stream registers, before the Ethernet handshake and before any producer connects.
@@ -219,6 +223,9 @@ void kernel_main() {
     auto downstreams = receiver::set_up_channels(args);  // the receiver's downstream connections, for its loop
     if constexpr (is_sender_role) {
         sender::set_up_channels(args.connection_semaphores);
+        if constexpr (!stream_registers_available) {
+            sender::set_producer_write_counters(args.producer_cursors);
+        }
     }
     finish_phase<Phase::SETUP_DONE>();
 

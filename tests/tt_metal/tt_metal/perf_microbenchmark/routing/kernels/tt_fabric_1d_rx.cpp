@@ -81,7 +81,7 @@ void kernel_main() {
         // Read all DRAM data in one go
         uint32_t total_data_size_bytes = num_packets * packet_payload_size_bytes;
         uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dest_bank_id, dest_dram_addr);
-        noc_async_read(dram_noc_addr, (uint32_t)start_addr, total_data_size_bytes);
+        noc_async_read(dram_noc_addr, (uint32_t)(uintptr_t)start_addr, total_data_size_bytes);
         noc_async_read_barrier();
 
         // Verify each packet in the data

@@ -488,8 +488,13 @@
 // The Ethernet link of this CCE, written by the host before launch: EthLink (hostdev/eth_link.h).
 #define MEM_IERISC_FABRIC_ETH_LINK_SIZE 16
 #define MEM_IERISC_FABRIC_ETH_LINK_BASE (MEM_IERISC_PACKET_HEADER_POOL_BASE + MEM_IERISC_PACKET_HEADER_POOL_SIZE)
+// The 8-byte staging word of each TX queue for a single-word send on a NOC link (eth_cce_send.h send_dword).
+// Written only through the uncached alias, so no cached line covers it.
+#define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE 32
+#define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE (MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_FABRIC_ETH_LINK_SIZE)
 // Unreserved L1 of an idle Ethernet core: above the regions both Ethernet slots have.
-#define MEM_IERISC_UNRESERVED_BASE ((MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_FABRIC_ETH_LINK_SIZE + 63) & ~63)
+#define MEM_IERISC_UNRESERVED_BASE \
+    ((MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE + 63) & ~63)
 
 // Offset 0 is the reset-vector register. Every hart starts there.
 #define ETH_BOOT_HART_RESET_VECTOR 0
@@ -544,6 +549,8 @@
 #define MEM_AERISC_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * 6 * 2 * MEM_AERISC_LOCAL_HARTS)
 #define MEM_AERISC_FABRIC_ETH_LINK_SIZE 16
 #define MEM_AERISC_FABRIC_ETH_LINK_BASE (MEM_AERISC_PACKET_HEADER_POOL_BASE + MEM_AERISC_PACKET_HEADER_POOL_SIZE)
+#define MEM_AERISC_FABRIC_NOC_DWORD_STAGE_SIZE 32
+#define MEM_AERISC_FABRIC_NOC_DWORD_STAGE_BASE (MEM_AERISC_FABRIC_ETH_LINK_BASE + MEM_AERISC_FABRIC_ETH_LINK_SIZE)
 // Fabric router regions on a linked Keraunos CCE (ACTIVE_ETH), after the regions both Ethernet slots have. Router
 // state and command alias the routing table head, as on Blackhole.
 #define MEM_AERISC_FABRIC_ROUTER_STATE_BASE MEM_AERISC_ROUTING_TABLE_BASE
@@ -551,7 +558,7 @@
 // sizeof(FabricTelemetry), including the postcode (4 B) and scratch (28 B) words at its end.
 #define MEM_AERISC_FABRIC_TELEMETRY_SIZE 160
 #define MEM_AERISC_FABRIC_TELEMETRY_BASE \
-    ((MEM_AERISC_FABRIC_ETH_LINK_BASE + MEM_AERISC_FABRIC_ETH_LINK_SIZE + 63) & ~63)
+    ((MEM_AERISC_FABRIC_NOC_DWORD_STAGE_BASE + MEM_AERISC_FABRIC_NOC_DWORD_STAGE_SIZE + 63) & ~63)
 #define MEM_AERISC_FABRIC_POSTCODES_SIZE 4
 #define MEM_AERISC_FABRIC_SCRATCH_SIZE 28
 #define MEM_AERISC_FABRIC_POSTCODES_BASE                                                                      \

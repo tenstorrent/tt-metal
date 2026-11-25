@@ -28,8 +28,8 @@ FORCE_INLINE void fabric_sender_side_handshake(
     size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
-    const uint32_t local_val_addr = reinterpret_cast<uint32_t>(&handshake_info->local_value);
-    const uint32_t scratch_addr = reinterpret_cast<uint32_t>(&handshake_info->scratch);
+    const uint32_t local_val_addr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&handshake_info->local_value));
+    const uint32_t scratch_addr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&handshake_info->scratch));
     uint32_t count = 0;
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE
 #ifndef ARCH_WORMHOLE
@@ -60,8 +60,8 @@ FORCE_INLINE void fabric_receiver_side_handshake(
     size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
-    const uint32_t local_val_addr = reinterpret_cast<uint32_t>(&handshake_info->local_value);
-    const uint32_t scratch_addr = reinterpret_cast<uint32_t>(&handshake_info->scratch);
+    const uint32_t local_val_addr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&handshake_info->local_value));
+    const uint32_t scratch_addr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&handshake_info->scratch));
     uint32_t count = 0;
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE
 #ifndef ARCH_WORMHOLE

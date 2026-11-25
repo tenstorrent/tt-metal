@@ -81,6 +81,7 @@ size_t FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(tt::ARC
  *
  * @param risc_id The RISC ID (0 or 1)
  * @param arch The architecture (WORMHOLE_B0 or BLACKHOLE)
+ * @param eth_base_firmware Hal::has_eth_base_firmware(); false means nothing to context-switch into
  * @param enable_handshake Output parameter for handshake enable
  * @param enable_context_switch Output parameter for context switch enable
  * @param enable_interrupts Output parameter for interrupts enable
@@ -103,9 +104,14 @@ void validate_router_config(tt::ARCH arch, const std::unordered_map<std::string,
     const uint32_t local_tensix_connections = arg("NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS");
 
     TT_FATAL(
-        arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0,
-        "the router supports Blackhole and Wormhole only");
+        arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::QUASAR,
+        "the router supports Blackhole, Wormhole and Quasar (a Keraunos CCE) only");
     TT_FATAL(arch != tt::ARCH::WORMHOLE_B0 || num_active_eriscs == 1, "the router runs on one ERISC on Wormhole");
+    // Without stream registers (a Keraunos CCE) the router's credits are software counters: one hart runs both roles
+    // (the ERISCs' sync word is a stream scratch register), and the relay and the muxes have no software-counter form.
+    TT_FATAL(
+        arg("STREAM_REGISTERS_AVAILABLE") != 0 || (num_active_eriscs == 1 && !udm_mode && !tensix_mux_mode),
+        "without stream registers the router runs on one ERISC, without UDM or the Tensix mux extension");
     // VC1 traffic would go router to router around the muxes, but the host gives VC1's sender channels no slots there.
     TT_FATAL(!(tensix_mux_mode && has_vc1), "VC1 with the Tensix mux extension is not supported");
     // VC2 as FabricBuilderConfig builds it (Blackhole 2D, not UDM or the mux), with or without VC1: one worker channel
@@ -158,7 +164,9 @@ bool is_fabric_two_erisc_enabled(const FabricContext& fabric_context) {
     // out of stack size issue on the erisc, to be investigated
     bool tensix_extensions_enabled = fabric_context.is_tensix_enabled();
 
-    bool single_erisc_dispatch = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) < 2;
+    // Without base Ethernet firmware the router runs on one hart (DM0), however many the core has.
+    bool single_erisc_dispatch = !hal.has_eth_base_firmware() ||
+                                 hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) < 2;
 
     // 2d dynamic fabric doesn't properly support 2-erisc yet but is being deprecated anyways so we
     // simply disable 2-erisc on it for now.
@@ -170,11 +178,17 @@ void configure_risc_settings(
     size_t num_riscv_cores,
     size_t risc_id,
     tt::ARCH arch,
+    bool eth_base_firmware,
     bool enable_2_erisc_mode,
     bool& enable_handshake,
     bool& enable_context_switch,
     bool& enable_interrupts) {
-    if (arch == tt::ARCH::WORMHOLE_B0) {
+    if (!eth_base_firmware) {
+        // One router hart and no base firmware sharing the core.
+        enable_handshake = true;
+        enable_context_switch = false;
+        enable_interrupts = false;
+    } else if (arch == tt::ARCH::WORMHOLE_B0) {
         // Wormhole: All RISC cores handle both sender and receiver channels
         enable_handshake = true;
         enable_context_switch = true;
@@ -250,7 +264,8 @@ static std::pair<bool, bool> compute_edge_facing_flags(
     return {is_intermesh, is_intramesh};
 }
 
-FabricRiscConfig::FabricRiscConfig(uint32_t risc_id, tt::ARCH arch, size_t num_riscv_cores, bool enable_2_erisc_mode) :
+FabricRiscConfig::FabricRiscConfig(
+    uint32_t risc_id, tt::ARCH arch, bool eth_base_firmware, size_t num_riscv_cores, bool enable_2_erisc_mode) :
     noc_(risc_id == 0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1),
     iterations_between_ctx_switch_and_teardown_checks_(
         FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks),
@@ -261,6 +276,7 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id, tt::ARCH arch, size_t num_r
         num_riscv_cores,
         risc_id,
         arch,
+        eth_base_firmware,
         enable_2_erisc_mode,
         this->enable_handshake_,
         this->enable_context_switch_,
@@ -325,7 +341,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     this->num_riscv_cores = get_num_riscv_cores(fabric_context);
     for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         this->risc_configs.emplace_back(
-            risc_id, this->arch, this->num_riscv_cores, rtoptions.get_enable_2_erisc_mode());
+            risc_id,
+            this->arch,
+            hal.has_eth_base_firmware(),
+            this->num_riscv_cores,
+            rtoptions.get_enable_2_erisc_mode());
     }
     // temporary work-around for BH until 2-erisc is enabled. We are required to switch entirely to noc1 for
     // routers when only using a single erisc because erisc0 will be used by base FW and may periodically use
@@ -345,7 +365,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
         // counters are packed contiguously in memory, This can lead to resends of values but
         // this is safe for free running counters, which are enabled in this mode.
         size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
-        // Only the multi-TXQ (counter) form needs the wider clear. Keep the single-TXQ clear at one word:
+        // Only the multi-TXQ (counter) form needs the wider clear here; a CCE clears the whole block (below).
+        // Keep the single-TXQ clear at one word:
         // the wider clear at an unaligned address changes how many Ethernet commands UMD issues per
         // remote write during bring-up, which shifts the Ethernet core UMD ends up using for all
         // subsequent remote reads.
@@ -366,6 +387,19 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
 
         this->receiver_channel_remote_completion_counters_base_addr = next_l1_addr;
         next_l1_addr += num_words_consumed_per_counter;
+    }
+
+    if (!hal.has_stream_registers()) {
+        // Software credits (STREAM_REGISTERS_AVAILABLE 0): one Ethernet-word slot per receiver channel and per
+        // downstream router, each written by one agent. Sized for the maximum counts, so the layout does not move.
+        constexpr size_t software_counter_slot_bytes = 16;
+        next_l1_addr = tt::align(next_l1_addr, software_counter_slot_bytes);
+        this->to_receiver_packets_sent_counters_base_addr = next_l1_addr;
+        next_l1_addr += software_counter_slot_bytes * builder_config::num_max_receiver_channels;
+        this->local_sender_packets_sent_counters_base_addr = next_l1_addr;
+        next_l1_addr += software_counter_slot_bytes * builder_config::num_max_receiver_channels;
+        this->local_downstream_read_counters_base_addr = next_l1_addr;
+        next_l1_addr += software_counter_slot_bytes * builder_config::max_downstream_edms;
     }
 
     this->edm_channel_ack_addr = next_l1_addr;
@@ -432,6 +466,13 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     auto buffer_region_start = (buffer_address + buffer_alignment) & ~(buffer_alignment - 1);  // Align
     auto available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
     this->available_buffer_memory_regions.emplace_back(buffer_region_start, available_channel_buffering_space);
+
+    // A Keraunos CCE's software credits are counters the router reads against zero, and nothing else clears them in
+    // single-TXQ mode. Every Keraunos chip is MMIO-attached, so the UMD tunneling hazard above does not apply.
+    if (!hal.has_stream_registers()) {
+        this->router_block_clear_address = erisc_l1_unreserved_base;
+        this->router_buffer_clear_size_words = (buffer_region_start - erisc_l1_unreserved_base) / sizeof(uint32_t);
+    }
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
@@ -560,6 +601,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         if (requires_forced_assignment_to_noc1()) {
             this->sender_channel_ack_noc_ids[i] =
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
+        }
+    }
+    if (this->arch == tt::ARCH::QUASAR) {
+        // A Quasar hart has two command buffers: writes and atomics share 0 (WR_CMD_BUF), reads use 1.
+        for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = NocCmdBuf::WR_CMD_BUF;
+        }
+        for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+            this->sender_channel_ack_cmd_buf_ids[i] = NocCmdBuf::WR_CMD_BUF;
         }
     }
     this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
@@ -880,11 +930,17 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
             fabric_context.get_builder_context(), *static_allocator, config.topology, direction);
     // Worker channels need their buffer-index-counter L1 address set so the EDM kernel can reset it on each launch.
     // Channel 0 is always a worker. VC2 is also a worker channel when active.
-    downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];
-    if (sender_counts[2] > 0) {
-        size_t vc2_flat = sender_counts[0] + sender_counts[1];
-        downstream_vcs_sender_channel_buffer_index_semaphore_id[vc2_flat] =
-            sender_channels_buffer_index_semaphore_id[vc2_flat];
+    // Without stream registers every channel's producer cursor is its credit, so the kernel resets each one at the
+    // address its upstream writes (build_connection_to_fabric_channel). Left 0, the reset lands on L1 0-15.
+    if (!fabric_context.get_hal().has_stream_registers()) {
+        downstream_vcs_sender_channel_buffer_index_semaphore_id = sender_channels_buffer_index_semaphore_id;
+    } else {
+        downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];
+        if (sender_counts[2] > 0) {
+            size_t vc2_flat = sender_counts[0] + sender_counts[1];
+            downstream_vcs_sender_channel_buffer_index_semaphore_id[vc2_flat] =
+                sender_channels_buffer_index_semaphore_id[vc2_flat];
+        }
     }
 
     // Add this log right at the beginning of the constructor body
@@ -1252,6 +1308,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["VC0_USES_COUNTER_CREDITS"] = credit_plan.vc0_uses_counters ? 1 : 0;
     named_args["VC1_USES_COUNTER_CREDITS"] = credit_plan.vc1_uses_counters ? 1 : 0;
     named_args["VC2_USES_COUNTER_CREDITS"] = credit_plan.vc2_uses_counters ? 1 : 0;
+    // 0 selects software counters for every credit (fabric_erisc_router_ct_args.hpp) and needs the
+    // packets-sent and read counter addresses below.
+    named_args["STREAM_REGISTERS_AVAILABLE"] = fabric_context.get_hal().has_stream_registers() ? 1 : 0;
 
     // Flat bases for the shared free-slots table, so a VC's boundary is the same on every router.
     named_args["VC1_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(1);
@@ -1408,7 +1467,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["MY_ETH_CHANNEL"] = my_eth_channel_;
     named_args["MY_ERISC_ID"] = risc_id;
     named_args["NUM_ACTIVE_ERISCS"] = static_cast<uint32_t>(this->get_configured_risc_count());
-    named_args["FORCE_ALL_PATHS_TO_USE_SAME_NOC"] = config.requires_forced_assignment_to_noc1();
+    // A Keraunos CCE serves no stateful NOC path (internal/tt-2xx/quasar/cce_noc.h), so a Quasar router stays off them.
+    named_args["FORCE_ALL_PATHS_TO_USE_SAME_NOC"] =
+        config.requires_forced_assignment_to_noc1() || config.arch == tt::ARCH::QUASAR;
     named_args["IS_INTERMESH_ROUTER_ON_EDGE"] = is_intermesh_router_on_edge;
     named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge;
 
@@ -1523,6 +1584,13 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         static_cast<uint32_t>(config.receiver_channel_remote_ack_counters_base_addr);
     named_args["LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR"] =
         static_cast<uint32_t>(config.receiver_channel_remote_completion_counters_base_addr);
+    // 0 while STREAM_REGISTERS_AVAILABLE is 1.
+    named_args["TO_RECEIVER_PACKETS_SENT_COUNTERS_BASE_ADDR"] =
+        static_cast<uint32_t>(config.to_receiver_packets_sent_counters_base_addr);
+    named_args["LOCAL_SENDER_PACKETS_SENT_COUNTERS_BASE_ADDR"] =
+        static_cast<uint32_t>(config.local_sender_packets_sent_counters_base_addr);
+    named_args["LOCAL_DOWNSTREAM_READ_COUNTERS_BASE_ADDR"] =
+        static_cast<uint32_t>(config.local_downstream_read_counters_base_addr);
 
     // --- Host signal args (defaults; compute_mesh_router_builder overrides when wait_for_host_signal) ---
     named_args["IS_LOCAL_HANDSHAKE_MASTER"] = 0;

@@ -209,6 +209,13 @@ struct FabricEriscDatamoverConfig {
     size_t receiver_channel_remote_ack_counters_base_addr = 0;
     size_t receiver_channel_remote_completion_counters_base_addr = 0;
     size_t router_buffer_clear_size_words = 1;
+    // Without stream registers: the start of the builder block, [UNRESERVED base, channel buffers), which the host
+    // clears whole (router_buffer_clear_size_words) before each launch in place of the per-field clears.
+    std::optional<size_t> router_block_clear_address;
+    // Software-credit counters, allocated only without stream registers (0 otherwise).
+    size_t to_receiver_packets_sent_counters_base_addr = 0;
+    size_t local_sender_packets_sent_counters_base_addr = 0;
+    size_t local_downstream_read_counters_base_addr = 0;
     // Every sender channel's connection info and semaphores, [start, end): zeroed at fabric init.
     size_t sender_channels_bookkeeping_start = 0;
     size_t sender_channels_bookkeeping_end = 0;
@@ -284,7 +291,8 @@ private:
 };
 
 struct FabricRiscConfig {
-    FabricRiscConfig(uint32_t risc_id, tt::ARCH arch, size_t num_riscv_cores, bool enable_2_erisc_mode);
+    FabricRiscConfig(
+        uint32_t risc_id, tt::ARCH arch, bool eth_base_firmware, size_t num_riscv_cores, bool enable_2_erisc_mode);
     bool enable_handshake() const { return enable_handshake_; };
     bool enable_context_switch() const { return enable_context_switch_; };
     bool enable_interrupts() const { return enable_interrupts_; };

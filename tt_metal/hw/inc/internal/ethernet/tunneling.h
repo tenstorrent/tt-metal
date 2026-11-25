@@ -88,7 +88,7 @@ namespace internal_ {
 
 #if defined(ARCH_QUASAR)
 // A Keraunos CCE sends on its command buffer (eth_cce_send.h). There is no base firmware to switch to, so ctx_switch
-// has no effect, and no base-firmware link status for the watcher to check. A remote register write is an inline write
+// has no effect, and no base-firmware link status for the watcher to check. A remote register write is an 8-byte write
 // to the same flat address in the peer's CCE SRAM (cce_eth::send_dword).
 FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) { return cce_eth::txq_busy(q_num); }
 
@@ -125,8 +125,11 @@ FORCE_INLINE void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint64
     }
     cce_eth::send_dword(q_num, reg_addr, val);
 }
+// Assumes !eth_txq_is_busy(q_num): on a NOC link send_dword rewrites the queue's staging word, which the queue's
+// previous copy may still be reading.
 FORCE_INLINE
 void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint64_t val) {
+    ASSERT(!eth_txq_is_busy(q_num));
     cce_eth::send_dword(q_num, reg_addr, val);
 }
 #else

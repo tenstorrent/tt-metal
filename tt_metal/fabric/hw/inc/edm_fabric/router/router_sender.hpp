@@ -49,7 +49,8 @@ struct SenderChannel {
     static constexpr uint32_t num_slots = SENDER_NUM_BUFFERS_ARRAY[CH];
     static constexpr uint32_t first_slot_addr = channel_allocs::Entry<SENDER_TO_ENTRY_IDX[CH]>::base_address;
     static constexpr uint32_t last_slot_addr = first_slot_addr + (num_slots - 1) * channel_buffer_size;
-    // Its free-slots register: the host's table is by fabric position, the same on every router.
+    // Its free-slots register: the host's table is by fabric position, the same on every router. Without stream
+    // registers the count is software (read_free_slots).
     static constexpr uint32_t free_slots_stream = sender_free_slots_streams[fabric_position_for_compact_sender(CH)];
     // Counters the remote receiver writes over the link.
     static constexpr uint32_t completion_counter_addr =
@@ -153,8 +154,9 @@ template <size_t VC>
 struct RemoteReceiverChannel {
     static constexpr size_t rx = receiver_channel_by_vc[VC];  // the host's index of the channel
     static constexpr uint32_t num_slots = REMOTE_RECEIVER_NUM_BUFFERS_ARRAY[rx];
+    // In the remote router's L1: a plain offset, not this router's own view.
     static constexpr uint32_t first_slot_addr =
-        eth_remote_channel_allocs::Entry<REMOTE_RECEIVER_TO_ENTRY_IDX[rx]>::base_address;
+        router_l1_offset(eth_remote_channel_allocs::Entry<REMOTE_RECEIVER_TO_ENTRY_IDX[rx]>::base_address);
     static constexpr uint32_t last_slot_addr = first_slot_addr + (num_slots - 1) * channel_buffer_size;
     static constexpr uint32_t packets_received_stream = to_receiver_packets_sent_streams[rx];
 };
@@ -166,7 +168,8 @@ struct RemoteReceiverChannel {
 // This router's progress into VC's remote receiver channel, in one word: the slots known free there (low 16 bits) and
 // the next slot to fill, its address / 16 (high 16 bits). One word, so a VC kept in memory takes and puts back its
 // progress with one load and one store. For ERISC L1 only (the remote receiver channel is always in the remote router's
-// L1); a Tensix downstream must not reuse it.
+// L1); a Tensix downstream must not reuse it. Where the remote router's L1 is larger than 1 MiB (a Keraunos CCE's) the
+// split is 14 and 18 bits.
 template <size_t VC>
 class RemoteReceiverChannelProgress {
 public:
@@ -178,7 +181,7 @@ public:
 
     FORCE_INLINE bool has_room(uint32_t n) const { return free_slots() >= n; }
 
-    // The next slot's address: the high half in bytes, word >> ADDR_SHIFT (the free-slot count stays below
+    // The next slot's address: the high part in bytes, word >> ADDR_SHIFT (the free-slot count stays below
     // 1 << ADDR_SHIFT, so it shifts out).
     FORCE_INLINE uint32_t next_slot_addr() const { return word >> ADDR_SHIFT; }
 
@@ -199,8 +202,9 @@ public:
 
 private:
     // The word: the free-slot count in the low FREE_SLOTS_BITS, the next slot's address in 16 B units above it.
-    static constexpr uint32_t FREE_SLOTS_BITS = 16;
     static constexpr uint32_t SLOT_ADDR_UNIT_BITS = 4;
+    static constexpr uint32_t FREE_SLOTS_BITS =
+        (RemoteReceiverChannel<VC>::last_slot_addr >> SLOT_ADDR_UNIT_BITS) < (1u << 16) ? 16 : 14;
     static constexpr uint32_t ADDR_SHIFT = FREE_SLOTS_BITS - SLOT_ADDR_UNIT_BITS;
     static constexpr uint32_t encode(uint32_t free_slots, uint32_t slot_addr) {
         return (slot_addr >> SLOT_ADDR_UNIT_BITS) << FREE_SLOTS_BITS | free_slots;
@@ -215,7 +219,7 @@ private:
         (channel_buffer_size & SLOT_ADDR_UNIT_MASK) == 0);
     static_assert(
         (RemoteReceiverChannel<VC>::last_slot_addr >> SLOT_ADDR_UNIT_BITS) < (1u << (32 - FREE_SLOTS_BITS)),
-        "a slot address fits in the high half");
+        "a slot address fits in the high part");
     static_assert(
         RemoteReceiverChannel<VC>::num_slots < (1u << ADDR_SHIFT), "the free-slot count stays below 1 << ADDR_SHIFT");
 
@@ -305,9 +309,22 @@ struct SenderChannelInterfaces {
         return std::launder(reinterpret_cast<All*>(storage))->template get<CH>();
     }
 
+    // Without stream registers: each channel's producers' write count, in its producer-cursor block
+    // (set_producer_write_counters).
+    static inline std::array<volatile tt_l1_ptr uint32_t*, NUM_SENDER_CHANNELS> producer_write_counters;
+
 private:
     alignas(All) static inline unsigned char storage[sizeof(All)];
 };
+
+// Without stream registers: channel CH's producer, a worker or an upstream router, takes `returned`, the slots credited
+// to it so far, as a word in its own L1 at the address it gave when it connected.
+template <size_t CH>
+FORCE_INLINE void credit_read_count(uint32_t returned) {
+    auto& interface = SenderChannelInterfaces::of<CH>();
+    interface.local_read_counter.counter = returned;
+    interface.template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
+}
 
 // A worker channel's connection-semaphore change, one copy for every worker channel: opening caches the worker's credit
 // address; closing writes the credits so far (`returned`) into the worker's connection info and signals its teardown
@@ -371,11 +388,15 @@ struct WorkerChannel {
 
     // `returned` slots in all: into the read counter and, while a worker is connected, from there into the worker's L1.
     // With presets the command is all preset (preset_credit): the credit waits for the buffer and sends it.
+    // Without stream registers the count goes as the library's inline write (a posted NoC write from L1 is not served
+    // there).
     __attribute__((noinline)) static void credit(uint32_t returned, bool worker_connected) {
         constexpr uint32_t source = read_counter_addr;
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(source) = returned;
         if (worker_connected) {
-            if constexpr (CommandBuffers::presets) {
+            if constexpr (!stream_registers_available) {
+                credit_read_count<CH>(returned);
+            } else if constexpr (CommandBuffers::presets) {
                 noc_wwrite_with_state<
                     noc_mode,
                     credit_cmd_buf,
@@ -447,7 +468,8 @@ private:
 };
 
 // A forwarding channel: a router on this chip facing another direction writes into it. That upstream router connects
-// once at init and is credited +n on its free-slots register.
+// once at init and is credited +n on its free-slots register; without stream registers, with the count of slots
+// credited so far, as a worker is (credit_read_count).
 template <size_t CH>
 struct ForwardingChannel {
     static_assert(!SenderChannel<CH>::worker);
@@ -460,13 +482,18 @@ struct ForwardingChannel {
         return SenderChannelInterfaces::of<CH>().cached_worker_semaphore_address;
     }
 
-    // +n on the upstream router's free-slots register, at `register_addr` (as the channel's state holds it).
-    static FORCE_INLINE void credit(uint64_t register_addr, uint32_t n) {
-        noc_inline_dw_write<InlineWriteDst::REG, true>(
-            register_addr,
-            pack_value_for_inc_on_write_stream_reg_write(n),
-            INLINE_WRITE_ALL_BYTES,
-            SenderChannel<CH>::producer_noc);
+    // +n on the upstream router's free-slots register, at `register_addr` (as the channel's state holds it); without
+    // stream registers `returned`, the slots credited so far, to the word the upstream router gave.
+    static FORCE_INLINE void credit(uint64_t register_addr, uint32_t n, uint32_t returned) {
+        if constexpr (stream_registers_available) {
+            noc_inline_dw_write<InlineWriteDst::REG, true>(
+                register_addr,
+                pack_value_for_inc_on_write_stream_reg_write(n),
+                INLINE_WRITE_ALL_BYTES,
+                SenderChannel<CH>::producer_noc);
+        } else {
+            credit_read_count<CH>(returned);
+        }
     }
 };
 
@@ -474,12 +501,34 @@ struct ForwardingChannel {
 // Free-slots registers
 // ---------------------------------------------------------------------------------------------------------------------
 
+// Channel CH's free slots as its free-slots register holds them (raw). Without stream registers: its slot count less
+// the packets its producers have written (their count in its producer-cursor block) and this router has not yet sent.
+template <size_t CH>
+FORCE_INLINE uint32_t read_free_slots() {
+    if constexpr (stream_registers_available) {
+        return read_stream_raw<SenderChannel<CH>::free_slots_stream>();
+    } else {
+        return SenderChannel<CH>::num_slots - (*SenderChannelInterfaces::producer_write_counters[CH] -
+                                               SenderChannelInterfaces::of<CH>().local_write_counter.counter);
+    }
+}
+
+// One packet of channel CH sent: its slot back in the channel's free slots.
+template <size_t CH>
+FORCE_INLINE void give_back_slot() {
+    if constexpr (stream_registers_available) {
+        increment_local_update_ptr_val<SenderChannel<CH>::free_slots_stream>(1);
+    } else {
+        SenderChannelInterfaces::of<CH>().template update_write_counter_for_send<false>();
+    }
+}
+
 // The free-slots registers of the channels in MASK, into registers[CH], lowest channel first.
 template <uint32_t MASK>
 FORCE_INLINE void read_free_slots_registers(uint32_t* registers) {
     if constexpr (MASK != 0) {
         constexpr size_t CH = lowest_bit(MASK);
-        registers[CH] = read_stream_raw<SenderChannel<CH>::free_slots_stream>();
+        registers[CH] = read_free_slots<CH>();
         read_free_slots_registers<without_lowest_bit(MASK)>(registers);
     }
 }
@@ -579,13 +628,14 @@ FORCE_INLINE bool send(
     }
     end_read_group();
 
-    increment_local_update_ptr_val<SenderChannel<CH>::free_slots_stream>(1);
+    give_back_slot<CH>();
     if (txq_busy(status_after)) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         }
     }
-    // The remote router's packets-received register +1: after the data, on the same TX queue.
-    remote_update_ptr_val<RemoteReceiverChannel<VC>::packets_received_stream, sender_txq_id>(1);
+    // The remote router's packets-received register +1 (without stream registers, this router's count sent into the
+    // remote router's slot): after the data, on the same TX queue.
+    send_packets_sent_credit<RemoteReceiverChannel<VC>::packets_received_stream>();
     sent++;
     if constexpr (telemetry::counts_sent) {
         telemetry::note_sent(size);
@@ -608,7 +658,7 @@ FORCE_INLINE void credit_slots(const SenderChannelState<CH>& state, uint32_t n, 
     if constexpr (SenderChannel<CH>::worker) {
         WorkerChannel<CH>::credit(returned, WorkerChannel<CH>::connected(state));
     } else {
-        ForwardingChannel<CH>::credit(state.upstream_free_slots_addr, n);
+        ForwardingChannel<CH>::credit(state.upstream_free_slots_addr, n, returned);
     }
 }
 
@@ -1018,15 +1068,18 @@ __attribute__((noinline)) void run() {
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Before the Ethernet handshake and any producer connects (both ERISCs, before their first sync), every sender channel,
-// serviced or not: its free-slots register at its slot count, its first-level-ack and completion registers at 0 where
-// its VC takes stream credits. Positions past the router's own channels (arrays sized for the widest router) have none.
+// serviced or not: its free-slots register at its slot count (without stream registers its count starts with its
+// producer cursor, reset_connections), its first-level-ack and completion registers at 0 where its VC takes stream
+// credits. Positions past the router's own channels (arrays sized for the widest router) have none.
 __attribute__((noinline)) void init_channel_streams() {
     constexpr size_t own_channels =
         ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS + ACTUAL_VC2_SENDER_CHANNELS;
     for_each_index<own_channels>([](auto ch) {
         constexpr size_t CH = decltype(ch)::value;
         constexpr size_t position = fabric_position_for_compact_sender(CH);
-        init_ptr_val<sender_free_slots_streams[position]>(SENDER_NUM_BUFFERS_ARRAY[CH]);
+        if constexpr (stream_registers_available) {
+            init_ptr_val<sender_free_slots_streams[position]>(SENDER_NUM_BUFFERS_ARRAY[CH]);
+        }
         init_stream_if_used<to_sender_packets_acked_streams[position]>(0);
         init_stream_if_used<to_sender_packets_completed_streams[position]>(0);
     });
@@ -1057,15 +1110,24 @@ FORCE_INLINE void set_up_channels(const std::array<size_t, MAX_NUM_SENDER_CHANNE
     SenderChannelInterfaces::start(connection_semaphores);
 }
 
+// Without stream registers, at init with set_up_channels: where read_free_slots finds each channel's producers' write
+// count.
+FORCE_INLINE void set_producer_write_counters(const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
+    for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ++ch) {
+        SenderChannelInterfaces::producer_write_counters[ch] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            producer_cursors[ch] + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter));
+    }
+}
+
 // While init waits for an upstream router, the base firmware's routing runs once per this many polls.
 constexpr uint32_t POLLS_PER_ROUTING_RUN = 100000;
 
-// What init's wait for an upstream router does besides polling the connect request: on Blackhole it ends on
+// What init's wait for an upstream router does besides polling the connect request: off Wormhole it ends on
 // termination and runs the base firmware's routing every POLLS_PER_ROUTING_RUN polls. On Wormhole it polls the connect
 // request alone, as the fabric's Wormhole routers always have; the Ethernet handshake's waits there skip the
 // termination check too (fabric_router_eth_handshake.hpp).
-constexpr bool connect_wait_checks_termination = is_blackhole_arch;
-constexpr bool connect_wait_runs_routing = is_blackhole_arch;
+constexpr bool connect_wait_checks_termination = !is_wormhole_arch;
+constexpr bool connect_wait_runs_routing = !is_wormhole_arch;
 
 // Waits until an upstream router asks to connect on `connection_semaphore`, or termination where the wait checks it.
 // One body for every channel. Cold (optimized for size): it runs only until that router connects.
