@@ -25,6 +25,7 @@
 #if defined(TRISC_UNPACK) || defined(TRISC_PACK)
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #include "ckernel_buf_desc.h"
+#include "llk_compute_api_claim.h"
 #include "llk_tdma_guard.h"
 #endif
 #ifdef TRISC_UNPACK
@@ -61,9 +62,11 @@ constexpr bool is_supported_format(DataFormat f, bool en_32bit_dest) {
  * waited/reserved DFB of this thread whose ring base is `bd_base`. The guard arms per DFB id in the wait/reserve and
  * checks it in the pop/push; an id-free op knows only its descriptor, and a DFB's descriptor is based at its ring
  * base (tc_slots[0]), so the base address is the key that joins the two.
+ * Also claims the kernel for the 2.0 API (llk_compute_api_claim.h).
  * @param bd_base: Buffer-descriptor base (16B units) of the descriptor the TDMA used.
  */
 inline void tdma_guard_note_bd([[maybe_unused]] const std::uint32_t bd_base) {
+    LLK_COMPUTE_API_CLAIM(2_0, legacy);  // every 2.0 unpack / pack op passes here; emits no code
 #if defined(ENABLE_LLK_ASSERT_ONLY) || defined(ENABLE_LLK_ASSERT)
     std::uint32_t armed = llk_tdma_guard::armed_mask();
     for (std::uint32_t dfb = 0; armed != 0; ++dfb, armed >>= 1) {
