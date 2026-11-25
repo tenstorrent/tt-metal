@@ -68,12 +68,14 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
 // This is to be called before program-local allocation begins.
 //
 // It prevents further persistent-l1 space allocations when they could intersect with program-local allocations.
-// Also sets the base address of all the regions.
+// Also sets the base address of all the regions: the persistent L1 high water mark, or `floor` when higher.
+// `floor` is the end of the program's kernel config when that config runs past the persistent L1 arena base.
 //
 // side-effect:
 //  - starts each region that has no allocations at its base address.
 //  - "seal" persistent_l1 to prevent collision between address spaces during allocation.
-void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1);
+void prepare_ephemeral_allocation(
+    EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1, DeviceAddr floor);
 
 // TODO(#62451):
 // The allocation logic should be unified in the future but we unfortunately have different allocation routine for now.
