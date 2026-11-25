@@ -21,6 +21,7 @@
 #include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "metal2_host_api/test_helpers/fabric_mock_fixture.hpp"
@@ -48,6 +49,12 @@ std::vector<uint32_t> SemaphoreIdsOnNodeForTest(distributed::MeshWorkload& workl
     std::ranges::transform(
         semaphores, std::back_inserter(ids), [](const auto& semaphore) { return semaphore.get().id(); });
     return ids;
+}
+
+// Not a public API: the per-device run args that the workload holds for the Program on `range`, or nullptr.
+const distributed::PerDeviceRuntimeArgs* PerDeviceRunArgsForTest(
+    distributed::MeshWorkload& workload, const distributed::MeshCoordinateRange& range) {
+    return workload.impl().per_device_runtime_args(range);
 }
 
 TEST_F(ProgramSpecFabric1DTest, CPU_ConnectionToNeighbourMatchesLegacyConnectionArgs) {
@@ -94,6 +101,65 @@ TEST_F(ProgramSpecFabric1DTest, CPU_ConnectionArgsSurviveSettingRunArgsAgain) {
     const std::vector<uint32_t> first = WriterRuntimeArgsForTest(workload, NodeCoord{0, 0});
     program.set_program_run_args(ProgramRunArgs{});
     EXPECT_EQ(WriterRuntimeArgsForTest(workload, NodeCoord{0, 0}), first);
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_ConnectionOnLinkOneMatchesLegacyConnectionArgs) {
+    // The link of a node selects the router, as the link of append_fabric_connection_rt_args does.
+    experimental::FabricConnectionsSpec connection =
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()});
+    connection.links = {{NodeCoord{0, 0}, 1}};
+    distributed::MeshWorkload workload(fixture_device(), MakeSpecWithFabricConnectionForTest(connection));
+    workload.get_programs().begin()->second.set_program_run_args(ProgramRunArgs{});
+    EXPECT_EQ(
+        WriterRuntimeArgsForTest(workload, NodeCoord{0, 0}),
+        LegacyConnectionArgsForTest(
+            fixture_device(), fixture_neighbour_fabric_node_id(), distributed::MeshCoordinate(0, 0), /*link=*/1));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_ConnectionArgsFollowNamedPerNodeRuntimeArgs) {
+    // A kernel gets its named per-node runtime args first, then its connection args.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()}));
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"num_packets"};
+    distributed::MeshWorkload workload(fixture_device(), spec);
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        {.kernel = KernelSpecName{"writer"},
+         .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"num_packets", 7u}})}};
+    workload.get_programs().begin()->second.set_program_run_args(run_args);
+    std::vector<uint32_t> expected = {7u};
+    std::ranges::copy(
+        LegacyConnectionArgsForTest(fixture_device(), fixture_neighbour_fabric_node_id()),
+        std::back_inserter(expected));
+    EXPECT_EQ(WriterRuntimeArgsForTest(workload, NodeCoord{0, 0}), expected);
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_ConnectionArgsFollowPerNodeTensorBinding) {
+    // A kernel gets the address of its per-node tensor binding first, then its connection args.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()}));
+    spec.tensor_parameters = {test_helpers::MakePerNodeTensorParameter("per_node_tensor", /*num_cores=*/1)};
+    test_helpers::BindTensorParameterToKernel(spec.kernels[0], "per_node_tensor", "per_node_tensor");
+    distributed::MeshWorkload workload(fixture_device(), spec);
+    const std::vector<uint32_t> legacy =
+        LegacyConnectionArgsForTest(fixture_device(), fixture_neighbour_fabric_node_id());
+    EXPECT_THAT(WriterRuntimeArgsForTest(workload, NodeCoord{0, 0}), ElementsAre(_, legacy[0], legacy[1], legacy[2]));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_SecondBindingFollowsEveryTargetOfTheFirstBinding) {
+    // A kernel that binds two specs gets the args of each target of the first spec, then the args of the second spec.
+    experimental::FabricConnectionsSpec second =
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()});
+    second.unique_id = experimental::FabricConnectionsSpecName{"second"};
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(MakeFabricConnectionForTest(
+        experimental::Fabric1DTargets{fixture_neighbour_direction(), fixture_other_neighbour_direction()}));
+    spec.advanced_options.fabric_connections.push_back(second);
+    spec.kernels[0].advanced_options.fabric_connection_bindings.push_back(experimental::FabricConnectionBinding{
+        .fabric_connections_spec_name = second.unique_id, .accessor_name = "second"});
+    spec.advanced_options.fabric_connection_options.disable_exclusive_fabric_link_check = true;
+    distributed::MeshWorkload workload(fixture_device(), spec);
+    const uint32_t router = LegacyConnectionArgsForTest(fixture_device(), fixture_neighbour_fabric_node_id())[0];
+    EXPECT_THAT(WriterRuntimeArgsForTest(workload, NodeCoord{0, 0}), ElementsAre(router, _, _, _, _, _, router, _, _));
 }
 
 TEST_F(ProgramSpecFabric1DMeshTest, CPU_RangedProgramConnectsEachDeviceThroughItsOwnRouter) {
@@ -203,6 +269,26 @@ TEST_F(ProgramSpecFabric1DMeshTest, CPU_WraparoundRangeWithFabricConnectionsFail
     EXPECT_THAT(
         [&] { distributed::MeshWorkload(fixture_mesh_device(), specs); },
         ThrowsMessage<std::runtime_error>(HasSubstr("give each device its own Program")));
+}
+
+TEST_F(ProgramSpecFabric1DMeshTest, CPU_WraparoundRangeWithoutFabricConnectionsIsAccepted) {
+    // A Program without fabric connections has no per-device run args, so it can run on a wraparound range.
+    const distributed::MeshCoordinateRange wraparound(
+        distributed::MeshCoordinate(0, 1), distributed::MeshCoordinate(0, 0), fixture_mesh_device().shape());
+    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec> specs = {
+        {wraparound, test_helpers::MakeMinimalGen1ValidProgramSpec()}};
+    EXPECT_NO_THROW(distributed::MeshWorkload(fixture_mesh_device(), specs));
+}
+
+TEST_F(ProgramSpecFabric1DMeshTest, CPU_ProgramOnOneDeviceHasNoPerDeviceRunArgs) {
+    // A Program on one device holds its connection args in its own runtime args, without per-device run args.
+    const distributed::MeshCoordinate second(0, 1);
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(MakeFabricConnectionForTest(
+        experimental::Fabric1DTargets{fixture_direction(second, distributed::MeshCoordinate(1, 1))}));
+    const distributed::MeshCoordinateRange one_device(second);
+    distributed::MeshWorkload workload(
+        fixture_mesh_device(), std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>{{one_device, spec}});
+    EXPECT_EQ(PerDeviceRunArgsForTest(workload, one_device), nullptr);
 }
 
 }  // namespace

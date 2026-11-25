@@ -89,6 +89,30 @@ void kernel_main() {
 }
 )";
 
+// Sends with a WorkerToFabricEdmSender built from the binding token fabric::to_receiver, as many times as the per-node
+// runtime arg node_increments tells.
+constexpr const char* kSenderWithPerNodeArgSource = R"(
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/global_semaphore.h"
+#include "experimental/kernel_args.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+
+void kernel_main() {
+    auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_binding(fabric::to_receiver);
+    sender.open();
+    auto* hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(PacketHeaderPool::allocate_header());
+    const GlobalSemaphore::ToChip chip{.num_hops = 1};
+    GlobalSemaphore sem(get_arg(args::sem_addr));
+    Noc noc;
+    for (uint32_t i = 0; i < get_arg(args::node_increments); i++) {
+        sem.up(sender, hdr, chip, noc, get_arg(args::dst_noc_x), get_arg(args::dst_noc_y), 1);
+    }
+    sender.close();
+}
+)";
+
 // Sends on the forward connection of a FabricConnectionManager built from the binding token fabric::to_receiver,
 // whose targets are {forward, backward}.
 constexpr const char* kSenderFromConnectionManagerSource = R"(
@@ -114,7 +138,7 @@ void kernel_main() {
 )";
 
 // Writes {has forward connection, has backward connection} of a FabricConnectionManager built from the optional
-// bindings fabric::fwd and fabric::bwd to report_addr, then sends on its only connection.
+// bindings fabric::fwd and fabric::bwd to report_addr, then sends on its only connection, if it has one.
 constexpr const char* kSenderFromOptionalBindingsSource = R"(
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -130,6 +154,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::report_addr));
     report[0] = connections.has_forward_connection();
     report[1] = connections.has_backward_connection();
+    if (!connections.is_logically_connected()) {
+        return;
+    }
     auto& sender = connections.has_forward_connection() ? connections.get_forward_connection()
                                                          : connections.get_backward_connection();
     auto* hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(PacketHeaderPool::allocate_header());
@@ -138,6 +165,32 @@ void kernel_main() {
     Noc noc;
     for (uint32_t i = 0; i < get_arg(args::increments); i++) {
         sem.up(sender, hdr, chip, noc, get_arg(args::dst_noc_x), get_arg(args::dst_noc_y), 1);
+    }
+    connections.close();
+}
+)";
+
+// Builds a FabricConnectionManager from the optional binding fabric::fwd in two steps: the build sends the open
+// request, and open_finish() waits for the connection. Then sends on the forward connection.
+constexpr const char* kSenderFromOptionalBindingsOpenedInTwoStepsSource = R"(
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/global_semaphore.h"
+#include "experimental/kernel_args.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+
+void kernel_main() {
+    auto connections = FabricConnectionManager::build_from_optional_bindings<
+        FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
+        fabric::get_token_if_present<"fwd">(), fabric::get_token_if_present<"bwd">());
+    connections.open_finish();
+    auto* hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(PacketHeaderPool::allocate_header());
+    const GlobalSemaphore::ToChip chip{.num_hops = 1};
+    GlobalSemaphore sem(get_arg(args::sem_addr));
+    Noc noc;
+    for (uint32_t i = 0; i < get_arg(args::increments); i++) {
+        sem.up(connections.get_forward_connection(), hdr, chip, noc, get_arg(args::dst_noc_x), get_arg(args::dst_noc_y), 1);
     }
     connections.close();
 }
@@ -172,6 +225,74 @@ void kernel_main() {
     for (uint32_t i = 0; i < get_arg(args::increments); i++) {
         sem.up(slot.sender, hdr, chip, noc, get_arg(args::dst_noc_x), get_arg(args::dst_noc_y), 1);
     }
+    close_connections(connections);
+}
+)";
+
+// Builds a RoutingPlaneConnectionManager from the binding token fabric::to_receiver in two steps: the build sends the
+// open request, and open_finish() waits for the connection. Then sends on its only slot.
+constexpr const char* kSenderFromRoutingPlaneOpenedInTwoStepsSource = R"(
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/global_semaphore.h"
+#include "experimental/kernel_args.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+
+void kernel_main() {
+    auto connections = tt::tt_fabric::RoutingPlaneConnectionManager::build_from_binding<
+        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(fabric::to_receiver);
+    connections.open_finish();
+    auto& slot = connections.get(0);
+    auto* hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(PacketHeaderPool::allocate_header());
+    const GlobalSemaphore::ToChip chip{.num_hops = 1};
+    GlobalSemaphore sem(get_arg(args::sem_addr));
+    Noc noc;
+    for (uint32_t i = 0; i < get_arg(args::increments); i++) {
+        sem.up(slot.sender, hdr, chip, noc, get_arg(args::dst_noc_x), get_arg(args::dst_noc_y), 1);
+    }
+    connections.close();
+}
+)";
+
+// Writes {tag of slot 0, number of slots} of a RoutingPlaneConnectionManager opened from the binding token
+// fabric::to_receiver to report_addr.
+constexpr const char* kRoutingPlaneSlotTagSource = R"(
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/api_common.h"
+
+using namespace tt::tt_fabric::common::experimental;
+
+void kernel_main() {
+    tt::tt_fabric::RoutingPlaneConnectionManager connections;
+    open_connections(connections, fabric::to_receiver);
+    volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::report_addr));
+    report[0] = connections.get_tag(0);
+    report[1] = connections.active_count();
+    close_connections(connections);
+}
+)";
+
+// Writes {destination chip id, destination mesh id} of slot 0 of a RoutingPlaneConnectionManager opened from the
+// binding token fabric::to_receiver on a 2D fabric to report_addr.
+constexpr const char* kRoutingPlaneSlotDestinationSource = R"(
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/api_common.h"
+
+using namespace tt::tt_fabric::common::experimental;
+
+void kernel_main() {
+    tt::tt_fabric::RoutingPlaneConnectionManager connections;
+    open_connections(connections, fabric::to_receiver);
+    volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::report_addr));
+    report[0] = connections.get(0).dst_dev_id;
+    report[1] = connections.get(0).dst_mesh_id;
     close_connections(connections);
 }
 )";
@@ -257,6 +378,13 @@ bool HasNeighbourInDirectionForTest(MeshDevice& device, RoutingDirection directi
                 .get_control_plane()
                 .get_intra_chip_neighbors(node, direction)
                 .empty();
+}
+
+// Not a public API: the eth_chan_directions value of `direction`, which is the tag of a routing-plane slot whose
+// router is in that direction.
+uint32_t EthChanDirectionForTest(RoutingDirection direction) {
+    return static_cast<uint32_t>(
+        tt::tt_metal::MetalContext::instance().get_control_plane().routing_direction_to_eth_direction(direction));
 }
 
 RoutingDirection OppositeDirectionForTest(RoutingDirection direction) {
@@ -407,7 +535,20 @@ std::vector<uint32_t> ReadReceiverReportForTest(MeshDevice& device) {
         2 * sizeof(uint32_t));
 }
 
-// Not a public API: the report of a sender built from optional bindings: {has forward, has backward}.
+// Not a public API: fills the sender's report on `device` with kReportNotWritten, enqueues `sender` on `device`, and
+// waits for it.
+void ClearSenderReportThenRunSenderForTest(MeshDevice& device, MeshWorkload& sender) {
+    tt::tt_metal::IDevice* chip = device.get_devices().at(0);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        chip->id(),
+        chip->worker_core_from_logical_core(kCore),
+        std::vector<uint32_t>{kReportNotWritten, kReportNotWritten},
+        SenderReportAddressForTest(device));
+    tt::tt_metal::distributed::EnqueueMeshWorkload(device.mesh_command_queue(), sender, false);
+    tt::tt_metal::distributed::Finish(device.mesh_command_queue());
+}
+
+// Not a public API: the two words that the sender writes to its report on `device`.
 std::vector<uint32_t> ReadSenderReportForTest(MeshDevice& device) {
     tt::tt_metal::IDevice* chip = device.get_devices().at(0);
     return tt::tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -509,6 +650,106 @@ TEST_F(Fabric1DFixture, Metal2RoutingPlaneSlotReachesNeighbour) {
     EXPECT_EQ(ReadReceiverReportForTest(*pair->dst_device), (std::vector<uint32_t>{kIncrements, 0u}));
 }
 
+TEST_F(Fabric1DFixture, Metal2SenderWithPerNodeArgReachesNeighbour) {
+    // A sender built from a binding, in a kernel that also has a per-node runtime arg, reaches the neighbouring chip.
+    const std::optional<NeighbourPairForTest> pair = FindNeighbourPairForTest(this);
+    if (!pair.has_value()) {
+        GTEST_SKIP() << "No pair of neighbouring chips found";
+    }
+    GlobalSemaphore sem = tt::tt_metal::CreateGlobalSemaphore(*pair->dst_device, CoreRangeSet(CoreRange(kCore)), 0);
+    FabricConnectionsSpec connection{
+        .unique_id = FabricConnectionsSpecName{"to_receiver"},
+        .targets = Fabric1DTargets{pair->direction},
+        .links = {{kCore, 0}}};
+    ProgramSpec spec = MakeSenderSpecForTest(kSenderWithPerNodeArgSource, connection);
+    spec.kernels.front().runtime_arg_schema.runtime_arg_names = {"node_increments"};
+    tt::tt_metal::ProgramRunArgs args = MakeSenderRunArgsForTest(*pair, sem);
+    args.kernel_run_args.front().runtime_arg_values["node_increments"][kCore] = kIncrements;
+    MeshWorkload sender(*pair->src_device, spec);
+    sender.get_programs().begin()->second.set_program_run_args(args);
+    MeshWorkload receiver = MakeReceiverWorkloadForTest(*pair->dst_device, sem);
+    RunReceiverThenSenderForTest(*pair, receiver, sender);
+    EXPECT_EQ(ReadReceiverReportForTest(*pair->dst_device), (std::vector<uint32_t>{kIncrements, 0u}));
+}
+
+TEST_F(Fabric1DFixture, Metal2ConnectionManagerFromNeitherOptionalBindingHasNoConnection) {
+    // A manager built from optional bindings, in a kernel that binds neither fwd nor bwd, has no connection.
+    const std::optional<NeighbourPairForTest> pair = FindNeighbourPairForTest(this);
+    if (!pair.has_value()) {
+        GTEST_SKIP() << "No pair of neighbouring chips found";
+    }
+    GlobalSemaphore sem = tt::tt_metal::CreateGlobalSemaphore(*pair->dst_device, CoreRangeSet(CoreRange(kCore)), 0);
+    FabricConnectionsSpec connection{
+        .unique_id = FabricConnectionsSpecName{"to_receiver"},
+        .targets = Fabric1DTargets{pair->direction},
+        .links = {{kCore, 0}}};
+    MeshWorkload sender(
+        *pair->src_device, MakeSenderSpecForTest(kSenderFromOptionalBindingsSource, connection, "to_receiver"));
+    sender.get_programs().begin()->second.set_program_run_args(MakeSenderRunArgsForTest(*pair, sem));
+    ClearSenderReportThenRunSenderForTest(*pair->src_device, sender);
+    EXPECT_EQ(ReadSenderReportForTest(*pair->src_device), (std::vector<uint32_t>{0u, 0u}));
+}
+
+TEST_F(Fabric1DFixture, Metal2ConnectionManagerOpenedInTwoStepsReachesNeighbour) {
+    // A manager built from an optional binding that only starts the open, then finished with open_finish(), reaches
+    // the neighbouring chip.
+    const std::optional<NeighbourPairForTest> pair = FindNeighbourPairForTest(this);
+    if (!pair.has_value()) {
+        GTEST_SKIP() << "No pair of neighbouring chips found";
+    }
+    GlobalSemaphore sem = tt::tt_metal::CreateGlobalSemaphore(*pair->dst_device, CoreRangeSet(CoreRange(kCore)), 0);
+    FabricConnectionsSpec connection{
+        .unique_id = FabricConnectionsSpecName{"to_receiver"},
+        .targets = Fabric1DTargets{pair->direction},
+        .links = {{kCore, 0}}};
+    MeshWorkload sender(
+        *pair->src_device, MakeSenderSpecForTest(kSenderFromOptionalBindingsOpenedInTwoStepsSource, connection, "fwd"));
+    sender.get_programs().begin()->second.set_program_run_args(MakeSenderRunArgsForTest(*pair, sem));
+    MeshWorkload receiver = MakeReceiverWorkloadForTest(*pair->dst_device, sem);
+    RunReceiverThenSenderForTest(*pair, receiver, sender);
+    EXPECT_EQ(ReadReceiverReportForTest(*pair->dst_device), (std::vector<uint32_t>{kIncrements, 0u}));
+}
+
+TEST_F(Fabric1DFixture, Metal2RoutingPlaneOpenedInTwoStepsReachesNeighbour) {
+    // A RoutingPlaneConnectionManager built from a binding that only starts the open, then finished with
+    // open_finish(), sends on its slot to the neighbouring chip.
+    const std::optional<NeighbourPairForTest> pair = FindNeighbourPairForTest(this);
+    if (!pair.has_value()) {
+        GTEST_SKIP() << "No pair of neighbouring chips found";
+    }
+    GlobalSemaphore sem = tt::tt_metal::CreateGlobalSemaphore(*pair->dst_device, CoreRangeSet(CoreRange(kCore)), 0);
+    FabricConnectionsSpec connection{
+        .unique_id = FabricConnectionsSpecName{"to_receiver"},
+        .targets = Fabric1DTargets{pair->direction},
+        .links = {{kCore, 0}}};
+    MeshWorkload sender(
+        *pair->src_device, MakeSenderSpecForTest(kSenderFromRoutingPlaneOpenedInTwoStepsSource, connection));
+    sender.get_programs().begin()->second.set_program_run_args(MakeSenderRunArgsForTest(*pair, sem));
+    MeshWorkload receiver = MakeReceiverWorkloadForTest(*pair->dst_device, sem);
+    RunReceiverThenSenderForTest(*pair, receiver, sender);
+    EXPECT_EQ(ReadReceiverReportForTest(*pair->dst_device), (std::vector<uint32_t>{kIncrements, 0u}));
+}
+
+TEST_F(Fabric1DFixture, Metal2RoutingPlaneSlotTagIsDirectionOfTarget) {
+    // A RoutingPlaneConnectionManager opened from the binding of one direction target has one slot, tagged with the
+    // eth_chan_directions value of that direction.
+    const std::optional<NeighbourPairForTest> pair = FindNeighbourPairForTest(this);
+    if (!pair.has_value()) {
+        GTEST_SKIP() << "No pair of neighbouring chips found";
+    }
+    GlobalSemaphore sem = tt::tt_metal::CreateGlobalSemaphore(*pair->dst_device, CoreRangeSet(CoreRange(kCore)), 0);
+    FabricConnectionsSpec connection{
+        .unique_id = FabricConnectionsSpecName{"to_receiver"},
+        .targets = Fabric1DTargets{pair->direction},
+        .links = {{kCore, 0}}};
+    MeshWorkload sender(*pair->src_device, MakeSenderSpecForTest(kRoutingPlaneSlotTagSource, connection));
+    sender.get_programs().begin()->second.set_program_run_args(MakeSenderRunArgsForTest(*pair, sem));
+    ClearSenderReportThenRunSenderForTest(*pair->src_device, sender);
+    EXPECT_EQ(
+        ReadSenderReportForTest(*pair->src_device),
+        (std::vector<uint32_t>{EthChanDirectionForTest(pair->direction), 1u}));
+}
+
 TEST_F(Fabric2DFixture, Metal2SenderBuiltFromBindingReachesPeer) {
     // A sender built from the binding of a peer target delivers every increment to the peer chip.
     const std::optional<NeighbourPairForTest> pair = FindNeighbourPairForTest(this);
@@ -543,6 +784,25 @@ TEST_F(Fabric2DFixture, Metal2RoutingPlaneSlotReachesPeer) {
     MeshWorkload receiver = MakeReceiverWorkloadForTest(*pair->dst_device, sem);
     RunReceiverThenSenderForTest(*pair, receiver, sender);
     EXPECT_EQ(ReadReceiverReportForTest(*pair->dst_device), (std::vector<uint32_t>{kIncrements, 0u}));
+}
+
+TEST_F(Fabric2DFixture, Metal2RoutingPlaneSlotDestinationIsPeer) {
+    // A RoutingPlaneConnectionManager opened from a peer binding gives its slot the peer's chip id and mesh id.
+    const std::optional<NeighbourPairForTest> pair = FindNeighbourPairForTest(this);
+    if (!pair.has_value()) {
+        GTEST_SKIP() << "No pair of neighbouring chips found";
+    }
+    GlobalSemaphore sem = tt::tt_metal::CreateGlobalSemaphore(*pair->dst_device, CoreRangeSet(CoreRange(kCore)), 0);
+    FabricConnectionsSpec connection{
+        .unique_id = FabricConnectionsSpecName{"to_receiver"},
+        .targets = Fabric2DTargets{pair->dst_node},
+        .links = {{kCore, 0}}};
+    MeshWorkload sender(*pair->src_device, MakeSenderSpecForTest(kRoutingPlaneSlotDestinationSource, connection));
+    sender.get_programs().begin()->second.set_program_run_args(MakeSenderRunArgsForTest(*pair, sem));
+    ClearSenderReportThenRunSenderForTest(*pair->src_device, sender);
+    EXPECT_EQ(
+        ReadSenderReportForTest(*pair->src_device),
+        (std::vector<uint32_t>{pair->dst_node.chip_id, *pair->dst_node.mesh_id}));
 }
 
 // Every device of the system mesh, with the fabric in 1D mode.

@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+
 #include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -33,6 +35,25 @@ TEST_F(ProgramSpecFabric1DTest, CPU_FabricConnectionTokenHasOneSlotPerTargetJITS
         experimental::Fabric1DTargets{fixture_neighbour_direction(), fixture_other_neighbour_direction()}));
     spec.kernels[0].source = KernelSpec::SourceCode{kTwoTargetTokenKernel};
     EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
+}
+
+// Not a public API: the JIT cache key of kernel "writer" of the workload's Program.
+uint64_t WriterKernelHashForTest(distributed::MeshWorkload& workload) {
+    Program& program = workload.get_programs().begin()->second;
+    return program.impl().get_kernel_by_spec_name("writer")->compute_hash();
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_FabricConnectionTargetCountChangesKernelHash) {
+    // A kernel bound to a one-target spec and the same kernel bound to a two-target spec are cached apart.
+    distributed::MeshWorkload one_target(
+        fixture_device(),
+        MakeSpecWithFabricConnectionForTest(
+            MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()})));
+    distributed::MeshWorkload two_targets(
+        fixture_device(),
+        MakeSpecWithFabricConnectionForTest(MakeFabricConnectionForTest(
+            experimental::Fabric1DTargets{fixture_neighbour_direction(), fixture_other_neighbour_direction()})));
+    EXPECT_NE(WriterKernelHashForTest(one_target), WriterKernelHashForTest(two_targets));
 }
 
 constexpr const char* kTokenIfPresentKernel = R"(

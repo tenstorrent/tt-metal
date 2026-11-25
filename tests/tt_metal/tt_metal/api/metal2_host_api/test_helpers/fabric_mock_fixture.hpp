@@ -118,6 +118,7 @@ private:
 
 class ProgramSpecFabric1DTest : public FabricMockDeviceFixture<tt_fabric::FabricConfig::FABRIC_1D> {};
 class ProgramSpecFabric2DTest : public FabricMockDeviceFixture<tt_fabric::FabricConfig::FABRIC_2D> {};
+class ProgramSpecFabricDisabledTest : public FabricMockDeviceFixture<tt_fabric::FabricConfig::DISABLED> {};
 // One 2x2 mesh on a mock 4-chip Wormhole cluster, with the fabric in mode `Config`.
 // The fabric config is scoped to the fixture's own mock MetalEnv.
 template <tt_fabric::FabricConfig Config>
@@ -194,15 +195,16 @@ inline std::vector<uint32_t> WriterRuntimeArgsForTest(distributed::MeshWorkload&
 }
 
 // Not a public API: the connection args that append_fabric_connection_rt_args gives a worker on node {0, 0}
-// of a new Program, for the connection from the device at `src` of `mesh_device` to `dst` over link 0.
+// of a new Program, for the connection from the device at `src` of `mesh_device` to `dst` over `link`.
 inline std::vector<uint32_t> LegacyConnectionArgsForTest(
     distributed::MeshDevice& mesh_device,
     const tt_fabric::FabricNodeId& dst,
-    const distributed::MeshCoordinate& src = distributed::MeshCoordinate(0, 0)) {
+    const distributed::MeshCoordinate& src = distributed::MeshCoordinate(0, 0),
+    uint32_t link = 0) {
     Program legacy_program = CreateProgram();
     std::vector<uint32_t> args;
     tt_fabric::append_fabric_connection_rt_args(
-        mesh_device, mesh_device.get_fabric_node_id(src), dst, 0, legacy_program, {0, 0}, args);
+        mesh_device, mesh_device.get_fabric_node_id(src), dst, link, legacy_program, {0, 0}, args);
     return args;
 }
 

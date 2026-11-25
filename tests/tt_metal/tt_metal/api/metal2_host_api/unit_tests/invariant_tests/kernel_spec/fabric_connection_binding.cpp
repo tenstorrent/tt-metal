@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <stdexcept>
+#include <string>
 
 #include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -72,6 +73,17 @@ TEST_F(ProgramSpecFabric1DTest, CPU_FabricConnectionBindingWithInvalidAccessorNa
     EXPECT_THAT(
         [&] { distributed::MeshWorkload(fixture_device(), spec); },
         ThrowsMessage<std::runtime_error>(HasSubstr("must be a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_FabricConnectionBindingWithTooLongAccessorNameFails) {
+    // An accessor name has at most MAX_ACCESSOR_NAME_LENGTH characters.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()}));
+    spec.kernels[0].advanced_options.fabric_connection_bindings[0].accessor_name =
+        std::string(MAX_ACCESSOR_NAME_LENGTH + 1, 'c');
+    EXPECT_THAT(
+        [&] { distributed::MeshWorkload(fixture_device(), spec); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("an accessor_name must be at most")));
 }
 
 TEST_F(ProgramSpecFabric1DTest, CPU_FabricConnectionBoundByComputeKernelFails) {

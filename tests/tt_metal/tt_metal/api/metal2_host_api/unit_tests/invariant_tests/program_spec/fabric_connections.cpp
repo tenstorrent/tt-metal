@@ -24,6 +24,7 @@ using test_helpers::MakeFabricConnectionForTest;
 using test_helpers::MakeSpecWithFabricConnectionForTest;
 using test_helpers::ProgramSpecFabric1DTest;
 using test_helpers::ProgramSpecFabric2DUDMTest;
+using test_helpers::ProgramSpecFabricDisabledTest;
 using ::testing::HasSubstr;
 using ::testing::ThrowsMessage;
 
@@ -95,6 +96,52 @@ TEST_F(ProgramSpecFabric1DTest, CPU_FabricConnectionOnNodeWithoutFreeSemaphoresF
     EXPECT_THAT(
         [&] { distributed::MeshWorkload(fixture_device(), spec); },
         ThrowsMessage<std::runtime_error>(HasSubstr("has no semaphores left for the connection")));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_FabricConnectionUsesTheLastTwoFreeSemaphoresOfTheNode) {
+    // A target can use the last two free semaphores of a node.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()}));
+    for (int i = 0; i < 14; ++i) {
+        spec.semaphores.push_back(
+            SemaphoreSpec{.unique_id = SemaphoreSpecName{"sem" + std::to_string(i)}, .target_nodes = NodeCoord{0, 0}});
+    }
+    EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_TwoFabricConnectionsSpecsWithOneNameFail) {
+    // Each FabricConnectionsSpec of a ProgramSpec has its own name.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()}));
+    spec.advanced_options.fabric_connections.push_back(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_other_neighbour_direction()}));
+    EXPECT_THAT(
+        [&] { distributed::MeshWorkload(fixture_device(), spec); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Duplicate FabricConnectionsSpec name 'conn'")));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_FabricConnectionToZWithoutNeighbourFailsOnlyForTheMissingNeighbour) {
+    // Z is an allowed direction target; it fails only on a device without a fabric neighbour in Z.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{tt_fabric::RoutingDirection::Z}));
+    EXPECT_THAT(
+        [&] { distributed::MeshWorkload(fixture_device(), spec); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("has no fabric neighbour in direction")));
+}
+
+TEST_F(ProgramSpecFabricDisabledTest, CPU_FabricConnectionWithFabricDisabledFails) {
+    // A Program with fabric connections needs the fabric to be enabled.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{tt_fabric::RoutingDirection::E}));
+    EXPECT_THAT(
+        [&] { distributed::MeshWorkload(fixture_device(), spec); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("needs the fabric to be enabled")));
+}
+
+TEST_F(ProgramSpecFabricDisabledTest, CPU_ProgramWithoutFabricConnectionsWithFabricDisabledIsAccepted) {
+    // A Program without fabric connections does not need the fabric.
+    ProgramSpec spec = test_helpers::MakeMinimalGen1ValidProgramSpec();
+    EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
 }
 
 TEST_F(ProgramSpecFabric1DTest, CPU_TwoFabricConnectionsOnOneLinkFail) {

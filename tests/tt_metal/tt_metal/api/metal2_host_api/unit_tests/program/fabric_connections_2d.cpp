@@ -27,6 +27,15 @@ using test_helpers::MakeSpecWithFabricConnectionForTest;
 using test_helpers::ProgramSpecFabric2DMeshTest;
 using test_helpers::ProgramSpecFabric2DTest;
 using test_helpers::WriterRuntimeArgsForTest;
+using test_helpers::WriterRuntimeArgsOnDeviceForTest;
+using ::testing::_;
+using ::testing::ElementsAre;
+
+// Not a public API: the number of chips in mesh `mesh_id` of the fabric of `mesh_device`.
+tt_fabric::LogicalChipId ChipsInMeshForTest(distributed::MeshDevice& mesh_device, tt_fabric::MeshId mesh_id) {
+    const auto& control_plane = mesh_device.impl().metal_context().get_control_plane();
+    return static_cast<tt_fabric::LogicalChipId>(control_plane.get_physical_mesh_shape(mesh_id).mesh_size());
+}
 
 TEST_F(ProgramSpecFabric2DTest, CPU_ConnectionToPeerMatchesLegacyConnectionArgs) {
     // A peer target gets the args of append_fabric_connection_rt_args, then the peer's ids.
@@ -57,6 +66,34 @@ TEST_F(ProgramSpecFabric2DTest, CPU_ConnectionToPeerOutsideTheSystemFails) {
     EXPECT_THAT(
         [&] { distributed::MeshWorkload(fixture_device(), spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not a fabric node of the system")));
+}
+
+TEST_F(ProgramSpecFabric2DTest, CPU_ConnectionToPeerOneChipPastTheEndOfTheMeshFails) {
+    // A peer target's chip id is less than the number of chips in its mesh.
+    const tt_fabric::FabricNodeId own = fixture_fabric_node_id();
+    const tt_fabric::FabricNodeId past_the_end(own.mesh_id, ChipsInMeshForTest(fixture_device(), own.mesh_id));
+    ProgramSpec spec =
+        MakeSpecWithFabricConnectionForTest(MakeFabricConnectionForTest(experimental::Fabric2DTargets{past_the_end}));
+    EXPECT_THAT(
+        [&] { distributed::MeshWorkload(fixture_device(), spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not a fabric node of the system")));
+}
+
+TEST_F(ProgramSpecFabric2DMeshTest, CPU_RangedProgramToPeerConnectsEachDeviceTowardItsOwnFirstHop) {
+    // On a Program on two devices, each device connects a peer target through the router of its own first hop.
+    const distributed::MeshCoordinate first(0, 0);
+    const distributed::MeshCoordinate second(0, 1);
+    const tt_fabric::FabricNodeId peer = fixture_fabric_node_id(distributed::MeshCoordinate(1, 1));
+    ProgramSpec spec =
+        MakeSpecWithFabricConnectionForTest(MakeFabricConnectionForTest(experimental::Fabric2DTargets{peer}));
+    distributed::MeshWorkload workload(
+        fixture_mesh_device(), {{distributed::MeshCoordinateRange(first, second), spec}});
+    const uint32_t first_router = LegacyConnectionArgsForTest(fixture_mesh_device(), peer, first)[0];
+    const uint32_t second_router = LegacyConnectionArgsForTest(fixture_mesh_device(), peer, second)[0];
+    EXPECT_THAT(
+        WriterRuntimeArgsOnDeviceForTest(workload, first, NodeCoord{0, 0}), ElementsAre(first_router, _, _, _, _));
+    EXPECT_THAT(
+        WriterRuntimeArgsOnDeviceForTest(workload, second, NodeCoord{0, 0}), ElementsAre(second_router, _, _, _, _));
 }
 
 TEST_F(ProgramSpecFabric2DMeshTest, CPU_RangedProgramWithPeerThatIsOneOfItsDevicesFails) {
