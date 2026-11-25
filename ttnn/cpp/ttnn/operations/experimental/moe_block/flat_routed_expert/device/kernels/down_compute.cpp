@@ -25,6 +25,26 @@
 #include "flat_options.hpp"
 #include "schedule_meta.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "api/debug/kernel_profiler.hpp"
+#include "y_fp8_quant.hpp"
+
+#ifdef TRISC_PACK
+#include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+namespace ckernel::sfpu {
+// FP8_Y_PLAN.md M1: a dummy SFPU load / multiply by 1.0 / store over one DEST tile (values unchanged)
+template <int ITERATIONS = 8>
+inline void flat_exp_dummy_touch() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = v * sfpi::vConstFloatPrgm0;  // (1.0: flat_exp_dummy_init)
+        sfpi::dst_reg++;
+    }
+}
+inline void flat_exp_dummy_init() { sfpi::vConstFloatPrgm0 = 1.0f; }
+}  // namespace ckernel::sfpu
+#endif
 
 namespace {
 
@@ -46,6 +66,11 @@ constexpr uint32_t h_tiles = k_tiles * row_tiles;
 constexpr uint32_t in0_block_k_tiles = k_tiles % 8 == 0 ? 8 : k_tiles % 4 == 0 ? 4 : k_tiles % 2 == 0 ? 2 : 1;
 constexpr uint32_t dest_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
 constexpr bool reads_per_load = flat_options::down_weights_per_load;
+// FP8_Y_PLAN.md M0 / M1 experiments (the host's TT_FLAT_EXP_* env): dummy SFPU sweeps over the packer's half a pass
+constexpr uint32_t pack_dummy = get_named_compile_time_arg_val("down_pack_dummy");
+// (perf only: the fp8 quantize on the pack thread, its scales into a scratch array; y is not meaningful): 1: 1 x pass
+// width blocks, 2: 1 x 32 blocks
+constexpr uint32_t pack_quant = get_named_compile_time_arg_val("down_pack_quant");
 static_assert(columns <= 16 && k_tiles % k_tiles_per_block == 0 && k_tiles % in0_block_k_tiles == 0);
 static_assert(ring_blocks >= blocks_per_expert);
 static_assert(!reads_per_load || ring_blocks == flat_options::gate_up_ring_regions * blocks_per_expert);
@@ -90,6 +115,13 @@ void compute_schedule() {
     static_assert(!row_major_y || columns % pass_columns == 0);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(h_cb, weight_cb, out_cb);
+    if constexpr (pack_quant != 0) {
+        y_fp8::init();
+    }
+    if constexpr (pack_dummy > 0) {
+        PACK((SFPU_UNARY_INIT(unused)));
+        PACK((ckernel::sfpu::flat_exp_dummy_init()));
+    }
     matmul_block_init(h_cb, weight_cb, false, pass_columns, 1, in0_block_k_tiles);
     if constexpr (row_major_y) {
         pack_untilize_dest_init<pass_columns, columns>(out_cb);
@@ -132,34 +164,59 @@ void compute_schedule() {
                     matmul_block_init(h_cb, weight_cb, false, width, 1, in0_block_k_tiles);
                 }
                 tile_regs_acquire();
-                uint32_t block_offset = 0;
-                for (uint32_t k = 0; k < k_tiles; ++k) {
-                    const uint32_t block = k / k_tiles_per_block;
-                    if (k % k_tiles_per_block == 0) {
-                        block_offset = reads_per_load ? weight_block_in_region(
-                                                            load * blocks_per_expert + block, region_first_slot + block)
-                                                      : weight_block(entry * blocks_per_expert + block);
-                    }
-                    matmul_block(
-                        h_cb,
-                        weight_cb,
-                        row + k * row_tiles,
-                        block_offset + (k % k_tiles_per_block) * columns + first_column,
-                        0,
-                        false,
-                        width,
-                        1,
-                        in0_block_k_tiles);
-                    // the weights' last row (final column pass): each block goes as soon as it is used, so the next
-                    // expert's blocks stream into the ring while this row still runs
-                    if (frees_weights && last_pass && row == rows - 1 &&
-                        k % k_tiles_per_block == k_tiles_per_block - 1) {
-                        cb_pop_front(weight_cb, block_tiles);
-                        ++blocks_freed;
+                {
+#ifdef TRISC_MATH
+                    DeviceZoneScopedN("DN-MM");  // (FP8_Y_PLAN.md M0: compiled in with the device profiler only)
+#endif
+                    uint32_t block_offset = 0;
+                    for (uint32_t k = 0; k < k_tiles; ++k) {
+                        const uint32_t block = k / k_tiles_per_block;
+                        if (k % k_tiles_per_block == 0) {
+                            block_offset = reads_per_load
+                                               ? weight_block_in_region(
+                                                     load * blocks_per_expert + block, region_first_slot + block)
+                                               : weight_block(entry * blocks_per_expert + block);
+                        }
+                        matmul_block(
+                            h_cb,
+                            weight_cb,
+                            row + k * row_tiles,
+                            block_offset + (k % k_tiles_per_block) * columns + first_column,
+                            0,
+                            false,
+                            width,
+                            1,
+                            in0_block_k_tiles);
+                        // the weights' last row (final column pass): each block goes as soon as it is used, so the next
+                        // expert's blocks stream into the ring while this row still runs
+                        if (frees_weights && last_pass && row == rows - 1 &&
+                            k % k_tiles_per_block == k_tiles_per_block - 1) {
+                            cb_pop_front(weight_cb, block_tiles);
+                            ++blocks_freed;
+                        }
                     }
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef TRISC_PACK
+                if constexpr (pack_quant != 0) {
+                    DeviceZoneScopedN("DN-QUANT");
+                    static uint32_t scratch_scales[32 * 8];
+                    y_fp8::quantize_block<pass_columns, pack_quant == 2 ? 1 : pass_columns>(
+                        reinterpret_cast<uint32_t>(scratch_scales), 8);
+                }
+                if constexpr (pack_dummy > 0) {
+                    DeviceZoneScopedN("DN-DUMMY");
+                    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                    for (uint32_t rep = 0; rep < pack_dummy; ++rep) {
+                        for (uint32_t tile = 0; tile < width; ++tile) {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, DST_ACCUM_MODE, flat_exp_dummy_touch, (8), tile, VectorMode::RC);
+                        }
+                    }
+                    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
+                }
+#endif
                 if constexpr (row_major_y) {
                     pack_untilize_dest<pass_columns, columns>(out_cb, 1, first_column / pass_columns);
                 } else {

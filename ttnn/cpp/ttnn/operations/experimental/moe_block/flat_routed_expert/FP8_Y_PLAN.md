@@ -173,3 +173,41 @@ scale cells), program factory / plan / options, host API and validation.
 * `row_bytes` (`combine_host.cpp`) splits into the wire row and the output row (bf16).
 * Where it pays (Nov 6 measurements): GLM 4x4 SP 10240 is X-line bisection bound (traffic ~1590 of 1986 us): fewer
   bytes is the lever. GLM 8x4 5120 is flat bound (small gain); K3 is weight bound (none).
+
+## Results so far (Nov 25, one p150b; work in progress)
+
+**M0 / M1 (device time, median of 5; GLM, row-major bf16 y, `down_fp32`).** Experiment hooks (env, not in the
+program hash): `TT_FLAT_EXP_DOWN_HALF_SYNC`, `TT_FLAT_EXP_DOWN_PACK_DUMMY`, `TT_FLAT_EXP_DOWN_PACK_QUANT` (1: 1 x pass
+width blocks, 2: 1 x 32; perf only - y is not valid). Harness: `test_flat_fp8_y_experiments.py`.
+
+| | 8x4-5120 | 4x4-5120 |
+|---|---|---|
+| full sync (today) | 517.7 us | 997.2 us |
+| half sync, passes of 3 | 526.8 | 1029.9 |
+| + e4m3 quantize 1x96 | 535.5 (+3.4%) | 1033.8 (+3.7%) |
+| + e4m3 quantize 1x32 | 555.4 (+7.3%) | 1072.0 (+7.5%) |
+
+Device profiler, a pass: matmul ~3,800 cycles; quantize ~3,960 (1x96) / ~5,130 (1x32) - no margin; it hides only
+because the down cores wait on weights.
+
+**M2: bit exact** (`test_flat_y_fp8_quant.py`, 1x96 and 1x32: codes and scales vs the torch golden). Scales leave
+through DEST: TRISC2 reads the spare tile (RISC view, `0xFFBD8000`). Blackhole findings:
+* `pack_untilize_dest` of an odd block width (3) into an 8-bit format writes one tile more a row: the out CB row
+  stride is padded (9 tiles for GLM).
+* The packer's e4m3 subnormals are wrong (exponent 0 keeps the mantissa without the implicit 1); the unpacker
+  flushes e4m3 subnormals to 0. So the format should flush |q| < 2^-6 to 0 (drop the SFPU's subnormal branches).
+
+**Combine consume microbench** (`routed_experts_combine/test_combine_fp8_consume_bench.py`): one accumulator core,
+rows landed in L1, snap 2^-14. Wire row `[H codes][32 cells x 16 B: 12 e8m0 bytes, one per 16 columns][trailer]` =
+6688 B (bf16: 12320). The rows as flat 1024-code tiles; 16 codes = one DEST row; an FP16 factor per DEST row (srcB
+column 0, ELWMUL SRCB_BCAST_COL as sparse_sdpa's fused dequant; fp8 unpacks to FP16 and the FPU takes one exponent
+family): bf16 today 5,090 cycles a row, fp8 4,400; both within 1 bf16 ulp of their golden.
+
+**Accuracy: e4m3 is the weak point.** Relative RMS error of y: bf16 0.17%, bfp8_b (old TtMoe, "acceptable")
+0.7-1.3%, e4m3 + pow2 scale 2.7% (any block size: with pow2 scales e4m3 is scale invariant). Sign + 7-bit magnitude
+(int8 sign-magnitude, a bfp8_b mantissa) under a pow2 block scale: 1x16 = bfp8_b, 1x32 0.8-1.7%, 1x96 0.9-2.9%.
+
+**Next:** switch to int8 sign-magnitude + pow2 block scale (1x32 / 1x96): same wire bytes, the exponent byte =
+log2(s) + 133 (bfp8_b's shared exponent), and the combine reads a flat tile as a native Bfp8_b tile (64 exponent
+bytes, then the 1024 values) - today's gate broadcast multiply unchanged. To verify: the packer's fp32 -> Int8 is
+sign-magnitude (and Int8 pack_untilize with a pass width of 3); the fidelity the gate x mantissa product needs.
