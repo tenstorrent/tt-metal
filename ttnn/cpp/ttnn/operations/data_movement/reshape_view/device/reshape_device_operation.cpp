@@ -51,6 +51,20 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
+    // Opt-in compact tiled mapping (TTNN_RESHAPE_TILED_COMPACT_MAPPING=1): hashed only when enabled, so the
+    // default hash is unchanged.
+    if (ReshapeViewTiledProgramFactory::compact_mapping_enabled()) {
+        return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
+            operation_attributes.logical_output_shape,
+            operation_attributes.output_mem_config,
+            operation_attributes.sub_core_grid.has_value(),
+            operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
+                                                           : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+            tensor_args,
+            program_factory.index(),
+            true);
+    }
+
     // don't hash on operation_attributes_t::recreate_mapping_tensor
     return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
         operation_attributes.logical_output_shape,

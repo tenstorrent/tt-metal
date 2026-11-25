@@ -5,7 +5,9 @@
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
 
 #include <cmath>
+#include <cstdlib>
 #include <numeric>
+#include <string_view>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -15,6 +17,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn::prim {
 
@@ -206,7 +209,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
 }
 
 Tensor compute_reshape_mapping_host_tensor(
-    const uint32_t /*num_input_pages*/,
+    const uint32_t mapping_column_stride,
     const uint32_t num_output_pages,
     const Shape& input_shape,
     const Shape& output_shape,
@@ -215,9 +218,10 @@ Tensor compute_reshape_mapping_host_tensor(
     Dims tile_dims_input(input_shape, tile_shape), tile_dims_output(output_shape, tile_shape);
 
     std::vector<std::vector<SegmentMapData>> mapping_vector;
-    mapping_vector.reserve(num_output_pages);
+    const uint32_t num_mapping_pages = num_output_pages / mapping_column_stride;
+    mapping_vector.reserve(num_mapping_pages);
 
-    for (uint32_t output_page_idx = 0; output_page_idx < num_output_pages; ++output_page_idx) {
+    for (uint32_t output_page_idx = 0; output_page_idx < num_output_pages; output_page_idx += mapping_column_stride) {
         mapping_vector.emplace_back(reshape_map_output_page(
             output_page_idx, input_shape, output_shape, tile_dims_input, tile_dims_output, tile_shape, face_shape));
     }
@@ -232,7 +236,7 @@ Tensor compute_reshape_mapping_host_tensor(
     max_input_segments += max_input_segments % (tt::tt_metal::hal::get_l1_alignment());
 
     // initialize to 0 because that will be checked by the kernel as a stopping condition
-    std::vector<uint32_t> flat_mapping_vector(SegmentMapData::size * num_output_pages * max_input_segments, 0);
+    std::vector<uint32_t> flat_mapping_vector(SegmentMapData::size * num_mapping_pages * max_input_segments, 0);
     auto it = flat_mapping_vector.begin();
     for (const auto& v : mapping_vector) {
         auto* map_ptr = reinterpret_cast<SegmentMapData*>(&(*it));
@@ -241,7 +245,7 @@ Tensor compute_reshape_mapping_host_tensor(
         it += max_input_segments * SegmentMapData::size;
     }
 
-    const std::array<uint32_t, 2> mapping_shape_vector = {num_output_pages, SegmentMapData::size * max_input_segments};
+    const std::array<uint32_t, 2> mapping_shape_vector = {num_mapping_pages, SegmentMapData::size * max_input_segments};
     const Shape mapping_shape(mapping_shape_vector);
     const tt::tt_metal::TensorLayout mapping_layout(
         tt::tt_metal::convert_to_data_type<decltype(flat_mapping_vector)::value_type>(),
@@ -272,6 +276,18 @@ Tensor compute_reshape_mapping_host_tensor(
 // map, the writer copies the segment from the input page to a scratch page stored in L1. When all segments are written,
 // the scratch page is copied to its output destination.
 
+bool ReshapeViewTiledProgramFactory::compact_mapping_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TTNN_RESHAPE_TILED_COMPACT_MAPPING");
+        const bool on = value != nullptr && std::string_view(value) == "1";
+        if (on) {
+            log_info(tt::LogOp, "TTNN_RESHAPE_TILED_COMPACT_MAPPING=1: reshape tiled compact mapping enabled");
+        }
+        return on;
+    }();
+    return enabled;
+}
+
 ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_program_artifacts(
     const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
@@ -294,13 +310,27 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
 
     tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
-    const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
     const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
 
+    // Opt-in (TTNN_RESHAPE_TILED_COMPACT_MAPPING=1, default off): with equal, tile-aligned widths every
+    // tile column has identical segment offsets and lengths, and its input page IDs are those of column
+    // zero plus the column index. Keep one mapping page per output tile row instead of one per output
+    // page (the per-page copies are what the program cache retains). In every other case, and always
+    // when the flag is unset, the stride is 1: the mapping is the per-page one and the reader gets no
+    // extra define or compile-time arg.
+    uint32_t mapping_column_stride = 1;
+    if (compact_mapping_enabled() && input_shape[-1] == output_shape[-1] &&
+        output_shape[-1] % tile_shape[1] == 0 && output_shape[-1] > tile_shape[1] &&
+        num_output_pages % (output_shape[-1] / tile_shape[1]) == 0) {
+        mapping_column_stride = output_shape[-1] / tile_shape[1];
+    }
+    const bool compact_mapping = mapping_column_stride > 1;
+
     // Host-compute and upload the input->output page-mapping tensor.
-    Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
-                                num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
-                                .to_device(device);
+    Tensor mapping_tensor =
+        detail::compute_reshape_mapping_host_tensor(
+            mapping_column_stride, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
+            .to_device(device);
 
     const uint32_t mapping_page_size = mapping_tensor.logical_shape()[-1];
     // Quasar has no UInt32 device format (tt::is_data_format_supported rejects it in ValidateProgramSpec),
@@ -406,6 +436,11 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
         .hw_config = create_reader_datamovement_config(),
     };
+
+    if (compact_mapping) {
+        reader.compile_time_args.emplace("Mapping_column_stride", mapping_column_stride);
+        reader.compiler_options.defines.emplace("RESHAPE_TILED_COMPACT_MAPPING", "1");
+    }
 
     KernelSpec writer{
         .unique_id = WRITER,

@@ -19,6 +19,10 @@ struct ReshapeViewTiledProgramFactory {
         const ReshapeViewParams& operation_attributes,
         const ReshapeViewInputs& tensor_args,
         Tensor& tensor_return_value);
+
+    // True only when the process was started with TTNN_RESHAPE_TILED_COMPACT_MAPPING=1 (read once per
+    // process; default off). Selects the compact column-stride page mapping; keys the program hash when on.
+    static bool compact_mapping_enabled();
 };
 
 }  // namespace ttnn::prim
