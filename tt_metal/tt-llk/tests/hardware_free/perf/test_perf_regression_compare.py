@@ -137,6 +137,95 @@ def test_unchanged_run_still_compares_every_point(tmp_path):
     assert len(result["records"]) == 2
 
 
+def test_renamed_module_compares_through_schema_alias(tmp_path):
+    baseline = [
+        _csv(
+            tmp_path,
+            "baseline.csv",
+            _INIT,
+            _TILE_LOOP,
+            module="perf_vif_targets",
+        )
+    ]
+    current = [
+        _csv(
+            tmp_path,
+            "current.csv",
+            _INIT,
+            _TILE_LOOP,
+            module="perf_vif_equiv_sweep",
+        )
+    ]
+
+    result = compare_runs(current, baseline)
+
+    assert len(result["records"]) == 2
+    assert not result["new_points"]
+    assert {record["test_module"] for record in result["records"]} == {
+        "perf_vif_equiv_sweep"
+    }
+
+
+def _column_csv(tmp_path, name, module, column, value=4):
+    path = tmp_path / name / f"{module}.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "marker": ["TILE_LOOP"],
+            column: [value],
+            "mean(L1_TO_L1)": [_TILE_LOOP],
+        }
+    ).to_csv(path, index=False)
+    return str(path)
+
+
+@pytest.mark.parametrize(
+    "module, old, new",
+    [
+        ("perf_sfpu_reduce_sdpa", "reduce_pool_type", "pool_type"),
+        ("perf_sfpu_ternary", "ternary_mathop", "mathop"),
+    ],
+)
+def test_renamed_column_matches_old_baseline(tmp_path, module, old, new):
+    baseline = [_column_csv(tmp_path, "b", module, old, "X")]
+    current = [_column_csv(tmp_path, "c", module, new, "X")]
+
+    result = compare_runs(current, baseline)
+
+    assert len(result["records"]) == 1
+    assert not result["new_points"]
+
+
+def test_renamed_module_and_column_match_together(tmp_path):
+    baseline = [_column_csv(tmp_path, "b", "perf_pack_dest_bank", "tile_cnt")]
+    current = [_column_csv(tmp_path, "c", "perf_pack_l1_acc", "tile_cnt")]
+
+    assert len(compare_runs(current, baseline)["records"]) == 1
+
+
+def test_column_alias_only_applies_to_its_own_test(tmp_path):
+    # `ternary_mathop` is only a legacy name inside perf_sfpu_ternary.
+    baseline = [_column_csv(tmp_path, "b", "perf_x", "ternary_mathop", "X")]
+    current = [_column_csv(tmp_path, "c", "perf_x", "mathop", "X")]
+
+    result = compare_runs(current, baseline)
+
+    assert not result["records"]
+    assert len(result["new_points"]) == 1
+
+
+def test_missing_schema_catalog_stops_the_gate(tmp_path, monkeypatch):
+    import regression_compare
+
+    monkeypatch.setattr(regression_compare, "SCHEMA_CATALOG", tmp_path / "none.py")
+    monkeypatch.setattr(regression_compare, "_HISTORY", None)
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        SystemExit
+    ):
+        regression_compare._naming_history()
+
+
 def test_new_config_is_reported_not_flagged(tmp_path):
     baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, tile_cnt=4)]
     # tile_cnt=8 exists on the current side only, so it has nothing to compare to.

@@ -17,13 +17,13 @@
 #include <optional>
 #include <tuple>
 #include <vector>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 // The worker rectangle both passes run on. Rows 0-1 are reserved for the combine op and one
@@ -325,6 +325,9 @@ struct HybridRoutedExpertFfnParams {
     uint32_t combine_num_links = 2;
     uint32_t num_experts_per_tok = 0;
     uint32_t seq_len_per_chip = 0;
+    // Pages one of combine's forwarding channels holds, the model's MOE_FWD_VC_PAGES. Set exactly when
+    // overlap_combine is.
+    std::optional<uint32_t> combine_fwd_vc_pages;
 
     // The overlap's counters: combine's per-stream receive counts and the routed expert's start signal. They
     // must outlive every launch -- an upstream chip may bump one for the next launch before this chip starts it
@@ -357,6 +360,7 @@ struct HybridRoutedExpertFfnParams {
         "combine_num_links",
         "num_experts_per_tok",
         "seq_len_per_chip",
+        "combine_fwd_vc_pages",
         "fwd_arrived_addr",
         "final_arrived_addr",
         "expert_go_addr",
@@ -377,6 +381,7 @@ struct HybridRoutedExpertFfnParams {
             combine_num_links,
             num_experts_per_tok,
             seq_len_per_chip,
+            combine_fwd_vc_pages,
             fwd_arrived_addr,
             final_arrived_addr,
             expert_go_addr,

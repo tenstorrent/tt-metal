@@ -6,7 +6,7 @@
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 
 #include <array>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 
 namespace ttnn::kernel_lib::host {
 
@@ -32,10 +32,10 @@ public:
         uint32_t first_semaphore_id) const;
     uint32_t next_semaphore_id() const;
     void attach(
-        tt::tt_metal::experimental::ProgramSpec& spec,
-        tt::tt_metal::experimental::ProgramRunArgs& run_args,
+        tt::tt_metal::ProgramSpec& spec,
+        tt::tt_metal::ProgramRunArgs& run_args,
         std::string_view prefix,
-        std::span<const tt::tt_metal::experimental::KernelSpecName> targets) const;
+        std::span<const tt::tt_metal::KernelSpecName> targets) const;
 
     void attach(
         tt::tt_metal::Program& program,

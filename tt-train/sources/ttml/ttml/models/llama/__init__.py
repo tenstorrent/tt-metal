@@ -14,6 +14,7 @@ from typing import Optional
 
 import ttnn
 import ttml
+from ttml.common.utils import build_rope_params_from_config
 from ttml.modules import (
     AbstractModuleBase,
     ColumnParallelLinear,
@@ -62,8 +63,9 @@ class LlamaConfig:
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
     sharding) and is ignored when ``use_tp=False``.
 
-    ``use_composite_sdpa`` runs attention through ``scaled_dot_product_attention_composite``,
-    which also accepts non-broadcast masks such as ``(B, 1, S, S)``.
+    ``use_composite_sdpa`` runs the attention of the forward without a KV cache through
+    ``scaled_dot_product_attention_composite``, which also accepts non-broadcast masks such as
+    ``(B, 1, S, S)``. The KV-cache forward picks its SDPA from the mask shape.
     """
 
     hidden_size: int = 384
@@ -269,21 +271,7 @@ class Llama(AbstractModuleBase):
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight
 
-        head_dim = config.hidden_size // config.num_attention_heads
-
-        rope_scaling_params = ttml.ops.rope.RopeScalingParams()
-        if config.rope_scaling.scaling_factor != 0.0 and config.rope_scaling.original_context_length != 0:
-            rope_scaling_params.scaling_factor = config.rope_scaling.scaling_factor
-            rope_scaling_params.high_freq_factor = config.rope_scaling.high_freq_factor
-            rope_scaling_params.low_freq_factor = config.rope_scaling.low_freq_factor
-            rope_scaling_params.original_context_length = config.rope_scaling.original_context_length
-
-        rope_params = ttml.ops.rope.build_rope_params(
-            config.max_position_embeddings,
-            head_dim,
-            config.rope_theta,
-            rope_scaling_params,
-        )
+        rope_params = build_rope_params_from_config(config, config.hidden_size // config.num_attention_heads)
 
         # Depth-scaled init for the residual-writing projections (attention out-proj, MLP
         # down-proj): each of them adds its output into the residual stream, so the stream's
@@ -327,7 +315,9 @@ class Llama(AbstractModuleBase):
         mask: ttml.autograd.Tensor,
         kv_cache: Optional[ttml.models.KvCache] = None,
         new_tokens: Optional[int] = None,
+        unpadded_token_positions: Optional[ttml.autograd.Tensor] = None,
     ) -> ttml.autograd.Tensor:
+        """``unpadded_token_positions``: [B, S] UINT32 ROW_MAJOR, sharded like input, ids < max_position_embeddings."""
         # Token IDs must be padded to the tile boundary so the embedding lookup
         # produces a tile-aligned tensor.  The padding is stripped after lookup.
         TILE_SIZE = 32
@@ -356,12 +346,15 @@ class Llama(AbstractModuleBase):
             out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
             out = ttml.autograd.create_tensor(out_val)
 
+        rope_positions = None
+        if unpadded_token_positions is not None:
+            rope_positions = ttml.ops.rope.RotaryEmbeddingPositions(unpadded_token_positions)
         for layer_idx, block in enumerate(self.blocks):
             extra_args = () if kv_cache is None else (kv_cache, layer_idx, new_tokens)
             if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
-                out = memory_efficient_runner(block, out, mask, *extra_args)
+                out = memory_efficient_runner(block, out, mask, *extra_args, rope_positions=rope_positions)
             elif self.config.runner_type == ttml.models.RunnerType.Default:
-                out = block(out, mask, *extra_args)
+                out = block(out, mask, *extra_args, rope_positions=rope_positions)
             else:
                 raise ValueError("Unknown runner type. Supported runner types ['default', 'memory_efficient']")
 

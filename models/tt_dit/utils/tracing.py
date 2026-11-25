@@ -241,6 +241,8 @@ class Tracer:
         kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
         self._args = _tree_map(self._tensor_to_device, args, path_label="args")
         self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
+        _tree_map(_force_copy_compile, self._args, path_label="args")
+        _tree_map(_force_copy_compile, self._kwargs, path_label="kwargs")
 
         if self._prep_run:
             if self._clone_prep_inputs:
@@ -433,6 +435,13 @@ def _is_tracer_valid_value(value: Any) -> bool:
     return False
 
 
+def _force_copy_compile(value: Any, *, path_label: str) -> None:
+    """Compile the copy that replay uses to refresh a device input; capture itself never runs it."""
+    del path_label
+    if isinstance(value, ttnn.Tensor):
+        ttnn.copy(value, value)
+
+
 def _clone_tensor(value: Any, *, path_label: str) -> Any:
     """Clone a tensor, passing through non-tensor values unchanged."""
     del path_label
@@ -442,7 +451,7 @@ def _clone_tensor(value: Any, *, path_label: str) -> Any:
 def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> Any:
     """Apply a function to leaves of nested data structures.
 
-    Recursively traverses nested structures (tuples, lists, dicts) and applies
+    Recursively traverses nested structures (tuples, named ones included, lists, dicts) and applies
     the given function to corresponding leaf elements across all input structures.
 
     Args:
@@ -474,9 +483,10 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
                 msg = f"tuple lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
                 raise ValueError(msg)
 
-        return tuple(
+        items = [
             _tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))
-        )
+        ]
+        return type(x)(*items) if hasattr(type(x), "_fields") else tuple(items)
 
     if isinstance(x, list) and all(isinstance(y, list) for y in xs):
         for y in xs:

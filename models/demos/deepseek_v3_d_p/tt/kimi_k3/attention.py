@@ -27,8 +27,8 @@ from typing import NamedTuple, Optional, Protocol
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, deallocate_state, device_scalar
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, device_scalar
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 
 
 def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> None:
@@ -47,9 +47,9 @@ class KdaChunkScalars(NamedTuple):
     """The device scalars every KDA layer of one chunk reads; each is a one-element UINT32 tensor.
 
     `slot` selects the carry in the slabs, and `start` and `end` bound the chunk (`end` is `None` for full
-    capacity). `start` also marks a request head: at 0 the layers load zeros instead of the slot (the load's
-    `zero_fill_at_zero`), because a carry summarizes the whole prefix behind it and a new request must not
-    continue the previous one's. When `start != 0` the caller is responsible for the slot holding the
+    capacity). `start` also marks a request head: at 0 the layers' ops start from zeros instead of the slot's
+    carry, because a carry summarizes the whole prefix behind it and a new request must not continue the
+    previous one's. When `start != 0` the caller is responsible for the slot holding the
     correct state for the prefix before `start`.
     """
 
@@ -92,6 +92,9 @@ class K3AttnContext:
 
     rope_tensors: Optional[dict] = None
     kvpe_cache: object = None
+    # K3.1's DSA indexer key cache, layer-stacked in the same rank-local slot space as `kvpe_cache`
+    # (K3.1 has no `indexer_types`, so every DSA layer owns its slot). `None` on K3, which has no indexer.
+    index_kv_cache: object = None
     # RANK-LOCAL MLA slot, from `KimiK3LayerSchedule.kv_slot`. `None` on a KDA layer, which has no
     # slot at all; see layer_schedule.py for why this is not the global one.
     cache_layer_idx: Optional[int] = None
@@ -128,11 +131,11 @@ class K3Attention(Protocol):
 
 
 class TtK3MlaAttention(LightweightModule):
-    """`ttMLA` under the protocol.
+    """`ttMLA` under the protocol: K3's dense MLA, or K3.1's Gated DSA on the same layers.
 
     A thin adapter and deliberately nothing more: K3's MLA differences — NoPE, the output gate, 96
-    heads — are all read off the `config` inside `ttMLA.__init__`, so there is no K3-specific
-    attention code to write. What K3 does change is on the *caller's* side: `layer_num` is the
+    heads — and K3.1's DSA indexer (`resolve_has_indexer` reads its `index_*` fields) are all read off
+    the `config` inside `ttMLA.__init__`, so there is no K3-specific attention code to write. What K3 does change is on the *caller's* side: `layer_num` is the
     rank's MLA count rather than its layer count, and `cache_layer_idx` is a rank-local slot from
     the schedule rather than an enumerate index.
     """
@@ -162,16 +165,23 @@ class TtK3MlaAttention(LightweightModule):
         """The wrapped module, for the KV pad-zero and ack the block still owes on this layer."""
         return self._mla
 
-    def forward(self, normed: ttnn.Tensor, ctx: K3AttnContext) -> ttnn.Tensor:
-        """K3 is dense, so the indexer arguments are absent and the return is the bare tensor.
+    def set_trace_controller(self, controller):
+        """Sparse MLA splits a capture around its top-k / KV-gather sub-device swaps; dense MLA ignores it."""
+        self._mla.set_trace_controller(controller)
 
-        `resolve_has_indexer` reports False for K3's config (no `has_indexer`, no `index_*` fields),
-        which is also what lets the trace guard in `TtPrefillTransformer.set_trace_controller` pass.
+    def release_sub_device_manager(self):
+        """Drop the sparse-MLA overlap manager before mesh close (a no-op for dense MLA)."""
+        self._mla.release_sparse_mla_overlap_manager()
+
+    def forward(self, normed: ttnn.Tensor, ctx: K3AttnContext) -> ttnn.Tensor:
+        """The return is the bare tensor: K3.1's DSA layers each run their own indexer, so no top-k
+        indices cross layers and none are requested. K3's dense MLA ignores `index_kv_cache` (None).
         """
         return self._mla.forward(
             normed,
             ctx.rope_tensors,
             ctx.kvpe_cache,
+            index_kv_cache=ctx.index_kv_cache,
             cache_layer_idx=ctx.cache_layer_idx,
             actual_start=ctx.actual_start,
             # #54744 clamps the KV write to the real tokens. The shared block threads this through;
@@ -188,19 +198,24 @@ class TtK3KdaAttention(LightweightModule):
     `ttKDA` is purely functional and retains nothing, so the carry has to live somewhere with one
     address for the life of the run, or a captured trace could not advance the recurrence with no
     host in the loop. That somewhere is the migration slab itself, the way MLA's KV cache is its own
-    migration format: per chunk the layer loads its slot's carry into the model's one scratch carry,
-    runs, and stores the replacement back, every copy a device program that reads the slot on
-    device and belongs inside the captured region. That is why load and store happen here in
-    `forward` rather than being left to the caller.
+    migration format: per chunk the convolution, the SP relay and the final carry read the slot's
+    carry from the slabs and write the replacement back in place, each op reading the slot on
+    device. `ttKDA.forward` on `KdaStates.entry` is that whole per-chunk layer (TP all-gather, KDA,
+    reduce-scatter), so it is what the layer's perf test measures.
     """
 
     writes_kv = False
 
-    def __init__(self, kda, layer_idx: int, tp_axis: int, num_links: int, tp_topology, scratch: KdaState):
+    def __init__(self, kda, layer_idx: int, tp_axis: int, num_links: int, tp_topology):
+        # The slabs hold the contract's convolution pages; a shape check alone cannot tell a token-paged tail from
+        # them when a device holds one 64-channel head.
+        if kda.convolution_page_channels != KDA_CONVOLUTION_PAGE_CHANNELS:
+            raise ValueError(
+                f"KDA layer {layer_idx} pages its convolution tail by {kda.convolution_page_channels} channels, but "
+                f"the state contract's slabs need convolution_page_channels={KDA_CONVOLUTION_PAGE_CHANNELS}"
+            )
         self.kda = kda
         self.layer_idx = layer_idx
-        # BORROWED from the model and shared by its KDA layers: the only state `ttKDA.forward` reads.
-        self._scratch = scratch
         self._tp_axis = tp_axis
         self._num_links = num_links
         self._tp_topology = tp_topology
@@ -220,22 +235,14 @@ class TtK3KdaAttention(LightweightModule):
         # replays, not when it is recorded; the bounds, and with the start whether the chunk heads a
         # request, likewise change per replay without a host read (see `KdaChunkScalars`).
         scalars = ctx.kda_scalars
-        gathered = ttnn.all_gather(
-            normed,
-            dim=-1,
-            cluster_axis=self._tp_axis,
-            num_links=self._num_links,
-            topology=self._tp_topology,
+        # `[1, 1, T, d/tp]` -> `[1, T, d/tp]`: ttKDA takes three dimensions, and the leading one is batch.
+        # The squeeze is a view over `normed`, which the block frees after this returns.
+        hidden = ttnn.squeeze(normed, dim=0)
+        # The whole per-chunk layer: TP all-gather, KDA on this slot's carry in the slabs (zeros at a request head),
+        # output projection + reduce-scatter.
+        output, _ = self.kda.forward(
+            hidden, ctx.kda_states.entry(scalars.slot, self.layer_idx), scalars.start, scalars.end
         )
-        # `[1, 1, T, d]` -> `[1, T, d]`: ttKDA takes three dimensions, and the leading one is batch.
-        # The squeeze is a view over `gathered`'s buffer, so `gathered` must stay allocated until the
-        # forward is done; the `ttnn.deallocate(hidden)` below frees it.
-        hidden = ttnn.squeeze(gathered, dim=0)
-        ctx.kda_states.import_layer(self._scratch, scalars.slot, self.layer_idx, zero_fill_at_zero=scalars.start)
-        output, new_state = self.kda.forward(hidden, self._scratch, actual_start=scalars.start, actual_end=scalars.end)
-        ttnn.deallocate(hidden)
-        ctx.kda_states.export_layer(new_state, scalars.slot, self.layer_idx)
-        deallocate_state(new_state)
 
         # `_project_output` reduce-scatters on the TP axis and returns `[B, T, d/tp]`, so the only
         # thing left is the leading axis the block's residual expects.
@@ -251,7 +258,6 @@ def build_attention(
     schedule,
     *,
     seq_len: int,
-    kda_scratch: Optional[KdaState] = None,
     sp_axis: int = 0,
     tp_axis: int = 1,
     num_links: int = 1,
@@ -264,12 +270,14 @@ def build_attention(
     is_balanced: bool = False,
     first_layer_idx: int = 0,
     tp_shard_kv: Optional[bool] = None,
+    sparse_kv_cache_format=None,
 ) -> K3Attention:
     """The one place the hybrid schedule turns into a module.
 
     Everything below this call is polymorphic; everything above it knows the schedule. `topology` is
     the per-axis pair the model opened — `per_axis_topology()` — and is passed to MLA whole (its SDPA
     runs on the SP axis) but to KDA as its TP element only, since KDA's own CCL is TP-side.
+    `sparse_kv_cache_format` is the KVPE cache format of a DSA (K3.1) layer; `None` on dense K3.
     """
     from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
     from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
@@ -277,7 +285,7 @@ def build_attention(
     from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 
-    topology = topology if topology is not None else per_axis_topology()
+    topology = topology if topology is not None else per_axis_topology(mesh_device=mesh_device)
     tp_topology = topology[tp_axis] if isinstance(topology, (tuple, list)) else topology
 
     if schedule.is_mla(layer_idx):
@@ -302,11 +310,10 @@ def build_attention(
                 kv_only=kv_only,
                 first_layer_idx=first_layer_idx,
                 tp_shard_kv=tp_shard_kv,
+                sparse_kv_cache_format=sparse_kv_cache_format,
             )
         )
 
-    if kda_scratch is None:
-        raise ValueError(f"layer {layer_idx} is KDA and needs the model's scratch carry (kda_scratch)")
     return TtK3KdaAttention(
         ttKDA(
             mesh_device,
@@ -326,5 +333,4 @@ def build_attention(
         tp_axis=tp_axis,
         num_links=num_links,
         tp_topology=tp_topology,
-        scratch=kda_scratch,
     )

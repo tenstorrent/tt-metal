@@ -566,7 +566,13 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
 
 # Rows too wide for L1 with gamma and beta select the large-tensor kernel, which streams each row in blocks and
 # switches the packer between several output buffers. Issue #62517: on Quasar this hung with fp32_dest_acc_en.
-@pytest.mark.parametrize("h", [4096])
+# The row width alone selects the kernel; #62517 reproduced on a single tile row. Sanity runs h=32, the
+# original h=4096 runs nightly (#62486).
+LARGE_LAYER_NORM_WIDE_ROWS_HEIGHTS = [32, 4096]
+LARGE_LAYER_NORM_WIDE_ROWS_SANITY_HEIGHTS = [32]
+
+
+@pytest.mark.parametrize("h", LARGE_LAYER_NORM_WIDE_ROWS_SANITY_HEIGHTS)
 @pytest.mark.parametrize("w", [8192, 16384])
 def test_large_layer_norm_wide_rows_with_weight_and_bias(device, h, w):
     torch.manual_seed(0)
@@ -605,13 +611,7 @@ def test_large_layer_norm_wide_rows_with_weight_and_bias(device, h, w):
     assert torch.isfinite(output_tensor).all()
     assert output_tensor.count_nonzero() > 0
 
-    if device.arch() == ttnn.device.Arch.QUASAR:
-        try:
-            assert_output_accuracy(torch_output_tensor, output_tensor)
-        except AssertionError:
-            pytest.xfail("Quasar REDUCE_ROW truncates the fp32 running sum on every tile (#60931)")
-    else:
-        assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h, w", [(24, 42), (2048, 2048)])
@@ -992,3 +992,62 @@ def test_large_layer_norm_row_major_input_affine(device, dtype, expect_error):
     bias_rm = ttnn.from_torch(torch_bias.reshape(w // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     with expect_error(RuntimeError, "does not support row-major gamma/beta"):
         ttnn.layer_norm(input_tensor, weight=weight_rm, bias=bias_rm)
+
+
+@run_for_wormhole_b0_or_blackhole()
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat8_b),
+        (torch.bfloat16, ttnn.float32),
+        (torch.float32, ttnn.bfloat16),
+    ],
+)
+@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
+def test_layer_norm_output_dtype(device, input_dtype, output_dtype, use_welford, fp32_dest_acc_en):
+    """dtype sets the output data type on the interleaved path."""
+    torch.manual_seed(0)
+    h, w, eps = 640, 128, 1e-5
+    torch_input = torch.rand((1, 1, h, w), dtype=input_dtype)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((w,), dtype=torch.bfloat16)
+    torch_output = torch.nn.functional.layer_norm(
+        torch_input.float(), normalized_shape=[w], weight=torch_weight.float(), bias=torch_bias.float(), eps=eps
+    )
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.layer_norm(
+        input_tensor,
+        epsilon=eps,
+        weight=weight,
+        bias=bias,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest_acc_en
+        ),
+        recip_tensor=create_recip_tensor(device, w, use_welford),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=output_dtype,
+    )
+    assert output.dtype == output_dtype
+    atol = 0.1 if output_dtype == ttnn.bfloat8_b else 0.05
+    assert_numeric_metrics(
+        torch_output, ttnn.to_torch(output).float(), rtol=0.0, atol=atol, pcc_threshold=0.999, check_frobenius=False
+    )
+
+
+def test_layer_norm_output_dtype_rejects_row_major(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.rand((32, 64), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "needs a TILE input"):
+        ttnn.layer_norm(input_tensor, dtype=ttnn.float32)
+
+
+def test_layer_norm_output_dtype_rejects_integer(device, expect_error):
+    input_tensor = ttnn.from_torch(torch.rand((32, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Output dtype must be FLOAT32, BFLOAT16, BFLOAT8_B or an MX format"):
+        ttnn.layer_norm(input_tensor, dtype=ttnn.uint32)

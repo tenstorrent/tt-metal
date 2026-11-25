@@ -14,8 +14,8 @@
 
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
 
 namespace tt::tt_metal {
     class Inspector;

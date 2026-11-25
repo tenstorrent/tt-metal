@@ -5,13 +5,13 @@
 #include "moe_gpt_program_factory.hpp"
 #include "moe_gpt_device_operation_types.hpp"
 
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -26,9 +26,9 @@
 
 namespace {
 
-uint32_t get_num_pages(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->num_pages(); }
-uint32_t get_page_size(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->page_size(); }
-uint32_t get_aligned_page_size(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->aligned_page_size(); }
+uint32_t get_num_pages(const ttnn::Tensor& t) { return (uint32_t)t.mesh_buffer().num_pages(); }
+uint32_t get_page_size(const ttnn::Tensor& t) { return (uint32_t)t.mesh_buffer().page_size(); }
+uint32_t get_aligned_page_size(const ttnn::Tensor& t) { return (uint32_t)t.mesh_buffer().aligned_page_size(); }
 
 std::string serialize_physical_core_coords(
     const std::vector<tt::tt_metal::CoreCoord>& cores, tt::tt_metal::distributed::MeshDevice* device) {
@@ -190,8 +190,8 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
         // Combine output CB: c_0 on combine cores, backed by the HEIGHT_SHARDED output tensor
         const auto& tilize_output_tensor = tensor_return_value.at(3);
         const CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
-        const uint32_t output_pages = tilize_output_tensor.buffer()->num_pages();
-        const uint32_t output_page_size = static_cast<uint32_t>(tilize_output_tensor.buffer()->page_size());
+        const uint32_t output_pages = tilize_output_tensor.mesh_buffer().num_pages();
+        const uint32_t output_page_size = static_cast<uint32_t>(tilize_output_tensor.mesh_buffer().page_size());
         const uint32_t shared_cb_num_pages_combine = output_pages / shard_cores.num_cores();
         const auto output_dataformat = tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype());
         output_buffer = tilize_output_tensor.buffer();

@@ -204,7 +204,7 @@ def _config(
     gmg,
     tiles,
     src_b=None,
-    math_op=MathOperation.Elwadd,
+    mathop=MathOperation.Elwadd,
     fidelity=MathFidelity.HiFi4,
     approx=ApproximationMode.No,
     dest_sync=DestSync.Half,
@@ -216,7 +216,7 @@ def _config(
         FORMATS,
         templates=[
             gmg,
-            MATH_OP(mathop=math_op),
+            MATH_OP(mathop=mathop),
             MATH_FIDELITY(fidelity),
             APPROX_MODE(approx),
             ACC_TO_DEST(acc_to_dest),
@@ -822,9 +822,9 @@ def _binary_stimuli(seed):
     return values(), values(), values(), values()
 
 
-def _binary_want(math_op, operand_a, src_b, fidelity):
+def _binary_want(mathop, operand_a, src_b, fidelity):
     return get_golden_generator(EltwiseBinaryGolden)(
-        math_op,
+        mathop,
         operand_a.reshape(-1),
         src_b.reshape(-1),
         DataFormat.Float16_b,
@@ -833,13 +833,13 @@ def _binary_want(math_op, operand_a, src_b, fidelity):
     )
 
 
-def _binary_fidelity(math_op):
+def _binary_fidelity(mathop):
     # The LLK reads fidelity only to reject high fidelity for ELWMUL; the mop it programs is the
     # same either way, so this picks the one legal value rather than sweeping.
-    return MathFidelity.LoFi if math_op == MathOperation.Elwmul else MathFidelity.HiFi4
+    return MathFidelity.LoFi if mathop == MathOperation.Elwmul else MathFidelity.HiFi4
 
 
-def _binary_key_region(math_op, operand_a, src_b, fidelity, acc_base, acc_to_dest):
+def _binary_key_region(mathop, operand_a, src_b, fidelity, acc_base, acc_to_dest):
     """What the key region should hold once the binary has run.
 
     ELWMUL accumulates onto whatever the region already held, whatever acc_to_dest says. Bit 21 of
@@ -849,29 +849,29 @@ def _binary_key_region(math_op, operand_a, src_b, fidelity, acc_base, acc_to_des
     eltwise_binary leans on the packer's section-end ZEROACC for that, and so does this op. The gate
     is unaffected either way, since it only ever instantiates ELWADD.
     """
-    want = _binary_want(math_op, operand_a, src_b, fidelity)
-    if acc_to_dest or math_op == MathOperation.Elwmul:
+    want = _binary_want(mathop, operand_a, src_b, fidelity)
+    if acc_to_dest or mathop == MathOperation.Elwmul:
         want = (want.to(torch.float32) + acc_base.to(torch.float32)).to(torch.bfloat16)
     return want
 
 
 @parametrize(
-    math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     reload=[False, True],
 )
-def test_generalized_moe_gate_binary(math_op, reload):
+def test_generalized_moe_gate_binary(mathop, reload):
     # COPY takes SrcA from the unpacker and drops a copy in the score region on the way; RELOAD
     # reads it back out. Seeding that region with something other than the unpacked operand is what
     # makes the two distinguishable.
     src_a, src_b, seed, acc_base = _binary_stimuli(seed=31)
-    fidelity = _binary_fidelity(math_op)
+    fidelity = _binary_fidelity(mathop)
 
     tiles = _run(
         _config(
             GENERALIZED_MOE_GATE(mode=MODE_BINARY, reload=reload),
             [src_a, _word_tile(_to_dst(seed)), _word_tile(_to_dst(acc_base)), _zeros()],
             src_b=src_b,
-            math_op=math_op,
+            mathop=mathop,
             fidelity=fidelity,
         ),
         view=_all_faces,
@@ -886,7 +886,7 @@ def test_generalized_moe_gate_binary(math_op, reload):
     assert torch.equal(
         _from_dst(tiles[KEYS]).reshape(-1).to(torch.bfloat16),
         _binary_key_region(
-            math_op, operand_a, src_b, fidelity, acc_base, acc_to_dest=False
+            mathop, operand_a, src_b, fidelity, acc_base, acc_to_dest=False
         ),
     ), "the result did not reach the key region"
 
@@ -894,18 +894,18 @@ def test_generalized_moe_gate_binary(math_op, reload):
 # acc_to_dest makes the FPU add its result onto whatever the key region already holds, so with it
 # set all three ops accumulate. Read this together with the test above, where the same three run
 # with it clear: that pair is what pins ELWMUL accumulating regardless.
-@parametrize(math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul])
-def test_generalized_moe_gate_binary_acc_to_dest(math_op):
-    math_op = _one(math_op)
+@parametrize(mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul])
+def test_generalized_moe_gate_binary_acc_to_dest(mathop):
+    mathop = _one(mathop)
     src_a, src_b, seed, acc_base = _binary_stimuli(seed=57)
-    fidelity = _binary_fidelity(math_op)
+    fidelity = _binary_fidelity(mathop)
 
     tiles = _run(
         _config(
             GENERALIZED_MOE_GATE(mode=MODE_BINARY),
             [src_a, _word_tile(_to_dst(seed)), _word_tile(_to_dst(acc_base)), _zeros()],
             src_b=src_b,
-            math_op=math_op,
+            mathop=mathop,
             fidelity=fidelity,
             acc_to_dest=True,
         ),
@@ -914,7 +914,7 @@ def test_generalized_moe_gate_binary_acc_to_dest(math_op):
 
     assert torch.equal(
         _from_dst(tiles[KEYS]).reshape(-1).to(torch.bfloat16),
-        _binary_key_region(math_op, src_a, src_b, fidelity, acc_base, acc_to_dest=True),
+        _binary_key_region(mathop, src_a, src_b, fidelity, acc_base, acc_to_dest=True),
     ), "acc_to_dest did not accumulate onto the key region"
 
 

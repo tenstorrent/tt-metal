@@ -8,7 +8,7 @@
 
 #include "sdpa_perf_model.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -69,7 +69,7 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
                 tensor.dtype() == DataType::BFLOAT4_B,
             "Inputs to ring-distributed SDPA must be BF16, BF8, or BF4");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to ring-distributed SDPA need to be in DRAM");
     }
 

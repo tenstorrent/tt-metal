@@ -28,7 +28,15 @@ from unittest.mock import Mock, create_autospec
 import pytest
 
 import ttnn
+from models.demos.common.prefill.prefill_chunk import (
+    EMPTY_CHUNK,
+    PrefillChunk,
+    packed_forward_capabilities,
+    packed_forward_refusals,
+)
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3 import attention as attention_module
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import (
     K3AttnContext,
@@ -87,8 +95,8 @@ def test_the_cache_check_call_binds_to_the_transformer():
 
 
 def test_every_forward_call_binds_to_the_transformer():
-    """The eager and traced chunk paths both call `self.model.forward`; neither is reached by an eager test."""
-    for call in _call_sites("self.model.forward", expected=2):
+    """The eager and traced chunk paths and the packed `prefill_forward` call `self.model.forward`; none is reached by an eager test."""
+    for call in _call_sites("self.model.forward", expected=3):
         _bind(TtKimiK3Transformer.forward, call, None)
 
 
@@ -106,6 +114,34 @@ def test_forward_rejects_mtp_arguments_before_device_work(expect_error, mtp_kwar
     model = object.__new__(TtKimiK3Transformer)
     with expect_error(ValueError, "no MTP predictor"):
         model.forward(object(), **mtp_kwargs)
+
+
+def test_forward_checks_the_index_cache_against_the_config(expect_error):
+    """K3 has no DSA indexer, so an index cache is a wiring mistake; K3.1's DSA layers cannot run without one."""
+    model = object.__new__(TtKimiK3Transformer)
+    model.has_indexer = False
+    with expect_error(ValueError, "no DSA indexer"):
+        model.forward(object(), index_kv_cache=object())
+    model.has_indexer, model.schedule = True, SimpleNamespace(num_mla_layers=1)
+    with expect_error(ValueError, "pass index_kv_cache"):
+        model.forward(object())
+
+
+def test_only_a_dsa_config_takes_a_sparse_kv_cache_format(expect_error):
+    """K3's dense MLA cache cannot take a sparse format; refused before any device work."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+    with expect_error(ValueError, "dense MLA KV cache"):
+        TtKimiK3Transformer(
+            None,
+            kimi_k3_hf_config(),
+            KimiK3Config,
+            {},
+            num_layers=1,
+            seq_len=5120,
+            sparse_kv_cache_format=MlaKvCacheFormat.SCALED_FP8,
+        )
 
 
 def test_runtime_rejects_mtp_before_the_shared_build(monkeypatch, expect_error):
@@ -147,6 +183,7 @@ def test_the_block_kwargs_that_are_swept_through_are_genuinely_block_level():
 @pytest.mark.parametrize("sp_axis,tp_axis", [(0, 1), (1, 0)])
 def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis, tp_axis):
     constructor = create_autospec(ttKDA)
+    constructor.return_value.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
     monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.kda.kda.ttKDA", constructor)
     monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.tt_ccl.get_tt_ccl", lambda device: None)
     build_attention(
@@ -160,10 +197,10 @@ def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         topology=(ttnn.Topology.Linear, ttnn.Topology.Linear),
-        kda_scratch=object(),
     )
     kwargs = constructor.call_args.kwargs
     assert kwargs["active_seq_len"] == 2560
+    assert kwargs["program_config"].convolution_page_channels == KDA_CONVOLUTION_PAGE_CHANNELS
     # SP8 owns 320 rows (10 chunks); SP4 owns 640 rows (20 chunks).
     assert kwargs["program_config"].recurrence.summary_group_chunks == (10 if sp_axis == 0 else 20)
 
@@ -203,18 +240,19 @@ def test_build_kda_scalars_rejects_invalid_host_bounds_before_upload(monkeypatch
     upload.assert_not_called()
 
 
-def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkeypatch):
+def test_kda_forward_runs_the_whole_layer_on_its_slot_in_the_slabs(monkeypatch):
     kdas = [create_autospec(ttKDA, instance=True) for _ in range(2)]
     for kda in kdas:
-        kda.forward.return_value = object(), SimpleNamespace(recurrent=object(), convolution=object())
+        kda.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
+        kda.forward.return_value = (object(), None)
     slot, start, end = object(), object(), object()
-    from_torch, deallocate = Mock(), Mock()
+    from_torch, deallocate, gather = Mock(), Mock(), Mock()
     monkeypatch.setattr(ttnn, "from_torch", from_torch)
     monkeypatch.setattr(ttnn, "deallocate", deallocate)
-    monkeypatch.setattr(ttnn, "all_gather", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "all_gather", gather)
     monkeypatch.setattr(ttnn, "squeeze", lambda tensor, **kwargs: tensor)
     monkeypatch.setattr(ttnn, "unsqueeze", lambda tensor, **kwargs: tensor)
-    slabs, scratch = Mock(), object()
+    slabs = Mock()
     # The host ints are MLA's; a KDA layer reads only the scalars and the slabs, the same objects on every layer.
     ctx = K3AttnContext(
         actual_start=5120,
@@ -225,19 +263,82 @@ def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkey
     )
     hidden = object()
     for layer_idx, kda in enumerate(kdas):
-        output, new_state = kda.forward.return_value
-        slabs.reset_mock()
-        assert TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear, scratch).forward(hidden, ctx) is output
-        # The carry is selected by the device slot, so a capture never pins the slot it was recorded on:
-        # load slot (or zeros when the start reads 0, a request head) -> scratch, run on the scratch, store the
-        # replacement at the slot (nothing zeroed), free it.
-        slabs.import_layer.assert_called_once_with(scratch, slot, layer_idx, zero_fill_at_zero=start)
-        kda.forward.assert_called_once_with(hidden, scratch, actual_start=start, actual_end=end)
-        slabs.export_layer.assert_called_once_with(new_state, slot, layer_idx)
-        assert [c.args for c in deallocate.call_args_list][-2:] == [(new_state.recurrent,), (new_state.convolution,)]
+        output = kda.forward.return_value[0]
+        assert TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear).forward(hidden, ctx) is output
+        # The whole per-chunk layer is ttKDA.forward on the slot's slab entry, selected by the device slot, so a
+        # capture never pins the slot it was recorded on.
+        kda.forward.assert_called_once_with(hidden, slabs.entry.return_value, start, end)
+        slabs.entry.assert_called_with(slot, layer_idx)
+    # The wrapper itself moves nothing: no gather, no slab copy, no free of the block's input.
+    gather.assert_not_called()
+    deallocate.assert_not_called()
     from_torch.assert_not_called()
-    # The caller owns the scalars and frees them once per chunk, after its last KDA layer.
-    assert all(call.args not in ((slot,), (start,), (end,)) for call in deallocate.call_args_list)
+
+
+def _mocked_layer(monkeypatch, tensor_parallel_size: int):
+    """A ttKDA whose device work is mocks recording one call order."""
+    calls = Mock()
+    layer = object.__new__(ttKDA)
+    layer.tensor_parallel_size = tensor_parallel_size
+    layer.tensor_parallel_axis = 1
+    layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1, num_heads=2, norm_eps=1e-6)
+    layer.weights = SimpleNamespace(convolution_taps=(), norm=object(), output_gate_projection=object())
+    layer.gated_rms_output_dtype = layer.norm_output_memory_config = None
+    layer.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
+    layer.kda_compute_config = object()
+    layer.input_projection_compute_config = SimpleNamespace(math_fidelity=ttnn.MathFidelity.HiFi2)
+    for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
+        setattr(layer, name, None)
+    layer._history_exchange = SimpleNamespace(buffer=None, semaphores=None)
+    layer._tp_gather_kwargs = None
+    layer._validate_forward = Mock()
+    layer._validate_runtime_bound = Mock()
+    projected = SimpleNamespace(projected=object(), decay_rank_offset=0, output_gate_offset=0, beta_offset=0)
+    layer._project_inputs = calls.project_inputs
+    calls.project_inputs.return_value = projected
+    layer._compute_decay = calls.compute_decay
+    layer.recurrence = calls.recurrence
+    calls.recurrence.return_value = SimpleNamespace(output=object(), final_state="final_recurrent")
+    calls.recurrence.applies_output_norm = False
+    layer._kda_rms_norm = calls.norm
+    layer._project_output = calls.project_output
+    calls.project_output.return_value = "output"
+    monkeypatch.setattr(ttnn, "all_gather", calls.all_gather)
+    calls.all_gather.return_value = "gathered"
+    monkeypatch.setattr(ttnn, "deallocate", calls.deallocate)
+    monkeypatch.setattr(ttnn.experimental.kda, "qkv_causal_conv1d_silu_with_carry", calls.conv)
+    calls.conv.return_value = (object(), object(), object(), "new_convolution")
+    return layer, calls
+
+
+def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkeypatch):
+    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
+    full = SimpleNamespace(shape=(1, 64, 256))
+    output, state = layer.forward(full, Mock(), object())
+    calls.all_gather.assert_not_called()
+    calls.project_inputs.assert_called_once_with(full)
+    assert output == "output" and (state.recurrent, state.convolution) == ("final_recurrent", "new_convolution")
+
+
+def test_kda_layer_with_sequence_parallelism_leaves_the_norm_to_the_relay(monkeypatch):
+    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
+    calls.recurrence.applies_output_norm = True
+    full = SimpleNamespace(shape=(1, 64, 256))
+    output, _ = layer.forward(full, Mock(), object())
+    calls.norm.assert_not_called()
+    output_norm = calls.recurrence.call_args.kwargs["output_norm"]
+    # The relay forms the output gate from the layer's input and the separate gate projection.
+    assert output_norm.gate_input is full and output_norm.gate_local is None
+    assert output_norm.gate_weight is layer.weights.output_gate_projection and output_norm.num_heads == 2
+    calls.project_output.assert_called_once_with(calls.recurrence.return_value.output)
+    assert output == "output"
+
+
+def test_kda_attention_rejects_a_layer_without_the_contract_convolution_pages(expect_error):
+    # A default-config layer keeps its convolution tail token-paged.
+    kda = Mock(convolution_page_channels=KDAProgramConfig().convolution_page_channels)
+    with expect_error(ValueError, f"convolution_page_channels={KDA_CONVOLUTION_PAGE_CHANNELS}"):
+        TtK3KdaAttention(kda, 1, 1, 1, ttnn.Topology.Linear)
 
 
 @pytest.mark.parametrize(
@@ -254,7 +355,9 @@ def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkey
 def test_kda_forward_requires_scalars_and_slabs_before_device_work(monkeypatch, expect_error, ctx, message):
     gather = Mock()
     monkeypatch.setattr(ttnn, "all_gather", gather)
-    attention = TtK3KdaAttention(Mock(), 1, 1, 1, ttnn.Topology.Linear, object())
+    attention = TtK3KdaAttention(
+        Mock(convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS), 1, 1, 1, ttnn.Topology.Linear
+    )
     with expect_error(ValueError, message):
         attention.forward(object(), ctx)
     gather.assert_not_called()
@@ -285,32 +388,32 @@ def test_runtime_accepts_unaligned_end(monkeypatch):
     parent_forward.assert_called_once()
 
 
-def _runtime_serving(*, num_users: int, kda_layer_ids: tuple[int, ...], scratch):
+def _runtime_serving(*, num_users: int, kda_layer_ids: tuple[int, ...], has_kda_layers: bool):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
 
     runtime = object.__new__(TtKimiK3Runtime)
     runtime.config = SimpleNamespace(num_users=num_users)
     schedule = SimpleNamespace(rank_kda_layer_ids=lambda: kda_layer_ids)
-    runtime.model = SimpleNamespace(kda_scratch=scratch, kda_states=None, schedule=schedule)
+    runtime.model = SimpleNamespace(has_kda_layers=has_kda_layers, kda_states=None, schedule=schedule)
     return runtime
 
 
 @pytest.mark.parametrize(
-    "has_slabs,scratch",
-    [(False, None), (True, object()), (False, object()), (True, None)],
+    "has_slabs,has_kda_layers",
+    [(False, False), (True, True), (False, True), (True, False)],
     ids=["no-kda-rank", "kda-rank", "slabs-missing", "slabs-without-kda-layers"],
 )
 def test_compile_hands_the_slabs_to_the_model_only_when_the_rank_has_kda_layers(
-    monkeypatch, expect_error, has_slabs, scratch
+    monkeypatch, expect_error, has_slabs, has_kda_layers
 ):
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
     slabs = SimpleNamespace(num_slots=2, layer_ids=(0, 3)) if has_slabs else None
-    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), scratch=scratch)
+    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), has_kda_layers=has_kda_layers)
     parent_compile = Mock()
     monkeypatch.setattr(TtPrefillRuntime, "compile", parent_compile)
     kv_caches = SimpleNamespace(kda_states=slabs)
-    if has_slabs == (scratch is not None):
+    if has_slabs == has_kda_layers:
         runtime.compile(kv_caches)
         assert runtime.model.kda_states is slabs
         parent_compile.assert_called_once_with(kv_caches)
@@ -328,10 +431,140 @@ def test_compile_rejects_slabs_that_do_not_match_the_runtime(monkeypatch, expect
 
     # An out-of-range slot is a silent no-op on device, so a slot count or layer set that disagrees
     # with the runtime must fail here, before the first forward.
-    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), scratch=object())
+    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), has_kda_layers=True)
     parent_compile = Mock()
     monkeypatch.setattr(TtPrefillRuntime, "compile", parent_compile)
     with expect_error(RuntimeError, "KDA slabs"):
         runtime.compile(SimpleNamespace(kda_states=SimpleNamespace(num_slots=num_slots, layer_ids=layer_ids)))
     assert runtime.model.kda_states is None
     parent_compile.assert_not_called()
+
+
+@pytest.mark.parametrize("adapter_name", ["kimi_k3", "kimi_k3_1"])
+def test_build_runtime_hands_the_forward_budget_to_the_runtime(monkeypatch, adapter_name):
+    """The runner sizes its sockets and persistent buffers for forward_chunks * chunk_size rows, so a runtime built
+    without the budget runs one chunk per forward and its traced input no longer matches the socket. K3 and K3.1
+    (which inherits build_runtime) both pack."""
+    from models.demos.common.prefill.adapter import PrefillRunParams
+    from models.demos.deepseek_v3_d_p.tt import tt_ccl
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import runtime as k3_runtime
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
+
+    adapter = {"kimi_k3": KimiK3Adapter, "kimi_k3_1": KimiK31Adapter}[adapter_name]()
+    monkeypatch.setattr(tt_ccl, "per_axis_topology", lambda *args, **kwargs: (None, None))
+    built = Mock()
+    monkeypatch.setattr(k3_runtime, "TtKimiK3Runtime", built)
+    params = PrefillRunParams(
+        mesh_shape=(4, 4),
+        num_layers=12,
+        first_layer_idx=12,
+        is_first_rank=False,
+        is_last_rank=True,
+        max_seq_len=4 * 2560,
+        chunk_size=2560,
+        num_users=87,
+        capacity_factor=8,
+        num_links=2,
+        gate_mode_name="DEVICE_FP32",
+        kv_only_last_layer=False,
+        weight_cache_path=None,
+        sp_axis=1,
+        tp_axis=0,
+        use_trace=True,
+        forward_chunks=2,
+    )
+    adapter.build_runtime(mesh_device=None, hf_config=None, params=params)
+    config = built.call_args.kwargs["config"]
+    assert config.forward_chunks == 2
+    assert config.forward_chunks == adapter.packed_forward_chunks(params)
+
+
+# --- Kimi-K3.1 packed forwards: a DSA indexer per layer, no indexer indices between ranks ---
+
+
+def _k31_params(forward_chunks, use_trace, num_users=4):
+    from models.demos.common.prefill.adapter import PrefillRunParams
+
+    return PrefillRunParams(
+        mesh_shape=(8, 4),
+        num_layers=24,
+        first_layer_idx=0,
+        is_first_rank=True,
+        is_last_rank=False,
+        max_seq_len=8 * 5120,
+        chunk_size=5120,
+        num_users=num_users,
+        capacity_factor=8,
+        num_links=2,
+        gate_mode_name="DEVICE_FP32",
+        kv_only_last_layer=False,
+        weight_cache_path=None,
+        tp_shard_kv=True,
+        use_trace=use_trace,
+        forward_chunks=forward_chunks,
+    )
+
+
+def test_k31_adapter_packs_on_pp4():
+    """K3.1 packs, traced and with per-chunk D2H acks (the runner's kimi_k3_1_packed.json run). Its PP4 split passes no
+    indexer indices (every DSA layer owns its indexer), so the runner's multi-rank check (indexer_indices = num_ranks
+    > 1 and passes_indexer_indices) refuses nothing."""
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
+
+    assert KimiK31Adapter.supports_packed_forward
+    assert not KimiK31Adapter.passes_indexer_indices
+    caps = packed_forward_capabilities(KimiK31Adapter)
+    assert packed_forward_refusals(2, indexer_indices=KimiK31Adapter.passes_indexer_indices, **caps) == []
+    assert packed_forward_refusals(2, use_trace=True, d2h_acks=True, **caps) == []
+    # No MTP or drafter on K3.1's packed path.
+    assert packed_forward_refusals(2, mtp_levels=1, **caps)
+
+
+@pytest.mark.parametrize("forward_chunks,use_trace,extra", [(1, True, 0), (2, False, 0), (2, True, 1)])
+def test_k31_cache_slots_hold_the_traced_scratch_slot(forward_chunks, use_trace, extra):
+    """Every K3.1 KV cache, the DSA index cache included (allocate_kv_cache sizes both from kv_cache_slots), holds the
+    traced packed forward's scratch slot, which an empty chunk position writes."""
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
+
+    params = _k31_params(forward_chunks, use_trace)
+    assert KimiK31Adapter().kv_cache_slots(params) == params.num_users + extra
+
+
+class _GuardsPassed(Exception):
+    pass
+
+
+def _k31_stub(forward_chunks=2, has_indexer=True, num_mla_layers=1):
+    class Stub(SimpleNamespace):
+        @property
+        def is_first_rank(self):  # first read after the argument checks
+            raise _GuardsPassed("argument checks passed")
+
+    return Stub(
+        forward_chunks=forward_chunks,
+        has_indexer=has_indexer,
+        schedule=SimpleNamespace(num_mla_layers=num_mla_layers),
+        first_layer_idx=0,
+    )
+
+
+def test_k31_packed_forward_takes_the_index_cache(expect_error):
+    """TtKimiK3Transformer.forward_packed: K3.1 needs its index cache, K3 refuses one, and neither takes seed indices
+    (no layer reuses another's top-k)."""
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
+
+    chunks = [PrefillChunk(0, 0, 2560), EMPTY_CHUNK]
+    fwd = TtKimiK3Transformer.forward_packed
+    with expect_error(_GuardsPassed, "argument checks passed"):
+        fwd(_k31_stub(), None, None, chunks, index_kv_cache=object())
+    with expect_error(ValueError, "pass index_kv_cache"):
+        fwd(_k31_stub(), None, None, chunks)
+    with expect_error(_GuardsPassed, "argument checks passed"):  # a rank with no DSA layer has no index cache
+        fwd(_k31_stub(num_mla_layers=0), None, None, chunks)
+    with expect_error(ValueError, "seed_indexer_indices"):
+        fwd(_k31_stub(), None, None, chunks, index_kv_cache=object(), seed_indexer_indices=object())
+    with expect_error(ValueError, "no DSA indexer"):
+        fwd(_k31_stub(has_indexer=False), None, None, chunks, index_kv_cache=object())
+    with expect_error(_GuardsPassed, "argument checks passed"):
+        fwd(_k31_stub(has_indexer=False), None, None, chunks)

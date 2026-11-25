@@ -8,7 +8,7 @@
 #include <memory>
 #include <optional>
 
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <ttnn/global_semaphore.hpp>
 
 #include "hybrid_half_merge.hpp"
@@ -36,6 +36,7 @@ combine::CombineFabric2dParams combine_attributes(
         .seq_len_per_chip = op.seq_len_per_chip,
         .axis = op.combine_axis,
         .num_links = op.combine_num_links,
+        .fwd_vc_pages = op.combine_fwd_vc_pages.value(),
         .hybrid_token_threshold = op.hybrid_token_threshold,
     };
 }

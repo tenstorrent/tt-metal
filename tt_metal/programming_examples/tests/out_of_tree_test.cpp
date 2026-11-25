@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fstream>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include "tt-metalium/kernel_types.hpp"
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
 #include "tt_stl/assert.hpp"
 
 using namespace tt::tt_metal;
@@ -31,7 +31,7 @@ int main() {
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());

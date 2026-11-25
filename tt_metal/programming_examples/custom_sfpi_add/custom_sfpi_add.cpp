@@ -3,19 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/ostream.h>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <random>
 #include <string_view>
 #include <vector>
-#include "tt-metalium/base_types.hpp"
+#include "tt-metalium/workload/specification/compute_modes.hpp"
 
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -60,7 +60,7 @@ int main() {
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
 
         // A MeshWorkload is a collection of programs that will be executed on the mesh. Each workload is
         // local to a single device. Here we create a workload for our single-device mesh.

@@ -33,7 +33,7 @@ Program setup
 .. code-block:: cpp
 
    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-   Program program = CreateProgram();
+   Program program = CreateProgram(*mesh_device);
 
 Operations in Metalium are almost always capable to be run asynchronously and the ordering of operations is managed by a command queue. The command queue, like the name suggests, is a FIFO queue of commands that are executed in order. Commands include operations run on the device such as upload/download of data and program execution. The mesh command queue handles operations across the entire mesh (in this case, our single device).
 
@@ -121,7 +121,7 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
     KernelHandle dram_copy_kernel_id = CreateKernel(
         program,
-        "loopback/kernels/loopback_dram_copy.cpp",
+        OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -133,11 +133,17 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
     The path to the kernel source file can either be
 
-    * Relative to the ``TT_METAL_KERNEL_PATH`` environment variable (or ``TT_METAL_HOME`` if the former is not set), or
     * Absolute path to the file, or
-    * Relative to the current working directory
+    * Relative to the current working directory, or
+    * Relative to the ``TT_METAL_KERNEL_PATH`` environment variable (if set), or
+    * Relative to the system kernel directory (``/usr/share/tenstorrent/kernels/``), or
+    * Relative to the runtime root
 
-    Metalium will search for the kernel source file in order of the above. In this case the kernel will be found relative to ``TT_METAL_HOME``. If the file is not found, an error will be thrown.
+    Metalium will search for the kernel source file in order of the above. If the file is not found, an error will be thrown.
+
+    The runtime root is ``TT_METAL_RUNTIME_ROOT`` if set, otherwise the root passed to ``SetRootDir``, otherwise the package install root if it exists. Only when none of these is available does Metalium fall back to the current working directory, and only if that directory contains ``tt_metal/``.
+
+    The programming examples are built with ``OVERRIDE_KERNEL_PREFIX`` defined as ``tt_metal/programming_examples/``, so this example passes ``tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp``. When the example is run from the repository root, that path is found relative to the current working directory.
 
 The kernel itself is simple. It takes the buffer addresses and the number of tiles to copy. It copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
 

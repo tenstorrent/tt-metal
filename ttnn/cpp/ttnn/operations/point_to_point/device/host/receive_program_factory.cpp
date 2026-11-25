@@ -4,9 +4,9 @@
 ///
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include "point_to_point_device_op.hpp"
 
@@ -142,7 +142,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
             page_idx_start,
             page_idx_end,
             num_pages_per_packet,
-            intermediate_tensor.buffer()->address(),  // placeholder, replaced via Buffer* below
+            intermediate_tensor.mesh_buffer().address(),  // placeholder, replaced via Buffer* below
             packet_size_bytes,
             output_page_size_bytes,
             num_page_segments,

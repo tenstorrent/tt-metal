@@ -7,7 +7,8 @@
 #include <cmath>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::rotate {
 
@@ -119,7 +120,7 @@ RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input.dtype(),
             tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
             operation_attributes.memory_config,

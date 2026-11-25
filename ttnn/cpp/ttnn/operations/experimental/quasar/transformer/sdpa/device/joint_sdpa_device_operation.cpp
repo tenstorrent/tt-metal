@@ -8,7 +8,7 @@
 
 #include <cmath>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
@@ -61,7 +61,7 @@ void JointSDPADeviceOperation::validate_on_program_cache_miss(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B,
             "Inputs to Joint SDPA must be BF16 or BF8");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
     }
 

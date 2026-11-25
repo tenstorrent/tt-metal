@@ -25,8 +25,8 @@ target_precompile_headers(
         <vector>
         <gtest/gtest.h>
         <gmock/gmock.h>
-        <tt-metalium/host_api.hpp>
-        <tt-metalium/distributed.hpp>
+        <tt-metalium/workload/legacy/host_api.hpp>
+        <tt-metalium/execution/distributed.hpp>
         <ttnn/device_operation.hpp>
         <ttnn/operation.hpp>
         <ttnn/tensor/tensor.hpp>
@@ -213,7 +213,6 @@ target_link_libraries(
     test_ccl_multi_cq_multi_device
     PRIVATE
         Boost::asio
-        Boost::lockfree
         test_common_utils
 )
 

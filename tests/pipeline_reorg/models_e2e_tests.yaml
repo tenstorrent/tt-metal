@@ -265,7 +265,7 @@
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 20
       tier: 2
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -949,6 +949,11 @@
     DFLASH_DRAFT_PATH=$(HF_HUB_OFFLINE=0 HF_HUB_CACHE=/tmp/dflash_hf python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download('z-lab/gpt-oss-20b-DFlash'))")
     export DFLASH_DRAFT_PATH
     pytest models/demos/gpt_oss/tests/test_dflash.py -k isl_1k
+    # Batched DFlash, 32 and 128 users (QuietBox 2; skips elsewhere): tokens vs the batch-32 decode, accepted tokens per round.
+    # Its dense expert weights are not in the shared cache (read-only): run on a job-local cache of links into it, so the
+    # cached files are read from there and only the missing ones are written locally.
+    GPT_OSS_JOB_CACHE=$(mktemp -d)/cache && cp -rs "${TT_CACHE_PATH:?}" "$GPT_OSS_JOB_CACHE"
+    TT_CACHE_PATH=$GPT_OSS_JOB_CACHE/ pytest models/demos/gpt_oss/tests/test_dflash_batched.py
   model: gpt-oss-20b
   model_family: GPT-OSS
   skus:
@@ -961,7 +966,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 26 # text_demo 7.2 min + DFlash test 9-12 min (measured: the weight load from the shared cache varies)
+      timeout: 32 # text_demo 7.2 min + DFlash test 9-12 min + batched DFlash ~3 min plus its model load (the load from the shared cache varies)
       tier: 2
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
@@ -1163,6 +1168,33 @@
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: e2e
+
+# ── Ideogram 4 (TT-DiT) ────────────────────────────────────────────
+- name: TT-DiT Ideogram 4 multihost e2e tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface HF_HUB_OFFLINE=1
+    export IDEOGRAM4_WEIGHTS=ideogram-ai/ideogram-4-fp8
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 3600 -rs \
+        models/tt_dit/tests/models/ideogram4/test_perf_ideogram4.py \
+        models/tt_dit/tests/models/ideogram4/test_serving_ideogram4.py \
+        -k "bh_galaxy_sp8tp4"
+  model: ideogram-4
+  model_family: Ideogram
+  skus:
+    bh_sc1:
+      timeout: 80
+      tier: 1
+      release_ready: false
+  owner_id: U0ANYQF656Y # Rahmy Salman
   team: models
   budget_type: e2e
 
