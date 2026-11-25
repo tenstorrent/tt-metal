@@ -38,7 +38,11 @@ constexpr uint32_t BAR_SLOT = get_named_compile_time_arg_val(combine_names::kBar
 // (the device plan)
 constexpr auto plan_args =
     TensorAccessorArgs<get_named_compile_time_arg_val(combine_names::kPortReaderPlanAccessorFirstArg)>();
-constexpr uint32_t GRANT_B = 8;  // grants go out in batches of this many slots (or the rest)
+#ifdef ZZ_GB  // (MEASUREMENT ONLY)
+constexpr uint32_t GRANT_B = ZZ_GB;
+#else
+constexpr uint32_t GRANT_B = 8;
+#endif  // grants go out in batches of this many slots (or the rest)
 
 #ifdef COMBINE_ROLE_FUNCTION_NAME  // (one role of a two-role kernel: combine_port_or_accumulator_reader / _writer.cpp)
 void COMBINE_ROLE_FUNCTION_NAME() {

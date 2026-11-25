@@ -43,6 +43,9 @@ void kernel_main() {
     constexpr uint32_t sfree_id = flat_options::x_slot_free_sem, xcons_id = flat_options::x_consumed_sem;
     constexpr uint32_t xend_id = flat_options::x_end_sem;
     constexpr uint32_t depth = get_named_compile_time_arg_val("x_forward_depth");
+    // (MEASUREMENT ONLY, FLAT_X_NOC1: the receiver (BRISC, NOC1) forwards x and publishes min(consumed, forwarded) as
+    // XCONS; this RISC only reports it upstream and reads the weights)
+    constexpr bool x_fwd_brisc = get_named_compile_time_arg_val("x_fwd_brisc") != 0;
     constexpr uint32_t nb =
         flat_options::super_blocks_per_sub_block * flat_options::super_block_tiles / flat_options::x_block_k_tiles;
     static_assert(depth >= 1 && depth <= 14);
@@ -98,7 +101,7 @@ void kernel_main() {
         if (!g_done) {
             g_done = gr.step();
         }
-        if (sxy) {
+        if (!x_fwd_brisc && sxy) {
             const uint32_t arrived = *xarr;
             while (iss < arrived && iss - fwd < depth && (iss / xp < x_slots || *sfree >= iss / xp + 1 - x_slots)) {
                 while (iss / xp >= cv_end) {  // (the cursor onto the block's sub-block)
@@ -131,13 +134,13 @@ void kernel_main() {
             }
         }
         const uint32_t cons = *xcons;
-        const uint32_t freed = sxy && fwd / xp < cons ? fwd / xp : cons;
+        const uint32_t freed = !x_fwd_brisc && sxy && fwd / xp < cons ? fwd / xp : cons;
         if (freed > rep) {
             noc_semaphore_inc(pxy ? pred_free : relay_word, freed - rep);
             rep = freed;
         }
         const uint32_t end = *xend;
-        if (g_done && end && rep == end - 1 && (!sxy || fwd == (end - 1) * xp)) {
+        if (g_done && end && rep == end - 1 && (x_fwd_brisc || !sxy || fwd == (end - 1) * xp)) {
             break;
         }
     }

@@ -28,6 +28,9 @@
 #include "combine_zero_gate.hpp"
 #include "combine_pool.hpp"
 #include "combine_formats.hpp"
+#ifdef ZZ_TIMING  // (MEASUREMENT ONLY: wait counters as profiler data)
+#include "api/debug/kernel_profiler.hpp"
+#endif
 #include "combine_options.hpp"
 #include "../combine_names.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/combine_plan_words.hpp"
@@ -391,6 +394,10 @@ void kernel_main() {
     constexpr uint32_t slots_probed_per_source = N > 16 ? 1 : (N > 8 ? 2 : 4);
     static_assert(N * slots_probed_per_source * fmt::kTrailerBytes <= 1024, "the trailer probes: 1 KB of CB_TAB");
     uint32_t inflight = 0;
+#ifdef ZZ_TIMING
+    uint32_t zz_full = 0, zz_idle = 0, zz_rows_remote = 0, zz_last = 0;
+    const uint32_t zz_t0 = get_timestamp_32b();
+#endif
     auto flush_rows = [&]() {
         noc_async_read_barrier();
         for (uint32_t i = 0; i < inflight; ++i) {  // (a row at a time: a push wraps the CB only at its exact end)
@@ -406,8 +413,14 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w))[0] =
             fmt::trailer_weight_bits(tr[fmt::kTrailerWeight]);
         cb_push_back(cb_w, 1);
+#ifdef ZZ_TIMING
+        const uint32_t zf = get_timestamp_32b();
+#endif
         cb_reserve_back(cb_row, NT * (inflight + 1));
         cb_reserve_back(cb_meta, inflight + 1);
+#ifdef ZZ_TIMING
+        zz_full += get_timestamp_32b() - zf;
+#endif
         uint32_t rp = get_write_ptr(cb_row) + inflight * NT * get_local_cb_interface(cb_row).fifo_page_size;
         if (rp >= get_local_cb_interface(cb_row).fifo_limit) {
             rp -= get_local_cb_interface(cb_row).fifo_size;
@@ -542,6 +555,9 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             uint32_t got[N], any = 0;
+#ifdef ZZ_TIMING
+            const uint32_t zp = get_timestamp_32b();
+#endif
             for (uint32_t k = 0; k < N; ++k) {
                 got[k] = 0;
                 for (uint32_t j = 0; j < np[k]; ++j) {
@@ -555,6 +571,16 @@ void kernel_main() {
                 }
                 any |= got[k];
             }
+#ifdef ZZ_TIMING
+            if (!any) {
+                zz_idle += get_timestamp_32b() - zp;  // (a probe pass with nothing landed)
+            } else {
+                for (uint32_t k = 0; k < N; ++k) {
+                    zz_rows_remote += got[k];
+                }
+                zz_last = get_timestamp_32b() - zz_t0;
+            }
+#endif
             if (any) {  // (credits once the rows are read and their trailers cleared: the sources write the slots
                         // again)
                 if (inflight) {
@@ -576,6 +602,13 @@ void kernel_main() {
             }
         }
     }
+#ifdef ZZ_TIMING
+    DeviceTimestampedData("ZZ-AFULL", zz_full);
+    DeviceTimestampedData("ZZ-AIDLE", zz_idle);
+    DeviceTimestampedData("ZZ-AROWS", zz_rows_remote);
+    DeviceTimestampedData("ZZ-ALAST", zz_last);
+    DeviceTimestampedData("ZZ-AEND", get_timestamp_32b() - zz_t0);
+#endif
     cb_reserve_back(cb_meta, 1);  // (the compute's end marker: it does not know the row count)
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_meta))[0] = 0xFFFFFFFF;
     cb_push_back(cb_meta, 1);

@@ -119,7 +119,10 @@ std::function<Args(uint32_t)> ChipProgram::planner_args() const {
     }
     // (routing_planner.hpp PlannerArgs::first_hop: the fabric's first hop from me to each chip, kFirstHopsPerWord a
     // word)
-    add(head, FirstHops{.N = model.num_chips, .dirs = model.config.shape.first_hops}.packed_row(my_chip));
+    // (MEASUREMENT: MOE_CMB_TIE_SPLIT - the combine's first hops, its rows' and credits' ports)
+    add(head,
+        combine_first_hops(FirstHops{.N = model.num_chips, .dirs = model.config.shape.first_hops}, model.topology())
+            .packed_row(my_chip));
     // (the planner cores: an instance on planner_cores[instance_slot(instance).first], its RISC
     // instance_slot(instance).second)
     auto on_risc0 = [this](uint32_t instance) { return model.instance_slot(instance).second == 0; };

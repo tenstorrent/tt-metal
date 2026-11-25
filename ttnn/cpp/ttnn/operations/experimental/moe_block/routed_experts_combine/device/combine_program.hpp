@@ -80,6 +80,7 @@ struct CombinePlan {
     MeshTopology topo;
     MeshPlan mesh;              // ports: peers and fabric link ids
     FirstHops hops;             // the fabric's first hop between every pair of chips: the port a row / credit leaves by
+    FirstHops fabric_hops;      // (MEASUREMENT, tie split: the fabric's own - the port headers patch where hops differ)
     uint32_t fabric_links = 0;  // fabric links between neighbor chips (L)
     uint32_t snap_step_bits = 0;  // fp32 bits of the combine's snap step q (0: off)
     uint32_t home_tokens = 0;     // home tokens a chip (S)

@@ -241,6 +241,20 @@ void bind_routed_experts_combine(nb::module_& mod) {
             d["landing_slots_per_accumulator"] = l1.plan->landing_slots_per_accumulator;
             d["landing_on_flat_expert_cores"] = l1.plan->landing_on_flat_expert_cores;
             d["pool_slots"] = l1.plan->pool_slots;
+            // (MEASUREMENT ONLY, the combine lab: the plan's cores - port (chip r, c, direction index, link index,
+            // logical x, y) and accumulator (chip r, c, logical x, y) lists)
+            nb::list ports, accs;
+            for (const auto& [k, c] : l1.plan->port_core) {
+                ports.append(nb::make_tuple(
+                    k.chip.r, k.chip.c, static_cast<uint32_t>(k.dir), k.link_index, uint32_t(c.x), uint32_t(c.y)));
+            }
+            for (const auto& [ch, cores] : l1.plan->accumulator_cores) {
+                for (const auto& c : cores) {
+                    accs.append(nb::make_tuple(ch.r, ch.c, uint32_t(c.x), uint32_t(c.y)));
+                }
+            }
+            d["port_cores"] = ports;
+            d["accumulator_cores"] = accs;
             return d;
         },
         nb::arg("resources"),

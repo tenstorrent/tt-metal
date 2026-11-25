@@ -75,7 +75,7 @@ constexpr uint32_t kColumnLoadHops = 2;
 
 PortCores place_spread(
     MeshDevice& mesh_device, const MeshPlan& plan, tt::tt_metal::NOC noc, const std::vector<CoreCoord>& allowed) {
-    const FirstHops first_hops = fabric_first_hops(mesh_device, plan.topo);
+    const FirstHops first_hops = combine_first_hops(fabric_first_hops(mesh_device, plan.topo), plan.topo);
     const uint32_t num_chips = plan.topo.num_chips();
     PortCores out;
     for (const auto& [chip, ports] : plan.chips) {
