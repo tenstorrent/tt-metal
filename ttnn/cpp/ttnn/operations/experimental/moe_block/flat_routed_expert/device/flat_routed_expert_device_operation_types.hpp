@@ -32,6 +32,11 @@ struct FlatLayoutOptions {
     // h's data format after gate/up (h_local on the gate/up cores, the down cores' h CB, the h chain between them):
     // bf16 (else bfp8, the default). Doubles h's L1 a buffer.
     bool h_bf16 = false;
+    // the gate/up cores' x ring grown into the arena's leftover L1 (when the ring holds a whole sub-block's x - row
+    // passes): every block past a sub-block lets the next sub-block's x flow in during the first pass too, not only as
+    // the last pass frees slots. Off keeps a sub-block's worth (the combine: its landing pool takes the flat expert
+    // cores' free L1).
+    bool x_ring_fill = true;
 
     // the tile bytes of x / h in these formats
     uint32_t x_tile() const { return x_bf16 ? 2048u : 1088u; }

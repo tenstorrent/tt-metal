@@ -60,8 +60,17 @@ int noc_hops(const Core& src, const Core& dst, int noc) {
 // (DST tiles the gate/up sub-block may use, row passes?): fp32 DEST holds 4 tiles; row passes (NP <= 2, the x ring
 // holds a sub-block's K-blocks) keep the 8-tile rows. With 16-column units (units) a block of 3 / 4 pairs' width runs
 // the sub-block in a full-sync fp32 DST (8 tiles: one row tile of up to 8 tiles).
+// (MEASUREMENT ONLY: FLAT_NO_ROW_PASSES=1 never takes row passes; FLAT_X_RING=n the x ring's blocks)
+uint32_t exp_env(const char* name) {
+    const char* v = std::getenv(name);
+    return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
+}
+
 std::pair<uint32_t, bool> gu_dst(uint32_t np, uint32_t ht, uint32_t x_slots, bool units = false) {
     // (np: the gate/up width in pairs; a units width w is w / 2 rounded up)
+    if (exp_env("FLAT_NO_ROW_PASSES") == 1) {
+        return {4, false};
+    }
     if (np > 2 && 2 * np <= 8 && units && ht / kKBlk <= x_slots) {
         return {8, true};
     }
@@ -217,7 +226,8 @@ FlatRoutedExpertPlan make_plan(
     const FlatRoutedExpertConfig& cfg,
     uint32_t budget,
     uint32_t mt_max,
-    uint32_t hbuf_max) {
+    uint32_t hbuf_max,
+    uint32_t x_ring = 0) {
     auto* device = &mesh_device;
     FlatRoutedExpertPlan p;
     p.hidden = cfg.hidden;
@@ -286,7 +296,12 @@ FlatRoutedExpertPlan make_plan(
         }
         const uint32_t np = per / 2;
         const bool pairs = per % 2 == 0 && p.intermediate_tiles % np == 0 && (p.intermediate_tiles / np) % slots == 0;
-        for (uint32_t xs : {24u, 16u, 12u}) {
+        // (x_ring: a given ring size - the plan search grows the ring past a sub-block, below)
+        std::vector<uint32_t> ring_sizes = {24u, 16u, 12u};
+        if (x_ring != 0) {
+            ring_sizes = {x_ring};
+        }
+        for (uint32_t xs : ring_sizes) {
             const uint32_t dst =
                 pairs ? gu_dst(np, p.hidden_tiles, xs).first : gu_dst((per + 1) / 2, p.hidden_tiles, xs, true).first;
             const uint32_t mt_ = std::min(dst / per, mt_max);
@@ -362,6 +377,11 @@ FlatRoutedExpertPlan make_plan(
     // wide gate/up blocks (gwt > 4) with row passes: gate/up in a full-sync DST
     p.gate_up_full_sync = p.gate_up_weight_tiles_per_row > 4 && p.gate_up_row_passes &&
                           p.row_tiles_per_sub_block * p.gate_up_weight_tiles_per_row > 4;
+    // (MEASUREMENT ONLY: FLAT_GU_FULL_SYNC=1 - a row-pass sub-block in one pass, in a full-sync fp32 DST)
+    if (exp_env("FLAT_GU_FULL_SYNC") == 1 && p.gate_up_row_passes &&
+        p.row_tiles_per_sub_block * p.gate_up_weight_tiles_per_row <= 8) {
+        p.gate_up_full_sync = true;
+    }
     TT_FATAL(
         p.row_tiles_per_sub_block * p.gate_up_weight_tiles_per_row <= p.gate_up_dst_tiles,
         "flat_routed_expert: sub-block split");
@@ -369,6 +389,9 @@ FlatRoutedExpertPlan make_plan(
                            (p.row_tiles_per_sub_block * 32) * p.row_tiles_per_sub_block * 32;
     p.helper_relays_per_primary = 1;
     p.relay_landing_slots = 2;  // (two landing rings a primary: the helpers feed both)
+    if (const uint32_t forced = exp_env("FLAT_RELAY_LANDING"); forced != 0) {  // (MEASUREMENT ONLY)
+        p.relay_landing_slots = forced;
+    }
     // the down weight ring: two whole experts with pinning (the pinned schedule's regions), else 1.5
     p.down_weight_ring_experts = cfg.pin ? 2.0f : 1.5f;
 
@@ -746,6 +769,10 @@ FlatRoutedExpertPlan make_plan(
         p.dynamic_counts_bytes = 4 * dyn_half;
         p.static_l1_bytes = 0;  // (every CB is in the arena)
     }
+    if (x_ring != 0 && gu_bytes > budget) {  // (a ring the search tries: too large, quietly - an arena past budget)
+        p.arena_tiles = budget / 2048 + 1;
+        return p;
+    }
     TT_FATAL(gu_bytes <= budget, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
         if (p.hidden_tiles % t == 0 && t % kKBlk == 0) {
@@ -918,6 +945,28 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
             try {
                 auto p = make_plan(mesh_device, cfg, budget, mt, hbuf);
                 if (p.arena_tiles * 2048 <= budget) {
+                    // the x ring grown into the leftover L1 while the sub-block rows and h buffers stay (with row
+                    // passes the ring holds a whole sub-block: each block past it lets the next sub-block's x in during
+                    // the first pass; GLM-5.3 4x4 M 320 on a p150: 24 / 26 / 28 blocks 1258 / 1227 / 1217 us). Pair
+                    // splits only: the 16-column-unit ones lose (p150, filled vs not: GLM-5.3 4x4 10240 -3.3%, 8x4 5120
+                    // hot -3.2%, 8x4 10240 -2.6%; M3 +2.4%, K3 4x4 2560 +1.5%, V4.1-Flash hot +1.0%) (MEASUREMENT ONLY:
+                    // FLAT_NO_X_RING_FILL=1 - the A/B of the fill)
+                    if (cfg.layout.x_ring_fill && p.gate_up_row_passes && p.units_per_core == 0 &&
+                        exp_env("FLAT_NO_X_RING_FILL") != 1) {
+                        for (uint32_t xs = p.x_ring_blocks + 1; xs <= 2 * p.gate_up_k_blocks; ++xs) {
+                            try {
+                                auto q = make_plan(mesh_device, cfg, budget, mt, hbuf, xs);
+                                if (q.arena_tiles * 2048 > budget || !q.gate_up_row_passes ||
+                                    q.row_tiles_per_sub_block != p.row_tiles_per_sub_block ||
+                                    q.down_h_buffers != p.down_h_buffers) {
+                                    break;
+                                }
+                                p = std::move(q);
+                            } catch (const std::exception&) {
+                                break;
+                            }
+                        }
+                    }
                     return p;
                 }
                 tried += fmt::format(
