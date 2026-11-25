@@ -140,7 +140,10 @@ std::optional<RoutingDirection> InterDomainMesh::direction(const FabricNodeId& a
     return it == edges.end() ? std::nullopt : std::optional(it->second.port_direction);
 }
 
-InterDomainMesh make_inter_domain_mesh(const MeshGraph& workload, const std::vector<DomainLink>& physical) {
+InterDomainMesh make_inter_domain_mesh(
+    const MeshGraph& workload,
+    const std::vector<DomainLink>& physical,
+    const std::map<FabricNodeId, uint32_t>& perimeter) {
     const auto meshes = workload.get_mesh_ids();
     // one mesh already as square as any grid over its chips: it is the domain's mesh, chip for chip
     if (meshes.size() == 1) {
@@ -155,11 +158,15 @@ InterDomainMesh make_inter_domain_mesh(const MeshGraph& workload, const std::vec
     }
 
     const auto workload_link = workload_links(workload);
-    // a chip has four directions for its routers (Z aside): a physical link is a candidate only where both have one
-    // free
+    // a chip has four directions for its routers (Z aside), its workload's and perimeter's first: a physical link is a
+    // candidate only where both have one free
+    auto used = [&](const FabricNodeId& chip) {
+        const auto it = perimeter.find(chip);
+        return workload_link.at(chip).size() + (it == perimeter.end() ? 0 : it->second);
+    };
     auto links = workload_link;
     for (const auto& l : physical) {
-        if (workload_link.at(l.a).size() < 4 && workload_link.at(l.b).size() < 4) {
+        if (used(l.a) < 4 && used(l.b) < 4) {
             links[l.a].insert(l.b);
             links[l.b].insert(l.a);
         }
@@ -175,9 +182,8 @@ InterDomainMesh make_inter_domain_mesh(const MeshGraph& workload, const std::vec
                 extra[l.b].insert(l.a);
             }
         }
-        return std::all_of(extra.begin(), extra.end(), [&](const auto& e) {
-            return workload_link.at(e.first).size() + e.second.size() <= 4;
-        });
+        return std::all_of(
+            extra.begin(), extra.end(), [&](const auto& e) { return used(e.first) + e.second.size() <= 4; });
     };
     // each shape, squarest first: on the workload's links if they embed it, else on every link
     for (uint32_t rows : squarest_first(static_cast<uint32_t>(links.size()))) {

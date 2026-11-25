@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt_stl/assert.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/reflection.hpp>
@@ -223,23 +224,41 @@ FabricContext::FabricContext(
         const auto& mesh_graph = control_plane.get_mesh_graph();
         const auto& psd = control_plane.get_physical_system_descriptor();
         std::vector<DomainLink> physical;
+        std::vector<FabricNodeId> chips;
+        std::vector<uint32_t> peers_outside;  // this process's chips' cables out of the domain: only it sees them
         for (MeshId mesh : mesh_graph.get_mesh_ids()) {
             for (ChipId chip = 0; chip < mesh_graph.get_mesh_shape(mesh).mesh_size(); ++chip) {
                 const FabricNodeId a(mesh, chip);
                 const auto asic = control_plane.get_asic_id_from_fabric_node_id(a);
-                for (const auto& [peer_asic, link] : psd.get_eth_links(asic)) {
+                std::set<tt::tt_metal::AsicID> outside;
+                for (const auto& [peer_asic, link] : psd.get_eth_links(asic, /*outside_job=*/true)) {
                     const auto id = psd.find_physical_node_id(peer_asic);
                     const auto b =
                         id ? control_plane.get_topology_mapper().find_fabric_node_id_from_physical_node_id(*id)
                            : std::nullopt;
-                    if (b && a < *b) {
+                    if (!b) {
+                        outside.insert(peer_asic);
+                    } else if (a < *b) {
                         physical.push_back(
                             DomainLink{.a = a, .a_chan = link.src_chan, .b = *b, .b_chan = link.dst_chan});
                     }
                 }
+                chips.push_back(a);
+                peers_outside.push_back(outside.size());
             }
         }
-        this->inter_domain_mesh_ = make_inter_domain_mesh(mesh_graph, physical);
+        // every process of the domain picks the same grid, so each shares its chips' perimeters
+        const auto& world = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        std::vector<uint32_t> gathered(peers_outside.size() * *world->size());
+        world->all_gather(
+            ttsl::as_writable_bytes(ttsl::Span<uint32_t>{peers_outside.data(), peers_outside.size()}),
+            ttsl::as_writable_bytes(ttsl::Span<uint32_t>{gathered.data(), gathered.size()}));
+        std::map<FabricNodeId, uint32_t> perimeter;
+        for (size_t i = 0; i < gathered.size(); ++i) {
+            auto& n = perimeter[chips[i % chips.size()]];
+            n = std::max(n, gathered[i]);
+        }
+        this->inter_domain_mesh_ = make_inter_domain_mesh(mesh_graph, physical, perimeter);
     }
 
     // Step 5: Compute packet specifications (depends on: routing flags)
