@@ -501,6 +501,22 @@ def test_erfc(device):
     _assert_erfc(input_tensor, golden, result)
 
 
+@pytest.mark.skipif(not is_blackhole(), reason="4 ULP erfc is a Blackhole kernel property")
+def test_erfc_full_mantissa(device):
+    """Float32 inputs with nonzero low mantissa bits, within 4 ULP of float64 erfc rounded once to float32."""
+    magnitudes = torch.arange(0, 0x41200000, 4099, dtype=torch.int32).view(torch.float32)  # [0, 10)
+    positive = magnitudes[magnitudes < ERFC_CLAMP]
+    input_tensor = torch.cat([positive, -magnitudes])
+    padding = (-input_tensor.numel()) % 1024
+    input_tensor = torch.cat([input_tensor, input_tensor[:padding]]).reshape(-1, 32)
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden = torch.erfc(input_tensor.to(torch.float64)).to(torch.float32)
+    result = ttnn.to_torch(ttnn.erfc(tt_in))
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ERFC_ULP_THRESHOLD)
+
+
 @pytest.mark.xfail(
     reason="#51137: |x| >= 5 is clamped instead of decaying.",
 )
