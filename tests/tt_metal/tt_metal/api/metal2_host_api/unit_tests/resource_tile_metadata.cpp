@@ -8,7 +8,7 @@
 #include <array>
 #include <stdexcept>
 
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
@@ -213,7 +213,7 @@ TEST_F(MxResourceProgramValidation, CPU_DfbRejectsIncompleteBlock) {
     spec.dataflow_buffers[0].data_format_metadata = DataFormat::MxFp4;
     spec.dataflow_buffers[0].tile_format_metadata = Tile({1, 16});
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device(), spec); },
+        [&] { Program(fixture_device(), spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::AllOf(::testing::HasSubstr("DFB 'dfb_0'"), ::testing::HasSubstr("multiple of 32 elements"))));
 }
@@ -228,7 +228,7 @@ TEST_F(MxResourceProgramValidation, CPU_ScratchpadRejectsIncompleteBlock) {
         .tile_format_metadata = Tile({1, 16})}};
     spec.kernels[0].scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device(), spec); },
+        [&] { Program(fixture_device(), spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
             ::testing::HasSubstr("ScratchpadSpec 'pad'"), ::testing::HasSubstr("multiple of 32 elements"))));
 }
@@ -240,7 +240,7 @@ TEST_F(MxResourceProgramValidation, CPU_TensorRejectsIncompleteBlock) {
         {.unique_id = TensorParamName{"tensor"}, .spec = MakeNonPublicTensorSpec(DataType::MXFP4, Tile({1, 16}))}};
     test_helpers::BindTensorParameterToKernel(spec.kernels[0], "tensor", "tensor");
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device(), spec); },
+        [&] { Program(fixture_device(), spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
             ::testing::HasSubstr("TensorParameter 'tensor'"), ::testing::HasSubstr("multiple of 32 elements"))));
 }
@@ -253,7 +253,7 @@ TEST_F(MxResourceProgramValidation, CPU_PerNodeTensorRejectsIncompleteBlock) {
          .spec = MakeNonPublicTensorSpec(DataType::MXFP4, Tile({1, 16}), true)}};
     test_helpers::BindTensorParameterToKernel(spec.kernels[0], "tensor", "tensor");
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device(), spec); },
+        [&] { Program(fixture_device(), spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
             ::testing::HasSubstr("TensorParameter 'tensor'"), ::testing::HasSubstr("multiple of 32 elements"))));
 }

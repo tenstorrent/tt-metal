@@ -9,7 +9,7 @@
 #include <string>
 
 #include <fmt/format.h>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -98,7 +98,7 @@ TEST_P(BindingTokenGeometry, CPU_DfbTileShape) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(dfb::input_dfb)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // Blackhole scratchpad shape queries compile in data movement and all compute stages.
@@ -106,7 +106,7 @@ TEST_P(BindingTokenGeometry, CPU_ScratchpadTileShape) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(scratch::pad)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // Blackhole common and per-node tile shape queries compile in data movement and all compute stages.
@@ -115,7 +115,7 @@ TEST_P(BindingTokenGeometry, CPU_TensorBindingTileShape) {
     const std::string source =
         MakeNonPublicTileShapeQuerySource(geometry, "tensor_accessor::get_tile_shape(tensor::local)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // A bound resource exposes its tile height as a constant in DM and all compute stages.
@@ -131,7 +131,7 @@ void kernel_main() {{
 )",
         geometry.rows);
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // A bound resource exposes its tile width as a constant in DM and all compute stages.
@@ -147,7 +147,7 @@ void kernel_main() {{
 )",
         geometry.columns);
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // A bound resource exposes its tile element count independently of its storage format.
@@ -163,7 +163,7 @@ void kernel_main() {{
 )",
         geometry.rows * geometry.columns);
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // A bound resource exposes the total number of faces, including custom face layouts.
@@ -179,7 +179,7 @@ void kernel_main() {{
 )",
         geometry.faces);
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // A bound resource exposes its partial-height flag as uint32_t with the expected 0/1 value.
@@ -187,7 +187,7 @@ TEST_P(BindingTokenGeometry, CPU_PartialFace) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTileFlagQuerySource("get_partial_face", geometry.partial);
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // A bound resource exposes its narrow-width flag as uint32_t with the expected 0/1 value.
@@ -195,7 +195,7 @@ TEST_P(BindingTokenGeometry, CPU_NarrowTile) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTileFlagQuerySource("get_narrow_tile", geometry.narrow);
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -223,7 +223,7 @@ TEST_P(BindingTokenGeometryWormhole, CPU_DfbTileShape) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(dfb::input_dfb)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // Wormhole scratchpad shape queries compile in data movement and all compute stages.
@@ -231,7 +231,7 @@ TEST_P(BindingTokenGeometryWormhole, CPU_ScratchpadTileShape) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(scratch::pad)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // Wormhole common and per-node tile shape queries compile in data movement and all compute stages.
@@ -240,7 +240,7 @@ TEST_P(BindingTokenGeometryWormhole, CPU_TensorBindingTileShape) {
     const std::string source =
         MakeNonPublicTileShapeQuerySource(geometry, "tensor_accessor::get_tile_shape(tensor::local)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -292,7 +292,7 @@ TEST_P(BindingTokenCustomFaceWidth, CPU_ScratchpadGeometry) {
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     // TODO(#66336): Divergent behavior between metal 1.0 vs metal 2.0
     spec.dataflow_buffers[0].tile_format_metadata.reset();
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // A tensor binding's scalar geometry reflects the face width configured on its resource.
@@ -302,7 +302,7 @@ TEST_P(BindingTokenCustomFaceWidth, CPU_TensorGeometry) {
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     // TODO(#66336): Divergent behavior between metal 1.0 vs metal 2.0
     spec.dataflow_buffers[0].tile_format_metadata.reset();
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // A scratchpad's aggregate shape preserves custom face dimensions and grid counts.
@@ -313,7 +313,7 @@ TEST_P(BindingTokenCustomFaceWidth, CPU_ScratchpadTileShape) {
     spec.dataflow_buffers[0].tile_format_metadata.reset();
     spec.kernels[1].source =
         KernelSpec::SourceCode{MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(scratch::pad)")};
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // A tensor binding's aggregate shape preserves custom face dimensions and grid counts.
@@ -324,7 +324,7 @@ TEST_P(BindingTokenCustomFaceWidth, CPU_TensorBindingTileShape) {
     spec.dataflow_buffers[0].tile_format_metadata.reset();
     spec.kernels[1].source = KernelSpec::SourceCode{
         MakeNonPublicTileShapeQuerySource(geometry, "tensor_accessor::get_tile_shape(tensor::local)")};
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -354,7 +354,7 @@ TEST_P(BindingTokenTileShapeWithoutFormat, CPU_DefaultGeometry) {
     const GeometryCase geometry{"Default", std::nullopt, 32, 32, 4, false, false, missing.per_node};
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
     spec.kernels[1].source = KernelSpec::SourceCode{MakeNonPublicTileShapeQuerySource(geometry, missing.query)};
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <fmt/format.h>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -123,7 +123,7 @@ TEST_P(BindingTokenTileSizeBlackhole, CPU_QualifiedMetadataGetters) {
     }
     source += "}\n";
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // Resource tokens expose tile storage bytes independently of DFB entries and scratchpad allocation sizes.
@@ -139,14 +139,14 @@ void kernel_main() {{
 )",
         size.bytes);
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // MX storage sizes use the host format and include block scales before hardware format remapping.
 TEST_P(BindingTokenTileSizeQuasar, CPU_TileStorageBytes) {
     const TileSizeCase size = GetParam();
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, "void kernel_main() {}", true);
-    Program program = MakeProgramFromSpec(fixture_device(), spec);
+    Program program = Program(fixture_device(), spec);
     EXPECT_THAT(
         GetNonPublicSerializedResourceMetadata(program, fixture_device().arch()),
         ::testing::AllOf(
@@ -207,7 +207,7 @@ constexpr uint32_t token_tile_size() { return get_tile_size(dfb::input_dfb); }
 void kernel_main() { static_assert(cb_compatibility::token_tile_size() == 2048); }
 )";
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 struct CbIdOverloadCase {
@@ -229,7 +229,7 @@ TEST_P(BindingTokenQualifiedDfbGetter, CPU_IgnoresCbIdOverload) {
     const std::string source =
         fmt::format("{}\nvoid kernel_main() {{ static_assert({}); }}\n", overload.cb_id_overload, overload.query);
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, source);
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -258,7 +258,7 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_F(BindingTokenTileSizeMetadata, CPU_StorageBytesAffectKernelHash) {
     const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, "void kernel_main() {}");
-    Program program = MakeProgramFromSpec(fixture_device(), spec);
+    Program program = Program(fixture_device(), spec);
     Kernel& kernel = *program.impl().get_kernel_by_spec_name("dm_kernel");
     const auto original_hash = kernel.compute_hash();
     kernel.scratchpad_binding_handles()[0].llk_metadata->tile_size_bytes += 16;
@@ -273,7 +273,7 @@ TEST_F(BindingTokenTileSizeMetadata, CPU_Tf32FormatQueryStillCompiles) {
     for (ScratchpadSpec& scratchpad : spec.scratchpads) {
         scratchpad.data_format_metadata = tt::DataFormat::Tf32;
     }
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+    EXPECT_NO_THROW(Program(fixture_device(), spec));
 }
 
 // A TF32 tile-size query reports an unsupported format instead of missing metadata.
@@ -285,7 +285,7 @@ TEST_F(BindingTokenTileSizeMetadata, CPU_Tf32StorageSizeQueryFails) {
         scratchpad.data_format_metadata = tt::DataFormat::Tf32;
     }
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device(), spec); },
+        [&] { Program(fixture_device(), spec); },
         ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("tile_size_unsupported_for_format")));
 }
 
@@ -306,7 +306,7 @@ TEST_P(BindingTokenTileSizeMissing, CPU_RequiresMetadata) {
     const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, source);
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device(), spec); },
+        [&] { Program(fixture_device(), spec); },
         ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("data_format_metadata_not_set")));
 }
 
