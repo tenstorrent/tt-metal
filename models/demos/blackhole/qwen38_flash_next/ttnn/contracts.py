@@ -540,7 +540,7 @@ def same_buffer(left, right) -> bool:
     """Whether two device tensors are one allocation: a zero-cost view (``ttnn.reshape`` of a ROW_MAJOR tensor, or of
     a TILE tensor that keeps its last dimension) and its source share a buffer under different tensor ids.  This is
     the test that decides whether a reshape's SOURCE may be freed while the result is still read: freeing the source
-    of a view frees the result's rows (the 2026-09-26 slab defect, docs/NUMERICS.md); ``_tensor_key`` compares tensor
+    of a view frees the result's rows (the 2026-09-26 slab defect); ``_tensor_key`` compares tensor
     ids, which a view never shares, and must not decide it."""
 
     left_address, right_address = getattr(left, "buffer_address", None), getattr(right, "buffer_address", None)

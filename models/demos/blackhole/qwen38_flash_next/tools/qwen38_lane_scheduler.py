@@ -76,8 +76,8 @@ PLACEHOLDER_DRAFT_TOKEN = 0
 IDLE_WAIT_SECONDS = 0.25  # the driver's wait on the condition between submits when no lane is active
 # The stall budget: the admission work (seconds) the decoding lanes wait for, since their last pass, before the driver
 # runs their pass between two admission segments; None runs every admission whole.  The default is the measured
-# setting of the 2026-09-29 sweep (docs/NUMERICS.md "Served lanes": half the interleave cost of 0.25 s on a four-burst
-# for a pause bounded near 0.7 s; docs/SERVER.md states the trade-off).
+# setting of the 2026-09-29 sweep (half the interleave cost of 0.25 s on a four-burst
+# for a pause bounded near 0.7 s).
 DEFAULT_STALL_BUDGET_SECONDS = 0.5
 # Finish reasons the driver assigns; the handler's cancels arrive with their own ("stop", "deadline", "disconnected").
 FINISH_SHUTDOWN = "shutdown"

@@ -887,7 +887,7 @@ class Qwen38ChatCompletion:
 # prefill of the ids takes, so an exact repeat restores the fresh state bitwise; ``forced-tail`` = a restored or
 # extended request captured it: positions a fresh prefill would compute inside the chunk driver came from 1-row steps
 # (a teacher-forced tail, a decoded reply) or from the tail's own alignment steps and chunk boundaries, so the state
-# agrees with a fresh prefill's to rounding only (docs/NUMERICS.md).  A restore whose tail is the last prompt token
+# agrees with a fresh prefill's to rounding only.  A restore whose tail is the last prompt token
 # alone recaptures the restored state and inherits its value.
 SNAPSHOT_SCHEDULES = ("chunked", "forced-tail")
 

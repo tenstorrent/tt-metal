@@ -12,7 +12,6 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import re
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -21,8 +20,6 @@ import ttnn
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_prefill_rows as module
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import registry
-
-MODEL_DIR = Path(__file__).resolve().parents[1]
 
 NAME = "gdn_prefill_rows"
 SLAB = 2048
@@ -361,17 +358,6 @@ def test_the_buffers_follow_the_switch_and_exclude_the_flat_form():
     assert _squash("gdn_qk_flat and gdn_prefill_rows are exclusive slab forms") in allocator
     assert _squash("the fused prefill rows buffers are a slab option (gdn_prefill_rows)") in allocator
     assert _squash("a shared GDN rows body and its layer disagree on the fused prefill rows form") in allocator
-
-
-def test_the_note_names_the_switch_and_the_class():
-    text = (MODEL_DIR / "docs/PREFILL.md").read_text(encoding="utf-8")
-    assert "QWEN38_FUSED=gdn_prefill_rows" in text
-    assert "gdn_pre_rows" in text and "gdn_post_rows" in text
-    assert "ttnn.prim.chunk_gdn_prep" in text and "ttnn.prim.chunk_gdn_scan" in text
-    # the numbers of record on one p150 die at 2048 rows: pre 332, post pair 115, the three together 447.6, the
-    # chain's 3,270 us per layer (a retune moves the first two; the pair sum and the chain's figure stay pinned)
-    for number in ("332", "115", "447", "3,270"):
-        assert number in text, number
 
 
 def test_every_buffer_a_program_writes_is_restamped_with_its_declared_topology():

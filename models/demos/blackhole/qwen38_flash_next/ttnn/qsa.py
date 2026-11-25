@@ -3803,7 +3803,7 @@ class Qwen38TTNNQSA:
     _lane_score_rows_fused = None
     # QWEN38_FUSED=sparse_sdpa_tiled: the slab's attention as the block-shared kernel (ttnn/fused/sparse_sdpa_tiled)
     # in place of the block-id expansion + zero half + head pad + sparse_sdpa + slice; tolerance class against the
-    # chain (docs/PREFILL.md), resolved at construction and kept through trace capture; the chunk forms never see it.
+    # chain, resolved at construction and kept through trace capture; the chunk forms never see it.
     _slab_attention_fused = None
     _slab_attention_base_config = None
     # the lanes' score-row windows: the chain here, ttnn/fused/qsa_block.lane_score_rows_of(_fused) with qsa_score_merge

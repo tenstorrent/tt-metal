@@ -1324,7 +1324,7 @@ def test_construction_order_and_forwarded_arguments(construction, monkeypatch) -
         "marker": constructed["marker"],
         "stage_missing_bf4": False,
     }
-    assert DEFAULT_SLAB_ROWS == 2048  # the measured form (docs/PREFILL.md), the default slab
+    assert DEFAULT_SLAB_ROWS == 2048  # the measured form, the default slab
     assert opened == {
         "marker": opened["marker"],
         "chunked_prefill": True,

@@ -5,6 +5,8 @@
 
 Derived from Samuel Jett (sjettTT, sjett@tenstorrent.com), source cd9a117,
 chunk_gdn_phased_program_factory.cpp. No shared operation default is changed.
+The six kernels keep the exact source bytes of Samuel Jett's source (sjettTT) at commit
+cd9a11771107ea2c27da3303a0556ff7343e4af5, from ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels.
 """
 from pathlib import Path
 import struct

@@ -14,8 +14,7 @@ dual-NoC transaction-id ring gather of ``sparse_sdpa``, the writer turns the mem
 mask band per chunk, and compute runs ``sparse_sdpa``'s streaming flash loop with the band added before the running
 max.  The attended set per query is exactly today's (the selected complete blocks' tokens plus the tail of its own
 incomplete block); the visiting order and the chunk size differ, so the class is tolerance against
-``sparse_sdpa`` (bit-exact run to run).  docs/PREFILL.md (the block-shared attention section) and docs/NUMERICS.md carry the
-numbers and the class.
+``sparse_sdpa`` (bit-exact run to run).
 
 Inputs (per device): ``q`` ``[1, H, S, Dq]`` bf16 ROW_MAJOR (the local heads' query rows, Dq = 256); ``kv`` the packed
 ``[1, 1, T, W]`` bf16 ROW_MAJOR cache (1 KB rows ``[V | K]``, W = 512); ``block_ids`` ``[1, 1, S, IDS]`` uint32
@@ -557,7 +556,7 @@ def sparse_sdpa_tiled(
     )
     tokens = g["IDS"] * config.block_tokens  # the selected tokens of one row
     # Q, the block ids and the positions in, the attention out; the K/V rows at the union's floor (one row's selection
-    # per tile: the measured union ratios over it, 1.03-3.45 at TQ 16, are in PREFILL.md); the FLOPs of every row's
+    # per tile: the measured union ratios over it, 1.03-3.45 at TQ 16); the FLOPs of every row's
     # own selected tokens (Q K^T and P V; the union's extra cells are the kernel's overhead, not the model's work)
     meta = fp.program_meta(
         NAME,
@@ -968,7 +967,7 @@ register(
         # chain): acceptance pins 12/12 and the acceptance columns identical; the 31,716-token long part identical
         # through the first slab, from position 8128 (cross-slab attention) KL control -> arm mean 0.0028 / max 0.084,
         # top-1 vs the control 160/160, top-1 vs HF 0.9875 (= the control's); TTFT 15.92 -> 14.25 s.  On one die the
-        # kernel is no farther from the fp32 oracle than the chain on captured selections (docs/NUMERICS.md).
+        # kernel is no farther from the fp32 oracle than the chain on captured selections.
         component_proof="line gate 2026-09-26: KL 0.0028 mean / 0.084 max vs the control, top-1 160/160, vs HF 0.9875 = control",
         admits=admits,
     )

@@ -689,7 +689,3 @@ def test_design_note_reference_and_docs() -> None:
     # naming the development directories in public code); its presence and the gate tool's slab option are checked
     # by the development-side companion test.
     assert "the prefill dense design note" in pd.__doc__
-    docs = (MODEL_DIR / "docs" / "PREFILL.md").read_text()
-    assert all(switch in docs for switch in pd.SWITCHES)
-    assert "| `QWEN38_PREFILL_DENSE_GRID` | `today`, `wide` | `wide` |" in docs  # the documented default
-    assert "| `QWEN38_PREFILL_DENSE_DTYPE` | `bf16`, `bf8` | `bf16` |" in docs

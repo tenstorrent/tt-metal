@@ -7,7 +7,7 @@ Samuel Jett's producer preserves the source normalization, query scaling and
 chunk-major bytes. The model-owned recurrence retains the source intermediate rounding sequence
 through the current public generic_op API.
 The existing projection, output projection, reduce-scatter and state ownership
-remain in Qwen38TTNNGDN. Source-era timing and program counts in docs/PREFILL.md
+remain in Qwen38TTNNGDN. Source-era timing and program counts
 are historical measurements, not measurements of this adapter.
 
 The registry admits this body only for a slab carrying the fused buffers.

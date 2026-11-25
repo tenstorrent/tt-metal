@@ -219,7 +219,7 @@ def effective_device_sampler(args: Any) -> bool:
 
 MTP_DRAFTS_PER_REQUEST_VARIABLE = "QWEN38_MTP_DRAFTS_PER_REQUEST"
 # The pair of chains a per-request server captures: the default (--mtp K) and the other member; a request picks with
-# extra_body.mtp_drafts (docs/SERVER.md).  The measured pair (2026-09-26): k = 5 on the 6-row verify MoE form pays on
+# extra_body.mtp_drafts.  The measured pair (2026-09-26): k = 5 on the 6-row verify MoE form pays on
 # structured output (json, code), k = 4 stays the chat / prose default.
 MTP_DRAFTS_PER_REQUEST_PAIR = (4, 5)
 
@@ -2296,7 +2296,7 @@ def _parser() -> argparse.ArgumentParser:
         "--long-chunks",
         action="store_true",
         help="accepted for compatibility: the 128-row chunk trace and the 128-row chunks ahead of the 32-row ones are "
-        "the served default of the chunked prefill (bitwise the 32-row chunks, docs/PREFILL.md); --prefill-mode "
+        "the served default of the chunked prefill (bitwise the 32-row chunks); --prefill-mode "
         "teacher_forced has no chunks at all",
     )
     parser.add_argument(
@@ -2306,7 +2306,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="ROWS",
         help=f"chunked prefill only: also capture a prefill slab of ROWS rows ({SLAB_ROWS_RULE}; every "
         "dense linear as one matmul, the GDN state carried through the slab in one kernel call) and run slabs ahead "
-        "of the 128-row chunks; implies --long-chunks; tolerance-class against the chunk bodies (docs/PREFILL.md)",
+        "of the 128-row chunks; implies --long-chunks; tolerance-class against the chunk bodies",
     )
     parser.add_argument(
         "--allocated-context",
@@ -2410,7 +2410,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="--lanes only: the admission work (seconds) the decoding lanes wait for before their pass runs between "
         "two segments of an admission (0: a pass at every segment; 'off': every admission runs whole and stalls the "
-        f"lanes for its length); default {DEFAULT_STALL_BUDGET_SECONDS} (docs/SERVER.md)",
+        f"lanes for its length); default {DEFAULT_STALL_BUDGET_SECONDS}",
     )
     return parser
 
@@ -2471,7 +2471,7 @@ def main() -> int:
     if lanes_switch is None and args.lanes_stall_budget != DEFAULT_STALL_BUDGET_SECONDS:
         raise SystemExit("--lanes-stall-budget needs --lanes (the budget is the lane scheduler's)")
     # The 128-row chunks are the served default of the chunked prefill (bitwise the 32-row chunks; the 560-token chat
-    # prompt prefills in 0.81 s against 1.19 s in 32-row chunks alone, docs/PREFILL.md): the flag is accepted, the
+    # prompt prefills in 0.81 s against 1.19 s in 32-row chunks alone): the flag is accepted, the
     # teacher-forced mode has no chunk trace to extend.
     args.long_chunks = args.prefill_mode == "chunked"
     if args.agreement_reference is not None and not args.sampling:

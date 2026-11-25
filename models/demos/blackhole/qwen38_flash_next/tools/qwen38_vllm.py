@@ -3378,7 +3378,7 @@ class Qwen38ForCausalLM:
         row is the host argmax (torch.argmax returns the lowest id among equal maxima, the device greedy's tie rule), any other row the
         single path's host draw (penalties over the prompt, ``position_generator(seed, P - 1)``).  Without sampling params
         the row's output is its masked logits ``[1, 1, VOCAB_SIZE]``, as in the single path.  A pack's tokens are in the
-        tolerance class of the single path's, not bitwise (docs/PREFILL.md).  Every row here starts at 0 and needs no
+        tolerance class of the single path's, not bitwise.  Every row here starts at 0 and needs no
         state block (under MambaSpec the caller passes only such rows), so the single-path rows of the plan take the
         defaults ``start=0, layer_blocks=None``.  ``claimed``: the lanes already handed out by this prefill call."""
 

@@ -15,12 +15,12 @@ stream's partial and sum the four (P = sum_b P_b * recip_b) into the partial til
 today.  The gate's operand normalized' = bf16(u_b * recip_b) is written by the norm cores off the critical path.
 The transport kernels, the partials payload and ``low_rank_gate`` are gr_fold's / gr_read's unchanged.
 
-Rounding points that move against the chain (``docs/NUMERICS.md``): chain = bf16(bf16(x * rsqrt) * gamma/4) into
+Rounding points that move against the chain: chain = bf16(bf16(x * rsqrt) * gamma/4) into
 the matmul, the DRAM-sharded matmul's spill/reload every 8 K tiles, then the device sum; here bf16(x * gamma/4)
 into the matmul (no spill), rsqrt onto the fp32 partial, then the unchanged device sum -> bf16 -> silu; the gate's
 operand has one bf16 rounding where the chain has two.  COMPONENT class, on by default since 2026-09-27 with the
 component proof recorded in its registry entry (the 1x4 replica against the tt/ oracle, a dev tool, and the paired served
-sample; ``docs/NUMERICS.md``); it needs ``gr_read``; ``QWEN38_FUSED_OFF=gr_recip_last`` restores the fold's front.
+sample); it needs ``gr_read``; ``QWEN38_FUSED_OFF=gr_recip_last`` restores the gr_read chain.
 """
 
 from __future__ import annotations

@@ -193,9 +193,7 @@ def run_demoted(client: Client, a: list[int], b: list[int], k: int) -> tuple[lis
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.timeout(7200)
 def test_hybrid_import(mesh_device, monkeypatch) -> None:
-    monkeypatch.setenv(
-        "QWEN38_PREFILL_PACK", "0"
-    )  # the pack diverges from the B=1 chain after token 1 (docs/PREFILL.md)
+    monkeypatch.setenv("QWEN38_PREFILL_PACK", "0")  # the pack diverges from the B=1 chain after token 1
     try:
         checkpoint = checkpoint_directory()
     except FileNotFoundError as error:

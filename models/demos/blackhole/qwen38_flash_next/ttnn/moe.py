@@ -1094,7 +1094,7 @@ class Qwen38TTNNMoE:
             # ttnn.reshape of a ROW_MAJOR device tensor is a zero-cost view: a new tensor id over the SAME buffer, so a
             # tensor-id test says "different" and freeing the source frees the rows the view still reads (the
             # 2026-09-26 slab defect: the op's next DRAM allocation, its packed token-list page, landed on the input's
-            # first rows; docs/NUMERICS.md).  The source is freed only when the reshape produced its own buffer; a
+            # first rows).  The source is freed only when the reshape produced its own buffer; a
             # view's buffer is released once, through sparse_input, after the call.
             untilized_rows = sparse_input
             sparse_input = ttnn.reshape(untilized_rows, self.row_contract.moe_sparse_input)
