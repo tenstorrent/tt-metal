@@ -22,6 +22,7 @@ from ....utils.tracing import StateTensor, traced_function
 from .agmm_config import AgmmMode
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock, onehot_identity
+from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass
 
 # shift, scale -- the order `norm_out.linear` emits them in.
 NUM_OUT_MODULATION_PARAMS = 2
@@ -229,6 +230,8 @@ class MiniMaxH3Transformer3DModel(Module):
         dynamic_length: bool = False,
         agmm_mode: AgmmMode | str | None = None,
         ff1_output_dtype: ttnn.DataType | None = None,
+        # VSA: when set, bind a geometry's pre-pass with `set_vsa_prepass` and feed the sequence in its tile order.
+        vsa_config: MiniMaxH3VSAConfig | None = None,
     ) -> None:
         """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
         are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour.
@@ -342,6 +345,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     norm_row_capacity=norm_row_capacity,
                     agmm_mode=agmm_mode,
                     ff1_output_dtype=ff1_output_dtype,
+                    vsa_config=vsa_config,
                 )
                 for _ in range(num_layers)
             ]
@@ -369,6 +373,15 @@ class MiniMaxH3Transformer3DModel(Module):
             grid = get_matmul_core_grid(mesh_device)
             for name, width in (("video", video_patch_dim), ("audio", audio_in_channels)):
                 self._head_configs[name] = get_matmul_config(_HEAD_CONFIG_ROWS, hidden_size, width, grid)
+        # A plain tuple, not child modules, so the per-step heads stay out of the weight cache.
+        self._output_projections: tuple[Linear, Linear] | None = None
+
+    def set_output_projections(self, projections: tuple[Linear, Linear] | None) -> None:
+        """Run the next forwards with these `(proj_out, audio_proj_out)`; None restores the loaded ones.
+
+        Outside the traced `run_blocks`, so a swap between steps needs no recapture.
+        """
+        self._output_projections = projections
 
     def prepare_static_sources(
         self,
@@ -599,8 +612,9 @@ class MiniMaxH3Transformer3DModel(Module):
                 hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False, **ag_kwargs
             )
 
-        video_all = self.proj_out(hidden, matmul_config=self._head_configs.get("video"))
-        audio_all = self.audio_proj_out(hidden, matmul_config=self._head_configs.get("audio"))
+        proj_out, audio_proj_out = self._output_projections or (self.proj_out, self.audio_proj_out)
+        video_all = proj_out(hidden, matmul_config=self._head_configs.get("video"))
+        audio_all = audio_proj_out(hidden, matmul_config=self._head_configs.get("audio"))
         if self.sp_factor > 1:
             video_all = self.ccl_manager.all_gather(
                 video_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False, **ag_kwargs
@@ -690,6 +704,11 @@ class MiniMaxH3Transformer3DModel(Module):
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
         return hidden
+
+    def set_vsa_prepass(self, prepass: VSAPrepass | None) -> None:
+        """Bind one geometry's VSA pre-pass to every block (its constants are shared across layers); None is dense."""
+        for block in self.transformer_blocks:
+            block.attn.set_vsa_prepass(prepass)
 
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""

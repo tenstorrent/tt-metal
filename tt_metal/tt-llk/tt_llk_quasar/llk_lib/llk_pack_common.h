@@ -269,7 +269,7 @@ inline void _llk_pack_reduce_mask_clear_()
  */
 inline void _llk_packer_wait_for_math_done_()
 {
-    TTI_SEMWAIT(p_stall::STALL_TDMA, p_stall::STALL_ON_ZERO, 0, semaphore::t6_sem(semaphore::MATH_PACK));
+    TTI_SEMWAIT(p_stall::STALL_TDMA | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO, 0, semaphore::t6_sem(semaphore::MATH_PACK));
 }
 
 /**
@@ -291,6 +291,7 @@ inline void _llk_packer_set_math_semaphore_()
  * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
  * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
  * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
+ * @note Call @ref _llk_tile_regs_return_ first if this section is on loan.
  */
 template <std::uint32_t PACK_SEL, DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_pack_dest_semaphore_section_done_()

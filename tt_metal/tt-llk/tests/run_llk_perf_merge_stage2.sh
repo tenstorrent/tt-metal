@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 # Merge gate stage 2, in a leg after stage 1: re-measure this leg's regressions on both commits at 5 code positions.
-# Usage: CHIP_ARCH=<arch> THRESHOLD=<x> [MODULE_THRESHOLDS=<m=x,...>] LLK_STAGE2_DEADLINE=<epoch s>
+# Usage: CHIP_ARCH=<arch> THRESHOLD=<x> MIN_CYCLES=<n> MODULE_THRESHOLDS=<m=x,...> LLK_STAGE2_DEADLINE=<epoch s>
 #        [LLK_STAGE2_BASE_REF=<sha>] run_llk_perf_merge_stage2.sh <baseline dir> <out dir>
 set -euo pipefail
 
@@ -25,7 +25,10 @@ python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit_sha
 # candidates, which stage 2 does not reproduce.
 BASE_SHA="${LLK_STAGE2_BASE_REF:-$(cat "$OUT/stage2.base")}"
 
-COMPARE=(--threshold "${THRESHOLD:?}" --min-cycles 30 --module-threshold "${MODULE_THRESHOLDS:-}")
+# The code positions, from the one list in run_llk_perf_placement.sh: both sides measure at them and decide reads them.
+SHIFTS="$(sed -n 's/.*LLK_CODE_SHIFTS:-\([0-9 ]*\).*/\1/p' "$LLK/tests/run_llk_perf_placement.sh")"
+
+COMPARE=(--threshold "${THRESHOLD:?}" --min-cycles "${MIN_CYCLES:?}" --module-threshold "${MODULE_THRESHOLDS?}")
 
 python3 "$LLK/perf/regression_compare.py" "${COMPARE[@]}" \
   --current "$LLK/perf_data/runs/**/*.csv" --baseline "$BASELINE/**/*.csv" \
@@ -49,13 +52,14 @@ measure() {
     echo "::warning::No time left to measure on the $1 side."
     return
   fi
-  LLK_PERF_NODE_LIST="$4" LLK_STOP_AT="$3" RUNNER_TEMP="$OUT/tmp-$1" \
+  LLK_CODE_SHIFTS="$SHIFTS" LLK_PERF_NODE_LIST="$4" LLK_STOP_AT="$3" RUNNER_TEMP="$OUT/tmp-$1" \
     timeout -k 5 "$(( $3 + 15 - $(date +%s) ))" "$2/tests/run_llk_perf_placement.sh" \
     || echo "::warning::Stage 2 on the $1 side did not finish; what it missed is reported as not re-measured."
   for x in "$2"/tests/python_tests/pytest-report-placement-*.xml; do
     [[ -f $x ]] && mv "$x" "$OUT/stage2.junit-$1-$(basename "$x")"
   done
-  for d in "$2"/perf_data/runs/p{0,4,24,44,60}; do
+  for s in $SHIFTS; do
+    d="$2/perf_data/runs/p$s"
     [[ -d $d ]] && mv "$d" "$d-1"
   done
   # Both sides run the PR's node ids; a test the base does not have (renamed, new) is skipped there.
@@ -97,4 +101,4 @@ fi
 mkdir -p "$BASE/tt_metal/tt-llk/perf_data/runs"
 python3 "$LLK/perf/placement_check.py" decide "${COMPARE[@]}" --candidates "$OUT/stage1.regressions.csv" \
   --baseline "$BASE/tt_metal/tt-llk/perf_data/runs" --current "$LLK/perf_data/runs" \
-  --over-cap "$OUT/nodes.over" --arch "$CHIP_ARCH" --report "$OUT/stage2.md" || true
+  --over-cap "$OUT/nodes.over" --positions "$SHIFTS" --arch "$CHIP_ARCH" --report "$OUT/stage2.md" || true

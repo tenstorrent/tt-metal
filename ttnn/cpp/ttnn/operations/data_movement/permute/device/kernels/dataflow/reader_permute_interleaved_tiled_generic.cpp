@@ -222,7 +222,10 @@ void kernel_main() {
                         uint64_t final_src_addr = s.get_noc_addr((uint32_t)tile, total_offset);
                         uint32_t l1_base = l1_col_base + cb_w_offset;
                         if ((final_src_addr & read_alignment_minus_one) != (l1_base & read_alignment_minus_one)) {
-                            uint32_t misaligned_addr = l1_base + misalignment;
+                            // The gap is a multiple of SUBTILE_LINE_BYTES and at most misalignment, so the landing
+                            // spot fits in the cb_in entry's spare bytes.
+                            uint32_t misaligned_addr =
+                                l1_base + (((uint32_t)final_src_addr - l1_base) & read_alignment_minus_one);
                             if constexpr (bounce_in_scratchpad) {
                                 // Land the line at the source's offset within an aligned window of the scratchpad,
                                 // as the DFB entries here hold exactly one tile and have no room for it.

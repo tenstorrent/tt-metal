@@ -317,8 +317,8 @@ triage:
 
 llk:
   pr_gate:
-    wh_n150_civ2: 40
-    bh_p150b_civ2_viommu: 55  # +10: the SFPU ULP PR check (llk_pr_gate_tests.yaml)
+    wh_n150_civ2: 45  # +15: the SFPU ULP PR check (llk_pr_gate_tests.yaml)
+    bh_p150b_civ2_viommu: 60  # +15: the SFPU ULP PR check (llk_pr_gate_tests.yaml)
     sim_quasar_xl: 30
     cpu_medium: 10
   sanity:
@@ -339,6 +339,7 @@ llk:
     bh_p150b_civ2: 1200
   # Stage 2 of the LLK perf gate (llk-perf-gate.yaml): runs only when stage 1 finds a regression.
   perf_placement:
+    wh_n150_civ2: 60
     bh_p150b_civ2: 60
   bit_exact:
     wh_n150_civ2: 90

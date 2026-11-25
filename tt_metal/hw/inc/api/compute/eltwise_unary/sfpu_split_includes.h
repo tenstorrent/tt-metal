@@ -333,6 +333,10 @@
 #include "api/compute/sub_int_sfpu.h"
 #endif
 
+#ifdef SFPU_OP_BINARY_QUANT_INCLUDE
+#include "api/compute/quantization.h"
+#endif
+
 #ifdef SFPU_OP_SILU_GLU_INCLUDE
 #include "api/compute/silu_glu.h"
 #endif
