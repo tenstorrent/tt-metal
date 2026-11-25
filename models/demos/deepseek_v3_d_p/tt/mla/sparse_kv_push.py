@@ -215,10 +215,14 @@ class SparseKvPushPlanner:
         chunk_start: int = 0,
         chunk_start_tensor: ttnn.Tensor | None = None,
         defer_gather: bool = False,
+        core_grid: ttnn.CoreRangeSet | None = None,
     ) -> SparseKvPushPlan:
         """The plan for `indices`, cached across the layers that reuse them, one per chunk of a packed forward. On a
         traced replay the plan op reads the chunk start from chunk_start_tensor on device, so one cached plan serves
         any chunk at that metadata slot; eagerly it takes chunk_start as a runtime arg.
+
+        core_grid: the cores (one rectangle) to build a new plan on, e.g. a loaded sub-device's; the whole grid by
+        default. It does not change the plan, so it is not part of the cache key.
 
         defer_gather leaves a new plan's table gather pending (see SparseKvPushPlan.run_gather); without it, a pending
         gather runs now."""
@@ -229,14 +233,21 @@ class SparseKvPushPlanner:
         plan = self._plans.get(key)
         if plan is None:
             plan = self._build(
-                len(self._plans), indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor
+                len(self._plans),
+                indices,
+                stripe_chunk,
+                page_bytes,
+                max_rows,
+                chunk_start,
+                chunk_start_tensor,
+                core_grid,
             )
             self._plans[key] = plan
         if not defer_gather:
             plan.run_gather()
         return plan
 
-    def _build(self, slot, indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor):
+    def _build(self, slot, indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor, core_grid):
         n = self.mesh_device.get_num_devices()
         table, compact_indices = ttnn.experimental.sparse_push_plan(
             indices,
@@ -245,6 +256,7 @@ class SparseKvPushPlanner:
             page_bytes=page_bytes,
             chunk_start=None if chunk_start_tensor is not None else chunk_start,
             chunk_start_tensor=chunk_start_tensor,
+            core_range=core_grid.ranges()[0] if core_grid is not None else None,
         )
         self.builds += 1
         gathered_rows = table.shape[2] * n

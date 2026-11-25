@@ -2542,7 +2542,7 @@ class ttMLA:
             return dense
         return self._push.push_buffer(parity, dense, **self._push_geometry)
 
-    def _sparse_push_plan(self, indices, kv_actual_isl, metadata, defer_gather=False):
+    def _sparse_push_plan(self, indices, kv_actual_isl, metadata, defer_gather=False, core_grid=None):
         """The push plan for `indices`; the planner caches it across the layers that reuse them."""
         return self._push.plan(
             indices,
@@ -2552,6 +2552,7 @@ class ttMLA:
             chunk_start=kv_actual_isl or 0,
             chunk_start_tensor=metadata[1] if metadata is not None else None,
             defer_gather=defer_gather,
+            core_grid=core_grid,
         )
 
     def _other_push_parity(self, parity):
@@ -2752,6 +2753,7 @@ class ttMLA:
         cache_batch_idx,
         populated_global,
         seq_len_local,
+        kv_actual_isl=0,
         metadata=None,
     ):
         """Run the closed two-program overlap region and return joined branch outputs.
@@ -2761,6 +2763,13 @@ class ttMLA:
         """
         resources = self._sparse_mla_overlap
         assert resources is not None
+        # The next layer's push plan needs only this layer's top-k (as is: no TP redistribution).
+        plan_early = (
+            self._push_next_layer
+            and self._push.presend
+            and self._push_prefetch_grids is not None
+            and not selection_state.requires_tp_redistribution
+        )
         loaded = False
         failed = False
         try:
@@ -2785,6 +2794,13 @@ class ttMLA:
                     overlap_resources=resources,
                     metadata=metadata,
                 )
+                # Build that plan here, on the top-k cores after top-k, while the KV gather finishes: one sub-device
+                # switch fewer. Its table gather stays pending (it runs beside attention); _presend finds the plan
+                # in the planner's cache.
+                if plan_early:
+                    self._sparse_push_plan(
+                        local_indices, kv_actual_isl, metadata, defer_gather=True, core_grid=resources.topk_core_grid
+                    )
         except Exception:
             failed = True
             raise
@@ -2833,6 +2849,7 @@ class ttMLA:
             cache_batch_idx=cache_batch_idx,
             populated_global=populated_global,
             seq_len_local=seq_len_local,
+            kv_actual_isl=kv_actual_isl,
             metadata=metadata,
         )
         # This full layer reads the dense gather buffer (parity None).
