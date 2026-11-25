@@ -290,9 +290,6 @@ inline void _llk_math_eltwise_binary_init_(
         MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi || ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL,
         "Math fidelity larger than LoFi only works with Eltwise MUL");
     const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
-    // LLK_ASSERT(
-    //     reuse_dest == EltwiseBinaryReuseDestType::NONE || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary destination reuse requires 16-row
-    //     faces");
     LLK_ASSERT(tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary four-face tiles require 16-row faces");
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_init_", tensor_shape);
     _set_tile_shape_idx_gpr_(padded_tile_rows(tensor_shape));

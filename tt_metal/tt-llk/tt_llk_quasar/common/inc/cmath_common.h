@@ -331,7 +331,6 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod, const std::uint8_t n
     // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch), so we emit
     // 16 / ELTWISE_MATH_ROWS MOVs to cover all 16 rows of a face — 4row_arch needs twice as many
     // as Quasar. The dest counter handles face progression.
-    // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
     static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "move_d2a_fixed_face supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCA_VLD tests the bank that MOVD2A will write.
@@ -353,7 +352,6 @@ inline void move_d2b_fixed_face(const std::uint8_t addrmod, const std::uint8_t n
     // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch), so we emit
     // 16 / ELTWISE_MATH_ROWS MOVs to cover all 16 rows of a face — 4row_arch needs twice as many
     // as Quasar. The dest counter handles face progression.
-    // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
     static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "move_d2b_fixed_face supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCB_VLD tests the bank that MOVD2B will write.

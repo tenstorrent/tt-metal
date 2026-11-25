@@ -63,21 +63,12 @@ from helpers.tile_constants import (
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test, result_tensor
 
-# INPUT_DIMENSIONS = [
-#     [512, 32],
-# ]
-# OUTPUT_DIMENSIONS = [
-#     [128, 32],
-# ]
-
 REUSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
     ],
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
-
-# TILE_DIMENSIONS = [32, 32]
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
