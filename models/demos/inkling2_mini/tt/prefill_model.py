@@ -223,7 +223,7 @@ EXPERT_ROW_GROUPS = 2  # 4: no faster on prose8k
 EXPERT_GRID_Y = 10  # all 10 worker rows, two 5-row groups (a smaller grid or older build: the next entry)
 
 
-def _has_unified(dev, w_gate_up, w_down, fidelity):
+def _has_unified(dev, w_gate_up, w_down, fidelity, w_up=None):
     """Does this build's deepseek_prefill.unified_routed_expert_moe take stacked expert weights (the same
     [1, E, K, 2I] tensor in every gate / up slot) at this math fidelity (precise mode)? A no-expert call: older
     builds reject the shapes or any fidelity but LoFi. Returns None (no), or the op's extra keywords: core_grid_x
@@ -239,7 +239,7 @@ def _has_unified(dev, w_gate_up, w_down, fidelity):
     ckc = ttnn.init_device_compute_kernel_config(
         dev.arch(), math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=True
     )
-    e = [w_gate_up] * NUM_EXPERTS
+    e, u = [w_gate_up] * NUM_EXPERTS, [w_gate_up if w_up is None else w_up] * NUM_EXPERTS
     for kw in (
         {"core_grid_x": EXPERT_GRID_X, "core_grid_y": EXPERT_GRID_Y, "core_row_groups": EXPERT_ROW_GROUPS},
         {"core_grid_x": EXPERT_GRID_X, "core_row_groups": EXPERT_ROW_GROUPS},
@@ -247,7 +247,7 @@ def _has_unified(dev, w_gate_up, w_down, fidelity):
         {},
     ):
         try:
-            op(x, u32([0] * NUM_EXPERTS), u32([0] * NUM_EXPERTS), u32(list(range(NUM_EXPERTS))), e, e,
+            op(x, u32([0] * NUM_EXPERTS), u32([0] * NUM_EXPERTS), u32(list(range(NUM_EXPERTS))), e, u,
                [w_down] * NUM_EXPERTS, 32, compute_kernel_config=ckc, activation=ttnn.RoutedExpertActivation.SituGlu,
                x_row_index=u32([32] * 64), output_row_major=True, zero_output_row=32, **kw)  # fmt: skip
             return kw
@@ -421,9 +421,12 @@ class _LayerPF:
         rw = ttnn.to_torch(moe.router_w).float().reshape(HIDDEN, NUM_EXPERTS)
         self.router_w = put(rw.view(1, 1, HIDDEN, NUM_EXPERTS))
         self.router_bias_row = ttnn.to_torch(moe.router_bias).float().reshape(1, 1, 1, NUM_EXPERTS)
+        # PF-layout experts (a decode cache): the plain tensors are rebuilt on the device for each expert step
+        # (Inkling2Prefill._expert_weights, tt/pf_tiles.py)
+        self.pf_moe = moe if getattr(getattr(moe, "fused", None), "pf", False) else None
         self.w_gate_up = moe.w_gate_up if hasattr(moe, "w_gate_up") else dev_of("experts.w_gate_up")
         self.w_down = moe.w_down
-        for t in (self.w_gate_up, self.w_down):
+        for t in () if self.pf_moe is not None else (self.w_gate_up, self.w_down):
             if _is_sticks(t) or len(t.shape) != 4 or t.shape[1] != NUM_EXPERTS or t.layout != ttnn.TILE_LAYOUT:
                 raise ValueError(
                     f"layer {L}: prefill needs TILE expert weights [1, {NUM_EXPERTS}, K, N], got {tuple(t.shape)} "
@@ -524,11 +527,14 @@ class Inkling2Prefill:
         fids = [expert_fidelity] if expert_fidelity else [ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.LoFi]
         self.expert_fidelity = fids[0]
         if experts in ("auto", "unified"):
+            gate, up, down, tmp = self._expert_weights(self.layers[0])
             for fid in fids:
-                kw = _has_unified(dev, self.layers[0].w_gate_up, self.layers[0].w_down, fid)
+                kw = _has_unified(dev, gate, down, fid, up)
                 if kw is not None:
                     self.expert_fidelity = fid
                     break
+            for t in tmp:
+                ttnn.deallocate(t)
             op = "ttnn.experimental.deepseek_prefill.unified_routed_expert_moe"
             if kw is None and experts == "unified":
                 raise RuntimeError(f"Inkling2Prefill(experts='unified'): this build's {op} is missing or rejects stacked "
@@ -1159,6 +1165,7 @@ class Inkling2Prefill:
         b = self._route(indices, n, t)  # host sync (a segment boundary when traced)
         if self.unified:
             return self._experts_unified(lp, x_rm, b, weights, t)
+        assert lp.pf_moe is None, "PF-layout experts need the unified expert op"
         nslot = b["nslot"]
         xs = ttnn.reshape(ttnn.embedding(b["gi"], x_rm, layout=ttnn.TILE_LAYOUT), [1, nslot, self.gm, HIDDEN])
         self._tick("moe.dispatch")
@@ -1169,15 +1176,17 @@ class Inkling2Prefill:
         the softcapped SwiGLU): expert e reads its region of rows (token rows through the row index), the output
         rows are gathered back per (k, token) and weighted -> [1,1,T,C] bf16. Pad tokens read the zeroed spare
         row."""
-        e = [lp.w_gate_up] * NUM_EXPERTS
+        gate, up, down, tmp = self._expert_weights(lp)
+        if tmp:
+            self._tick("moe.rebuild")
         y = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
             x_rm,
             b["u_off"],
             b["u_cnt"],
             self.c_etab,
-            e,
-            e,
-            [lp.w_down] * NUM_EXPERTS,
+            [gate] * NUM_EXPERTS,
+            [up] * NUM_EXPERTS,
+            [down] * NUM_EXPERTS,
             t,
             compute_kernel_config=self.unified_ckc,
             activation=ttnn.RoutedExpertActivation.SituGlu,
@@ -1186,6 +1195,8 @@ class Inkling2Prefill:
             zero_output_row=b["u_rows"] - 32,
             **self.unified_kw,
         )
+        for w in tmp:  # (the queue keeps the frees behind the expert program)
+            ttnn.deallocate(w)
         self._tick("moe.experts")
         if self._pfcomb is not None and PfHandoff.ok(weights):  # bf16 TILE DRAM
             out = self._pfcomb(y, b["bi"], weights)  # [1,1,T,8]: the kernel reads column k (no permute)
@@ -1199,6 +1210,20 @@ class Inkling2Prefill:
         yb = ttnn.reshape(ttnn.embedding(b["bi"], y, layout=ttnn.TILE_LAYOUT), [1, TOP_K, t, HIDDEN])
         ttnn.deallocate(y)
         return _bf16(ttnn.sum(ttnn.multiply(yb, wk), dim=1, keepdim=True))
+
+    def _expert_weights(self, lp):
+        """(gate, up, down, tensors to free after the step) of a layer for the unified expert op. A PF-layout
+        cache: the plain tensors, rebuilt from the PF tensors with whole-tile moves (tt/pf_tiles.py), so a process
+        that decodes on the PF cache can prefill in chunks. They take DRAM only during the layer's expert step."""
+        if lp.pf_moe is None:
+            return lp.w_gate_up, lp.w_gate_up, lp.w_down, []
+        from models.demos.inkling2_mini.tt import pf_tiles
+
+        moe = lp.pf_moe
+        gate_up = pf_tiles.gate_up(moe.w_gate_up, moe.fused.gu_x)
+        down = pf_tiles.down(moe.w_down, moe.fused.dn_x)
+        self.n_rebuilt = getattr(self, "n_rebuilt", 0) + 1
+        return gate_up, gate_up, down, [gate_up, down]
 
     def _urows(self, t):
         """Fixed row count of the unified expert buffer: tile-aligned expert regions (sum < 8 t + 128 * 31) + a
