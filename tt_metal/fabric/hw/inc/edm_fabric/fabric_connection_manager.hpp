@@ -98,11 +98,9 @@ public:
     static FabricConnectionManager build_from_binding(FabricConnectionBindingToken token) {
         ASSERT(token.num_targets() == 2);
         FabricConnectionManager connection_manager;
-        connection_manager.connection_flags = FORWARD_CONNECTION_FLAG_MASK | BACKWARD_CONNECTION_FLAG_MASK;
-        connection_manager.forward_fabric_sender = build_sender_of_target(token, 0);
-        start_open<build_mode>(connection_manager.forward_fabric_sender);
-        connection_manager.backward_fabric_sender = build_sender_of_target(token, 1);
-        start_open<build_mode>(connection_manager.backward_fabric_sender);
+        connection_manager.connection_flags = 0;
+        connection_manager.add_forward_connection<build_mode>(token, 0);
+        connection_manager.add_backward_connection<build_mode>(token, 1);
         connection_manager.finish_open<build_mode>();
         return connection_manager;
     }
@@ -131,6 +129,24 @@ private:
         FabricConnectionBindingToken token, uint32_t target_index) {
         std::size_t arg_idx = tt::tt_fabric::fabric_connection_binding::target_rta_word(token, target_index);
         return tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+    }
+
+    // Makes target `target_index` of `token` the forward connection, and sends its open request if `build_mode` opens
+    // connections.
+    template <BuildFromArgsMode build_mode>
+    void add_forward_connection(FabricConnectionBindingToken token, uint32_t target_index) {
+        connection_flags |= FORWARD_CONNECTION_FLAG_MASK;
+        forward_fabric_sender = build_sender_of_target(token, target_index);
+        start_open<build_mode>(forward_fabric_sender);
+    }
+
+    // Makes target `target_index` of `token` the backward connection, and sends its open request if `build_mode`
+    // opens connections.
+    template <BuildFromArgsMode build_mode>
+    void add_backward_connection(FabricConnectionBindingToken token, uint32_t target_index) {
+        connection_flags |= BACKWARD_CONNECTION_FLAG_MASK;
+        backward_fabric_sender = build_sender_of_target(token, target_index);
+        start_open<build_mode>(backward_fabric_sender);
     }
 
     // Sends the open request of a just-built connection if `build_mode` opens connections.
