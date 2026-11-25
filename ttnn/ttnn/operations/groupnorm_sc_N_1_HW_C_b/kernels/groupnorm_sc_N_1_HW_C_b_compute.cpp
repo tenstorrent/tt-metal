@@ -22,7 +22,13 @@
 // Every helper keeps its default INPUT_AND_OUTPUT data-format reconfig; the one boot is the matmul
 // contract compute_kernel_hw_startup<SrcOrder::Reverse>.
 
+// Debug builds only (watcher / LLK asserts, i.e. --dev): the asserts inflate TRISC text, and GCC's IPA
+// constant-propagation clones of the per-chunk wrappers then overflow the 70 688 B kernel-config ring on the RM
+// root binary (measured up to 3.5 KB over). Production builds keep the clones: measured faster (sharded TILE
+// vae_16384x512 70.0 us vs 78.0 us without them).
+#if defined(WATCHER_ENABLED) || defined(WATCHER_NOINLINE) || defined(ENABLE_LLK_ASSERT)
 #pragma GCC optimize("no-ipa-cp-clone")
+#endif
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
