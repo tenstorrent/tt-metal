@@ -11,6 +11,9 @@ from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_w
 
 import ttnn
 
+# The Quasar matmul takes its own program config classes, bound on the C++ module.
+quasar_ops = ttnn._ttnn.operations.experimental.quasar
+
 
 def largest_divisor_at_most(value, limit):
     return max(divisor for divisor in range(1, min(value, limit) + 1) if value % divisor == 0)
@@ -101,7 +104,7 @@ def update_model_config(config, batch_size, device):
             block_w=dim_t__x,
             inplace=False,
         ),
-        "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "query_key_value_matmul_program_config": quasar_ops.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=dim_t__x,
             out_subblock_h=1,
@@ -111,7 +114,7 @@ def update_model_config(config, batch_size, device):
             transpose_mcast=False,
             fused_activation=None,
         ),
-        "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+        "query_by_key_matmul_program_config": quasar_ops.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=head_size_t,
             out_subblock_h=1,
@@ -125,7 +128,7 @@ def update_model_config(config, batch_size, device):
             block_h=head_seqL_t__x,
             block_w=seqL_t,
         ),
-        "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+        "attention_probabilities_by_value_matmul_program_config": quasar_ops.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=seqL_t,
             out_subblock_h=1,
@@ -133,7 +136,7 @@ def update_model_config(config, batch_size, device):
             per_core_M=head_seqL_t__x,
             per_core_N=head_size_t,
         ),
-        "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "self_output_matmul_program_config": quasar_ops.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=dim_t__x,
             out_subblock_h=1,
@@ -150,7 +153,7 @@ def update_model_config(config, batch_size, device):
             block_w=dim_t__x,
             inplace=False,
         ),
-        "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "ff1_matmul_program_config": quasar_ops.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=dim_t__x,
             out_subblock_h=1,
@@ -159,9 +162,9 @@ def update_model_config(config, batch_size, device):
             per_core_M=seqL_t__y,
             per_core_N=dim_t__x * 4,
             transpose_mcast=False,
-            fused_activation=(ttnn.UnaryOpType.GELU, True),
+            fused_activation=None,
         ),
-        "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "ff2_matmul_program_config": quasar_ops.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=dim_t__x * 4,
             out_subblock_h=1,
@@ -171,7 +174,7 @@ def update_model_config(config, batch_size, device):
             transpose_mcast=False,
             fused_activation=None,
         ),
-        "classifer_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "classifer_matmul_program_config": quasar_ops.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=dim_t__x // 2,
             out_subblock_h=1,
@@ -268,16 +271,29 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     stride_h = patch_size
     stride_w = 1
 
-    folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w, collapse_output=True)  # 1568, 1024
+    folded_channels = img_c * stride_h * stride_w
+    if pixel_values.is_sharded():
+        # Without input_is_nhwc the sharded fold reads the input as NCHW.
+        fold_options = dict(input_is_nhwc=True, output_shape=[batch_size, patch_count, patch_count, folded_channels])
+    else:
+        fold_options = {}
+    folded_pixel_values = ttnn.experimental.quasar.fold(pixel_values, stride_h, stride_w, **fold_options)
     ttnn.deallocate(pixel_values)
-    folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=config.memory_configs["embeddings"])
+    folded_pixel_values = ttnn.experimental.quasar.reshape(
+        folded_pixel_values, (1, 1, batch_size * patch_count_all, folded_channels)
+    )
+    folded_pixel_values = ttnn.experimental.quasar.to_memory_config(
+        folded_pixel_values, memory_config=config.memory_configs["embeddings"]
+    )
     # Convert back to interleaved or otherwise to_layout will fail
-    folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    folded_pixel_values = ttnn.experimental.quasar.to_layout(
+        folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
 
     if unittest_check:
         parameters = parameters.vit.embeddings.patch_embeddings
 
-    patch_embedding_output = ttnn.linear(
+    patch_embedding_output = ttnn.experimental.quasar.linear(
         folded_pixel_values,
         parameters.projection.weight,
         bias=parameters.projection.bias,
@@ -287,8 +303,10 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
         compute_kernel_config=config.program_configs["matmul_compute_config"],
     )
 
-    patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
-    patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, patch_size_sq_trpl))
+    patch_embedding_output = ttnn.experimental.quasar.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
+    patch_embedding_output = ttnn.experimental.quasar.reshape(
+        patch_embedding_output, (batch_size, patch_count_all, patch_size_sq_trpl)
+    )
 
     return patch_embedding_output
 
@@ -305,8 +323,8 @@ def vit_embeddings(
 
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters=parameters.patch_embeddings)
     embedding_output = ttnn.concat([cls_token, patch_embeddings], -2, memory_config=config.memory_configs["embeddings"])
-    embedding_output = ttnn.to_layout(embedding_output, layout=ttnn.TILE_LAYOUT)
-    embedding_output = ttnn.add(
+    embedding_output = ttnn.experimental.quasar.to_layout(embedding_output, layout=ttnn.TILE_LAYOUT)
+    embedding_output = ttnn.experimental.quasar.add(
         embedding_output, position_embeddings, memory_config=config.memory_configs["embeddings"], dtype=ttnn.bfloat16
     )
 
@@ -321,11 +339,15 @@ def split_heads_interleaved(query_key_value, num_heads, head_size):
     so the heads are split here instead.
     """
     batch_size, sequence_size, _ = query_key_value.shape
-    heads = ttnn.reshape(query_key_value, (batch_size, sequence_size, num_heads, 3 * head_size))
+    heads = ttnn.experimental.quasar.reshape(query_key_value, (batch_size, sequence_size, num_heads, 3 * head_size))
     heads = ttnn.permute(heads, (0, 2, 1, 3))
-    query = ttnn.slice(heads, (0, 0, 0, 0), (batch_size, num_heads, sequence_size, head_size))
-    key = ttnn.slice(heads, (0, 0, 0, head_size), (batch_size, num_heads, sequence_size, 2 * head_size))
-    value = ttnn.slice(heads, (0, 0, 0, 2 * head_size), (batch_size, num_heads, sequence_size, 3 * head_size))
+    query = ttnn.experimental.quasar.slice(heads, (0, 0, 0, 0), (batch_size, num_heads, sequence_size, head_size))
+    key = ttnn.experimental.quasar.slice(
+        heads, (0, 0, 0, head_size), (batch_size, num_heads, sequence_size, 2 * head_size)
+    )
+    value = ttnn.experimental.quasar.slice(
+        heads, (0, 0, 0, 2 * head_size), (batch_size, num_heads, sequence_size, 3 * head_size)
+    )
     ttnn.deallocate(heads)
     return query, ttnn.permute(key, (0, 1, 3, 2)), value
 
@@ -339,7 +361,7 @@ def vit_attention(
     *_, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
 
-    query_key_value = ttnn.linear(
+    query_key_value = ttnn.experimental.quasar.linear(
         hidden_states,
         parameters.query_key_value.weight,
         bias=parameters.query_key_value.bias,
@@ -364,9 +386,9 @@ def vit_attention(
     ttnn.deallocate(query_key_value)
     ttnn.deallocate(hidden_states)
     if config.should_reallocate_in_attention:
-        value = ttnn.reallocate(value)
+        value = ttnn.experimental.quasar.reallocate(value)
 
-    attention_scores = ttnn.matmul(
+    attention_scores = ttnn.experimental.quasar.matmul(
         query,
         key,
         memory_config=config.memory_configs["attention_heads"],
@@ -378,17 +400,18 @@ def vit_attention(
     ttnn.deallocate(key)
 
     scale = 1.0 / (head_size**0.5)
-    attention_scores = ttnn.mul_(
+    attention_scores = ttnn.experimental.quasar.multiply_(
         attention_scores,
         scale,
     )
 
+    # The Quasar softmax rejects a padded last dimension, and the 197 keys are padded to 224.
     attention_probs = ttnn.softmax_in_place(
         attention_scores,
         program_config=config.program_configs["softmax_program_config"],
     )
 
-    context_layer = ttnn.matmul(
+    context_layer = ttnn.experimental.quasar.matmul(
         attention_probs,
         value,
         memory_config=config.memory_configs["attention_heads"],
@@ -404,7 +427,7 @@ def vit_attention(
         memory_config=config.memory_configs["encoder"],
     )
 
-    self_output = ttnn.linear(
+    self_output = ttnn.experimental.quasar.linear(
         context_layer,
         parameters.o_proj.weight,
         bias=parameters.o_proj.bias,
@@ -415,7 +438,7 @@ def vit_attention(
     )
     ttnn.deallocate(context_layer)
     if config.should_reallocate_in_attention:
-        self_output = ttnn.reallocate(self_output)
+        self_output = ttnn.experimental.quasar.reallocate(self_output)
 
     return self_output
 
@@ -426,7 +449,7 @@ def vit_mlp(
     *,
     parameters,
 ):
-    intermediate = ttnn.linear(
+    intermediate = ttnn.experimental.quasar.linear(
         hidden_states,
         parameters.fc1.weight,
         bias=parameters.fc1.bias,
@@ -434,12 +457,12 @@ def vit_mlp(
         dtype=ttnn.bfloat16,
         program_config=config.program_configs["ff1_matmul_program_config"],
         compute_kernel_config=config.program_configs["matmul_compute_config"],
-        # The sharded ff1 program config fuses GELU; without it the activation is passed explicitly.
-        activation="gelu" if config.in_dram else None,
     )
     ttnn.deallocate(hidden_states)
+    # The Quasar 2D matmul fuses only RELU, so GELU runs after it, in place.
+    ttnn.gelu(intermediate, output_tensor=intermediate)
 
-    output = ttnn.linear(
+    output = ttnn.experimental.quasar.linear(
         intermediate,
         parameters.fc2.weight,
         bias=parameters.fc2.bias,
@@ -461,7 +484,9 @@ def vit_feedforward(
     parameters,
 ):
     output = vit_mlp(config, hidden_states, parameters=parameters.mlp)
-    output = ttnn.add(output, attention_output, memory_config=config.memory_configs["encoder"], dtype=ttnn.bfloat16)
+    output = ttnn.experimental.quasar.add(
+        output, attention_output, memory_config=config.memory_configs["encoder"], dtype=ttnn.bfloat16
+    )
     ttnn.deallocate(attention_output)
     return output
 
@@ -486,7 +511,7 @@ def vit_layer(
         parameters=parameters.attention,
     )
 
-    multi_head_attention_output = ttnn.add(
+    multi_head_attention_output = ttnn.experimental.quasar.add(
         multi_head_attention_output,
         hidden_states,
         memory_config=config.memory_configs["encoder"],
@@ -525,7 +550,7 @@ def vit_encoder(
         TILE_HEIGHT = 32
         emb_N, emb_S, emb_D = embeddings.shape
         emb_S = (((emb_S - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT
-        encoder_input = ttnn.to_memory_config(
+        encoder_input = ttnn.experimental.quasar.to_memory_config(
             embeddings, memory_config=activation_memory_config(config, [emb_N, emb_S, emb_D]), dtype=ttnn.bfloat16
         )
         ttnn.deallocate(embeddings)
@@ -567,7 +592,7 @@ def vit(
     )
 
     # Classifier
-    classifier_output = ttnn.linear(
+    classifier_output = ttnn.experimental.quasar.linear(
         output,
         parameters.classifier.weight,
         bias=parameters.classifier.bias,
