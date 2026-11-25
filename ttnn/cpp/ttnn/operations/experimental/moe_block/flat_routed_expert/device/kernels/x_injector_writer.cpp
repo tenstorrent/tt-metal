@@ -45,11 +45,56 @@ void kernel_main() {
     constexpr uint32_t blk_bytes = mt * kblk * tb, piece = kblk * tb;
     const uint32_t ring = moe_block_args::arg(0);
     const uint32_t hxy = moe_block_args::arg(1);
-    const uint64_t head_xarr = get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(xarr_sem));
+    // (MEASUREMENT FLAT_X_MCAST=1: x multicast over the whole rectangle - RT 1 its NOC0 corners, 8 bits each: start x,
+    // y, end x, y - no snake; every gate/up core reports its freed blocks into its own word here (RT 2 + 4 i), the
+    // slots free once the slowest has; the XARR count multicast from the last word)
+    // (bits: 1 multicast, 2 linked within a batch, 4 posted data + the XARR multicast behind it on the same VC;
+    // x_mcast_vc: the VC, 0 the default multicast VC)
+    constexpr uint32_t mcast_bits = get_named_compile_time_arg_val("x_mcast");
+    constexpr bool mcast = (mcast_bits & 1) != 0, mc_linked = (mcast_bits & 2) != 0, mc_posted = (mcast_bits & 4) != 0;
+    constexpr uint32_t mc_vc = get_named_compile_time_arg_val("x_mcast_vc")
+                                   ? get_named_compile_time_arg_val("x_mcast_vc")
+                                   : NOC_MULTICAST_WRITE_VC;
+    constexpr uint32_t kWords = 64;
+    const uint32_t msx = hxy >> 24, msy = (hxy >> 16) & 0xFF, mex = (hxy >> 8) & 0xFF, mey = hxy & 0xFF;
+    const uint32_t ndst = mcast ? (mex - msx + 1) * (mey - msy + 1) : 1;
+    const uint64_t head_xarr = mcast ? get_noc_multicast_addr(msx, msy, mex, mey, get_semaphore(xarr_sem))
+                                     : get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(xarr_sem));
     volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(moe_block_args::arg(2));
     // the freed word restarts every launch: zeroed here (the head only bumps it after consuming x this relay sent in
     // this launch), so no host write is needed between launches
-    *freed = 0;
+    for (uint32_t i = 0; i < (mcast ? kWords : 1u); ++i) {
+        freed[i] = 0;
+    }
+    // (16-byte aligned, as the semaphore it is multicast to: the NoC needs source and destination alike modulo 16)
+    volatile tt_l1_ptr uint32_t* xarr_word = freed + kWords - 4;
+    uint32_t xarr_val = 0;
+    auto freed_min = [&]() {
+        uint32_t m = freed[0];
+        for (uint32_t i = 1; i < ndst; ++i) {
+            m = freed[i] < m ? freed[i] : m;
+        }
+        return m;
+    };
+    auto send_xarr = [&]() {
+        *xarr_word = xarr_val;
+        while (!noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
+        }
+        ncrisc_noc_fast_write_any_len<noc_mode>(
+            noc_index,
+            write_cmd_buf,
+            reinterpret_cast<uint32_t>(xarr_word),
+            head_xarr,
+            4,
+            mc_vc,
+            true,
+            false,
+            ndst,
+            true);
+    };
+    // (multicast batches retire on the write-ack count: the software count after each batch is its target)
+    uint32_t ack_target[8] = {0};
+    ZZ_COUNTER(zz_ack);
     const uint32_t land = moe_block_args::arg(4), land_slots = moe_block_args::arg(5);
     const uint32_t helper_xy[kXnh] = {moe_block_args::arg(3), moe_block_args::arg(6)};
     // The schedule: the super-blocks follow from the active experts' sub-blocks (RT 7.. are the expert_schedule.hpp
@@ -68,6 +113,20 @@ void kernel_main() {
         // right after issuing, the last write can still sit in the command buffer and the id reads "done" early)
         while (cb_done < cb_iss && !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
         }
+        if constexpr (mcast) {
+            auto acked = [&](uint32_t b) {
+                return int32_t(NOC_STATUS_READ_REG(noc_index, NIU_MST_WR_ACK_RECEIVED) - ack_target[b % 8]) >= 0;
+            };
+            while (cb_done < cb_iss && (cb_iss - cb_done > keep || acked(cb_done))) {
+                ZZ_WAIT(zz_ack, while (!acked(cb_done)){});
+                if constexpr (!mc_posted) {
+                    xarr_val += per_sb * flat_options::x_chain_pieces;
+                    send_xarr();
+                }
+                ++cb_done;
+            }
+            return;
+        }
         while (cb_done < cb_iss && (cb_iss - cb_done > keep || ncrisc_noc_nonposted_write_with_transaction_id_flushed(
                                                                    noc_index, 1 + cb_done % kChainDepth))) {
             while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, 1 + cb_done % kChainDepth)) {
@@ -77,6 +136,8 @@ void kernel_main() {
         }
     };
     ZZ_COUNTER(zz_data);
+    ZZ_COUNTER(zz_issue);
+    ZZ_COUNTER(zz_flush);
     ZZ_COUNTER(zz_slots);
     [[maybe_unused]] const uint32_t zz_start = ZZ_NOW();
     for (uint32_t b = 0; b < num_sb; ++b) {
@@ -98,7 +159,7 @@ void kernel_main() {
         // never sees the last batch and never frees one (deadlock).
         invalidate_l1_cache();
         ZZ_WAIT(
-            zz_slots, while (sent + per_sb > *freed + x_slots) {
+            zz_slots, while (sent + per_sb > (mcast ? freed_min() : *freed) + x_slots) {
                 chain_retire(kChainDepth);
                 invalidate_l1_cache();
             });
@@ -107,26 +168,66 @@ void kernel_main() {
         chain_retire(kChainDepth - 1);  // (room for this batch's id)
         // (a short last sub-block: only its row tiles holding tokens go; the head's XARR still counts every piece)
         const uint32_t lr = sub_block_row_tiles(schedule, b / nsb);
+        [[maybe_unused]] const uint32_t zz_i0 = ZZ_NOW();
         for (uint32_t k = 0; k < per_sb; ++k) {
             const uint32_t dst = ring + ((sent + k) % x_slots) * blk_bytes;
             for (uint32_t m = 0; m < lr; ++m) {
+                if constexpr (mcast) {
+                    const bool last = k + 1 == per_sb && m + 1 == lr;
+                    ncrisc_noc_fast_write_any_len<noc_mode>(
+                        noc_index,
+                        write_cmd_buf,
+                        src + (m * sbt + k * kblk) * tb,
+                        get_noc_multicast_addr(msx, msy, mex, mey, dst + m * piece),
+                        piece,
+                        mc_vc,
+                        true,
+                        mc_linked && !last,
+                        ndst,
+                        true,
+                        mc_posted);
+                    continue;
+                }
+                constexpr uint32_t x_vc = get_named_compile_time_arg_val("x_vc")
+                                              ? get_named_compile_time_arg_val("x_vc")
+                                              : NOC_UNICAST_WRITE_VC;
                 noc_async_write_one_packet_with_trid(
                     src + (m * sbt + k * kblk) * tb,
                     get_noc_addr(hxy >> 16, hxy & 0xFFFF, dst + m * piece),
                     piece,
-                    1 + cb_iss % kChainDepth);
+                    1 + cb_iss % kChainDepth,
+                    write_cmd_buf,
+                    noc_index,
+                    x_vc);
             }
+        }
+        if constexpr (zz::on) {
+            zz_issue += get_timestamp_32b() - zz_i0;
+        }
+        if constexpr (mc_posted) {
+            // (the XARR multicast right behind the batch, same VC and path: it lands after the data)
+            xarr_val += per_sb * flat_options::x_chain_pieces;
+            send_xarr();
+        }
+        if constexpr (mcast) {
+            ack_target[cb_iss % 8] = noc_nonposted_writes_acked[noc_index];
         }
         ++cb_iss;
         chain_retire(kChainDepth);
         sent += per_sb;
-        noc_async_writes_flushed();
+        ZZ_WAIT(zz_flush, noc_async_writes_flushed());
+        if constexpr (mc_posted) {
+            ZZ_WAIT(zz_flush, noc_async_posted_writes_flushed());  // (the landing slot read out)
+        }
         noc_semaphore_inc(
             get_noc_addr(helper_xy[hh] >> 16, helper_xy[hh] & 0xFFFF, get_semaphore(flat_options::x_credit_sem)),
             1);  // slot free
     }
     ZZ_EMIT("ZZ-XP-DATAWAIT", zz_data);
     ZZ_EMIT("ZZ-XP-SLOTWAIT", zz_slots);
+    ZZ_EMIT("ZZ-XP-ISSUE", zz_issue);
+    ZZ_EMIT("ZZ-XP-FLUSH", zz_flush);
+    ZZ_EMIT("ZZ-XP-ACK", zz_ack);
     ZZ_EMIT("ZZ-XP-SPAN", ZZ_NOW() - zz_start);
     chain_retire(0);
     noc_async_write_set_trid(0);

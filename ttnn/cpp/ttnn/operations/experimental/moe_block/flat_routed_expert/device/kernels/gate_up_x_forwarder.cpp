@@ -75,7 +75,20 @@ void kernel_main() {
     bool g_done = true;
     volatile tt_l1_ptr uint32_t* mailbox =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(schedule_scratch(ScratchOwner::Ncrisc));
-    {
+    constexpr bool w_brisc = get_named_compile_time_arg_val("gate_up_w_brisc") != 0;
+    if constexpr (w_brisc) {
+        // (MEASUREMENT FLAT_GU_W_NOC1: the receiver reads the weights on NOC1 - its args in this RISC's second scratch)
+        volatile tt_l1_ptr uint32_t* mailbox_set = sem(flat_options::gate_up_mailbox_sem);
+        while (*mailbox_set == 0) {
+            invalidate_l1_cache();
+        }
+        volatile tt_l1_ptr uint32_t* wa = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            schedule_scratch(ScratchOwner::Ncrisc) + flat_options::schedule_scratch_bytes);
+        for (uint32_t i = 0; i < 5; ++i) {
+            wa[i] = moe_block_args::arg(6 + i);
+        }
+        *mailbox_set = 2;
+    } else {
         volatile tt_l1_ptr uint32_t* mailbox_set = sem(flat_options::gate_up_mailbox_sem);
         while (*mailbox_set == 0) {
             invalidate_l1_cache();
@@ -105,6 +118,16 @@ void kernel_main() {
         cdepth = (subs - 1) * mt + last >= deep_rows ? depth : shallow;
     };
     set_np();
+    // (MEASUREMENT: x_vc the snake writes' VC, 0 the default; x_stateful: the successor set once on the write command
+    // buffer, each piece only its addresses, size and id)
+    constexpr uint32_t x_vc =
+        get_named_compile_time_arg_val("x_vc") ? get_named_compile_time_arg_val("x_vc") : NOC_UNICAST_WRITE_VC;
+    constexpr bool x_stateful = get_named_compile_time_arg_val("x_stateful") != 0;
+    if constexpr (x_stateful) {
+        if (!x_fwd_brisc && sxy) {
+            noc_async_write_one_packet_with_trid_set_state(s_ring, write_cmd_buf, noc_index, x_vc);
+        }
+    }
     while (true) {
         invalidate_l1_cache();
         if (!g_done) {
@@ -128,7 +151,13 @@ void kernel_main() {
                 const uint32_t off = ((iss / xp) % x_slots) * x_bytes + (iss % xp) * piece;
                 for (uint32_t o = 0; o < piece; o += NOC_MAX_BURST_SIZE) {
                     const uint32_t n = piece - o < NOC_MAX_BURST_SIZE ? piece - o : NOC_MAX_BURST_SIZE;
-                    noc_async_write_one_packet_with_trid(x_ring + off + o, s_ring + off + o, n, 1 + iss % depth);
+                    if constexpr (x_stateful) {
+                        noc_async_write_one_packet_with_trid_with_state(
+                            x_ring + off + o, x_ring + off + o, n, 1 + iss % depth, write_cmd_buf);
+                    } else {
+                        noc_async_write_one_packet_with_trid(
+                            x_ring + off + o, s_ring + off + o, n, 1 + iss % depth, write_cmd_buf, noc_index, x_vc);
+                    }
                 }
                 ++iss;
             }

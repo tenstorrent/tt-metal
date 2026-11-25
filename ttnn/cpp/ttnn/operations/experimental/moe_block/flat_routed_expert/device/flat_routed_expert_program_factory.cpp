@@ -218,6 +218,10 @@ FlatProgramHandles add_flat_routed_expert_program(
         uint32_t pred = 0, succ0 = 0;
     };
     std::vector<XLink> xlink(ngu);
+    // (MEASUREMENT ONLY, FLAT_X_MCAST=1: the primaries multicast x over their rectangles, no snake)
+    const uint32_t x_mcast_bits = std::getenv("FLAT_X_MCAST") ? uint32_t(std::atoi(std::getenv("FLAT_X_MCAST"))) : 0u;
+    const bool x_mcast = (x_mcast_bits & 1) != 0;
+    std::vector<uint32_t> rect_index(ngu, 0);
     std::vector<uint32_t> x_head(NR, 0);  // each rectangle's snake head (gate/up index)
     // MEASUREMENT ONLY (never commit), FLAT_X_NOC1=1: the snakes forward on NOC1 (north / west first): mirrored - from the
     // relay's row up a column (wrapping inside the rectangle), one column west, from the rectangle's east edge
@@ -248,6 +252,13 @@ FlatProgramHandles add_flat_routed_expert_program(
             }
         }
         x_head[k] = seq.front();
+        for (size_t j = 0; j < rect_cores[k].size(); ++j) {
+            rect_index[rect_cores[k][j]] = j;
+        }
+        TT_FATAL(!x_mcast || rect_cores[k].size() + 4 <= kRelayWordsBytes / 4, "FLAT_X_MCAST: rectangle too large");
+        if (x_mcast) {
+            continue;
+        }
         for (size_t j = 0; j < seq.size(); ++j) {
             XLink& l = xlink[seq[j]];
             l.pred = j ? pk(p.gate_up_cores[seq[j - 1]]) : 0;
@@ -330,6 +341,18 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["gate_up_k_steps"] = std::getenv("FLAT_GU_K_STEPS") == nullptr || std::getenv("FLAT_GU_K_STEPS")[0] != '0';
     options["gate_up_skip_activation"] =
         std::getenv("FLAT_GU_SKIP_ACT") != nullptr && std::getenv("FLAT_GU_SKIP_ACT")[0] == '1';  // (MEASUREMENT ONLY)
+    options["gate_up_w_brisc"] =
+        std::getenv("FLAT_GU_W_NOC1") != nullptr && std::getenv("FLAT_GU_W_NOC1")[0] == '1';  // (MEASUREMENT ONLY)
+    options["x_mcast"] = x_mcast_bits;
+    // x (the primaries' writes into the snake heads, the snake's forwarding) on unicast VC 3, its own: h is on 0, the
+    // weight read requests and the default writes on 1, row-major y on 2 (the combine sets none). Against VC 1 (P150):
+    // GLM-5.3 4x4 10240 1155.6 -> 1108.1 us (-4.1%), 8x4 10240 -4.0%, 8x4 5120 hot -2.2%, DSV4.1-Flash 10240 -1.4%; the
+    // short experts within +1% (GLM-5.3-Flash +1.0%, 4x4 7680 +0.9%). (FLAT_X_VC=n: MEASUREMENT override)
+    options["x_vc"] = std::getenv("FLAT_X_VC") ? uint32_t(std::atoi(std::getenv("FLAT_X_VC"))) : 3u;
+    options["x_stateful"] = std::getenv("FLAT_X_STATE") != nullptr && std::getenv("FLAT_X_STATE")[0] == '1';
+    options["x_mcast_vc"] = std::getenv("FLAT_X_MCAST_VC") ? uint32_t(std::atoi(std::getenv("FLAT_X_MCAST_VC"))) : 0u;
+    options["zz_iso"] =
+        std::getenv("FLAT_ISO") ? uint32_t(std::atoi(std::getenv("FLAT_ISO"))) : 0u;  // (MEASUREMENT ONLY)
     options["zz_flat_probes"] = std::getenv("FLAT_ZZ_PROBES") != nullptr && std::getenv("FLAT_ZZ_PROBES")[0] == '1';
     options["y_row_major_rows"] = 0;  // (the down kernels': their column width's)
     options["down_core_count"] = ND;
@@ -536,8 +559,12 @@ FlatProgramHandles add_flat_routed_expert_program(
                 // the snake head and its freed word, helper 0's xy, the landing rings, their slots, helper 1's xy
                 // (rectangle 0's first - helper k's ring k), then the expert_schedule.hpp args
                 Args xm;
+                const auto [rx0, rx1, ry0, ry1] = p.gate_up_rectangles[k];
+                const auto c0 = phys(CoreCoord(rx0, ry0)), c1 = phys(CoreCoord(rx1, ry1));
+                const uint32_t corners =
+                    (uint32_t(c0.x) << 24) | (uint32_t(c0.y) << 16) | (uint32_t(c1.x) << 8) | uint32_t(c1.y);
                 xm.a(FlatAddr::Arena, p.x_ring_offset)
-                    .lit(pk(p.gate_up_cores[x_head[k]]))
+                    .lit(x_mcast ? corners : pk(p.gate_up_cores[x_head[k]]))
                     .a(FlatAddr::Words)
                     .lit(pk(p.relay_cores[NR]))
                     .a(FlatAddr::Arena, p.relay_landing_offset)
@@ -635,7 +662,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit(SFREE)
                     .lit(xlink[ci].succ0)
                     .lit(pk(p.relay_cores[p.rectangle_of(gc)]))
-                    .a(FlatAddr::Words, 0);
+                    .a(FlatAddr::Words, x_mcast ? 4 * rect_index[ci] : 0);
                 f.cat(gw);
                 add_rt(k_x_forwarder, gc, f);
                 set_runtime_args(program.kernels[kc], gc, std::vector<uint32_t>{(cg_ * p.units_per_core) & 1u});
