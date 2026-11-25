@@ -318,13 +318,22 @@ def _kv_snapshot(model, state, slot: int, length: int, layers) -> dict:
     return {i: state.to_torch(i, length) for i in layers}
 
 
-def _kv_same(a: dict, b: dict) -> dict:
-    out = {}
+def _kv_same(a: dict, b: dict, end: int) -> dict:
+    """Bit equality per cache, all rows, and where they differ: the real rows [0, end) or the pad rows past them."""
+    out, where = {}, {}
     for i in a:
         for k in a[i]:
             if a[i][k].numel():
-                out[f"L{i}.{k}"] = bool(torch.equal(a[i][k], b[i][k]))
-    return {"all_equal": all(out.values()), "per": out}
+                key = f"L{i}.{k}"
+                out[key] = bool(torch.equal(a[i][k], b[i][k]))
+                if not out[key]:
+                    rows = (a[i][k] != b[i][k]).flatten(1).any(1).nonzero().flatten()
+                    where[key] = {
+                        "real": int((rows < end).sum()),
+                        "pad": int((rows >= end).sum()),
+                        "first": int(rows[0]),
+                    }
+    return {"all_equal": all(out.values()), "per": out, "differ": where}
 
 
 def _meta_suite(model, tokens, seq: int, chunk: int, layers, eager_final: dict, gold, rows: int, repeats: int) -> dict:
@@ -419,7 +428,7 @@ def _meta_suite(model, tokens, seq: int, chunk: int, layers, eager_final: dict, 
             "case": [slot, start, end],
             "meta_vs_eager_real_rows": _same(mf[real], ef[real]),
             "meta_vs_eager_all_rows": _same(mf, ef),
-            "kv_meta_vs_eager": _kv_same(kv_e, kv_m),
+            "kv_meta_vs_eager": _kv_same(kv_e, kv_m, end),
         }
         print(f"case {n} {cases[n]}: {case_res[n]['meta_vs_eager_real_rows']}", flush=True)
     res["cases"] = case_res
@@ -487,7 +496,7 @@ def _meta_suite(model, tokens, seq: int, chunk: int, layers, eager_final: dict, 
             kv_len = -(-end // 32) * 32
             case_res[n]["traced_seconds"] = r[0]
             case_res[n]["traced_vs_eager_real_rows"] = _same(host[real], ef[real])
-            case_res[n]["kv_traced_vs_eager"] = _kv_same(kv_e, _kv_snapshot(model, state, slot, kv_len, kv_layers))
+            case_res[n]["kv_traced_vs_eager"] = _kv_same(kv_e, _kv_snapshot(model, state, slot, kv_len, kv_layers), end)
             print(f"traced case {n}: {case_res[n]['traced_vs_eager_real_rows']}", flush=True)
     finally:
         sub_device.release(mesh, tid)
