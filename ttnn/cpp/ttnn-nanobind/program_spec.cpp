@@ -164,7 +164,7 @@ static_assert(reflect::size<DMConfig::DataMovement2XXConfig>() == 2);
 static_assert(reflect::size<DMConfig>() == 2);
 static_assert(reflect::size<ComputeConfig::Compute1XXConfig>() == 1);
 static_assert(reflect::size<ComputeConfig::Compute12XConfig>() == 1);
-static_assert(reflect::size<ComputeConfig::Compute2XXConfig>() == 1);
+static_assert(reflect::size<ComputeConfig::Compute2XXConfig>() == 3);
 static_assert(reflect::size<ComputeConfig>() == 8);
 static_assert(reflect::size<m2::KernelSpec::SourceCode>() == 1);
 static_assert(reflect::size<m2::KernelSpec::CompilerOptions>() == 3);
@@ -635,12 +635,22 @@ void bind_hardware_configs(nb::module_& mod) {
     nb::class_<ComputeConfig::Compute2XXConfig>(compute_config, "Compute2XXConfig")
         .def(
             "__init__",
-            [](ComputeConfig::Compute2XXConfig* self, bool enable_unpack_rvv) {
-                new (self) ComputeConfig::Compute2XXConfig{.enable_unpack_rvv = enable_unpack_rvv};
+            [](ComputeConfig::Compute2XXConfig* self,
+               bool enable_unpack_rvv,
+               std::vector<m2::DFBSpecName> sfpu_pipeline_consumed_dfbs,
+               std::vector<m2::DFBSpecName> sfpu_pipeline_produced_dfbs) {
+                new (self) ComputeConfig::Compute2XXConfig{
+                    .enable_unpack_rvv = enable_unpack_rvv,
+                    .sfpu_pipeline_consumed_dfbs = std::move(sfpu_pipeline_consumed_dfbs),
+                    .sfpu_pipeline_produced_dfbs = std::move(sfpu_pipeline_produced_dfbs)};
             },
             nb::kw_only(),
-            nb::arg("enable_unpack_rvv") = compute_2xx_defaults.enable_unpack_rvv)
-        .def_rw("enable_unpack_rvv", &ComputeConfig::Compute2XXConfig::enable_unpack_rvv);
+            nb::arg("enable_unpack_rvv") = compute_2xx_defaults.enable_unpack_rvv,
+            nb::arg("sfpu_pipeline_consumed_dfbs") = compute_2xx_defaults.sfpu_pipeline_consumed_dfbs,
+            nb::arg("sfpu_pipeline_produced_dfbs") = compute_2xx_defaults.sfpu_pipeline_produced_dfbs)
+        .def_rw("enable_unpack_rvv", &ComputeConfig::Compute2XXConfig::enable_unpack_rvv)
+        .def_rw("sfpu_pipeline_consumed_dfbs", &ComputeConfig::Compute2XXConfig::sfpu_pipeline_consumed_dfbs, COPY)
+        .def_rw("sfpu_pipeline_produced_dfbs", &ComputeConfig::Compute2XXConfig::sfpu_pipeline_produced_dfbs, COPY);
 
     const ComputeConfig compute_defaults{};
     compute_config
@@ -663,7 +673,7 @@ void bind_hardware_configs(nb::module_& mod) {
                     .unpack_modes = std::move(unpack_modes),
                     .config_1xx = config_1xx,
                     .config_12x = config_12x,
-                    .config_2xx = config_2xx};
+                    .config_2xx = std::move(config_2xx)};
             },
             nb::kw_only(),
             nb::arg("fpu_math_fidelity") = compute_defaults.fpu_math_fidelity,

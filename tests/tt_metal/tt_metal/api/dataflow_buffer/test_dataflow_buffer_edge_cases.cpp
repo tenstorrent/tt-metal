@@ -966,6 +966,36 @@ TEST_F(UnitMeshFixture, TensixDMTest1xDFB_RingPressure_2Sx4S_Multiset_2_0) {
     run_single_dfb_program_2_0(this->device(), params);
 }
 
+TEST_F(UnitMeshFixture, Trisc3DMTest1xDFB_RingPressure_2Sx4S) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 2,
+        .num_consumers = 4,
+        .implicit_sync = false,
+        .num_entries = 16,
+        .num_entries_in_buffer = 32,
+        .producer_on_trisc3 = true,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, DMTrisc3Test1xDFB_RingPressure_4Sx4A) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::TENSIX,
+        .num_producers = 4,
+        .num_consumers = 4,
+        .pap = DFBAccessPattern::STRIDED,
+        .cap = DFBAccessPattern::ALL,
+        .implicit_sync = false,
+        .num_entries = 4,
+        .num_entries_in_buffer = 64,
+        .consumer_on_trisc3 = true,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
 // ---------------------------------------------------------------------------------------------
 // DM→DM asymmetric under ring pressure.
 //
