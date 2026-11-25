@@ -432,8 +432,7 @@ DeviceAddr MeshSocket::get_config_buffer_address() const {
     if (!socket_endpoint_uses_per_core_allocation(config_, socket_endpoint_type_)) {
         return config_buffer_->address();
     }
-    // A per-core buffer's address lives on each device's Buffer, one per core; the mesh-level
-    // scalar stays 0. Per-core requires a single (device, core) for the endpoint, so resolve there.
+    // Per-core requires a single (device, core) for the endpoint, so read the buffer's address there.
     const auto cores = socket_endpoint_cores(config_, socket_endpoint_type_);
     const auto& core = *cores.begin();
     return experimental::per_core_allocation::get_per_core_address(*config_buffer_, core.device_coord, core.core_coord);

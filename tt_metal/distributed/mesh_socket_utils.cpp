@@ -292,6 +292,11 @@ std::shared_ptr<MeshBuffer> create_per_core_socket_buffer(
     const DeviceLocalBufferConfig& device_local_config,
     MeshDevice& mesh_device,
     const MeshCoordinate& device_coord) {
+    TT_FATAL(
+        mesh_device.is_local(device_coord),
+        "A per-core socket buffer lives only on its endpoint device {}, which this rank does not drive. Create the "
+        "socket on the rank that drives that device (a rank-scoped socket), or set per_core_allocation to false.",
+        device_coord);
     auto buffer = experimental::per_core_allocation::create_on_single_device(
         mesh_buffer_config, device_local_config, &mesh_device, device_coord);
     Inspector::mesh_buffer_allocated(buffer.get());
@@ -366,11 +371,8 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     if (per_core) {
         // Per-core requires a single (device, core) for the endpoint, so only that device needs the buffer.
         const MeshCoreCoord endpoint = *socket_endpoint_cores(config, socket_endpoint).begin();
-        if (device->is_local(endpoint.device_coord)) {
-            return create_per_core_socket_buffer(mesh_buffer_specs, buffer_specs, *device, endpoint.device_coord);
-        }
+        return create_per_core_socket_buffer(mesh_buffer_specs, buffer_specs, *device, endpoint.device_coord);
     }
-    // A rank that does not drive a per-core endpoint's device keeps MeshBuffer::create, which skips that device.
     return MeshBuffer::create(mesh_buffer_specs, buffer_specs, device.get());
 }
 
@@ -439,12 +441,9 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
     if (per_core) {
         // The single receiver (device, core) checked above is the only place the FIFO is needed.
         const auto& receiver_device = config.socket_connection_config.front().receiver_core.device_coord;
-        if (receiver->is_local(receiver_device)) {
-            return create_per_core_socket_buffer(
-                socket_data_mesh_buffer_specs, socket_data_buffer_specs, *receiver, receiver_device);
-        }
+        return create_per_core_socket_buffer(
+            socket_data_mesh_buffer_specs, socket_data_buffer_specs, *receiver, receiver_device);
     }
-    // A rank that does not drive a per-core receiver's device keeps MeshBuffer::create, which skips that device.
     return MeshBuffer::create(socket_data_mesh_buffer_specs, socket_data_buffer_specs, receiver.get());
 }
 

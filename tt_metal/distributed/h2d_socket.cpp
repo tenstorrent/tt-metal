@@ -264,13 +264,8 @@ void H2DSocketImpl::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_dev
     if (!recv_is_local) {
         return;
     }
-    // Per-core buffers have a real address only via the per-core API;
-    // address() is not valid for them (host would push to a bogus L1 spot).
-    const DeviceAddr data_buf_base = per_core
-                                         ? experimental::per_core_allocation::get_per_core_address(
-                                               *data_buffer_, recv_core_.device_coord, recv_core_.core_coord)
-                                         : data_buffer_->address();
-    aligned_data_buf_start_ = tt::align(data_buf_base, pcie_alignment);
+    // A per-core FIFO sits on one core of one device, so address() is that core's address.
+    aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
     write_ptr_ = 0;
 }
 
