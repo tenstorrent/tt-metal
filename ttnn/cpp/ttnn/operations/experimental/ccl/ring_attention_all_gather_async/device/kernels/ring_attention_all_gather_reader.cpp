@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
+#include "api/dataflow/global_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
@@ -155,7 +156,7 @@ void kernel_main() {
     // Load the input tensor spec
     uint32_t gather_dim = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    GlobalSemaphore out_ready(get_arg_val<uint32_t>(arg_idx++));
 
     std::array<uint32_t, num_inputs> input_tensor_Wt;
     std::array<uint32_t, num_inputs> input_tensor_Ht;
@@ -368,14 +369,11 @@ void kernel_main() {
         // In the ring case, I expect num_targets_forward_direction slices from the right (keep in mind this differs for
         // odd/even chips)
 
-        // Device 2.0: legacy primitive retained, out_ready_sem is the address of a GlobalSemaphore
-        // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
-        // GlobalSemaphore.
         const uint32_t next_slice = slices_received + 1;
         if constexpr (partial_readiness_enabled) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2 - 1);
+            out_ready.wait_min(next_slice * 2 - 1);
         } else {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice);
+            out_ready.wait_min(next_slice);
         }
 
         int sender_transport_rank_signed;
@@ -399,7 +397,7 @@ void kernel_main() {
             op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
         }
         if constexpr (partial_readiness_enabled) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2);
+            out_ready.wait_min(next_slice * 2);
             if constexpr (fuse_op) {
                 op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
             }
@@ -531,6 +529,5 @@ void kernel_main() {
     if constexpr (fuse_op) {
         noc_obj.async_atomic_barrier();
     }
-    // Device 2.0 migration: legacy primitive retained, out_ready_sem is a GlobalSemaphore address.
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+    out_ready.set(0);
 }
