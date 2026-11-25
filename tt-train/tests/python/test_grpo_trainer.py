@@ -631,6 +631,7 @@ def test_capitals_one_by_one_equals_single_batch():
         np.testing.assert_allclose(
             batched.logprobs[b][:n],
             single.logprobs[0][:n],
+            # One bf16 step of a logit near 25 is 0.125; single and batched log p differ by at most 0.0625 here.
             atol=0.1,
             err_msg=f"row {b}: single={tokenizer.decode(one)!r} batch={tokenizer.decode(many)!r}",
         )
