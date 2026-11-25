@@ -1869,6 +1869,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
+    const bool keraunos_ethernet =
+        has_quasar_ethernet && !cluster_.get_soc_desc(device_id).get_arch_descriptor().get_keraunos().cores.empty();
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
@@ -1881,8 +1883,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             hal_.get_dev_addr(
                 llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core),
                 HalL1MemAddrType::CORE_INFO));
-        if (has_quasar_ethernet &&
-            !cluster_.get_soc_desc(device_id).get_arch_descriptor().get_keraunos().cores.empty()) {
+        if (keraunos_ethernet) {
             // ACTIVE_ETH has one image, linked into CCE0's SRAM.
             TT_FATAL(
                 cluster_.get_keraunos_eth_cce(device_id, virtual_core) == 0,
