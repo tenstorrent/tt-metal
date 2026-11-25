@@ -19,9 +19,12 @@
 
 #include "tt_fabric_test_context.hpp"
 #include "tt_fabric_test_constants.hpp"
+#include "tt_fabric_test_perf_breakdown.hpp"
 
 using tt::tt_fabric::fabric_tests::DEFAULT_BUILT_TESTS_DUMP_FILE;
 using tt::tt_fabric::fabric_tests::OUTPUT_DIR;
+namespace perf_bd = tt::tt_fabric::fabric_tests::perf_breakdown;
+using perf_bd::ScopedPhase;
 
 const std::unordered_map<Topology, FabricConfig> TestFixture::topology_to_fabric_config_map = {
     {Topology::NeighborExchange, FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE},
@@ -202,7 +205,7 @@ int main(int argc, char** argv) {
 
         const auto& topology = test_config.fabric_setup.topology;
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
-        if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
+        if (test_config.performance_test_mode != PerformanceTestMode::NONE || perf_bd::router_telemetry()) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
@@ -216,8 +219,12 @@ int main(int argc, char** argv) {
             topology,
             fabric_tensix_config);
 
-        bool open_devices_success =
-            test_context.open_devices(test_config.fabric_setup, test_config.channel_trimming_mode);
+        bool open_devices_success = false;
+        {
+            ScopedPhase phase("open_devices");
+            open_devices_success =
+                test_context.open_devices(test_config.fabric_setup, test_config.channel_trimming_mode);
+        }
         if (!open_devices_success) {
             log_warning(
                 tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
@@ -259,10 +266,18 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Starting top-level iteration {}/{}", iter + 1, test_config.num_top_level_iterations);
 
             log_info(tt::LogTest, "Building tests");
+            auto build_t0 = perf_bd::Clock::now();
             auto built_tests = builder.build_tests({test_config}, cmdline_parser);
+            for (auto& built_test : built_tests) {
+                test_context.split_senders_to_fit_core_limits(built_test);
+            }
+            if (perf_bd::enabled()) {
+                perf_bd::Collector::get().add_phase("build_tests", perf_bd::ms_since(build_t0));
+            }
 
             // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
-            test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
+            test_context.set_telemetry_enabled(
+                test_config.performance_test_mode != PerformanceTestMode::NONE || perf_bd::router_telemetry());
             // Set skip_packet_validation flag
             test_context.set_skip_packet_validation(test_config.skip_packet_validation);
 
@@ -274,16 +289,22 @@ int main(int argc, char** argv) {
                 log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
                 tests_executed++;
 
-                // Prepare allocator and memory maps for this specific test
-                test_context.prepare_for_test(built_test);
+                {
+                    ScopedPhase phase("prepare");
+                    // Prepare allocator and memory maps for this specific test
+                    test_context.prepare_for_test(built_test);
 
-                // Set performance test mode for each iteration
-                test_context.set_performance_test_mode(built_test.performance_test_mode);
+                    // Set performance test mode for each iteration
+                    test_context.set_performance_test_mode(built_test.performance_test_mode);
 
-                test_context.setup_devices();
+                    test_context.setup_devices();
+                }
                 log_info(tt::LogTest, "Device setup complete");
 
-                test_context.process_traffic_config(built_test);
+                {
+                    ScopedPhase phase("traffic_config");
+                    test_context.process_traffic_config(built_test);
+                }
                 log_info(tt::LogTest, "Traffic config processed");
 
                 // Setup latency test mode AFTER process_traffic_config so that senders_/receivers_ maps are populated
@@ -301,16 +322,29 @@ int main(int argc, char** argv) {
                 }
 
                 log_info(tt::LogTest, "Compiling programs");
-                test_context.compile_programs();
+                {
+                    ScopedPhase phase("create_kernels");
+                    test_context.compile_programs();
+                }
 
-                // multi-host barrier to synchronize before starting the test (as we could be clearing out addresses)
-                fixture->barrier();
+                {
+                    ScopedPhase phase("barrier_pre");
+                    // multi-host barrier to synchronize before starting the test (as we could be clearing out
+                    // addresses)
+                    fixture->barrier();
+                }
 
                 log_info(tt::LogTest, "Launching programs");
-                test_context.launch_programs();
+                {
+                    ScopedPhase phase("enqueue_workload");
+                    test_context.launch_programs();
+                }
 
                 log_info(tt::LogTest, "Waiting for programs");
-                test_context.wait_for_programs_with_progress();
+                {
+                    ScopedPhase phase("wait");
+                    test_context.wait_for_programs_with_progress();
+                }
 
                 if (test_context.did_last_test_hang()) {
                     log_error(
@@ -324,6 +358,7 @@ int main(int argc, char** argv) {
 
                 log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
 
+                auto post_t0 = perf_bd::Clock::now();
                 test_context.process_telemetry_data(built_test);
 
                 // Read and report code profiling results
@@ -332,7 +367,14 @@ int main(int argc, char** argv) {
                     test_context.report_code_profiling_results();
                 }
 
-                test_context.validate_results();
+                if (perf_bd::enabled()) {
+                    perf_bd::Collector::get().add_phase("telemetry_prof", perf_bd::ms_since(post_t0));
+                }
+                {
+                    ScopedPhase phase("validate_readback");
+                    test_context.validate_results();
+                }
+                post_t0 = perf_bd::Clock::now();
 
                 // Performance profiling (bandwidth mode)
                 if (test_context.get_performance_test_mode() == PerformanceTestMode::BANDWIDTH) {
@@ -351,6 +393,10 @@ int main(int argc, char** argv) {
                 // Synchronize across all hosts after running the current test variant
                 fixture->barrier();
                 test_context.reset_devices();
+                if (perf_bd::enabled()) {
+                    perf_bd::Collector::get().add_phase("teardown", perf_bd::ms_since(post_t0));
+                    perf_bd::Collector::get().end_test(built_test.parametrized_name);
+                }
             }
             if (test_context.did_last_test_hang()) {
                 break;
@@ -362,6 +408,10 @@ int main(int argc, char** argv) {
     }
 
     test_context.close_devices();
+
+    if (perf_bd::enabled()) {
+        perf_bd::Collector::get().report_run();
+    }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(false);
 

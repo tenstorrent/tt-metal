@@ -5,11 +5,15 @@
 #include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp"
 
+#include <atomic>
 #include <filesystem>
+#include <future>
 #include <thread>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_constants.hpp"
+#include "tt_fabric_test_perf_breakdown.hpp"
+#include "kernels/tt_fabric_test_pattern.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
@@ -226,12 +230,6 @@ void TestContext::setup_latency_test_workers(TestConfig& config) {
     latency_test_manager_->setup_latency_test_workers(config, test_devices_);
 }
 
-// Create latency kernels for a device based on its role (sender, responder, or neither)
-void TestContext::create_latency_kernels_for_device(TestDevice& test_device) {
-    TT_FATAL(latency_test_manager_, "Latency manager not initialized");
-    latency_test_manager_->create_latency_kernels_for_device(test_device, test_devices_);
-}
-
 // Configures latency test mode - validates config and sets performance_test_mode flag
 void TestContext::setup_latency_test_mode(const TestConfig& config) {
     TT_FATAL(
@@ -283,7 +281,7 @@ void TestContext::init(
     const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies,
     bool use_dynamic_policies) {
     fixture_ = std::move(fixture);
-    allocation_policies_ = policies;
+    allocation_policies_ = size_receiver_rings_to_fill_l1(policies);
     use_dynamic_policies_ = use_dynamic_policies;
 
     initialize_memory_maps();
@@ -294,11 +292,19 @@ void TestContext::init(
     }
 
     this->allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
-        *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
+        *this->fixture_, *this->fixture_, allocation_policies_, sender_memory_map_, receiver_memory_map_);
 
     bandwidth_profiler_ = std::make_unique<BandwidthProfiler>(*fixture_, *fixture_, *fixture_);
     bandwidth_results_manager_ = std::make_unique<BandwidthResultsManager>();
     latency_test_manager_ = std::make_unique<LatencyResultsManager>(*fixture_, sender_memory_map_);
+}
+
+void TestContext::split_senders_to_fit_core_limits(TestConfig& config) const {
+    const std::optional<uint32_t> fixed_receiver_configs_per_core =
+        use_dynamic_policies_ ? std::nullopt
+                              : std::optional<uint32_t>(allocation_policies_.receiver_config.max_configs_per_core);
+    tt::tt_fabric::fabric_tests::DynamicPolicyManager::split_senders_to_fit_core_limits(
+        config, *fixture_, *fixture_, fixed_receiver_configs_per_core);
 }
 
 void TestContext::prepare_for_test(const TestConfig& config) {
@@ -309,6 +315,7 @@ void TestContext::prepare_for_test(const TestConfig& config) {
     auto new_policy = policy_manager_->get_new_policy_for_test(config);
 
     if (new_policy.has_value()) {
+        new_policy = size_receiver_rings_to_fill_l1(new_policy.value());
         update_memory_maps(new_policy.value());
 
         allocator_.reset();
@@ -316,8 +323,7 @@ void TestContext::prepare_for_test(const TestConfig& config) {
             *fixture_, *fixture_, new_policy.value(), sender_memory_map_, receiver_memory_map_);
     }
 
-    const auto& policy_to_validate = new_policy.has_value() ? new_policy.value() : policy_manager_->get_cached_policy();
-    validate_packet_sizes_for_policy(config, policy_to_validate.default_payload_chunk_size);
+    validate_packet_sizes_for_policy(config, receiver_memory_map_.get_payload_chunk_size());
 }
 
 void TestContext::setup_devices() {
@@ -397,24 +403,89 @@ void TestContext::initialize_bandwidth_results_csv_file() {
 }
 
 void TestContext::compile_programs() {
+    namespace perf_bd = tt::tt_fabric::fabric_tests::perf_breakdown;
     fixture_->setup_workload();
+    const bool latency_mode = performance_test_mode_ == PerformanceTestMode::LATENCY;
+    const bool enable_kernel_benchmark =
+        skip_packet_validation_ || (performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
+    std::vector<TestDevice*> devices;
+    devices.reserve(test_devices_.size());
     for (auto& [coord, test_device] : test_devices_) {
-        bool enable_kernel_benchmark =
-            skip_packet_validation_ || (performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
         test_device.set_benchmark_mode(enable_kernel_benchmark);
         test_device.set_global_sync(global_sync_);
         test_device.set_progress_monitoring_enabled(progress_config_.enabled);
 
         auto device_id = test_device.get_node_id();
         test_device.set_sync_core(device_global_sync_cores_[device_id]);
+        devices.push_back(&test_device);
+    }
 
-        // Create kernels (latency or normal)
-        if (performance_test_mode_ == PerformanceTestMode::LATENCY) {
-            create_latency_kernels_for_device(test_device);
-        } else {
-            // Normal mode: create standard kernels for all devices
-            test_device.create_kernels();
+    auto build_device = [&](TestDevice& test_device) {
+        const auto device_t0 = perf_bd::Clock::now();
+        test_device.create_kernels();
+        if (perf_bd::host_detail()) {
+            perf_bd::Collector::get().add_device_build(perf_bd::ms_since(device_t0));
         }
+    };
+
+    // Each device's program is built from that device's own state, so the devices can be built on parallel threads.
+    // Host writes go through the shared command queue: they are recorded during the build and issued afterwards in
+    // device order, the same order as a serial build. The dispatch data collection / inspector mesh-buffer logging
+    // debug options mutate shared state without a lock, which is why they cannot run in a parallel build.
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const bool parallel = devices.size() > 1 && !rtoptions.get_dispatch_data_collection_enabled() &&
+                          !(rtoptions.get_inspector_enabled() && rtoptions.get_inspector_log_mesh_buffers());
+    std::optional<perf_bd::ScopedDetail> devices_phase(std::in_place, "sub_ck_devices");
+    if (parallel) {
+        for (auto* test_device : devices) {
+            test_device->set_defer_host_writes(true);
+        }
+        const size_t num_threads = std::min<size_t>(devices.size(), std::max(1u, std::thread::hardware_concurrency()));
+        std::atomic<size_t> next_device{0};
+        {
+            std::vector<std::future<void>> workers;
+            workers.reserve(num_threads);
+            for (size_t t = 0; t < num_threads; t++) {
+                workers.push_back(std::async(std::launch::async, [&] {
+                    for (size_t i = next_device++; i < devices.size(); i = next_device++) {
+                        build_device(*devices[i]);
+                    }
+                }));
+            }
+            // get() rethrows a build failure; the remaining futures join their threads when destroyed.
+            for (auto& worker : workers) {
+                worker.get();
+            }
+        }
+        perf_bd::ScopedDetail flush_phase("sub_ck_deferred_writes");
+        for (auto* test_device : devices) {
+            test_device->set_defer_host_writes(false);
+            test_device->flush_deferred_host_writes();
+        }
+    } else {  // serial build
+        for (auto* test_device : devices) {
+            build_device(*test_device);
+        }
+    }
+    devices_phase.reset();
+
+    // Benchmark runs generate and check no payloads, so there is nothing to report.
+    if (!latency_mode && !enable_kernel_benchmark) {
+        TestDevice::SfpuCoverage total;
+        for (const auto* test_device : devices) {
+            const auto& coverage = test_device->get_sfpu_coverage();
+            total.sender_configs += coverage.sender_configs;
+            total.generated += coverage.generated;
+            total.receiver_configs += coverage.receiver_configs;
+            total.verified += coverage.verified;
+        }
+        log_info(
+            tt::LogTest,
+            "SFPU coverage: payloads generated for {}/{} sender configs, checked for {}/{} receiver configs",
+            total.generated,
+            total.sender_configs,
+            total.verified,
+            total.receiver_configs);
     }
 
     if (show_workers_) {
@@ -451,7 +522,14 @@ void TestContext::compile_programs() {
         }
     }
 
+    // Host writes were issued non-blocking; make sure they have landed before the programs run.
+    {
+        perf_bd::ScopedPhase phase("sub_write_flush");  // nested inside create_kernels
+        fixture_->barrier_reads();
+    }
+
     // Enqueue all programs
+    perf_bd::ScopedDetail add_programs_phase("sub_ck_add_programs");
     for (auto& [coord, test_device] : test_devices_) {
         auto& program_handle = test_device.get_program_handle();
         if (program_handle.impl().num_kernels()) {
@@ -539,6 +617,41 @@ void TestContext::setup_ci_artifacts() {
 
 void TestContext::initialize_memory_maps() { update_memory_maps(allocation_policies_); }
 
+// Each receiver config's ring is as large as the receiver core's L1 allows: the receiver core's L1 from the end of
+// its fixed regions up to the compute verifier's request and flag pages at the top, split evenly over
+// max_configs_per_core. The rings are the last region of the receiver layout (ReceiverMemoryMap), so nothing follows
+// them. The chunk size also sets each flow's credits (calculate_credit_config), so deeper rings mean more credits per
+// flow. A default_payload_chunk_size set in the yaml is kept as is.
+tt::tt_fabric::fabric_tests::AllocatorPolicies TestContext::size_receiver_rings_to_fill_l1(
+    tt::tt_fabric::fabric_tests::AllocatorPolicies policies) const {
+    if (policies.payload_chunk_size_from_yaml) {
+        return policies;
+    }
+
+    const uint32_t num_configs = std::max<uint32_t>(policies.receiver_config.max_configs_per_core, 1);
+    // The rings end where the compute verifier's request and flag pages begin.
+    const uint32_t rings_end = tt::tt_fabric::fabric_tests::sfpu_verify_control_base();
+    // Where the rings start: the receiver layout with empty rings.
+    const tt::tt_fabric::fabric_tests::ReceiverMemoryMap layout_without_rings(
+        fixture_->get_l1_unreserved_base(),
+        fixture_->get_l1_unreserved_size(),
+        fixture_->get_l1_alignment(),
+        0,
+        num_configs);
+    const uint32_t rings_base = layout_without_rings.payload_chunks.start;
+    TT_FATAL(rings_base < rings_end, "Receiver rings start at {:#x}, past the usable end {:#x}", rings_base, rings_end);
+    const uint32_t ring_bytes = ((rings_end - rings_base) / num_configs) & ~uint32_t{63};
+    log_info(
+        tt::LogTest,
+        "Receiver rings fill L1: {} B per config, {} configs per core from {:#x} to {:#x}",
+        ring_bytes,
+        num_configs,
+        rings_base,
+        rings_end);
+    policies.default_payload_chunk_size = ring_bytes;
+    return policies;
+}
+
 void TestContext::update_memory_maps(const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
     auto l1_unreserved_base = fixture_->get_l1_unreserved_base();
     auto l1_unreserved_size = fixture_->get_l1_unreserved_size();
@@ -596,12 +709,21 @@ void TestContext::process_traffic_config(TestConfig& config) {
     this->allocator_->allocate_resources(config);
     log_debug(tt::LogTest, "Resource allocation complete");
 
-    // Use unified connection manager when BOTH sync AND flow control are enabled
-    // - This ensures sync and credit returns use the same link tracking for correct mux detection
-    // - When only sync is enabled (no flow control), separate managers avoid mux overhead
-    if (config.enable_flow_control && config.global_sync) {
+    // With sync, a device uses the unified connection manager whenever its sync core can share a link with another
+    // client that needs a mux there, so the sync core goes through that mux rather than claiming the router channel the
+    // mux holds:
+    // - flow control: receivers return credits over the senders' links (every device)
+    // - senders sharing a link (e.g. the pieces of a split sender): they reach that link through a mux (only the
+    //   devices where this happens)
+    // The other devices keep separate managers, which avoid the mux overhead.
+    if (config.global_sync) {
+        const auto links_shared_by_senders =
+            tt::tt_fabric::fabric_tests::DynamicPolicyManager::find_links_shared_by_senders(
+                config, *this->fixture_, *this->fixture_);
         for (auto& [_, device] : test_devices_) {
-            device.set_use_unified_connection_manager(true);
+            if (config.enable_flow_control || links_shared_by_senders.contains(device.get_node_id())) {
+                device.set_use_unified_connection_manager(true);
+            }
         }
     }
 

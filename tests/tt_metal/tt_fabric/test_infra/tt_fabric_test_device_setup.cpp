@@ -2,18 +2,156 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <limits>
 #include <set>
 #include <string>
+#include <unordered_set>
 
 #include <tt_stl/reflection.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_metal/fabric/fabric_vc2_connection.hpp"
 #include "tt_metal/fabric/mcast_reverse_tree.hpp"
+#include "kernels/tt_fabric_test_pattern.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
 namespace {
+
+// Pages in flight between the payload generator and the sender. The sender holds up to half of them until its next
+// flush.
+constexpr uint32_t sfpu_payload_ring_pages() { return 8; }
+
+// What makes two kernels on different cores the same kernel (TT_FABRIC_TEST_PERF_HOST_DETAIL kernel counts).
+size_t kernel_signature(
+    const char* processor,
+    const std::string& src,
+    uint32_t noc,
+    const std::vector<uint32_t>& ct_args,
+    const std::map<std::string, std::string>& defines) {
+    std::string key = fmt::format("{}|{}|{}|", processor, src, noc);
+    for (uint32_t arg : ct_args) {
+        key += fmt::format("{},", arg);
+    }
+    for (const auto& [name, value] : defines) {
+        key += fmt::format("|{}={}", name, value);
+    }
+    return std::hash<std::string>{}(key);
+}
+
+// Whether the sender kernel sends a payload for this config (the ntypes with a write); matches the kernel's
+// payload_size_bytes > 0.
+bool sender_config_carries_payload(const TestTrafficSenderConfig& config) {
+    const auto type = config.parameters.noc_send_type.type;
+    return type == NocSendType::NOC_UNICAST_WRITE || type == NocSendType::NOC_UNICAST_SCATTER_WRITE ||
+           type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC;
+}
+
+// Int32 tiles a payload of this size takes on the compute engine.
+uint32_t sfpu_payload_tiles(uint32_t payload_bytes) { return (payload_bytes + SFPU_TILE_BYTES - 1) / SFPU_TILE_BYTES; }
+
+// The sender kernel keeps one payload buffer per config, back to back from the payload region's start
+// (SenderKernelMemoryMap::get_payload_buffer_address), and only checks the end with a device ASSERT. Fails on the host
+// when they would run past the end of L1, for example when one core takes hundreds of configs.
+void check_sender_payload_buffers_fit(const TestSender& sender, const SenderMemoryMap& memory_map) {
+    uint32_t payload_bytes = 0;
+    for (const auto& config_and_keys : sender.configs_) {
+        const auto& config = config_and_keys.first;
+        if (sender_config_carries_payload(config)) {
+            payload_bytes += config.parameters.payload_size_bytes;
+        }
+    }
+    const uint32_t region_end = memory_map.highest_usable_address;
+    const uint32_t region_bytes = region_end - memory_map.payload_buffers.start;
+    TT_FATAL(
+        payload_bytes <= region_bytes,
+        "Sender core {} has {} configs whose payload buffers take {} B, more than the {} B payload region "
+        "[{:#x}, {:#x}). Spread the configs over more sender cores in the test or use smaller packets.",
+        sender.get_core().str(),
+        sender.configs_.size(),
+        payload_bytes,
+        region_bytes,
+        memory_map.payload_buffers.start,
+        region_end);
+}
+
+// Base of a payload generator's page ring of pages of the given tiles, at the top of the sender's L1 region.
+uint32_t sfpu_payload_ring_base(const SenderMemoryMap& memory_map, uint32_t page_tiles) {
+    const uint32_t ring_bytes = sfpu_payload_ring_pages() * page_tiles * SFPU_TILE_BYTES;
+    return (memory_map.highest_usable_address - ring_bytes) & ~uint32_t{63};
+}
+
+// Which of the sender's configs take their payloads from the core's compute engine (the SFPU generates them) rather
+// than the sender (BRISC) filling them itself: validated traffic, on a core with at most SFPU_PAYLOAD_MAX_CONFIGS
+// configs whose payload buffers stay below the generator's page ring. The sender fills the others itself.
+std::vector<bool> sfpu_payload_configs(
+    const TestSender& sender, bool benchmark_mode, const SenderMemoryMap& memory_map) {
+    std::vector<bool> sfpu(sender.configs_.size(), false);
+
+    // SFPU not used in benchmark mode as no payloads are generated there. We also don't use SFPU if we can't fit
+    // the number of sender configs into the SFPU.
+    if (benchmark_mode || sender.configs_.size() > SFPU_PAYLOAD_MAX_CONFIGS) {
+        return sfpu;
+    }
+    uint32_t page_tiles = 0;
+    uint32_t payload_buffers_end = memory_map.payload_buffers.start;  // the sender kernel's one payload per config
+    for (size_t i = 0; i < sender.configs_.size(); i++) {
+        const auto& config = sender.configs_[i].first;
+        if (sender_config_carries_payload(config)) {
+            const uint32_t tiles = sfpu_payload_tiles(config.parameters.payload_size_bytes);
+            sfpu[i] = tiles <= SFPU_PAYLOAD_MAX_TILES;
+            page_tiles = std::max(page_tiles, sfpu[i] ? tiles : 0);
+            payload_buffers_end += config.parameters.payload_size_bytes;
+        }
+    }
+
+    // If we can't fit the number of sender configs into the dedicated SFPU page ring, fallback to
+    // sender (brisc) generating payload itself.
+    if (page_tiles > 0 && payload_buffers_end > sfpu_payload_ring_base(memory_map, page_tiles)) {
+        std::fill(sfpu.begin(), sfpu.end(), false);
+    }
+    return sfpu;
+}
+
+// Which of the receiver's configs are verified on the core's compute engine rather than by the receiver: of its first
+// SFPU_VERIFY_MAX_CONFIGS configs, those landing one payload slot per packet that the verifier can check, a write,
+// fused write or scatter write of at most SFPU_PAYLOAD_MAX_TILES tiles in at most SFPU_VERIFY_MAX_SEGMENTS chunks,
+// whose size keeps every slot 16 B aligned for the unpacker and whose ring has fewer than 65536 slots (a CB's
+// free-space count is 16-bit). None in benchmark mode, or when a receive ring reaches the verifier's request and flag
+// pages.
+std::vector<bool> sfpu_verify_configs(const TestReceiver& receiver, bool benchmark_mode) {
+    std::vector<bool> sfpu(receiver.configs_.size(), false);
+    if (benchmark_mode) {
+        return sfpu;
+    }
+    const uint32_t control_base = sfpu_verify_control_base();
+    for (const auto& [config, _] : receiver.configs_) {
+        if (config.target_address + config.payload_buffer_size > control_base) {
+            return sfpu;
+        }
+    }
+    for (size_t i = 0; i < std::min<size_t>(receiver.configs_.size(), SFPU_VERIFY_MAX_CONFIGS); i++) {
+        const auto& config = receiver.configs_[i].first;
+        const auto type = config.parameters.noc_send_type.type;
+        const uint32_t bytes = config.parameters.payload_size_bytes;
+        if ((type != NocSendType::NOC_UNICAST_WRITE && type != NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC &&
+             type != NocSendType::NOC_UNICAST_SCATTER_WRITE) ||
+            bytes == 0 || sfpu_payload_tiles(bytes) > SFPU_PAYLOAD_MAX_TILES || bytes % 16 != 0 ||
+            config.payload_buffer_size / bytes > std::numeric_limits<uint16_t>::max()) {
+            continue;
+        }
+        if (type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
+            const auto& chunks = config.parameters.scatter_chunk_sizes;
+            if (chunks.size() > SFPU_VERIFY_MAX_SEGMENTS ||
+                std::any_of(chunks.begin(), chunks.end(), [](uint32_t chunk) { return chunk % 4 != 0; })) {
+                continue;
+            }
+        }
+        sfpu[i] = true;
+    }
+    return sfpu;
+}
 
 // Returns the canonical root outputs, which may fan out even without express routing.
 // Per-axis topology is available for every valid 2D mesh.
@@ -60,12 +198,39 @@ std::vector<RoutingDirection> mcast_outgoing_directions(
 
 }  // namespace
 
+std::vector<RoutingDirection> get_sender_outgoing_directions(
+    const IRouteManager& route_manager,
+    const FabricNodeId& src_node_id,
+    const std::optional<std::unordered_map<RoutingDirection, uint32_t>>& hops,
+    const FabricNodeId& dst_node_id,
+    ChipSendType chip_send_type,
+    bool is_2D_routing_enabled,
+    tt::tt_fabric::Topology topology) {
+    if (hops.has_value() && chip_send_type == ChipSendType::CHIP_MULTICAST && is_2D_routing_enabled) {
+        return mcast_outgoing_directions(src_node_id, hops.value());
+    }
+
+    // Special handling: For torus 2D unicast, we have bugs where we try to follow the input hop count
+    // but the routing tables cause packets to fail to reach the destination properly in some cases,
+    // due to torus links. In this case, we use node IDs instead of hops.
+    const bool is_torus_2d_unicast = topology == tt::tt_fabric::Topology::Torus && is_2D_routing_enabled &&
+                                     chip_send_type == ChipSendType::CHIP_UNICAST;
+    const bool has_z_hop = hops.has_value() && hops->contains(RoutingDirection::Z) && hops->at(RoutingDirection::Z) > 0;
+    if (hops.has_value() && (!is_torus_2d_unicast || has_z_hop)) {
+        return {route_manager.get_forwarding_direction(hops.value())};
+    }
+    return {route_manager.get_forwarding_direction(src_node_id, dst_node_id)};
+}
+
 // ====================================
 // FabricConnectionManager Implementation
 // ====================================
 
 void FabricConnectionManager::register_client(
-    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst) {
+    const tt::tt_metal::CoreCoord& core,
+    TestWorkerType worker_type,
+    const ConnectionKey& key,
+    const FabricNodeId& next_hop_dst) {
     auto [it, inserted] = connections_.try_emplace(key);
     auto& conn = it->second;
 
@@ -156,8 +321,12 @@ void FabricConnectionManager::process(
                 }
             }
 
-            const uint8_t num_buffers_full_size_channel = BUFFERS_PER_CHANNEL;
-            const uint8_t num_buffers_header_only_channel = BUFFERS_PER_CHANNEL;
+            if (perf_breakdown::enabled()) {
+                perf_breakdown::Collector::get().add_mux(num_full_size_channels, num_header_only_channels);
+            }
+
+            const uint8_t num_buffers_full_size_channel = MUX_BUFFERS_PER_CHANNEL;
+            const uint8_t num_buffers_header_only_channel = MUX_BUFFERS_PER_CHANNEL;
             const size_t buffer_size_bytes_full_size_channel = device_info_provider->get_channel_buffer_size_bytes();
             const size_t mux_base_l1_address = device_info_provider->get_l1_unreserved_base();
 
@@ -176,6 +345,10 @@ void FabricConnectionManager::process(
             // Track all mux client cores
             for (const auto& [client_core, _] : conn.channel_map) {
                 all_mux_client_cores_.insert(client_core);
+            }
+
+            if (num_full_size_channels > 0) {
+                mux_configs_.at(mux_core.value())->set_num_full_size_channel_iters(MUX_FULL_SIZE_CHANNEL_ITERS);
             }
 
             test_device_ptr->add_mux_worker_config(
@@ -218,7 +391,8 @@ std::vector<ConnectionKey> FabricConnectionManager::get_connection_keys_for_core
     return {};
 }
 
-size_t FabricConnectionManager::get_connection_count_for_core(const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const {
+size_t FabricConnectionManager::get_connection_count_for_core(
+    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const {
     auto keys = get_connection_keys_for_core(core, worker_type);
     return keys.size();
 }
@@ -387,22 +561,19 @@ void FabricConnectionManager::assign_and_validate_channels(Connection& conn, con
         }
     }
 
-    // Validate channel limits
+    // A mux past its channel budget overflows its stack at runtime (see get_max_mux_channels), so fail here instead.
+    const uint32_t max_channels = get_max_mux_channels();
     TT_FATAL(
-        next_full_size <= MAX_FULL_SIZE_CHANNELS,
-        "Exceeded full-size channel limit: {} for connection direction={} link={} (max={})",
+        next_full_size + next_header_only <= max_channels,
+        "Mux for connection direction={} link={} needs {} channels ({} full-size for senders, {} header-only for "
+        "receivers and sync), but a mux serves at most {} on this arch. Put more receive configs on each core "
+        "(receiver max_configs_per_core), use more links, or use fewer senders per link.",
+        static_cast<int>(key.direction),
+        key.link_idx,
+        next_full_size + next_header_only,
         next_full_size,
-        static_cast<int>(key.direction),
-        key.link_idx,
-        MAX_FULL_SIZE_CHANNELS);
-
-    TT_FATAL(
-        next_header_only <= MAX_HEADER_ONLY_CHANNELS,
-        "Exceeded header-only channel limit: {} for connection direction={} link={} (max={})",
         next_header_only,
-        static_cast<int>(key.direction),
-        key.link_idx,
-        MAX_HEADER_ONLY_CHANNELS);
+        max_channels);
 }
 
 // ====================================
@@ -429,20 +600,38 @@ void TestWorker::create_kernel(
     uint32_t local_args_address,
     uint32_t local_args_capacity_bytes,
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
-    tt::tt_metal::NOC noc_id) const {
-    auto kernel_handle = tt::tt_metal::CreateKernel(
-        this->test_device_ptr_->get_program_handle(),
-        this->kernel_src_,
-        {this->logical_core_},
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = noc_id,
-            .compile_args = ct_args,
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    tt::tt_metal::NOC noc_id,
+    const std::map<std::string, std::string>& extra_defines) const {
+    std::map<std::string, std::string> defines = extra_defines;
+    if (perf_breakdown::enabled()) {
+        defines["FABRIC_TEST_PERF_BREAKDOWN"] = "1";
+        if (perf_breakdown::send_detail()) {
+            defines["FABRIC_TEST_PERF_SEND_DETAIL"] = "1";
+        }
+        if (perf_breakdown::perf_sched()) {
+            defines["FABRIC_TEST_PERF_SCHED"] = "1";
+        }
+        if (perf_breakdown::hot_detail_period() > 0) {
+            defines["FABRIC_TEST_PERF_HOT_DETAIL"] = std::to_string(perf_breakdown::hot_detail_period());
+        }
+        perf_breakdown::Collector::get().add_kernel_created();
+    }
+    defines["FABRIC_TEST_SENDER_BATCH_PAGES"] = std::to_string(sfpu_payload_ring_pages() / 2);
+    if (perf_breakdown::host_detail()) {
+        perf_breakdown::Collector::get().add_kernel_signature(
+            this->test_device_ptr_,
+            this->kernel_src_,
+            kernel_signature("dm", this->kernel_src_, static_cast<uint32_t>(noc_id), ct_args, defines));
+    }
+    if (perf_breakdown::host_detail()) {
+        perf_breakdown::Collector::get().add_rt_args(rt_args.size());
+    }
+    this->test_device_ptr_->add_shared_kernel_core(
+        {.src = this->kernel_src_, .noc = noc_id, .ct_args = ct_args, .defines = std::move(defines)},
+        this->logical_core_,
+        rt_args);
 
-    // Set fabric connection runtime args (for WorkerToFabricEdmSender::build_from_args)
-    tt::tt_metal::SetRuntimeArgs(
-        this->test_device_ptr_->get_program_handle(), kernel_handle, this->logical_core_, rt_args);
+    perf_breakdown::ScopedDetail host_writes_phase("sub_ck_host_writes");
 
     // Set local args to memory buffer
     if (!local_args.empty()) {
@@ -456,16 +645,14 @@ void TestWorker::create_kernel(
             local_args_bytes,
             local_args_capacity_bytes);
 
-        this->test_device_ptr_->set_local_runtime_args_for_core(
-            device_coord, this->logical_core_, local_args_address, local_args);
+        this->test_device_ptr_->write_local_args(device_coord, this->logical_core_, local_args_address, local_args);
     }
 
-    const auto device_info_provider_ptr = this->test_device_ptr_->get_device_info_provider();
     for (const auto& [address, num_bytes] : addresses_and_size_to_clear) {
         if (address == 0 || num_bytes == 0) {
             continue;
         }
-        device_info_provider_ptr->zero_out_buffer_on_cores(device_coord, {this->logical_core_}, address, num_bytes);
+        this->test_device_ptr_->zero_core_region(device_coord, this->logical_core_, address, num_bytes);
     }
 }
 
@@ -480,29 +667,14 @@ TestSender::TestSender(
 }
 
 void TestSender::add_config(TestTrafficSenderConfig config) {
-    // Determine direction for fabric connection
-    const auto dst_node_id = config.dst_node_ids[0];
-
-    // Special handling: For torus 2D unicast, we have bugs where we try to follow the input hop count
-    // but the routing tables cause packets to fail to reach the destination properly in some cases,
-    // due to torus links. In this case, we use node IDs instead of hops.
-    const bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
-                                     (config.parameters.is_2D_routing_enabled) &&
-                                     (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
-
-    const bool has_z_hop = config.hops.has_value() && config.hops->contains(RoutingDirection::Z) &&
-                           config.hops->at(RoutingDirection::Z) > 0;
-
-    std::vector<RoutingDirection> outgoing_directions;
-    if (config.hops.has_value() && config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST &&
-        config.parameters.is_2D_routing_enabled) {
-        outgoing_directions = mcast_outgoing_directions(this->test_device_ptr_->get_node_id(), config.hops.value());
-    } else if (config.hops.has_value() && (!is_torus_2d_unicast || has_z_hop)) {
-        outgoing_directions.push_back(this->test_device_ptr_->get_forwarding_direction(config.hops.value()));
-    } else {
-        outgoing_directions.push_back(
-            this->test_device_ptr_->get_forwarding_direction(this->test_device_ptr_->get_node_id(), dst_node_id));
-    }
+    const std::vector<RoutingDirection> outgoing_directions = get_sender_outgoing_directions(
+        *this->test_device_ptr_->route_manager_,
+        this->test_device_ptr_->get_node_id(),
+        config.hops,
+        config.dst_node_ids[0],
+        config.parameters.chip_send_type,
+        config.parameters.is_2D_routing_enabled,
+        config.parameters.topology);
 
     std::vector<ConnectionKey> fabric_connection_keys;
     fabric_connection_keys.reserve(outgoing_directions.size());
@@ -611,7 +783,8 @@ bool TestReceiver::validate_results(std::vector<uint32_t>& data) const {
 // TestSync Implementation
 // ====================================
 
-TestSync::TestSync(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+TestSync::TestSync(
+    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {
     // TODO: init mem map?
 }
@@ -655,7 +828,8 @@ bool TestSync::validate_results(std::vector<uint32_t>& /*data*/) const {
 // TestMux Implementation
 // ====================================
 
-TestMux::TestMux(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+TestMux::TestMux(
+    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {}
 
 void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
@@ -791,7 +965,8 @@ void TestDevice::add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, Te
     this->sync_workers_.at(logical_core).add_config(std::move(sync_config));
 }
 
-void TestDevice::add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
+void TestDevice::add_receiver_traffic_config(
+    tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
     if (!this->receivers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::RECEIVER, logical_core);
     }
@@ -800,7 +975,10 @@ void TestDevice::add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_cor
 }
 
 void TestDevice::add_mux_worker_config(
-    tt::tt_metal::CoreCoord logical_core, FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
+    tt::tt_metal::CoreCoord logical_core,
+    FabricMuxConfig* mux_config,
+    ConnectionKey connection_key,
+    FabricNodeId next_hop_dst) {
     if (!this->muxes_.contains(logical_core)) {
         this->add_worker(TestWorkerType::MUX, logical_core);
     }
@@ -814,24 +992,106 @@ void TestDevice::create_kernels() {
     // Create local allocator for on-demand mux core allocation
     LocalDeviceCoreAllocator local_alloc(std::move(pristine_cores_));
 
-    // Process fabric connections to determine mux requirements and assign channels
-    connection_manager_.process(local_alloc, this, device_info_provider_);
+    {
+        perf_breakdown::ScopedDetail phase("sub_ck_conn");
+        // Process fabric connections to determine mux requirements and assign channels
+        connection_manager_.process(local_alloc, this, device_info_provider_);
 
-    // Process sync connections separately if not using unified connection manager
-    if (!use_unified_connection_manager_) {
-        sync_connection_manager_.process(local_alloc, this, device_info_provider_);
+        // Process sync connections separately if not using unified connection manager
+        if (!use_unified_connection_manager_) {
+            sync_connection_manager_.process(local_alloc, this, device_info_provider_);
+        }
     }
 
-    this->create_mux_kernels();
+    // Plan connections, then set up every core: circular buffers, their L1 buffers and local-args writes happen now,
+    // while each kernel's cores and runtime args are collected and the kernels themselves are created at the end.
+
+    {
+        perf_breakdown::ScopedDetail phase("sub_ck_mux");
+        this->create_mux_kernels();
+    }
 
     if (global_sync_) {
+        perf_breakdown::ScopedDetail phase("sub_ck_sync");
         this->create_sync_kernel();
     }
 
-    // Normal flow (benchmark_mode affects kernel behavior via compile-time args)
-    // Note: Latency tests call create_latency_sender_kernel() and create_latency_responder_kernel() directly
-    this->create_sender_kernels();
-    this->create_receiver_kernels();
+    if (latency_sender_.has_value()) {
+        const auto& setup = latency_sender_.value();
+        this->create_latency_sender_kernel(
+            setup.core,
+            setup.responder_node,
+            setup.payload_size,
+            setup.num_samples,
+            setup.noc_send_type,
+            setup.responder_virtual_core);
+    } else if (latency_responder_.has_value()) {
+        const auto& setup = latency_responder_.value();
+        this->create_latency_responder_kernel(
+            setup.core,
+            setup.sender_node,
+            setup.payload_size,
+            setup.num_samples,
+            setup.noc_send_type,
+            setup.sender_send_buffer_address,
+            setup.sender_receive_buffer_address,
+            setup.sender_virtual_core);
+    } else {
+        {
+            perf_breakdown::ScopedDetail phase("sub_ck_sender");
+            this->create_sender_kernels();
+        }
+        {
+            perf_breakdown::ScopedDetail phase("sub_ck_receiver");
+            this->create_receiver_kernels();
+        }
+    }
+
+    // Create the collected kernels: one per shared kernel key, over all of that key's cores
+    perf_breakdown::ScopedDetail phase("sub_ck_shared");
+    this->create_shared_kernels();
+}
+
+void TestDevice::add_shared_kernel_core(
+    SharedKernelKey key, tt::tt_metal::CoreCoord core, std::vector<uint32_t> rt_args) {
+    shared_kernel_cores_[std::move(key)].emplace_back(core, std::move(rt_args));
+}
+
+void TestDevice::create_shared_kernels() {
+    for (auto& [key, cores] : shared_kernel_cores_) {
+        std::set<tt::tt_metal::CoreRange> ranges;
+        for (const auto& [core, _] : cores) {
+            ranges.insert(tt::tt_metal::CoreRange(core));
+        }
+        const auto core_ranges = tt::tt_metal::CoreRangeSet(ranges).merge_ranges();
+        std::optional<perf_breakdown::ScopedDetail> kernel_phase(std::in_place, "sub_ck_create_kernel");
+        const auto kernel_handle =
+            key.compute ? tt::tt_metal::CreateKernel(
+                              program_handle_,
+                              key.src,
+                              core_ranges,
+                              tt::tt_metal::ComputeConfig{
+                                  .fp32_dest_acc_en = true, .compile_args = key.ct_args, .defines = key.defines})
+                        : tt::tt_metal::CreateKernel(
+                              program_handle_,
+                              key.src,
+                              core_ranges,
+                              tt::tt_metal::DataMovementConfig{
+                                  .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                                  .noc = key.noc,
+                                  .compile_args = key.ct_args,
+                                  .defines = key.defines,
+                                  .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+        kernel_phase.reset();
+        perf_breakdown::ScopedDetail rt_args_phase("sub_ck_rt_args");
+        for (const auto& [core, rt_args] : cores) {
+            // Data movement kernels always got runtime args; the payload verifier has none.
+            if (!key.compute || !rt_args.empty()) {
+                tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, core, rt_args);
+            }
+        }
+    }
+    shared_kernel_cores_.clear();
 }
 
 void TestDevice::create_mux_kernels() {
@@ -1007,6 +1267,13 @@ void TestDevice::create_sender_kernels() {
     TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
     TT_FATAL(sender_memory_map_->is_valid(), "Sender memory map is invalid");
 
+    // Sender cores without a payload generator get a placeholder payload CB, so a sender kernel builds the same
+    // whether or not its core has one. Benchmark mode generates no payloads, so no core there has the CB.
+    const bool sfpu_placeholders = !benchmark_mode_;
+    std::vector<tt::tt_metal::CoreCoord> placeholder_cores;
+    sfpu_coverage_.sender_configs = 0;
+    sfpu_coverage_.generated = 0;
+
     for (const auto& [core, sender] : this->senders_) {
         // Get connection count and generate all connection args via FabricConnectionManager
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::SENDER);
@@ -1058,6 +1325,24 @@ void TestDevice::create_sender_kernels() {
 
         // Runtime args with connection type information
         std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
+        const size_t highest_usable_address_arg_idx = rt_args.size() - 1;  // last memory map arg
+
+        check_sender_payload_buffers_fit(sender, *sender_memory_map_);
+
+        // Per config: true when its payloads come from the core's compute engine (sfpu_payload_configs), false when
+        // this kernel fills them. Passed as a runtime flag, so the kernel build doesn't depend on the choice.
+        const std::vector<bool> sfpu_configs = sfpu_payload_configs(sender, benchmark_mode_, *sender_memory_map_);
+        sfpu_coverage_.sender_configs += sfpu_configs.size();
+        sfpu_coverage_.generated += std::count(sfpu_configs.begin(), sfpu_configs.end(), true);
+        if (std::find(sfpu_configs.begin(), sfpu_configs.end(), true) != sfpu_configs.end()) {
+            rt_args[highest_usable_address_arg_idx] = create_sfpu_payload_generator(core, sender, sfpu_configs);
+        } else if (sfpu_placeholders) {
+            placeholder_cores.push_back(core);
+        }
+        std::map<std::string, std::string> sender_defines;
+        if (const uint32_t corrupt_mode = perf_breakdown::corrupt_payload(); corrupt_mode != 0) {
+            sender_defines["FABRIC_TEST_CORRUPT_PAYLOAD"] = std::to_string(corrupt_mode);
+        }
 
         // Add all connection args via FabricConnectionManager
         auto connection_args = connection_manager_.generate_connection_args_for_core(
@@ -1103,8 +1388,8 @@ void TestDevice::create_sender_kernels() {
         }
 
         // Add sender traffic config args (including credit management info)
-        for (const auto& [config, _] : sender.configs_) {
-            auto traffic_config_args = config.get_args(false);  // false = not a sync config
+        for (size_t i = 0; i < sender.configs_.size(); i++) {
+            auto traffic_config_args = sender.configs_[i].first.get_args(false /* is_sync_config */, sfpu_configs[i]);
             local_args.insert(local_args.end(), traffic_config_args.begin(), traffic_config_args.end());
         }
 
@@ -1150,10 +1435,190 @@ void TestDevice::create_sender_kernels() {
             sender_memory_map_->get_local_args_address(),
             sender_memory_map_->get_local_args_size(),
             addresses_and_size_to_clear,
-            noc_id);
+            noc_id,
+            sender_defines);
 
         log_debug(tt::LogTest, "Created sender kernel on core {}", core);
     }
+
+    if (!placeholder_cores.empty()) {
+        create_sfpu_placeholder_cbs(
+            placeholder_cores,
+            sender_memory_map_->get_result_buffer_address(),
+            {{SFPU_PAYLOAD_CB_INDEX, tt::DataFormat::Int32}});
+    }
+}
+
+uint32_t TestDevice::create_sfpu_payload_generator(
+    const tt::tt_metal::CoreCoord& core, const TestSender& sender, const std::vector<bool>& sfpu_configs) {
+    perf_breakdown::ScopedDetail phase("sub_ck_sfpu_gen");
+    // The ring sits at the top of the sender's L1 region; the sender's highest usable address is lowered to its base
+    // so the sender's own buffers stay below it. A page holds the largest generated payload's tiles.
+    uint32_t page_tiles = 0;
+    for (size_t i = 0; i < sender.configs_.size(); i++) {
+        if (sfpu_configs[i]) {
+            page_tiles =
+                std::max(page_tiles, sfpu_payload_tiles(sender.configs_[i].first.parameters.payload_size_bytes));
+        }
+    }
+    const uint32_t page_bytes = page_tiles * SFPU_TILE_BYTES;
+    const uint32_t ring_bytes = sfpu_payload_ring_pages() * page_bytes;
+    const uint32_t ring_base = sfpu_payload_ring_base(*sender_memory_map_, page_tiles);
+
+    const auto* fixture = dynamic_cast<const TestFixture*>(this->device_info_provider_.get());
+    TT_FATAL(fixture != nullptr, "Failed to cast device_info_provider to TestFixture");
+
+    // Get the sfpu payload generator's ring buffer
+    auto ring_buffer = [&] {
+        perf_breakdown::ScopedDetail buf_phase("sub_ck_sfpu_bufs");
+        return fixture->create_mesh_buffer_helper({core}, ring_base, ring_bytes);
+    }();
+    auto* device_ring_buffer = ring_buffer->get_device_buffer(coord_);
+    sfpu_payload_buffers_.push_back(std::move(ring_buffer));
+
+    // Create the circular buffer and place it over the ring buffer
+    tt::tt_metal::CircularBufferConfig ring_config(ring_bytes, {{SFPU_PAYLOAD_CB_INDEX, tt::DataFormat::Int32}});
+    ring_config.set_page_size(SFPU_PAYLOAD_CB_INDEX, page_bytes);
+    ring_config.set_globally_allocated_address(*device_ring_buffer);
+    tt::tt_metal::CreateCircularBuffer(program_handle_, core, ring_config);
+
+    // The number of configs, then per config its initial seed, the number of pages to generate (0 when the sender fills
+    // the config's payloads itself, or it has none) and the tiles of each.
+    std::vector<uint32_t> rt_args;
+    rt_args.reserve(1 + 3 * sender.configs_.size());
+    rt_args.push_back(static_cast<uint32_t>(sender.configs_.size()));
+    for (size_t i = 0; i < sender.configs_.size(); i++) {
+        const auto& config = sender.configs_[i].first;
+        rt_args.push_back(config.parameters.seed);
+        rt_args.push_back(sfpu_configs[i] ? config.parameters.num_packets : 0);
+        rt_args.push_back(sfpu_payload_tiles(config.parameters.payload_size_bytes));
+    }
+
+    const std::vector<uint32_t> gen_ct_args;
+    if (perf_breakdown::host_detail()) {
+        perf_breakdown::Collector::get().add_kernel_signature(
+            this,
+            default_payload_gen_kernel_src,
+            kernel_signature("compute", default_payload_gen_kernel_src, 0, gen_ct_args, {}));
+    }
+    add_shared_kernel_core(
+        {.src = default_payload_gen_kernel_src, .compute = true, .ct_args = gen_ct_args}, core, std::move(rt_args));
+
+    // One line per generator for post-mortem reads (ttexalens): where the ring and results live, and what the
+    // first configs' first pages must hold (word i = seed + i).
+    const auto physical_chip_id =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
+            fabric_node_id_);
+    std::string first_configs;
+    for (size_t i = 0; i < std::min<size_t>(sender.configs_.size(), 3); i++) {
+        const auto& config = sender.configs_[i].first;
+        first_configs += fmt::format(
+            " cfg{}=(seed=0x{:x},bytes={},pkts={},sfpu={},dst_chip={},dst_core={},dst_addr=0x{:x})",
+            i,
+            config.parameters.seed,
+            config.parameters.payload_size_bytes,
+            config.parameters.num_packets,
+            sfpu_configs[i] ? 1 : 0,
+            config.dst_node_ids.empty() ? -1 : static_cast<int>(config.dst_node_ids[0].chip_id),
+            config.dst_logical_core.str(),
+            config.target_address);
+    }
+    log_info(
+        tt::LogTest,
+        "SFPU_DIAG node={} phys_chip={} core={} ring_base=0x{:x} ring_bytes={} result_buf=0x{:x} num_configs={}{}",
+        fabric_node_id_,
+        physical_chip_id,
+        core.str(),
+        ring_base,
+        ring_bytes,
+        sender_memory_map_->get_result_buffer_address(),
+        sender.configs_.size(),
+        first_configs);
+    return ring_base;
+}
+
+void TestDevice::create_sfpu_payload_verifier(
+    const tt::tt_metal::CoreCoord& core, const TestReceiver& receiver, const std::vector<bool>& sfpu_configs) {
+    perf_breakdown::ScopedDetail phase("sub_ck_sfpu_verify");
+    const auto* fixture = dynamic_cast<const TestFixture*>(this->device_info_provider_.get());
+    TT_FATAL(fixture != nullptr, "Failed to cast device_info_provider to TestFixture");
+
+    // Requests and verdict flags at the top of Tensix L1, above every config's receive ring.
+    // Request cb is for the brisc (that is polling for incoming packets) to issue a request to the sfpu verifier. The
+    // flag cb is for the sfpu verifier to set a flag when it has verified a packet, where the flag indicates the
+    // verififcation result.
+    const uint32_t flag_bytes = SFPU_VERIFY_DEPTH * SFPU_TILE_BYTES;
+    const uint32_t req_bytes = SFPU_VERIFY_DEPTH * SFPU_VERIFY_REQ_PAGE_BYTES;
+    const uint32_t control_base = sfpu_verify_control_base();
+    uint32_t rings_end = 0;
+    for (const auto& [config, _] : receiver.configs_) {
+        rings_end = std::max(rings_end, static_cast<uint32_t>(config.target_address + config.payload_buffer_size));
+    }
+    TT_FATAL(
+        rings_end <= control_base,
+        "Receiver core {} rings end at 0x{:x}, above the SFPU verify control region at 0x{:x}",
+        core.str(),
+        rings_end,
+        control_base);
+
+    auto control_buffer = [&] {
+        perf_breakdown::ScopedDetail buf_phase("sub_ck_sfpu_bufs");
+        return fixture->create_mesh_buffer_helper({core}, control_base, flag_bytes + req_bytes);
+    }();
+    auto* device_control_buffer = control_buffer->get_device_buffer(coord_);
+    sfpu_payload_buffers_.push_back(std::move(control_buffer));
+
+    tt::tt_metal::CircularBufferConfig flag_config(flag_bytes, {{SFPU_VERIFY_FLAG_CB_INDEX, tt::DataFormat::Int32}});
+    flag_config.set_page_size(SFPU_VERIFY_FLAG_CB_INDEX, SFPU_TILE_BYTES);
+    flag_config.set_globally_allocated_address_and_total_size(*device_control_buffer, flag_bytes, 0);
+    tt::tt_metal::CreateCircularBuffer(program_handle_, core, flag_config);
+
+    tt::tt_metal::CircularBufferConfig req_config(req_bytes, {{SFPU_VERIFY_REQ_CB_INDEX, tt::DataFormat::UInt32}});
+    req_config.set_page_size(SFPU_VERIFY_REQ_CB_INDEX, SFPU_VERIFY_REQ_PAGE_BYTES);
+    req_config.set_globally_allocated_address_and_total_size(*device_control_buffer, req_bytes, flag_bytes);
+    tt::tt_metal::CreateCircularBuffer(program_handle_, core, req_config);
+
+    // A data CB per verified config over its receive ring: page = payload, as many pages as whole payloads fit in the
+    // ring (the ring wraps when the next payload would not fit), so the CB read pointer follows the ring slots. The
+    // other data CBs are placeholders over the first flag page, so every receiver has the same CBs (and kernel builds);
+    // no kernel touches them.
+    for (size_t i = 0; i < SFPU_VERIFY_MAX_CONFIGS; i++) {
+        const uint32_t data_cb = SFPU_VERIFY_DATA_CB_BASE + static_cast<uint32_t>(i);
+        if (i >= sfpu_configs.size() || !sfpu_configs[i]) {
+            tt::tt_metal::CircularBufferConfig placeholder_config(
+                SFPU_TILE_BYTES, {{static_cast<uint8_t>(data_cb), tt::DataFormat::Int32}});
+            placeholder_config.set_page_size(data_cb, SFPU_TILE_BYTES);
+            placeholder_config.set_globally_allocated_address_and_total_size(
+                *device_control_buffer, SFPU_TILE_BYTES, 0);
+            tt::tt_metal::CreateCircularBuffer(program_handle_, core, placeholder_config);
+            continue;
+        }
+        const auto& config = receiver.configs_[i].first;
+        const uint32_t payload_bytes = config.parameters.payload_size_bytes;
+        const uint32_t ring_bytes = (config.payload_buffer_size / payload_bytes) * payload_bytes;
+        auto ring_buffer = [&] {
+            perf_breakdown::ScopedDetail buf_phase("sub_ck_sfpu_bufs");
+            return fixture->create_mesh_buffer_helper({core}, config.target_address, ring_bytes);
+        }();
+        auto* device_ring_buffer = ring_buffer->get_device_buffer(coord_);
+        sfpu_payload_buffers_.push_back(std::move(ring_buffer));
+
+        tt::tt_metal::CircularBufferConfig data_config(
+            ring_bytes, {{static_cast<uint8_t>(data_cb), tt::DataFormat::Int32}});
+        data_config.set_page_size(data_cb, payload_bytes);
+        data_config.set_globally_allocated_address(*device_ring_buffer);
+        tt::tt_metal::CreateCircularBuffer(program_handle_, core, data_config);
+    }
+
+    const std::vector<uint32_t> verify_ct_args;
+    if (perf_breakdown::host_detail()) {
+        perf_breakdown::Collector::get().add_kernel_signature(
+            this,
+            default_payload_verify_kernel_src,
+            kernel_signature("compute", default_payload_verify_kernel_src, 0, verify_ct_args, {}));
+    }
+    add_shared_kernel_core(
+        {.src = default_payload_verify_kernel_src, .compute = true, .ct_args = verify_ct_args}, core, {});
 }
 
 void TestDevice::create_receiver_kernels() {
@@ -1162,7 +1627,20 @@ void TestDevice::create_receiver_kernels() {
     TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
     TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
 
+    // Receiver cores without a compute verifier get placeholder verifier CBs, so a receiver kernel builds the same
+    // whether or not its core has one. Benchmark mode checks no payloads, so no core there has the CBs.
+    const bool sfpu_placeholders = !benchmark_mode_;
+    std::vector<tt::tt_metal::CoreCoord> placeholder_cores;
+    sfpu_coverage_.receiver_configs = 0;
+    sfpu_coverage_.verified = 0;
+
     for (const auto& [core, receiver] : this->receivers_) {
+        // Some configs' payloads are checked on the core's compute engine instead of by the receiver
+        // (sfpu_verify_configs); the kernel follows each config's choice at runtime.
+        const std::vector<bool> sfpu_configs = sfpu_verify_configs(receiver, benchmark_mode_);
+        sfpu_coverage_.receiver_configs += sfpu_configs.size();
+        sfpu_coverage_.verified += std::count(sfpu_configs.begin(), sfpu_configs.end(), true);
+
         // Get connection count and generate all connection args via FabricConnectionManager (for credit return)
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::RECEIVER);
 
@@ -1221,7 +1699,7 @@ void TestDevice::create_receiver_kernels() {
         // Local args for traffic configs
         std::vector<uint32_t> local_args;
         if (!receiver.configs_.empty()) {
-            const auto first_traffic_args = receiver.configs_[0].first.get_args();
+            const auto first_traffic_args = receiver.configs_[0].first.get_args(sfpu_configs[0]);
             local_args.reserve(local_args.size() + (receiver.configs_.size() * first_traffic_args.size()));
             local_args.insert(local_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
@@ -1233,7 +1711,7 @@ void TestDevice::create_receiver_kernels() {
 
             for (size_t i = 1; i < receiver.configs_.size(); ++i) {
                 const auto& traffic_config = receiver.configs_[i].first;
-                const auto traffic_args = traffic_config.get_args();
+                const auto traffic_args = traffic_config.get_args(sfpu_configs[i]);
                 local_args.insert(local_args.end(), traffic_args.begin(), traffic_args.end());
 
                 // clear out the atomic inc address if used
@@ -1255,6 +1733,11 @@ void TestDevice::create_receiver_kernels() {
                  receiver_memory_map_->get_mux_termination_sync_size()});
         }
 
+        if (std::find(sfpu_configs.begin(), sfpu_configs.end(), true) != sfpu_configs.end()) {
+            create_sfpu_payload_verifier(core, receiver, sfpu_configs);
+        } else if (sfpu_placeholders) {
+            placeholder_cores.push_back(core);
+        }
         receiver.create_kernel(
             coord_,
             ct_args,
@@ -1265,6 +1748,41 @@ void TestDevice::create_receiver_kernels() {
             addresses_and_size_to_clear);
 
         log_debug(tt::LogTest, "Created receiver kernel on core {}", core);
+    }
+
+    if (!placeholder_cores.empty()) {
+        std::vector<std::pair<uint8_t, tt::DataFormat>> cbs = {
+            {SFPU_VERIFY_REQ_CB_INDEX, tt::DataFormat::UInt32}, {SFPU_VERIFY_FLAG_CB_INDEX, tt::DataFormat::Int32}};
+        for (uint32_t i = 0; i < SFPU_VERIFY_MAX_CONFIGS; i++) {
+            cbs.emplace_back(SFPU_VERIFY_DATA_CB_BASE + i, tt::DataFormat::Int32);
+        }
+        create_sfpu_placeholder_cbs(placeholder_cores, receiver_memory_map_->get_result_buffer_address(), cbs);
+    }
+}
+
+void TestDevice::create_sfpu_placeholder_cbs(
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    uint32_t address,
+    const std::vector<std::pair<uint8_t, tt::DataFormat>>& cbs) {
+    perf_breakdown::ScopedDetail phase("sub_ck_sfpu_bufs");
+    const auto* fixture = dynamic_cast<const TestFixture*>(this->device_info_provider_.get());
+    TT_FATAL(fixture != nullptr, "Failed to cast device_info_provider to TestFixture");
+    // No kernel reads or writes a placeholder CB, so they all lie over the same 16 B of each core, at any address.
+    constexpr uint32_t PLACEHOLDER_BYTES = 16;
+    auto buffer = fixture->create_mesh_buffer_helper(cores, address, PLACEHOLDER_BYTES);
+    auto* device_buffer = buffer->get_device_buffer(coord_);
+    sfpu_payload_buffers_.push_back(std::move(buffer));
+
+    std::set<tt::tt_metal::CoreRange> core_ranges;
+    for (const auto& core : cores) {
+        core_ranges.insert(tt::tt_metal::CoreRange(core));
+    }
+    const tt::tt_metal::CoreRangeSet core_set(core_ranges);
+    for (const auto& [index, format] : cbs) {
+        tt::tt_metal::CircularBufferConfig config(PLACEHOLDER_BYTES, {{index, format}});
+        config.set_page_size(index, PLACEHOLDER_BYTES);
+        config.set_globally_allocated_address(*device_buffer);
+        tt::tt_metal::CreateCircularBuffer(program_handle_, core_set, config);
     }
 }
 
@@ -1364,9 +1882,68 @@ TestDevice::ValidationReadOps TestDevice::initiate_results_readback() const {
     return ops;
 }
 
+// TT_FABRIC_TEST_PERF_PER_CORE=1: one line per sender core with its loop and wait times and what its configs send to
+// (distinct destination chips, hops to them, distinct first-hop connections), to see which cores set the device time.
+void TestDevice::log_sender_core_perf(
+    const tt::tt_metal::CoreCoord& core,
+    const TestSender& sender,
+    const std::vector<uint32_t>& words,
+    uint32_t aiclk_mhz) const {
+    const auto read_slot_cycles = [&words](uint32_t slot) {
+        const uint32_t idx = perf_breakdown::PERF_BREAKDOWN_BASE_WORD_INDEX + 2 * slot;
+        return idx + 1 < words.size()
+                   ? static_cast<uint64_t>(words[idx]) | (static_cast<uint64_t>(words[idx + 1]) << 32)
+                   : uint64_t{0};
+    };
+    const double cycles_per_ms = aiclk_mhz > 0 ? aiclk_mhz * 1000.0 : 1.0;
+
+    std::set<FabricNodeId> destinations;
+    std::unordered_set<ConnectionKey, ConnectionKeyHash> first_hop_connections;
+    uint32_t total_hops = 0;
+    uint32_t max_hops = 0;
+    for (const auto& [config, connection_keys] : sender.configs_) {
+        if (!connection_keys.empty()) {
+            first_hop_connections.insert(connection_keys.front());
+        }
+        uint32_t config_hops = 0;
+        for (const auto& dst : config.dst_node_ids) {
+            destinations.insert(dst);
+            uint32_t dst_hops = 0;
+            for (const auto& [direction, hops] : this->route_manager_->get_hops_to_chip(this->fabric_node_id_, dst)) {
+                dst_hops += hops;
+            }
+            config_hops = std::max(config_hops, dst_hops);
+        }
+        total_hops += config_hops;
+        max_hops = std::max(max_hops, config_hops);
+    }
+    const size_t num_configs = sender.configs_.size();
+    log_info(
+        tt::LogTest,
+        "PERF_CORE snd dev={} core={} configs={} dsts={} hops={:.1f}/{} first_hop_conns={} loop_ms={:.1f} "
+        "slot_wait_ms={:.1f} fill_ms={:.1f} credit_blk={}",
+        this->fabric_node_id_,
+        core.str(),
+        num_configs,
+        destinations.size(),
+        num_configs > 0 ? static_cast<double>(total_hops) / num_configs : 0.0,
+        max_hops,
+        first_hop_connections.size(),
+        read_slot_cycles(perf_breakdown::S_LOOP) / cycles_per_ms,
+        read_slot_cycles(perf_breakdown::S_SLOT_WAIT) / cycles_per_ms,
+        read_slot_cycles(perf_breakdown::S_FILL) / cycles_per_ms,
+        read_slot_cycles(perf_breakdown::S_CREDIT_BLOCKED));
+}
+
 void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) const {
     const auto* fixture = dynamic_cast<const TestFixture*>(this->device_info_provider_.get());
     TT_FATAL(fixture != nullptr, "Failed to cast device_info_provider to TestFixture");
+
+    const bool collect_perf = perf_breakdown::enabled();
+    auto& perf_collector = perf_breakdown::Collector::get();
+    if (collect_perf) {
+        perf_collector.set_aiclk_mhz(fixture->get_device_frequency_mhz(this->fabric_node_id_));
+    }
 
     // Validate senders
     if (ops.has_senders) {
@@ -1374,6 +1951,47 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
         for (const auto& [core, sender] : this->senders_) {
             bool pass = sender.validate_results(data.at(core));
             TT_FATAL(pass, "Sender on device: {} core: {} failed", this->fabric_node_id_, core);
+            if (collect_perf) {
+                perf_collector.add_sender(data.at(core), sender.configs_.size());
+            }
+            if (collect_perf && perf_breakdown::perf_per_core()) {
+                log_sender_core_perf(
+                    core, sender, data.at(core), fixture->get_device_frequency_mhz(this->fabric_node_id_));
+            }
+            if (collect_perf && perf_breakdown::hot_detail_period() > 0) {
+                const auto& words = data.at(core);
+                perf_collector.add_sender_hot_detail(
+                    words,
+                    static_cast<uint64_t>(words[TT_FABRIC_WORD_CNT_INDEX]) |
+                        (static_cast<uint64_t>(words[TT_FABRIC_WORD_CNT_INDEX + 1]) << 32));
+            }
+            if (collect_perf && perf_breakdown::perf_sched()) {
+                std::unordered_map<ConnectionKey, uint32_t, ConnectionKeyHash> configs_per_connection;
+                for (const auto& [config, connection_keys] : sender.configs_) {
+                    configs_per_connection[connection_keys.front()]++;
+                }
+                std::vector<perf_breakdown::SchedConfigInfo> sched_configs;
+                for (const auto& [config, connection_keys] : sender.configs_) {
+                    perf_breakdown::SchedConfigInfo info{
+                        .conn_load = configs_per_connection.at(connection_keys.front())};
+                    if (config.hops.has_value()) {
+                        for (const auto& [direction, hops] : *config.hops) {
+                            info.hops += hops;
+                        }
+                    } else {
+                        for (const auto& dst : config.dst_node_ids) {
+                            uint32_t dst_hops = 0;
+                            for (const auto& [direction, hops] :
+                                 this->route_manager_->get_hops_to_chip(this->fabric_node_id_, dst)) {
+                                dst_hops += hops;
+                            }
+                            info.hops = std::max(info.hops, dst_hops);
+                        }
+                    }
+                    sched_configs.push_back(info);
+                }
+                perf_collector.add_sender_sched(data.at(core), sched_configs);
+            }
         }
     }
 
@@ -1383,6 +2001,9 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
         for (const auto& [core, receiver] : this->receivers_) {
             bool pass = receiver.validate_results(data.at(core));
             TT_FATAL(pass, "Receiver on device: {} core: {} failed", this->fabric_node_id_, core);
+            if (collect_perf) {
+                perf_collector.add_receiver(data.at(core), receiver.configs_.size());
+            }
         }
     }
 }
@@ -1445,17 +2066,52 @@ void TestDevice::set_local_runtime_args_for_core(
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
 }
 
-size_t TestDevice::get_latency_send_buffer_address() const {
-    // Send buffer starts after the latency result buffer
-    // Results are stored as uint32_t elapsed times (1 per sample)
-    return sender_memory_map_->get_result_buffer_address() + (TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
+void TestDevice::write_local_args(
+    const MeshCoordinate& device_coord,
+    tt::tt_metal::CoreCoord logical_core,
+    uint32_t address,
+    const std::vector<uint32_t>& args) {
+    if (defer_host_writes_) {
+        deferred_host_writes_.push_back(
+            {.device_coord = device_coord, .logical_core = logical_core, .address = address, .args = args});
+        return;
+    }
+    set_local_runtime_args_for_core(device_coord, logical_core, address, args);
 }
 
-size_t TestDevice::get_latency_receive_buffer_address(uint32_t payload_size) const {
+void TestDevice::zero_core_region(
+    const MeshCoordinate& device_coord, tt::tt_metal::CoreCoord logical_core, uint32_t address, uint32_t num_bytes) {
+    if (defer_host_writes_) {
+        deferred_host_writes_.push_back(
+            {.device_coord = device_coord, .logical_core = logical_core, .address = address, .zero_bytes = num_bytes});
+        return;
+    }
+    device_info_provider_->zero_out_buffer_on_cores(device_coord, {logical_core}, address, num_bytes);
+}
+
+void TestDevice::flush_deferred_host_writes() {
+    for (const auto& write : deferred_host_writes_) {
+        if (write.zero_bytes > 0) {
+            device_info_provider_->zero_out_buffer_on_cores(
+                write.device_coord, {write.logical_core}, write.address, write.zero_bytes);
+        } else {
+            set_local_runtime_args_for_core(write.device_coord, write.logical_core, write.address, write.args);
+        }
+    }
+    deferred_host_writes_.clear();
+}
+
+size_t TestDevice::get_latency_send_buffer_address(const SenderMemoryMap& sender_memory_map) {
+    // Send buffer starts after the latency result buffer
+    // Results are stored as uint32_t elapsed times (1 per sample)
+    return sender_memory_map.get_result_buffer_address() + (TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
+}
+
+size_t TestDevice::get_latency_receive_buffer_address(const SenderMemoryMap& sender_memory_map, uint32_t payload_size) {
     // Receive buffer starts after the send buffer
     // Send buffer size must accommodate the full message payload
     TT_FATAL(payload_size > 0, "Latency payload size must be greater than 0");
-    return get_latency_send_buffer_address() + payload_size;
+    return get_latency_send_buffer_address(sender_memory_map) + payload_size;
 }
 
 void TestDevice::create_latency_sender_kernel(
@@ -1514,10 +2170,10 @@ void TestDevice::create_latency_sender_kernel(
         num_samples,
         MAX_LATENCY_SAMPLES);
 
-    uint32_t send_buffer_address = get_latency_send_buffer_address();
-    uint32_t receive_buffer_address = get_latency_receive_buffer_address(payload_size);
+    uint32_t send_buffer_address = get_latency_send_buffer_address(*sender_memory_map_);
+    uint32_t receive_buffer_address = get_latency_receive_buffer_address(*sender_memory_map_, payload_size);
 
-    // responder_virtual_core is passed as parameter from TestContext
+    // responder_virtual_core comes from the latency setup (LatencySenderSetup)
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // result buffer for latency samples
@@ -1622,10 +2278,9 @@ void TestDevice::create_latency_responder_kernel(
         num_samples,
         MAX_LATENCY_SAMPLES);
 
-    // Use sender's actual buffer addresses and coordinates passed from caller (no recomputation)
+    // The sender's buffer addresses and core come from the latency setup (LatencyResponderSetup)
     // Responder receives from sender's send buffer
     uint32_t responder_receive_buffer_address = sender_send_buffer_address;
-    // sender_virtual_core is passed as parameter from TestContext
 
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {

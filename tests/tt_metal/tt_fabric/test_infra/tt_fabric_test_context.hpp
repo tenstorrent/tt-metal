@@ -117,6 +117,11 @@ public:
         const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies,
         bool use_dynamic_policies = true);
 
+    // Splits senders whose configs exceed one core's fast paths across more cores
+    // (DynamicPolicyManager::split_senders_to_fit_core_limits). Runs before prepare_for_test, whose policy counts the
+    // pieces.
+    void split_senders_to_fit_core_limits(TestConfig& config) const;
+
     void prepare_for_test(const TestConfig& config);
 
     uint32_t get_randomized_master_seed() const { return fixture_->get_randomized_master_seed(); }
@@ -239,8 +244,6 @@ private:
 
     void setup_latency_test_workers(TestConfig& config);
 
-    void create_latency_kernels_for_device(TestDevice& test_device);
-
     LatencyResultsManager::LatencyWorkerLocation get_latency_sender_location();
 
     LatencyResultsManager::LatencyWorkerLocation get_latency_receiver_location();
@@ -250,6 +253,8 @@ private:
     void initialize_memory_maps();
 
     void update_memory_maps(const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies);
+    tt::tt_fabric::fabric_tests::AllocatorPolicies size_receiver_rings_to_fill_l1(
+        tt::tt_fabric::fabric_tests::AllocatorPolicies policies) const;
 
     void validate_packet_sizes_for_policy(const TestConfig& config, uint32_t payload_chunk_size);
 

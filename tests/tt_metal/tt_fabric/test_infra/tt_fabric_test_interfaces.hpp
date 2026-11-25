@@ -164,6 +164,18 @@ public:
         ChipSendType chip_send_type) const = 0;
 };
 
+// The directions in which a sender's packets for one traffic config leave its chip. Each direction (with the sender's
+// link and VC) names the router channel the sender connects to, directly or through a mux. hops are the config's hops
+// when it has them, and dst_node_id is its first destination.
+std::vector<RoutingDirection> get_sender_outgoing_directions(
+    const IRouteManager& route_manager,
+    const FabricNodeId& src_node_id,
+    const std::optional<std::unordered_map<RoutingDirection, uint32_t>>& hops,
+    const FabricNodeId& dst_node_id,
+    ChipSendType chip_send_type,
+    bool is_2D_routing_enabled,
+    tt::tt_fabric::Topology topology);
+
 class IDistributedContextManager {
 public:
     virtual ~IDistributedContextManager() = default;
