@@ -294,8 +294,12 @@ def _run_weight_pages(mesh_device, fmt, transposed, counts, max_tokens, indexed=
 
     dram = ttnn.DRAM_MEMORY_CONFIG
 
-    def dev(t, dtype, layout):
-        return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh_device, memory_config=dram)
+    def dev(t, dtype, layout, tile=None):
+        return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh_device, memory_config=dram, tile=tile)
+
+    # transposed: the weight tensors carry a transposed tile (ttnn tiles them transposed: the same bytes as `stored`);
+    # the table-addressed byte streams are described by weights_tile
+    w_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE), transpose_tile=True) if transposed else None
 
     def idx(values):
         return dev(torch.tensor(values, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
@@ -311,13 +315,14 @@ def _run_weight_pages(mesh_device, fmt, transposed, counts, max_tokens, indexed=
         gate_biases=bias_lists["gate"],
         up_biases=bias_lists["up"],
         down_biases=bias_lists["down"],
-        weights_tile_transposed=transposed,
     )
     if indexed:
         common.update(x_row_index=idx(row_index.tolist()), output_row_major=True)
 
-    # 1) per-expert weight tensors (DRAM interleaved)
-    w_lists = {r: [dev(stored[e][r], wdtype, ttnn.TILE_LAYOUT) for e in range(E)] for r in ("gate", "up", "down")}
+    # 1) per-expert weight tensors (DRAM interleaved), the logical weights in w_tile tiles
+    w_lists = {
+        r: [dev(logical[e][r], wdtype, ttnn.TILE_LAYOUT, tile=w_tile) for e in range(E)] for r in ("gate", "up", "down")
+    }
     out_tensors = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
         tt_x,
         offsets,
@@ -374,6 +379,7 @@ def _run_weight_pages(mesh_device, fmt, transposed, counts, max_tokens, indexed=
         weights_k_gate_up=K_GU,
         weights_k_down=N_GU,
         weights_dtype=wdtype,
+        weights_tile=w_tile,
         **common,
     )
     out_pages = ttnn.to_torch(out_pages).float().reshape(-1, EMB)

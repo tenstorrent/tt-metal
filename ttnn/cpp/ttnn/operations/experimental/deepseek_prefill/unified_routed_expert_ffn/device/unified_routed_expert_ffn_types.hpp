@@ -124,9 +124,9 @@ struct UnifiedRoutedExpertFfnParams {
     // pairs point at) names it here instead of zeroing it with a separate op.
     uint32_t zero_output_row = std::numeric_limits<uint32_t>::max();
 
-    // The weights are stored in transposed tiles (their ttnn.Tile has transpose_tile; set from gate_projs[0] by the
-    // prim): the compute kernel transposes each weight tile back as it unpacks it (matmul transpose flag). The tile
-    // grid, its sharding and the reader are unchanged. A block-float weight then shares one exponent per 16
+    // The weights are stored in transposed tiles (set by the prim from gate_projs[0]'s ttnn.Tile, or from weights_tile
+    // with weight_pages): the compute kernel transposes each weight tile back as it unpacks it (matmul transpose flag).
+    // The tile grid, its sharding and the reader are unchanged. A block-float weight then shares one exponent per 16
     // consecutive input rows of one output column (gpt-oss: GPTQ weights rounded on that grid). Changes the compute
     // program (part of the cache key).
     bool weights_tile_transposed = false;

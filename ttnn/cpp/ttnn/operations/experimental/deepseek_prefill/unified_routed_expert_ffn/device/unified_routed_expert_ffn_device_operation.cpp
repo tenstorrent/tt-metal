@@ -263,6 +263,18 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                     name,
                     e,
                     w.memory_config());
+                // Transposed tiles: all or nothing, and the whole tile (the matmul transposes the faces and within
+                // them).
+                const auto& tile = w.tensor_spec().tile();
+                TT_FATAL(
+                    tile.get_transpose_within_face() == op.weights_tile_transposed &&
+                        tile.get_transpose_of_faces() == op.weights_tile_transposed,
+                    "{}[{}] tile ({}) must be transposed like gate_proj[0]'s (transposed: {}): all weights share one "
+                    "program",
+                    name,
+                    e,
+                    tile,
+                    op.weights_tile_transposed);
                 TT_FATAL(
                     w.padded_shape() == ref.padded_shape() && w.dtype() == ref.dtype(),
                     "{}[{}] shape/dtype ({}, {}) must match expert 0 ({}, {}) — all experts share one program",
@@ -585,7 +597,6 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t l1_end,
     const std::optional<ttnn::Tensor>& x_row_index,
     uint32_t zero_output_row,
-    bool weights_tile_transposed,
     const std::optional<ttnn::Tensor>& weight_pages,
     const std::optional<ttnn::Tensor>& gate_up_weight_source,
     const std::optional<ttnn::Tensor>& down_weight_source,
@@ -595,7 +606,8 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t weights_n_down,
     uint32_t weights_k_gate_up,
     uint32_t weights_k_down,
-    tt::tt_metal::DataType weights_dtype) {
+    tt::tt_metal::DataType weights_dtype,
+    const std::optional<tt::tt_metal::Tile>& weights_tile) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::
         UnifiedRoutedExpertFfnDeviceOperation;
     // Checked here, not in validate_on_program_cache_miss, so it also runs on cache hits: the reader uses
@@ -604,6 +616,14 @@ ttnn::Tensor unified_routed_expert_moe(
         TT_FATAL(x_row_index->storage_type() == ttnn::StorageType::DEVICE, "x_row_index must be on device");
         TT_FATAL(x_row_index->device() == x.device(), "x_row_index must be on the same mesh device as x");
     }
+    // Weights stored in transposed tiles (ttnn.Tile(..., transpose_tile=True)): the matmuls transpose each weight tile
+    // back as they unpack it, as ttnn.matmul does for a transposed in1 tile. Weight tensors carry their tile (checked
+    // against gate_projs[0]'s in validate_on_program_cache_miss); table-addressed weights are byte buffers, so
+    // weights_tile describes them.
+    const bool weights_tile_transposed =
+        weight_pages.has_value()
+            ? (weights_tile.has_value() && weights_tile->get_transpose_within_face())
+            : (!gate_projs.empty() && gate_projs[0].tensor_spec().tile().get_transpose_within_face());
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .m_tiles = m_tiles,

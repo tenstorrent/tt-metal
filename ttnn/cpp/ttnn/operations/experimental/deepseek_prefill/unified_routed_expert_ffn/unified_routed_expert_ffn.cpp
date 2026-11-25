@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unified_routed_expert_ffn.hpp"
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "device/unified_routed_expert_ffn_device_operation.hpp"
 #include "tt-metalium/utils/math.hpp"
@@ -30,7 +31,6 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::optional<ttnn::Tensor>& x_row_index,
     bool output_row_major,
     uint32_t zero_output_row,
-    bool weights_tile_transposed,
     const std::optional<ttnn::Tensor>& weight_pages,
     const std::optional<ttnn::Tensor>& gate_up_weight_source,
     const std::optional<ttnn::Tensor>& down_weight_source,
@@ -40,7 +40,8 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t weights_n_down,
     uint32_t weights_k_gate_up,
     uint32_t weights_k_down,
-    const std::optional<tt::tt_metal::DataType>& weights_dtype) {
+    const std::optional<tt::tt_metal::DataType>& weights_dtype,
+    const std::optional<tt::tt_metal::Tile>& weights_tile) {
     // Single fused device op across ALL local experts. This builds ONE program
     // whose reader/compute/writer kernels iterate over every local expert.
     TT_FATAL(
@@ -85,12 +86,23 @@ ttnn::Tensor unified_routed_expert_moe(
             row_words,
             pshape);
         experts_per_chip = static_cast<uint32_t>(pshape.volume() / row_words);
+        // The sources are byte buffers (only their addresses are used), so weights_tile describes the tiles: the
+        // normal 32x32 tile or the same tile transposed (faces and within them, as ttnn.matmul reads one).
+        if (weights_tile.has_value()) {
+            TT_FATAL(
+                weights_tile->get_height() == tt::constants::TILE_HEIGHT &&
+                    weights_tile->get_width() == tt::constants::TILE_WIDTH &&
+                    weights_tile->get_transpose_within_face() == weights_tile->get_transpose_of_faces(),
+                "weights_tile must be a 32x32 tile, transposed or not, got {}",
+                *weights_tile);
+        }
     } else {
         TT_FATAL(
             gate_up_k_stride == 0 && down_k_stride == 0 && weights_n_gate_up == 0 && weights_n_down == 0 &&
-                weights_k_gate_up == 0 && weights_k_down == 0 && !weights_dtype.has_value(),
-            "gate_up_k_stride / down_k_stride / weights_n_* / weights_k_* / weights_dtype apply only with "
-            "weight_pages");
+                weights_k_gate_up == 0 && weights_k_down == 0 && !weights_dtype.has_value() &&
+                !weights_tile.has_value(),
+            "gate_up_k_stride / down_k_stride / weights_n_* / weights_k_* / weights_dtype / weights_tile apply only "
+            "with weight_pages (the weight tensors carry their own dtype and tile)");
     }
     TT_FATAL(experts_per_chip > 0, "Need at least one expert per chip");
 
@@ -178,7 +190,6 @@ ttnn::Tensor unified_routed_expert_moe(
         l1_end,
         x_row_index,
         zero_output_row,
-        weights_tile_transposed,
         weight_pages,
         gate_up_weight_source,
         down_weight_source,
@@ -188,7 +199,8 @@ ttnn::Tensor unified_routed_expert_moe(
         weights_n_down,
         weights_k_gate_up,
         weights_k_down,
-        weights_dtype.value_or(tt::tt_metal::DataType::BFLOAT8_B));
+        weights_dtype.value_or(tt::tt_metal::DataType::BFLOAT8_B),
+        weights_tile);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

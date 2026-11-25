@@ -55,6 +55,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             gate_projs (list[ttnn.Tensor]): one (emb, hidden) per local expert.
             up_projs (list[ttnn.Tensor]): one (emb, hidden) per local expert.
             down_projs (list[ttnn.Tensor]): one (hidden, emb) per local expert.
+                The weights may be stored in transposed tiles (ttnn.Tile(..., transpose_tile=True), all of them
+                alike): the matmuls transpose each tile back as they unpack it, as ttnn.matmul does. A block-float
+                weight then shares one exponent per 16 consecutive input rows of one output column.
             max_dispatched_tokens_per_expert (int): rows extract gives back.
 
         Keyword Args:
@@ -75,9 +78,6 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 dispatched_buffer only). Rows outside every expert region stay uninitialized.
             zero_output_row (int, optional): with output_row_major, one output row the op sets to zeros.
                 It must not hold a routed token (it is never written with expert output).
-            weights_tile_transposed (bool, optional): every weight tile is stored transposed within itself (the
-                tile grid is unchanged); the matmuls transpose it back as they unpack it. A block-float weight then
-                shares one exponent per 16 consecutive input rows of one output column instead of per 16 columns.
             weight_pages (ttnn.Tensor, optional): table-addressed weights. UINT32 ROW_MAJOR DRAM tensor of shape
                 [experts, 2 * (2 * weights_n_gate_up + weights_n_down)], one row (page) per local expert: the gate
                 columns' entries, then the up columns', then the down columns', each entry two words
@@ -94,6 +94,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             weights_k_gate_up (int, optional): gate / up K tiles (= emb / 32).
             weights_k_down (int, optional): down K tiles (= weights_n_gate_up).
             weights_dtype (ttnn.DataType, optional): the weight tiles' format (bfloat4_b, bfloat8_b or bfloat16).
+            weights_tile (ttnn.Tile, optional): with weight_pages, the weight tiles' tile: the default 32x32 one or
+                ttnn.Tile((32, 32), transpose_tile=True) for tiles stored transposed (the matmuls transpose them back
+                as they unpack them). Without weight_pages the weight tensors carry their own tile.
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -123,7 +126,6 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("x_row_index") = nb::none(),
         nb::arg("output_row_major") = false,
         nb::arg("zero_output_row") = std::numeric_limits<uint32_t>::max(),
-        nb::arg("weights_tile_transposed") = false,
         nb::arg("weight_pages") = nb::none(),
         nb::arg("gate_up_weight_source") = nb::none(),
         nb::arg("down_weight_source") = nb::none(),
@@ -133,7 +135,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("weights_n_down") = 0,
         nb::arg("weights_k_gate_up") = 0,
         nb::arg("weights_k_down") = 0,
-        nb::arg("weights_dtype") = nb::none());
+        nb::arg("weights_dtype") = nb::none(),
+        nb::arg("weights_tile") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

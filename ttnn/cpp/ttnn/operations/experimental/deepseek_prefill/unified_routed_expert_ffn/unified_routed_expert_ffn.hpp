@@ -52,8 +52,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //   weight_pages / gate_up_weight_source / down_weight_source (all three or none): table-addressed weights. The
 //     weight lists are then empty and every weight tile is read through weight_pages (see
 //     UnifiedRoutedExpertFfnInputs::weight_pages for the layout); the shapes come from weights_n_gate_up /
-//     weights_n_down / weights_k_gate_up / weights_k_down, the tile format from weights_dtype, and tile k of a
-//     column sits gate_up_k_stride / down_k_stride bytes after tile k - 1.
+//     weights_n_down / weights_k_gate_up / weights_k_down, the tile format from weights_dtype (and weights_tile: a
+//     transposed tile, default the normal 32x32 one), and tile k of a column sits gate_up_k_stride / down_k_stride
+//     bytes after tile k - 1. Without weight_pages the weight tensors' own tiles say whether they are transposed.
 //
 // Returns:
 //   ttnn::Tensor: expert outputs, same shape as dispatched_buffer.
@@ -81,8 +82,6 @@ ttnn::Tensor unified_routed_expert_moe(
     // ROW_MAJOR bf16 output instead of TILE bf8 (row-major dispatched_buffer only), and one of its rows zeroed.
     bool output_row_major = false,
     uint32_t zero_output_row = std::numeric_limits<uint32_t>::max(),
-    // Every weight tile is stored transposed within itself (same tile grid); the matmuls transpose it back on unpack.
-    bool weights_tile_transposed = false,
     const std::optional<ttnn::Tensor>& weight_pages = std::nullopt,
     const std::optional<ttnn::Tensor>& gate_up_weight_source = std::nullopt,
     const std::optional<ttnn::Tensor>& down_weight_source = std::nullopt,
@@ -92,7 +91,8 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t weights_n_down = 0,
     uint32_t weights_k_gate_up = 0,
     uint32_t weights_k_down = 0,
-    const std::optional<tt::tt_metal::DataType>& weights_dtype = std::nullopt);
+    const std::optional<tt::tt_metal::DataType>& weights_dtype = std::nullopt,
+    const std::optional<tt::tt_metal::Tile>& weights_tile = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 
