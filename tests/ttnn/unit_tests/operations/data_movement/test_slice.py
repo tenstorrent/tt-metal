@@ -2823,3 +2823,230 @@ def test_slice_rm_width_sharded_subaligned_input_into_preallocated(device):
     ttnn.slice(t, [0, 0, 16, 0], [1, 1, 48, 64], [1, 1, 1, 1], output_tensor=out)
 
     assert_equal(x[:, :, 16:48, :], ttnn.to_torch(out))
+
+
+def _contiguous_1d_l1_grid(shard_shape, grid_end):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))})
+    nd_shard_spec = ttnn.NdShardSpec(
+        ttnn.Shape(shard_shape), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+
+
+# Quasar slice of an RM ND-sharded input read and wrote rows by the wrong page size, and an inherited
+# output config overwrote other L1 tensors. Shard [1, 1, 1, 8] and an 8-row slice squeeze the buffer distribution to
+# rank one, which hides how many pages a row spans; the nonzero width-begin takes the composite path.
+@pytest.mark.parametrize("shard_shape", [[1, 1, 8, 8], [1, 1, 8, 16], [1, 1, 1, 8]], ids=["8x8", "8x16", "1x8"])
+@pytest.mark.parametrize(
+    "begins, ends",
+    [([0, 0, 0, 0], [1, 1, 32, 64]), ([0, 0, 0, 0], [1, 1, 8, 64]), ([0, 0, 8, 16], [1, 1, 40, 48])],
+    ids=["rows_0_32", "rows_0_8", "width_begin_16"],
+)
+@pytest.mark.parametrize("output_memory_config", [None, ttnn.DRAM_MEMORY_CONFIG], ids=["inherited", "dram"])
+def test_quasar_slice_nd_sharded_rm(device, shard_shape, begins, ends, output_memory_config):
+    torch_input = ((torch.arange(64 * 64) % 29 + 1) / 8).reshape(1, 1, 64, 64).bfloat16()
+    torch_live = (torch.arange(32 * 64) % 13).reshape(1, 1, 32, 64).bfloat16()
+    input_memory_config = _contiguous_1d_l1_grid(shard_shape, grid_end=(7, 1))
+    tt_input = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory_config
+    )
+    # An unrelated L1 tensor allocated before the slice; a mis-sized output buffer used to write over it.
+    tt_live = ttnn.from_torch(
+        torch_live, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory_config
+    )
+
+    output = ttnn.experimental.quasar.slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_memory_config)
+
+    slices = tuple(slice(b, e) for b, e in zip(begins, ends))
+    assert_equal(torch_input[slices], ttnn.to_torch(output))
+    assert_equal(torch_input, ttnn.to_torch(tt_input))
+    assert_equal(torch_live, ttnn.to_torch(tt_live))
+    if output_memory_config is None:
+        out_memory_config = output.memory_config()
+        assert out_memory_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
+        assert out_memory_config.nd_shard_spec is not None
+        assert out_memory_config.nd_shard_spec.grid == input_memory_config.nd_shard_spec.grid
+
+
+def test_quasar_slice_nd_sharded_rank1_inherited(device):
+    torch_input = torch.arange(256).bfloat16()
+    tt_input = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_contiguous_1d_l1([64], num_cores=4)
+    )
+
+    output = ttnn.experimental.quasar.slice(tt_input, [0], [128], [1])
+
+    assert list(output.memory_config().nd_shard_spec.shard_shape) == [32]
+    assert_equal(torch_input[:128], ttnn.to_torch(output))
+
+
+def test_quasar_slice_nd_sharded_tensor_args_inherited(device):
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 256, 64), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1([1, 1, 64, 64], num_cores=4),
+    )
+    start = ttnn.from_torch(torch.tensor([0, 0, 0, 0]), device=device)
+    end = ttnn.from_torch(torch.tensor([1, 1, 128, 64]), device=device)
+
+    output = ttnn.experimental.quasar.slice(tt_input, start, end, slice_dim=2, num_devices=2)
+
+    assert list(output.memory_config().nd_shard_spec.shard_shape) == [1, 1, 32, 64]
+    assert_equal(torch_input[:, :, :128, :], ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
+@pytest.mark.parametrize(
+    "begins, ends, step",
+    [
+        ([0, 0, 1, 0], [1, 1, 65, 64], [1, 1, 1, 1]),
+        ([0, 0, 1, 0], [1, 1, 129, 64], [1, 1, 1, 1]),
+        ([0, 0, 0, 0], [1, 1, 256, 64], [1, 1, 4, 1]),
+    ],
+    ids=["unaligned_begin_64", "unaligned_begin_128", "step_4"],
+)
+def test_quasar_slice_nd_sharded_tile_through_rm_staging(device, dtype, begins, ends, step):
+    if dtype == ttnn.bfloat8_b and step != [1, 1, 1, 1]:
+        pytest.skip("Strided slice is not supported for BFLOAT8_B")
+    # A TILE input sliced via ROW_MAJOR staging must come back with tile-compatible shards, and the staging
+    # shard rescale must use the untilized dtype (BFLOAT8_B has no ROW_MAJOR form).
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 256, 64), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1([1, 1, 64, 64], num_cores=4),
+    )
+    expected = ttnn.to_torch(tt_input)[tuple(slice(b, e, s) for b, e, s in zip(begins, ends, step))]
+
+    output = ttnn.experimental.quasar.slice(tt_input, begins, ends, step)
+
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
+    assert torch.equal(ttnn.to_torch(output), expected)
+
+
+def test_quasar_slice_nd_sharded_width_padded_output(device):
+    # Output shards [1, 1, 8, 24] pad the 64-wide output row to 72, past the 64-wide input row.
+    torch_input = ((torch.arange(64 * 64) % 29 + 1) / 8).reshape(1, 1, 64, 64).bfloat16()
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1_grid([1, 1, 8, 8], grid_end=(7, 1)),
+    )
+    output = ttnn.experimental.quasar.slice(
+        tt_input,
+        [0, 0, 32, 0],
+        [1, 1, 64, 64],
+        [1, 1, 1, 1],
+        memory_config=_contiguous_1d_l1([1, 1, 8, 24], num_cores=4),
+    )
+    assert_equal(torch_input[:, :, 32:64, :], ttnn.to_torch(output))
+    assert_equal(torch_input, ttnn.to_torch(tt_input))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
+@pytest.mark.parametrize(
+    "begins, ends",
+    [([0, 0, 1, 0], [1, 1, 5, 64]), ([0, 0, 0, 32], [1, 1, 64, 64]), ([0, 0, 1, 16], [1, 1, 65, 48])],
+    ids=["short_rows", "width_begin_32", "width_begin_16_unaligned_rows"],
+)
+def test_quasar_slice_nd_sharded_tile_width_sharded_staging(device, dtype, begins, ends):
+    # Shards [1, 1, 64, 32] are two pages wide per row once untilized; slicing rows or width through ROW_MAJOR
+    # staging must not stride output rows by the wrong number of pages.
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 256, 64), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1_grid([1, 1, 64, 32], grid_end=(7, 0)),
+    )
+    expected = ttnn.to_torch(tt_input)[tuple(slice(b, e) for b, e in zip(begins, ends))]
+
+    output = ttnn.experimental.quasar.slice(tt_input, begins, ends, [1, 1, 1, 1])
+
+    assert torch.equal(ttnn.to_torch(output), expected)
+
+
+@pytest.mark.parametrize(
+    "begins, ends",
+    [([0, 0, 1, 0], [1, 1, 65, 24]), ([0, 0, 1, 8], [1, 1, 65, 64]), ([0, 0, 0, 0], [1, 1, 64, 24])],
+    ids=["width_reducing_unaligned_rows", "width_begin_8", "width_reducing"],
+)
+def test_quasar_slice_nd_sharded_tile_width_offset_and_reduction(device, begins, ends):
+    # TILE input with [1, 1, 32, 32] ND shards, staged through ROW_MAJOR: a nonzero width-begin must not
+    # misaddress ND pages, and a narrowed width must not leave sub-aligned output shards.
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 128, 64), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1_grid([1, 1, 32, 32], grid_end=(3, 0)),
+    )
+
+    output = ttnn.experimental.quasar.slice(tt_input, begins, ends, [1, 1, 1, 1])
+
+    assert_equal(torch_input[tuple(slice(b, e) for b, e in zip(begins, ends))], ttnn.to_torch(output))
+
+
+def test_quasar_slice_nd_sharded_composite_rejects_non_divisible_contiguous_output(device, expect_error):
+    # Output shards [1, 1, 8, 24] pad the 64-wide row to 3 shards per row, so [1, 1, 32, 64] splits into 12
+    # shards, which 8 CONTIGUOUS_1D cores can't hold. The width padding routes this through the composite path,
+    # which must still reject it.
+    torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1_grid([1, 1, 8, 8], grid_end=(7, 0)),
+    )
+    with expect_error(RuntimeError, "is CONTIGUOUS_1D but splits the output shape"):
+        ttnn.experimental.quasar.slice(
+            tt_input,
+            [0, 0, 0, 0],
+            [1, 1, 32, 64],
+            [1, 1, 1, 1],
+            memory_config=_contiguous_1d_l1_grid([1, 1, 8, 24], grid_end=(7, 0)),
+        )
+
+
+def test_quasar_slice_nd_sharded_full_range_rejects_non_divisible_contiguous_output(device, expect_error):
+    # A full-range slice is a no-op that only converts the input into the requested config. Shards [1, 1, 8, 24]
+    # split the [1, 1, 32, 64] result into 12 shards, which 8 CONTIGUOUS_1D cores can't hold.
+    tt_input = ttnn.from_torch(
+        torch.rand((1, 1, 32, 64), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "is CONTIGUOUS_1D but splits the output shape"):
+        ttnn.experimental.quasar.slice(
+            tt_input,
+            [0, 0, 0, 0],
+            [1, 1, 32, 64],
+            [1, 1, 1, 1],
+            memory_config=_contiguous_1d_l1_grid([1, 1, 8, 24], grid_end=(7, 0)),
+        )
+
+
+def test_quasar_slice_nd_sharded_full_range_small_tile(device):
+    # The ND output validation must use the input's own 16x32 tile, not the default 32x32 one.
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 64, 32), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile([16, 32]),
+        device=device,
+        memory_config=_contiguous_1d_l1([1, 1, 16, 32], num_cores=4),
+    )
+
+    output = ttnn.experimental.quasar.slice(tt_input, [0, 0, 0, 0], [1, 1, 64, 32], [1, 1, 1, 1])
+
+    assert_equal(torch_input, ttnn.to_torch(output))
