@@ -206,6 +206,33 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_gate, Dt);
     };
+    // O-2b (kLeadStaged): user j of pass `pass` — its q and gate rows into rows j * heads + h of the pass's tile sets
+    // (reserved at its first user, pushed after its last), one user per iteration: a whole pass's ~200 row reads at
+    // once held up that iteration's partials for the leader compute
+    auto place_pass_user = [&](uint32_t pass, uint32_t j) __attribute__((noinline)) {
+        const uint32_t a = pass * kQPerPass + j;
+        if (a >= n_act) {
+            return;
+        }
+        if (j == 0) {
+            cb_reserve_back(cb_qraw, Dt);
+            cb_reserve_back(cb_gate, Dt);
+        }
+        const uint32_t q = get_write_ptr(cb_qraw), g = get_write_ptr(cb_gate);
+        const uint32_t ug = act.row[a];
+        const uint32_t rows = rows_base + (ug / users) * row_tiles * kRowTile;
+        for (uint32_t h = 0; h < heads; h++) {
+            for (uint32_t d = 0; d < Dt; d++) {
+                place_row(rows + (h * Dt + d) * kRowTile, ug % users, q + d * kTile, j * heads + h);
+                place_row(rows + (gate0 + h * Dt + d) * kRowTile, ug % users, g + d * kTile, j * heads + h);
+            }
+        }
+        noc_async_read_barrier();
+        if (j + 1 == kQPerPass || a + 1 == n_act) {
+            cb_push_back(cb_qraw, Dt);
+            cb_push_back(cb_gate, Dt);
+        }
+    };
     // kGatePass: active user ka's sigmoid(gate) rows (rows j * heads .. of its pass) into rows 0 .. heads - 1 of cb_gs
     auto extract_gs = [&](uint32_t ka) {
         const uint32_t j = ka % kQPerPass;
@@ -250,16 +277,17 @@ void kernel_main() {
             noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));
             mark(l, 1);
             place_user(0);
+            if (kLeadStaged && kQPerPass < n_act) {
+                place_user(kQPerPass);  // (O-2b: pass 1 too — compute stages it during pass 0)
+            }
             if (!kLeadStaged && kAttnPipe && n_act > 1) {
                 place_user(1);  // (O-2: q two users ahead)
             }
             mark(l, 2);
         }
         if constexpr (kLeadStaged) {
-            // (O-2b: pass p + 1's rows at pass p's start, for compute's staged prep)
-            if (k % kQPerPass == 0 && k + kQPerPass < n_act) {
-                place_user(k + kQPerPass);
-            }
+            // (O-2b: pass p + 2's rows, a user per iteration of pass p — compute stages pass p + 2 during pass p + 1)
+            place_pass_user(k / kQPerPass + 2, k % kQPerPass);
         } else {
             // the next user's rows go in before this user's partials arrive, so compute prepares its q meanwhile
             constexpr uint32_t ahead = kAttnPipe ? 2 : 1;

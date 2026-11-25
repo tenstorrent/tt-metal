@@ -125,7 +125,7 @@ void kernel_main() {
             }
         };
         if constexpr (kLeadStaged) {
-            // (O-2b, attn_common.hpp kLeadStaged: pass p + 1's prep in three stages before pass p's users 0, 1, 2)
+            // (O-2b, attn_common.hpp kLeadStaged: pass p + 1's prep in four stages before pass p's users 0 .. 3)
             const uint32_t n_pass = (n_act + kQPerPass - 1) / kQPerPass;
             auto stage = [&](uint32_t p, uint32_t s) __attribute__((noinline)) {
                 if (s == 0) {
@@ -136,17 +136,18 @@ void kernel_main() {
                     }
                 } else if (s == 1) {
                     had_mm_stage();
-                } else {
+                } else if (s == 2) {
                     had_bfly_stage(cb_q_mc, cb_q_mc);
+                } else {
                     gate_sigmoid(cb_gs_pass);  // (the pass's users; the reader extracts each one's rows)
                 }
             };
-            for (uint32_t s = 0; s < 3; s++) {
+            for (uint32_t s = 0; s < 4; s++) {
                 stage(0, s);
             }
             for (uint32_t k = 0; k < n_act; k++) {
                 const uint32_t p = k / kQPerPass, j = k % kQPerPass;
-                if (j < 3 && p + 1 < n_pass) {
+                if (j < 4 && p + 1 < n_pass) {
                     stage(p + 1, j);
                 }
                 sum_partials<false>(children);
