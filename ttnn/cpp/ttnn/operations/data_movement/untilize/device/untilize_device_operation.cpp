@@ -416,7 +416,10 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         return UntilizeMultiCoreParallelizeColumnProgramFactory{};
     }
     if (pf_option == 1) {
-        if (!input_is_sharded && !output_is_sharded) {
+        // get_pf_type only returns 1 for interleaved input, so the block factory (interleaved only) applies
+        // unless the output is sharded. That case, interleaved input with sharded output and wide rows, is
+        // the only one that still runs on a single core.
+        if (!output_is_sharded) {
             return UntilizeMultiCoreBlockProgramFactory{};
         }
         return UntilizeSingleCoreProgramFactory{};
