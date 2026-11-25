@@ -336,12 +336,8 @@ A conversation that goes on (8,192-token prompt, 24-token replies, `--max-model-
   tokens, other pass sizes round otherwise (1024 against 4096 passes: the 8.4K reply parts at token 37).
 - The prefill's programs need a 48 KB kernel-config ring (`serve.sh` sets it): speculative greedy 77.2 to
   77.3 tok/s against 77.5 to 77.7 with the 64 KB ring. `PREFILL=0` keeps the 64 KB ring.
-- A continued conversation in the speculative launch: the prefill does not write the drafter's context of the
-  new tokens (its drafter pass hung the card in one such case, not understood yet), so the reply after a paste
-  decodes slower (48 to 53 tok/s over 24 tokens against 78 after a new prompt). Its tokens equal the plain
-  launch's.
-- Decode keeps its speed: speculative decode runs with it (the prefill also writes the drafter's context of a new
-  prompt), and the decode traces and the expert prefetch stay across a prefill (their L1 is freed and taken back
+- Decode keeps its speed: speculative decode runs with it (the prefill also writes the drafter's context of the
+  prompt, a continued conversation's new tokens included: the reply after a +8K paste decodes at 78 to 80 tok/s), and the decode traces and the expert prefetch stay across a prefill (their L1 is freed and taken back
   at the same addresses): no slow steps after a prefill.
 - The reply after a prefill is the demo's prefill reply, not the token-by-token one: for that prompt they part at
   token 30 (in a TILE-cache process too).
