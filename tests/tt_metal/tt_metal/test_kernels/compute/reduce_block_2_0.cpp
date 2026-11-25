@@ -18,7 +18,7 @@
 // (which calls the legacy reduce_block). Differs from that kernel ONLY in the reduce call, isolating
 // reduce_block. The CBs must be >= num_tiles deep -- the TEST_F passes cb_depth_tiles=num_tiles.
 void kernel_main() {
-    std::uint32_t num_tiles = get_compile_time_arg_val(0);
+    constexpr std::uint32_t num_tiles = get_compile_time_arg_val(0);
 
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb1(tt::CBIndex::c_1);
@@ -44,8 +44,8 @@ void kernel_main() {
     cb16.reserve_back(num_tiles);
 
     tile_regs_acquire();
-    experimental::reduce_block<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
-        DataOp(data_cb.read_address()), ScalerOp(scaler_cb.read_address()), 0, 0, 0, num_tiles);
+    experimental::reduce_block<PoolType::SUM, ReduceDim::REDUCE_SCALAR, num_tiles>(
+        DataOp(data_cb.read_address()), ScalerOp(scaler_cb.read_address()), 0, 0, 0);
     tile_regs_commit();
 
     tile_regs_wait();

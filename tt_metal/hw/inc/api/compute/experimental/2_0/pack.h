@@ -22,7 +22,8 @@ enum class Relu : std::uint8_t { None, Zero };
 /**
  * Id-free pack init, Quasar. Pack TRISC programs a Pack0 buffer descriptor at out's base, the packer input format
  * (Float32 with a 32-bit Dest), the packer ReLU `relu`, L1 accumulation off, and the one-tile pack MOP. out's base is the DFB ring base, so one init serves every back() of the ring. Re-init when another
- * op ran in between (Quasar rule). No uninit. Only 16-bit float operands (Float16_b, Float16).
+ * op ran in between (Quasar rule). No uninit. Only 16-bit float operands (Float16_b, Float16). Restores the
+ * pass-through packer edge mask if a reduce_init programmed one.
  * Pack buffer descriptors: the pack TRISC owns 8 (ids 16..23), re-allocated round robin by each pack_init; an op
  * only ever executes on the descriptor its own init programmed, so a kernel may call pack_init any number of times.
  *

@@ -4,6 +4,209 @@
 
 #pragma once
 
+#ifdef ARCH_QUASAR
+
+#include <cstdint>
+#include "api/compute/common_globals.h"
+#include "api/compute/experimental/2_0/internal/op_hooks.h"
+#include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_2_0.h"  // id-free Quasar LLK API
+
+namespace ckernel {
+namespace experimental {
+
+// Id-free (2.0) reduce on Quasar (data + scaler -> reduced): same surface as Blackhole. Quasar programs each op's
+// buffer descriptors, formats and MOPs in its init, so call reduce_init before every reduce (re-init after any other
+// op). The FPU reduce has no MIN.
+
+// clang-format off
+/**
+ * Reduce init: programs UNPACK (data and scaler descriptors, formats, MOP), MATH (ALU formats, fidelity, MOP) and
+ * PACK: a one-tile pack to `out` (as pack_init, no ReLU) plus the edge mask that keeps only the reduced row/column. No
+ * separate pack_init is needed. The scaler is read from the first face of its tile; fill it with 1.0 (MAX, SUM) or the
+ * averaging factor (AVG).
+ *
+ * | Template | reduce_type         | SUM / AVG / MAX                              | PoolType   | | True  |
+ * | Template | reduce_dim          | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR     | ReduceDim  | | True  |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                    | bool       | DST_ACCUM_MODE | False |
+ * | Function | data                | Input operand (reduced); drives the geometry | LLKOperand | Float16_b / Float16 | True |
+ * | Function | scaler              | Scaler operand                               | LLKOperand | Float16_b / Float16 | True |
+ * | Function | out                 | Output operand (pack target + edge mask)     | LLKOperand | | True  |
+ */
+// clang-format on
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat DF,
+    TensorShape DS,
+    DataFormat SF,
+    TensorShape SS,
+    DataFormat OF,
+    TensorShape OS>
+ALWI void reduce_init(LLKOperand<DF, DS> data, LLKOperand<SF, SS> scaler, LLKOperand<OF, OS> out) {
+    static_assert(
+        llk_2_0::is_supported_format(DF) && llk_2_0::is_supported_format(SF), "reduce_init: Float16_b / Float16 only.");
+    static_assert(
+        llk_2_0::is_supported_format(OF, is_fp32_dest_acc_en),
+        "reduce_init: output Float16_b / Float16, or Float32 at a 32-bit Dest (as pack_init).");
+    static_assert(is_legal_tile_shape(DS), "reduce_init: illegal data tile shape.");
+    static_assert(is_legal_tile_shape(SS), "reduce_init: illegal scaler tile shape.");
+    static_assert(is_legal_tile_shape(OS), "reduce_init: illegal output tile shape.");
+    static_assert(
+        !(reduce_dim == ReduceDim::REDUCE_ROW && reduce_type != PoolType::MAX) || (same_tile_shape(DS, SS) && DF == SF),
+        "reduce_init: REDUCE_ROW (non-MAX) swaps SrcA/SrcB, so data and scaler need the same tile shape and format.");
+    static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "reduce_init: Dest mode is kernel-wide (DST_ACCUM_MODE)");
+    constexpr LLKMemDescriptor D = LLKOperand<DF, DS>::descriptor;
+    constexpr LLKMemDescriptor S = LLKOperand<SF, SS>::descriptor;
+    UNPACK((llk_2_0::unpack_reduce_init<reduce_type, reduce_dim, D, S>(data.l1_address, scaler.l1_address)));
+    MATH((llk_2_0::math_reduce_init<reduce_type, reduce_dim, D, S, is_fp32_dest_acc_en, MATH_FIDELITY>()));
+    constexpr LLKMemDescriptor O = LLKOperand<OF, OS>::descriptor;
+    PACK((llk_2_0::pack_init<O, is_fp32_dest_acc_en, false /*relu*/>(out.l1_address)));
+    PACK((llk_2_0::pack_reduce_mask_config<reduce_dim, O>()));
+}
+
+// clang-format off
+/**
+ * reduce_init(data, scaler, out) with the data as its own scaler operand.
+ *
+ * | Template | reduce_type         | SUM / AVG / MAX                              | PoolType   | | True  |
+ * | Template | reduce_dim          | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR     | ReduceDim  | | True  |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                    | bool       | DST_ACCUM_MODE | False |
+ * | Function | data                | Input operand (reduced); drives the geometry | LLKOperand | | True  |
+ * | Function | out                 | Output operand (pack target + edge mask)     | LLKOperand | | True  |
+ */
+// clang-format on
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat DF,
+    TensorShape DS,
+    DataFormat OF,
+    TensorShape OS>
+ALWI void reduce_init(LLKOperand<DF, DS> data, LLKOperand<OF, OS> out) {
+    reduce_init<reduce_type, reduce_dim, is_fp32_dest_acc_en>(data, data, out);
+}
+
+// clang-format off
+/**
+ * Reduce data tile `itile` (with scaler tile `itile_scaler`) into DST[idst], accumulating with what DST[idst] holds.
+ * Pair with reduce_init. DST must be acquired.
+ *
+ * | Template | reduce_type          | SUM / AVG / MAX                         | PoolType   | | True  |
+ * | Template | reduce_dim           | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim  | | True  |
+ * | Template | is_fp32_dest_acc_en  | fp32 dest-accumulate mode               | bool       | DST_ACCUM_MODE | False |
+ * | Function | data / scaler        | Input operands, same as reduce_init     | LLKOperand | | True  |
+ * | Function | itile / itile_scaler | Tile indices within data / scaler       | uint32_t   | | True  |
+ * | Function | idst                 | DST register index for the result       | uint32_t   | < Dest section | True |
+ */
+// clang-format on
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat DF,
+    TensorShape DS,
+    DataFormat SF,
+    TensorShape SS>
+ALWI void reduce_tile(
+    LLKOperand<DF, DS> data,
+    LLKOperand<SF, SS> scaler,
+    std::uint32_t itile,
+    std::uint32_t itile_scaler,
+    std::uint32_t idst) {
+    MATH((llk_2_0::math_reduce<reduce_type, reduce_dim>(idst, DS)));
+    UNPACK((llk_2_0::unpack_reduce<reduce_type, reduce_dim, LLKOperand<DF, DS>::descriptor>(
+        data.l1_address, scaler.l1_address, data.tile(itile), scaler.tile(itile_scaler))));
+}
+
+// clang-format off
+/**
+ * Reduce `ntiles` consecutive data tiles, each into its own DST slot: data tile (start_itile + i) -> DST[start_idst +
+ * i]. Loop form of reduce_tile (to accumulate a block into one slot, loop reduce_tile at a fixed idst). Pair with
+ * reduce_init. DST must be acquired.
+ *
+ * | Template | reduce_type         | SUM / AVG / MAX                                 | PoolType   | | True  |
+ * | Template | reduce_dim          | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR        | ReduceDim  | | True  |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                       | bool       | DST_ACCUM_MODE | False |
+ * | Function | data / scaler       | Input operands, same as reduce_init             | LLKOperand | | True  |
+ * | Function | start_itile         | Index of the first data tile within `data`      | uint32_t   | | True  |
+ * | Function | itile_scaler        | Tile index within `scaler`                      | uint32_t   | | True  |
+ * | Function | start_idst          | DST register index for the first tile's result  | uint32_t   | start_idst + ntiles <= Dest section | True |
+ * | Template | ntiles              | Number of consecutive data tiles to reduce      | uint32_t   | <= Dest section | True  |
+ */
+// clang-format on
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    std::uint32_t ntiles,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat DF,
+    TensorShape DS,
+    DataFormat SF,
+    TensorShape SS>
+ALWI void reduce_block(
+    LLKOperand<DF, DS> data,
+    LLKOperand<SF, SS> scaler,
+    std::uint32_t start_itile,
+    std::uint32_t itile_scaler,
+    std::uint32_t start_idst) {
+    static_assert(
+        ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "reduce_block: block exceeds one Dest section");
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en>(
+            data, scaler, start_itile + i, itile_scaler, start_idst + i);
+    }
+}
+
+// clang-format off
+/**
+ * Math-only reduction into DST[idst]: the MATH half of reduce_tile. The source tiles must already be in SrcA/SrcB
+ * (staged by a preceding fused unpack). Pair with reduce_init. DST must be acquired.
+ *
+ * | Template | reduce_type         | SUM / AVG / MAX                         | PoolType  | | True  |
+ * | Template | reduce_dim          | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim | | True  |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode               | bool      | DST_ACCUM_MODE | False |
+ * | Function | idst                | DST register index for the result      | uint32_t  | | True  |
+ * | Function | num_faces           | Number of faces to reduce              | uint32_t  | 1 / 2 / 4 | False |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = MAX_NUM_FACES) {
+    MATH((llk_2_0::math_reduce<reduce_type, reduce_dim>(idst, tensor_shape_from_num_faces(MAX_FACE_R_DIM, num_faces))));
+}
+
+// clang-format off
+/**
+ * Math-only reduction into DST[idst] with an explicit tile geometry. As above, the source tiles must already be in
+ * SrcA/SrcB. Pair with reduce_init. DST must be acquired.
+ *
+ * | Template | reduce_type         | SUM / AVG / MAX                         | PoolType             | | True  |
+ * | Template | reduce_dim          | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim            | | True  |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode               | bool                 | DST_ACCUM_MODE | False |
+ * | Function | idst                | DST register index for the result      | uint32_t             | | True  |
+ * | Function | tensor_shape        | Tile geometry to reduce                 | ckernel::TensorShape | | True  |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tensor_shape) {
+    MATH((llk_2_0::math_reduce<reduce_type, reduce_dim>(idst, tensor_shape)));
+}
+
+// clang-format off
+/**
+ * Reduce uninit: no-op on Quasar. The next op's init resets the unpack, math and pack state (including the
+ * pass-through packer edge mask). Kept for the Blackhole surface.
+ */
+// clang-format on
+ALWI void reduce_uninit() {}
+
+}  // namespace experimental
+}  // namespace ckernel
+
+#else  // Blackhole
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -145,13 +348,14 @@ ALWI void reduce_tile(
  * | Function | start_itile   | Index of the first data tile within `data`     | uint32_t   | | True |
  * | Function | itile_scaler  | Tile index within `scaler`                      | uint32_t   | | True |
  * | Function | start_idst    | DST register index for the first tile's result | uint32_t   | start_idst + ntiles <= DST size | True |
- * | Function | ntiles        | Number of consecutive data tiles to reduce     | uint32_t   | | True |
+ * | Template | ntiles        | Number of consecutive data tiles to reduce     | uint32_t   | | True |
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                 | bool       | | False |
  */
 // clang-format on
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
+    std::uint32_t ntiles,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat DF,
     TensorShape DS,
@@ -162,8 +366,7 @@ ALWI void reduce_block(
     LLKOperand<SF, SS> scaler,
     std::uint32_t start_itile,
     std::uint32_t itile_scaler,
-    std::uint32_t start_idst,
-    std::uint32_t ntiles) {
+    std::uint32_t start_idst) {
     SAN_HOOK(unsupported());
     static_assert(is_legal_tile_shape(DS), "reduce_block: illegal data tile shape.");
     static_assert(is_legal_tile_shape(SS), "reduce_block: illegal scaler tile shape.");
@@ -225,3 +428,5 @@ ALWI void reduce_uninit() {
 
 }  // namespace experimental
 }  // namespace ckernel
+
+#endif  // ARCH_QUASAR
