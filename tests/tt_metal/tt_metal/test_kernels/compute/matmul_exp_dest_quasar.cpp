@@ -42,7 +42,7 @@ void kernel_main() {
             in0.pop_front(1);
             in1.pop_front(1);
         }
-        ExpOp::tile(0);  // SFPU: exp(Dest[0]) in place
+        ExpOp::tile(DstIndex{0});  // SFPU: exp(Dest[0]) in place
         tile_regs_commit();
 
         out.reserve_back(1);

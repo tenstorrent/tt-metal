@@ -31,6 +31,7 @@
 
 namespace ckernel {
 
+using sfpu::DstIndex;
 using sfpu::SfpuReg;
 
 // Op tags are declared in ckernel_sfpu_ops.h: op::Exp<APPROXIMATION_MODE>, op::Square, op::Add<ROUNDING>. Variants are
@@ -129,11 +130,11 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
      *
      * | Argument    | Description                     | Type       | Valid Range                                    | Required |
      * |-------------|---------------------------------|------------|------------------------------------------------|----------|
-     * | idst        | The index of the tile in DST    | uint32_t   | Must be less than the acquired size of DST REG | True     |
+     * | idst        | The index of the tile in DST    | DstIndex   | Must be less than the acquired size of DST REG | True     |
      * | vector_mode | The faces to compute            | VectorMode | R, C, RC, None, RC_custom                      | False    |
      */
     // clang-format on
-    ALWI static void tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
+    ALWI static void tile(DstIndex idst, VectorMode vector_mode = VectorMode::RC) {
 #ifdef TRISC_MATH
         static_assert(inputs == 1, "this op takes two Dest tiles: tile(idst0, idst1, odst)");
 #endif
@@ -150,13 +151,13 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
      *
      * | Argument    | Description                            | Type       | Valid Range                                    | Required |
      * |-------------|----------------------------------------|------------|------------------------------------------------|----------|
-     * | idst0       | The index of the first operand in DST  | uint32_t   | Must be less than the acquired size of DST REG | True     |
-     * | idst1       | The index of the second operand in DST | uint32_t   | Must be less than the acquired size of DST REG | True     |
-     * | odst        | The index of the output tile in DST    | uint32_t   | Must be less than the acquired size of DST REG | True     |
+     * | idst0       | The index of the first operand in DST  | DstIndex   | Must be less than the acquired size of DST REG | True     |
+     * | idst1       | The index of the second operand in DST | DstIndex   | Must be less than the acquired size of DST REG | True     |
+     * | odst        | The index of the output tile in DST    | DstIndex   | Must be less than the acquired size of DST REG | True     |
      * | vector_mode | The faces to compute                   | VectorMode | R, C, RC, None, RC_custom                      | False    |
      */
     // clang-format on
-    ALWI static void tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+    ALWI static void tile(DstIndex idst0, DstIndex idst1, DstIndex odst, VectorMode vector_mode = VectorMode::RC) {
 #ifdef TRISC_MATH
         static_assert(inputs == 2, "this op takes one Dest tile: tile(idst)");
 #endif

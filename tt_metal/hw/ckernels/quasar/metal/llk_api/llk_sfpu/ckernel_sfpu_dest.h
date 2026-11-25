@@ -137,14 +137,15 @@ struct SfpuDestOpBase<Op, 1> {
 
     /** @brief Run Op on one Dest tile, in place; vector_mode selects the faces. */
     template <trisc::DstTileShape SLOT>
-    static void run(const std::uint32_t dst_index, const VectorMode vector_mode = VectorMode::RC) {
-        detail::check_dest_index<SLOT>(dst_index);
+    static void run(const DstIndex dst_index, const VectorMode vector_mode = VectorMode::RC) {
+        const std::uint32_t index = static_cast<std::uint32_t>(dst_index);
+        detail::check_dest_index<SLOT>(index);
         detail::check_vector_mode(vector_mode);
-        _llk_math_eltwise_unary_sfpu_params_<SLOT>(Op::calculate, dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_<SLOT>(Op::calculate, index, vector_mode);
     }
 
     /** @brief run<SLOT>() with the tile shape of Op. */
-    static void run(const std::uint32_t dst_index, const VectorMode vector_mode = VectorMode::RC) {
+    static void run(const DstIndex dst_index, const VectorMode vector_mode = VectorMode::RC) {
         run<Op::tile_shape>(dst_index, vector_mode);
     }
 };
@@ -161,23 +162,25 @@ struct SfpuDestOpBase<Op, 2> {
     /** @brief Run Op on two Dest tiles into a third (the output may be one of the inputs). */
     template <trisc::DstTileShape SLOT>
     static void run(
-        const std::uint32_t dst_index_in0,
-        const std::uint32_t dst_index_in1,
-        const std::uint32_t dst_index_out,
+        const DstIndex dst_index_in0,
+        const DstIndex dst_index_in1,
+        const DstIndex dst_index_out,
         const VectorMode vector_mode = VectorMode::RC) {
-        detail::check_dest_index<SLOT>(dst_index_in0);
-        detail::check_dest_index<SLOT>(dst_index_in1);
-        detail::check_dest_index<SLOT>(dst_index_out);
+        const std::uint32_t in0 = static_cast<std::uint32_t>(dst_index_in0);
+        const std::uint32_t in1 = static_cast<std::uint32_t>(dst_index_in1);
+        const std::uint32_t out = static_cast<std::uint32_t>(dst_index_out);
+        detail::check_dest_index<SLOT>(in0);
+        detail::check_dest_index<SLOT>(in1);
+        detail::check_dest_index<SLOT>(out);
         detail::check_vector_mode(vector_mode);
-        _llk_math_eltwise_binary_sfpu_params_<SLOT>(
-            Op::calculate, dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+        _llk_math_eltwise_binary_sfpu_params_<SLOT>(Op::calculate, in0, in1, out, vector_mode);
     }
 
     /** @brief run<SLOT>() with the tile shape of Op. */
     static void run(
-        const std::uint32_t dst_index_in0,
-        const std::uint32_t dst_index_in1,
-        const std::uint32_t dst_index_out,
+        const DstIndex dst_index_in0,
+        const DstIndex dst_index_in1,
+        const DstIndex dst_index_out,
         const VectorMode vector_mode = VectorMode::RC) {
         run<Op::tile_shape>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
