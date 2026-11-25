@@ -103,13 +103,14 @@ tt::tt_metal::ProgramDescriptor SwigluPackedBwProgramFactory::create_descriptor(
         make_writer_kernel_descriptor(all_cores, writer_ct_args, {}, kWriterKernelPath));
 
     std::vector<uint32_t> compute_g1_args = {num_blocks_g1, block_size};
-    program.kernels.push_back(
-        make_compute_kernel_descriptor(core_group_1, compute_g1_args, {}, kComputeKernelPath, true));
+    // BF16 DEST: swiglu_gate_bw_block's silu_bw_tile evaluates a BF16 DEST (see swiglu_gate_bw_compute.hpp).
+    program.kernels.push_back(make_compute_kernel_descriptor(
+        core_group_1, compute_g1_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/false));
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_g2_args = {num_blocks_g2, block_size};
-        program.kernels.push_back(
-            make_compute_kernel_descriptor(core_group_2, compute_g2_args, {}, kComputeKernelPath, true));
+        program.kernels.push_back(make_compute_kernel_descriptor(
+            core_group_2, compute_g2_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/false));
     }
 
     // Slots as named at the top of the file; override_runtime_arguments() rewrites the addresses on every cache hit.

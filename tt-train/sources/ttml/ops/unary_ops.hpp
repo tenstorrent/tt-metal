@@ -14,7 +14,9 @@ using GeluVariant = ttnn::operations::unary::GeluVariant;
 
 autograd::TensorPtr relu(const autograd::TensorPtr& tensor);
 autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant = GeluVariant::ACCURATE);
-autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw = false);
+// use_composite_bw = true (the default) backpropagates with ttnn::silu_bw, whose BF16 SFPU kernel is correctly
+// rounded; false keeps the fused ttml::metal::silu_bw (sigmoid, then four rounded FPU/SFPU steps).
+autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw = true);
 autograd::TensorPtr mean(const autograd::TensorPtr& tensor);
 // autograd::TensorPtr sum(const autograd::TensorPtr& tensor);
 autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t new_batch_dim);
