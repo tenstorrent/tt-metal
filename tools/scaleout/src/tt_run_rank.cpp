@@ -407,7 +407,7 @@ int guard(int argc, char** argv) {
     return 1;
 }
 
-// ---- wrap mode ----------------------------------------------------------------------------------------------------
+// ---- tt-run-rank -- <program>: running one rank -----------------------------------------------------------------
 struct Job {
     int me = -1;
     std::string nspace;
@@ -538,6 +538,12 @@ void connect_tool(pid_t daemon) {
     }
 #else
     (void)daemon;
+    if (std::strcmp(rank_name(), "0") == 0) {
+        std::fprintf(
+            stderr,
+            "[tt-run-rank] built without PMIx: a failed rank is named, but the job is not stopped gracefully and the "
+            "other ranks are not told\n");
+    }
 #endif
 }
 

@@ -385,7 +385,11 @@ if(ENABLE_DISTRIBUTED)
                     "${_tt_run_rank_pmix_dir}"
         )
     else()
-        message(STATUS "tt-run-rank built without PMIx: no PMIx in the MPI install (tt-run will force a stop)")
+        message(
+            WARNING
+            "tt-run-rank built without PMIx (no pmix_tool.h / libpmix in the MPI install): a failed rank is still named, "
+            "but the job is not stopped gracefully, a slow rank can be killed mid-close, and tt-run forces every stop"
+        )
     endif()
     if(TT_INSTALL)
         install(
