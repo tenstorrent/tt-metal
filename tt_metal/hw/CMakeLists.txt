@@ -532,6 +532,7 @@ list(APPEND HW_JIT_API_HEADERS ${compute_api_headers})
 # Quasar device headers are globbed, so a new one needs no sources.cmake line.
 file(
     GLOB_RECURSE tt_2xx_headers
+    CONFIGURE_DEPENDS
     RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
     inc/internal/tt-2xx/*.h
     inc/internal/tt-2xx/*.hpp
