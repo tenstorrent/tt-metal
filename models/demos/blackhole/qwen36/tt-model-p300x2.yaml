@@ -146,6 +146,9 @@ serve_profiles:
       RESIDENT_KV_V_BFP4: "1"
       RESIDENT_KV_K_BFP4: "1"
       RESIDENT_MAX_TOKENS_ALL_USERS: "2560000"
+      # O-2 (2026-11-25): at 9-32 users (row groups) the attention workers compute the next user while the current
+      # user's global row max is in flight — bit-identical; 32-row step 45.75 -> 44.65 ms, served c32 529 -> 542 tok/s
+      RESIDENT_ATTN_PIPE: "1"
       RESIDENT_PREFILL_CHUNKS: "256,512,1024"
       # prefix caching in host memory (GB; 0 = off): a prompt's state at its last 1,024-token boundary (GDN states,
       # conv history, KV; for the speculating build also the drafter's context taps) is kept in host RAM, and a later
@@ -404,5 +407,7 @@ verify:
   - "import os; os.environ['RESIDENT_KV_V_BFP4'] = '1'; import qwen36_resident.model as M; assert M.V_BFP4"
   # batch: K in bfp4 (Hadamard-rotated, S0-8) reaches the model (RESIDENT_KV_K_BFP4)
   - "import os; os.environ['RESIDENT_KV_K_BFP4'] = '1'; import ttnn, qwen36_resident.model as M; assert M.K_BFP4 and M.K_DT == ttnn.bfloat4_b and M.K_RTN"
+  # batch: O-2 reaches the model (RESIDENT_ATTN_PIPE: the row-group attention users overlapped)
+  - "import os; os.environ['RESIDENT_ATTN_PIPE'] = '1'; import qwen36_resident.model as M; assert M.ATTN_PIPE"
   # batch's chunk list reaches the adapter (ae776ee280c); without it the build keeps the 128 chunk and OOMs
   - "import os; os.environ['RESIDENT_PREFILL_CHUNKS'] = '256,512,1024'; from qwen36_resident.generator_vllm import PREFILL_CHUNKS; assert PREFILL_CHUNKS == (256, 512, 1024), PREFILL_CHUNKS"
