@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <cstdint>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "ttnn/distributed/types.hpp"

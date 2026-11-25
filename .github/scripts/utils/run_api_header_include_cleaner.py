@@ -70,7 +70,7 @@ UNUSED = re.compile(r"^included header (?P<header>.+) is not used directly$")
 
 # clang-tidy spells a header it asks to add as a quoted path relative to the
 # include directory it was found through ("tt_stl/span.hpp", "core_coord.hpp");
-# the repo writes <tt_stl/span.hpp> and <tt-metalium/core_coord.hpp>, and
+# the repo writes <tt_stl/span.hpp> and <tt-metalium/vocabulary/core_coord.hpp>, and
 # tt_metal/api has no quoted includes at all. (root relative to the repo,
 # include prefix), in lookup order: the include directories of the verification TUs.
 PROJECT_INCLUDE_ROOTS = (
@@ -230,6 +230,8 @@ def run_one(entry: dict, args: argparse.Namespace, out: str, root: str) -> Resul
             f"--config-file={args.config}",
             f"--export-fixes={fixes.name}",
             "--quiet",
+            # Forwarding headers warn when included; this checks include hygiene, not deprecation.
+            "--extra-arg=-DTT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS",
             entry["file"],
         ]
         start = time.monotonic()

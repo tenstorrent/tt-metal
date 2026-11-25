@@ -6,8 +6,8 @@
 
 #include <optional>
 
-#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 

@@ -10,10 +10,10 @@
 
 #include "tt_metal/test_utils/stimulus.hpp"
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace distribution_spec_tests {

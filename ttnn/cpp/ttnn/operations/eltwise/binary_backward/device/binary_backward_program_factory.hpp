@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "binary_backward_device_operation_types.hpp"
 

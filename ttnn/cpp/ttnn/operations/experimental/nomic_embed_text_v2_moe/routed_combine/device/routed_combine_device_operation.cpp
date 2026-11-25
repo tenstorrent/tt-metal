@@ -9,8 +9,8 @@
 #include <cstdint>
 #include <string_view>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 

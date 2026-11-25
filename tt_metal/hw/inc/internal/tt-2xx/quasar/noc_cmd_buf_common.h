@@ -70,9 +70,6 @@ static_assert(
 // Static transaction ID used for all command buffers
 constexpr uint32_t NOC_OVERLAY_TRID_STATIC = 0;
 
-// Per-cmd-buf packetization limit programmed at boot. 8KB; lower than the 64KB HW default to avoid NOC congestion.
-constexpr uint32_t NOC_OVERLAY_MAX_BYTES_IN_PACKET = 8 * 1024;
-
 // ============================================================================
 // CMD_BUF_MISC Register Bit Definitions (TT_ROCC_CMD_BUF_MISC_reg_t)
 // ============================================================================

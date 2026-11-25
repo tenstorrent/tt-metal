@@ -5,9 +5,9 @@
 #pragma once
 
 #include "hostdevcommon/fabric_common.h"
-#include <tt-metalium/cluster.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_target_device.hpp"

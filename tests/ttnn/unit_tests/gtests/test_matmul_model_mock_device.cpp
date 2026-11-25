@@ -19,8 +19,8 @@
 
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include <tt-umd/types/arch.hpp>
 

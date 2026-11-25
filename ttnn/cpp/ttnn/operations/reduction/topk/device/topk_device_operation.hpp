@@ -11,7 +11,7 @@
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/command_list_params.hpp"
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include <optional>
 #include <variant>

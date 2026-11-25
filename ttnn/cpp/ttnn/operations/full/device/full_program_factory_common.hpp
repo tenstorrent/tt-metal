@@ -10,7 +10,7 @@
 #include <string>
 #include <variant>
 
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <tt_stl/assert.hpp>
 

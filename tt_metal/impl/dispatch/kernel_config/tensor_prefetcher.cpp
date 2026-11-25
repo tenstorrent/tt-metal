@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "hostdev/remote_dfb_config_layout.h"

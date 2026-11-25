@@ -13,9 +13,9 @@
 #include "ttnn/operations/transformer/sdpa/device/block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
 #include "ttnn/operations/ccl/ccl_host_types.hpp"                           // ttnn::ccl::Topology
 #include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
 
 namespace ttnn::operations::experimental::quasar::indexer_score {
 

@@ -5,9 +5,9 @@
 #pragma once
 
 #include <unordered_map>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 
 // Experimental and subject to change: this header carries no API-stability guarantee.
 
