@@ -50,6 +50,7 @@ from models.demos.inkling2_mini.convert import cache as wcache
 from models.demos.inkling2_mini.tt.attention import (
     D_REL,
     HEAD_DIM,
+    KV0,
     N_HEADS,
     N_KV,
     QK_CLIP,
@@ -77,6 +78,7 @@ from models.demos.inkling2_mini.tt.fused.pf_gateout import PfGateOut
 from models.demos.inkling2_mini.tt.fused.pf_handoff import PfHandoff
 from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, half_proj, half_scale_rows, scale_rows
 from models.demos.inkling2_mini.tt.fused.pf_msg import PfMessages
+from models.demos.inkling2_mini.tt.fused.pf_pages import PfPages
 from models.demos.inkling2_mini.tt.fused.pf_rel import PfRel, skew_proj
 from models.demos.inkling2_mini.tt.fused.pf_ring import PfRing
 from models.demos.inkling2_mini.tt.fused.pf_route import PfRoute
@@ -352,6 +354,24 @@ class _Gate:
 
 
 ATTN_NAMES = ("w_qgrs", "w_k", "w_v", "w_o", "q_clip_scale", "rel_clip_scale", "rel_proj", "k_conv", "v_conv")
+PROJ_NAMES = ("w_qgrs", "w_k", "w_v", "w_o")
+
+
+def _attn_sources(attn):
+    """{projection: (BankLinear, column ranges)}: where the cache's plain w_qgrs / w_k / w_v / w_o tiles sit in the
+    decode attention's bank-streamed weights (w_all = [qgrs | k | v (| k_dyn | v_dyn)], tt/attention.py), or None
+    when the decode keeps them in another form."""
+    w_all, w_o = getattr(attn, "w_all", None), getattr(attn, "w_o", None)
+    if getattr(w_all, "bank", None) is None or getattr(w_o, "bank", None) is None:
+        return None
+    width = N_KV * HEAD_DIM
+    out = {"w_qgrs": (w_all.bank, [(0, KV0)]), "w_o": (w_o.bank, [(0, w_o.bank.N)])}
+    nd = (w_all.bank.N - KV0 - 2 * width) // 2  # dynamic-tap columns of k and of v (global layers)
+    for i, n in enumerate(("w_k", "w_v")):
+        c = KV0 + i * width
+        d = KV0 + 2 * width + i * nd
+        out[n] = (w_all.bank, [(c, c + width)] + ([(d, d + nd)] if nd else []))
+    return out
 
 
 class _LayerPF:
@@ -364,7 +384,12 @@ class _LayerPF:
         dev = pf.device
         self.lay = lay
         L = lay.L
-        names = {f"attn.{n}" for n in ATTN_NAMES} | {"attn_res_q", "mlp_res_q", "post_attn_conv", "post_mlp_conv"}
+        # the four projections: read from the decode's own bank-streamed weights when it has them (no second copy;
+        # pf.share_attn), else loaded again from the cache in plain form
+        self.attn_src = _attn_sources(lay.attn) if pf.share_attn else None
+        skip = PROJ_NAMES if self.attn_src is not None else ()
+        names = {f"attn.{n}" for n in ATTN_NAMES if n not in skip}
+        names |= {"attn_res_q", "mlp_res_q", "post_attn_conv", "post_mlp_conv"}
         names |= {"q_input_norm", "k_input_norm", "v_input_norm"} if lay.is_global else {"attn_norm"}
         if lay.is_loop:
             names |= {f"msg_gate.{g}.{k}" for g in ("q", "k", "v", "mlp") for k in ("down", "forget", "gain")}
@@ -379,7 +404,8 @@ class _LayerPF:
         def dev_of(name):
             return ttnn.to_device(w[name], dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        self.w_qgrs, self.w_k, self.w_v, self.w_o = (dev_of(f"attn.{n}") for n in ("w_qgrs", "w_k", "w_v", "w_o"))
+        for n in PROJ_NAMES:
+            setattr(self, n, None if n in skip else dev_of(f"attn.{n}"))
         self.q_scale = put(_host(w["attn.q_clip_scale"]).view(1, N_HEADS, 1, HEAD_DIM))
         self.q_scale_rows = put(scale_rows(_host(w["attn.q_clip_scale"]).view(N_HEADS, HEAD_DIM)))  # PfHeads form
         self.rel_scale = put(_host(w["attn.rel_clip_scale"]).view(1, N_HEADS, 1, D_REL))
@@ -527,6 +553,10 @@ class Inkling2Prefill:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+        # the projections read from the decode's attention weights (no second copy, ~0.65 GB at DRAM);
+        # INKLING_PF_ATTN_SHARE=0 loads the plain copy from the cache as before (same tiles: same output)
+        self.share_attn = os.environ.get("INKLING_PF_ATTN_SHARE", "1") != "0"
+        self._pfpages = PfPages(dev)
         self.layers = [_LayerPF(self, lay, root) for lay in model.layers]
         # unified experts at HiFi2 when the build takes it, else at LoFi (fp32 DEST: more accurate than the sparse
         # path, forced PCC 0.999911 vs 0.999900), else sparse; expert_fidelity pins one fidelity
@@ -715,6 +745,17 @@ class Inkling2Prefill:
         pc = self._mm_blocked_cfg(x, w) if self.mm_blocked else None
         return ttnn.linear(x, w, dtype=dtype, compute_kernel_config=self.mm_cfg, program_config=pc)
 
+    def _proj(self, lp, x, name):
+        """x @ the layer's projection `name` (PROJ_NAMES). Shared with the decode (lp.attn_src): a plain copy for
+        this call only, the decode weight's tiles moved in one program (tt/fused/pf_pages.py)."""
+        w = getattr(lp, name)
+        if w is not None:
+            return self._linear(x, w)
+        w = self._pfpages.plain(*lp.attn_src[name])
+        y = self._linear(x, w)
+        ttnn.deallocate(w)
+        return y
+
     def _mm_blocked_cfg(self, x, w):
         """mm_blocked's config for the two big projections (None for any other shape): grid 11 x 10, transposed
         multicast (grid columns split M), K blocks of 4 tiles, output blocks that fit L1."""
@@ -757,7 +798,7 @@ class Inkling2Prefill:
     def _kv(self, lp, x, w, kv, tail):
         """k or v for the chunk: projection, k=4 conv over [history ++ chunk], heads, clip / rms -> [1,8,T,128] bf16."""
         width = N_KV * HEAD_DIM
-        proj = self._linear(x, w)
+        proj = self._proj(lp, x, w)
         t = proj.shape[2]
         is_global = lp.lay.is_global
         if is_global:
@@ -848,7 +889,7 @@ class Inkling2Prefill:
         lay = lp.lay
         is_global = lay.is_global
         t = xq.shape[2]
-        qgrs = self._linear(xq, lp.w_qgrs)
+        qgrs = self._proj(lp, xq, "w_qgrs")
         self._tick("a.qgrs")
         tau_g = tau if is_global else None
         if self._pfheads is not None:  # q * scale, clipped, * tau (global), * SCALE: the SDPA's q
@@ -866,8 +907,8 @@ class Inkling2Prefill:
 
         self._tick("a.q_rel_prep")
         self._record_inputs(lp, conv, xq, xk, xv, n, t)
-        k = self._kv(lp, xk, lp.w_k, "k", conv["k"])
-        v = self._kv(lp, xv, lp.w_v, "v", conv["v"])
+        k = self._kv(lp, xk, "w_k", "k", conv["k"])
+        v = self._kv(lp, xv, "w_v", "v", conv["v"])
         self._tick("a.kv")
 
         cdt = st.k_ring.dtype
@@ -901,10 +942,10 @@ class Inkling2Prefill:
 
         self._tick("a.cache_write")
         if self._pfgate is not None:  # heads -> rows, * sigmoid(gate), bf16 in one program
-            return self._linear(self._pfgate(_bf16(attn), qgrs, 3072), lp.w_o)
+            return self._proj(lp, self._pfgate(_bf16(attn), qgrs, 3072), "w_o")
         attn = _unheads(_bf16(attn))  # [1,1,T,3072]
         gated = ttnn.multiply(_f32(attn), ttnn.sigmoid(_f32(_cols(qgrs, 3072, 6144))))
-        return self._linear(ttnn.typecast(gated, ttnn.bfloat16), lp.w_o)
+        return self._proj(lp, ttnn.typecast(gated, ttnn.bfloat16), "w_o")
 
     def _attention_r3(self, lp, qs, rel, sink, st, k_c, v_c, s, t):
         """Attention by one SDPA with an in-kernel banded rel bias: rel_logits[q, d] = rel_states[q] . proj[:, d]

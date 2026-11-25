@@ -157,6 +157,34 @@ def noc0_placement(device, per_bank, south=10):
 PLACEMENT = "row"  # BankLinear worker placement: "row" (moe_bank.row_placement) or "noc0" (noc0_placement)
 
 
+def _storage_order(items, alt, nblk, KB, nb):
+    """-> (per bank: the (K tile row, first column tile, columns) runs in storage order, first tile slot of each item
+    in its bank, first tile slot of each item's alt blocks in the alt bank)."""
+    per_bank = [[] for _ in range(nb)]
+    used = [0] * nb
+    offsets, alt_offsets = [], []
+    for (b, rot, part), (ab, na) in zip(items, alt):
+        alt_offsets.append(used[ab])
+        on_alt = lambda q, p: q == 0 and _alt_block(p, na, nblk)  # noqa: E731
+        ncq, g0 = part[0]
+        for p in range(nblk):
+            if on_alt(0, p):
+                j = (p + rot) % nblk
+                for r in range(KB):
+                    per_bank[ab].append((j * KB + r, g0, ncq))
+                    used[ab] += ncq
+        offsets.append(used[b])
+        for q, (ncq, g0) in enumerate(part):
+            for p in range(nblk):
+                if on_alt(q, p):
+                    continue
+                j = (p + rot) % nblk
+                for r in range(KB):
+                    per_bank[b].append((j * KB + r, g0, ncq))
+                    used[b] += ncq
+    return per_bank, offsets, alt_offsets
+
+
 class BankLinear:
     def __init__(
         self, device, w, dtype, chunk, kb, cores_per_bank, compute_kernel_config, out_cols=None, out_dtype=ttnn.float32,
@@ -199,25 +227,9 @@ class BankLinear:
         self.alt = [(b, 0) for b, _, _ in self.items]
         if spread:
             self.alt = _spread(self.items, nb, self.KB * self.nblk, self.KB)
-        per_bank = [[] for _ in range(nb)]
-        self.offsets, self.alt_offsets = [], []
-        for (b, rot, part), (ab, na) in zip(self.items, self.alt):
-            self.alt_offsets.append(sum(t.shape[0] for t in per_bank[ab]))
-            on_alt = lambda q, p: q == 0 and _alt_block(p, na, self.nblk)  # noqa: E731
-            ncq, g0 = part[0]
-            for p in range(self.nblk):
-                if on_alt(0, p):
-                    j = (p + rot) % self.nblk
-                    for r in range(self.KB):
-                        per_bank[ab].append(tiles[j * self.KB + r, g0 : g0 + ncq])
-            self.offsets.append(sum(t.shape[0] for t in per_bank[b]))  # first tile slot of this item in bank b
-            for q, (ncq, g0) in enumerate(part):
-                for p in range(self.nblk):
-                    if on_alt(q, p):
-                        continue
-                    j = (p + rot) % self.nblk
-                    for r in range(self.KB):
-                        per_bank[b].append(tiles[j * self.KB + r, g0 : g0 + ncq])
+        per_bank, self.offsets, self.alt_offsets = _storage_order(self.items, self.alt, self.nblk, self.KB, nb)
+        self._order = per_bank
+        per_bank = [[tiles[kt, g0 : g0 + ncq] for kt, g0, ncq in tb] for tb in per_bank]
         stacks = [torch.cat([t.reshape(-1, TILE, TILE) for t in tb]) if tb else None for tb in per_bank]
         rows = max(len(s_) for s_ in stacks if s_ is not None)
         pages = torch.zeros(rows, nb, TILE, TILE, dtype=torch.bfloat16)
@@ -262,6 +274,17 @@ class BankLinear:
 
     def spreads(self):
         return any(n for _, n in self.alt)
+
+    def page_map(self):
+        """[Kt, out column tiles] int64: the page of self.weight holding each tile of w (page slot * nb + bank;
+        -1: not stored). A plain interleaved copy of w is these pages in this order (tt/fused/pf_pages.py)."""
+        m = torch.full((self.Kt, -(-self.out_cols // TILE)), -1, dtype=torch.int64)
+        for b, runs in enumerate(self._order):
+            slot = 0
+            for kt, g0, ncq in runs:
+                m[kt, g0 : g0 + ncq] = (slot + torch.arange(ncq)) * self.nb + b
+                slot += ncq
+        return m
 
     def reader_defines(self):
         return [("W_SPREAD", "1")] * self.spreads()
