@@ -815,7 +815,7 @@ TEST(InterDomain, RelayingPlanes) {
                 return true;
             }
         }
-        return node_of.size() == 1;
+        return false;  // as the lowering: a plane with no domain router (a single-chip domain has none)
     };
     for (const auto& port : ports) {
         mine_routed.push_back(RoutedPort{
@@ -1082,6 +1082,34 @@ TEST(InterDomain, RelayingPlanes) {
                 EXPECT_EQ(bad[slot], 0u) << "round " << round << " asic " << asic << " slot " << slot << ": "
                                          << bad[slot] << " bad words";
                 ++checked;
+            }
+        }
+        // scenario 4 (#65599): a link on no plane here (an aux link, more links than planes) lands only what is for
+        // its own chip. Where the peer splits nothing (it owns a plane on every link), a stream crosses the link of the
+        // port it left by: then some cross this domain's aux links, and their bytes were checked above. (A peer that
+        // splits onto a link whose end here is aux is outside the design: Galaxy has at most one more link than planes
+        // on one side of a pair.)
+        const bool peer_splits =
+            std::any_of(peer_routed.begin(), peer_routed.end(), [](const RoutedPort& q) { return q.live && !q.owned; });
+        if (!peer_splits && node_of.size() > 1) {
+            size_t through_aux = 0;
+            std::ifstream in(theirs(std::to_string(round) + ".relay.streams"));
+            uint64_t to = 0;
+            uint32_t slot = 0;
+            while (in >> to >> slot) {
+                const auto& q = peer_routed.at(slot / 3);  // the peer port the stream left by
+                for (const auto& p : mine_routed) {
+                    if (p.asic == q.peer_asic && p.chan == q.peer_chan && p.live && !p.owned) {
+                        EXPECT_EQ(to, p.asic)
+                            << "slot " << slot << " crosses aux chan " << p.chan << " for another chip";
+                        ++through_aux;
+                    }
+                }
+            }
+            const bool has_aux = std::any_of(
+                mine_routed.begin(), mine_routed.end(), [](const RoutedPort& p) { return p.live && !p.owned; });
+            if (has_aux && !far_only) {
+                EXPECT_GT(through_aux, 0u) << "this domain has aux links but nothing crossed one";
             }
         }
         if (!far_only) {
