@@ -64,11 +64,9 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
             sender::before_round(round, s.states.loop_local_progress(), s.states);
 #if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
             // The streaming profiler's clock sync port (link_sync.hpp) is polled after every part of a round's passes.
-            // A part is as long as the receiver loop's passes between context-switch checks; without a port, the round.
+            // A part is as long as the receiver loop's passes between context-switch checks.
             constexpr size_t passes_per_clock_sync_poll =
-                link_sync::RouterHook::kHasPort
-                    ? std::min(iterations_between_ctx_switch_and_teardown_checks, FOLLOW_POLL_PASSES)
-                    : iterations_between_ctx_switch_and_teardown_checks;
+                std::min(iterations_between_ctx_switch_and_teardown_checks, FOLLOW_POLL_PASSES);
             for (size_t c = 0; c < iterations_between_ctx_switch_and_teardown_checks / passes_per_clock_sync_poll;
                  c++) {
                 for (size_t n = 0; n < passes_per_clock_sync_poll; n++) {

@@ -379,7 +379,6 @@ using Port = std::conditional_t<Role == kernel_profiler::LinkSyncRole::Transmitt
 // Runs a port inside a fabric router, which calls poll() every few passes of its main loop.
 template <kernel_profiler::LinkSyncRole Role>
 struct RouterPort {
-    static constexpr bool kHasPort = true;
     static inline Port<Role> port;
     // Starts the port the first time. After that, serves it and has it schedule when it is next served.
     __attribute__((noinline, cold)) static void serve_port() {
@@ -411,7 +410,6 @@ struct RouterPort {
 };
 
 struct NoPort {
-    static constexpr bool kHasPort = false;
     static void poll() {}
 };
 
