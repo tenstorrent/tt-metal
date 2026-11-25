@@ -5,11 +5,11 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <optional>
 #include <vector>
 
 #include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/shard_data_transfer.hpp>
 #include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include <tt-metalium/execution/mesh_command_queue.hpp>
 
@@ -39,34 +39,20 @@ void enqueue_write_tensor(
 
 namespace experimental {
 
-// Experimental: the shard region transfers below are subject to change without notice.
+// Experimental: subject to change without notice.
 
-// One byte range of one shard of a mesh tensor's buffer and the host memory it is copied to / from.
-// ``shard`` is the shard's linear index in the mesh (row-major over the mesh shape); ``offset`` and ``size`` are bytes
-// of that shard's buffer, whole pages only (the buffer must be interleaved, where page i is bytes
-// [i * page_size, (i + 1) * page_size)); ``host`` points at ``size`` bytes of host memory owned by the caller.
-struct ShardRegionTransfer {
-    uint32_t shard = 0;
-    uint64_t offset = 0;
-    uint64_t size = 0;
-    std::byte* host = nullptr;
-};
-
-// Reads / writes many byte ranges of the shards of a mesh tensor in one command-queue call, ordered after every
-// command already enqueued on ``queue``. Unlike the single-device APIs above, these work on any mesh. Every transfer is
-// checked (shard index, page alignment, bounds) before any is enqueued, so a rejected batch enqueues nothing. The
-// caller keeps the host memory valid (and, for writes, unchanged) until the transfer has completed (``blocking``, or a
-// later finish / event on the queue).
-void enqueue_read_shard_regions(
+// MeshCommandQueue::enqueue_read_shards / enqueue_write_shards on the buffer of ``device_tensor``, which callers
+// outside tt_metal cannot reach. Unlike the single-device APIs above, these take any shards of any mesh.
+void enqueue_read_shards(
     distributed::MeshCommandQueue& queue,
     const MeshTensor& device_tensor,
-    const std::vector<ShardRegionTransfer>& transfers,
+    const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
     bool blocking = true);
 
-void enqueue_write_shard_regions(
+void enqueue_write_shards(
     distributed::MeshCommandQueue& queue,
     MeshTensor& device_tensor,
-    const std::vector<ShardRegionTransfer>& transfers,
+    const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
     bool blocking = true);
 
 }  // namespace experimental

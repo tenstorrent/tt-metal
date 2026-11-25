@@ -8,6 +8,7 @@
 #include <tt-metalium/execution/mesh_event.hpp>
 #include <api/tt-metalium/experimental/pinned_memory.hpp>
 #include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
@@ -15,6 +16,7 @@
 #include "tt-metalium/memory/buffer/buffer.hpp"
 #include "tt-metalium/vocabulary/mesh_coord.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
+#include "tt_metal/impl/buffers/buffer_impl.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
@@ -43,6 +45,63 @@ std::optional<MeshCoordinateRange> shard_device_range(const std::vector<ShardDat
         }
     }
     return MeshCoordinateRange(start, end);
+}
+
+// Checks every transfer before any is dispatched. A read rejected inside the dispatch loop would leave the reads before
+// it enqueued without the completion request that ends them, and the next read would consume their read descriptors.
+void validate_shard_data_transfers(
+    const MeshDevice& mesh_device,
+    const MeshBuffer& buffer,
+    const std::vector<ShardDataTransfer>& shard_data_transfers) {
+    const MeshCoordinateRange mesh_range(mesh_device.shape());
+    for (const auto& shard_data_transfer : shard_data_transfers) {
+        const MeshCoordinate coord = shard_data_transfer.shard_coord();
+        TT_FATAL(mesh_range.contains(coord), "Shard {} is outside the mesh of shape {}", coord, mesh_device.shape());
+        const auto region = shard_data_transfer.region();
+        if (region.has_value() && mesh_device.is_local(coord)) {
+            buffer.get_device_buffer(coord)->impl().validate_view_region(*region);
+        }
+    }
+}
+
+// True when ``next`` continues ``prev`` on the same shard, both in the buffer and in host memory. Transfers with pinned
+// memory are left alone: the pinned memory is tracked per transfer.
+bool continues(const ShardDataTransfer& prev, const ShardDataTransfer& next) {
+    const auto prev_region = prev.region();
+    const auto next_region = next.region();
+    if (!prev_region.has_value() || !next_region.has_value() || prev.host_data() == nullptr ||
+        prev.shard_coord() != next.shard_coord() || experimental::ShardDataTransferGetPinnedMemory(prev) != nullptr ||
+        experimental::ShardDataTransferGetPinnedMemory(next) != nullptr) {
+        return false;
+    }
+    return prev_region->offset + prev_region->size == next_region->offset &&
+           reinterpret_cast<uintptr_t>(prev.host_data()) + prev_region->size ==
+               reinterpret_cast<uintptr_t>(next.host_data());
+}
+
+// Merges each run of transfers that continue one another into one transfer: callers that describe paged data page by
+// page would otherwise pay one dispatch per page. Returns nullopt when no two transfers merge.
+std::optional<std::vector<ShardDataTransfer>> merge_adjacent_shard_data_transfers(
+    const std::vector<ShardDataTransfer>& shard_data_transfers) {
+    bool any_merge = false;
+    for (std::size_t i = 1; i < shard_data_transfers.size() && !any_merge; ++i) {
+        any_merge = continues(shard_data_transfers[i - 1], shard_data_transfers[i]);
+    }
+    if (!any_merge) {
+        return std::nullopt;
+    }
+    std::vector<ShardDataTransfer> merged;
+    merged.reserve(shard_data_transfers.size());
+    for (const auto& shard_data_transfer : shard_data_transfers) {
+        if (!merged.empty() && continues(merged.back(), shard_data_transfer)) {
+            auto region = *merged.back().region();
+            region.size += shard_data_transfer.region()->size;
+            merged.back().region(region);
+        } else {
+            merged.push_back(shard_data_transfer);
+        }
+    }
+    return merged;
 }
 
 }  // namespace
@@ -335,7 +394,7 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
 
 void MeshCommandQueueBase::enqueue_write_shards_nolock(
     MeshBuffer& buffer,
-    const std::vector<ShardDataTransfer>& shard_data_transfers,
+    const std::vector<ShardDataTransfer>& requested_shard_data_transfers,
     bool blocking,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
@@ -346,6 +405,10 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
     }
+    validate_shard_data_transfers(*mesh_device_, buffer, requested_shard_data_transfers);
+    const auto merged_shard_data_transfers = merge_adjacent_shard_data_transfers(requested_shard_data_transfers);
+    const auto& shard_data_transfers =
+        merged_shard_data_transfers.has_value() ? *merged_shard_data_transfers : requested_shard_data_transfers;
     ScopedTransferStats transfer_stats(
         *this, HostTransferCategory::BufferWriteFastDispatch, shard_device_range(shard_data_transfers));
 
@@ -439,12 +502,19 @@ void MeshCommandQueueBase::enqueue_write_with_core_filter(
 }
 
 void MeshCommandQueueBase::enqueue_read_shards_nolock(
-    const std::vector<ShardDataTransfer>& shard_data_transfers,
+    const std::vector<ShardDataTransfer>& requested_shard_data_transfers,
     const std::shared_ptr<MeshBuffer>& buffer,
     bool blocking,
     std::vector<MemoryPin> memory_pins) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
+    // A graph capture that blocks reads skips every shard read below, so it has nothing to check.
+    if (!tt::tt_metal::GraphTracker::instance().hook_read_from_device(buffer.get())) {
+        validate_shard_data_transfers(*mesh_device_, *buffer, requested_shard_data_transfers);
+    }
+    const auto merged_shard_data_transfers = merge_adjacent_shard_data_transfers(requested_shard_data_transfers);
+    const auto& shard_data_transfers =
+        merged_shard_data_transfers.has_value() ? *merged_shard_data_transfers : requested_shard_data_transfers;
     ScopedTransferStats transfer_stats(
         *this, HostTransferCategory::BufferReadFastDispatch, shard_device_range(shard_data_transfers));
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};

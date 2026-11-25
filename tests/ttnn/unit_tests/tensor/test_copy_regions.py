@@ -129,9 +129,9 @@ def test_rejected_batch_enqueues_nothing(device, expect_error):
 
     # A valid first region followed by a bad one: the call fails and the first region is not read either.
     stale = np.zeros(bb, dtype=np.uint8)
-    with expect_error(RuntimeError, "whole number of"):
+    with expect_error(RuntimeError, "multiple of page size"):
         ttnn.copy_device_to_host_regions(src, [(0, 0, bb, stale.ctypes.data), (0, page // 2, page, stale.ctypes.data)])
-    with expect_error(RuntimeError, "outside the"):
+    with expect_error(RuntimeError, "within buffer"):
         ttnn.copy_device_to_host_regions(
             src, [(0, 0, bb, stale.ctypes.data), (0, NUM_BLOCKS * bb, bb, stale.ctypes.data)]
         )
@@ -144,6 +144,14 @@ def test_rejected_batch_enqueues_nothing(device, expect_error):
     ttnn.synchronize_device(device)
     np.testing.assert_array_equal(host, whole[3 * bb : 4 * bb])
     assert not stale.any()
+
+    # A rejected write batch does not write its valid first region either.
+    ones = np.full(bb, 0xFF, dtype=np.uint8)
+    with expect_error(RuntimeError, "within buffer"):
+        ttnn.copy_host_to_device_regions(
+            src, [(0, 0, bb, ones.ctypes.data), (0, NUM_BLOCKS * bb, bb, ones.ctypes.data)]
+        )
+    np.testing.assert_array_equal(_all_bytes(src, dtype), whole)
 
 
 def _device_bytes(tensor, mesh_device):

@@ -674,16 +674,35 @@ std::shared_ptr<Buffer> BufferImpl::create(
     return buffer;
 }
 
+void BufferImpl::validate_view_region(const BufferRegion& region) const {
+    TT_FATAL(page_size_ > 0, "Region of a buffer with page size 0");
+    TT_FATAL(
+        region.offset % page_size_ == 0,
+        "Region offset must be a multiple of page size (offset {}, page size {})",
+        region.offset,
+        page_size_);
+    TT_FATAL(
+        region.size % page_size_ == 0,
+        "Region size must be a multiple of page size (size {}, page size {})",
+        region.size,
+        page_size_);
+    TT_FATAL(
+        region.size <= size_ && region.offset <= size_ - region.size,
+        "Region must be within buffer (offset {}, size {}, buffer size {})",
+        region.offset,
+        region.size,
+        size_);
+    TT_FATAL(
+        !per_core_allocation_ || (region.offset == 0 && region.size == size_),
+        "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
+}
+
 std::shared_ptr<Buffer> BufferImpl::view(Buffer& self, const BufferRegion& region) {
-    TT_FATAL(region.offset % self.page_size() == 0, "Region offset must be a multiple of page size");
-    TT_FATAL(region.size % self.page_size() == 0, "Region size must be a multiple of page size");
-    TT_FATAL(region.offset + region.size <= self.size(), "Region must be within buffer");
+    validate_view_region(region);
 
     if (region.offset == 0 && region.size == self.size()) {
         return self.shared_from_this();
     }
-
-    TT_FATAL(!per_core_allocation_, "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
 
     // A view takes the parent's address rather than allocating, so the flag changes nothing about
     // placement here. It is carried anyway so is_range_lockstep_allocation() agrees on a buffer and

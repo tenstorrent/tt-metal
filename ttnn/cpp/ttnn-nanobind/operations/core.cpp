@@ -5,8 +5,8 @@
 #include "core.hpp"
 
 #include <cstdint>
-#include <limits>
 #include <optional>
+#include <type_traits>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
@@ -332,60 +332,72 @@ void py_module(nb::module_& mod) {
 
     // Regions come as (shard, byte offset, byte size, host address) tuples, or as an (N, 4) uint64 array with the
     // same columns, which callers build without a Python object per region.
-    using RegionTuples = std::vector<std::tuple<uint32_t, uint64_t, uint64_t, uintptr_t>>;
+    using RegionTuples = std::vector<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>>;
     using RegionArray = nb::ndarray<const uint64_t, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
-    auto from_tuples = [](const RegionTuples& regions) {
-        std::vector<tt::tt_metal::experimental::ShardRegionTransfer> out;
-        out.reserve(regions.size());
-        for (const auto& [shard, offset, size, host] : regions) {
-            out.push_back(tt::tt_metal::experimental::ShardRegionTransfer{
-                .shard = shard, .offset = offset, .size = size, .host = reinterpret_cast<std::byte*>(host)});
-        }
-        return out;
-    };
-    auto from_array = [](const RegionArray& regions) {
-        TT_FATAL(regions.shape(1) == 4, "regions must have shape (N, 4), got (N, {})", regions.shape(1));
-        std::vector<tt::tt_metal::experimental::ShardRegionTransfer> out;
-        out.reserve(regions.shape(0));
-        const uint64_t* row = regions.data();
-        for (size_t i = 0; i < regions.shape(0); i++, row += 4) {
-            TT_FATAL(
-                row[0] <= std::numeric_limits<uint32_t>::max(), "regions row {}: shard {} out of range", i, row[0]);
-            out.push_back(tt::tt_metal::experimental::ShardRegionTransfer{
-                .shard = static_cast<uint32_t>(row[0]),
-                .offset = row[1],
-                .size = row[2],
-                .host = reinterpret_cast<std::byte*>(row[3])});
-        }
-        return out;
-    };
-    auto read_regions = [](const ttnn::Tensor& device_tensor,
-                           const std::vector<tt::tt_metal::experimental::ShardRegionTransfer>& transfers,
-                           bool blocking,
-                           std::optional<ttnn::QueueId> cq_id) {
+    // MeshCommandQueue::enqueue_read_shards / enqueue_write_shards check the page alignment and bounds of every region
+    // before any is enqueued, and merge regions that continue one another.
+    auto to_transfers = [](const ttnn::Tensor& device_tensor, const auto& regions) {
+        TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "region copies need a device tensor");
+        // Byte offset i * page_size is page i only in an interleaved buffer.
         TT_FATAL(
-            device_tensor.storage_type() == StorageType::DEVICE, "copy_device_to_host_regions needs a device tensor");
-        auto& cq = ttnn::current_mesh_command_queue(*device_tensor.device(), cq_id);
-        tt::tt_metal::experimental::enqueue_read_shard_regions(cq, device_tensor.mesh_tensor(), transfers, blocking);
+            !device_tensor.memory_config().is_sharded(),
+            "region copies support interleaved tensors only, got a sharded tensor");
+        const tt::tt_metal::distributed::MeshCoordinateRange range(device_tensor.device()->shape());
+        const std::vector<tt::tt_metal::distributed::MeshCoordinate> coords(range.begin(), range.end());
+        std::vector<tt::tt_metal::distributed::ShardDataTransfer> transfers;
+        auto add = [&](uint64_t shard, uint64_t offset, uint64_t size, uint64_t host) {
+            TT_FATAL(shard < coords.size(), "shard {} out of range: the mesh has {} devices", shard, coords.size());
+            TT_FATAL(host != 0, "region for shard {} has a null host address", shard);
+            TT_FATAL(size > 0, "region for shard {} has size 0", shard);
+            transfers.push_back(tt::tt_metal::distributed::ShardDataTransfer{coords[shard]}
+                                    .host_data(reinterpret_cast<void*>(static_cast<uintptr_t>(host)))
+                                    .region(tt::tt_metal::BufferRegion(offset, size)));
+        };
+        if constexpr (std::is_same_v<std::decay_t<decltype(regions)>, RegionArray>) {
+            TT_FATAL(regions.shape(1) == 4, "regions must have shape (N, 4), got (N, {})", regions.shape(1));
+            transfers.reserve(regions.shape(0));
+            const uint64_t* row = regions.data();
+            for (size_t i = 0; i < regions.shape(0); i++, row += 4) {
+                add(row[0], row[1], row[2], row[3]);
+            }
+        } else {
+            transfers.reserve(regions.size());
+            for (const auto& [shard, offset, size, host] : regions) {
+                add(shard, offset, size, host);
+            }
+        }
+        return transfers;
     };
-    auto write_regions = [](ttnn::Tensor& device_tensor,
-                            const std::vector<tt::tt_metal::experimental::ShardRegionTransfer>& transfers,
-                            bool blocking,
-                            std::optional<ttnn::QueueId> cq_id) {
-        TT_FATAL(
-            device_tensor.storage_type() == StorageType::DEVICE, "copy_host_to_device_regions needs a device tensor");
-        auto& cq = ttnn::current_mesh_command_queue(*device_tensor.device(), cq_id);
-        tt::tt_metal::experimental::enqueue_write_shard_regions(
-            cq, device_tensor.device_storage().get_mesh_tensor(), transfers, blocking);
-    };
+    auto read_regions =
+        [to_transfers](
+            const ttnn::Tensor& device_tensor, const auto& regions, bool blocking, std::optional<ttnn::QueueId> cq_id) {
+            const auto transfers = to_transfers(device_tensor, regions);
+            if (transfers.empty()) {
+                return;
+            }
+            auto& cq = ttnn::current_mesh_command_queue(*device_tensor.device(), cq_id);
+            tt::tt_metal::experimental::enqueue_read_shards(
+                cq, device_tensor.device_storage().get_mesh_tensor(), transfers, blocking);
+        };
+    auto write_regions =
+        [to_transfers](
+            ttnn::Tensor& device_tensor, const auto& regions, bool blocking, std::optional<ttnn::QueueId> cq_id) {
+            const auto transfers = to_transfers(device_tensor, regions);
+            if (transfers.empty()) {
+                return;
+            }
+            auto& cq = ttnn::current_mesh_command_queue(*device_tensor.device(), cq_id);
+            tt::tt_metal::experimental::enqueue_write_shards(
+                cq, device_tensor.device_storage().get_mesh_tensor(), transfers, blocking);
+        };
 
     mod.def(
         "copy_device_to_host_regions",
-        [from_array, read_regions](
+        [read_regions](
             const ttnn::Tensor& device_tensor,
             const RegionArray& regions,
             bool blocking,
-            std::optional<ttnn::QueueId> cq_id) { read_regions(device_tensor, from_array(regions), blocking, cq_id); },
+            std::optional<ttnn::QueueId> cq_id) { read_regions(device_tensor, regions, blocking, cq_id); },
         nb::arg("device_tensor"),
         nb::arg("regions"),
         nb::arg("blocking") = true,
@@ -394,11 +406,11 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "copy_device_to_host_regions",
-        [from_tuples, read_regions](
+        [read_regions](
             const ttnn::Tensor& device_tensor,
             const RegionTuples& regions,
             bool blocking,
-            std::optional<ttnn::QueueId> cq_id) { read_regions(device_tensor, from_tuples(regions), blocking, cq_id); },
+            std::optional<ttnn::QueueId> cq_id) { read_regions(device_tensor, regions, blocking, cq_id); },
         nb::arg("device_tensor"),
         nb::arg("regions"),
         nb::arg("blocking") = true,
@@ -420,11 +432,11 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "copy_host_to_device_regions",
-        [from_array, write_regions](
+        [write_regions](
             ttnn::Tensor& device_tensor,
             const RegionArray& regions,
             bool blocking,
-            std::optional<ttnn::QueueId> cq_id) { write_regions(device_tensor, from_array(regions), blocking, cq_id); },
+            std::optional<ttnn::QueueId> cq_id) { write_regions(device_tensor, regions, blocking, cq_id); },
         nb::arg("device_tensor"),
         nb::arg("regions"),
         nb::arg("blocking") = true,
@@ -433,11 +445,11 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "copy_host_to_device_regions",
-        [from_tuples, write_regions](
+        [write_regions](
             ttnn::Tensor& device_tensor,
             const RegionTuples& regions,
             bool blocking,
-            std::optional<ttnn::QueueId> cq_id) { write_regions(device_tensor, from_tuples(regions), blocking, cq_id); },
+            std::optional<ttnn::QueueId> cq_id) { write_regions(device_tensor, regions, blocking, cq_id); },
         nb::arg("device_tensor"),
         nb::arg("regions"),
         nb::arg("blocking") = true,
