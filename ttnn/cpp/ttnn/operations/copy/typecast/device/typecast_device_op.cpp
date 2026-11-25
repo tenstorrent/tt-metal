@@ -5,6 +5,7 @@
 #include "typecast_device_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operation.hpp"
 
 #include <tt-metalium/hal.hpp>
 
@@ -166,6 +167,40 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
     return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
+ttsl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+    if (!typecast_rm_chunked_is_shape_free(args, tensor_args)) {
+        // The flag leaves out of the full hash: where it has no effect, the program is the same either way.
+        const TypecastParams without_flag{
+            .input_dtype = args.input_dtype,
+            .output_dtype = args.output_dtype,
+            .output_memory_config = args.output_memory_config,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .preserve_fp32_precision = args.preserve_fp32_precision,
+            .bfp8_pack_precise = args.bfp8_pack_precise,
+            .sub_core_grids = args.sub_core_grids};
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<TypecastDeviceOperation>, without_flag, tensor_args);
+    }
+    // A shape-free call is one the row-major factory serves: interleaved row major without sub_core_grids.
+    TT_ASSERT(std::holds_alternative<TypecastRowMajorChunkedProgramFactory>(select_program_factory(args, tensor_args)));
+    // The kernels take the row counts at run time. The row width sets the page sizes, and with fewer rows than
+    // cores the core set follows the row count, so those stay in the key.
+    const auto grid = input.device()->compute_with_storage_grid_size();
+    const uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1];
+    const uint32_t rows_key = num_rows >= grid.x * grid.y ? 0 : num_rows;
+    return tt::tt_metal::operation::hash_operation<TypecastDeviceOperation>(
+        args,
+        input.dtype(),
+        input.memory_config(),
+        input.logical_shape().rank(),
+        input.padded_shape()[-1],
+        input.tensor_spec().page_config(),
+        input.tensor_spec().tensor_layout().get_alignment(),
+        rows_key);
+}
+
 bool TypecastDeviceOperation::skip_launch(
     const operation_attributes_t& /*attributes*/,
     const tensor_args_t& /*tensor_args*/,
@@ -184,7 +219,8 @@ Tensor typecast(
     bool preserve_fp32_precision,
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool runtime_shapes) {
     return ttnn::device_operation::launch<TypecastDeviceOperation>(
         TypecastParams{
             .input_dtype = input.dtype(),
@@ -194,6 +230,7 @@ Tensor typecast(
             .preserve_fp32_precision = preserve_fp32_precision,
             .bfp8_pack_precise = bfp8_pack_precise,
             .sub_core_grids = sub_core_grids,
+            .runtime_shapes = runtime_shapes,
         },
         TypecastInputs{.input = input, .preallocated_output = preallocated_output});
 }

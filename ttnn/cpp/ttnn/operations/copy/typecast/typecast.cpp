@@ -40,7 +40,8 @@ inline Tensor typecast_impl(
     const DataType& output_dtype,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool runtime_shapes = false) {
     // Handle host tensors by delegating to to_dtype
     if (is_cpu_tensor(input_tensor)) {
         TT_FATAL(
@@ -85,7 +86,8 @@ inline Tensor typecast_impl(
         preserve_fp32_precision,
         bfp8_pack_precise,
         optional_output_tensor,
-        sub_core_grids);
+        sub_core_grids,
+        runtime_shapes);
 }
 
 }  // namespace ttnn::operations::copy::detail
@@ -97,7 +99,8 @@ Tensor typecast(
     const DataType& output_dtype,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool runtime_shapes) {
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype == optional_output_tensor.value().dtype(),
@@ -105,7 +108,7 @@ Tensor typecast(
     }
 
     return operations::copy::detail::typecast_impl(
-        input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids);
+        input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids, runtime_shapes);
 }
 
 Tensor typecast(
@@ -114,7 +117,8 @@ Tensor typecast(
     const DataType& tt_output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool runtime_shapes) {
     TT_FATAL(tt_input_dtype == input_tensor.dtype(), "input dtype and input tensor's dtype provided should match");
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
@@ -122,7 +126,7 @@ Tensor typecast(
             "If both output dtype and output tensor provided dtype should match");
     }
     return operations::copy::detail::typecast_impl(
-        input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids);
+        input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids, runtime_shapes);
 }
 
 }  // namespace ttnn

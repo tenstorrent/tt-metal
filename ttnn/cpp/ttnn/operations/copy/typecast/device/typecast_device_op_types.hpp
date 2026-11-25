@@ -19,6 +19,9 @@ struct TypecastParams {
     const bool preserve_fp32_precision = false;
     const bool bfp8_pack_precise = false;
     const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+    // A row-major program serves every row count of the same row width and rank, at more host time per call
+    // (see typecast_rm_chunked_is_shape_free).
+    const bool runtime_shapes = false;
 };
 
 struct TypecastInputs {
