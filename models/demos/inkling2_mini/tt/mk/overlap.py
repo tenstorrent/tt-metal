@@ -11,7 +11,7 @@ How: for each staged projection (attention w_all and / or w_o), every layer's Ba
 (same weight tensor, placed off the hosting programs' rows) and gets a staged reader over ONE staging tensor shared
 by the 24 layers. ``ttnn.generic_op`` is wrapped: after app i's projection ran, app i+1's fill for it is queued;
 each later DRAM-light program in HOST_KB carries the next piece of it, sized to end inside that program (budget mode,
-the default; M2 mode: ``parts`` equal pieces on programs of at most ``max_cores`` cores). Fill and host cores are
+the default; parts mode: ``parts`` equal pieces on programs of at most ``max_cores`` cores). Fill and host cores are
 disjoint (asserted). App i+1's projection reads whatever prefix was filled. Bytes into every CB slot are unchanged,
 so outputs are bit-equal.
 
@@ -31,8 +31,8 @@ _orig_generic_op = ttnn.generic_op
 _STREAMS = "bank_"  # bank_linear_*, moe_bank_*: weight streams
 
 # Budget mode (Overlap(budget=...), the default): DRAM-light programs that may carry a fill, with the bytes per core
-# one piece may fill there. Keyed by (sorted kernel basenames, core count). Sized from the M3 device profiles (4K,
-# integrate c99577bf5b7): ~7.5 KB/us per core (2 KB x 1 read in flight on each RISC) x the program's time, then cut
+# one piece may fill there. Keyed by (sorted kernel basenames, core count). Sized from device profiles at 4K:
+# ~7.5 KB/us per core (2 KB x 1 read in flight on each RISC) x the program's time, then cut
 # where the profile showed the host stretched more than the staged bytes saved. Measured and left out: attn_bias
 # (32 cores, 14.5 us: 90 KB stretched it to 20.2 us; 30 KB at budget 0.8: +0.08 ms), attn_near / attn_comb (global
 # layers; +0.02 ms). The router (rows 2..5, DRAM idle while its collector runs) takes the largest piece: with it,
@@ -58,7 +58,7 @@ HOST_KB = {
     JOIN_KEY: 178,  # post-MLP conv + next attn-res joined (model.GLUE_JOIN): the two programs' 89 + 89
 }
 # R verify rows (fused/common.py per_row): the 1-row program once per row, on R x its cores (logical rows 0..5, off
-# the staging block), about as long as the 1-row program (alpha ~ 0, M6-report.md): the same KB per staging core
+# the staging block), about as long as the 1-row program (alpha ~ 0): the same KB per staging core
 for _key, _kb in list(HOST_KB.items()):
     for _r in (2, 3, 4):
         HOST_KB.setdefault(_key[:-1] + (_key[-1] * _r,), _kb)
@@ -72,11 +72,11 @@ BUDGET = 0.8
 HOST_FILL = {JOIN_KEY: (2048, 2)}
 # KB per staging core one piece may fill inside a local sdpa call (sdpa_decode extra_kernels; 0 = off)
 SDPA_KB = 200  # 150 / 200 / 250 / 300: 16.18 / 16.09 / 16.24 / 16.41 ms at 4K (11 us delay); 0 / no hook: 16.29
-SDPA_DELAY_US = 11.0  # fill start inside the sdpa call: after its K / V reads (~11 us of 31, G3), DRAM idle after
+SDPA_DELAY_US = 11.0  # fill start inside the sdpa call: after its K / V reads (~11 us of 31), DRAM idle after
 
 
 def sdpa_extra_kernels():
-    """Whether this ttnn build's sdpa_decode takes extra_kernels (R9). Checked before any fill piece is taken: a call
+    """Whether this ttnn build's sdpa_decode takes extra_kernels. Checked before any fill piece is taken: a call
     that then failed would leave the staged consumer reading bytes that were never filled."""
     return "extra_kernels" in (ttnn.transformer.scaled_dot_product_attention_decode.__doc__ or "")
 
@@ -145,7 +145,7 @@ class Overlap:
         idle; wider small programs are short, so a fill piece makes them longer instead of hiding). gates: also stage
         the message gates' F / G (tt/mk/gate_stage.py) on their combine cores outside row 0 and outside the
         projections' staging cores; default INKLING_STAGE_GATES (off).
-        budget: None = M2 mode (single-core hosts, ``parts`` equal pieces). A number (default BUDGET) = budget mode:
+        budget: None = parts mode (single-core hosts, ``parts`` equal pieces). A number (default BUDGET) = budget mode:
         every program in ``host_kb`` (default HOST_KB) carries fill bytes up to budget x its KB per core, oldest
         queued item first, then the next items on cores disjoint from the ones it filled."""
         self.parts, self.max_cores = parts, max_cores

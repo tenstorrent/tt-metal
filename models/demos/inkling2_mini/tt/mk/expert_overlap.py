@@ -14,8 +14,8 @@ its DRAM reads run during app a + 1's attention, not during app a's expert step.
 release="moe" (default): the request waits for app a's expert step to end (its collector raises the signal).
 release="w_all": it waits for a signal raised right after app a + 1's attention w_all projection instead, so the
 stream skips the residual / gate programs between the two and runs during SDPA, w_o and the DRAM-light programs
-before the expert step. Since M5's sdpa fill pieces (R9) use that window, "w_all" lost its gain: stock build at
-257acca88f6, 2K / 120K ms: off 15.86 / 21.09, "w_all" 15.91 / 21.22, "moe" 15.52 / 20.85, "w_o" 17.29 / 22.55.
+before the expert step. Since the sdpa fill pieces (tt/mk/overlap.py) use that window, "w_all" lost its gain.
+Measured, 2K / 120K ms: off 15.86 / 21.09, "w_all" 15.91 / 21.22, "moe" 15.52 / 20.85, "w_o" 17.29 / 22.55.
 """
 
 import os
@@ -54,9 +54,9 @@ class _Signal:
 
 class ExpertOverlap:
     def __init__(self, model, ring_kb=240, guesses=None, release="moe", dynamic=True, mpfe=None):
-        """ring_kb: per ring core; 240 holds 2 BFP8 guesses (230 KB). 300 no longer fits beside M3 staging and the
+        """ring_kb: per ring core; 240 holds 2 BFP8 guesses (230 KB). 300 no longer fits beside the staging and the
         router stage (CB clash at capture). guesses: {gate_up dtype: n_guess} override, e.g. {"BFP4": 3}; default 2 (4K: 1 -> 18.01 ms, 2 -> 17.81,
-        BFP4 3 -> 17.86, BFP4 4 -> 18.39; with release "moe" at 257acca88f6: 1 -> 15.90, 2 -> 15.52, BFP4 3 -> 15.83).
+        BFP4 3 -> 17.86, BFP4 4 -> 18.39; with release "moe": 1 -> 15.90, 2 -> 15.52, BFP4 3 -> 15.83).
         release: see the module docstring."""
         from models.demos.inkling2_mini.tt import model as MD
 
@@ -64,7 +64,7 @@ class ExpertOverlap:
         dev = self.device = model.device
         assert release in ("w_all", "w_o", "moe"), release
         self.release = release
-        self.staged = []  # M3's staged w_all linears that raise the signal in their reader instead
+        self.staged = []  # the staged w_all linears that raise the signal in their reader instead
         self.proj = {"w_all": "w_all", "w_o": "wo"}.get(release)  # the attention projection that releases a request
         self.dynamic = dynamic  # False: the seed masks stay (no guess_out writes; for tests)
         layers = sorted({L for L, _ in self.apps})

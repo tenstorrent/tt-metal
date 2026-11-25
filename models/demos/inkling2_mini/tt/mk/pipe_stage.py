@@ -285,7 +285,7 @@ class _Proxy:
 
 class PipeOverlap:
     """Decode weight staging by the DRAM cores for the attention projections of every layer: w_all (and with
-    wo=True the o-projection + conv program, A4's AttnWo) read their weights from one PipeStage ring on the same 42
+    wo=True the o-projection + conv program, AttnWo) read their weights from one PipeStage ring on the same 42
     cores (each layer's BankLinear re-split over `split` x its cores off rows `exclude_rows`, as tt/mk/overlap.py;
     w_o is rebuilt with narrower passes first so it splits as far). Per decode step one request queues the slabs in
     call order, starting behind app 0's w_all: [w_o 0, w_all 1, w_o 1, ..., w_all 0 of the next step]; captured

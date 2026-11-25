@@ -73,7 +73,7 @@ def test_prefill_code1500(device):
         n = ref.numel()
         return float((acc[2] - acc[0] * acc[1] / n) / ((acc[3] - acc[0] ** 2 / n) * (acc[4] - acc[1] ** 2 / n)).sqrt())
 
-    # chunk 256 covers s > 0 (ring, tails, far keys); R3's banded-bias SDPA lands at 0.99989 there (blocked path
+    # chunk 256 covers s > 0 (ring, tails, far keys); the banded-bias SDPA lands at 0.99989 there (blocked path
     # 0.99990), a chunk-edge bug far lower
     for chunk, bar in ((2048, 0.9999), (256, 0.9998)):
         lp = forced_pcc(chunk)

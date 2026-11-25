@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Torch (fp32) reference of the Inkling-2-Mini DSpark drafter, from `mtp.safetensors` + the main checkpoint.
 
-Same math as tt/mtp.py and the CPU acceptance study (E9, port of vLLM `inkling2/nvidia/dspark.py`).
+Same math as tt/mtp.py (a port of vLLM `inkling2/nvidia/dspark.py`.
 `Reference(ckpt).draft(seq, feats, p)` -> 7 greedy draft tokens for positions p+1..p+7, given the anchor seq[p]
 and feats [>= p, 4, 2304] (taps of positions 0..p-1). shortcut: fp32 throughout (vLLM rounds some steps to bf16).
 """

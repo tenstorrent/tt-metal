@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-"""MoE input norm as one program (E10d's FusedRowNorm with an L1 output) instead of reshard + sharded rms_norm +
+"""MoE input norm as one program (FusedRowNorm with an L1 output) instead of reshard + sharded rms_norm +
 to L1 bf16 (3 programs per app). NOT bit-equal: fp32 SFPU math instead of the HiFi2 FPU path (closer to fp32, see
 tests/test_fused_moe_norm.py), so it is opt-in and goes through the model gate before use.
 

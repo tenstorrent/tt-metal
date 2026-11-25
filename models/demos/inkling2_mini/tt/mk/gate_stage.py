@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-"""M2 staging of the message gates' F / G weights (tt/fused/gate.py combine program) into L1.
+"""Staging of the message gates' F / G weights (tt/fused/gate.py combine program) into L1.
 
 A combine core reads its kz x nt fp32 tiles of F and of G (pages kt * nct + col0 + j) from DRAM: 48 KB per core for
 the QKV gate, 16 KB for the mlp gate, 3.5 / 1.2 MB per program, DRAM bound. ``GateStage`` copies them earlier

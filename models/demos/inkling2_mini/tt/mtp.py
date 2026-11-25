@@ -13,7 +13,7 @@ Port of vLLM `vllm/models/inkling2/nvidia/dspark.py` (cross-checked with ollama 
   `rnn_hidden` markov head picks k <= 7 greedy tokens on device.
 Every position-dependent input is a device tensor rewritten from host (trace safe).
 
-Speed (S6): the drafter's matmuls run as bank-streamed linears (tt/fused/bank_linear.py, ~420 GB/s instead of
+Speed: the drafter's matmuls run as bank-streamed linears (tt/fused/bank_linear.py, ~420 GB/s instead of
 ~200 for ttnn.linear on interleaved weights); the block's own K/V rows go into the context caches at p..p+7
 (fused/kernels/mtp_kv_rows.cpp, one program per layer) and the attention is one flash-decode call per layer
 (causal at p+7; local layers with a 1032-key sliding window = keys p-1024 .. p+7), so no op reads max_ctx-wide
@@ -88,7 +88,7 @@ class DSparkDrafter:
         """model: built Inkling2Model (shares embed, embed_norm, unembed, DecodePositions.pos).
         max_ctx: the positions the drafter covers (default: the model's): drafts at p < max_ctx, commits below
         max_ctx + KV_PAD. ring: the local layers' caches as rings (RING above); None = when that saves memory.
-        k: draft tokens per pass (markov steps). fast=False: E9's ttnn.linear matmuls (A/B only).
+        k: draft tokens per pass (markov steps). fast=False: plain ttnn.linear matmuls (A/B only).
         unembed_dtype: None = the decode head's unembed; ttnn.bfloat4_b = a drafter-only 4-bit copy (+0.25 GB).
         ckpt: source checkpoint for markov_head.hidden_out (the per-step head input, see draft());
         default $INKLING_CKPT."""
@@ -578,7 +578,7 @@ class DSparkDrafter:
     def capture(self, compile=True):
         """Trace draft(self.anchor). Every program must be compiled before ANY trace is captured (compile=False
         when the caller already did): programs first compiled after a capture put their program-cache buffers in
-        that trace's scratch, its replay corrupts them, and the device hangs (E9-report.md)."""
+        that trace's scratch, its replay corrupts them, and the device hangs."""
         if compile:
             self.draft(self.anchor)
         ttnn.synchronize_device(self.device)

@@ -282,7 +282,7 @@ def test_far_bfp4_rows(device, monkeypatch):
 def test_far_split_rows(device, monkeypatch):
     """far keys and values in two caches (FAR_SPLIT opt-in, bfp8 rings): decode writes the ring's k row to the key
     cache as it is and the host bfp4 rounding of the ring's v row to the value cache; the neighbouring rows keep
-    their values. The far call on the two caches gives finite output (its values: split_probe in the L3 report)."""
+    their values. The far call on the two caches gives finite output (its values are not checked)."""
     import models.demos.inkling2_mini.tt.attention_fast as AF
 
     if not hasattr(ttnn.SDPAProgramConfig, "unit_v_tile_col"):

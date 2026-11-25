@@ -6,8 +6,8 @@
 decodes (one trace for both). `SpecGenerator.generate`:
   prompt token by token (as v1) -> anchor x_p -> draft 7 tokens (traced) -> verify the first k.
 shortcut: verify = k+1 single-token decode steps that stop at the first mismatch (no multi-token target step
-yet; PF1's chunked prefill is the planned entry point). Outputs are exactly greedy and every step's features are
-committed, so the measured acceptance is real; the per-pass cost is not (see E9-report.md).
+yet; the chunked prefill is the planned entry point). Outputs are exactly greedy and every step's features are
+committed, so the measured acceptance is real; the per-pass cost is not.
 """
 
 from __future__ import annotations
@@ -184,7 +184,7 @@ class SpecGenerator(Generator):
         unused, kept for callers). Every program is compiled eagerly first (a program first compiled after a capture
         corrupts that trace's scratch); before_capture() runs after that, for the caller's own programs."""
         m, d = self.model, self.drafter
-        say = print if os.environ.get("S6_STAGES") else (lambda *a, **k: None)
+        say = print if os.environ.get("INKLING_SPEC_STAGES") else (lambda *a, **k: None)
         Vs = list(self.verifies.values())
         for V in Vs:
             assert self._shared(p_shared, V.R)
@@ -229,12 +229,12 @@ class SpecGenerator(Generator):
                 self._stage_topup(snap)
                 self._stage_restore(snap)
                 ttnn.synchronize_device(self.device)
-                say("S6 eager verify", R, p, flush=True)
+                say("spec eager verify", R, p, flush=True)
             for n in range(1, R + 1):
                 V.commit(n)
                 self._set_anchor(R, n)
                 ttnn.synchronize_device(self.device)
-                say("S6 eager commit", R, n, flush=True)
+                say("spec eager commit", R, n, flush=True)
         if self.stash:  # the stash steps (from the same staging state as their captures) and the short commits
             m.stash = True
             d.set_stash_pos(0)
@@ -248,7 +248,7 @@ class SpecGenerator(Generator):
                 d.stash_commit(n)
             m.stash = False
             ttnn.synchronize_device(self.device)
-            say("S6 eager stash", flush=True)
+            say("spec eager stash", flush=True)
         if self.quiet:
             m.quiet = True
             for ph in range(4):
@@ -266,11 +266,11 @@ class SpecGenerator(Generator):
             m.step()
             m.step()
         super().capture()
-        say("S6 plain captured", flush=True)
+        say("spec plain captured", flush=True)
         snap = self._stage_snap(snap)  # the same state after the plain captures (asserted)
         d.capture(compile=False)
         self._stage_restore(snap)
-        say("S6 draft captured", flush=True)
+        say("spec draft captured", flush=True)
         if self.stash:
             # as the verify passes: every stash step starts from the plain step's staging state and ends in it
             m.stash = True
@@ -289,7 +289,7 @@ class SpecGenerator(Generator):
                 self.ftrace[n] = ttnn.begin_trace_capture(self.device, cq_id=0)
                 d.stash_commit(n)
                 ttnn.end_trace_capture(self.device, self.ftrace[n], cq_id=0)
-            say("S6 stash captured", flush=True)
+            say("spec stash captured", flush=True)
         if self.quiet:  # as the stash steps
             m.quiet = True
             self.qtrace, self.qout = [], []
@@ -303,7 +303,7 @@ class SpecGenerator(Generator):
                 self._stage_snap(snap)
                 self._stage_restore(snap)
             m.quiet = False
-            say("S6 quiet captured", flush=True)
+            say("spec quiet captured", flush=True)
         for V in Vs:
             R = V.R
             for ph in range(4):
@@ -324,7 +324,7 @@ class SpecGenerator(Generator):
                     ttnn.end_trace_capture(self.device, tid, cq_id=0)
                     self._stage_restore(snap)
                     self.vtrace[(R, ph, shared)] = (tid, out)
-                    say("S6 verify captured", R, ph, shared, flush=True)
+                    say("spec verify captured", R, ph, shared, flush=True)
                 for n in range(1, R + 1):
                     V.set_inputs([0] * R, p_shared - p_shared % 4 + ph)
                     tid = ttnn.begin_trace_capture(self.device, cq_id=0)

@@ -503,7 +503,7 @@ class Inkling2AttentionFast(Inkling2Attention):
             scale=1.0,
             program_config=self.local_cfg,
             compute_kernel_config=self.hifi4,
-            **({"extra_kernels": extra} if extra is not None else {}),  # builds without R9 lack the argument
+            **({"extra_kernels": extra} if extra is not None else {}),  # older builds lack the argument
         )
         return self._out_proj(self.out(attn, proj), post)
 
@@ -545,7 +545,7 @@ class Inkling2AttentionFast(Inkling2Attention):
         Returns that input (self.out.act, rows 0 .. R-1): row t is bit-equal to row 0 after plain decode of token t.
         Call commit_rows after the accept to write the accepted rows into the ring.
         Global layers run each token's prep / near / far / output merge in order (no shared attention call: the far
-        call's core split is per token, see perf/G3c-handoff.md); the near part reads the pending rows the same way."""
+        call's core split is per token); the near part reads the pending rows the same way."""
         assert self.FUSED and len(xs) == rows.R
         if self.is_global:
             assert FAR_GRP

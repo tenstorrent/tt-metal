@@ -105,7 +105,7 @@ def test_all_messages_cost(device):
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 16 * 1024 * 1024}], indirect=True)
 def test_fused_messages(device):
     """FusedMessages (seal + one 12-core attend, straight into the per-layer message tensors) vs the model's
-    path (MessageAttnRes.all_messages, E2 ops) + split: PCC per message, traced twice bit-equal, timed."""
+    path (MessageAttnRes.all_messages, the op chain) + split: PCC per message, traced twice bit-equal, timed."""
     from models.demos.inkling2_mini.tt.fused.messages import FusedMessages
 
     g = torch.Generator().manual_seed(9)

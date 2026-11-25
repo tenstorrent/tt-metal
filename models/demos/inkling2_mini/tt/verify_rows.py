@@ -7,7 +7,7 @@ each row bit-equal to the 1-row step at its position (fused/common.py per_row an
     out = rs.step(tokens, pos, attention, experts)   # [(logits, token)] per row
     rs.commit(n_accepted)                             # conv rings: the accepted rows' inputs
 
-Attention and the routed experts are passed in (S6 / M5 / G2 own their R-row versions):
+Attention and the routed experts are passed in (their modules own the R-row versions):
     attention(L, p, xq, xk, xv) -> a: [1, 1, R, C] fp32 attention output rows (the short conv's input; a dense twin
         of R vectors if it has one). xq / xk / xv: per row, its q / k / v input rows (bf16 [1, 1, 1, C]).
     experts(L, x, weights, ids) -> y: [1, 1, R, C] bf16 L1 (with its dense twin, as moe_bank's R-row step);

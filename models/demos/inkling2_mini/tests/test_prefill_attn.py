@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 """Prefill attention core, block test (seconds, no model load), random inputs, local and global layers, first chunk
-and later chunks (ring rotation, s < 1024, far keys): the R3 path (one SDPA with in-kernel banded rel bias and
-per-query sink) and the blocked path (bias-matmul mask, near/far split; builds without R3) against a torch reference.
+and later chunks (ring rotation, s < 1024, far keys): the `r3` path (one SDPA with in-kernel banded rel bias and
+per-query sink) and the blocked path (bias-matmul mask, near/far split; no rel_logits) against a torch reference.
 
     pytest -s models/demos/inkling2_mini/tests/test_prefill_attn.py
 """
@@ -90,7 +90,7 @@ def _reference(qs, k_pos, v_pos, rel, sink, p, s, is_global):
 )
 def test_attention_core(device, path, is_global, s, t):
     if path == "r3" and "rel_logits" not in (ttnn.transformer.scaled_dot_product_attention.__doc__ or ""):
-        pytest.skip("this build's SDPA has no rel_logits (R3)")
+        pytest.skip("this build's SDPA has no rel_logits")
     torch.manual_seed(0)
     max_ctx = 4096 + 128
     put = lambda x, dt=ttnn.bfloat16: ttnn.from_torch(x, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)  # noqa

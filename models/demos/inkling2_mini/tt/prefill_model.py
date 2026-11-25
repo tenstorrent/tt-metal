@@ -475,7 +475,7 @@ class Inkling2Prefill:
         fp32 DEST; needs a build with stacked expert weights and, for fidelities above LoFi, the op's
         math_fidelity attribute), "sparse" (grouped sparse_matmul), "auto" (default): unified when the build runs it
         at HiFi2, else at LoFi, else sparse. expert_fidelity: pin the unified op's fidelity; default LoFi
-        (with mm_blocked: +9.6 % at 8K, KL .00865 -> .00913, perf/G4f-report.md); None: HiFi2 when the build
+        (with mm_blocked: +9.6 % at 8K, KL .00865 -> .00913); None: HiFi2 when the build
         takes it (the earlier, exact default). mm_blocked: see self.mm_blocked below; False: the earlier default.
         proj_fidelity: opt-in math fidelity of the prefill projections (q|gate|rel|sink, k, v, w_o; not the router), e.g.
         LoFi; None (default): the model's (HiFi2). Changes output; decode keeps its own config.
@@ -537,12 +537,12 @@ class Inkling2Prefill:
                 logger.warning(
                     f"Inkling2Prefill: this build's {op} is missing or rejects stacked expert weights; falling back to "
                     "the sparse expert path, which FAILS the prefill gate (forced code1500 logits PCC 0.999900 < "
-                    "0.9999) and is slower. Use a build with the unified expert op (fork integrate 710cc79df56+)."
+                    "0.9999) and is slower. Use a build whose unified expert op takes stacked weights."
                 )
             elif expert_fidelity is None and self.expert_fidelity != ttnn.MathFidelity.HiFi2:
                 logger.warning(
                     f"Inkling2Prefill: this build's {op} takes no math_fidelity; running it at LoFi (fp32 DEST), not "
-                    "the HiFi2 default: outputs differ from a HiFi2 build (fork integrate 710cc79df56+)."
+                    "the HiFi2 default: outputs differ from a build whose op takes math_fidelity."
                 )
             if experts == "auto":
                 experts = "unified" if kw is not None else "sparse"
@@ -553,7 +553,7 @@ class Inkling2Prefill:
         assert self._chunk_ok(chunk), chunk
         self.chunk = chunk
         # routing buffers built on the device (tt/fused/pf_route.py), no host round trip; the sparse path needs
-        # one slot-expert buffer per chunk (R2 sparse_matmul takes all slots in one call)
+        # one slot-expert buffer per chunk (the indexed sparse_matmul takes all slots in one call)
         self._pfroute = PfRoute(dev) if (self.unified or self.r2) else None
         # unified experts: gather + weight + sum of the k expert rows in one program (tt/fused/pf_combine.py)
         self._pfcomb = PfCombine(dev) if self.unified else None
@@ -600,7 +600,7 @@ class Inkling2Prefill:
         self.r3_chunks = tuple(r3_chunks)
         # q|k|v|gate (2304 -> 6560) and w_o (3072 -> 2304) projections with hand-set 2D multicast configs that
         # accumulate K in blocks of 4 tiles (else 1 / 2): other fp32 summation order, ~-1.3 ms per application at
-        # 8K (perf/G5d-report.md). On by default; mm_blocked=False is the earlier default.
+        # 8K. On by default; mm_blocked=False is the earlier default.
         self.mm_blocked = mm_blocked
         # The loop message gates' messages and outputs stored bf16 (fp32 inside each program; tt/fused/pf_msg.py,
         # pf_gate.py). On by default in both run modes; INKLING_PF_GATE_BF16=0 keeps them fp32 (the earlier output).
@@ -858,7 +858,7 @@ class Inkling2Prefill:
             qs = ttnn.typecast(ttnn.multiply(_f32(q), SCALE), ttnn.bfloat16)  # kernel adds mask to raw q.k
 
         if is_global:  # far cache rows [v | k], or [v | 1, 0 x 31 | k] without FAR_UNIT (attention_fast kv_full)
-            # shortcut: no prefill write for the bfp4 far cache opt-in (attention_fast FAR_DTYPE); port G3's FarFill4
+            # shortcut: no prefill write for the bfp4 far cache opt-in (attention_fast FAR_DTYPE); add a bfp4 far fill
             # when prefill must run with it
             assert st.kv_full.dtype == k_c.dtype, "prefill: bfp4 far cache (FAR_DTYPE) not supported"
             assert st.v_full is None, "prefill: split far caches (FAR_SPLIT) not supported"
