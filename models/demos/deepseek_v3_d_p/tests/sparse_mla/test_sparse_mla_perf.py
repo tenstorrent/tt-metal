@@ -66,7 +66,8 @@ MODES = ("untraced", "traced")
 # GLM-5.3 (both cases): first measured on CI LoudBoxes (6 processes on 3 hosts, 10 readings per value with in-process
 # repeats): the mean of the readings, every reading within the band; one warm untraced reading (+18%, a third repeat in
 # one process, traced replay normal) left out. Galaxy 8x4 then scaled by the L1-activation / sharded-norm change's
-# measured speedup (2 runs of main, 3 of the change, on one Galaxy; ratios under 1% left unapplied).
+# measured speedup (2 runs of main, 3 of the change, on one Galaxy; ratios under 1% left unapplied); the change's CI run
+# (1 run) was within 2% of those. Galaxy 4x4 and LoudBox K3.1 re-measured on the change's CI runs (1 run each).
 _TARGETS_MS = {
     "Galaxy": {
         "kimi_k3_1": (2.88, 2.53, 6.34, 6.09),
@@ -74,10 +75,9 @@ _TARGETS_MS = {
         "glm_5_3-no_indexer": (2.24, 1.83, 2.26, 1.89),
     },
     "Galaxy 4x4": {
-        "kimi_k3_1": (3.21, 3.05, 7.21, 6.98),
-        # GLM-5.3: re-centred on CI run 45551006453 (1 run); deltas under 1% left as is.
-        "glm_5_3": (2.85, 2.60, 6.81, 6.45),
-        "glm_5_3-no_indexer": (2.22, 2.23, 4.63, 4.50),
+        "kimi_k3_1": (3.12, 2.92, 7.05, 6.80),
+        "glm_5_3": (2.85, 2.54, 6.69, 6.35),
+        "glm_5_3-no_indexer": (2.17, 2.10, 4.53, 4.41),
     },
     "Galaxy 4x4 subtorus": {
         "kimi_k3_1": (2.97, 2.80, 6.62, 6.37),
@@ -85,7 +85,7 @@ _TARGETS_MS = {
         "glm_5_3-no_indexer": (2.14, 1.98, 2.22, 2.08),
     },
     "LoudBox": {
-        "kimi_k3_1": (2.65, 2.51, 3.87, 3.71),
+        "kimi_k3_1": (2.58, 2.41, 3.78, 3.60),
         "glm_5_3": (2.31, 2.11, 3.47, 3.26),
         "glm_5_3-no_indexer": (1.87, 1.83, 2.59, 2.55),
     },
