@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"

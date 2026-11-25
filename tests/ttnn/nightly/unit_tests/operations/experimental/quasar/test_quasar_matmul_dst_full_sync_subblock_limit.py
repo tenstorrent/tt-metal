@@ -104,10 +104,6 @@ def test_quasar_matmul_dst_full_sync_subblock_limit(device, expect_error, family
             compute_kernel_config=compute_kernel_config,
         )
 
-    if fp32_dest_acc_en:
-        # The Quasar copies of these factories can't build fp32-accumulation programs with partials yet (Metal 2.0
-        # validation: the FP32 partials DFB has no unpack_modes entry), so the fp32 cases only check the rejection.
-        return
     output = ttnn.experimental.quasar.matmul(
         a,
         b,

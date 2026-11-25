@@ -11,8 +11,8 @@
 #include "command_generated.h"
 #include "light_metal_binary_generated.h"
 #include "trace/trace_buffer.hpp"
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/program.hpp>
 
 #include "impl/program/program_impl.hpp"
 

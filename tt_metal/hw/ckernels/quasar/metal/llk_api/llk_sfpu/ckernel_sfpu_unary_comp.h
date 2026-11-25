@@ -22,12 +22,10 @@ inline void calculate_unary_ne(uint value) {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v == s) { v = 0.0f; }
-        v_else { v = 1.0f; }
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = 1.0f;
+        v_if(v == s) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = v;
 
         sfpi::dst_reg++;
     }
@@ -42,12 +40,10 @@ inline void calculate_unary_eq(uint value) {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v == s) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = 0.0f;
+        v_if(v == s) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = v;
 
         sfpi::dst_reg++;
     }
@@ -62,12 +58,10 @@ inline void calculate_unary_gt(uint value) {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v > s) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = 0.0f;
+        v_if(v > s) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = v;
 
         sfpi::dst_reg++;
     }
@@ -82,12 +76,10 @@ inline void calculate_unary_lt(uint value) {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v < s) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = 0.0f;
+        v_if(v < s) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = v;
 
         sfpi::dst_reg++;
     }
@@ -102,12 +94,10 @@ inline void calculate_unary_ge(uint value) {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v < s) { v = 0.0f; }
-        v_else { v = 1.0f; }
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = 1.0f;
+        v_if(v < s) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = v;
 
         sfpi::dst_reg++;
     }
@@ -122,12 +112,10 @@ inline void calculate_unary_le(uint value) {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v > s) { v = 0.0f; }
-        v_else { v = 1.0f; }
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = 1.0f;
+        v_if(v > s) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = v;
 
         sfpi::dst_reg++;
     }

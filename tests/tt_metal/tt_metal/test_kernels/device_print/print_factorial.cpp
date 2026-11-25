@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/debug/device_print.h"
+#if defined(COMPILE_FOR_TRISC)
+#include "api/compute/common.h"  // get_arg_val
+#endif
 
 uint32_t factorial(uint32_t n) { return n == 0 ? 1 : n * factorial(n - 1); }
 

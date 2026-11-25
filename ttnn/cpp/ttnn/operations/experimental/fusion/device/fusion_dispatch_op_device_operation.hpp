@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include <tt_stl/reflection.hpp>
 

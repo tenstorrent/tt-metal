@@ -72,6 +72,10 @@ def mul_program(
     """
     num_tiles = out.volume() // (32 * 32)
     work = num_tiles if tile_limit is None else min(tile_limit, num_tiles)
+    # split_tiles clamps the work to its second argument, so fewer cores' worth of tiles than work would silently drop tiles.
+    assert (
+        cores_for_tiles is None or cores_for_tiles >= work
+    ), f"cores_for_tiles={cores_for_tiles} is below the {work} tiles to process"
     cores, num_tiles_by_core, start_id_by_core = split_tiles(a.device(), cores_for_tiles or num_tiles, work)
 
     dfb_names = ["in_a", "in_b", "out"]
@@ -373,7 +377,8 @@ def exp_program(input_tensor, output_tensor, compute_threads=1):
     return spec, run_args
 
 
-def exp_inputs(device, num_tiles):
+def exp_inputs(device, num_tiles, seed=0):
+    torch.manual_seed(seed)
     torch_input = torch.rand([1, num_tiles, 32, 32]).to(torch.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -403,6 +408,99 @@ def test_the_exp_program(device, expect_error):
     in_place_run_args.tensor_args = {"tensor": input_tensor}
     result = E.generic_op([input_tensor], spec, in_place_run_args)
     assert_close(torch.exp(torch_input), ttnn.to_torch(result))
+
+
+def guide_example(device):
+    """The example in docs/source/ttnn/ttnn/generic_op_program_spec.rst, which includes the lines between the markers."""
+    # [guide-example-start]
+    E = ttnn.experimental
+    KERNELS = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels"
+
+    num_tiles = 8
+    torch_input = torch.rand([1, num_tiles, 32, 32]).to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    # generic_op does not create its output: preallocate it.
+    output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, device)
+
+    grid = device.compute_with_storage_grid_size()
+    _, cores, group_1, group_2, tiles_1, tiles_2 = ttnn.split_work_to_cores(grid, num_tiles)
+
+    dm_schema = E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_pages", "start_id"])
+    spec = E.ProgramSpec(
+        name="exp",
+        kernels=[
+            E.KernelSpec(
+                unique_id="reader",
+                source=f"{KERNELS}/dataflow/reader_unary_interleaved_start_id_metal2.cpp",
+                dfb_bindings=[E.producer_of("in", "in")],
+                tensor_bindings=[E.TensorBinding(tensor_parameter_name="input", accessor_name="src")],
+                runtime_arg_schema=dm_schema,
+                hw_config=E.create_reader_datamovement_config(),
+            ),
+            E.KernelSpec(
+                unique_id="writer",
+                source=f"{KERNELS}/dataflow/writer_unary_interleaved_start_id_metal2.cpp",
+                dfb_bindings=[E.consumer_of("out", "out")],
+                tensor_bindings=[E.TensorBinding(tensor_parameter_name="output", accessor_name="dst")],
+                runtime_arg_schema=dm_schema,
+                hw_config=E.create_writer_datamovement_config(),
+            ),
+            E.KernelSpec(
+                unique_id="compute",
+                source=f"{KERNELS}/compute/eltwise_sfpu_metal2.cpp",
+                compiler_options=E.KernelSpec.CompilerOptions(
+                    defines={"SFPU_OP_EXP_INCLUDE": "1", "SFPU_OP_CHAIN_0": "exp_tile_init(); exp_tile(0);"}
+                ),
+                dfb_bindings=[E.consumer_of("in", "in"), E.producer_of("out", "out")],
+                runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles"]),
+                # 32-bit data also needs enable_32_bit_dest=True and unpack_modes={"in": E.UnpackMode.UnpackToDest}
+                # here; with the defaults, or with UnpackToSrc, it loses precision.
+                hw_config=E.ComputeHardwareConfig(),
+            ),
+        ],
+        dataflow_buffers=[
+            # Each entry holds one tile of the input's data type.
+            E.DataflowBufferSpec(
+                unique_id=name,
+                entry_size=ttnn.tile_size(input_tensor.dtype),
+                num_entries=2,
+                data_format_metadata=input_tensor.dtype,
+            )
+            for name in ("in", "out")
+        ],
+        tensor_parameters=[
+            E.TensorParameter(unique_id="input", spec=input_tensor.spec),
+            E.TensorParameter(unique_id="output", spec=output_tensor.spec),
+        ],
+        work_units=[E.WorkUnitSpec(name="exp", kernels=["reader", "writer", "compute"], target_nodes=cores)],
+    )
+
+    # The values of this call, by argument name and then by node. Tensors are bound by name.
+    num_pages, start_id, start = {}, {}, 0
+    for group, n in ((group_1, tiles_1), (group_2, tiles_2)):
+        for core in ttnn.corerange_to_cores(group):
+            num_pages[core], start_id[core] = n, start
+            start += n
+    dm_args = {"num_pages": num_pages, "start_id": start_id}
+    run_args = E.ProgramRunArgs(
+        kernel_run_args=[
+            E.KernelRunArgs(kernel="reader", runtime_arg_values=dm_args),
+            E.KernelRunArgs(kernel="writer", runtime_arg_values=dm_args),
+            E.KernelRunArgs(kernel="compute", runtime_arg_values={"num_tiles": num_pages}),
+        ],
+        tensor_args={"input": input_tensor, "output": output_tensor},
+    )
+
+    output_tensor = E.generic_op([input_tensor, output_tensor], spec, run_args)
+    # [guide-example-end]
+    return torch_input, output_tensor
+
+
+def test_the_guide_example(device):
+    torch_input, output_tensor = guide_example(device)
+    assert_close(torch.exp(torch_input), ttnn.to_torch(output_tensor))
 
 
 def test_two_compute_threads_on_quasar(device):
@@ -542,6 +640,7 @@ def test_array_args_and_aliased_buffers(device):
     assert torch.equal(result[5 * 1024 :], tile_order(initial)[5 * 1024 :])
 
 
+@pytest.mark.timeout(60)  # a regression hangs in synchronize_device; fail fast instead of waiting for the global 300 s
 def test_semaphores_start_at_zero_on_every_call(device):
     out = ttnn.allocate_tensor_on_device(ttnn.TensorSpec((32, 32), ttnn.bfloat16, ttnn.TILE_LAYOUT), device)
     node = ttnn.CoreCoord(0, 0)
@@ -806,17 +905,19 @@ def test_tensor_args_must_match_the_parameters(device, cache_hit, expect_error):
 
 def test_tensors_on_another_mesh_device_are_rejected(device, expect_error):
     submesh = device.create_submesh(ttnn.MeshShape(1, 1))
-    _, a, b, _ = inputs(device)
-    out = ttnn.allocate_tensor_on_device(a.spec, submesh)
-    spec, run_args = mul_program(a, b, out)
+    out = None
     try:
+        _, a, b, _ = inputs(device)
+        out = ttnn.allocate_tensor_on_device(a.spec, submesh)
+        spec, run_args = mul_program(a, b, out)
         with expect_error(RuntimeError, "io_tensors\\[0\\] is on a different MeshDevice than the output tensor"):
             E.generic_op([a, b, out], spec, run_args)
     finally:
         # The parent MeshDevice keeps its submeshes alive, so an open submesh would outlive the device fixture's close
         # and then close the chip again, on hardware while the next test was opening it. Close it while the parent is
         # open.
-        ttnn.deallocate(out)
+        if out is not None:
+            ttnn.deallocate(out)
         ttnn.close_mesh_device(submesh)
 
 
@@ -989,6 +1090,26 @@ def mesh_range(device):
     return ttnn.MeshCoordinateRange(device.shape)
 
 
+def rename_tensor_parameter(spec, run_args, old_name, new_name):
+    """Renames a tensor parameter of a spec, its kernels' bindings and its entry in the run args."""
+    parameters = spec.tensor_parameters
+    for parameter in parameters:
+        if parameter.unique_id == old_name:
+            parameter.unique_id = new_name
+    spec.tensor_parameters = parameters
+    kernels = spec.kernels
+    for kernel in kernels:
+        bindings = kernel.tensor_bindings
+        for binding in bindings:
+            if binding.tensor_parameter_name == old_name:
+                binding.tensor_parameter_name = new_name
+        kernel.tensor_bindings = bindings
+    spec.kernels = kernels
+    tensors = run_args.tensor_args
+    tensors[new_name] = tensors.pop(old_name)
+    run_args.tensor_args = tensors
+
+
 def one_device(column):
     return ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, column), ttnn.MeshCoordinate(0, column))
 
@@ -1018,6 +1139,215 @@ def test_a_range_over_a_device_without_a_tensor_is_rejected(mesh_device, expect_
             E.MeshProgramSpec(programs=[(whole_mesh, spec)]),
             E.MeshProgramRunArgs(programs=[(whole_mesh, run_args)]),
         )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expect_error):
+    """Per-device views of one tensor share its MeshTensor, which is all Metal binds, so on each device a program runs
+    on it reads that device's part of the tensor. A tensor argument that misses one of those devices, such as a
+    per-device view, is rejected."""
+    torch.manual_seed(23)
+    torch_input = torch.rand([2, 1, 32, 32]).to(torch.bfloat16)
+    split = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=split)
+    output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
+    first_input, second_input = ttnn.get_device_tensors(input_tensor)
+    first_output, second_output = ttnn.get_device_tensors(output_tensor)
+
+    # The program runs on the first device, and the run args name the second device's view of the input.
+    message = r"tensor_args\['input'\] holds devices"
+    spec, run_args = exp_program(second_input, first_output)
+    with expect_error(
+        RuntimeError,
+        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but its program runs on device "
+        r"MeshCoordinate\(\[0, 0\]\), which it does not hold\. On each device, a program reads that device's part of a "
+        r"tensor, so a program that binds a per-device view must run only on the view's devices: with a ProgramSpec, "
+        r"list only views of those devices in io_tensors; with a MeshProgramSpec, bind the view only in the run args "
+        r"of a range on them\. Binding the whole tensor instead reads each device's own part, which is the view's "
+        r"data only if every device holds the same data",
+    ):
+        E.generic_op([first_input, first_output], spec, run_args)
+    with expect_error(RuntimeError, message):
+        E.prepare_generic_op([first_input, first_output], spec, run_args)
+    # With the whole tensors in io_tensors the program runs on both devices, so one device's view misses the other.
+    whole_spec, whole_run_args = exp_program(first_input, output_tensor)
+    with expect_error(RuntimeError, message):
+        E.generic_op([input_tensor, output_tensor], whole_spec, whole_run_args)
+    # The same through a mesh range over both devices.
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(mesh_range(mesh_device), whole_spec)]),
+            E.MeshProgramRunArgs(programs=[(mesh_range(mesh_device), whole_run_args)]),
+        )
+    mesh_spec = E.MeshProgramSpec(programs=[(one_device(0), spec)])
+    mesh_run_args = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
+    with expect_error(
+        RuntimeError,
+        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but its program runs on device "
+        r"MeshCoordinate\(\[0, 0\]\), which it does not hold\.",
+    ):
+        E.generic_op([input_tensor, output_tensor], mesh_spec, mesh_run_args)
+    with expect_error(RuntimeError, message):
+        E.prepare_generic_op([input_tensor, output_tensor], mesh_spec, mesh_run_args)
+    # A run args taken back from a MeshProgramRunArgs keeps its tensors, views included.
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_input, first_output], spec, mesh_run_args.programs[0][1])
+    # Every program of a MeshProgramSpec is checked: here the second device's program names the first device's view.
+    first_spec, first_run_args = exp_program(first_input, first_output)
+    other_spec, other_run_args = exp_program(first_input, second_output)
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), other_run_args)]),
+        )
+    # Each range's run args are checked against their own range, so run args in another order are checked too.
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(1), other_run_args), (one_device(0), first_run_args)]),
+        )
+
+    # generic_op's other checks run first, so every other call they reject gets their message: a view of a tensor
+    # that io_tensors does not list, or that whole tensor; a tensor under a name its program does not declare, even if
+    # another range's program declares it; and a tensor in run args for a range the spec has no program on.
+    unlisted = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
+    spec, run_args = exp_program(ttnn.get_device_tensors(unlisted)[1], output_tensor)
+    with expect_error(RuntimeError, "tensor of tensor parameter 'input' is not in io_tensors"):
+        E.generic_op([input_tensor, output_tensor], spec, run_args)
+    spec, run_args = exp_program(unlisted, output_tensor)
+    with expect_error(RuntimeError, "tensor of tensor parameter 'input' is not in io_tensors"):
+        E.generic_op([input_tensor, output_tensor], spec, run_args)
+    spec, run_args = exp_program(first_input, first_output)
+    run_args.tensor_args = {"input": first_input, "output": first_output, "extra": second_input}
+    with expect_error(RuntimeError, "has a tensor for 'extra', which the ProgramSpec does not declare"):
+        E.generic_op([first_input, first_output], spec, run_args)
+    first_spec, first_run_args = exp_program(first_input, first_output)
+    other_spec, other_run_args = exp_program(second_input, second_output)
+    rename_tensor_parameter(other_spec, other_run_args, "input", "source")
+    other_run_args.tensor_args = {**other_run_args.tensor_args, "input": first_input}
+    with expect_error(RuntimeError, "has a tensor for 'input', which the ProgramSpec does not declare"):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), other_run_args)]),
+        )
+    spec, run_args = exp_program(second_input, first_output)
+    with expect_error(RuntimeError, "has no run args for mesh range"):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(1), spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(0), run_args)]),
+        )
+    # A range far past the mesh gets the range check's message, which comes before any walk over the range.
+    past_the_mesh = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(999999, 999999))
+    spec, run_args = exp_program(second_input, second_output)
+    with expect_error(RuntimeError, "mesh range .* reaches outside the MeshDevice"):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(past_the_mesh, spec)]),
+            E.MeshProgramRunArgs(programs=[(past_the_mesh, run_args)]),
+        )
+
+    # A Python subclass of the run args is checked too.
+    class SubclassRunArgs(E.ProgramRunArgs):
+        pass
+
+    spec, run_args = exp_program(second_input, first_output)
+    subclass_run_args = SubclassRunArgs(kernel_run_args=run_args.kernel_run_args, tensor_args=run_args.tensor_args)
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_input, first_output], spec, subclass_run_args)
+
+    # The tensors that run args keep are private: an entry of another type, put there in place, is reported, not read.
+    spec, run_args = exp_program(first_input, first_output)
+    edited = exp_program(first_input, first_output)[1]
+    edited._tensor_args["input"] = 1
+    with expect_error(RuntimeError, "a ProgramRunArgs keeps were edited in place; set its tensor_args again"):
+        E.generic_op([first_input, first_output], spec, edited)
+    mesh_spec = E.MeshProgramSpec(programs=[(one_device(0), spec)])
+    edited_mesh = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
+    edited_mesh._tensor_args[0]["input"] = 1
+    with expect_error(RuntimeError, "a MeshProgramRunArgs keeps were edited in place; set its programs again"):
+        E.generic_op([first_input, first_output], mesh_spec, edited_mesh)
+    edited_mesh = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
+    edited_mesh._tensor_args.append({})
+    with expect_error(RuntimeError, "a MeshProgramRunArgs keeps were edited in place; set its programs again"):
+        E.generic_op([first_input, first_output], mesh_spec, edited_mesh)
+
+    # A view, or the whole tensor, that holds the program's device reads that device's part, whether io_tensors lists
+    # the input's view or the whole input: the output's view keeps the program on the first device. Each call writes
+    # its own output of zeros, so each result shows that its program ran there.
+    def zeros():
+        return ttnn.from_torch(
+            torch.zeros_like(torch_input), layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=split
+        )
+
+    inputs_bound_and_listed = [(first_input, input_tensor), (first_input, first_input), (input_tensor, first_input)]
+    for bound_input, listed_input in inputs_bound_and_listed:
+        output = zeros()
+        output_view = ttnn.get_device_tensors(output)[0]
+        spec, run_args = exp_program(bound_input, output_view)
+        result = E.generic_op([listed_input, output_view], spec, run_args)
+        assert_close(torch.exp(torch_input[:1]), ttnn.to_torch(result))
+
+    # The check compares devices, not placements: one device's view of a replicated tensor is rejected in the other
+    # device's program too, although both devices hold the same data. The tensor itself holds both devices and passes.
+    replicated = ttnn.from_torch(torch_input[:1], layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    replicated_output = ttnn.from_torch(torch.zeros_like(torch_input[:1]), layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    first_replica, second_replica = ttnn.get_device_tensors(replicated)
+    first_replicated_output = ttnn.get_device_tensors(replicated_output)[0]
+    spec, run_args = exp_program(second_replica, first_replicated_output)
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_replica, first_replicated_output], spec, run_args)
+    spec, run_args = exp_program(replicated, first_replicated_output)
+    result = E.generic_op([first_replica, first_replicated_output], spec, run_args)
+    assert_close(torch.exp(torch_input[:1]), ttnn.to_torch(result))
+
+    # Each device's program may name that device's views while io_tensors lists the whole tensors.
+    output = zeros()
+    first_view, second_view = ttnn.get_device_tensors(output)
+    first_spec, first_run_args = exp_program(first_input, first_view)
+    second_spec, second_run_args = exp_program(second_input, second_view)
+    each_spec = E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), second_spec)])
+    E.generic_op(
+        [input_tensor, output],
+        each_spec,
+        E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), second_run_args)]),
+    )
+    result = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    assert_close(torch.exp(torch_input), result)
+    # The same mesh call hits the cached programs, and the check runs there too: with the run args swapped, the first
+    # device's program binds the second device's views.
+    entries = mesh_device.num_program_cache_entries()
+    E.generic_op(
+        [input_tensor, output],
+        each_spec,
+        E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), second_run_args)]),
+    )
+    assert mesh_device.num_program_cache_entries() == entries
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output],
+            each_spec,
+            E.MeshProgramRunArgs(programs=[(one_device(0), second_run_args), (one_device(1), first_run_args)]),
+        )
+
+    # Views are not part of the cache key, so a call that hits a cached program gets the check too, with
+    # validate_program_args off as well: here the second device's view in a program on the first device. The same
+    # call with the first device's view adds no cache entry, so the program is cached and the next call hits it.
+    ttnn.CONFIG.validate_program_args = False
+    output = zeros()
+    output_view = ttnn.get_device_tensors(output)[0]
+    entries = mesh_device.num_program_cache_entries()
+    E.generic_op([first_input, output_view], *exp_program(first_input, output_view))
+    assert mesh_device.num_program_cache_entries() == entries
+    spec, run_args = exp_program(second_input, output_view)
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_input, output_view], spec, run_args)
+    # prepare_generic_op takes a view that holds its program's device.
+    E.prepare_generic_op([first_input, output_view], *exp_program(first_input, output_view))
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
@@ -1141,6 +1471,90 @@ def test_one_program_runs_on_every_device_of_its_tensors(mesh_device):
     assert new_entries == 0
     for expected_output, output in zip(expected, outputs):
         assert_close(expected_output, output)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_the_output_label_after_a_call_and_its_fix(mesh_device, expect_error):
+    """Every call merges the output's tensor topology from the labels of io_tensors, the output's own included: a call
+    that raises after the label changes and a prepare_generic_op call too. The merged label can be 1-D, and other
+    tensors keep their labels. The labels that the note in generic_op's docstring builds are ttnn's own, and a split one
+    put on the output stays through later calls over replicated inputs."""
+    torch.manual_seed(29)
+    sharded = ttnn.from_torch(
+        torch.rand([2, 1, 32, 32]).to(torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, 0),
+    )
+    output = ttnn.allocate_tensor_on_device(sharded.spec, mesh_device)
+    allocated, input_label = output.tensor_topology(), sharded.tensor_topology()
+
+    # The note's two labels for an output on every device: those of a fresh allocation and of the sharded input.
+    coords = output.tensor_topology().mesh_coords()
+    shape = output.device().shape
+    same = ttnn.TensorTopology(shape, [ttnn.PlacementReplicate()] * shape.dims(), coords)
+    split = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(0)], coords)
+    assert same == allocated
+    assert split == input_label
+    # A label with a placement for each mesh axis, as ttnn.create_mesh_mapper gives a tensor.
+    per_axis = [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)]
+    mapped = ttnn.from_torch(
+        torch.rand([2, 1, 32, 32]).to(torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(per_axis)),
+    )
+    assert mapped.tensor_topology() == ttnn.TensorTopology(shape, per_axis, coords)
+
+    # exp over the sharded input writes different data on each device, split along dim 0 as the input is, and the
+    # merged label says so, in the input's 1-D form: after a call that raises after the label changes, after
+    # prepare_generic_op, and after a call that runs.
+    spec, run_args = exp_program(sharded, output)
+    run_args.tensor_args = {"input": sharded, "output": output, "extra": sharded}
+    with expect_error(RuntimeError, "has a tensor for 'extra', which the ProgramSpec does not declare"):
+        E.generic_op([sharded, output], spec, run_args)
+    assert output.tensor_topology() == split
+    # tensor_topology() returned a copy, which the call left as it was.
+    assert allocated == same
+    output.update_tensor_topology(allocated)
+    E.prepare_generic_op([sharded, output], *exp_program(sharded, output))
+    assert output.tensor_topology() == split
+    output.update_tensor_topology(allocated)
+    E.generic_op([sharded, output], *exp_program(sharded, output))
+    assert output.tensor_topology() == split
+
+    # exp over an input replicated from the host writes the same data on every device, and the merged label says so,
+    # in the input's 1-D form. Given the note's label for it, the output gets the merged one back on the next call.
+    replicated = ttnn.from_torch(
+        torch.rand([1, 1, 32, 32]).to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=mesh_device
+    )
+    output = ttnn.allocate_tensor_on_device(replicated.spec, mesh_device)
+    E.generic_op([replicated, output], *exp_program(replicated, output))
+    merged = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementReplicate()], coords)
+    assert output.tensor_topology() == merged
+    output.update_tensor_topology(same)
+    assert output.tensor_topology() == same
+    E.generic_op([replicated, output], *exp_program(replicated, output))
+    assert output.tensor_topology() == merged
+
+    # Mul on the first device and add on the second, over inputs replicated from the host, write different data on
+    # each device, which the merged label misses. The note's split label fixes that, and it stays through the next
+    # call, since the output's own label is part of the merge and a split label wins it. The inputs keep theirs.
+    _, a, b, out = inputs(mesh_device, seed=31)
+    mul_spec, mul_args = mul_program(a, b, out)
+    add_spec, add_args = mul_program(a, b, out)
+    kernels = add_spec.kernels
+    kernels[1].compiler_options = E.KernelSpec.CompilerOptions(defines={"BINARY_ADD": "1"})
+    add_spec.kernels = kernels
+    spec = E.MeshProgramSpec(programs=[(one_device(0), mul_spec), (one_device(1), add_spec)])
+    run_args = E.MeshProgramRunArgs(programs=[(one_device(0), mul_args), (one_device(1), add_args)])
+    E.generic_op([a, b, out], spec, run_args)
+    assert out.tensor_topology() == merged
+    out.update_tensor_topology(split)
+    E.generic_op([a, b, out], spec, run_args)
+    assert out.tensor_topology() == split
+    assert a.tensor_topology() == merged
+    assert b.tensor_topology() == merged
 
 
 def test_mesh_form(device):
@@ -1316,9 +1730,16 @@ def hash_spec(**kernel_fields):
     )
 
 
+# Fields the edit helpers may touch; anything else (typos, dunder names) fails loudly instead of being set.
+_EDITABLE_LIST_FIELDS = frozenset({"kernels", "dataflow_buffers", "tensor_parameters", "work_units"})
+_EDITABLE_SPEC_FIELDS = frozenset({"name", "semaphores", "scratchpads"})
+
+
 def with_field(program_spec, field, index, /, **changes):
+    assert field in _EDITABLE_LIST_FIELDS, f"unexpected ProgramSpec list field: {field!r}"
     items = getattr(program_spec, field)
     for name, value in changes.items():
+        assert hasattr(items[index], name), f"{field}[{index}] has no attribute {name!r}"
         setattr(items[index], name, value)
     setattr(program_spec, field, items)
     return program_spec
@@ -1384,10 +1805,14 @@ NON_STRUCTURAL_EDITS = {
 
 
 def setattr_and_return(spec, field, value):
+    assert field in _EDITABLE_SPEC_FIELDS, f"unexpected ProgramSpec field: {field!r}"
     setattr(spec, field, value)
     return spec
 
 
+# Python does not enforce "every": STRUCTURAL_EDITS is a hand-kept list. The real guard is the static_assert tripwires at
+# the top of compute_program_spec_hash (generic_program_spec_device_operation.cpp), which fail the build when ProgramSpec,
+# WorkUnitSpec or TensorParameter gains or loses a field; add the matching edit here when that happens.
 @pytest.mark.parametrize("edit", STRUCTURAL_EDITS.values(), ids=STRUCTURAL_EDITS.keys())
 def test_hash_changes_with_every_structural_field(edit):
     assert E.compute_program_spec_hash(edit()) != E.compute_program_spec_hash(hash_spec())
@@ -1404,6 +1829,19 @@ def test_hash_ignores_relaxed_tensor_fields():
     first = with_field(hash_spec(), "tensor_parameters", 0, relaxations=relaxations)
     second = with_field(hash_spec(), "tensor_parameters", 0, relaxations=relaxations, spec=small)
     assert E.compute_program_spec_hash(first) == E.compute_program_spec_hash(second)
+
+
+def _scratchpad_spec(**fields):
+    program_spec = hash_spec()
+    program_spec.scratchpads = [E.ScratchpadSpec(unique_id="scratch", size_per_node=64, **fields)]
+    return program_spec
+
+
+def test_hash_tells_an_unset_scratchpad_data_format_from_float32():
+    # The scratchpad half of the same libc++ workaround (hash_data_formats_set in the C++ spec hash).
+    unset = _scratchpad_spec()
+    float32 = _scratchpad_spec(data_format_metadata=ttnn.float32)
+    assert E.compute_program_spec_hash(unset) != E.compute_program_spec_hash(float32)
 
 
 def test_hash_tells_an_unset_data_format_from_float32():

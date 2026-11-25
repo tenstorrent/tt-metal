@@ -10,7 +10,7 @@
 #include <mutex>
 #include <utility>
 
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "device/flat_routed_expert_device_operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"

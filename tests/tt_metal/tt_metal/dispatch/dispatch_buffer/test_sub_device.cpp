@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -17,19 +17,19 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "llrt.hpp"
 #include <tt_stl/span.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-umd/types/xy_pair.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 
