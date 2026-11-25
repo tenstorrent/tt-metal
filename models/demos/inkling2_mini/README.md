@@ -106,40 +106,45 @@ Four steps make both from the tile cache `$D/tile` above. Only the capture runs 
 
 | step | runs on | time | needs |
 |---|---|---|---|
-| 1. `gptq_calib corpus`, `weights` | host | seconds | the tokenizer, the texts below |
+| 1. `gptq_calib data`, `corpus`, `weights` | host | a minute | the tokenizer, network for `data`, the source files below |
 | 2. `gptq_calib capture` | card | the model load (~35 s) and 1.4 to 2.2 s per 2048-token sequence | the tile cache; 0.43 GB of disk per 2048-token sequence (24 GB for the set below) |
-| 3. `gptq_calib solve` | host, CPU only | about 10 minutes per layer for the set below on a shared 80-core host; 37 layer solves for the two caches | the checkpoint and the capture; about 10 GB of RAM at 43K tokens |
+| 3. `gptq_calib solve` | host, CPU only | 2 to 3 minutes per layer with 40 threads on an 80-core host; 37 layer solves for the two caches | the checkpoint and the capture; 9 to 15 GB of RAM per process |
 | 4. `variant`, then the layout steps | host | `variant`: 45 s per layer; per cache 2.3 min for the bank layout and 2.6 min for the PF layout | disk for the rewritten expert tensors only (the rest is hard-linked): 19 GiB per bank or PF cache |
 
 ```
 G="python -m models.demos.inkling2_mini.convert.gptq_calib"
 V="python -m models.demos.inkling2_mini.convert.variant"
-C=<a work directory>; T=<a tt-metal checkout>
+C=<a work directory>
+T=<tt-metal at commit d1a10279368>; A=$T/tt_metal/impl/allocator
+PY=<CPython 3.13 Lib>; CLAP=<clap_builder 4.6.2>; HASH=<hashbrown 0.17.1>     # the table below says which
 
-# 1. the calibration set: 45 sequences of 2048 tokens and 2 of 8192 (the table below), then the weights
-$G corpus --out $C/ids.pt \
-    --chat chat:12:ultrachat.jsonl --ask "code:6:$T/ttnn:.py,.cpp,.hpp:Explain what this code does." \
+# 1. the public texts, the calibration set (47 sequences, 108,544 tokens: the table below), the weights
+$G data --out $C/data
+B="--text book:$C/data/pg"
+$G corpus --out $C/ids1.pt --chat chat:12:$C/data/ultrachat.jsonl \
+    --ask "code:6:$T/ttnn/cpp:.py,.cpp,.hpp:Explain what this code does." \
     --ask "instruct:3:$T/tech_reports:.md:Summarize this document." \
-    --text book:pg84.txt@0.2 --text book:pg84.txt@0.6 --text book:pg98.txt@0.2 --text book:pg98.txt@0.6 \
-    --text book:pg1400.txt@0.2 --text book:pg1400.txt@0.6 --text book:pg345.txt@0.2 --text book:pg345.txt@0.6 \
-    --chat chat:4:oasst.jsonl --chat instruct:6:dolly.jsonl \
-    --text code:argparse.py --text code:json/decoder.py,json/encoder.py,csv.py,heapq.py \
-    --text code:<clap_builder src/*.rs> --text code:<hashbrown src/*.rs> \
-    --text code:$T/tt_metal/impl/program/program.cpp --text code:<$T/tt_metal/impl/allocator/*.cpp>
-    # <...>: the files, comma-separated; pgN.txt: the plain text of Project Gutenberg book N
-$G corpus --out $C/ids_long.pt --seq 8192 --first 45 --text long:pg1400.txt@0.4 --text long:pg345.txt@0.8
-$G weights --ids $C/ids.pt $C/ids_long.pt --out $C/weights.json \
-    --share chat=.348,instruct=.126,code=.263,book=.175,long=.088
+    ${B}84.body.txt#0.2 ${B}84.body.txt#0.6 ${B}98.body.txt#0.2 ${B}98.body.txt#0.6 \
+    ${B}1400.body.txt#0.2 ${B}1400.body.txt#0.6 ${B}345.body.txt#0.2 ${B}345.body.txt#0.6
+$G corpus --out $C/ids2.pt --first 29 --reasoning-effort none \
+    --chat chat:4:$C/data/oasst.jsonl --chat instruct:6:$C/data/dolly.jsonl \
+    --text code:$PY/argparse.py --text code:$PY/json/decoder.py \
+    --text code:$CLAP/src/derive.rs --text code:$HASH/src/map.rs \
+    --text code:$T/tt_metal/impl/program/program.cpp --text code:$A/allocation_request.cpp,$A/allocator.cpp
+$G corpus --out $C/ids_long.pt --seq 8192 --first 45 \
+    --text long:$C/data/pg1400.txt@0.4 --text long:$C/data/pg345.txt@0.8
+$G weights --ids $C/ids1.pt $C/ids2.pt $C/ids_long.pt --out $C/weights.json \
+    --share chat=.348377,instruct=.125949,code=.262755,book=.175260,long=.087668
 
 # 2. the MoE inputs of every layer application, on the card
-$G capture --ids $C/ids.pt --out $C/cap --cache $D/tile
-$G capture --ids $C/ids_long.pt --out $C/cap --cache $D/tile
+for f in ids1 ids2 ids_long; do $G capture --ids $C/$f.pt --out $C/cap --cache $D/tile; done
 
 # 3. the solves: every expert tensor of layers 0-19 on the BFP4 grid; then layers 6-17 and 19-23 with their
 #    BFP8 tensors on the BFP8 grid (--gu8 / --dn8: the layers whose gate_up / down the dtype map keeps BFP8)
-$G solve --capture $C/cap --weights $C/weights.json --layers 0-19 --out $C/codes-l8
-$G solve --capture $C/cap --weights $C/weights.json --layers 6-17,19-23 --gu8 12-15,17,20-23 --dn8 6-17,19-23 \
-    --out $C/codes-def8
+OMP_NUM_THREADS=40 $G solve --capture $C/cap --weights $C/weights.json --layers 0-19 --threads 40 \
+    --out $C/codes-l8
+OMP_NUM_THREADS=38 $G solve --capture $C/cap --weights $C/weights.json --layers 6-17,19-23 \
+    --gu8 12-15,17,20-23 --dn8 6-17,19-23 --threads 38 --out $C/codes-def8
 
 # 4. the tile caches, then the decode layouts as in "Weights and cache conversion"
 $V --base $D/tile --out $D/own3-l8-tile --experts-from codes:$C/codes-l8 --layers 0-19
@@ -156,32 +161,46 @@ With `INKLING_CACHE_DIR=$D` the two run modes then find `own3-def8-pf`, `own3-de
 `own3-l8-tile`. `variant` reads every file it writes back and refuses a tensor that differs from its codes
 (`gptq_exact` in the manifest), and records where each tensor came from.
 
-The calibration set of the measured caches: 47 sequences, 108,544 tokens, none of them a golden or an evaluation
-prompt. Chat data goes through the chat template; `--chat` reads one JSON list of messages per line.
+The calibration set: 47 sequences in three files, none of them a golden or an evaluation prompt. Nothing is drawn
+at random; the order of the rows and files decides. Chat data goes through the chat template (`ids2.pt` with
+`reasoning_effort` "none"); `--text` sequences are raw text.
 
 | kind | sequences | text | weight |
 |---|---:|---|---:|
-| chat | 12 | `HuggingFaceH4/ultrachat_200k`, test_sft conversations | 1.1540 |
-| chat | 4 | `OpenAssistant/oasst_top1_2023-08-25`, English test threads | 1.1540 |
-| instruct | 6 | `databricks/databricks-dolly-15k`: instruction and context as the user turn, response as the answer | 0.7417 |
-| instruct | 3 | tt-metal `tech_reports/*.md`, each as "Summarize this document." | 0.7417 |
-| code | 6 | tt-metal ttnn sources, each as "Explain what this code does." | 1.1605 |
-| code | 6 | raw source: CPython 3.13 `argparse.py`; `json/decoder.py`, `json/encoder.py`, `csv.py`, `heapq.py`; `clap_builder` 4.6.2 and `hashbrown` 0.17.1 `src/*.rs`; tt-metal `impl/program/program.cpp` and `impl/allocator/*.cpp` | 1.1605 |
-| book | 8 | raw text of Project Gutenberg 84, 98, 1400 and 345, from 0.2 and 0.6 of each | 1.1611 |
-| long | 2 (8192 tokens) | Project Gutenberg 1400 from 0.4 and 345 from 0.8 | 0.5808 |
+| chat | 12 | `HuggingFaceH4/ultrachat_200k`, test_sft, rows 0-25 | 1.1540 |
+| code | 6 | tt-metal `ttnn/cpp` at commit `d1a10279368`: the first source files over 4000 bytes in path order, each as "Explain what this code does." | 1.1605 |
+| instruct | 3 | tt-metal `tech_reports/*.md` at that commit, each as "Summarize this document." | 0.7417 |
+| book | 8 | Project Gutenberg 84, 98, 1400 and 345 (`N-0.txt` of the mirror), text between the marker lines, 2048 tokens from 1/5 and 3/5 of its tokens | 1.1611 |
+| chat | 4 | `OpenAssistant/oasst_top1_2023-08-25`, test, English threads from row 190 on (rows below are held out) | 1.1540 |
+| instruct | 6 | `databricks/databricks-dolly-15k`, English rows from row 59 on: instruction and context as the user turn, response as the answer | 0.7417 |
+| code | 6 | raw source, the first 2048 tokens of: `argparse.py` of Debian 13's `libpython3.13-stdlib` 3.13.5-2+deb13u5 (CPython 3.13.5 plus Debian's gettext patch); `json/decoder.py` of CPython 3.13.5; `clap_builder` 4.6.2 `src/derive.rs`; `hashbrown` 0.17.1 `src/map.rs`; tt-metal `program.cpp`; tt-metal `allocation_request.cpp` + `allocator.cpp` | 1.1605 |
+| long | 2 (8192 tokens) | Project Gutenberg 1400 from 0.4 and 345 from 0.8 of the file's characters | 0.5808 |
 
-The weights give each kind a fixed share of the Hessian rows (chat .348, instruct .126, code .263, book .175,
-long .088), whatever its token count.
+The shares give each kind a fixed part of the Hessian rows, whatever its token count, and the weights above.
 
-What was measured, and what was not:
+What a rebuild reproduces (checked for the caches the numbers in this file were measured on):
 
-- The numbers in "Measured numbers" are those of the caches made this way with an earlier revision of these
-  tools: the same solver, with the sequences packed by scripts that `corpus` replaces. Their token-id files were
-  not kept. A rebuild gives caches of the same kind; the experts are bit-equal only for the same token sequences.
-- Solve, measured: about 10 minutes per layer over the 108,544 tokens, and about 1 hour for 24 layers with
-  about 10 GB of RAM over 43K tokens, both with 40 threads on an 80-core host that ran other jobs; 154 s and
-  5.8 GB for layer 0 over 4096 tokens with 10 threads on a 12-core host. The RAM of the 108,544-token solve was
-  not recorded.
+- Token ids: the same. The id files of the measured run were not kept, its capture was. On every one of the
+  108,544 positions the reference model's first-layer router picks at least 5 of the 8 experts that capture holds
+  for the position (98.6 to 99.2 % of all picks per sequence; another text gives 17 to 33 %). The weights file is
+  identical.
+- Solve: the same codes, bit for bit, from the same captured inputs with the same thread counts (`--threads` and
+  `OMP_NUM_THREADS` 40 and 38 as above, torch 2.15, the same 80-core aarch64 host): all 37 layer solves were
+  run again with the code of this folder and compared.
+- The thread count and the machine matter. With 16 threads, 752 of the 170 million values of one layer-0 tensor
+  changed. On a 12-core x86 host about 6 % of the values of layers 0-5 did. The output error of each tensor on
+  the calibration inputs stayed the same (within 0.02 %): such a cache is as good a rounding, but it is not
+  the measured cache. With those six x86 layers in place of the measured ones, the KL to the bf16 model is
+  0.0110 against 0.0109, and the KL between the two caches 0.0034 (4,068 evaluation positions; the experts'
+  rounding emulated on the CPU reference model, every other weight bf16).
+- Caches: the same bytes. `variant` wrote the 6 tensors of three layers again from the kept codes, byte-equal to
+  the files in the caches.
+- Capture: not repeated. The captured inputs depend on the prefill's numerics, and the measured caches' capture
+  ran before the prefill's faster defaults went in (K-blocked LoFi projections, bf16 gate messages). `capture`
+  uses the defaults of the day, so a capture made now differs in the low bits, and some codes with it.
+- Solve, measured with 40 threads on the 80-core host: 78 to 180 s per layer with the host otherwise idle
+  (about 1.5 hours for the 37 solves in sequence, half that in two processes); about 10 minutes per layer when
+  the host ran other jobs. 9 to 15 GB of RAM per solve process over the 108,544 tokens.
 - Against plain rounding, on the calibration inputs, the output error of the BFP8 tensors was 0.23 to 0.46 times
   (gate_up) and 0.45 to 0.68 times (down) with GPTQ. KL to the bf16 model, same bytes: 0.0086 with plain rounding,
   0.0067 for `own3-def8`.
