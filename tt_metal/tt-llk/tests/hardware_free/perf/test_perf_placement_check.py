@@ -463,4 +463,17 @@ def test_slack_lists_only_the_rows_the_gate_blocks_on(tmp_path):
 
     results, notes = gate([rows], 2, stage1, "abc", ["abc"])
     write_blocking(tmp_path / "s1.regressions.csv", results, notes, out)
-    assert pd.read_csv(out)["marker"].tolist() == ["TILE_LOOP", "INIT"]
+    assert pd.read_csv(out)["marker"].tolist() == ["INIT", "TILE_LOOP"]
+
+
+def test_slack_lists_confirmed_regressions_first(tmp_path):
+    stage1 = _candidates(tmp_path, init=True)
+    results = [
+        dict(stage1[0], outcome="unmeasured"),
+        dict(stage1[1], outcome="regression"),
+    ]
+    out = tmp_path / "blocking.csv"
+
+    write_blocking(tmp_path / "s1.regressions.csv", results, [], out)
+
+    assert pd.read_csv(out)["marker"].tolist() == ["INIT", "TILE_LOOP"]
