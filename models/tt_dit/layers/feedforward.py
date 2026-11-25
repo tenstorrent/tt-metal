@@ -130,6 +130,7 @@ class ParallelFeedForward(Module):
         num_workers_per_link=None,
         transpose_core_grid: bool | None = None,
         persistent_buffer_rows: int | None = None,
+        ff2_suffix=None,
     ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
@@ -139,6 +140,8 @@ class ParallelFeedForward(Module):
         `transpose_core_grid` and `persistent_buffer_rows` are forwarded to ff1 only, for callers that have
         measured block sizes for their ff1 shape; ff2 keeps the generic path (and its exact-shape pairs: the
         unfused reduce-scatter's intermediate must match the op's spec).
+        `ff2_suffix` (optional): ff1's output -> a tensor ff2 reads as extra K columns (fused concat), for an ff2 weight
+        that stacks its rows under the ff1 output's.
         """
         ff1_out = self.ff1(
             x,
@@ -153,7 +156,9 @@ class ParallelFeedForward(Module):
             persistent_buffer_rows=persistent_buffer_rows,
         )
         return self.ff2(
-            ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
+            ff1_out if ff2_suffix is None else [ff1_out, ff2_suffix(ff1_out)],
+            compute_kernel_config=compute_kernel_config,
+            use_persistent_buffer=use_persistent_buffer,
         )
 
     def forward_fused_addcmul(
@@ -174,6 +179,7 @@ class ParallelFeedForward(Module):
         persistent_buffer_rows: int | None = None,
         mmrs_config=None,
         ff2_use_persistent_buffer: bool | None = None,
+        ff2_suffix=None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -184,7 +190,8 @@ class ParallelFeedForward(Module):
         `default_block_size`, `force_transpose` and the frozen ff1 config go to ff1 only, as in `forward`;
         `mmrs_config` is ff2's frozen fused MM+RS blocking. `persistent_buffer_rows` sizes ff1's all-gather pair;
         ff2's reduce-scatter output pair is the activation it returns, so a caller serving varying lengths turns
-        that pair off with `ff2_use_persistent_buffer=False` (default: `use_persistent_buffer`).
+        that pair off with `ff2_use_persistent_buffer=False` (default: `use_persistent_buffer`). `ff2_suffix`: as in
+        `forward`.
         """
         ff1_out = self.ff1(
             x,
@@ -202,7 +209,7 @@ class ParallelFeedForward(Module):
         if ff2_use_persistent_buffer is None:
             ff2_use_persistent_buffer = use_persistent_buffer
         return self.ff2.forward_fused_addcmul(
-            ff1_out,
+            ff1_out if ff2_suffix is None else [ff1_out, ff2_suffix(ff1_out)],
             addcmul_a,
             addcmul_b,
             scalar=scalar,

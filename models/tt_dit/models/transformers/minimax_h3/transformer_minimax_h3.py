@@ -228,10 +228,12 @@ class MiniMaxH3Transformer3DModel(Module):
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
         agmm_mode: AgmmMode | str | None = None,
+        lora_rank: int | None = None,
     ) -> None:
         """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
         are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour.
-        `agmm_mode` picks that path's all-gather matmul pins (`resolve_agmm_mode`)."""
+        `agmm_mode` picks that path's all-gather matmul pins (`resolve_agmm_mode`).
+        `lora_rank`: the blocks' q/k/v, to_out, ff1 and ff2 carry an unmerged LoRA of this rank as a side branch."""
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -339,6 +341,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     dynamic_length=dynamic_length,
                     norm_row_capacity=norm_row_capacity,
                     agmm_mode=agmm_mode,
+                    lora_rank=lora_rank,
                 )
                 for _ in range(num_layers)
             ]

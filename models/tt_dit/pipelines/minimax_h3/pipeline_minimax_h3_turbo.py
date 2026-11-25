@@ -25,7 +25,6 @@ in float32, so they are fused in float32 and never rounded to bfloat16.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -36,7 +35,12 @@ from safetensors import safe_open
 
 import ttnn
 
-from ...experimental.lora.h3_adapter_loader import h3_host_deltas, iter_h3_host_deltas
+from ...experimental.lora.h3_adapter_loader import (
+    file_digest,
+    h3_host_deltas,
+    iter_h3_host_deltas,
+    round_bf16_stochastic,
+)
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3TimestepEmbedding, MiniMaxH3TwoTime
 from .hyperflow_minimax_h3 import MiniMaxH3HyperFlow
 from .pipeline_minimax_h3 import AUDIO_SHIFT, VIDEO_SHIFT, MiniMaxH3Pipeline
@@ -49,20 +53,6 @@ TURBO_NUM_FORWARDS = (4, 8)
 #: A HyperFlow file's float32 targets: the base time embedder and the endpoint copy it adds.
 HYPERFLOW_HOST_PREFIXES = ("time_embedder.", "endpoint_time_embedder.")
 _TIME_EMBEDDER_KEYS = ("linear_1.weight", "linear_1.bias", "linear_2.weight", "linear_2.bias")
-
-
-def _round_bf16_stochastic(tensor: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
-    bits = tensor.float().contiguous().view(torch.int32)
-    noise = torch.randint(0, 1 << 16, bits.shape, dtype=torch.int32, generator=generator)
-    return ((bits + noise) & ~0xFFFF).view(torch.float32).to(torch.bfloat16)
-
-
-def _file_digest(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        while chunk := handle.read(1 << 24):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
@@ -86,7 +76,7 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             default_audio_shift=AUDIO_SHIFT,
         ).lora_path
         self.lora_strength = float(lora_strength)
-        self._lora_digest = _file_digest(self.lora_path)
+        self._lora_digest = file_digest(self.lora_path)
         # Stays None when the transformer loads from the weight cache, which skips `_read_safetensors`.
         self.merged_targets: int | None = None
         self._time_embedder_states: dict[str, dict[str, torch.Tensor]] | None = None
@@ -165,7 +155,7 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             if weight.shape != delta.shape:
                 raise ValueError(f"turbo adapter target {key}: delta {tuple(delta.shape)} != {tuple(weight.shape)}")
             if weight.dtype == torch.bfloat16:
-                state[key] = _round_bf16_stochastic(weight.float() + delta, generator)
+                state[key] = round_bf16_stochastic(weight.float() + delta, generator)
             else:
                 state[key] = weight + delta.to(weight.dtype)
             merged += 1
