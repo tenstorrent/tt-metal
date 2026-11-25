@@ -13,7 +13,7 @@
 #include <flatbuffers/flatbuffers.h>
 
 #include <tt_stl/span.hpp>
-#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
 
 namespace ttnn {
 

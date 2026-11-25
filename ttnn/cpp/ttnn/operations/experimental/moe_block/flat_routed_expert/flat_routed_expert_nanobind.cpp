@@ -17,7 +17,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "device/flat_program.hpp"
 #include "device/flat_routed_expert_plan.hpp"

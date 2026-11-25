@@ -79,20 +79,32 @@ jobs:
       offload-compile: ${{ github.event_name == 'schedule' || inputs.offload-compile }}
     secrets: inherit
 
+  gate-policy:
+    name: "Gate policy"
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-slim
+    outputs:
+      nightly_sol: ${{ steps.policy.outputs.nightly_sol }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 20
+        with:
+          sparse-checkout: tt_metal/tt-llk/perf/gate_policy.json
+          sparse-checkout-cone-mode: false
+      - id: policy
+        run: echo "nightly_sol=$(python3 -c 'import json; print(json.dumps(json.load(open("tt_metal/tt-llk/perf/gate_policy.json"))["nightly_sol"]))')" >> "$GITHUB_OUTPUT"
+
   gate:
     name: "Gate ${{ matrix.arch }} (speed of light)"
-    needs: llk-perf-tests
+    needs: [gate-policy, llk-perf-tests]
     if: ${{ !cancelled() && github.event_name == 'schedule' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: blackhole
-            threshold: 0.02
             run_types: L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE
           - arch: wormhole
-            threshold: 0.03
-            module_thresholds: perf_matmul=0.10,perf_math_matmul=0.10
             run_types: L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
@@ -100,9 +112,9 @@ jobs:
       baseline_pipeline: baseline
       speed_of_light: "true"
       run_types: ${{ matrix.run_types }}
-      threshold: ${{ matrix.threshold }}
-      min_cycles: 30
-      module_thresholds: ${{ matrix.module_thresholds }}
+      threshold: ${{ fromJSON(needs.gate-policy.outputs.nightly_sol)[matrix.arch].threshold }}
+      min_cycles: ${{ fromJSON(needs.gate-policy.outputs.nightly_sol)[matrix.arch].min_cycles }}
+      module_thresholds: ${{ fromJSON(needs.gate-policy.outputs.nightly_sol)[matrix.arch].module_thresholds }}
       measure_result: ${{ needs.llk-perf-tests.result }}
       fail_on_regression: false
     secrets: inherit

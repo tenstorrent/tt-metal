@@ -4,13 +4,13 @@
 
 #include <gtest/gtest.h>
 #include "gmock/gmock.h"
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <array>
 #include <cstddef>
 #include <iostream>
@@ -20,6 +20,7 @@
 #include <optional>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -28,37 +29,38 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 #include <internal/mesh_device.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include "env_lib.hpp"
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include "common/env_lib.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
-#include <tt-metalium/mesh_config.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/memory_pin.hpp>
-#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory/utils/memory_pin.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
 #include "tests/tt_metal/tt_metal/common/host_transfer_stats_scope.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
@@ -457,6 +459,54 @@ TEST_F(MeshBufferTest2x4, Deallocation) {
 
     buffer_view->deallocate();
     EXPECT_FALSE(buffer_view->is_allocated());
+}
+
+// Frees a MeshBuffer after its MeshDevice was closed and another MeshDevice opened the same chip. The free must not
+// reach the new MeshDevice's devices, where it would release an address that a buffer of the new MeshDevice holds.
+TEST(MeshBufferTest, DeallocationAfterMeshDeviceReopened) {
+    const MeshDeviceConfig config(MeshShape(1, 1));
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = 2048};
+
+    auto closed_mesh_device =
+        MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    auto stale = MeshBuffer::create(buffer_config, device_local_config, closed_mesh_device.get());
+    closed_mesh_device->close();
+
+    auto mesh_device =
+        MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    auto held = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+    // Its devices are closed, even though the chip is open again, so no device buffer can be built.
+    EXPECT_THAT(
+        [&] { (void)stale->get_device_buffer(MeshCoordinate(0, 0)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("the MeshBuffer's devices are closed")));
+    stale.reset();
+    auto next = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+    EXPECT_NE(next->address(), held->address());
+
+    next.reset();
+    held.reset();
+    mesh_device->close();
+}
+
+// A MeshBuffer of a closed submesh serves no device buffers, even though the parent keeps the devices open: the close
+// released its allocation, and a new submesh may since have allocated the same address.
+TEST_F(MeshBufferTestSuite, ClosedSubmeshServesNoDeviceBuffers) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = 1024};
+
+    auto closed_submesh = mesh_device_->create_submesh(MeshShape(1, 1));
+    auto stale = MeshBuffer::create(buffer_config, device_local_config, closed_submesh.get());
+    closed_submesh->close();
+
+    auto submesh = mesh_device_->create_submesh(MeshShape(1, 1));
+    auto live = MeshBuffer::create(buffer_config, device_local_config, submesh.get());
+    EXPECT_THAT(
+        [&] { (void)stale->get_device_buffer(MeshCoordinate(0, 0)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("the MeshBuffer's MeshDevice is closed")));
+    EXPECT_NE(live->get_device_buffer(MeshCoordinate(0, 0)), nullptr);
 }
 
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {

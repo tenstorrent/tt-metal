@@ -7,11 +7,13 @@
 Masks, block counts and pooled K / V are built in torch. The output is checked against an fp64 block-sparse reference
 with the same mask (kept blocks exact, other blocks one pooled entry, or none in kept-only mode), against the dense
 ring op where a keep-all mask makes the two equal, and at production lengths against the dense op's own accuracy.
+The runtime logical length (logical_n_tensor) is checked bit for bit against the per-length programs: one program, and
+one trace, for every length of a padded shape.
 """
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 import torch
@@ -29,10 +31,14 @@ BLOCK = 64  # tokens per (square) mask block, passed as block_size; also the q c
 HEADS_PER_DEVICE = 14  # MiniMax-H3 at TP=4
 D = 128
 KEEP_ALL = 1.0
+TRACE_REGION_SIZE = 50_000_000  # for test_balance_trace_masks
 SLOW = pytest.mark.skipif(os.environ.get("CI") == "true", reason="production-size shapes - skip on CI")
+# One captured sparse op (test_runtime_len_trace_replay) with ample headroom.
+TRACE_REGION_SIZE = 8 * 1024 * 1024
 # On CI (a shared job with a tight time budget) only these cases run, about 2 minutes on a Galaxy: one per feature
 # (dense equivalence, one local head, a short last shard, ragged shards, partial blocks, LoFi block float, block
-# counts, several passes, no block 0, frame masks, per-head masks, argument checks). The rest run locally.
+# counts, several passes, no block 0, frame masks, per-head masks, load balancing, argument checks). The rest run
+# locally.
 CI_SUBSET = {
     "test_keep_all_matches_dense[r1024k256]",
     "test_keep_all_matches_dense[r1024k256-one_head]",
@@ -45,6 +51,8 @@ CI_SUBSET = {
     "test_without_block0[r1024k256-band-kept_only]",
     "test_frame_mask[256-window]",
     "test_heads_differ",
+    "test_balance[r1024k256-prefix-kept_only]",
+    "test_balance_masks_per_call",
 }
 
 
@@ -311,7 +319,7 @@ def dense_reference(q, k, v, logical_n, scale, heads, shards, rows):
 
 @pytest.fixture(scope="module")
 def runtime():
-    rt = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    rt = open_ring_joint_sdpa_runtime(MESH_CONFIG, trace_region_size=TRACE_REGION_SIZE)
     yield rt
     close_ring_joint_sdpa_runtime(rt)
 
@@ -376,8 +384,17 @@ class Case:
         )
         self.dims = dims
 
-    def _upload(self, x, d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-        return ttnn.from_torch(x, dtype=dtype, layout=layout, device=self.rt.mesh_device, mesh_mapper=self.mapper(d))
+    def _upload(self, x, d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, on_device=True):
+        device = self.rt.mesh_device if on_device else None
+        return ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, mesh_mapper=self.mapper(d))
+
+    def length_tensor(self, n, on_device=True):
+        """The logical_n_tensor input: [1, 1, 1, 1] uint32, replicated (on_device=False: the host twin that
+        ttnn.copy_host_to_device_tensor rewrites it with)."""
+        x = torch.tensor([n], dtype=torch.int64).reshape(1, 1, 1, 1)
+        return self._upload(
+            x, self.dims(None, None), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, on_device=on_device
+        )
 
     def quantize(self, x, dtype=None, bits=None):
         """x as the device reads it: rounded to `bits` significant bits (LoFi inputs), then stored in `dtype` (default
@@ -456,10 +473,13 @@ class Case:
         pooled=True,
         dense_floor=False,
         counts=None,
+        logical_n_tensor=None,
+        host_logical_n=None,
     ):
         """pooled=False omits pooled K / V (kept blocks only). dense_floor=True (with want_ref="slice") also computes
         the exact dense reference on the slice. counts: the block_counts input ([S * nb_pad]), also used by the
-        pooling and the reference."""
+        pooling and the reference. logical_n_tensor: the op's runtime length input (holding geo.logical_n);
+        host_logical_n: the logical_n argument instead of geo.logical_n (a placeholder with the tensor)."""
         rt, geo = self.rt, self.geo
         tq = self._upload(q, self.seq_dims, dtype=self.q_dtype)
         tk, tv = (self._upload(x, self.seq_dims, dtype=self.dtype) for x in (k, v))
@@ -477,7 +497,18 @@ class Case:
                 counts.reshape(1, 1, 1, -1), self.dims(None, None), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
         )
-        out = self.call(tq, tk, tv, t_mask, t_pk, t_pv, q_blocks_per_pass=q_blocks_per_pass, block_counts=t_counts)
+        out = self.call(
+            tq,
+            tk,
+            tv,
+            t_mask,
+            t_pk,
+            t_pv,
+            q_blocks_per_pass=q_blocks_per_pass,
+            block_counts=t_counts,
+            logical_n=geo.logical_n if host_logical_n is None else host_logical_n,
+            logical_n_tensor=logical_n_tensor,
+        )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None
         if want_dense:
@@ -669,12 +700,20 @@ def test_sub_block_shard_tail(runtime, pooled):
 @pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
 @pytest.mark.parametrize("geom", list(RAGGED))
 def test_kept_partial_blocks(runtime, geom, pooled):
-    """Kept partial last blocks and logical_n tail blocks: computed exactly over their real tokens."""
+    """Kept partial last blocks and logical_n tail blocks: computed exactly over their real tokens. The length comes
+    from logical_n_tensor, with the full padded length as the host logical_n."""
     geo = RAGGED[geom]
     case = Case(runtime, geo)
     live = _block_lengths(geo, case.S).reshape(-1)
     mask = make_mask(geo, case.S, case.H, density=0.3, seed=22, counts=live)
-    r = case.run(*case.inputs(22), mask, want_dense=False, pooled=pooled)
+    r = case.run(
+        *case.inputs(22),
+        mask,
+        want_dense=False,
+        pooled=pooled,
+        logical_n_tensor=case.length_tensor(geo.logical_n),
+        host_logical_n=case.S * geo.rows,
+    )
     _check(f"kept partial {_mode(pooled)} {geom}", r, _density(mask, geo, case.S, live), dense_min=None, ref_min=0.999)
 
 
@@ -898,6 +937,131 @@ def test_determinism(runtime):
     assert torch.equal(a, b), f"max |diff| {(a - b).abs().max().item():.3e}"
 
 
+BALANCE_MASKS = ["heavy_rows", "prefix", "causal"]
+
+
+def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0.9, heads=None, dense_blocks=4):
+    """A mask with very uneven row costs, for load balancing.
+
+    heavy_rows  make_mask, then `heavy_rows` random rows (heads from `heads`) keep `heavy` of the blocks
+    prefix      make_mask, then the first `dense_blocks` Q blocks of shard 0 are dense and every row keeps them
+    suffix      the same with the last `dense_blocks` Q blocks of shard S - 1
+    causal      Q block i keeps the K blocks j <= i in sequence order
+    """
+    g = torch.Generator().manual_seed(seed)
+    nb, nb_pad = geo.nb(), geo.nb_pad()
+    full = (_block_lengths(geo, S) == BLOCK).reshape(-1).to(torch.int64)  # [S * nb_pad]
+    if kind == "causal":
+        k_global = torch.arange(S * nb_pad)
+        k_index = (k_global // nb_pad) * nb + k_global % nb_pad  # global block number in sequence order
+        q_index = torch.arange(S)[:, None] * nb + torch.arange(nb_pad)[None, :]  # [S, nb_pad]
+        keep = k_index[None, None, :] <= q_index[:, :, None]  # [S, nb_pad, S * nb_pad]
+        mask = keep[:, None].expand(S, H, nb_pad, S * nb_pad).to(torch.int64).clone()
+    else:
+        mask = make_mask(geo, S, H, density=density, seed=seed)
+    if kind == "heavy_rows":
+        heads = list(range(H)) if heads is None else heads
+        for _ in range(heavy_rows):
+            s = int(torch.randint(S, (1,), generator=g))
+            h = heads[int(torch.randint(len(heads), (1,), generator=g))]
+            qb = int(torch.randint(nb, (1,), generator=g))
+            mask[s, h, qb] = (torch.rand(S * nb_pad, generator=g) < heavy).to(torch.int64)
+    elif kind in ("prefix", "suffix"):
+        assert 0 < dense_blocks <= nb, f"{dense_blocks} dense blocks do not fit one shard's {nb}"
+        s = 0 if kind == "prefix" else S - 1
+        blocks = torch.arange(dense_blocks) if kind == "prefix" else torch.arange(nb - dense_blocks, nb)
+        mask[s, :, blocks] = 1
+        mask[:, :, :nb, s * nb_pad + blocks] = 1
+    elif kind != "causal":
+        raise ValueError(f"unknown balance mask {kind}")
+    mask = mask * full
+    mask[:, :, nb:] = 0  # padding Q rows
+    return mask
+
+
+@pytest.mark.parametrize(
+    "geom, kind, pooled",
+    [
+        pytest.param(geom, kind, pooled, id=f"{geom}-{kind}-{'pooled' if pooled else 'kept_only'}")
+        for geom, kinds in (("r1024k256", BALANCE_MASKS), ("r1184k256", ["prefix"]))
+        for kind in kinds
+        for pooled in (False, True)
+    ],
+)
+def test_balance(runtime, geom, kind, pooled):
+    """Load balancing on uneven masks; r1184 adds a partial last block, which never moves between devices."""
+    case = Case(runtime, GEOMETRIES[geom])
+    checked = sorted({0, 1, case.H // 2, case.H - 1})
+    mask = balance_mask(case.geo, case.S, case.H, kind=kind, seed=40, heads=checked)
+    r = case.run(*case.inputs(40), mask, want_dense=False, pooled=pooled)
+    tag = f"balance {kind} {_mode(pooled)} {geom}"
+    _check(tag, r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("kind", ["prefix", "causal"])
+def test_balance_passes(runtime, kind, pooled):
+    """Load balancing with two Q passes: swapped-in units can sit in either pass."""
+    geo = ALIGNED["r1024k256"]
+    case = Case(runtime, geo)
+    q_blocks_per_pass = case.q_blocks_per_pass_for(2)
+    mask = balance_mask(geo, case.S, case.H, kind=kind, seed=41)
+    r = case.run(*case.inputs(41), mask, want_dense=False, pooled=pooled, q_blocks_per_pass=q_blocks_per_pass)
+    _check(f"balance passes 2 {kind} {_mode(pooled)}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+
+
+def test_balance_masks_per_call(runtime):
+    """Cached program, new mask every call: the plan is per call and the fabric counters must return to zero."""
+    case = Case(runtime, ALIGNED["r1024k256"])
+    checked = sorted({0, 1, case.H // 2, case.H - 1})
+    for call, kind in enumerate(["prefix", "random", "causal", "heavy_rows", "prefix"]):
+        seed = 50 + call
+        if kind == "random":
+            mask = make_mask(case.geo, case.S, case.H, density=0.2, seed=seed)
+        else:
+            mask = balance_mask(case.geo, case.S, case.H, kind=kind, seed=seed, heads=checked)
+        r = case.run(*case.inputs(seed), mask, want_dense=False, pooled=False)
+        _check(f"call {call} {kind}", r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
+
+
+def test_balance_trace_masks(runtime):
+    """Trace replay with new mask contents each replay: the plan is recomputed on device."""
+    geo = ALIGNED["r1024k256"]
+    case = Case(runtime, geo)
+    mesh = runtime.mesh_device
+    checked = sorted({0, 1, case.H // 2, case.H - 1})
+    q, k, v = case.inputs(60)
+    pk, pv = (pool(x, geo, case.S) for x in (k, v))
+    tq = case._upload(q, case.seq_dims, dtype=case.q_dtype)
+    tk, tv = (case._upload(x, case.seq_dims, dtype=case.dtype) for x in (k, v))
+    masks = [
+        balance_mask(geo, case.S, case.H, kind="prefix", seed=60),
+        balance_mask(geo, case.S, case.H, kind="causal", seed=61),
+        make_mask(geo, case.S, case.H, density=0.2, seed=62),
+    ]
+    t_mask = case._upload(masks[0], case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(case.call(tq, tk, tv, t_mask))  # compile
+    ttnn.synchronize_device(mesh)
+    trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+    out = case.call(tq, tk, tv, t_mask)
+    ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+    try:
+        for i, mask in enumerate(masks):
+            host_mask = ttnn.from_torch(
+                mask, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=case.mapper(case.dims(0, 1))
+            )
+            ttnn.copy_host_to_device_tensor(host_mask, t_mask)
+            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+            sparse = ttnn.to_torch(out, mesh_composer=case.composer).float()
+            ref = sparse_reference(q, k, v, mask, pk, pv, geo, case.S, case.scale, pooled=False, heads=checked)
+            r = {"sparse": sparse[:, :, : geo.logical_n], "dense": None, "ref": ref[:, :, : geo.logical_n]}
+            _check(f"trace replay {i}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    finally:
+        ttnn.release_trace(mesh, trace_id)
+        ttnn.deallocate(out)
+        ttnn.deallocate(t_mask)
+
+
 @pytest.mark.parametrize("geom", ["r1024k256", "r1024k512"])
 def test_fresh_inputs_per_call(runtime, geom):
     """Four calls on the cached program, new inputs and masks each: catches stale K / V from a previous call."""
@@ -1106,3 +1270,118 @@ def test_invalid_args(runtime, expect_error, bad):
         )
     with expect_error(RuntimeError, message):
         case.call(q, k, v, t_mask, pk, pv, **bufs, **spec)
+
+
+# Runtime logical length (logical_n_tensor): per geometry, three lengths of the same padded shape - the full length, one
+# ending mid-tile, and one leaving the last shard empty (also mid-tile).
+RUNTIME_LEN_GEOMETRIES = {"r1024k256": ALIGNED["r1024k256"], "r1184k512": RAGGED["r1184k512"]}
+
+
+def _runtime_lengths(geo, S):
+    full = S * geo.rows
+    return [full, full - 472, (S - 1) * geo.rows - 40]
+
+
+@pytest.mark.parametrize("counts", [False, True], ids=["geometric", "block_counts"])
+@pytest.mark.parametrize("geom", list(RUNTIME_LEN_GEOMETRIES))
+def test_runtime_len_one_program(runtime, geom, counts):
+    """logical_n_tensor: three lengths of one padded shape run on ONE cached program (the host logical_n a fixed
+    placeholder), each bit-identical to the per-length program without the tensor. block_counts: the length words
+    follow the counts table in the counts page, and the counts are capped by the live length."""
+    base = RUNTIME_LEN_GEOMETRIES[geom]
+    case = Case(runtime, base)
+    S = case.S
+    lengths = _runtime_lengths(base, S)
+    given_counts = random_counts(base, S, seed=41) if counts else None
+    q, k, v = case.inputs(41)
+    masks = [
+        make_mask(replace(base, logical_n=n), S, case.H, density=0.2, seed=41, counts=given_counts) for n in lengths
+    ]
+
+    dev = runtime.mesh_device
+    refs = []
+    start = dev.num_program_cache_entries()
+    for n, mask in zip(lengths, masks):
+        case.geo = replace(base, logical_n=n)
+        refs.append(case.run(q, k, v, mask, want_dense=False, want_ref=False, counts=given_counts)["sparse"])
+    tag = f"runtime_len {geom} {'block_counts' if counts else 'geometric'}"
+    logger.info(f"[{tag}] without the tensor: {dev.num_program_cache_entries() - start} new programs")
+
+    t_len = case.length_tensor(lengths[0])
+    added = []
+    for i, (n, mask) in enumerate(zip(lengths, masks)):
+        case.geo = replace(base, logical_n=n)
+        ttnn.copy_host_to_device_tensor(case.length_tensor(n, on_device=False), t_len)
+        before = dev.num_program_cache_entries()
+        got = case.run(
+            q,
+            k,
+            v,
+            mask,
+            want_dense=False,
+            want_ref=False,
+            counts=given_counts,
+            logical_n_tensor=t_len,
+            host_logical_n=lengths[0],
+        )["sparse"]
+        added.append(dev.num_program_cache_entries() - before)
+        same = torch.equal(got, refs[i])
+        diff = (got - refs[i]).abs().max().item()
+        logger.info(f"[{tag}] logical_n {n}: new programs {added[-1]}, bit-identical {same}, max |diff| {diff:.3e}")
+        assert same, f"logical_n {n}: differs from the per-length program, max |diff| {diff:.3e}"
+    assert added == [1, 0, 0], f"program cache entries added per call {added}: expected one program for every length"
+
+
+def test_runtime_len_trace_replay(runtime):
+    """One trace captured at one length, replayed at others with only the inputs and logical_n_tensor rewritten in
+    place: each replay bit-identical to the per-length program without the tensor."""
+    base = RUNTIME_LEN_GEOMETRIES["r1184k512"]
+    case = Case(runtime, base)
+    S = case.S
+    dev = runtime.mesh_device
+    lengths = _runtime_lengths(base, S)
+    q, k, v = case.inputs(43)
+    per_len = []
+    refs = []
+    for n in lengths:
+        case.geo = geo = replace(base, logical_n=n)
+        mask = make_mask(geo, S, case.H, density=0.2, seed=43)
+        pooled = [case.quantize(pool(x, geo, S)) for x in (k, v)]
+        per_len.append((mask, pooled))
+        refs.append(case.run(q, k, v, mask, want_dense=False, want_ref=False)["sparse"])
+
+    tq, tk, tv = (case._upload(x, case.seq_dims) for x in (q, k, v))
+    mask_args = (case.dims(0, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    t_mask = case._upload(per_len[0][0], *mask_args)
+    t_pk, t_pv = (case._upload(x, case.dims(None, 1)) for x in per_len[0][1])
+    t_len = case.length_tensor(lengths[0])
+
+    def call():
+        return case.call(tq, tk, tv, t_mask, t_pk, t_pv, logical_n=lengths[0], logical_n_tensor=t_len)
+
+    ttnn.deallocate(call())
+    ttnn.synchronize_device(dev)
+    trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+    out = call()
+    ttnn.end_trace_capture(dev, trace_id, cq_id=0)
+    ttnn.synchronize_device(dev)
+    try:
+        for i in [1, 2, 0, 2, 1]:
+            n = lengths[i]
+            mask, (pk, pv) = per_len[i]
+            ttnn.copy_host_to_device_tensor(case._upload(mask, *mask_args, on_device=False), t_mask)
+            ttnn.copy_host_to_device_tensor(case._upload(pk, case.dims(None, 1), on_device=False), t_pk)
+            ttnn.copy_host_to_device_tensor(case._upload(pv, case.dims(None, 1), on_device=False), t_pv)
+            ttnn.copy_host_to_device_tensor(case.length_tensor(n, on_device=False), t_len)
+            ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(dev)
+            got = ttnn.to_torch(out, mesh_composer=case.composer).float()[:, :, :n]
+            same = torch.equal(got, refs[i])
+            diff = (got - refs[i]).abs().max().item()
+            logger.info(
+                f"[runtime_len trace] replay at logical_n {n} (captured at {lengths[0]}): bit-identical {same}, "
+                f"max |diff| {diff:.3e}"
+            )
+            assert same, f"replay at logical_n {n}: max |diff| {diff:.3e}"
+    finally:
+        ttnn.release_trace(dev, trace_id)

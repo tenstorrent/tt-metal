@@ -35,8 +35,10 @@ transport accepts it without changes.
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
+import time
 from typing import Any, Optional, Tuple
 
 import torch
@@ -107,7 +109,7 @@ def load_hf_state_dict(model_source: str) -> dict:
 
 
 def setup_ttml_model(
-    transformer_config: TransformerConfig, device_config: DeviceConfig, model_source: str
+    transformer_config: TransformerConfig, device_config: DeviceConfig, model_source: str, num_command_queues: int = 1
 ) -> Tuple[Any, Any]:
     """Open the device and build the ttml model and tokenizer.
 
@@ -124,13 +126,13 @@ def setup_ttml_model(
         raise ValueError(f"setup_ttml_model: model_type must be one of {_SUPPORTED_KINDS}, got {model_kind!r}")
 
     _reject_old_checkpoint_format(model_source)
-    open_device(model_kind, device_config)
+    open_device(model_kind, device_config, num_command_queues)
     if model_kind == "llama":
         return _build_llama(transformer_config, device_config, model_source)
     return _build_qwen3(transformer_config, device_config, model_source)
 
 
-def open_device(model_kind: str, device_config: DeviceConfig) -> Any:
+def open_device(model_kind: str, device_config: DeviceConfig, num_command_queues: int = 1) -> Any:
     """Open the device and return the ``ttnn.MeshDevice``.
 
     Llama opens the ``AutoContext`` device directly; Qwen3 opens a named mesh
@@ -144,12 +146,12 @@ def open_device(model_kind: str, device_config: DeviceConfig) -> Any:
         if device_config.total_devices() > 1 and ttnn.get_fabric_config() == ttnn.FabricConfig.DISABLED:
             ttml.core.distributed.enable_fabric(device_config.total_devices())
         autograd_ctx = ttml.autograd.AutoContext.get_instance()
-        autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
+        autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids, num_command_queues)
         return autograd_ctx.get_device()
 
     mesh = build_mesh(device_config)
     device_ids = tuple(device_config.device_ids) if device_config.device_ids else None
-    ttml.open_device_mesh(mesh, device_ids)
+    ttml.open_device_mesh(mesh, device_ids, num_command_queues)
     return ttml.autograd.AutoContext.get_instance().get_device()
 
 
@@ -255,6 +257,18 @@ def weights_ref_hf_dict(model) -> dict[str, ttnn.Tensor]:
     if isinstance(model, Llama):
         return _llama_weights_ref_hf_dict(model)
     raise TypeError(f"weights_ref_hf_dict supports ttml Llama and Qwen3 models, got {type(model).__name__}")
+
+
+def push_weights(client: Any, model: Any, version: int) -> float:
+    """Sends the policy weights through ``client`` as ``version``; returns the push time in seconds."""
+    start = time.perf_counter()
+    hf_dict = weights_ref_hf_dict(model)
+    try:
+        client.send_weights(hf_dict, version=version)
+    finally:
+        del hf_dict
+        gc.collect()
+    return time.perf_counter() - start
 
 
 def _llama_weights_ref_hf_dict(model) -> dict[str, ttnn.Tensor]:

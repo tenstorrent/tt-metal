@@ -4,7 +4,7 @@
 #pragma once
 
 #include "moe_fused_swiglu_types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::quasar::deepseek_prefill::moe_fused_swiglu {
 

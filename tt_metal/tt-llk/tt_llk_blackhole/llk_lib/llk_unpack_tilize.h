@@ -442,11 +442,11 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
     ckernel_unpack_template tmp = ckernel_unpack_template(
         false,                                     // src B
         false,                                     // halo - just used for 4 unpacks
-        lltt::replay_insn(0, replay_buf_half_len), // runs when context is 0
+        TT_OP_REPLAY(0, replay_buf_half_len, 0, 0), // runs when context is 0
         0,
         0,
         0,
-        lltt::replay_insn(replay_buf_half_len, replay_buf_half_len), // runs when context is 1
+        TT_OP_REPLAY(replay_buf_half_len, replay_buf_half_len, 0, 0), // runs when context is 1
         0,
         0);
 

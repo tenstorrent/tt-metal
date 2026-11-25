@@ -4,4 +4,4 @@
 
 #pragma once
 
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>

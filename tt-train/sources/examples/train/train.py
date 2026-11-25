@@ -294,6 +294,11 @@ def _extract_last_step_logits(logits: ttml.autograd.Tensor) -> ttml.autograd.Ten
     return ttml.autograd.create_tensor(last, requires_grad=False)
 
 
+def _padded_vocab(model: Any, vocab_size: int) -> int:
+    """The vocab the model's embedding and head use: Llama and DeepSeek pad to a multiple of 32 * tp under TP."""
+    return getattr(model, "padded_vocab_size", round_up_to_tile(vocab_size, 32))
+
+
 def _vocab_pad_mask(padded_vocab: int, vocab_size: int) -> Any:
     """Additive mask `[1, 1, 1, padded_vocab]` that drives the tile-padding columns `[vocab_size:]` to -inf.
 
@@ -606,7 +611,7 @@ def run_training(
         trainer.load_checkpoint(resume_path)
 
     # ─ Build header sections ─
-    padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)
+    padded_vocab = _padded_vocab(model, model_cfg.vocab_size)
     if model_cfg.vocab_size != padded_vocab:
         vocab_str = f"{model_cfg.vocab_size} -> {padded_vocab} padded"
     else:
@@ -737,7 +742,7 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     seq_len = model_cfg.max_sequence_length
 
     total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
-    padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)
+    padded_vocab = _padded_vocab(model, model_cfg.vocab_size)
     vocab_str = (
         f"{tokenizer.vocab_size} -> {padded_vocab} padded"
         if tokenizer.vocab_size != padded_vocab

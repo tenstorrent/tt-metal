@@ -206,7 +206,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
         }
-        _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(tensor_shape);
+        _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(tensor_shape, math_format);
 
         PROFILER_SYNC();
     }
@@ -248,7 +248,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
-                        _llk_math_eltwise_unary_broadcast_<unpack_to_dest>(tile);
+                        _llk_math_eltwise_unary_broadcast_(tile);
                     }
                 }
             }
@@ -261,7 +261,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
-                        _llk_math_eltwise_unary_broadcast_<unpack_to_dest>(tile);
+                        _llk_math_eltwise_unary_broadcast_(tile);
                     }
                     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                 }

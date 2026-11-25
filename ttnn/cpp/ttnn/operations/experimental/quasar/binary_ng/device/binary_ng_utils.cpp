@@ -5,8 +5,8 @@
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt_stl/assert.hpp>
 // log_info / log_warning in native_tuning(). Included explicitly rather than left to arrive
 // transitively: this target is a unity build, so a missing include here still compiles.

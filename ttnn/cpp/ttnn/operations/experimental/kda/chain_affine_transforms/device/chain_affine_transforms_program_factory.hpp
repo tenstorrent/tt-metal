@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 #include "chain_affine_transforms_device_operation_types.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"

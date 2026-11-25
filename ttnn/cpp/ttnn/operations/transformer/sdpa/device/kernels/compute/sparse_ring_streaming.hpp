@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_ring_balance_plan.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
@@ -1022,6 +1023,7 @@ template <
     bool pooled_route,
     uint32_t resident_slots,
     uint32_t plan_block_words,
+    uint32_t plan_header_words,
     uint32_t plan_rec_base,
     uint32_t num_q_passes,
     bool pair_steps,
@@ -1029,7 +1031,8 @@ template <
     bool has_block_counts,
     uint32_t cb_key_bias,
     uint32_t key_bias_tiles,
-    uint32_t cb_sum_identity>
+    uint32_t cb_sum_identity,
+    bool unit_table_on = false>
 void sdpa_ring_resident(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1046,7 +1049,8 @@ void sdpa_ring_resident(
     [[maybe_unused]] uint32_t& kb_pos,
     const bool is_last_ring_iter,
     const bool is_first_active_iter,
-    [[maybe_unused]] const volatile uint8_t* block_counts) {
+    [[maybe_unused]] const volatile uint8_t* block_counts,
+    [[maybe_unused]] const volatile uint32_t* unit_table = nullptr) {
     static_assert(resident_slots >= 1 && resident_slots <= 32, "resident state is tracked in a 32-bit mask");
     // The step reconfigures the unpacker/packer only around the Q@K^T and P@V matmuls (whose inputs may be block
     // float) and the Float32 output and sum slots, and otherwise assumes the intermediate format.
@@ -1084,7 +1088,8 @@ void sdpa_ring_resident(
     constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / kBlockTiles;
     constexpr uint32_t kBW = plan_block_words;
     static_assert(Sk_chunk_t % kBlockTiles == 0, "a piece holds whole blocks");
-    static_assert(kBW >= 1 && kBW + 3 <= 16, "the plan header holds the block words, the union bits and the flag");
+    static_assert(
+        kBW >= 1 && kBW + 3 <= plan_header_words, "the plan header holds the block words, the union bits and the flag");
     static_assert(kBlocksPerPiece <= 255 && Sk_chunk_t <= 255, "run tables are byte-indexed");
 
     // CB capacities, as the program factory allocates them for resident Q: the score
@@ -1161,7 +1166,14 @@ void sdpa_ring_resident(
             return plan_copy[i * kRec + w];
         }
     };
-    const auto res_head = [&](uint32_t i) -> uint32_t { return ((global_q_start + i) / num_q_chunks) % NH; };
+    // With load balancing, global_q_start and global_q_end are positions in the core's unit table.
+    const auto res_head = [&](uint32_t i) -> uint32_t {
+        if constexpr (unit_table_on) {
+            return (sparse_balance::unit_of(unit_table[global_q_start + i]) / num_q_chunks) % NH;
+        } else {
+            return ((global_q_start + i) / num_q_chunks) % NH;
+        }
+    };
     const auto union_lo = [&](uint32_t i) -> uint32_t { return plan_word(i, kBW); };
     const auto union_hi = [&](uint32_t i) -> uint32_t { return plan_word(i, kBW + 1); };
     // The same in every record of the iteration.
@@ -1177,7 +1189,12 @@ void sdpa_ring_resident(
     // the geometric length; chunked_prefill_utils.hpp).
     constexpr uint32_t kMaskNb = get_named_compile_time_arg_val("mask_nb");
     [[maybe_unused]] constexpr uint32_t kMaskNbPad = get_named_compile_time_arg_val("mask_nb_pad");
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    [[maybe_unused]] const uint32_t kLogicalN =
+        reinterpret_cast<const volatile uint32_t*>(block_counts + SPARSE_LOGICAL_N_TENSOR)[0];
+#else
     [[maybe_unused]] constexpr uint32_t kLogicalN = get_named_compile_time_arg_val("sparse_logical_n");
+#endif
     const auto blk_count = [&](uint32_t b) -> uint32_t {
         if (b >= kMaskNb) {
             return 0;

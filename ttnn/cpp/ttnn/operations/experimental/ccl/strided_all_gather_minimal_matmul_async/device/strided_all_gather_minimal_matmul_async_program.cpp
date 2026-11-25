@@ -10,10 +10,10 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <sstream>
 #include <type_traits>
 
