@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 

@@ -17,8 +17,8 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/device.hpp"

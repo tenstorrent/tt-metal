@@ -10,8 +10,8 @@
 #include <numeric>
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "scatter_codegen_program_factory.hpp"
