@@ -174,6 +174,54 @@ TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnored) {
     EXPECT_FALSE(ctx.l1_ecc_halt_detected());
 }
 
+// After a power cycle, most cores log a false error at another word's address, a populated row, unless firmware flushes
+// the stale state first (flush_l1_ecc_error_banks). Only a power cycle brings it back and core (0,0) is usually clean,
+// so this runs on every core, and without the flush it fails only on a freshly booted chip.
+TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnoredOnEveryCore) {
+    auto& ctx = MetalContext::instance();
+    if (ctx.rtoptions().get_watcher_enabled()) {
+        GTEST_SKIP() << "Watcher NoC sanitize rejects the read past the end of L1";
+    }
+    const auto& hal = ctx.hal();
+    constexpr uint32_t bytes = 1024;
+    const uint32_t l1_end = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    const uint32_t dst = devices_[0]->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const CoreCoord grid = devices_[0]->compute_with_storage_grid_size();
+    const CoreRange all({0, 0}, {grid.x - 1, grid.y - 1});
+    Program program = CreateProgram();
+    KernelHandle kernel = CreateKernel(
+        program,
+        overread_kernel,
+        all,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, kernel, all, {l1_end, dst, bytes});
+    distributed::MeshWorkload workload;
+    auto zero = distributed::MeshCoordinate(0, 0);
+    workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    std::string error;
+    try {
+        this->RunProgram(devices_[0], workload);
+    } catch (const std::exception& e) {
+        error = e.what();
+        get_shared_devices().needs_recovery = true;
+    }
+
+    uint32_t num_halted = 0;
+    std::string halted;
+    for (uint32_t y = 0; y < grid.y; y++) {
+        for (uint32_t x = 0; x < grid.x; x++) {
+            tt_cxy_pair target(test_target_.chip, devices_[0]->worker_core_from_logical_core({x, y}));
+            ctx.get_cluster().read_core(record_.data(), record_.size(), target, halt_record_addr());
+            if (record_.view().reason() != 0) {
+                num_halted++;
+                halted += fmt::format(" ({},{}) row {}", x, y, record_.view().last_l1_error_banks_0_15() & 0xFFF);
+            }
+        }
+    }
+    EXPECT_EQ(num_halted, 0u) << "cores halted on a false error, with the logged row:" << halted;
+    EXPECT_TRUE(error.empty() || num_halted > 0) << "the program failed without an L1 ECC halt: " << error;
+}
+
 // The branch predictor indexes by a hash of the PC, so a taken branch elsewhere can make it predict the handler's mret
 // as taken. The handler must still return. The kernel runs such a branch before each of its false errors.
 TEST_F(L1EccHaltTest, MretWithAliasedBranchReturns) {
