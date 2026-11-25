@@ -11,6 +11,7 @@ from loguru import logger
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM
 
+from models.common.hf_layer_type_attention import layer_type_attention
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 
 
@@ -50,7 +51,18 @@ def validate_31b_config(config):
         "tie_word_embeddings": True,
         "attention_bias": False,
     }
-    mismatches = [name for name, value in expected.items() if getattr(config, name, None) != value]
+    attn = layer_type_attention(config)
+    actual = {
+        "num_key_value_heads": attn.sliding_kv_heads,
+        "num_global_key_value_heads": attn.full_kv_heads,
+        "head_dim": attn.sliding_head_dim,
+        "global_head_dim": attn.full_head_dim,
+    }
+    mismatches = [
+        name
+        for name, value in expected.items()
+        if (actual[name] if name in actual else getattr(config, name, None)) != value
+    ]
     for name in ("enable_moe_block", "hidden_size_per_layer_input", "num_kv_shared_layers", "use_double_wide_mlp"):
         if getattr(config, name, False):
             mismatches.append(name)
@@ -117,19 +129,16 @@ class Gemma4ModelArgs:
         sliding_rope = rope_params.get("sliding_attention", {})
         full_rope = rope_params.get("full_attention", {})
 
-        # num_global_key_value_heads: None means use same as sliding
-        num_global_kv = getattr(tc, "num_global_key_value_heads", None)
-        if num_global_kv is None:
-            num_global_kv = getattr(tc, "num_key_value_heads", 8)
+        attn = layer_type_attention(tc)
 
         return cls(
             hidden_size=tc.hidden_size,
             num_hidden_layers=tc.num_hidden_layers,
             num_attention_heads=tc.num_attention_heads,
-            num_key_value_heads=getattr(tc, "num_key_value_heads", 8),
-            head_dim=getattr(tc, "head_dim", 256),
-            num_global_key_value_heads=num_global_kv,
-            global_head_dim=getattr(tc, "global_head_dim", 512),
+            num_key_value_heads=attn.sliding_kv_heads,
+            head_dim=attn.sliding_head_dim,
+            num_global_key_value_heads=attn.full_kv_heads,
+            global_head_dim=attn.full_head_dim,
             attention_k_eq_v=getattr(tc, "attention_k_eq_v", False),
             sliding_window=getattr(tc, "sliding_window", 1024),
             rope_theta=sliding_rope.get("rope_theta", getattr(tc, "rope_theta", 10000.0)),

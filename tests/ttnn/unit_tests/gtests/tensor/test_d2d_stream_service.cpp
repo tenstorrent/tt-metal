@@ -44,22 +44,22 @@
 
 #include "gtest/gtest.h"
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -568,7 +568,7 @@ MeshWorkload make_remote_gate_opener_workload(
     const auto links = tt::tt_fabric::get_forwarding_link_indices(*opener_mesh, src_node, dst_node);
     TT_FATAL(!links.empty(), "no fabric route from the opener chip to the gate's chip");
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*opener_mesh);
     auto kernel = CreateKernel(
         program,
         "tests/ttnn/unit_tests/gtests/tensor/kernels/stage_gate_remote_opener.cpp",
@@ -647,7 +647,7 @@ MeshWorkload make_sender_worker_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
 
         auto cb_cfg = CircularBufferConfig(tensor_page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, tensor_page_size);
@@ -704,7 +704,7 @@ MeshWorkload make_receiver_worker_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         std::vector<uint32_t> ct_args = {
             static_cast<uint32_t>(receiver->get_data_ready_sem_addr()),
             num_iters,
@@ -1261,7 +1261,7 @@ private:
 
         MeshWorkload workload;
         for (const auto& coord : coords_) {
-            auto program = CreateProgram();
+            auto program = CreateProgram(*mesh_);
             CreateCircularBuffer(
                 program,
                 CoreRange{worker_, worker_},
@@ -1533,7 +1533,7 @@ MeshWorkload make_receiver_consumer_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
 
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
@@ -1637,7 +1637,7 @@ MeshWorkload make_bridge_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
 
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);

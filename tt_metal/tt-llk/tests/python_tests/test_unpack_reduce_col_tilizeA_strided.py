@@ -57,7 +57,7 @@ def unpack_reduce_col_tilizeA_strided_dest_acc(formats):
     return [DestAccumulation.No, DestAccumulation.Yes]
 
 
-def unpack_reduce_col_tilizeA_strided_max_tiles_per_iter(dest_acc):
+def unpack_reduce_col_tilizeA_strided_tile_cnt(dest_acc):
     """pool_2d reduces 8 tiles per iteration, or 4 when the block must fit a 32-bit half dest."""
     if dest_acc == DestAccumulation.Yes:
         return [4]
@@ -71,7 +71,7 @@ def _math_fidelity(pool_type):
 @parametrize(
     formats=UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
     dest_acc=unpack_reduce_col_tilizeA_strided_dest_acc,
-    max_tiles_per_iter=unpack_reduce_col_tilizeA_strided_max_tiles_per_iter,
+    tile_cnt=unpack_reduce_col_tilizeA_strided_tile_cnt,
     tile_dimensions=UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_DIMENSIONS,
     pool_type=UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES,
     dest_sync=UNPACK_REDUCE_COL_TILIZEA_STRIDED_DEST_SYNC,
@@ -79,7 +79,7 @@ def _math_fidelity(pool_type):
 def test_unpack_reduce_col_tilizeA_strided(
     formats,
     dest_acc,
-    max_tiles_per_iter,
+    tile_cnt,
     tile_dimensions,
     pool_type,
     dest_sync,
@@ -93,7 +93,7 @@ def test_unpack_reduce_col_tilizeA_strided(
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
     tile_shape = construct_tile_shape(tile_dimensions)
-    input_dimensions = [tile_dimensions[0], max_tiles_per_iter * DEFAULT_TILE_C_DIM]
+    input_dimensions = [tile_dimensions[0], tile_cnt * DEFAULT_TILE_C_DIM]
 
     # Negative Max values lose to a zeroed unwritten row, so a skipped -inf clear fails.
     spec_A = (

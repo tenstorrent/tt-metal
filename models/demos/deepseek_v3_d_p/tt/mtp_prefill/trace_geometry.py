@@ -137,14 +137,16 @@ class MTPTraceGeometry:
     def take_next(self) -> ttnn.Tensor:
         return self._tensors["take_next"]
 
-    def write(self, actual_start: int, actual_end: int, provided_levels: int) -> None:
+    def write(self, actual_start: int, actual_end: int, provided_levels: int, *, full: bool = False) -> None:
         """Rewrite the tensors whose plan key changed for ``[actual_start, actual_end)``. Never inside a capture.
 
         A provided chunk leaves the generate-only tensors and the selects stale; its replay does not read them.
+        ``full`` writes them anyway, for a packed forward whose "generate" replay runs every chunk's generation
+        chain: a provided chunk's then select nothing and patch nothing.
         """
         plan = self._plan(actual_start, actual_end, provided_levels)
         self.split = plan["split"]
-        generates = provided_levels < self.num_levels
+        generates = full or provided_levels < self.num_levels
         built, written = {}, set()
         for name in self._names():
             if not generates and _generate_only(name):

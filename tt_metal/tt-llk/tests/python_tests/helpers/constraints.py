@@ -167,6 +167,14 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
     return list(ALL_MATH_FIDELITIES)
 
 
+# Elementwise FPU binary operations that support reuse_dest, shared by WH/BH and Quasar.
+REUSE_DEST_MATH_OPS = [
+    MathOperation.Elwadd,
+    MathOperation.Elwsub,
+    MathOperation.Elwmul,
+]
+
+
 def get_perf_math_operations():
     """Return the elementwise math operations covered by Quasar perf tests."""
     return [MathOperation.Elwadd, MathOperation.Elwmul]

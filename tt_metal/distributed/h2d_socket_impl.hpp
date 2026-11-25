@@ -16,12 +16,14 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+
+#include "tt_metal/distributed/core_writer.hpp"
 
 namespace tt::umd {
 class IoWindow;
@@ -168,7 +170,8 @@ private:
     uint32_t aligned_data_buf_start_ = 0;
     uint32_t config_buffer_address_ = 0;
     uint32_t pcie_alignment_ = 0;
-    std::unique_ptr<tt::umd::IoWindow> receiver_core_window_;
+    std::unique_ptr<tt::umd::IoWindow> receiver_core_window_;  // L2CPU receivers: a window anchored at the LIM
+    std::unique_ptr<CoreWriter> core_writer_;                  // every other receiver
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     // HOST_PUSH only: try_stage gathers a run of pages here so that the run goes out in one write.

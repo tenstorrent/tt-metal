@@ -98,7 +98,7 @@ std::function<void(void*, uint32_t, uint64_t)> PCIeCoreWriter::get_pcie_writer()
 
 std::function<void(void*, uint32_t, uint64_t)> PCIeCoreWriter::get_posted_pcie_writer(uint64_t window_end) {
     const auto chip_id = static_cast<int>(device_id_);
-    // The owner's receiver window (H2DSocketImpl::init_receiver_tlb), anchored at the start of the core's L1.
+    // The owner's receiver window (CoreWriter), anchored at the start of the core's L1.
     if (window_ == nullptr && cluster_->get_soc_descriptor(chip_id).arch == tt::ARCH::BLACKHOLE) {
         tt::umd::CoreCoord core(virtual_core_x_, virtual_core_y_, CoreType::TENSIX, CoordSystem::TRANSLATED);
         window_ = create_posted_window(*cluster_, chip_id, core, /*addr=*/0, window_end);

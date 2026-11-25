@@ -8,7 +8,7 @@
 
 #include <nanobind/nanobind.h>
 
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 
 // Type Caster Doc:
 // https://nanobind.readthedocs.io/en/latest/porting.html#type-casters

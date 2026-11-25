@@ -10,15 +10,21 @@ graph_templates {
   value {
     children {
       name: "t3k1"
-      node_ref { node_descriptor: "N300_LB_DEFAULT" }
+      node_ref { node_descriptor: "N300_LB" }
     }
     children {
       name: "t3k2"
-      node_ref { node_descriptor: "N300_LB_DEFAULT" }
+      node_ref { node_descriptor: "N300_LB" }
     }
     internal_connections {
       key: "QSFP_DD"
       value {
+        # Connections within each T3K
+        connections { port_a { path: ["t3k1"] tray_id: 1 port_id: 1 } port_b { path: ["t3k1"] tray_id: 4 port_id: 1 } }
+        connections { port_a { path: ["t3k1"] tray_id: 2 port_id: 2 } port_b { path: ["t3k1"] tray_id: 3 port_id: 2 } }
+        connections { port_a { path: ["t3k2"] tray_id: 1 port_id: 1 } port_b { path: ["t3k2"] tray_id: 4 port_id: 1 } }
+        connections { port_a { path: ["t3k2"] tray_id: 2 port_id: 2 } port_b { path: ["t3k2"] tray_id: 3 port_id: 2 } }
+
         # T3K1 to T3K2 connections (8 channels total, 2 per chip pair)
         # N300 LB: tray 1/4 use port 2, tray 2/3 use port 1
         connections {
