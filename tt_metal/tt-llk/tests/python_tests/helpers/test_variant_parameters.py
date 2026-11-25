@@ -1220,6 +1220,8 @@ class TOPK(TemplateParameter):
     topk_split_phase: int = 0
     # Re-run the topk init between the two split calls (fresh replay recording).
     topk_split_reinit: bool = False
+    # Optional second split (0: none): the middle call runs [topk_split_phase, topk_split_phase2).
+    topk_split_phase2: int = 0
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1233,6 +1235,7 @@ class TOPK(TemplateParameter):
             f"constexpr std::uint32_t TOPK_TAG_BITS = {self.topk_tag_bits};",
             f"constexpr int TOPK_SPLIT_PHASE = {self.topk_split_phase};",
             f"constexpr bool TOPK_SPLIT_REINIT = {str(self.topk_split_reinit).lower()};",
+            f"constexpr int TOPK_SPLIT_PHASE2 = {self.topk_split_phase2};",
         ]
         return "\n".join(lines)
 
@@ -1248,8 +1251,9 @@ class TOPK(TemplateParameter):
             "std::uint32_t TOPK_TAG_BITS;",
             "int TOPK_SPLIT_PHASE;",
             "bool TOPK_SPLIT_REINIT;",
+            "int TOPK_SPLIT_PHASE2;",
         ]
-        return "\n".join(lines), "IIII???Ii?"
+        return "\n".join(lines), "IIII???Ii?i"
 
 
 @dataclass

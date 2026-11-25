@@ -381,14 +381,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     if constexpr (TOPK_SPLIT_PHASE > 0)
                     {
-                        // Phases [0, TOPK_SPLIT_PHASE) and [TOPK_SPLIT_PHASE, end_phase] as two calls. The second call's
-                        // step range (steps ph+1 down to 1) only applies when it covers a single phase.
-                        // Fill the replay buffer with NOPs first, so every window the two calls replay must be recorded by them.
-                        lltt::record<lltt::NoExec>(0, 32);
-                        for (int slot = 0; slot < 32; ++slot)
+                        // Phases [0, TOPK_SPLIT_PHASE), [TOPK_SPLIT_PHASE, TOPK_SPLIT_PHASE2) (if TOPK_SPLIT_PHASE2 > 0)
+                        // and the rest up to end_phase as separate calls. A call's step range (steps ph+1 down to 1)
+                        // only applies when it covers a single phase. The replay buffer is NOP-filled before the
+                        // first call and after every reinit, so each window a call replays must have been recorded
+                        // by it or by an earlier call since the last fill.
+                        const auto fill_replay_with_nops = []()
                         {
-                            TTI_SFPNOP;
-                        }
+                            lltt::record<lltt::NoExec>(0, 32);
+                            for (int slot = 0; slot < 32; ++slot)
+                            {
+                                TTI_SFPNOP;
+                            }
+                        };
+                        const auto resume = [&]()
+                        {
+                            if constexpr (TOPK_SPLIT_REINIT)
+                            {
+                                topk_init();
+                                fill_replay_with_nops();
+                            }
+                        };
+                        fill_replay_with_nops();
+                        ckernel::sfpu::topk_replay_init = 0; // the filled buffer holds no recorded window
+                        constexpr int last_split        = (TOPK_SPLIT_PHASE2 > 0) ? TOPK_SPLIT_PHASE2 : TOPK_SPLIT_PHASE;
+                        static_assert(TOPK_SPLIT_PHASE2 == 0 || TOPK_SPLIT_PHASE2 > TOPK_SPLIT_PHASE, "split phases must increase");
                         SFPU_UNARY_CALL(
                             dest_sync,
                             is_fp32_dest_acc_en,
@@ -401,10 +418,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             start_phase,
                             end_step,
                             start_step);
-                        if constexpr (TOPK_SPLIT_REINIT)
+                        if constexpr (TOPK_SPLIT_PHASE2 > 0)
                         {
-                            topk_init();
+                            resume();
+                            SFPU_UNARY_CALL(
+                                dest_sync,
+                                is_fp32_dest_acc_en,
+                                calculate_bitonic_topk_phases_steps,
+                                (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
+                                dst_index,
+                                vector_mode,
+                                TOPK_SORT_DIRECTION,
+                                TOPK_SPLIT_PHASE2 - 1,
+                                TOPK_SPLIT_PHASE,
+                                end_step,
+                                start_step);
                         }
+                        resume();
                         SFPU_UNARY_CALL(
                             dest_sync,
                             is_fp32_dest_acc_en,
@@ -414,7 +444,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             vector_mode,
                             TOPK_SORT_DIRECTION,
                             end_phase,
-                            TOPK_SPLIT_PHASE,
+                            last_split,
                             4 /* end_step */,
                             end_phase + 1 /* start_step */);
                     }
