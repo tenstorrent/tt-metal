@@ -20,7 +20,7 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>

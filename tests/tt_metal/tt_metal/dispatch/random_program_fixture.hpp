@@ -5,20 +5,20 @@
 #pragma once
 
 #include "command_queue_fixture.hpp"
-#include "env_lib.hpp"
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include "common/env_lib.hpp"
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <gtest/gtest.h>
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "distributed/mesh_device_impl.hpp"
 

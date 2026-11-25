@@ -836,12 +836,20 @@ jobs:
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
         with:
+          # ignored_line_patterns replaces the tool's bundled list, so its ^SKIPPED/^XFAIL entries are restated.
+          # vLLM's API server stops EngineCore with SIGTERM on every shutdown, clean or not, and EngineCore logs the
+          # signal name; a crash still surfaces through the exit code, failed tests and the server log's errors.
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["output"],
-              "output_dir": "ai_summaries"
+              "output_dir": "ai_summaries",
+              "ignored_line_patterns": [
+                "^SKIPPED\\b",
+                "^XFAIL\\b",
+                "\\[shutdown\\] EngineCore: trigger received signal=SIGTERM\\b"
+              ]
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}

@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/float8.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
 
 #include "tensor_impl.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"

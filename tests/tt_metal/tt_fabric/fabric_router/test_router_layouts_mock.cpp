@@ -11,11 +11,11 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
@@ -123,6 +123,21 @@ TEST_F(RouterLayoutMockTest, ManagedClientHasRouterLayouts) {
     }
     mesh->close();
     EXPECT_GT(routers, 0u);
+}
+
+// Only some of the chips opened (a 1x4 on a 2x4 box, say): the routers facing unopened chips build against their own
+// receivers, as stock does.
+TEST_F(RouterLayoutMockTest, SubsetOfChipsBuilds) {
+    const auto shape = SystemMesh::instance().shape();
+    if (shape.mesh_size() < 2) {
+        GTEST_SKIP() << "needs at least 2 chips";
+    }
+    const auto subset = shape[0] > 1 ? tt::tt_metal::distributed::MeshShape(1, shape[1])
+                                     : tt::tt_metal::distributed::MeshShape(1, shape[1] / 2);
+    SetFabricConfig(FabricConfig::FABRIC_1D);
+    auto mesh = MeshDevice::create(MeshDeviceConfig(subset));
+    EXPECT_EQ(mesh->num_devices(), subset.mesh_size());
+    mesh->close();
 }
 
 }  // namespace

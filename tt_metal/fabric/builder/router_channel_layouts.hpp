@@ -16,6 +16,7 @@
 #include <mutex>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace tt::tt_metal::distributed::multihost {
@@ -33,6 +34,11 @@ struct RouterChannelLayout {
     std::array<std::vector<Channel>, builder_config::MAX_NUM_VCS> senders;
     std::array<std::vector<Channel>, builder_config::MAX_NUM_VCS> receivers;
 };
+
+// No router across a link in this launch: the far chip isn't part of the fabric build (only some of the cluster's chips
+// were opened). The router then sizes its far receivers off its own, as stock does.
+struct NullPeerLayout {};
+using PeerLayout = std::variant<NullPeerLayout, std::reference_wrapper<const RouterChannelLayout>>;
 
 // Every router's channel layout, by fabric node and Ethernet channel. Device builds publish in parallel; the exchange
 // then gives each host the receivers of the routers across its links, before any router kernel is emitted.
@@ -79,6 +85,9 @@ public:
     const RouterChannelLayout& get(FabricNodeId node, chan_id_t eth_chan) const;
     // nullptr when no layout was published for the router.
     const RouterChannelLayout* find(FabricNodeId node, chan_id_t eth_chan) const;
+    // The router across a link: null when nothing on its chip was built this launch; fatal when its chip was built but
+    // that router wasn't.
+    PeerLayout peer(FabricNodeId node, chan_id_t eth_chan) const;
 
     // The two halves of the exchange, without the collectives.
     static std::vector<Record> pack(const Map& layouts);

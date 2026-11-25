@@ -24,18 +24,18 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -330,7 +330,7 @@ Program& persistent_run_on_mesh_device(
 // alive its Program keeps that program-local L1 placed, as an op held in the program cache does.
 distributed::MeshWorkload run_program_with_cb(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreRangeSet& cores) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     CreateKernel(
         program,
         blank_kernel_path,
@@ -3072,6 +3072,32 @@ bool run_coordinated_resize(
     // Subsequent FD work waits for SD1 idle (not long-running A on SD0).
     mesh_device->set_sub_device_stall_group({{SubDeviceId{1}}});
 
+    // On Quasar the sender's credit count is cached on the core so the host may read a stale value, so
+    // probe the receiver's count instead; it is updated with NoC atomics and always reads correctly.
+    const CoreCoord probe_core = is_quasar_arch() ? receiver_core : sender_core;
+    if (pad_room == ResizePadRoom::PENDING) {
+        // Wait until all E1 entries have arrived before checking that the resize is still blocked. A timeout
+        // fails the test but lets the rest of it run, so B still releases A.
+        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        const uint32_t e1_units = total_entries_e1 * (e1 / l1_alignment);
+        uint32_t sent = 0;
+        uint32_t acked = 0;
+        bool e1_arrived = false;
+        for (uint32_t i = 0; i < 10000; ++i) {
+            const auto credits = prefetcher_pipe_test::read_pipe_credits(device, pipe, probe_core);
+            sent = credits.first;
+            acked = credits.second;
+            if (sent - acked >= e1_units) {
+                e1_arrived = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        EXPECT_TRUE(e1_arrived)
+            << "Timed out waiting for the E1 entries before checking resize backpressure; probe credits=" << sent << "/"
+            << acked << " expected outstanding=" << e1_units;
+    }
+
     // A resizes before any receiver is enqueued exactly when the pad fits.
     const bool resized_early =
         poll_sem_set(device, sender_core, resized_sem.address(), pad_room == ResizePadRoom::FITS ? 10000 : 100);
@@ -3083,11 +3109,8 @@ bool run_coordinated_resize(
         EXPECT_FALSE(resized_early) << "set_entry_size(E2) published its pad into a full ring; sender credits="
                                     << sender_sent << "/" << sender_acked;
     }
-    // Quasar: local pages_sent is updated via cached stores; mid-run host TL1 peeks of the
-    // sender slot often still see 0 even after an L2 flush on emu. The receiver slot is
-    // incremented by NOC atomics into TL1, so it is the reliable undrained-E1 probe.
     if (is_quasar_arch()) {
-        const auto [recv_sent, recv_acked] = prefetcher_pipe_test::read_pipe_credits(device, pipe, receiver_core);
+        const auto [recv_sent, recv_acked] = prefetcher_pipe_test::read_pipe_credits(device, pipe, probe_core);
         EXPECT_LT(recv_acked, recv_sent)
             << "E1 unexpectedly drained before its receiver program was enqueued; receiver credits=" << recv_sent << "/"
             << recv_acked << " sender credits=" << sender_sent << "/" << sender_acked;

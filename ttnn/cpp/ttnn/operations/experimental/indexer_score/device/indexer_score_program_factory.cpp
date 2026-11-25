@@ -11,12 +11,12 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt-logger/tt-logger.hpp>  // log_info: per-program schedule/mcast summary
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"

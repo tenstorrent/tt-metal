@@ -6,9 +6,9 @@
 #include "device/conv3d_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/conv3d/prepare_conv3d_weights.hpp"
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include "ttnn/common/constants.hpp"
 #include <numeric>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
