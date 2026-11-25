@@ -52,7 +52,7 @@ inline std::uint32_t reduce_section_tiles(const std::uint32_t tile_cnt)
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand_to_dest.h"
@@ -78,8 +78,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Where to read from: buffer_A in L1, holding unpack_A_src, with the harness's face geometry.
         // unpack_A_dst below is what it converts to on the way into Dest.
-        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
         // Configure the unpacker and set it up to unpack into Dest; the tile loop pulls the whole bank in.
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
@@ -229,7 +230,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -255,8 +256,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Where to write to: buffer_Res in L1, holding pack_dst, with the harness's face geometry.
         // pack_src below is the Dest-side format the packer reads.
-        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
 
         // Configure pack engine 0 and set it up for one section of tiles.
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());

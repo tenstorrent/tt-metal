@@ -6,9 +6,9 @@
 
 #include <optional>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"

@@ -9,6 +9,12 @@ KV chunk address table that carries the MLA kvpe cache, as two extra configs:
 | 1 | `"01"` | KDA recurrent state | synthetic, `chunk_n_tokens = 96` | `[128, 32]` FP32 V-band, 16384 B |
 | 2 | `"02"` | KDA convolution tail | synthetic, `chunk_n_tokens = 64` | `[3, 64]` BF16 rectangle, 384 B |
 
+Kimi-K3.1 publishes four: its Gated DSA layers add the indexer key cache as `"01"` (tokens, 32 per chunk,
+`[32, 128]` bfp8, 4352 B, on the same layer rows and slabs as kvpe, whose chunk is scaled FP8, 32 x 704 B),
+and the two KDA configs move to `"02"` and `"03"` unchanged. Consumers find a config by the adapter's
+`cache_kind`, never by its number. `tests/test_kv_cache_table.py::test_kimi_k3_kv_cache_table` publishes
+both tables from device caches through the runner's `setup_kv_chunk_table` and reads every chunk back.
+
 Every config is published on the model's layer axis (rows 3, 7, 11, ... for kvpe; every other row
 for KDA). A KDA config has no token axis, so it uses the synthetic axis it shares with decode
 (tt-blaze `blaze/models/kimi_k3/cache_migration.py`, tt-blaze #6203): both states span one window of
@@ -67,8 +73,8 @@ The convolution order is the golden's `[all q | all k | all v]`. The recurrent g
 
 `models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the slabs and the
 host decoders (`recurrent_segment_to_torch`, `convolution_segment_to_torch`, `assemble_*`). Every K3 KDA
-layer (`ttKDA.forward` on `KdaStates.entry`) runs on the slabs directly: the convolution, the SP relay
-and the final carry read batch `slot * L + layer_position` (slot read on device) and write the
+layer (`ttKDA.forward` on `KdaStates.entry`) runs on the slabs directly: the convolution and the SP relay
+(which also forms the final carry) read batch `slot * L + layer_position` (slot read on device) and write the
 replacement back in place inside the captured region, so the state a reader sees is the one after the
 last committed chunk, and it lands before any later MLA layer acks that chunk, and before the KDA
 layer's own ack. Nothing clears a slot: on a request's head chunk (`actual_start == 0`, evaluated on
@@ -78,7 +84,7 @@ the previous request's state, and the slabs start uninitialized.
 ## Reading it back
 
 `models/demos/deepseek_v3_d_p/tt/runners/kda_state_readback.py` opens a published table and device
-map, walks configs 1 and 2 by model layer, reads every segment with `read_dram_umd`, reassembles the
+map, walks the KDA configs (the adapter's `cache_kind`: 1 and 2 on K3, 2 and 3 on K3.1; `--model`) by model layer, reads every segment with `read_dram_umd`, reassembles the
 per-layer state and scores it against the head/tail golden
 (`k3_vllm_code_debug_1M_head_tail/kda/kda_{recurrent,conv}_state_layer_N`, 1024-token period; the
 state after `real_len` tokens is row `real_len / 1024 - 1`). A rank's host only reaches its own

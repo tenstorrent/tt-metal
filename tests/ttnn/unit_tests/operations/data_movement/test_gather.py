@@ -688,6 +688,27 @@ def test_gather_rank_mismatch(input_shape, index_shape, device, expect_error):
         ttnn.gather(ttnn_input, -1, index=ttnn_index)
 
 
+@pytest.mark.parametrize("operand", ["input", "index", "output"])
+@pytest.mark.parametrize("tile", [[16, 32], [32, 16]], ids=["16x32", "32x16"])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_gather_rejects_non_32x32_tile(device, operand, tile, dim, expect_error):
+    input = torch.randn([2, 1, 64, 128], dtype=torch.bfloat16)
+    index = torch.randint(0, input.shape[dim], [2, 1, 64, 128], dtype=torch.int32)
+
+    def tile_for(name):
+        return ttnn.Tile(tile) if operand == name else ttnn.Tile([32, 32])
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile_for("input"), device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint32, layout=ttnn.TILE_LAYOUT, tile=tile_for("index"), device=device)
+    ttnn_output = None
+    if operand == "output":
+        ttnn_output = ttnn.from_torch(
+            torch.zeros_like(input), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile(tile), device=device
+        )
+    with expect_error(RuntimeError, f"has a {tile[0]}x{tile[1]} tile"):
+        ttnn.gather(ttnn_input, dim, index=ttnn_index, out=ttnn_output)
+
+
 def test_gather_rejects_row_major_out_for_tile_input(device, expect_error):
     torch.manual_seed(0)
     input = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
@@ -783,3 +804,26 @@ def test_gather_docstring_supported_index_inputs(index_dtype, layout, device):
     output = ttnn.gather(input_tensor, -1, index=index_tensor)
 
     assert_exact(torch.gather(ttnn.to_torch(input_tensor), -1, index), ttnn.to_torch(output))
+
+
+def test_gather_rm_nd_sharded_subaligned_input_rows(device):
+    # [1, 1, 32, 4] ND shards: 8-byte shard rows, not a multiple of the 16-byte L1 alignment, which the sharded reads
+    # cannot split. gather moves such an input to interleaved memory first.
+    x = ((torch.arange(32 * 64) % 97 - 48) / 8).reshape(1, 1, 32, 64).to(torch.bfloat16)
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape([1, 1, 32, 4]),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+    t = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
+    )
+    index = torch.randint(0, 64, (1, 1, 32, 64), generator=torch.Generator().manual_seed(0), dtype=torch.int32)
+    i = ttnn.from_torch(
+        index, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output = ttnn.gather(t, -1, index=i)
+
+    assert_equal(torch.gather(x, -1, index.long()), ttnn.to_torch(output))

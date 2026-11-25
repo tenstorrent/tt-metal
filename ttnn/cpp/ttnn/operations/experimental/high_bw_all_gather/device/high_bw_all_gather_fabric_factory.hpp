@@ -10,7 +10,7 @@
 
 #include "ttnn/device_operation.hpp"
 
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -33,6 +33,7 @@ struct HighBwAllGatherFabricFactory {
         tt::tt_metal::KernelHandle fabric_link_worker_sender_kernel_id{};
         tt::tt_metal::KernelHandle local_copy_core_reader_kernel_id{};
         tt::tt_metal::KernelHandle local_copy_core_writer_kernel_id{};
+        bool has_local_copy_cores = false;  // false (non-interleaved input): the link workers write the own shard
         tt::tt_metal::GlobalSemaphore downstream_started_counter;
         tt::tt_metal::GlobalSemaphore shards_arrived_counter;
         CoreRangeSet fabric_link_worker_cores;  // the cores that use the two global counters

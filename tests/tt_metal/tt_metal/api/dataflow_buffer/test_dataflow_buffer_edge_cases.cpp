@@ -9,6 +9,9 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 
+#include <array>
+#include <set>
+
 namespace tt::tt_metal {
 
 
@@ -98,7 +101,7 @@ static void run_a1_pipeline(distributed::MeshDevice& mesh_device, A1Transform tr
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -118,7 +121,7 @@ static void run_a1_pipeline(distributed::MeshDevice& mesh_device, A1Transform tr
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Stimulus
     const uint32_t total_bytes = entry_size * num_entries;
@@ -201,7 +204,7 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -220,7 +223,7 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     const uint32_t total_words = entry_size * total_tiles / sizeof(uint32_t);
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, total_words);
@@ -366,7 +369,7 @@ static void run_implicit_write_availability_guard(distributed::MeshDevice& mesh_
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     const uint32_t result_l1_addr = top_of_l1_scratch_addr(mesh_device, sizeof(uint32_t));
     std::vector<uint32_t> sentinel{kGuardSentinel};
@@ -379,7 +382,7 @@ static void run_implicit_write_availability_guard(distributed::MeshDevice& mesh_
         {.kernel = GUARD_CONSUMER},
     };
     params.tensor_args = {{GUARD_TENSOR, std::cref(out_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -454,7 +457,7 @@ static void run_implicit_read_availability_guard(distributed::MeshDevice& mesh_d
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     const uint32_t result_l1_addr = top_of_l1_scratch_addr(mesh_device, sizeof(uint32_t));
     std::vector<uint32_t> sentinel{kGuardSentinel};
@@ -467,7 +470,7 @@ static void run_implicit_read_availability_guard(distributed::MeshDevice& mesh_d
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}})},
     };
     params.tensor_args = {{GUARD_TENSOR, std::cref(in_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -576,7 +579,7 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -595,7 +598,7 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     auto input = create_random_vector_of_bfloat16(kPushTiles * kEntrySize, 1.0f, 0xD1D1);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
@@ -797,7 +800,7 @@ TEST_F(UnitMeshFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
         .work_units = {decoy_wu, shared_wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -826,7 +829,7 @@ TEST_F(UnitMeshFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     auto input = create_constant_vector_of_bfloat16(2 * entries_per_core * entry_size, 1.0f);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
@@ -1130,7 +1133,7 @@ static void run_a1_threaded_pipeline(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -1150,7 +1153,7 @@ static void run_a1_threaded_pipeline(
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     auto input = create_random_vector_of_bfloat16(entry_size * total_tiles, 2.0f, 0xA1A1);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
@@ -1290,6 +1293,273 @@ TEST_F(UnitMeshFixture, TensixBlockedOut_DMTensixDM_2Bx2A_blk4) {
 }
 TEST_F(UnitMeshFixture, TensixBlockedOut_DMTensixDM_2Bx1A_blk4) {
     run_tensix_blocked_out_pipeline(this->device(), /*P=*/2, /*C=*/1, /*block_size=*/4, /*num_entries=*/16);
+}
+
+namespace {
+
+// Modes of remapper_client_l_probe.cpp.
+constexpr uint32_t kRemapperProbeRead = 0;
+constexpr uint32_t kRemapperProbePlant = 1;
+constexpr uint32_t kRemapperProbeClear = 2;
+constexpr uint32_t kRemapperProbeSentinel = 0xDEADBEEF;
+constexpr uint32_t kClientLValidMask = 0xFu << 8;
+constexpr uint32_t kClientLIsProducer = 1u << 12;
+constexpr uint32_t kRemapperNeo0Client = 4;  // overlay::NEO_0
+
+// Pairs a program killed before its remapper teardown would leave armed, each linking Tensix-only counter 30 of one
+// Neo to counter 31 of the next. Every program's teardown clears pair 0, and the TRISC boot reset arms and clears
+// [16, 48), so pair 1 and pairs 48 and 63 are left for DM0's boot clear alone.
+struct StalePair {
+    uint32_t pair;
+    uint32_t neo;
+};
+constexpr std::array<StalePair, 3> kStalePairs = {{{1, 0}, {48, 1}, {63, 2}}};
+
+uint32_t stale_client_r(const StalePair& p) { return (kRemapperNeo0Client + p.neo + 1) | (31u << 3); }
+
+uint32_t stale_client_l(const StalePair& p) {
+    // The one-to-many pairs need ClientL marked as the producer; the one-to-one pairs ignore it.
+    const uint32_t is_producer = p.pair < ::dfb::NUM_REMAPPER_ONE_TO_MANY_PAIRINGS ? kClientLIsProducer : 0u;
+    return (kRemapperNeo0Client + p.neo) | (30u << 3) | (1u << 8) | is_producer;
+}
+
+// The register values remapper_client_l_probe.cpp plants in one pair.
+struct PlantedPair {
+    uint32_t pair;
+    uint32_t client_r;
+    uint32_t client_l;
+};
+
+std::array<PlantedPair, 3> planted_stale_pairs() {
+    std::array<PlantedPair, 3> planted{};
+    for (uint32_t i = 0; i < kStalePairs.size(); i++) {
+        planted[i] = {kStalePairs[i].pair, stale_client_r(kStalePairs[i]), stale_client_l(kStalePairs[i])};
+    }
+    return planted;
+}
+
+// Runs remapper_client_l_probe.cpp in `mode` on `planted`; in read mode, returns every pair's ClientL config.
+std::vector<uint32_t> run_remapper_probe(
+    distributed::MeshDevice& mesh_device, uint32_t mode, const std::array<PlantedPair, 3>& planted) {
+    const NodeCoord node{0, 0};
+    const KernelSpecName PROBE{"remapper_probe"};
+    auto probe = make_dm_kernel(PROBE, "tests/tt_metal/tt_metal/test_kernels/dataflow/remapper_client_l_probe.cpp");
+    probe.compile_time_args = {{"mode", mode}};
+    for (uint32_t i = 0; i < planted.size(); i++) {
+        probe.compile_time_args.emplace(fmt::format("pair{}", i), planted[i].pair);
+        probe.compile_time_args.emplace(fmt::format("client_r{}", i), planted[i].client_r);
+        probe.compile_time_args.emplace(fmt::format("client_l{}", i), planted[i].client_l);
+    }
+    probe.runtime_arg_schema = {.runtime_arg_names = {"result_addr"}};
+    ProgramSpec spec{
+        .name = "remapper_client_l_probe",
+        .kernels = {probe},
+        .work_units = {WorkUnitSpec{.name = "wu", .kernels = {PROBE}, .target_nodes = node}},
+    };
+    Program program(mesh_device, spec);
+
+    const uint32_t result_addr = top_of_l1_scratch_addr(mesh_device, ::dfb::NUM_REMAPPER_PAIRINGS * sizeof(uint32_t));
+    std::vector<uint32_t> sentinel(::dfb::NUM_REMAPPER_PAIRINGS, kRemapperProbeSentinel);
+    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), result_addr, sentinel);
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = PROBE, .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_addr", result_addr}})}};
+    program.set_program_run_args(params);
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<uint32_t> client_l;
+    if (mode == kRemapperProbeRead) {
+        slow_dispatch::ReadFromL1(
+            mesh_device, CoreCoord(0, 0), result_addr, ::dfb::NUM_REMAPPER_PAIRINGS * sizeof(uint32_t), client_l);
+    }
+    return client_l;
+}
+
+// A counter holding nothing: no tiles available and all of its capacity free.
+bool tc_idle(const LiveTcSnapshot& snap, uint32_t tc) {
+    return snap.tiles_available[tc] == 0 && snap.space_available[tc] == snap.capacity[tc];
+}
+
+// Reopens the unit meshes with one more command queue: the changed context parameters force a full re-initialization,
+// which resets the cores and boots the firmware again.
+void reboot_firmware(
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>>& id_to_device,
+    std::vector<std::shared_ptr<distributed::MeshDevice>>& devices,
+    size_t num_command_queues) {
+    std::vector<ChipId> ids;
+    ids.reserve(id_to_device.size());
+    for (const auto& [id, device] : id_to_device) {
+        ids.push_back(id);
+    }
+    id_to_device.clear();
+    devices.clear();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
+    id_to_device = distributed::MeshDevice::create_unit_meshes(
+        ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_command_queues + 1, dispatch_core_config);
+    for (const auto& [id, device] : id_to_device) {
+        devices.push_back(device);
+    }
+}
+
+}  // namespace
+
+// Tile counters and remapper pairs must come up idle after a firmware boot, whatever the previous firmware session
+// left in them. Leaves half the Tensix-only counters and two DM-visible ones of every Neo holding entries and three
+// pairs armed, then reboots the firmware and checks them before any program with a DFB runs, since launching such a
+// program resets its own counters.
+TEST_F(UnitMeshFixture, TileCountersAndRemapperIdleAfterFirmwareReboot) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Tile counters and the remapper are Quasar-only";
+    }
+
+    constexpr uint32_t num_neos = ::dfb::NUM_TENSIX;
+    constexpr uint32_t capacity = 2;
+    constexpr uint32_t num_stale_entries = 1;
+    constexpr std::array<uint32_t, 2> busy_dm_visible_tcs = {0, ::dfb::TC_TENSIX_POOL_START - 1};
+    const NodeCoord node{0, 0};
+    const CoreCoord core(node.x, node.y);
+
+    // Unpack posts to every one-to-one ClientL counter of each Neo's Tensix-only pool, and the DM to two DM-visible
+    // counters of each Neo. Nothing ever acks them. The kernels bind no DFB, so the firmware's kernel-exit drain does
+    // not wait for the entries to be consumed.
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName COMPUTE{"compute"};
+    auto producer =
+        make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/tile_counters_leave_busy_dm.cpp");
+    producer.compile_time_args = {
+        {"num_neos", num_neos},
+        {"capacity", capacity},
+        {"num_entries", num_stale_entries},
+        {"tc0", busy_dm_visible_tcs[0]},
+        {"tc1", busy_dm_visible_tcs[1]}};
+    auto compute = make_compute_kernel(
+        COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/tile_counters_leave_busy.cpp", num_neos);
+    compute.compile_time_args = {{"capacity", capacity}, {"num_entries", num_stale_entries}};
+
+    ProgramSpec spec{
+        .name = "leave_tile_counters_busy",
+        .kernels = {producer, compute},
+        .work_units = {WorkUnitSpec{.name = "wu", .kernels = {PRODUCER, COMPUTE}, .target_nodes = node}},
+    };
+    Program program(this->device(), spec);
+    program.set_program_run_args(ProgramRunArgs{.kernel_run_args = {{.kernel = PRODUCER}, {.kernel = COMPUTE}}});
+
+    // The counters the program leaves holding entries, per Neo. The ClientR shadows are left out because they are
+    // never given a capacity, so they never show entries.
+    std::array<std::set<uint32_t>, num_neos> busy_tcs;
+    for (uint32_t neo = 0; neo < num_neos; neo++) {
+        for (uint32_t tc = ::dfb::TC_TENSIX_POOL_START; tc < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX; tc += 2) {
+            busy_tcs[neo].insert(tc);
+        }
+        busy_tcs[neo].insert(busy_dm_visible_tcs.begin(), busy_dm_visible_tcs.end());
+    }
+
+    LaunchProgram(this->device(), std::move(program));
+
+    for (uint32_t neo = 0; neo < num_neos; neo++) {
+        const LiveTcSnapshot snap = read_live_tcs(this->device(), core, neo);
+        for (uint32_t tc : busy_tcs[neo]) {
+            ASSERT_FALSE(tc_idle(snap, tc))
+                << "setup did not leave neo " << neo << " tc " << tc << " busy (avail " << snap.tiles_available[tc]
+                << ", space " << snap.space_available[tc] << ", capacity " << snap.capacity[tc] << ")";
+        }
+    }
+
+    // Armed after the program above, whose own remapper teardown could otherwise clear them.
+    run_remapper_probe(this->device(), kRemapperProbePlant, planted_stale_pairs());
+    const std::vector<uint32_t> before = run_remapper_probe(this->device(), kRemapperProbeRead, planted_stale_pairs());
+    ASSERT_EQ(before.size(), ::dfb::NUM_REMAPPER_PAIRINGS);
+    for (const StalePair& p : kStalePairs) {
+        ASSERT_EQ(before[p.pair], stale_client_l(p)) << "setup did not leave pair " << p.pair << " armed";
+    }
+
+    reboot_firmware(id_to_device_, devices_, num_command_queues());
+
+    for (uint32_t neo = 0; neo < num_neos; neo++) {
+        const LiveTcSnapshot snap = read_live_tcs(this->device(), core, neo);
+        for (uint32_t tc = 0; tc < snap.tiles_available.size(); tc++) {
+            EXPECT_TRUE(tc_idle(snap, tc))
+                << "neo " << neo << " tc " << tc << " not idle after reboot (avail " << snap.tiles_available[tc]
+                << ", space " << snap.space_available[tc] << ", capacity " << snap.capacity[tc] << ")";
+        }
+    }
+
+    const std::vector<uint32_t> after = run_remapper_probe(this->device(), kRemapperProbeRead, planted_stale_pairs());
+    ASSERT_EQ(after.size(), ::dfb::NUM_REMAPPER_PAIRINGS);
+    for (uint32_t pair = 0; pair < ::dfb::NUM_REMAPPER_PAIRINGS; pair++) {
+        ASSERT_NE(after[pair], kRemapperProbeSentinel) << "probe kernel did not report pair " << pair;
+        EXPECT_EQ(after[pair] & kClientLValidMask, 0u) << "pair " << pair << " still armed after reboot";
+    }
+    if (HasFailure()) {
+        // Do not leave the stale pairs armed for later tests.
+        run_remapper_probe(this->device(), kRemapperProbeClear, planted_stale_pairs());
+        return;
+    }
+
+    // The counters and the remapper are usable again: an intra-tensix DFB on every Neo, and a DM->Tensix one
+    // through the remapper.
+    run_intra_tensix_dfb_program_2_0(this->device(), /*entry_size=*/1024, num_neos);
+    run_single_dfb_program_2_0(
+        this->device(),
+        M2SingleDFBParams{
+            M2PorCType::DM, M2PorCType::TENSIX, 1, num_neos, DFBAccessPattern::STRIDED, DFBAccessPattern::ALL});
+}
+
+namespace {
+
+constexpr uint32_t kClientLGroup = 1u << 13;
+constexpr uint32_t kRemapperDmClient0 = 0;  // overlay::DM_0
+constexpr uint32_t kRemapperDmClient1 = 1;  // overlay::DM_1
+
+constexpr uint32_t client_r_entry(uint32_t entry, uint32_t client, uint32_t tc) {
+    return (client | (tc << 3)) << (8 * entry);
+}
+
+// ClientL as DM1 programs it for a DM producer (DataflowBuffer's remapper slot blob).
+constexpr uint32_t dm_producer_client_l(uint32_t client, uint32_t tc, uint32_t valid) {
+    return client | (tc << 3) | (valid << 8) | kClientLIsProducer | kClientLGroup;
+}
+
+// One-to-many pairs as a DM->Tensix program killed before its remapper teardown would leave them: two with the
+// producer's ClientL on client 0, and a control on client 1.
+constexpr std::array<PlantedPair, 3> kStaleDmProducerPairs = {{
+    {2, client_r_entry(0, kRemapperNeo0Client + 1, 2), dm_producer_client_l(kRemapperDmClient0, 2, 0x1)},
+    {3,
+     client_r_entry(0, kRemapperNeo0Client + 1, 3) | client_r_entry(1, kRemapperNeo0Client + 2, 3),
+     dm_producer_client_l(kRemapperDmClient0, 3, 0x3)},
+    // Control: a DM5 producer, whose ClientL is on client 1.
+    {4, client_r_entry(0, kRemapperNeo0Client + 2, 4), dm_producer_client_l(kRemapperDmClient1, 4, 0x1)},
+}};
+
+}  // namespace
+
+// DM0's boot clear must disarm every one-to-many pair a killed DM->Tensix program left armed, by clearing only ClientL.
+// Zeroing ClientR first would point the pair's consumers at client 0.
+TEST_F(UnitMeshFixture, BootClearDisarmsStaleClient0ProducerPairs) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "The remapper is Quasar-only";
+    }
+
+    run_remapper_probe(this->device(), kRemapperProbePlant, kStaleDmProducerPairs);
+    const std::vector<uint32_t> before = run_remapper_probe(this->device(), kRemapperProbeRead, kStaleDmProducerPairs);
+    ASSERT_EQ(before.size(), ::dfb::NUM_REMAPPER_PAIRINGS);
+    for (const PlantedPair& p : kStaleDmProducerPairs) {
+        ASSERT_EQ(before[p.pair], p.client_l) << "setup did not leave pair " << p.pair << " armed";
+    }
+
+    reboot_firmware(id_to_device_, devices_, num_command_queues());
+
+    const std::vector<uint32_t> after = run_remapper_probe(this->device(), kRemapperProbeRead, kStaleDmProducerPairs);
+    ASSERT_EQ(after.size(), ::dfb::NUM_REMAPPER_PAIRINGS);
+    for (uint32_t pair = 0; pair < ::dfb::NUM_REMAPPER_PAIRINGS; pair++) {
+        EXPECT_NE(after[pair], kRemapperProbeSentinel) << "probe kernel did not report pair " << pair;
+        EXPECT_EQ(after[pair] & kClientLValidMask, 0u) << "pair " << pair << " still armed after reboot";
+    }
+    if (HasFailure()) {
+        // Do not leave the stale pairs armed for later tests.
+        run_remapper_probe(this->device(), kRemapperProbeClear, kStaleDmProducerPairs);
+    }
 }
 
 }  // namespace tt::tt_metal

@@ -20,7 +20,7 @@ PCIe bandwidth tests measuring host-to-device and device-to-host throughput at t
 
 ## Host-Side Tests (WriteShard / ReadShard)
 
-Test IDs 606 (H2D) and 607 (D2H) measure PCIe bandwidth from the host API level using [`distributed::WriteShard`](../../tt_metal/api/tt-metalium/distributed.hpp) and [`distributed::ReadShard`](../../tt_metal/api/tt-metalium/distributed.hpp). These go through the full dispatch path — command queue serialization, DMA engine, etc. No kernels are involved; timing is done with `std::chrono` on the host.
+Test IDs 606 (H2D) and 607 (D2H) measure PCIe bandwidth from the host API level using [`distributed::WriteShard`](../../tt_metal/api/tt-metalium/execution/distributed.hpp) and [`distributed::ReadShard`](../../tt_metal/api/tt-metalium/execution/distributed.hpp). These go through the full dispatch path — command queue serialization, DMA engine, etc. No kernels are involved; timing is done with `std::chrono` on the host.
 
 The sweep varies buffer size from 4 KB to 16 MB (powers of 4). Page size is fixed at 4 KB.
 

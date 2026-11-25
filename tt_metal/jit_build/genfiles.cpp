@@ -7,7 +7,7 @@
 #include "data_format.hpp"
 #include <algorithm>
 #include <cstdint>
-#include <tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -309,6 +309,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         scratch_entries.push_back({name, size_bytes, addr_crta_word, metadata});
     });
 
+    // GlobalSemaphore bindings: like scratchpads, in user-specified order (matches Kernel::compute_hash).
+    struct GlobalSemEntry {
+        string name;
+        uint32_t addr_crta_word;
+    };
+    vector<GlobalSemEntry> global_sem_entries;
+    settings.process_global_semaphore_binding_handles(
+        [&global_sem_entries](const string& name, uint32_t addr_crta_word) {
+            global_sem_entries.push_back({name, addr_crta_word});
+        });
+
     // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
     // hashes them in binding order; both orders carry the same set, so the cache key is stable).
     struct PipeEntry {
@@ -380,6 +391,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "#include \"api/scratchpad.h\"\n";
     }
 
+    if (!global_sem_entries.empty()) {
+        // The kernel includes api/dataflow/global_semaphore.h itself.
+        content << "#include \"api/dataflow/global_semaphore_binding_token.h\"\n";
+    }
+
     if (!tensor_binding_sequence_entries.empty()) {
         content << "#include <tuple>\n";
     }
@@ -420,7 +436,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // PrefetcherPipe relays bake the persistent slot into the token so the TRISC
             // constructor can O(1)-align to the durable checkpoint; CrossNode relays
             // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
-            content << "constexpr RelayDFBBindingToken " << entry.name << "{" << entry.id;
+            // Both sides' access patterns ride on the token for compile-time specialization.
+            content << "constexpr RelayDFBBindingToken<" << dfb_access_name(entry.pap) << ", "
+                    << dfb_access_name(entry.cap) << "> " << entry.name << "{" << entry.id;
             if (entry.prefetcher_pipe_id != 0xFF) {
                 content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
@@ -515,6 +533,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     emit_programmatic_binding_token_getter(content, scratch_entries, "ScratchpadBindingToken");
 
     content << "}  // namespace scratch\n";
+
+    if (!global_sem_entries.empty()) {
+        content << "namespace global_sem {\n";
+        for (const auto& entry : global_sem_entries) {
+            content << "constexpr GlobalSemaphoreBindingToken " << entry.name << "{" << entry.addr_crta_word << "u};\n";
+        }
+        content << "}  // namespace global_sem\n";
+    }
 
     write_file(path, content.str());
 }

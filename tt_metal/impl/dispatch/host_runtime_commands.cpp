@@ -4,12 +4,12 @@
 
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
-#include <buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <functional>
 #include <memory>
 
-#include "device.hpp"
+#include "tt-metalium/mesh/legacy/device.hpp"
 #include <tt_stl/overloaded.hpp>
 
 using namespace tt::tt_metal;

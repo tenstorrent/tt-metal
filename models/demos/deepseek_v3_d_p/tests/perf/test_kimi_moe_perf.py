@@ -1,250 +1,150 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Kimi-K3 / Kimi-K3.1 MoE perf gate: host time of one MoE layer forward on the MoE block, as the models run it.
+
+One MoE layer through the model adapter (TtMoEBlockFfn, K3's seeded random weights from block_cases.MODELS):
+
+* kimi_k3-8x4-5120: K3 on one 8x4 Galaxy, 5,120-token chunk.
+* kimi_k3_1-4x4-sp1-2560: K3.1's production stage, one tray half (SP=4 on mesh axis 1), 2,560-token chunk, K3.1's
+  L1_SMALL_SIZE. Run it through tests/run_4x4_stage_tests.sh; on the full Galaxy it skips.
+
+Host time from measure_host (untraced fastest of 10 after 10 warm-up, traced one replay, CPU clock held), gated
+two-sided against TARGETS_MS ± MARGIN[mode]; the traced output must match the untraced one. Per-op device time of the
+same calls is test_moe_block_models.py::test_moe_block_perf (BLOCK_US).
+
+    python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k kimi_k3-8x4
+    models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \\
+        models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k kimi_k3_1-4x4-sp1
 """
-Kimi MoE perf gate (K2.7 and K3): host wall-clock of the MoE forward, untraced (fastest of 10 after 10 warm-up,
-tests/measure) and traced (one replay), with the CPU clock held; bands untraced ±5%, traced ±3%; the traced output
-must match the untraced one.
 
-The forward overlaps dispatch with the shared expert on two sub-devices, so it is captured with
-``SubDeviceTraceController`` as several trace segments: an untimed pass compiles, then capture, then one timed
-replay. The time covers every segment, the sub-device load/clear between them and the final device sync.
-
-``KIMI_MOE_PERF_REPLAYS=N`` logs N replays; only the first gates. A case whose ``expected_ns`` or
-``expected_untraced_ns`` is ``None`` measures that mode without gating. Select with ``-k k2_7`` / ``-k k3`` and ``-k galaxy`` / ``-k loudbox``;
-the LoudBox row (2x4 Fabric2D) is record-only.
-"""
-
-import os
-import time
-from dataclasses import dataclass, field
+import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
-from loguru import logger
+import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc, is_blackhole
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    moe_fabric_payload,
-    torus_xy_device_params,
-)
-from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, gate
-from models.demos.deepseek_v3_d_p.tests.measure.timing import free, time_untraced
-from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import routed_expert_combine_overlap_arg
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
+from models.common.utility_functions import is_blackhole, skip_with_llk_assert, skip_with_watcher
+from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, band_failure, gate
+from models.demos.deepseek_v3_d_p.tests.measure.trace import measure_host
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
-from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 
-# 640 tokens/chip: the 5k production prefill chunk on SP=8.
-_SEQ_LEN_PER_CHIP = PREFILL_CHUNK_TOKENS_PER_CHIP
-# K3 halves the routed row width and doubles top-k, so per-chip dispatch bytes match K2.7.
-_DISPATCH_BUFFER_CAPACITY_FACTOR = 5
-# One forward uses ~0.26 MiB per chip (3 segments); the test logs the actual size.
-_TRACE_REGION_SIZE = 8 * 1024 * 1024
+sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "tests/ttnn/unit_tests/operations/experimental/moe_block"))
+from block_cases import MESH_SP_AXIS, MESHES, MODELS  # noqa: E402
 
-_REPLAYS = int(os.environ.get("KIMI_MOE_PERF_REPLAYS", "1"))
-# Baselines are cut on the 14kW galaxies; this runs elsewhere for bring-up only.
-_IGNORE_POWER = os.environ.get("KIMI_MOE_PERF_IGNORE_POWER") == "1"
+MODES = ("untraced", "traced")
 
 
 @dataclass(frozen=True)
-class _MoEPerfCase:
-    """One generation's shape, Galaxy baseline, and the run_model kwargs unique to it."""
+class MoEPerfCase:
+    model: str  # block_cases.MODELS key
+    mesh: str  # block_cases.MESHES key
+    chunk: int  # tokens a forward (the whole mesh's)
 
-    label: str
-    config: type
-    # Galaxy targets, 3 runs on one Galaxy: traced one replay, untraced fastest of 10 after 10 warm-up.
-    expected_ns: int | None
-    expected_untraced_ns: int | None
-    shape_note: str
-    extra: dict = field(default_factory=dict)
+    @property
+    def id(self) -> str:
+        return f"{self.model}-{self.mesh}-{self.chunk}"
 
-
-_K2_7 = _MoEPerfCase(
-    label="kimi-k2.7",
-    config=KimiK27Config,
-    expected_ns=2_968_000,
-    expected_untraced_ns=3_431_000,
-    shape_note="384 experts / top-8, 7168 emb",
-)
-
-_K3 = _MoEPerfCase(
-    label="kimi-k3",
-    config=KimiK3Config,
-    expected_ns=6_036_000,
-    expected_untraced_ns=6_392_000,
-    shape_note="896 experts / top-16, 3584 latent",
-    extra=dict(
-        routed_emb_dim=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
-        shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
-        latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
-        rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
-        routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
-        shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
-    ),
-)
-
-# (variant, case, id). Disjoint ids: pytest -k matches substrings, so a bare "kimi" would select both.
-_CASES = [("kimi_k2_7", _K2_7, "k2_7"), ("kimi_k3", _K3, "k3")]
-
-# (id, mesh shape, fabric profile, topology mark). Only the galaxy row gates; the LoudBox row records.
-_MESHES = [
-    ("galaxy-torus-xy-8x4", (8, 4), torus_xy_device_params, "mesh-8x4"),
-    ("loudbox-fabric2d-2x4", (2, 4), fabric2d_device_params, "mesh-2x4"),
-]
+    @property
+    def sp_axis(self) -> int:
+        return MESH_SP_AXIS.get(self.mesh, 0)
 
 
-def _perf_params():
-    """Every generation on every mesh, each opening the fabric with its own config's payload size."""
-    return [
-        pytest.param(
-            variant,
-            case,
-            mesh_shape,
-            make_device_params(
-                fabric_payload_size=moe_fabric_payload(case.config), trace_region_size=_TRACE_REGION_SIZE
-            ),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh_shape, topology=topology),
-            id=f"{case_id}-{mesh_id}",
+CASES = [MoEPerfCase("kimi_k3", "8x4", 5120), MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560)]
+# Host ms of one MoE layer forward (untraced, traced) by case id, on a 14 kW CI Galaxy (bh_sc1_high_power): untraced the
+# fastest run, traced the mean of the runs. A case without targets only reports.
+TARGETS_MS = {
+    "kimi_k3-8x4-5120": (2.38, 2.27),
+    "kimi_k3_1-4x4-sp1-2560": (3.63, 3.54),
+}
+
+
+def _params():
+    out = []
+    for c in CASES:
+        shape, make_params, topology = MESHES[c.mesh]
+        out.append(
+            pytest.param(
+                c,
+                shape,
+                make_params(**MODELS[c.model].mesh_params()),
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology=topology),
+                id=c.id,
+            )
         )
-        for variant, case, case_id in _CASES
-        for mesh_id, mesh_shape, make_device_params, topology in _MESHES
-    ]
+    return out
 
 
-def _replay_ns(mesh_device, copy_tid, controller):
-    """Wall-clock of one segmented replay; the input copy runs before the clock starts."""
-    ttnn.execute_trace(mesh_device, copy_tid, cq_id=0, blocking=False)
-    ttnn.synchronize_device(mesh_device)
-    start_ns = time.perf_counter_ns()
-    controller.replay()  # ends in synchronize_device
-    return time.perf_counter_ns() - start_ns
+def _setup(case: MoEPerfCase, mesh_device):
+    """One MoE layer on the block (weights made on its first call) and its input on the device."""
+    from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockFfnOptions, TtMoEBlockFfn
+
+    m = MODELS[case.model]
+    R, C = tuple(mesh_device.shape)
+    H = m.cfg.EMB_SIZE
+    sp_axis = case.sp_axis
+    ffn = TtMoEBlockFfn(
+        mesh_device,
+        m.cfg,
+        layer_idx=m.layer,
+        state_dict=m.weights(R * C),
+        options=MoEBlockFfnOptions(sp_axis=sp_axis),
+    )
+    x = (torch.randn(case.chunk, H, generator=torch.Generator().manual_seed(7)) * m.x_scale).to(torch.bfloat16)
+    x_tt = ttnn.from_torch(
+        x.reshape(1, 1, case.chunk, H),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # tokens (dim 2) over the SP axis, hidden (dim 3) over TP
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3) if sp_axis == 0 else (3, 2)),
+    )
+    return ffn, x_tt
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi prefill MoE requires Blackhole")
-@pytest.mark.timeout(0)
-@pytest.mark.parametrize(
-    "variant, case, mesh_device, device_params, num_links",
-    _perf_params(),
-    indirect=["variant", "mesh_device", "device_params"],
-)
-def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, num_links, request):
-    """Untraced and traced E2E of one MoE forward at the 5k production chunk, per Kimi generation."""
-    is_galaxy = tuple(mesh_device.shape) == (8, 4)
-    if is_galaxy and not _IGNORE_POWER:
-        require_high_power(f"{case.label} MoE perf")
-    topology = per_axis_topology(device_params["fabric_config"])
-    mesh_tag = "8x4 torus-xy" if is_galaxy else f"{mesh_device.shape[0]}x{mesh_device.shape[1]} fabric2d"
+@skip_with_llk_assert("LLK assertions perturb kernel timing")
+@skip_with_watcher("Watcher perturbs kernel timing")
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("case, mesh_device, device_params", _params(), indirect=["mesh_device", "device_params"])
+def test_kimi_moe_perf(request, case, mesh_device, device_params):
+    label = f"{case.id} MoE block"
+    require_high_power(f"{label} perf")
+    ffn, x_tt = _setup(case, mesh_device)
 
-    replays_ns, untraced_ms = [], []
-    trace_info = {}
     clock = hold_full_cpu_clock()
     request.addfinalizer(clock.restore)
+    print(f"{label} host: {clock.status}")
+    untraced, traced, trace_pcc = measure_host(mesh_device, lambda: ffn(x_tt))
+    samples = {"untraced": untraced, "traced": traced}
+    targets = dict(zip(MODES, TARGETS_MS.get(case.id, (None, None))))
 
-    def per_device(t):
-        return [ttnn.to_torch(x) for x in ttnn.get_device_tensors(ttnn.from_device(t))]
-
-    def measure(forward, tt_moe, tt_x):
-        # Untraced first. forward() frees its input, so each call gets a clone, inside the timed window (one copy of
-        # the chunk's activations; the traced replay's input refresh runs before its clock starts).
-        samples, out = time_untraced(lambda: forward(ttnn.clone(tt_x)), lambda: ttnn.synchronize_device(mesh_device))
-        untraced_ms.extend(samples)
-        eager = per_device(out[0])
-        free(out)
-        controller = SubDeviceTraceController(mesh_device)
-        copy_tid = None
-        capturing = False
-        tt_moe.set_trace_controller(controller)
-        try:
-            # Compile pass (a capture cannot JIT-build kernels). forward() frees its input, hence clone.
-            compile_out, _ = forward(ttnn.clone(tt_x))
-            ttnn.synchronize_device(mesh_device)
-            ttnn.deallocate(compile_out)
-
-            # forward() frees its input mid-capture, so its address gets reused inside the trace. A
-            # separate one-op trace refreshes that buffer from tt_x before every replay, keeping the
-            # routed input identical across replays.
-            copy_tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            x = ttnn.clone(tt_x)
-            ttnn.end_trace_capture(mesh_device, copy_tid, cq_id=0)
-
-            controller.begin_capture()
-            capturing = True
-            result = forward(x)
-            controller.end_capture()
-            capturing = False
-            trace_info["segments"] = controller.num_segments
-            trace_info["bytes"] = controller.trace_bytes()
-
-            for _ in range(max(1, _REPLAYS)):
-                replays_ns.append(_replay_ns(mesh_device, copy_tid, controller))
-                if len(replays_ns) == 1:  # the replay's input is tt_x again, as the eager calls' was
-                    trace_info["pcc"] = min(comp_pcc(a, b)[1] for a, b in zip(eager, per_device(result[0])))
-            return result
-        finally:
-            if capturing:  # close the open segment so release() runs and the real error surfaces
-                controller.end_capture()
-            controller.release()
-            if copy_tid is not None:
-                ttnn.release_trace(mesh_device, copy_tid)
-            tt_moe.set_trace_controller(None)
-            tt_moe.release_sub_device_manager()
-
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        _SEQ_LEN_PER_CHIP,
-        case.config.EMB_SIZE,
-        case.config.MOE_INTERMEDIATE_SIZE,
-        case.config.NUM_ROUTED_EXPERTS,
-        case.config.NUM_EXPERTS_PER_TOKEN,
-        _DISPATCH_BUFFER_CAPACITY_FACTOR,
-        False,  # run_pcc_check -- the pcc legs own correctness
-        num_links,
-        topology,
-        GateComputeMode.DEVICE_FP32,
-        request,
-        **case.extra,
-        measure=measure,
-        overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(case.config),
-        dispatch_fwd_vc_pages=case.config.MOE_FWD_VC_PAGES,
-        combine_fwd_vc_pages=case.config.MOE_FWD_VC_PAGES,
-    )
-
-    assert replays_ns, f"no traced replay was timed for the {case.label} MoE forward"
-
-    total_ns = replays_ns[0]
-    tag = f"{case.label} moe {mesh_tag} traced replay ({case.shape_note})"
-    logger.info(
-        f"{tag}: {trace_info['segments']} trace segments, {trace_info['bytes'] / 2**20:.2f} MiB trace region "
-        f"of {_TRACE_REGION_SIZE / 2**20:.0f} MiB"
-    )
-    if len(replays_ns) > 1:
-        logger.info(f"{tag}: replays (ms) " + " ".join(f"{ns / 1e6:.3f}" for ns in replays_ns))
-
+    shape = tuple(mesh_device.shape)
     results = {}
-    for mode, samples, measured, expected in (
-        ("untraced", untraced_ms, min(untraced_ms), case.expected_untraced_ns),
-        ("traced", [ns / 1e6 for ns in replays_ns], total_ns / 1e6, case.expected_ns),
-    ):
-        target = expected / 1e6 if is_galaxy and expected is not None else None  # the LoudBox row records only
-        results[mode] = (samples, measured, target, MARGIN[mode])
+    for mode in MODES:
+        measured, target = min(samples[mode]), targets[mode]
+        results[mode] = (samples[mode], measured, target, MARGIN[mode])
         emit_perf_metrics(
-            f"{case.label.replace('.', '_')}_moe_{mesh_tag.replace(' ', '_')}_{mode}",
-            f"{case.label} moe {mesh_tag} {mode} ({case.shape_note}) perf",
-            {"mesh": mesh_tag, "mode": mode, "samples_ms": samples, "measured_ms": measured, "target_ms": target},
+            f"{case.id.replace('-', '_')}_moe_block_{mode}",
+            f"{label} ({mode})",
+            {
+                "model": case.model,
+                "mesh": f"{shape[0]}x{shape[1]}",
+                "sp_axis": case.sp_axis,
+                "chunk_tokens": case.chunk,
+                "fabric": device_params["fabric_config"].name,
+                "weights": "random",
+                "mode": mode,
+                "samples_ms": samples[mode],
+                "measured_ms": measured,
+                "target_ms": target,
+                "margin_pct": MARGIN[mode] * 100.0,
+                "within_band": target is not None and band_failure(mode, measured, target, MARGIN[mode]) is None,
+            },
         )
-    gate(f"{case.label} moe {mesh_tag}", results, trace_info["pcc"])
+    gate(label, results, trace_pcc)

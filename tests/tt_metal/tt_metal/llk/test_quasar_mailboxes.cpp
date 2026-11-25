@@ -6,14 +6,15 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "host_api.hpp"
+#include "tt-metalium/workload/legacy/host_api.hpp"
 #include "llk_device_fixture.hpp"
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -64,7 +65,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarMailboxMinimal) {
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     // Kernel (MATH thread) writes the mailbox-read value here; host reads it back after the run.
     const std::uint32_t result_l1_addr = top_of_l1_result_addr(this->device(), sizeof(std::uint32_t));
@@ -78,7 +79,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarMailboxMinimal) {
             .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
         },
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(this->device(), std::move(program));
 
@@ -146,7 +147,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarDmToTriscMailbox) {
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     // Each TRISC thread writes the value it read here; host reads it back after the run.
     const std::uint32_t result_size_bytes = expected_result.size() * sizeof(std::uint32_t);
@@ -161,7 +162,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarDmToTriscMailbox) {
             .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
         },
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(this->device(), std::move(program));
 
@@ -244,7 +245,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     // Preload two known tiles into the DFB's L1 ring (single DFB -> ring base is the L1
     // allocator base). Tiles are entry_size apart for this 1-producer/1-consumer layout.
@@ -278,7 +279,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
             .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
         },
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(this->device(), std::move(program));
 

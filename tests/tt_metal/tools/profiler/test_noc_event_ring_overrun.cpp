@@ -24,11 +24,12 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -125,7 +126,7 @@ int main(int argc, char** argv) {
         const distributed::ReplicatedBufferConfig replicated_config{.size = PAGE_SIZE};
         auto dram_buffer = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
 
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         CircularBufferConfig cb_config =
             CircularBufferConfig(PAGE_SIZE, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, PAGE_SIZE);
         CreateCircularBuffer(program, core, cb_config);

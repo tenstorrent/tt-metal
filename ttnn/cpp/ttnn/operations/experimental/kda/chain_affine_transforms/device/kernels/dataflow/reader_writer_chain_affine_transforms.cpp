@@ -37,7 +37,6 @@ template <
     uint32_t Vt_full,
     uint32_t BH,
     uint32_t mcast_shared,
-    uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
 TT_KERNEL void dataflow(
@@ -47,7 +46,8 @@ TT_KERNEL void dataflow(
     uint32_t peer_y0,
     uint32_t peer_x1,
     uint32_t peer_y1,
-    uint32_t receivers) {
+    uint32_t receivers,
+    uint32_t sp_rank) {
     constexpr uint32_t e_tiles = Kt * Kt;
     constexpr uint32_t state_tiles = Kt * Vt;
     constexpr uint32_t row_tiles = Kt + Vt_full;

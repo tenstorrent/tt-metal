@@ -11,6 +11,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
     assert_accurate,
@@ -35,19 +36,20 @@ def _tp_rank(physical_index: int, mesh_columns: int, tensor_parallel_axis: int) 
     return (row, column)[tensor_parallel_axis]
 
 
-_FABRIC_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
+def _fabric_2d() -> dict:
+    return fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE)
 
 
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((1, 8), 1, _FABRIC_1D, id="tp8-1d"),
-        pytest.param((2, 4), 0, _FABRIC_1D, id="tp2-axis0"),
-        pytest.param((2, 4), 1, _FABRIC_1D, id="tp4-axis1"),
+        pytest.param((1, 8), 1, _fabric_2d(), id="tp8-fabric2d"),
+        pytest.param((2, 4), 0, _fabric_2d(), id="tp2-axis0"),
+        pytest.param((2, 4), 1, _fabric_2d(), id="tp4-axis1"),
         pytest.param(
             (8, 4),
             1,
-            fabric2d_device_params(),
+            _fabric_2d(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="tp4-8x4-fabric2d",
         ),
@@ -56,10 +58,12 @@ _FABRIC_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 )
 # A bounded gate (Kimi-K3) folds the per-head decay scale into the decay projection and bias at load.
 @pytest.mark.parametrize("gate_lower_bound", [None, -5.0], ids=["softplus-gate", "bounded-gate"])
+@pytest.mark.parametrize("separate_output_gate", [False, True], ids=["fused-output-gate", "separate-output-gate"])
 def test_device_weight_placement(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     gate_lower_bound: float | None,
+    separate_output_gate: bool,
 ) -> None:
     config = KDAConfig(
         hidden_size=64,
@@ -76,6 +80,7 @@ def test_device_weight_placement(
         config,
         state_dict,
         tensor_parallel_axis=tensor_parallel_axis,
+        separate_output_gate=separate_output_gate,
     )
     tensor_parallel_size = tuple(mesh_device.shape)[tensor_parallel_axis]
     local_heads = config.num_heads // tensor_parallel_size
@@ -103,6 +108,10 @@ def test_device_weight_placement(
         "norm": _host_shards(weights.norm),
         "tap": _host_shards(weights.convolution_taps[0]),
     }
+    if separate_output_gate:
+        fields["output_gate"] = _host_shards(weights.output_gate_projection)
+    else:
+        assert weights.output_gate_projection is None
 
     for physical_index in range(len(fields["input"])):
         tp_rank = (
@@ -122,14 +131,12 @@ def test_device_weight_placement(
             ),
             dim=0,
         ).T
-        expected_auxiliary = torch.cat(
-            (
-                state_dict["f_a_proj.weight"],
-                direct_gate[value_start:value_stop],
-                state_dict["b_proj.weight"][head_start:head_stop],
-            ),
-            dim=0,
-        ).T
+        # Beta's columns padded to a tile, then the output gate's.
+        beta = state_dict["b_proj.weight"][head_start:head_stop]
+        beta = torch.cat((beta, beta.new_zeros(-local_heads % ttnn.TILE_SIZE, beta.shape[-1])))
+        expected_auxiliary = torch.cat((state_dict["f_a_proj.weight"], beta), dim=0).T
+        expected_gate = direct_gate[value_start:value_stop].T
+        fused_gate = () if separate_output_gate else (expected_gate,)
         expected_tap = torch.cat(
             (
                 state_dict["q_conv1d.weight"][key_start:key_stop, 0, 0],
@@ -138,7 +145,7 @@ def test_device_weight_placement(
             )
         ).reshape(1, 1, -1)
         expected = {
-            "input": torch.cat((expected_qkv, expected_auxiliary), dim=-1),
+            "input": torch.cat((expected_qkv, expected_auxiliary, *fused_gate), dim=-1),
             "decay_output": decay_output[:, key_start:key_stop],
             "output": state_dict["o_proj.weight"][:, value_start:value_stop].T,
             "decay_scale": decay_scale[..., key_start:key_stop],
@@ -146,6 +153,8 @@ def test_device_weight_placement(
             "norm": state_dict["o_norm.weight"],
             "tap": expected_tap,
         }
+        if separate_output_gate:
+            expected["output_gate"] = expected_gate
         for name, expected_tensor in expected.items():
             # A bounded gate's scale and offset are FP32 on device; every other weight is BF16.
             fp32 = gate_lower_bound is not None and name in ("decay_scale", "decay_bias")
@@ -158,7 +167,7 @@ def test_device_weight_placement(
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("device_params", [_FABRIC_1D], indirect=True)
+@pytest.mark.parametrize("device_params", [_fabric_2d()], indirect=True)
 def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshDevice) -> None:
     config = KDAConfig(
         hidden_size=256,
