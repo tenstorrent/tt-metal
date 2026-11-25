@@ -15,6 +15,11 @@ one (the next turn of a conversation, the same prompt again) resumes from where 
 position 0, and the reply says how many tokens came from the cache (``cached``). Independently, a decode server
 that already holds a prompt's first ``have`` tokens' entries gets only the later ones.
 
+Prefill ahead (``prefill_warm``): a decode server whose decode slots are all taken sends the prompts of the requests
+waiting for one, to be prefilled into the prefix cache while the device would otherwise idle. Their real
+``prefill_push`` / ``prefill`` later finds them kept and only moves the entries. A warm-up runs after every other
+request waiting and yields to one between chunks (:class:`DeviceQueue`), keeping what it computed.
+
 Images (``--image-rows``, :class:`ImageBook`): a prompt may hold image-span tokens. The decode server names each
 image by key with its rows' slots and sends its vision rows the first time (``d_p_wire``). The server writes them
 into its embedding table past the vocabulary and rewrites the prompt's image ids into its own rows. In metal_2's
@@ -34,6 +39,8 @@ and try it with ``demo/prefill_client.py --server HOST:9041`` (``--prefix-check`
 from __future__ import annotations
 
 import argparse
+import contextlib
+import itertools
 import os
 import socket
 import sys
@@ -45,6 +52,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 
+from models.experimental.deepseek_v4_flash.demo.overhead import OVERHEAD
 from models.experimental.deepseek_v41_flash.tt.prefill.d_p_push import FabricPush
 from models.experimental.deepseek_v41_flash.tt.prefill.d_p_wire import VERSION, recv_msg, send_msg, send_states
 
@@ -206,6 +214,43 @@ class ImageBook:
         logger.info(f"image {key[:12]}: evicted ({len(self.free)} of {self.capacity} image rows free)")
 
 
+class DeviceQueue:
+    """The device, one request at a time (:meth:`hold`). Waiting requests are served in arrival order, except that a
+    prefill a decode server needs now goes before every warm-up (``prefill_warm``: a prompt prefilled ahead into the
+    prefix cache for a request still waiting for a decode slot), and a warm-up holding the device yields between
+    chunks while one waits (:meth:`urgent`)."""
+
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._held = False
+        self._waiting: list[tuple[int, int]] = []  # (1 for a warm-up else 0, arrival)
+        self._arrivals = itertools.count()
+
+    @contextlib.contextmanager
+    def hold(self, warm: bool = False):
+        me = (int(bool(warm)), next(self._arrivals))
+        with self._cv:
+            self._waiting.append(me)
+            try:
+                while self._held or min(self._waiting) != me:
+                    self._cv.wait()
+            finally:
+                self._waiting.remove(me)
+                self._cv.notify_all()  # (the next in line, should this one leave without the device)
+            self._held = True
+        try:
+            yield
+        finally:
+            with self._cv:
+                self._held = False
+                self._cv.notify_all()
+
+    def urgent(self) -> bool:
+        """A request other than a warm-up is waiting for the device."""
+        with self._cv:
+            return any(not warm for warm, _ in self._waiting)
+
+
 class StageTotals:
     """Seconds per stage of every request served so far (the ``stats`` op), and how many requests."""
 
@@ -228,7 +273,13 @@ class StageTotals:
 
 
 class PrefillService:
-    """The device side: one :class:`DPPrefill` and its prefix cache, one prefill at a time (``lock``).
+    """The device side: one :class:`DPPrefill` and its prefix cache, one prefill at a time (``device``,
+    :class:`DeviceQueue`: warm-ups after every other prefill, and yielding to one between chunks).
+
+    A warm-up (``warm``, the ``prefill_warm`` op) only prefills a prompt into the prefix cache, for a decode server
+    whose request for it is still waiting for a decode slot: its ``prefill`` / ``prefill_push`` later finds the prompt
+    kept and computes nothing, or the rest from where a warm-up that yielded stopped. Warm-ups are counted apart
+    (``warm_totals``, the ``stats`` op's ``warm``).
 
     Every request is profiled by stage (seconds, logged one line a request and summed in :attr:`totals`):
     ``queued`` waiting for the device, ``lookup`` the prefix cache, ``prefill.input`` / ``prefill.enqueue`` building
@@ -246,7 +297,8 @@ class PrefillService:
         self.sync_chunks = sync_chunks
         self.pusher: FabricPush | None = None  # made by the first prefill_push (it holds an H2D socket a chip)
         self.totals = StageTotals()
-        self.lock = threading.Lock()
+        self.warm_totals = StageTotals()
+        self.device = DeviceQueue()
         self.cache = PrefixCache(len(d_p.slots))
         self.images = ImageBook(d_p, self.cache) if getattr(d_p, "image_rows", 0) else None
         cfg = d_p.cfg
@@ -264,6 +316,8 @@ class PrefillService:
             "cache_slots": len(d_p.slots),
             # image-span tokens (ImageBook): how many images' rows the server holds at once; 0, or missing, none
             "image_rows": self.images.capacity if self.images is not None else 0,
+            # takes prefill_warm (a prompt prefilled ahead into the prefix cache); missing: it does not
+            "warm": True,
         }
 
     def check(self, ids: torch.Tensor, have: int, limit: int | None) -> None:
@@ -291,13 +345,20 @@ class PrefillService:
         targets: dict | None = None,
         images: list | None = None,
         rows: list | None = None,
+        warm: bool = False,
     ) -> None:
         """Prefill ``ids`` and reply with the entries from ``have`` on; with ``targets`` (``prefill_push``) write
         them into the client's device memory over TT-Fabric instead and reply with what was written. ``images``: the
         prompt's images (``[{"key", "slots", "rows"}]``, the decode server's), ``rows`` the row blobs sent with them;
-        :class:`NeedImages` (nothing run) when one is neither held nor sent."""
+        :class:`NeedImages` (nothing run) when one is neither held nor sent.
+
+        ``warm`` (``prefill_warm``): only prefill ``ids`` into the prefix cache, after every other request waiting and
+        stopping after a chunk once one comes in; reply ``{"seq_len", "done", "cached", "seconds", "queued"}``, where
+        ``done`` is how far it got (the slot keeps ``ids[:done]``, so sending it again continues from there)."""
         if images and self.images is None:
             raise ValueError("this prefill server takes no images (--image-rows 0)")
+        if warm and (images or targets is not None):
+            raise ValueError("a warm-up takes a text prompt only, and writes nothing to the client")
         self.check(ids, have, None if images else self.vocab)
         if targets is not None and (int(targets["seq_len"]) != ids.numel() or int(targets["start"]) != have):
             raise ValueError(
@@ -310,14 +371,15 @@ class PrefillService:
             # A client that hung up must not stop the prefill midway: the device work is already enqueued.
             if not gone:
                 try:
-                    send_msg(conn, {"progress": end})
+                    with OVERHEAD.time("net.send_progress"):
+                        send_msg(conn, {"progress": end})
                 except OSError as e:
                     gone.append(e)
 
         n = ids.numel()
         t_wait = time.perf_counter()
         stages: dict[str, float] = {}
-        with self.lock:
+        with self.device.hold(warm):
             t0 = time.perf_counter()
             stages["queued"] = t0 - t_wait
             if images:
@@ -325,31 +387,34 @@ class PrefillService:
                 self.check(ids, have, self.vocab + self.d_p.image_rows)
                 stages["images"] = time.perf_counter() - t0
                 t0 = time.perf_counter()
-            slot, start = self.cache.lookup(self.d_p, ids) if use_cache else (self.cache.victim(), 0)
+            slot, start = self.cache.lookup(self.d_p, ids) if use_cache or warm else (self.cache.victim(), 0)
             t1 = time.perf_counter()
             stages["lookup"] = t1 - t0
-            on_chunk = progress
+            on_chunk = None if warm else progress
             if targets is not None:
                 if self.pusher is None:
                     self.pusher = FabricPush(self.d_p)
                 self.pusher.begin(targets, slot=slot)
 
                 def on_chunk(s, end, seconds):
-                    self.pusher.chunk(end)
+                    with OVERHEAD.time("push.chunk"):
+                        self.pusher.chunk(end)
                     progress(s, end, seconds)
 
             prefill_times: dict = {}
+            done = n
             if start < n:
                 self.cache.keep(slot, None)  # (until the slot holds all of ids)
-                self.d_p.prefill(
+                done = self.d_p.prefill(
                     ids.tolist(),
                     on_chunk=on_chunk,
                     slot=slot,
                     start=start,
                     times=prefill_times,
                     sync_chunks=self.sync_chunks,
+                    stop=self.device.urgent if warm else None,
                 )
-                self.cache.keep(slot, ids)
+                self.cache.keep(slot, ids if done >= n else ids[:done])
             else:  # the slot holds the whole prompt already (it may hold more: what it keeps stays)
                 self.cache.touch(slot)
             chunks = prefill_times.pop("chunks", 0)
@@ -357,7 +422,9 @@ class PrefillService:
             t2 = time.perf_counter()
             seconds = t2 - t1
             parts: dict = {}
-            if targets is None:
+            if warm:
+                pass
+            elif targets is None:
                 host = self.d_p.host_states(n, parts, slot=slot, base=have)
             else:
                 pushed = self.pusher.finish(parts)
@@ -367,7 +434,11 @@ class PrefillService:
         if gone:
             raise ConnectionError(f"{peer} hung up during the prefill: {gone[0]}")
         t3 = time.perf_counter()
-        if targets is None:
+        if warm:
+            reply = {"seq_len": n, "done": done, "cached": start, "seconds": seconds, "queued": stages["queued"]}
+            send_msg(conn, reply)
+            moved = "kept" if done >= n else f"yielded at {done} to a waiting prefill"
+        elif targets is None:
             send_states(conn, host, seconds, stages["queued"], cached=start)
             moved = f"entries from {have} read back in {readback:.2f} s"
         else:
@@ -380,11 +451,24 @@ class PrefillService:
         t4 = time.perf_counter()
         stages["reply"] = t4 - t3
         stages["total"] = t4 - t_wait
-        self.totals.add(n - start, stages)
-        rate = f"{(n - start) / seconds:.0f} tok/s" if seconds > 0 and start < n else "nothing to compute"
+        computed = max(done - start, 0)
+        if warm:
+            self.warm_totals.add(computed, stages)
+            # Device time no request was waiting on yet (a decode server's request still waiting for a slot).
+            OVERHEAD.add("compute.prefill_ahead", seconds, own_thread=False)
+            OVERHEAD.add("wait.prefill_lock_ahead", stages["queued"], own_thread=False)
+        else:
+            self.totals.add(computed, stages)
+            for stage, s in stages.items():
+                if stage in _OVERHEAD_STAGES:
+                    OVERHEAD.add(_OVERHEAD_STAGES[stage], s, own_thread=False)
+                elif stage.startswith(("prefill.", "readback.", "push.")):
+                    OVERHEAD.add(_OVERHEAD_STAGES.get(stage.split(".")[0] + ".*", "") + stage, s, own_thread=False)
+        rate = f"{computed / seconds:.0f} tok/s" if seconds > 0 and computed else "nothing to compute"
         logger.info(
-            f"{peer}: {n} tokens, {'hit' if start else 'miss'} in slot {slot} ({start} cached), {n - start} prefilled "
-            f"in {seconds:.2f} s ({chunks} chunks, {rate}), waited {stages['queued']:.2f} s, {moved}"
+            f"{peer}: {'warm-up of ' if warm else ''}{n} tokens, {'hit' if start else 'miss'} in slot {slot} "
+            f"({start} cached), {computed} prefilled in {seconds:.2f} s ({chunks} chunks, {rate}), waited "
+            f"{stages['queued']:.2f} s, {moved}"
         )
         logger.info(
             f"{peer}: profile (ms{', chunks synced' if self.sync_chunks else ''}): "
@@ -392,13 +476,30 @@ class PrefillService:
         )
 
 
+# A request's profile stages (PrefillService.prefill) as overhead-table stages (overhead.py): which are the device
+# computing, a wait, or host overhead. "enqueue" can block on a full command queue, so it may hold device time too.
+_OVERHEAD_STAGES = {
+    "queued": "wait.prefill_lock",
+    "images": "prefill.images",
+    "lookup": "prefill.cache_lookup",
+    "reply": "net.send_reply",
+    "prefill.drain": "compute.prefill_drain",
+    "prefill.*": "",  # prefill.input (ids, Engram rows, H2D), prefill.enqueue (host dispatch)
+    "readback.*": "d2h.",  # the KV entries read back to the host (without push)
+    "push.*": "",  # the KV entries written into decode's DRAM over TT-Fabric
+}
+
+
 def _serve_connection(conn: socket.socket, peer: str, service: PrefillService) -> None:
     with conn:
         while True:
+            times: dict = {}
             try:
-                header, blobs = recv_msg(conn)
+                header, blobs = recv_msg(conn, times)
             except (ConnectionError, OSError):
                 break
+            OVERHEAD.add("idle.connection", times["wait"])
+            OVERHEAD.add("net.recv_request", times["transfer"])
             op = header.get("op")
             try:
                 if op == "ping":
@@ -406,8 +507,8 @@ def _serve_connection(conn: socket.socket, peer: str, service: PrefillService) -
                 elif op == "info":
                     send_msg(conn, service.info)
                 elif op == "stats":
-                    send_msg(conn, service.totals.snapshot())
-                elif op in ("prefill", "prefill_push"):
+                    send_msg(conn, {**service.totals.snapshot(), "warm": service.warm_totals.snapshot()})
+                elif op in ("prefill", "prefill_push", "prefill_warm"):
                     images = header.get("images") or []
                     if not blobs or len(blobs[0]) % 4 or (len(blobs) > 1 and not images):
                         raise ValueError(f"{op} takes one blob of int32 token ids (then its images' rows)")
@@ -422,6 +523,7 @@ def _serve_connection(conn: socket.socket, peer: str, service: PrefillService) -
                         header.get("targets") if op == "prefill_push" else None,
                         images=images,
                         rows=blobs[1:],
+                        warm=op == "prefill_warm",
                     )
                 else:
                     raise ValueError(f"unknown op {op!r}")

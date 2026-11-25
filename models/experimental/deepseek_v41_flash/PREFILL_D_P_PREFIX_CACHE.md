@@ -228,6 +228,33 @@ rebuilds every layer's window (layer 20 and 21-39 included) and gives the first 
 4. Throughput: `demo/test_server_perf.py` multi-turn traces, comparing prefill time and bytes received for turn 2+
    with and without the cache (`--cache-slots 1` and a prompt mix that evicts gives the "without").
 
+### 3.9 Prefill ahead for requests waiting for a decode slot
+
+With every decode slot taken (one per instance under `--persistent-moe --dspark`), a new request waits in the decode
+server's claim queue, and before this change the prefill server sat idle until a slot freed. Now (`--prefill-ahead N`,
+default 8, 0 off) the decode server sends the prompts of up to `N` waiting requests, oldest first and one at a time,
+as `prefill_warm` (`tt/prefill/d_p_wire.py`). The prefill server prefills each one into its prefix cache and sends
+nothing back but `{"done", "cached", ...}`. Once the request has a slot, its usual `prefill_push` / `prefill` finds the
+prompt kept (`cached == seq_len`), so only the entries move.
+
+* **Priority.** The prefill server's device queue (`DeviceQueue` in `demo/prefill_server.py`) serves every real prefill
+  before any warm-up, each kind in arrival order. A running warm-up checks after every chunk whether a real prefill is
+  waiting (`DPPrefill.prefill(stop=)`). If one is, it stops, keeps `ids[:done]` in its slot, and replies `done`. A
+  request that has its slot therefore waits at most one chunk for a warm-up. The decode server sends a stopped
+  warm-up again while its request still waits, and it continues from `done`. When the waiting request's own prefill
+  is the one that stopped it, that prefill continues from `done` too.
+* **What is warmed.** The decode server predicts the prompt off the scheduler thread
+  (`V41GenerationServer.ahead_prompt`). It renders the request the way admission will: from the conversation it
+  continues (a free slot's, device-parked or in host RAM: its tokens, then the new turn), or from scratch with the
+  server's defaults. It then cuts the result at the grid point a remote prefill sends (`_RemotePrefiller.warm_span`).
+  Prompts with images are skipped, and so are prompts decode would replay rather than prefill. A wrong guess wastes
+  only idle prefill time and one cache slot, because the real request is matched by its token ids. `N` is capped at
+  half the server's cache slots.
+* **Admission** leaves a warmed prompt whole: no trim back to a history boundary, which would otherwise miss the
+  kept prompt. It also counts a warmed prompt as cached when it chooses between the decode prefix cache and a whole
+  remote prefill.
+* Host tests: `tests/test_prefill_ahead.py`.
+
 ## 4. Limitations and next steps
 
 * **Partial-prefix hits (shared system prompt, edited earlier turn) miss.** The window carry at the divergence

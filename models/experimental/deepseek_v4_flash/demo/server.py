@@ -57,7 +57,7 @@ copy is written back into a slot -- falling back to an empty slot. A parked slot
 conversation for as long as it can: only when no slot is empty is the one idle longest taken
 for a new request, and only once it has been idle ``--slot-idle-timeout`` seconds (300 by
 default) since its last request; its conversation then moves to host RAM. Otherwise the request
-gets a 429. Clients that send one ``user`` identifier for all their traffic, or none, still run
+waits, first come first served, until a slot can be taken (or its client hangs up). Clients that send one ``user`` identifier for all their traffic, or none, still run
 in parallel.
 
 **Concurrency.** Up to ``--max-running`` turns generate at once, their steps in the
@@ -177,6 +177,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.deepseek_v4_flash.demo import tui
+from models.experimental.deepseek_v4_flash.demo.overhead import OVERHEAD
 from models.experimental.deepseek_v4_flash.demo.chat_cli import (
     ChatEngine,
     ChatFormat,
@@ -251,6 +252,123 @@ class _PromptStopped(Exception):
 
 # How often a request waiting on its reply checks that its client is still connected.
 _CLIENT_POLL_SECONDS = 0.5
+
+
+class _ClaimTicket:
+    """A request's place in a :class:`_ClaimQueue` (no ``__eq__``: two places are never the same one)."""
+
+    __slots__ = ("tried", "claimed")
+
+    def __init__(self):
+        self.tried = -1  # the round its last failed attempt saw
+        self.claimed = False
+
+
+class _ClaimQueue:
+    """Requests that found no room (a 429 from their claim) wait here, first come first served, instead of being
+    turned away; they try again whenever room may have been freed (:meth:`changed`), at least every
+    ``_CLIENT_POLL_SECONDS``, and give up only once their client has gone.
+
+    :meth:`run` takes ``attempt(claimed)``, which claims room and goes on to serve the request, calling ``claimed()``
+    once it holds its room (or raises a :class:`RequestError` 429 without any). A waiter tries only once every waiter
+    ahead of it has tried since room last changed, so a late request does not take room a waiting one could use; one
+    whose own room is not free (another instance's conversation, say) lets those behind it try.
+
+    ``on_queued()`` (optional) is called once a request starts to wait, as when it may have work done for it ahead
+    (the V4.1 server prefills its prompt on the prefill server meanwhile); it may return ``leave()``, called once the
+    request holds its room or stops waiting."""
+
+    def __init__(self, what: str = "request"):
+        self.what = what
+        self._cv = threading.Condition()
+        self._waiters: list[_ClaimTicket] = []  # oldest first (compared by identity)
+        self._round = 0
+
+    def __len__(self) -> int:
+        return len(self._waiters)
+
+    def changed(self) -> None:
+        """Room may have been freed: every waiter may try again."""
+        with self._cv:
+            self._round += 1
+            self._cv.notify_all()
+
+    def _drop(self, ticket: "_ClaimTicket") -> None:
+        with self._cv:
+            if ticket in self._waiters:
+                self._waiters.remove(ticket)
+                self._cv.notify_all()
+
+    def run(self, attempt, give_up=None, on_queued=None):
+        ticket = _ClaimTicket()
+        leave: list = []  # what on_queued returned, until called (this thread only: claimed() runs in attempt)
+
+        def joined() -> None:
+            if on_queued is None:
+                return
+            try:
+                hook = on_queued()
+            except Exception:  # noqa: BLE001 - work done ahead is an optimisation; the request waits as before
+                logger.exception(f"{self.what} queued: on_queued failed")
+                hook = None
+            if hook is not None:
+                leave.append(hook)
+
+        def left() -> None:
+            while leave:
+                try:
+                    leave.pop()()
+                except Exception:  # noqa: BLE001 - as above
+                    logger.exception(f"{self.what}: leaving the queue's work ahead failed")
+
+        def claimed() -> None:
+            ticket.claimed = True
+            self._drop(ticket)
+            left()
+
+        with self._cv:
+            queued = bool(self._waiters)
+            if queued:
+                self._waiters.append(ticket)  # others wait already: behind them
+            seen = self._round
+        if queued:
+            joined()
+        t_queued = time.perf_counter()
+        try:
+            while True:
+                if queued:
+                    with self._cv:
+                        while True:
+                            i = self._waiters.index(ticket)
+                            if ticket.tried < self._round and all(w.tried >= self._round for w in self._waiters[:i]):
+                                break
+                            if give_up is not None and give_up():
+                                raise _ClientGone()
+                            if not self._cv.wait(timeout=_CLIENT_POLL_SECONDS) and i == 0:
+                                self._round += 1  # time alone may free room (an idle slot's timeout)
+                        seen = self._round
+                try:
+                    return attempt(claimed)
+                except RequestError as e:
+                    if e.status != 429 or ticket.claimed:
+                        raise
+                    joining = not queued
+                    with self._cv:
+                        if joining:
+                            self._waiters.append(ticket)
+                            queued = True
+                            logger.info(f"{self.what} queued ({len(self._waiters)} waiting): {e.message}")
+                        ticket.tried = seen
+                        self._cv.notify_all()
+                    if joining:
+                        joined()
+        finally:
+            self._drop(ticket)
+            left()
+            if queued:
+                OVERHEAD.add("wait.queue_for_slot", time.perf_counter() - t_queued, own_thread=False)
+
+
 # sys.setswitchinterval while serving. A thread waiting for the GIL gets it only once the holder has run this
 # long (default 5 ms), and the output reader takes it back after every socket read and torch op on a token's
 # way to the next packet: an HTTP, console or scheduler thread busy meanwhile would add up to that per token.
@@ -311,7 +429,10 @@ def _tokenize(tokenizer, text: str) -> list[int]:
     """
     if len(text) < 2 * _TOKENIZE_PIECE_CHARS or any(" " in token for token in tokenizer.get_added_vocab()):
         return list(tokenizer(text, add_special_tokens=False)["input_ids"])
-    cuts = [0]
+    # A text that starts like one tokenized lately (the same conversation rendered again, or another request
+    # sharing its long start) takes that one's ids up to the last cut inside the shared start.
+    start, head, head_cuts = _TOKENIZE_MEMO.reuse(tokenizer, text)
+    cuts = [start]
     while len(text) - cuts[-1] >= 2 * _TOKENIZE_PIECE_CHARS:
         found = _TOKENIZE_CUT.search(text, cuts[-1] + _TOKENIZE_PIECE_CHARS)
         if found is None:
@@ -319,7 +440,70 @@ def _tokenize(tokenizer, text: str) -> list[int]:
         cuts.append(found.start() + 1)
     cuts.append(len(text))
     pieces = tokenizer([text[a:b] for a, b in zip(cuts, cuts[1:])], add_special_tokens=False)["input_ids"]
-    return [token for piece in pieces for token in piece]
+    ids = list(head)
+    marks = list(head_cuts)  # (char offset of a cut, ids before it)
+    for a, piece in zip(cuts, pieces):
+        marks.append((a, len(ids)))
+        ids.extend(piece)
+    _TOKENIZE_MEMO.keep(tokenizer, text, ids, marks)
+    return ids
+
+
+class _TokenizeMemo:
+    """The last few long texts :func:`_tokenize` tokenized, each with its ids and the piece cuts it made (char
+    offset, ids before it). A new text that shares a start with one reuses its ids up to the last of its cuts that
+    lies inside the shared start (with the letter after it): cut there, the rest tokenizes to the same ids."""
+
+    def __init__(self, entries: int = 4):
+        self.entries = entries
+        self._lock = threading.Lock()
+        self._kept: list[tuple] = []  # (tokenizer id, text, ids, marks), newest last
+
+    @staticmethod
+    def _shared(a: str, b: str) -> int:
+        """Length of the common start of ``a`` and ``b`` (compared a block at a time, then by halves)."""
+        n, step, k = min(len(a), len(b)), 1 << 16, 0
+        while k + step <= n and a[k : k + step] == b[k : k + step]:
+            k += step
+        lo, hi = k, min(k + step, n)  # a[:lo] == b[:lo]; the first difference is before hi
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if a[k:mid] == b[k:mid]:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
+    def reuse(self, tokenizer, text: str) -> tuple[int, list, list]:
+        """``(start, ids, marks)``: tokenize ``text[start:]`` and put ``ids`` (and the cuts ``marks``) before it."""
+        with self._lock:
+            kept = [k for k in self._kept if k[0] == id(tokenizer)]
+        best = (0, [], [])
+        for _, other, ids, marks in kept:
+            shared = self._shared(text, other)
+            # A cut at c is valid in both texts when they agree through the letter after it (text[c + 1]).
+            usable = [(c, n) for c, n in marks if 0 < c and c + 2 <= shared]
+            if usable and usable[-1][0] > best[0]:
+                c, n = usable[-1]
+                best = (c, ids[:n], [(cc, nn) for cc, nn in marks if cc < c])
+        return best
+
+    def keep(self, tokenizer, text: str, ids: list, marks: list) -> None:
+        with self._lock:
+            self._kept = [k for k in self._kept if k[1] != text]
+            self._kept.append((id(tokenizer), text, ids, marks))
+            del self._kept[: -self.entries]
+
+
+_TOKENIZE_MEMO = _TokenizeMemo()
+
+
+def _first_image(ids, vocab: int) -> int:
+    """The index of the first id at or past ``vocab`` (an image-span id), or ``len(ids)``; a C-speed ``max`` first,
+    since prompts seldom hold one."""
+    if not len(ids) or vocab <= 0 or max(ids) < vocab:
+        return len(ids)
+    return next(i for i, token in enumerate(ids) if token >= vocab)
 
 
 _PROMPT_SNIPPET_CHARS = 200
@@ -636,6 +820,10 @@ def _make_sampler(temperature, top_p):
     return sample
 
 
+# _Streamer keeps a reply's text up to a clean boundary once at least this many ids follow the previous one.
+_DECODE_COMMIT_TOKENS = 32
+
+
 class _Streamer:
     """Incrementally detokenize a reply, separating the ``<think>`` reasoning block
     from the answer and reporting only newly resolved text via
@@ -659,6 +847,12 @@ class _Streamer:
     ``omit_ids`` (a turn's EOS, when it generates past it) are dropped before decoding, as
     vLLM's detokenizer drops special tokens: an EOS the turn was told to ignore is not part
     of the reply, and a client echoing the reply back should not see it in ``content``.
+
+    Decoding is incremental: the ids up to the last clean boundary (a decode without a trailing
+    U+FFFD, at least :data:`_DECODE_COMMIT_TOKENS` ids back) are kept as text, and only the ids
+    after it are decoded again (byte-level BPE decodes additively at such a boundary). The server
+    pushes from the request's HTTP thread and closes from the scheduler's, so both take a lock;
+    once closed, a push does nothing.
     """
 
     def __init__(
@@ -680,11 +874,33 @@ class _Streamer:
         self.tool_calls: list[dict] = []
         self._sent_r = 0
         self._sent_c = 0
+        self._lock = threading.Lock()
+        self._closed = False
+        self._ids_done = 0  # ids decoded into _text_done, up to a clean boundary
+        self._text_done = ""
 
-    def push(self, token_ids) -> None:
+    def _decode(self, token_ids) -> str:
+        """The text of ``token_ids`` (the whole reply so far), decoding only the ids after the kept prefix."""
         if self.omit_ids:
             token_ids = [token_id for token_id in token_ids if token_id not in self.omit_ids]
-        full = self.tokenizer.decode(token_ids, skip_special_tokens=False).rstrip("\ufffd")
+        else:
+            token_ids = list(token_ids)
+        if len(token_ids) < self._ids_done:
+            self._ids_done, self._text_done = 0, ""  # (the reply shrank: start over)
+        tail = self.tokenizer.decode(token_ids[self._ids_done :], skip_special_tokens=False)
+        if len(token_ids) - self._ids_done >= _DECODE_COMMIT_TOKENS and not tail.endswith("\ufffd"):
+            self._text_done += tail
+            self._ids_done = len(token_ids)
+            return self._text_done
+        return self._text_done + tail
+
+    def push(self, token_ids) -> None:
+        with self._lock:
+            if not self._closed:
+                self._push(token_ids)
+
+    def _push(self, token_ids) -> None:
+        full = self._decode(token_ids).rstrip("\ufffd")
         self.text = full
         held = self._held_back(full)
         reasoning, content, _ = self._split(full[: len(full) - held])
@@ -701,11 +917,21 @@ class _Streamer:
             self._sent_c = len(content)
         self.reasoning, self.content = reasoning, content
 
-    def close(self) -> None:
-        """Flush the tail held back for a possible partial tag or character.
+    def close(self, token_ids=None) -> None:
+        """Flush the tail held back for a possible partial tag or character; ``token_ids``: the whole
+        reply, when the last push may not have seen all of it.
 
         Generation is over, so nothing more can complete the tail: it is emitted
         as-is and :attr:`reasoning` / :attr:`content` hold the complete reply."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if token_ids is not None:
+                self.text = self._decode(token_ids).rstrip("\ufffd")
+            self._close()
+
+    def _close(self) -> None:
         reasoning, content, tool_block = self._split(self.text)
         self.tool_calls = _parse_tool_calls(tool_block, self.chat_format) if tool_block else []
         if len(reasoning) > self._sent_r:
@@ -1710,7 +1936,7 @@ class _PrefixCache:
         """
         if vocab <= 0:
             return None
-        limit = min(next((i for i, token in enumerate(ids) if token >= vocab), len(ids)), len(ids) - 1)
+        limit = min(_first_image(ids, vocab), len(ids) - 1)
         if limit <= 0:
             return None
         best: tuple[int, object] | None = None
@@ -1720,7 +1946,10 @@ class _PrefixCache:
                 n = len(entry.tokens)
                 if n > limit or n <= (0 if best is None else best[0]):
                     continue
-                if entry.snapshot.pos != n or tuple(ids[:n]) != entry.tokens:
+                # A few ids first: most entries differ in them, and the whole compare copies n ids.
+                if entry.snapshot.pos != n or any(ids[i] != entry.tokens[i] for i in (n - 1, n // 2, n // 4)):
+                    continue
+                if tuple(ids[:n]) != entry.tokens:
                     continue
                 entry.used = now
                 best = (n, entry.snapshot)
@@ -1844,6 +2073,7 @@ class _Scheduler:
                 raise RequestError(503, "server is shutting down", "server_error")
             if self._broken is not None:
                 raise RequestError(503, f"decode is wedged, restart the server: {self._broken}", "server_error")
+            turn.t_queued = time.perf_counter()
             self._new.append(turn)
             self._wake.notify_all()
 
@@ -1907,40 +2137,56 @@ class _Scheduler:
 
     def _serve(self) -> None:
         while True:
-            with self._wake:
-                idle = not self._active
-                while not self._stop and not self._new and not self._chores and not self._active:
-                    self._wake.wait()
-                if idle:
-                    # The rate window starts with the work, not with the idle time before it.
-                    self._reset_window()
-                if self._stop:
-                    # No trace may be left parked on in-trace recv when the device closes.
-                    self._settle()
-                    self._drain(RequestError(503, "server is shutting down", "server_error"))
+            with OVERHEAD.loop_iteration("sched"):
+                if self._serve_once():
                     break
-                if self._broken is not None:
-                    # Nothing more can be generated (submit() rejects new turns too), but a
-                    # turn that slipped in before the failure still needs an answer.
-                    self._drain(self._broken)
-                    continue
-                admitting, self._new = list(self._new), deque()
-                chores, self._chores = list(self._chores), deque()
-            if admitting or chores:
-                # Both may rewind a session (free its blocks, rewrite page tables), which
-                # must not land between another step's dispatch and its readback.
+
+    def _serve_once(self) -> bool:
+        """One pass of the scheduler loop; True once it stops."""
+        with self._wake:
+            idle = not self._active
+            t_idle = time.perf_counter()
+            while not self._stop and not self._new and not self._chores and not self._active:
+                self._wake.wait()
+            if idle:
+                OVERHEAD.add("idle.scheduler", time.perf_counter() - t_idle)
+                # The rate window starts with the work, not with the idle time before it.
+                self._reset_window()
+            if self._stop:
+                # No trace may be left parked on in-trace recv when the device closes.
                 self._settle()
-            for fn, done, box in chores:
-                try:
+                self._drain(RequestError(503, "server is shutting down", "server_error"))
+                return True
+            if self._broken is not None:
+                # Nothing more can be generated (submit() rejects new turns too), but a
+                # turn that slipped in before the failure still needs an answer.
+                self._drain(self._broken)
+                return False
+            admitting, self._new = list(self._new), deque()
+            chores, self._chores = list(self._chores), deque()
+        if admitting or chores:
+            # Both may rewind a session (free its blocks, rewrite page tables), which
+            # must not land between another step's dispatch and its readback.
+            self._settle()
+        for fn, done, box in chores:
+            try:
+                with OVERHEAD.time("sched.chores"):
                     box.append(fn())
-                except BaseException as e:  # noqa: BLE001 - handed back to the caller's thread
-                    box.append(e)
-                finally:
-                    done.set()
-            for turn in admitting:
+            except BaseException as e:  # noqa: BLE001 - handed back to the caller's thread
+                box.append(e)
+            finally:
+                done.set()
+        for turn in admitting:
+            if getattr(turn, "t_queued", 0.0):
+                # From submit() to here: the scheduler busy with a round (or a prefill) meanwhile.
+                OVERHEAD.add("wait.scheduler_pickup", time.perf_counter() - turn.t_queued, own_thread=False)
+            with OVERHEAD.time("sched.admit"):
                 self._admit(turn)
-            if self._active:
-                self._round()
+            for stage, seconds in turn.admit_times.items():
+                OVERHEAD.add(f"sched.admit.{stage}", seconds, own_thread=False)
+        if self._active:
+            self._round()
+        return False
 
     # -- admission -------------------------------------------------------------- #
     def _admit(self, turn: _Turn) -> None:
@@ -2308,7 +2554,7 @@ class _Scheduler:
             cuts.add(history)
         vocab = getattr(getattr(self.engine.model, "config", None), "vocab_size", 0) or 0
         if vocab > 0:
-            image = next((i for i, token in enumerate(full) if token >= vocab), end)
+            image = _first_image(full, vocab)
             cuts = {cut for cut in cuts if cut < image}
         turn.prefix_cuts = cuts
 
@@ -2339,7 +2585,8 @@ class _Scheduler:
             return False
         if self._inflight or self._posted:
             return True
-        self._capture_prefix(user)
+        with OVERHEAD.time("sched.prefix_capture"):
+            self._capture_prefix(user)
         turn.prefix_cuts.discard(user.pos)
         if turn.capture_at == user.pos:
             turn.capture_at = None
@@ -2600,7 +2847,8 @@ class _Scheduler:
         self._post_ahead()
         if self._inflight:
             try:
-                self._collect(block=True)
+                with OVERHEAD.time("compute.wait_output"):
+                    self._collect(block=True)
             except Exception as e:  # noqa: BLE001 - see _abort_all: ordering is lost
                 self._abort_all(e)
 
@@ -2610,9 +2858,10 @@ class _Scheduler:
 
         Returns ``False`` if a read failed, in which case every turn has been aborted."""
         try:
-            self._flush_ahead()
-            while self._inflight:
-                self._collect(block=True)
+            with OVERHEAD.time("compute.settle"):
+                self._flush_ahead()
+                while self._inflight:
+                    self._collect(block=True)
         except Exception as e:  # noqa: BLE001 - see _abort_all: ordering is lost
             self._abort_all(e)
             return False
@@ -2830,9 +3079,10 @@ class _Scheduler:
                     self._feed(None, None, engine._replay_q[0], owner=turn)
         finally:
             self._window_dispatch += time.perf_counter() - t0
+            OVERHEAD.add("host.dispatch", time.perf_counter() - t0)
         if turn.error is None and turn.phase == _Turn.DECODE:
-            # Detokenizing re-decodes the whole reply, so it is kept off the path from a token to its packet.
-            turn.stream.push(turn.generated)
+            # The request's HTTP thread detokenizes (_relay): not this thread, between a token and its packet.
+            turn.events.put(("tokens",))
 
     def _post(self, turn: _Turn, positions, token_ids=None) -> None:
         """Post ``turn``'s steps at ``positions`` (:meth:`ChatEngine.post_traced`) and note them as its, here
@@ -2973,7 +3223,8 @@ class _Scheduler:
         and the next turn for that user can be admitted safely."""
         user = self.engine.users[turn.slot]
         turn.t_done = time.perf_counter()
-        turn.stream.close()
+        with OVERHEAD.time("sched.detokenize_final"):
+            turn.stream.close(turn.generated)
         user.pending_id = turn.next_id  # produced but never fed; the next turn starts with it
         assistant: dict = {"role": "assistant", "content": turn.stream.content}
         if turn.stream.reasoning:
@@ -3169,6 +3420,7 @@ class GenerationServer:
         self.scheduler = _Scheduler(self, prefill_chunk, decode_ahead)
         self._turns: dict[str, _Turn] = {}  # running turns by request id, for cancel()
         self._turns_lock = threading.Lock()
+        self._claims = _ClaimQueue()  # requests waiting for a slot (generate)
 
     # -- lifecycle -------------------------------------------------------------- #
     def start(self) -> None:
@@ -3294,6 +3546,12 @@ class GenerationServer:
         Runs on the HTTP thread, so it must not touch the device."""
         return _normalized_messages(body.get("messages"), body.get("tools"), self.engine.chat_format)
 
+    def _queued_hook(self, user_key: str, body: dict):
+        """``on_queued`` for :class:`_ClaimQueue` (``body`` with its normalized messages): work to do for a request
+        while it waits for a slot. None here; the V4.1 server prefills its prompt ahead on the prefill server."""
+        del user_key, body
+        return None
+
     def _await_seat(self, turn: _Turn, lease: _Lease, client_gone) -> bool:
         """Wait for one of the ``--max-running`` decode seats; ``False`` when ``turn`` gives up first.
 
@@ -3309,8 +3567,20 @@ class GenerationServer:
             lease.slot, lambda: turn.cancelled.is_set() or (client_gone is not None and client_gone())
         )
 
-    def generate(self, user_key: str, body: dict, on_chunk, request_id: str | None = None, client_gone=None) -> dict:
+    def generate(
+        self,
+        user_key: str,
+        body: dict,
+        on_chunk,
+        request_id: str | None = None,
+        client_gone=None,
+        on_lease=None,
+        queue: bool = True,
+    ) -> dict:
         """Run one chat-completion turn for ``user_key``.
+
+        With every slot claimed the request waits for one (``queue``, :class:`_ClaimQueue`) rather than get a 429;
+        ``queue=False`` raises the 429 (the caller has somewhere else to try). ``on_lease()`` once a slot is claimed.
 
         ``on_chunk(reasoning, content)`` receives the reply's new text as it resolves
         (either argument can be empty); raising ``_ClientGone`` aborts the turn, keeping
@@ -3320,7 +3590,8 @@ class GenerationServer:
         Blocks until the reply is complete, but holds nothing except this user's own
         lock: the decode steps run on the scheduler thread, interleaved with the other
         users' turns, and this thread only relays what they produce."""
-        messages = self.normalized_messages(body)
+        with OVERHEAD.time("http.parse_messages"):
+            messages = self.normalized_messages(body)
         body = {**body, "messages": messages}
 
         # ``max_completion_tokens`` is OpenAI's current name for the same cap, and what the
@@ -3361,7 +3632,19 @@ class GenerationServer:
         # A slot is claimed per turn, not per user, so two requests run concurrently even
         # when they carry the same ``user`` (or none). Held until the reply is complete:
         # the turn decodes into this slot's KV session.
-        lease = self.pool.acquire(user_key, messages)
+        with OVERHEAD.time("wait.slot"):
+            if queue:
+
+                def attempt(claimed):
+                    lease = self.pool.acquire(user_key, messages)
+                    claimed()
+                    return lease
+
+                lease = self._claims.run(attempt, client_gone, on_queued=self._queued_hook(user_key, body))
+            else:
+                lease = self.pool.acquire(user_key, messages)
+        if on_lease is not None:
+            on_lease()
         request_id = request_id or uuid.uuid4().hex
         turn = None
         seated = False
@@ -3370,7 +3653,8 @@ class GenerationServer:
             turn.previous_owner, turn.restore = lease.previous, lease.restore
             with self._turns_lock:
                 self._turns[request_id] = turn
-            seated = self._await_seat(turn, lease, client_gone)
+            with OVERHEAD.time("wait.seat"):
+                seated = self._await_seat(turn, lease, client_gone)
             if not seated:
                 # Given up in the queue: the scheduler retires a cancelled turn at admission without running it.
                 turn.cancelled.set()
@@ -3386,6 +3670,7 @@ class GenerationServer:
             if restore is not None:
                 self.pool.store(restore)
             self.pool.release(lease.slot)
+            self._claims.changed()
 
     @staticmethod
     def _relay(turn: _Turn, on_chunk, client_gone=None) -> dict:
@@ -3409,6 +3694,12 @@ class GenerationServer:
                     logger.info(f"user {turn.user_key!r}: client disconnected, stopping its turn")
                     turn.cancelled.set()
             if kind is None:
+                continue
+            if kind == "tokens":
+                # New tokens: decode them here, off the scheduler thread; their text comes back as deltas.
+                if not turn.cancelled.is_set() and turn.stream is not None:
+                    with OVERHEAD.time("http.detokenize"):
+                        turn.stream.push(turn.generated[:])
                 continue
             if kind == "delta":
                 if turn.cancelled.is_set():
@@ -3497,13 +3788,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     # -- response plumbing ------------------------------------------------------ #
     def _send_json(self, obj: dict, status: int = 200) -> None:
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(body)
+        with OVERHEAD.time("http.send_json"):
+            body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
 
     def _send_error_json(self, exc: Exception) -> None:
         status, message, err_type = _error_parts(exc)
@@ -3532,12 +3824,14 @@ class _Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def _sse_event(self, obj: dict) -> None:
-        self.wfile.write(b"data: " + json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n\n")
-        self.wfile.flush()
+        with OVERHEAD.time("http.sse_write"):
+            self.wfile.write(b"data: " + json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n\n")
+            self.wfile.flush()
 
     def _sse_done(self) -> None:
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
+        with OVERHEAD.time("http.sse_write"):
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
 
     # -- request parsing -------------------------------------------------------- #
     def _read_json(self) -> dict:
@@ -3545,11 +3839,13 @@ class _Handler(BaseHTTPRequestHandler):
         n = int(length) if length and length.isdigit() else 0
         if n > self.api.max_body_bytes:
             raise RequestError(413, "request body too large")
-        raw = self.rfile.read(n) if n else b""
+        with OVERHEAD.time("http.recv_body"):
+            raw = self.rfile.read(n) if n else b""
         if not raw.strip():
             return {}
         try:
-            return json.loads(raw.decode("utf-8"))
+            with OVERHEAD.time("http.json_parse"):
+                return json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             raise RequestError(400, f"malformed JSON body: {e}") from e
 
@@ -3562,7 +3858,8 @@ class _Handler(BaseHTTPRequestHandler):
             # a malformed request still gets a real status code. The result is discarded:
             # ``generate`` normalises the body itself, and folding tool turns into user
             # messages is not something to do twice.
-            self.api.normalized_messages(body)
+            with OVERHEAD.time("http.parse_messages"):
+                self.api.normalized_messages(body)
             completion_id = "chatcmpl-" + uuid.uuid4().hex
             object_kind, chunk_kind = "chat.completion", "chat.completion.chunk"
         else:
@@ -3767,6 +4064,9 @@ class _ModelHTTPServer(ThreadingHTTPServer):
 
     daemon_threads = True
     allow_reuse_address = True
+    # The listen backlog (socketserver's default is 5): a burst of clients connecting at once is accepted and
+    # queued (_ClaimQueue) rather than having its SYNs dropped and retried seconds later.
+    request_queue_size = 1024
 
     def __init__(self, address, handler, api: GenerationServer):
         super().__init__(address, handler)

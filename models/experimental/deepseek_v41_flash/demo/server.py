@@ -66,8 +66,12 @@ What V4.1 imposes on the serving side:
   measured 127 tok/s/user, 635 in all, against 100 / 500 a step at a time). The server is launched once for 4-row
   blocks and runs one-row requests natively on the same launch, so a switch costs nothing. Up to ``--instances`` users
   decode in parallel, one session each. A conversation stays on the instance that holds it: a request for it that
-  finds that session busy gets a 429 and is not started on another instance. A new conversation goes to the idlest
-  instance, and to the next when that one turns it away with a 429 before replying; it takes a parked session only
+  finds that session busy waits for it and is not started on another instance. A new conversation goes to the idlest
+  instance, and to the next when that one has no slot for it; with none free anywhere it waits in a first-come
+  first-served queue (no 429) until a request ends, or until its client goes. Meanwhile, with ``--prefill-url``,
+  its prompt is prefilled ahead on the prefill server into its prefix cache (``--prefill-ahead``,
+  :class:`_PrefillAhead`), at the server's idle times only, so that once it has a slot only its KV moves; it takes a
+  parked session only
   if it repeats that session's start (:class:`_V41SlotPool`) or once the session has been idle
   ``--slot-idle-timeout`` seconds. One instance alone measured ~216 tok/s/user on GSM8K and ~145 on chat text
   against ~149 a step at a time (``tests/decode/test_dspark_spec.py``). What that path takes: one session per
@@ -264,11 +268,13 @@ from models.experimental.deepseek_v41_flash.tt.vision import (
     write_embedding_rows,
 )
 from models.experimental.deepseek_v4_flash.demo.chat_cli import ChatEngine, ChatFormat, UserSession
+from models.experimental.deepseek_v4_flash.demo.overhead import OVERHEAD
 from models.experimental.deepseek_v4_flash.demo.server import (
     _DEFAULT_USER,
     DECODE_RATE_WINDOW,
     GenerationServer,
     RequestError,
+    _ClaimQueue,
     _content_text,
     _continues,
     _conversation_key,
@@ -342,11 +348,15 @@ _VISION_BUILD_LOCK = threading.Lock()
 _PERSISTENT_SLOTS = 256
 # Default --num-users with --persistent-moe and no --dspark (one stage holds every user's pools).
 _NUM_USERS_PERSISTENT = 8
+# _PrefillFirst._admit trims a remote prefill back to an uncached history boundary (so the decode-side prefix cache
+# captures it) only when the tokens it then leaves to decode replay in at most this long. It was a fixed 2048 tokens
+# (~10 s of 4-row block replay before the first token).
+_HISTORY_TRIM_SECONDS = float(os.environ.get("DEEPSEEK_V41_HISTORY_TRIM_SECONDS", "0.25"))
+# Default --prefill-ahead: requests waiting for a decode slot whose prompts the prefill server prefills ahead.
+_PREFILL_AHEAD = 8
 # Default --instances with --persistent-moe: one whole TP4 model (and its drafter) on each of mesh rows 4, 3, 2, 1, 0,
 # all sharing the TP12 MoE on rows 5-7 (pmoe.INSTANCE_ROWS).
 _INSTANCES = 5
-# How often a request held by a busy instance (one active slot, serving another turn) asks it again.
-_STICKY_RETRY_SECONDS = 0.5
 # Default --dspark-drafts with several instances, by the users decoding on all of them: 4-row verify rounds (3 drafts)
 # at every load. tests/decode/test_instances_dspark.py (GSM8K, 300 tokens, one user per instance, Nov 17) measured
 # DSpark against one-row steps at 1-5 users decoding at once: 184.0 / 176.0 / 171.9 / 142.6 / 127.0 tok/s/user against
@@ -1677,7 +1687,8 @@ class _SlotReuse:
         if user.messages and user.messages[-1].get("role") == "assistant":
             self.server.pool.reply_at[turn.slot] = (len(user.messages) - 1, reply_at)
         if getattr(self.server, "prefix_cache", None) is not None and not self._inflight and not self._posted:
-            self._capture_prefix(user)
+            with OVERHEAD.time("sched.prefix_capture"):
+                self._capture_prefix(user)
 
 
 class _EngramPrefetch:
@@ -1805,6 +1816,7 @@ class _MoeGate:
             with self._cv:
                 while not all(other in self._parked for other in others):
                     self._cv.wait()
+            OVERHEAD.add("wait.moe_gate", time.perf_counter() - t0)
             logger.debug(f"MoE gate: {len(others)} other instance(s) parked in {time.perf_counter() - t0:.3f}s")
             yield
         finally:
@@ -1879,8 +1891,17 @@ class _PrefillFirst(_Scheduler):
                         history = max(history_cuts)
                         if history <= user.pos + turn.device_prefill:
                             aligned_h = prefiller.aligned(history - user.pos, user.pos)
-                            max_trim_tail = 2048 if getattr(self.engine.model, "verify_rows", 1) > 1 else 1024
-                            if full_len - (user.pos + aligned_h) <= max_trim_tail:
+                            # Only while the extra tokens it leaves to decode replay cheaply: replayed through decode
+                            # they cost ~5 ms each, and the server keeps the history in its own prefix cache anyway.
+                            rate = getattr(self, "_block_replay_rate", None) or self.replay_rate
+                            extra = turn.device_prefill - aligned_h
+                            # Not when the prompt was prefilled ahead (_PrefillAhead): the server keeps it whole, and
+                            # a shorter prompt would miss it (it continues a kept prompt only from that one's end).
+                            if (
+                                0 <= extra
+                                and extra / rate <= _HISTORY_TRIM_SECONDS
+                                and not prefiller.is_warm(user.tokens[: user.pos] + turn.ids[: turn.device_prefill])
+                            ):
                                 turn.device_prefill = aligned_h
             with _timed(times, "send"):
                 self._send_ahead(turn)
@@ -1989,12 +2010,32 @@ class _PrefillFirst(_Scheduler):
         n_whole = prefiller.aligned(len(turn.ids))
         # Prefer the unpolluted block-replay rate (excludes import_session and prefix-capture exports) when available.
         rate = getattr(self, "_block_replay_rate", None) or self.replay_rate
+        # A prefix cached here was, most likely, prefilled by that server, which keeps recent prompts too: it would
+        # compute only the rest (the remote prefiller's estimate counts moving every entry here as well).
+        remote = isinstance(prefiller, _RemotePrefiller)
+        cached = min(pos, n_whole) if remote else 0
+        if remote and n_whole and prefiller.is_warm(turn.ids[:n_whole]):
+            cached = n_whole  # prefilled ahead while it waited for its slot (_PrefillAhead)
         whole_seconds = (
-            prefiller.seconds(n_whole) + (len(turn.ids) - n_whole) / rate if n_whole else len(turn.ids) / rate
+            (prefiller.seconds(n_whole, cached) if cached else prefiller.seconds(n_whole))
+            + (len(turn.ids) - n_whole) / rate
+            if n_whole
+            else len(turn.ids) / rate
         )
-        if tail / rate >= whole_seconds:
+        # From the cached prefix the tail replays through decode, or -- with a remote prefiller, which continues a
+        # session from its grid -- decode replays up to the grid, the server pushes only the entries after it
+        # (have = that position, not 0) and decode replays the ragged end (_choose_feed, continuing).
+        shared_seconds = tail / rate
+        step = getattr(prefiller, "continue_alignment", 0) or 0
+        if remote and step and tail > step:
+            shared_seconds = min(shared_seconds, prefiller.seconds(tail - step) + 2 * step / rate)
+        if shared_seconds >= whole_seconds:
             return False
-        return self._share_decoded_prefix(user, turn)
+        if not self._share_decoded_prefix(user, turn):
+            return False
+        if remote and step:
+            self._choose_feed(user, turn, continuing=True)
+        return True
 
     def _prompt_done(self, turn: _Turn) -> None:
         super()._prompt_done(turn)
@@ -2151,7 +2192,8 @@ class _PrefillFirst(_Scheduler):
                 self._dispatch(turn, steps)
         if self._inflight:
             try:
-                self._collect(block=True)
+                with OVERHEAD.time("compute.wait_output"):
+                    self._collect(block=True)
             except Exception as exc:
                 self._abort_all(exc)
 
@@ -2165,7 +2207,7 @@ class _PrefillFirst(_Scheduler):
         if fetching and len(fetching) == len(self._active) and not self._inflight and not self._posted:
             # Nothing to run until a prompt's KV is back (which notifies _wake), a request or chore comes in, or a
             # turn is stopped (polled: a cancel does not notify).
-            with self._wake:
+            with OVERHEAD.time("wait.prefill_server"), self._wake:
                 if not (self._new or self._chores or self._stop or any(turn.remote_fetch.done() for turn in fetching)):
                     self._wake.wait(0.1)
             return
@@ -2578,7 +2620,7 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
         if spec.position != user.pos:
             self._abort_all(RuntimeError(f"DSpark is at {spec.position}, the session at {user.pos}"))
             return
-        turn.stream.push(turn.generated)
+        turn.events.put(("tokens",))  # detokenized on the request's HTTP thread (_relay)
         # Each verify round rolls its tokens into the status pane's tok/s and tok/s/user as it ends.
         self.steps += len(kept)
         self._spec_accounted += len(kept)
@@ -2687,6 +2729,74 @@ class V41GenerationServer(GenerationServer):
                 )
         cache = self.engine.weight_cache
         self.files = files if files is not None else _FileStore(os.path.join(cache.path, "files") if cache else None)
+        # Requests waiting for a slot get their prompt prefilled ahead on the prefill server. With several instances
+        # (_Instances) the requests queue there, and it keeps the one _PrefillAhead for all of them.
+        self.prefill_ahead: _PrefillAhead | None = None
+        if getattr(self.engine, "instances", 1) <= 1:
+            self.prefill_ahead = _make_prefill_ahead(self.prefiller, getattr(self.engine, "prefill_ahead", 0))
+
+    def _queued_hook(self, user_key: str, body: dict):
+        if self.prefill_ahead is None:
+            return None
+        return self.prefill_ahead.add(lambda: self.ahead_prompt(body), user_key)
+
+    def _stored_conversation(self, messages: list[dict]):
+        """The longest conversation this server holds that ``messages`` continue -- in a slot no turn has claimed,
+        device-parked or in host RAM -- as ``(tokens, pending_id, next_render, thinking_mode, reasoning_effort)``,
+        or None. (A claimed slot's session belongs to the scheduler thread until its turn ends.)"""
+        pool = self.pool
+        best, best_len = None, 0
+        with pool._cv:
+            stored = [
+                (u.messages, u.tokens, u.pending_id, u._next_render, u.thinking_mode, u.reasoning_effort)
+                for i, u in enumerate(self.engine.users)
+                if not pool._busy[i] and u.pos and len(u.tokens) == u.pos
+            ]
+            stored += [
+                (c.messages, c.tokens, c.pending_id, c.next_render, c.thinking_mode, c.reasoning_effort)
+                for c in [*getattr(pool, "device_parked", ()), *pool.host]
+            ]
+            for held, tokens, *rest in stored:
+                if held and len(held) > best_len and _continues(messages, held):
+                    best, best_len = (list(tokens), *rest), len(held)
+        return best
+
+    def ahead_prompt(self, body: dict) -> list[int] | None:
+        """For a request waiting for a slot (:class:`_PrefillAhead`, ``body`` with its normalized messages): the tokens
+        its session will most likely hold from position 0 once its prompt is in, as admission would render them -- the
+        conversation it continues (:meth:`_stored_conversation`: its tokens, then the new turn) or else its messages
+        rendered afresh with this server's defaults. None when admission would not send it to the prefill server: a
+        prompt with images (rendering one encodes it on the device), or one decode replays faster (``_choose_feed``).
+        Runs off the scheduler thread: reads, and renders text only."""
+        prefiller = self.prefiller
+        messages = body["messages"]
+        if not isinstance(prefiller, _RemotePrefiller) or _image_keys(messages):
+            return None
+        rate = self.scheduler.replay_rate
+        user = SimpleNamespace(
+            engine=self.engine,
+            messages=list(messages),
+            _next_render=0,
+            pending_id=None,
+            thinking_mode=self.thinking_mode,
+            reasoning_effort=self.reasoning_effort,
+        )
+        stored = self._stored_conversation(messages)
+        if stored is None:
+            self._apply_options(user, body)
+            ids = GenerationServer._render_ids(self, user, include_assistant=True)
+            n = prefiller.aligned(len(ids))
+            if not n or prefiller.seconds(n) + (len(ids) - n) / rate >= len(ids) / rate:
+                return None
+            return ids
+        tokens, user.pending_id, user._next_render, user.thinking_mode, user.reasoning_effort = stored
+        if max(tokens, default=0) >= self.engine.model.config.vocab_size:
+            return None  # an earlier turn has an image: the prefill server takes none of this one (_prefill_text_only)
+        self._apply_options(user, body)
+        new = GenerationServer._render_ids(self, user, include_assistant=False)
+        if len(new) / rate <= prefiller.fill_seconds:
+            return None  # a short turn is appended through decode
+        return tokens + new
 
     def _await_seat(self, turn, lease, client_gone) -> bool:
         """Admit the turn now. ``--max-running`` limits decode, not prefill: the scheduler prefills every pending
@@ -2710,6 +2820,8 @@ class V41GenerationServer(GenerationServer):
         if self.monitor_feed is not None:
             self.monitor_feed.stop()
             logger.remove(self._monitor_sink)
+        if self.prefill_ahead is not None:
+            self.prefill_ahead.close()
         super().stop()
         if self.prefiller is not None and hasattr(self.prefiller, "close"):
             self.prefiller.close()
@@ -2838,6 +2950,8 @@ class V41GenerationServer(GenerationServer):
             stats["host_runtime"] = host
         if self.engine.images is not None:
             stats["images"] = {**self.engine.images.stats(), "files": self.files.usage()}
+        if self.prefill_ahead is not None:
+            stats["prefill_ahead"] = self.prefill_ahead.snapshot()
         return stats
 
     def upload_file(self, fields: dict) -> dict:
@@ -3023,6 +3137,14 @@ class _Instances:
         )
         self.scheduler = _TurnsView(self.servers)
         self._lock = threading.Lock()
+        self._claims = _ClaimQueue()  # new conversations waiting for a slot on any instance
+        # Prefill ahead for every instance's queued requests: one worker, one record of the prompts the prefill server
+        # was asked to keep (every instance's admission reads it, _PrefillFirst._admit).
+        self.prefill_ahead = _make_prefill_ahead(first.prefiller, getattr(first.engine, "prefill_ahead", 0))
+        if self.prefill_ahead is not None:
+            for server in self.servers:
+                if isinstance(server.prefiller, _RemotePrefiller):
+                    server.prefiller.warmed = first.prefiller.warmed
 
     def __getattr__(self, name):
         # Request parsing, uploads and the like are the same on every instance: the first one's.
@@ -3033,6 +3155,8 @@ class _Instances:
             server.start()
 
     def stop(self) -> None:
+        if self.prefill_ahead is not None:
+            self.prefill_ahead.close()
         for server in self.servers:
             server.stop()
 
@@ -3080,25 +3204,41 @@ class _Instances:
 
         # A conversation stays on the instances that hold it (usually one), waiting while their one active slot
         # serves another turn. A new one tries the idlest, then the next, when an instance turns it away with a
-        # 429 before replying.
-        while True:
+        # 429 before replying. Either kind, turned away, waits in the queue (_ClaimQueue: first come first served,
+        # tried again whenever a request ends, until its client goes) instead of getting the 429.
+        def attempt(claimed):
             order = self._order(user_key, messages)
             sticky = [server for server in order if self._holds(server, user_key, messages)]
             error = None
             for server in sticky or order:
                 try:
-                    return server.generate(user_key, body, relay, request_id, client_gone)
+                    return server.generate(
+                        user_key, body, relay, request_id, client_gone, on_lease=claimed, queue=False
+                    )
                 except RequestError as e:
                     if e.status != 429 or replied[0]:
                         raise
                     error = e
-            if not sticky or (client_gone is not None and client_gone()):
-                raise error
-            time.sleep(_STICKY_RETRY_SECONDS)
+            raise error
+
+        def queued():
+            # Its prompt is prefilled ahead as the instance holding its conversation (or any, for a new one) renders it.
+            if self.prefill_ahead is None:
+                return None
+            holder = next((s for s in self.servers if self._holds(s, user_key, messages)), self.servers[0])
+            request = {**body, "messages": messages}
+            return self.prefill_ahead.add(lambda: holder.ahead_prompt(request), user_key)
+
+        try:
+            return self._claims.run(attempt, client_gone, on_queued=queued)
+        finally:
+            self._claims.changed()  # this request's slot is free again
 
     def stats(self) -> dict:
         stats = self.servers[0].stats()
         stats["instances"] = [server.stats() for server in self.servers]
+        if self.prefill_ahead is not None:
+            stats["prefill_ahead"] = self.prefill_ahead.snapshot()
         return stats
 
     def session_rows(self) -> list[dict]:
@@ -3381,6 +3521,7 @@ class V41ChatEngine(ChatEngine):
         self.prefill_max_len = getattr(args, "prefill_max_len", None)
         self.kv_transfer_mode = getattr(args, "kv_transfer_mode", "tcp")
         self.prefill_wait = float(getattr(args, "prefill_wait", 0.0))
+        self.prefill_ahead = int(getattr(args, "prefill_ahead", 0) or 0)
         self.instance = instance
         self.instances = 1 if moe_server is None else len(moe_server.request_meshes)
         persistent = {}
@@ -3896,8 +4037,15 @@ class _RemotePrefiller:
         self.decode_window = self.kv_only or bool(getattr(engine, "dspark", False))
         self.fill_seconds = 0.5
         self.chunk_seconds = 0.15
+        # Moving one token's entries here (the push after the last chunk, or the TCP reply) and loading them: ~1.4 us
+        # a token measured for a 512k-token push. Learned in run().
+        self.move_seconds_per_token = 1.5e-6
         self.t_prefill_out = 0.0
         self.last_cached = 0  # of the last run's tokens, how many the server took from its prefix cache
+        # Prefill ahead (_PrefillAhead): the server takes prefill_warm; the prompts it was lately asked to keep (shared
+        # by every instance's prefiller, _Instances).
+        self.can_warm = bool(info.get("warm"))
+        self.warmed = _WarmSet()
         logger.info(
             f"disaggregated prefill connected to {self.address}: up to {self.max_len} tokens "
             f"(align {self.align}, chunk {self.chunk_size}, {len(announced_layers)}/{decode_model.num_layers} layers"
@@ -3985,6 +4133,7 @@ class _RemotePrefiller:
                 if images:
                     with self._lock:
                         self._sent_images |= client.sent_images
+                states["client_times"] = dict(getattr(client, "times", {}))
             except PrefillServerError:
                 if client is not None and client.sock.fileno() >= 0:
                     self._give_client(client)  # an error reply leaves the connection usable
@@ -4128,6 +4277,30 @@ class _RemotePrefiller:
             raise stopped[0]
         return reply
 
+    @staticmethod
+    def _record_overhead(states: dict, seat: float, wait: float, rtt: float, commit: float, load_times: dict) -> None:
+        """One remote prefill in the overhead table: on the scheduler thread the seat, the wait for the reply and the
+        KV load; off it (overlapping other turns' decode) the round trip's parts."""
+        OVERHEAD.add("prefill.seat", seat)
+        OVERHEAD.add("wait.prefill_reply", wait)
+        OVERHEAD.add("prefill.kv_load", commit)
+        for k, v in load_times.items():
+            OVERHEAD.add(f"prefill.kv_load.{k}", v, own_thread=False)
+        server, queued = float(states.get("seconds", 0.0)), float(states.get("queued", 0.0))
+        OVERHEAD.add("compute.prefill_server", server, own_thread=False)
+        OVERHEAD.add("wait.prefill_server_queue", queued, own_thread=False)
+        client = states.get("client_times") or {}
+        send, recv = float(client.get("send", 0.0)), float(client.get("recv", 0.0))
+        OVERHEAD.add("net.prefill_send", send, own_thread=False)
+        if recv:
+            OVERHEAD.add("net.prefill_recv_kv", recv, own_thread=False)
+        push = float(states.get("push_seconds", 0.0))
+        if push:
+            # The server's TT-Fabric writes still going after its last chunk (its compute seconds end before).
+            OVERHEAD.add("push.after_prefill", push, own_thread=False)
+        # The rest of the round trip: latency, the server's request handling and reply, protocol.
+        OVERHEAD.add("net.prefill_other", max(rtt - server - queued - push - send - recv, 0.0), own_thread=False)
+
     def aligned(self, n_tokens: int, start: int = 0, bounded: bool = False) -> int:
         if start % self.align or bounded:
             return 0
@@ -4137,8 +4310,44 @@ class _RemotePrefiller:
             return 0
         return max(0, min(n_tokens // self.align * self.align, self.max_len - start))
 
-    def seconds(self, n_tokens: int) -> float:
-        return self.fill_seconds + max(0, -(-n_tokens // self.chunk_size) - 1) * self.chunk_seconds
+    def warm_span(self, ids: list[int]) -> list[int]:
+        """Of ``ids`` (a session's tokens from position 0 once a prompt is in), what a remote prefill of that prompt
+        sends: up to the grid point before decode's tail (:meth:`aligned`), wherever the session continued from."""
+        return list(ids[: self.aligned(len(ids))])
+
+    def is_warm(self, ids) -> bool:
+        """Whether the server was lately asked to keep exactly ``ids`` (:meth:`warm`): a hint, its cache may have
+        dropped them since."""
+        return self.can_warm and len(ids) > 0 and ids in self.warmed
+
+    def warm(self, ids: list[int]) -> dict:
+        """Have the server prefill ``ids`` (a text prompt from position 0, :meth:`warm_span`) into its prefix cache
+        only (``prefill_warm``); its reply, whose ``done`` says how far it got. No device work here: any thread."""
+        client = self._take_client()
+        try:
+            reply = client.prefill_warm(ids)
+        except PrefillServerError:
+            if client.sock.fileno() >= 0:
+                self._give_client(client)  # an error reply leaves the connection usable
+            raise
+        except BaseException:
+            with contextlib.suppress(Exception):
+                client.close()
+            raise
+        self._give_client(client)
+        if int(reply.get("done", 0)) >= len(ids):
+            self.warmed.add(ids)
+        return reply
+
+    def seconds(self, n_tokens: int, cached: int = 0) -> float:
+        """About how long a remote prefill of ``n_tokens`` takes, ``cached`` of them in the server's prefix cache:
+        the chunks it computes, and moving every entry from 0 to this server (push or TCP) and loading them."""
+        computed = max(n_tokens - max(cached, 0), 0)
+        return (
+            self.fill_seconds
+            + max(0, -(-computed // self.chunk_size) - 1) * self.chunk_seconds
+            + n_tokens * self.move_seconds_per_token
+        )
 
     def run(
         self,
@@ -4219,15 +4428,24 @@ class _RemotePrefiller:
         user.pos = committed
         commit_seconds = time.perf_counter() - t_commit
         total_seconds = net_seconds + commit_seconds
+        self._record_overhead(states, seat_seconds, wait_seconds, net_seconds, commit_seconds, load_times)
         # Of this run's tokens (the session's from have on), those the server did not compute.
         self.last_cached = max(0, min(states["cached"], len(whole)) - have)
 
         computed = len(whole) - states["cached"]
         num_chunks = -(-computed // self.chunk_size)
-        if num_chunks > 1 and total_seconds > 0:
-            self.chunk_seconds = 0.5 * self.chunk_seconds + 0.5 * (total_seconds / num_chunks)
+        # Moving the entries (from 0, whatever the server computed) is learned apart from the chunks.
+        move_seconds = float(states.get("push_seconds", 0.0)) + float(
+            (states.get("client_times") or {}).get("recv", 0.0)
+        )
+        move_seconds += commit_seconds
+        if len(whole) >= 4 * self.chunk_size and move_seconds > 0:
+            self.move_seconds_per_token = 0.5 * self.move_seconds_per_token + 0.5 * move_seconds / len(whole)
+        compute_seconds = max(total_seconds - move_seconds, 0.0)
+        if num_chunks > 1 and compute_seconds > 0:
+            self.chunk_seconds = 0.5 * self.chunk_seconds + 0.5 * (compute_seconds / num_chunks)
         if computed > 0:
-            fill_seconds = max(total_seconds - max(num_chunks - 1, 0) * self.chunk_seconds, 0.0)
+            fill_seconds = max(compute_seconds - max(num_chunks - 1, 0) * self.chunk_seconds, 0.0)
             self.fill_seconds = 0.5 * self.fill_seconds + 0.5 * fill_seconds
         hit = f"{states['cached']} from the server's prefix cache" if states["cached"] else "no prefix-cache hit"
         logger.info(
@@ -4243,6 +4461,188 @@ class _RemotePrefiller:
             f"drain {1e3 * drain_seconds:.1f} ms ({drained} step(s)), seat {1e3 * seat_seconds:.1f} ms"
         )
         return None
+
+
+def _make_prefill_ahead(prefiller, depth: int) -> "_PrefillAhead | None":
+    """A :class:`_PrefillAhead` (``--prefill-ahead`` ``depth``) for a disaggregated ``prefiller`` whose server takes
+    warm-ups; else None."""
+    if depth <= 0 or not isinstance(prefiller, _RemotePrefiller):
+        return None
+    if not prefiller.can_warm:
+        logger.info(f"prefill ahead off: the prefill server at {prefiller.address} takes no prefill_warm (older build)")
+        return None
+    return _PrefillAhead(prefiller, depth)
+
+
+class _WarmSet:
+    """The prompts a prefill server was lately asked to keep (:meth:`_RemotePrefiller.warm`), the newest ``size`` by
+    length and hash. A hint only: the server's prefix cache drops its least recently used prompts."""
+
+    def __init__(self, size: int = 64):
+        self.size = size
+        self._lock = threading.Lock()
+        self._keys: OrderedDict = OrderedDict()
+
+    @staticmethod
+    def _key(ids) -> tuple[int, int]:
+        return len(ids), hash(tuple(ids))
+
+    def add(self, ids) -> None:
+        key = self._key(ids)
+        with self._lock:
+            self._keys[key] = None
+            self._keys.move_to_end(key)
+            while len(self._keys) > self.size:
+                self._keys.popitem(last=False)
+
+    def __contains__(self, ids) -> bool:
+        key = self._key(ids)
+        with self._lock:
+            return key in self._keys
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._keys)
+
+
+class _AheadRequest:
+    """A request waiting for a slot, as :class:`_PrefillAhead` holds it (compared by identity)."""
+
+    __slots__ = ("predict", "label", "taken", "left", "t0")
+
+    def __init__(self, predict, label: str):
+        self.predict = predict
+        self.label = label
+        self.taken = False  # the worker has picked it
+        self.left = False  # it got its slot, or stopped waiting
+        self.t0 = time.perf_counter()
+
+
+class _PrefillAhead:
+    """Prefill ahead: while every decode slot is taken, the prompts of the requests waiting for one (they join with
+    :meth:`add`, the ``on_queued`` of :class:`_ClaimQueue`) are prefilled on the disaggregated prefill server into its
+    prefix cache (``prefill_warm``), from a thread of their own, the oldest first, one at a time and at most ``depth``
+    waiting requests ahead. A request that then gets a slot sends its prompt as before (:meth:`_RemotePrefiller.start`)
+    and the server, holding it already, computes nothing and only moves the entries: the time to its first token loses
+    the prefill.
+
+    A warm-up costs the requests that have a slot nothing: the server runs it only while no other prefill waits and
+    stops it after a chunk when one comes in, keeping what it computed (a stopped one is sent again, to go on from
+    there, while its request still waits). The prompt is predicted here, on this thread (``predict()``,
+    :meth:`V41GenerationServer.ahead_prompt`); a wrong guess costs only the prefill server's idle time and a slot of its
+    prefix cache, since what the request's own prefill sends is matched by its token ids."""
+
+    def __init__(self, prefiller: "_RemotePrefiller", depth: int):
+        self.prefiller = prefiller
+        slots = int(prefiller.info.get("cache_slots", 0) or 0)
+        # Every prompt kept takes one of the server's prefix-cache slots, least recently used first: leave at least
+        # half of them to the conversations being served.
+        self.depth = max(1, min(int(depth), slots // 2) if slots > 1 else int(depth))
+        self._cv = threading.Condition()
+        self._waiting: list[_AheadRequest] = []  # oldest first
+        self._closed = False
+        self.stats = {"queued": 0, "warmed": 0, "skipped": 0, "failed": 0, "tokens": 0, "computed": 0, "seconds": 0.0}
+        self._thread = threading.Thread(target=self._run, name="prefill-ahead", daemon=True)
+        self._thread.start()
+        logger.info(
+            f"prefill ahead: up to {self.depth} waiting request(s) prefilled on {prefiller.address} while every "
+            f"decode slot is taken"
+        )
+
+    def add(self, predict, label: str):
+        """A request starts waiting for a slot; returns ``leave()``, to call once it has one or stops waiting."""
+        request = _AheadRequest(predict, label)
+        with self._cv:
+            if self._closed:
+                return None
+            self._waiting.append(request)
+            self.stats["queued"] += 1
+            self._cv.notify_all()
+
+        def leave() -> None:
+            with self._cv:
+                request.left = True
+                if request in self._waiting:
+                    self._waiting.remove(request)
+                self._cv.notify_all()
+
+        return leave
+
+    def snapshot(self) -> dict:
+        """Counts so far (requests queued, warmed, skipped, failed; tokens kept and computed, seconds), and how many
+        requests wait now."""
+        with self._cv:
+            return {**self.stats, "waiting": len(self._waiting), "depth": self.depth}
+
+    def close(self) -> None:
+        with self._cv:
+            self._closed = True
+            for request in self._waiting:
+                request.left = True
+            self._waiting.clear()
+            self._cv.notify_all()
+
+    def _next(self) -> _AheadRequest | None:
+        with self._cv:
+            while not self._closed:
+                for request in self._waiting[: self.depth]:
+                    if not request.taken:
+                        request.taken = True
+                        return request
+                self._cv.wait()
+        return None
+
+    def _run(self) -> None:
+        while True:
+            request = self._next()
+            if request is None:
+                return
+            try:
+                self._warm(request)
+            except Exception as exc:  # noqa: BLE001 - the request is served as without prefill ahead
+                self.stats["failed"] += 1
+                logger.warning(f"prefill ahead for {request.label!r} failed: {type(exc).__name__}: {exc}")
+                if isinstance(exc, (ConnectionError, OSError)):
+                    time.sleep(1.0)  # (a server going away: do not spin through the queue)
+
+    def _warm(self, request: _AheadRequest) -> None:
+        t0 = time.perf_counter()
+        ids = request.predict()
+        span = self.prefiller.warm_span(ids) if ids else []
+        predicted = time.perf_counter() - t0
+        OVERHEAD.add("prefill_ahead.predict", predicted)
+        if not span or request.left or self.prefiller.is_warm(span):
+            self.stats["skipped"] += 1
+            why = "it left the queue" if request.left else "already kept" if span else "nothing the server takes"
+            logger.debug(f"prefill ahead: not for {request.label!r} ({why})")
+            return
+        done = cached = -1
+        computed, seconds = 0, 0.0
+        while not request.left:
+            reply = self.prefiller.warm(span)
+            got, start = int(reply.get("done", 0)), int(reply.get("cached", 0))
+            if cached < 0:
+                cached = start
+            computed += max(got - start, 0)
+            seconds += float(reply.get("seconds", 0.0))
+            if got >= len(span) or got <= done:
+                done = got
+                break
+            done = got  # it yielded to a prefill a decode server waits for: go on from there behind it
+        if done < 0:
+            self.stats["skipped"] += 1
+            return
+        OVERHEAD.add("compute.prefill_ahead", seconds, own_thread=False)
+        self.stats["warmed"] += 1
+        self.stats["tokens"] += max(done, 0)
+        self.stats["computed"] += computed
+        self.stats["seconds"] += seconds
+        state = "kept" if done >= len(span) else f"{max(done, 0)} kept (its request has its slot)"
+        logger.info(
+            f"prefill ahead: {request.label!r}'s {len(span)}-token prompt {state} on the prefill server: "
+            f"{max(cached, 0)} cached, {computed} computed in {seconds:.2f} s, "
+            f"{time.perf_counter() - request.t0:.2f} s after it queued (predicted in {1e3 * predicted:.1f} ms)"
+        )
 
 
 def _stage_engram_tables(args) -> bool:
@@ -4358,6 +4758,15 @@ def parse_args(argv: list[str] | None = None):
         default=float(os.environ.get("DEEPSEEK_V41_PREFILL_WAIT", 0)),
         help="with --prefill-url: seconds to keep retrying a prefill server that is not listening yet, as when both "
         "servers start together (default: DEEPSEEK_V41_PREFILL_WAIT, else 0)",
+    )
+    p.add_argument(
+        "--prefill-ahead",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V41_PREFILL_AHEAD", _PREFILL_AHEAD)),
+        help="with --prefill-url: while every decode slot is taken, prefill the prompts of up to this many requests "
+        "waiting for one on the prefill server ahead of time, into its prefix cache (at most half its cache slots), "
+        "so that a request given a slot only has its KV moved; 0 turns it off (default: DEEPSEEK_V41_PREFILL_AHEAD, "
+        f"else {_PREFILL_AHEAD})",
     )
     p.add_argument(
         "--prefill-kv-only",

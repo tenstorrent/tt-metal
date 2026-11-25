@@ -62,6 +62,7 @@ from typing import Callable, Optional, Sequence
 import torch
 from loguru import logger
 
+from models.experimental.deepseek_v4_flash.demo.overhead import OVERHEAD
 from models.experimental.deepseek_v41_flash.tt.decode.dspark import DRAFT_PROB_PENALTY
 
 # Log every round's phases (and the round's accepted count) as it finishes. Off: only the end-of-run summary.
@@ -742,6 +743,11 @@ class DSparkSpeculator:
         }
         for phase, seconds in phases.items():
             self.stats.add(phase, seconds)
+        # The overhead table (verify is the model's: decode_verify_block records its dispatch and its read). The
+        # fixup only enqueues; the draft waits on the drafter's output.
+        OVERHEAD.add("dspark.fixup", phases["fixup"])
+        OVERHEAD.add("dspark.accept", phases["accept"])
+        OVERHEAD.add("compute.dspark_draft", phases["draft"])
         self.stats.accepted.append(m)
         self.stats.seconds += t4 - t0
         if _VERBOSE:

@@ -60,6 +60,7 @@ import ttnn
 from loguru import logger
 from tqdm import tqdm
 
+from models.experimental.deepseek_v4_flash.demo.overhead import OVERHEAD
 from models.experimental.deepseek_v41_flash.tt.config import (
     decoder_layer_weights,
     dequantized,
@@ -5082,7 +5083,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     ttnn.execute_trace(self.dspark.device, self._spec_tids["write_verified"], cq_id=0, blocking=False)
                 packet = self._block_verify_packet(ids, pos)
                 self._host.write_block(packet.reshape(-1).tolist(), ids, pos, slot)
-                out = self._read_socket_output().reshape(-1)[:t]
+                t_written = time.perf_counter()
+                # Before the dispatch: the lock, the capacity check, the trace replay, the packet's H2D write.
+                OVERHEAD.add("verify.host_dispatch", t_written - t_start)
+                # The step on the device and its output's D2H read (the host cannot tell them apart).
+                with OVERHEAD.time("compute.verify_read"):
+                    out = self._read_socket_output().reshape(-1)[:t]
                 if straddles_dense:
                     self._sync_dense_entries(sid)
                 return [int(x) for x in out]
@@ -5110,7 +5116,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 if feeds_drafter:
                     ttnn.execute_trace(self.dspark.device, self._spec_tids["write_verified"], cq_id=0, blocking=False)
 
-            result = self._run_block_verify(replay, ids, pos, engram_rows)
+            with OVERHEAD.time("compute.verify_python_path"):
+                result = self._run_block_verify(replay, ids, pos, engram_rows)
             if straddles_dense:
                 self._sync_dense_entries(sid)
             return result

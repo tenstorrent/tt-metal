@@ -222,10 +222,13 @@ class DPPrefill:
         start: int = 0,
         times: Optional[dict] = None,
         sync_chunks: bool = False,
+        stop: Optional[Callable[[], bool]] = None,
     ) -> int:
-        """Prefill ``ids`` into cache slot ``slot`` from position ``start``; returns the prompt length. ``start`` > 0
-        continues the slot's prompt, which holds ``ids[:start]`` (:meth:`resume_start`). The chunks keep to the
-        ``chunk`` grid: a start off it runs a partial first chunk up to the grid. ``on_chunk(start, end, seconds)``
+        """Prefill ``ids`` into cache slot ``slot`` from position ``start``; returns where it stopped: the prompt
+        length, or with ``stop`` (asked after every chunk but the last) the end of the chunk after which it said
+        True -- the slot then holds ``ids[:end]``, which a later prefill of ``ids`` continues (:meth:`resume_start`).
+        ``start`` > 0 continues the slot's prompt, which holds ``ids[:start]``. The chunks keep to the ``chunk``
+        grid: a start off it runs a partial first chunk up to the grid. ``on_chunk(start, end, seconds)``
         after each chunk (host enqueue time; the device runs behind, unless ``sync_chunks``).
 
         ``times`` (seconds, added up): ``input`` building the chunks' inputs, ``enqueue`` issuing their programs,
@@ -262,10 +265,12 @@ class DPPrefill:
             if on_chunk is not None:
                 on_chunk(pos, end, t3 - t0)
             pos = end
+            if pos < n and stop is not None and stop():
+                break
         t0 = time.perf_counter()
         ttnn.synchronize_device(self.mesh_device)
         times["drain"] = times.get("drain", 0.0) + time.perf_counter() - t0
-        return n
+        return pos
 
     def host_states(self, seq_len: int, times: Optional[dict] = None, slot: int = 0, base: int = 0) -> dict:
         """Layers 0-20 of cache slot ``slot`` after a prompt of ``seq_len`` tokens, in the host format (module

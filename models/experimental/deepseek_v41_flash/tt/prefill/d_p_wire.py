@@ -34,6 +34,11 @@ A message is an 8-byte big-endian header length, a JSON header, then the raw blo
   Reply: zero or more ``{"progress": end}``, then ``{"seq_len", "base", "cached", "seconds", "queued", "bytes",
   "pages", "push_seconds"}`` and no blobs, once every write has left the server's mesh (``bytes`` / ``pages``:
   what it wrote, ``push_seconds``: how long that took).
+* ``{"op": "prefill_warm"}`` + the ids blob (servers whose ``info`` has ``"warm": true``): prefill the prompt into
+  the server's prefix cache only, for a request the client cannot place yet (all its decode slots taken), so that its
+  ``prefill`` / ``prefill_push`` later computes nothing. It runs after every other request waiting and stops after a
+  chunk when one comes in. Reply ``{"seq_len", "done", "cached", "seconds", "queued"}``: ``done`` how far it got
+  (``seq_len``: all of it), the cache keeping ``[0, done)``, so sending it again continues from there.
 
 Images (servers whose ``info`` has ``"image_rows"`` > 0): a ``prefill`` / ``prefill_push`` prompt may hold image-span
 tokens as the decode server lays them out (``tt/vision.py``: ``vocab + 0 .. 2`` the span delimiters, ``vocab + 3 + s``
@@ -52,6 +57,7 @@ from __future__ import annotations
 import json
 import socket
 import struct
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 from urllib.parse import urlparse
@@ -108,12 +114,21 @@ def send_msg(sock: socket.socket, header: dict, blobs: Sequence = ()) -> None:
         sock.sendall(v)
 
 
-def recv_msg(sock: socket.socket) -> tuple[dict, list[bytearray]]:
+def recv_msg(sock: socket.socket, times: Optional[dict] = None) -> tuple[dict, list[bytearray]]:
+    """One message. ``times`` gets ``wait`` (seconds until its first bytes came), ``transfer`` (the rest) and
+    ``bytes``."""
+    t0 = time.perf_counter()
     (n,) = _LEN.unpack(_recv_exact(sock, _LEN.size))
+    t1 = time.perf_counter()
     if n > _MAX_HEADER:
         raise ConnectionError(f"header of {n} bytes: not this protocol")
     header = json.loads(_recv_exact(sock, n))
-    return header, [_recv_exact(sock, k) for k in header.get("blobs", [])]
+    blobs = [_recv_exact(sock, k) for k in header.get("blobs", [])]
+    if times is not None:
+        times["wait"] = t1 - t0
+        times["transfer"] = time.perf_counter() - t1
+        times["bytes"] = _LEN.size + n + sum(len(b) for b in blobs)
+    return header, blobs
 
 
 def _bf16_bytes(t: torch.Tensor) -> memoryview:
@@ -190,6 +205,10 @@ class PrefillClient:
         self.sock = socket.create_connection((host, port), timeout=timeout)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sent_images: set = set()  # (_prompt: the keys whose rows the last prompt sent)
+        # The last prompt's client-side seconds: "send" (the request out, image rows included), "first_reply"
+        # (from sent to the first reply: the server's queue and first chunk), "replies" (from there to the last
+        # reply), "recv" (reading the last reply's bytes: the KV entries without push), "need_rounds".
+        self.times: dict = {}
         try:
             self.info = self._call({"op": "info"})[0]
             self.info.pop("blobs", None)
@@ -211,8 +230,8 @@ class PrefillClient:
         send_msg(self.sock, header, blobs)
         return self._reply()
 
-    def _reply(self):
-        header, blobs = recv_msg(self.sock)
+    def _reply(self, times: Optional[dict] = None):
+        header, blobs = recv_msg(self.sock, times)
         if "error" in header:
             raise PrefillServerError(f"prefill server {self.address}: {header['error']}")
         return header, blobs
@@ -244,21 +263,34 @@ class PrefillClient:
         went to the server (the caller need not send them again)."""
         images = list(images or ())
         rows = {image.key for image in images if image.send_rows}
+        times = self.times = {"send": 0.0, "need_rounds": 0}
         while True:
+            t0 = time.perf_counter()
             self._send_prompt(header, ids, images, rows)
+            t_sent = time.perf_counter()
+            times["send"] += t_sent - t0
+            first = None
             while True:
-                reply, blobs = self._reply()
+                msg: dict = {}
+                reply, blobs = self._reply(msg)
+                if first is None:
+                    first = time.perf_counter() - msg["transfer"]
+                    times["first_reply"] = first - t_sent
                 if "need" in reply:
                     missing = set(reply["need"]) - {image.key for image in images}
                     if missing or set(reply["need"]) <= rows:
                         raise PrefillServerError(f"prefill server {self.address} asked for the rows of {reply['need']}")
                     rows |= set(reply["need"])
+                    times["need_rounds"] += 1
                     break
                 if "progress" in reply:
                     if on_progress is not None:
                         on_progress(int(reply["progress"]))
                     continue
                 self.sent_images = rows
+                times["replies"] = time.perf_counter() - msg["transfer"] - first
+                times["recv"] = msg["transfer"]
+                times["recv_bytes"] = msg["bytes"]
                 return finish(reply, blobs)
 
     def prefill(
@@ -294,6 +326,16 @@ class PrefillClient:
             return reply
 
         return self._prompt(header, ids, images, on_progress, finish)
+
+    def prefill_warm(self, ids: Sequence[int]) -> dict:
+        """Prefill the text prompt ``ids`` into the server's prefix cache only (``prefill_warm``, module docstring):
+        ``{"seq_len", "done", "cached", "seconds", "queued"}``."""
+
+        def finish(reply, _blobs):
+            reply.pop("blobs", None)
+            return reply
+
+        return self._prompt({"op": "prefill_warm"}, ids, (), None, finish)
 
     def close(self) -> None:
         self.sock.close()
