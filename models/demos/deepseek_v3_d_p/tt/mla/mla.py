@@ -2495,6 +2495,7 @@ class ttMLA:
             part=part,
             num_links=self.ccl_num_links,
             sp_axis=self.sp_axis,
+            after_prefix=prefetched,
             **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
             ready_semaphore=self._push.ready_semaphore,
             done_semaphore=self._push.done_semaphore,

@@ -62,12 +62,14 @@ MODES = ("untraced", "traced")
 # measured). Then re-centred on CI runs after that change: each value is the mean over runs of that run's measurement
 # (fastest untraced sample, traced replay). Galaxy 8x4 K3.1 warm and GLM-5.3: 2-3 runs; Galaxy 4x4 K3.1 warm and
 # LoudBox K3.1: 1 run; deltas under 1% left as is. Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled
-# Galaxy (3 runs), unscaled. Galaxy 8x4 GLM-5.3: re-measured with the stage cases on a CI host (1 run).
+# Galaxy (3 runs), unscaled. Galaxy 8x4 GLM-5.3: re-measured with the stage cases on a CI host (1 run), then scaled by
+# the bank-by-bank push layout and 8-core push's measured speedup (main vs the change on one Galaxy; shared long: 2-3
+# runs each, the rest 1 run; warm shared untraced takes warm traced's ratio, main's sample being an outlier).
 _TARGETS_MS = {
     "Galaxy": {
         "kimi_k3_1": (2.93, 2.63, 6.47, 6.18),
-        "glm_5_3": (3.13, 2.70, 6.73, 6.32),
-        "glm_5_3-no_indexer": (2.29, 1.97, 2.36, 2.05),
+        "glm_5_3": (3.07, 2.67, 6.56, 6.16),
+        "glm_5_3-no_indexer": (2.03, 1.75, 2.12, 1.80),
     },
     "Galaxy 4x4": {
         "kimi_k3_1": (3.21, 3.05, 7.21, 6.98),

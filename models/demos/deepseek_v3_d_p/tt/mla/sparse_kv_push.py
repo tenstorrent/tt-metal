@@ -110,7 +110,7 @@ class SparseKvPushPlanner:
         # Plans built (sparse_push_plan + all-gather), counted on the host.
         self.builds = 0
         self._buffers = {}
-        self._managers = {}  # query rows -> sub-device manager of grids(query rows)
+        self._manager = None  # sub-device manager of grids()
         # layer index -> (plan, buffer parity): the plan whose prefix rows the previous attention step already pushed,
         # beside its attention, into that buffer (None: the dense gather buffer)
         self.prefetched = {}
@@ -122,21 +122,15 @@ class SparseKvPushPlanner:
     def grids(self, query_rows: int):
         """(attention, push) core grids for sparse_sdpa beside the next layer's prefix push.
 
-        Cores past the fewest that keep attention's busiest core at its token count only add DRAM contention with the
-        push, so attention takes that many whole columns. The push sits in the remaining columns' rows furthest from
-        the Ethernet row, where it contends least with attention."""
+        The push takes the fewest whole columns that hold its cores (one per link and direction), in their rows
+        furthest from the Ethernet row; attention takes every other column. More attention cores make sparse_sdpa
+        faster even when its busiest core keeps the same token count (GLM, 160 rows: 110 cores beat 80)."""
         grid = self.mesh_device.compute_with_storage_grid_size()
         push_cores = self.links * PUSH_CORES_PER_LINK
-        # Attention's busiest core if it took every core the push leaves free...
-        tokens_per_core = divup(query_rows, grid.x * grid.y - push_cores)
-        # ...and the fewest whole columns that keep that load (GLM: 160 rows, 2 per core, 80 cores = 8 columns), but no
-        # more than leave the push its cores (e.g. 96 rows would take 10 columns, the push needs 3 of 12).
-        push_cols_needed = divup(push_cores, grid.y)
-        attention_cols = min(divup(divup(query_rows, tokens_per_core), grid.y), grid.x - push_cols_needed)
-        if attention_cols <= 0:
+        push_cols = divup(push_cores, grid.y)
+        attention_cols = grid.x - push_cols
+        if attention_cols <= 0 or query_rows <= 0:
             raise ValueError(f"no room for {push_cores} push cores beside attention on a {grid.x}x{grid.y} grid")
-        # The push takes the bottom rows of the remaining columns.
-        push_cols = grid.x - attention_cols
         push_rows = divup(push_cores, push_cols)
         attention = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(attention_cols - 1, grid.y - 1))]
@@ -148,21 +142,21 @@ class SparseKvPushPlanner:
 
     def prefetch_manager(self, query_rows: int):
         """Sub-device manager that runs attention (sub-device 0, whose cores sparse_sdpa takes by default) beside the
-        next layer's prefix push (sub-device 1), on grids(query_rows). Created at init, outside any trace capture."""
-        if query_rows not in self._managers:
+        next layer's prefix push (sub-device 1), on grids(query_rows). Created at init, outside any trace capture. The
+        grids don't depend on query_rows, so every caller shares one manager."""
+        if self._manager is None:
             attention, push = self.grids(query_rows)
-            self._managers[query_rows] = self.mesh_device.create_sub_device_manager(
+            self._manager = self.mesh_device.create_sub_device_manager(
                 [ttnn.SubDevice([attention]), ttnn.SubDevice([push])], 0
             )
-        return self._managers[query_rows]
+        return self._manager
 
     def release(self):
         """Unregister the sub-device managers before the mesh closes."""
-        if self._managers:
+        if self._manager is not None:
             self.mesh_device.clear_loaded_sub_device_manager()
-            for manager in self._managers.values():
-                self.mesh_device.remove_sub_device_manager(manager)
-            self._managers.clear()
+            self.mesh_device.remove_sub_device_manager(self._manager)
+            self._manager = None
 
     def buffer_spec(self, like: ttnn.Tensor, *, distinct_rows: int, max_rows: int, stripe_chunk: int):
         """The compact buffer's spec for up to `distinct_rows` pushed rows of `like`'s rows. A chip's distinct rows are

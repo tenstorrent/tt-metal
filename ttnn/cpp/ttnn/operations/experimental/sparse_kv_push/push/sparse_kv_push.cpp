@@ -26,7 +26,8 @@ Tensor sparse_kv_push(
     uint32_t batch_slot_num_layers,
     uint32_t batch_slot_layer_idx,
     const std::optional<CoreRangeSet>& core_grid,
-    uint32_t sp_axis) {
+    uint32_t sp_axis,
+    bool after_prefix) {
     return ttnn::prim::sparse_kv_push(
         input_tensor,
         output_tensor,
@@ -42,7 +43,8 @@ Tensor sparse_kv_push(
         batch_slot_num_layers,
         batch_slot_layer_idx,
         core_grid,
-        sp_axis);
+        sp_axis,
+        after_prefix);
 }
 
 bool is_sparse_kv_push_supported(MeshDevice* mesh_device, uint32_t stripe_chunk, uint32_t max_rows) {
@@ -53,7 +55,9 @@ bool is_sparse_kv_push_supported(MeshDevice* mesh_device, uint32_t stripe_chunk,
         mesh_shape.dims() == 2 && mesh_shape[0] >= 3 && mesh_shape[1] >= 3;
     const bool stripe = stripe_chunk > 0 && stripe_chunk % 32 == 0 && stripe_chunk <= ::sparse_push::kMaxStripeChunk &&
                         max_rows > 0 && max_rows % stripe_chunk == 0;
-    return torus && mesh_shape.mesh_size() <= ::sparse_push::plan_table::kMaxDevices && stripe &&
+    // A unit's packets (one per bank) fill whole writer batches.
+    const bool banks = mesh_device->num_dram_channels() % ::sparse_push::kBatch == 0;
+    return torus && mesh_shape.mesh_size() <= ::sparse_push::plan_table::kMaxDevices && stripe && banks &&
            plan_fits(mesh_device, max_rows);
 }
 

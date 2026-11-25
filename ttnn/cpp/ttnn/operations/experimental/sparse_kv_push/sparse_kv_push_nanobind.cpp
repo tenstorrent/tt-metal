@@ -181,11 +181,14 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
                 batch_slot_num_layers: Cache slots per user; must divide the cache's slots.
                 batch_slot_layer_idx: The pushed layer's slot within its user, below ``batch_slot_num_layers``.
                 core_grid: Cores for the push (default: the first sub-device's cores); it needs
-                    ``num_links * 4 * 3`` of them: two senders and one fabric mux per link and torus direction.
+                    ``num_links * 4`` of them: one sender per link and torus direction, each with its own router connection.
                 sp_axis: The mesh axis the cache's blocks stripe along first (0 or 1): the chip at position ``s`` on
                     it and ``t`` on the other axis owns blocks ``s * chips_on_other_axis + t`` (+ ``k * chips``).
                     Axis 0 is row-major chip order. Must match how the plan's owners are ordered (block ``b`` on
                     owner ``b % chips``).
+                after_prefix: Only with ``part=REST``, when the previous push into ``output_tensor`` was the
+                    ``PREFIX`` of the same plan: the push then skips its start fence (that prefix already fenced the
+                    buffer). Leave False for a standalone rest push.
 
             Returns:
                 ttnn.Tensor: ``output_tensor``, holding the pushed rows. Each chip's rows differ, so it is labelled
@@ -207,7 +210,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("batch_slot_num_layers") = 1,
         nb::arg("batch_slot_layer_idx") = 0,
         nb::arg("core_grid") = nb::none(),
-        nb::arg("sp_axis") = 0);
+        nb::arg("sp_axis") = 0,
+        nb::arg("after_prefix") = false);
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push::detail

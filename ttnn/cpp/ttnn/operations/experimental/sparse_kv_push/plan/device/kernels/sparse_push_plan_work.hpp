@@ -314,7 +314,7 @@ inline void rewrite(
         const uint32_t owner = block % num_devices;
         const uint32_t rank = range_offsets[(block / range_blocks) * owner_stride(num_devices) + owner] +
                               word_ranks[word] + __builtin_popcount(bitmap[word] & ((1u << (row % kRowsPerWord)) - 1u));
-        idx[i] = sparse_push::compact_page<pages_per_packet, banks>(run_bases[owner], rank);
+        idx[i] = sparse_push::compact_page(run_bases[owner], rank);
     }
 }
 

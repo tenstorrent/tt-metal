@@ -13,12 +13,12 @@
 
 namespace ttnn::operations::experimental::sparse_kv_push {
 
-// One fabric channel per (link, direction), each with kSendersPerChannel sender cores (reader + writer) feeding one mux
-// core that owns the router connection.
+// One fabric channel per (link, direction), each served by one sender core (reader + writer) that owns the router
+// connection itself.
 constexpr uint32_t kDirections = 4;  // E, W, N, S (the eth_chan_directions order get_neighbors returns)
-constexpr uint32_t kSendersPerChannel = 2;
+constexpr uint32_t kSendersPerChannel = 1;
 
-constexpr uint32_t cores_needed(uint32_t links) { return links * kDirections * (kSendersPerChannel + 1); }
+constexpr uint32_t cores_needed(uint32_t links) { return links * kDirections * kSendersPerChannel; }
 
 // Rows travel in packets of pages_per_packet rows, dealt round robin over the DRAM banks. The plan lays out the
 // compact slots and the push writes them, so both take the shape from here.

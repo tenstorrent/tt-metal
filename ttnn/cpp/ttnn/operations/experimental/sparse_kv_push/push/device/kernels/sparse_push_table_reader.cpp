@@ -13,7 +13,7 @@
 
 using namespace sparse_push;
 
-// One of the two senders of a (link, direction) fabric channel on an owner chip. For each requester the channel
+// The sender of a (link, direction) fabric channel on an owner chip. For each requester the channel
 // serves, it reads the requester's plan table, walks the bitmap over the blocks this chip owns, and hands the rows the
 // requester needs to the writer in packets (PacketBuilder), which sends them into the requester's compact buffer.
 
@@ -183,7 +183,9 @@ void kernel_main() {
         };
 
         // Walk this chip's blocks in order. Their bitmaps are fetched kBlocksPerBatch at a time behind one barrier.
-        for (uint32_t block = first_block; block < end_block;) {
+        // The walk ends at the part's last row: the blocks after it hold none, so their bitmaps are not read.
+        uint32_t rows_left = part_rows;
+        for (uint32_t block = first_block; block < end_block && rows_left != 0;) {
             const uint32_t batch_end = std::min(block + kBlocksPerBatch, end_block);
             for (uint32_t bitmap_block = block; bitmap_block < batch_end; ++bitmap_block) {
                 read_block_bitmap(bitmap_block, bitmap_block - block);
@@ -196,6 +198,7 @@ void kernel_main() {
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(blocks_l1 + window * kWindowBytes + in_window);
                 for (uint32_t word_index = 0; word_index < words_per_block; ++word_index) {
                     uint32_t word_bits = block_bits[word_index];
+                    rows_left -= __builtin_popcount(word_bits);
                     while (word_bits) {
                         // Lowest set bit first: rows in ascending order.
                         const uint32_t row =
