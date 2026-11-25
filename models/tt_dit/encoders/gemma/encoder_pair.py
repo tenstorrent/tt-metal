@@ -81,20 +81,20 @@ def _feature_extractor_state_dict(ckpt, *, mode: str, gemma_hidden_size: int, ge
     """video/audio aggregate_embed weights, permuted D-major→layer-major to match the
     on-device layer-major concat (see GemmaFeatureExtractor._weight_to_layer_major)."""
     sd = {}
-    for axis in ("video", "audio") if mode == "av" else ("video",):
-        prefix = f"text_embedding_projection.{axis}_aggregate_embed."
+    for modality in ("video", "audio") if mode == "av" else ("video",):
+        prefix = f"text_embedding_projection.{modality}_aggregate_embed."
         for k, v in ckpt.items():
             if k.startswith(prefix):
                 sub = k[len(prefix) :]
                 if sub == "weight":
                     v = GemmaFeatureExtractor._weight_to_layer_major(v, gemma_hidden_size, gemma_num_layers)
-                sd[f"{axis}_aggregate_embed.{sub}"] = v
+                sd[f"{modality}_aggregate_embed.{sub}"] = v
     return sd
 
 
-def _connector_state_dict(ckpt, axis: str, num_blocks: int) -> dict:
+def _connector_state_dict(ckpt, modality: str, num_blocks: int) -> dict:
     """One connector's transformer blocks + norm, dropping blocks beyond ``num_blocks``."""
-    prefix = f"model.diffusion_model.{axis}_embeddings_connector."
+    prefix = f"model.diffusion_model.{modality}_embeddings_connector."
     sd = {}
     for k, v in ckpt.items():
         if not k.startswith(prefix):
@@ -263,17 +263,17 @@ class GemmaTokenizerEncoderPair:
         connectors = [("video", self.video_connector)]
         if self.audio_connector is not None:
             connectors.append(("audio", self.audio_connector))
-        for axis, connector in connectors:
+        for modality, connector in connectors:
             specs.append(
                 (
                     connector,
                     {
                         **common,
                         "model_name": ckpt_name,
-                        "subfolder": f"{axis}_connector",
+                        "subfolder": f"{modality}_connector",
                         "dtype": "float32",
-                        "get_torch_state_dict": lambda axis=axis: _connector_state_dict(
-                            ckpt(), axis, CONNECTOR_NUM_BLOCKS
+                        "get_torch_state_dict": lambda modality=modality: _connector_state_dict(
+                            ckpt(), modality, CONNECTOR_NUM_BLOCKS
                         ),
                     },
                 )
