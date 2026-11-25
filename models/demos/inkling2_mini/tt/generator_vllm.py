@@ -15,7 +15,8 @@ transformers release vLLM pins does not know; the tokenizer and chat template ar
 
 What the plugin's calls do here:
 - prefill_forward: the prompt goes through the traced decode step token by token (tt/generator.py), as in the demo.
-  A prompt that starts with the tokens already on the card (the conversation so far) feeds only the new ones; any
+  A prompt that starts with the tokens already on the card (the conversation so far) feeds only the new ones (with
+  the chunked prefill on and enough new tokens: steps up to a multiple of 128, then a prefill from there); any
   other prompt resets the state and starts at position 0. vLLM's own prefix cache and chunked prefill stay off:
   the short-conv histories can not be rewound to an earlier position.
 - decode_forward: one traced step on the token vLLM hands in, at the position after the last one.
@@ -144,7 +145,8 @@ class Inkling2ForCausalLM:
         v = ttnn.get_memory_view(self.device, ttnn.BufferType.DRAM)
         room = v.num_banks * v.total_bytes_free_per_bank / 2**30 - self.PF_GIB[0] - self._pf_reserve_gib()
         room -= 0 if pf_attn_shared() else self.PF_OWN_COPY_GIB
-        chunk = next((c for c in self.PF_CHUNKS if self._pf_need(c) <= room), None)
+        cap = int(os.environ.get("INKLING_VLLM_PREFILL_PASS") or self.PF_CHUNKS[0])  # (the same passes in two launches)
+        chunk = next((c for c in self.PF_CHUNKS if c <= cap and self._pf_need(c) <= room), None)
         return chunk, room - self._pf_need(chunk or self.PF_CHUNKS[-1]), room - self._pf_need(self.PF_ONE)
 
     def _prefill_init(self, cache):
@@ -170,7 +172,7 @@ class Inkling2ForCausalLM:
             return None
         t0 = time.time()
         self.pf_chunk = chunk  # tokens per pass; the prefill is built for one pass of PF_ONE when that fits too
-        one = chunk == self.PF_CHUNKS[0] and spare_one >= 0
+        one = chunk == self.PF_CHUNKS[0] and spare_one >= 0 and not os.environ.get("INKLING_VLLM_PREFILL_PASS")
         pf = Inkling2Prefill(self.model, root=cache, chunk=-(-self.PF_ONE // 1024) * 1024 if one else chunk)
         pf.drafter = getattr(self, "drafter", None)  # (the speculative class: the prompt's drafter context too)
         logger.info(
@@ -416,8 +418,13 @@ class Inkling2ForCausalLM:
         last = self._request_log()
         t0, self._seeded, self._pf_logits = time.perf_counter(), False, None
         how = "fed"
+        a = -(-k // 128) * 128  # a prefill from a position above 0 starts at a multiple of 128: feed up to it
         if self.pf is not None and k == 0 and self.pf_min <= n <= self.max_ctx - 8:
             how = self._prefill_chunked(ids)
+        elif self.pf is not None and 0 < k and max(self.pf_min, 4) <= n - a and n <= self.max_ctx - 8:
+            for i in range(k, a):
+                self._step(ids[i], i)
+            how = f"from position {a} ({a - k} fed first): {self._prefill_chunked(ids, a)}"
         else:
             for i in range(k, n):
                 self._step(ids[i], i)
@@ -427,8 +434,9 @@ class Inkling2ForCausalLM:
         logger.info(f"prompt {n} tokens, {k} already on the card, {n - k} {how} in {dt:.2f} s{last}")
         return out
 
-    def _prefill_chunked(self, ids):
-        """The whole prompt through the chunked prefill, which hands its state to the decode step. The decode's
+    def _prefill_chunked(self, ids, start=0):
+        """The prompt from position `start` (0, or the conversation on the card goes on: a multiple of 128) through
+        the chunked prefill, which hands its state to the decode step. The decode's
         L1 weight staging gives way to it: Generator.suspend() frees that L1 between two steps and resume() takes
         the same addresses again, so the decode traces stay. If an address does not come back, the traces are
         released and captured again from the reply's own first steps (Generator.begin_live)."""
@@ -436,8 +444,9 @@ class Inkling2ForCausalLM:
         self.gen.suspend()
         t1 = time.perf_counter()
         self.pf.n_rebuilt = 0
-        one = len(ids) <= self.PF_ONE and self.pf.chunk > self.pf_chunk
-        self._pf_logits = self.pf.prefill(ids, chunk=self.pf.chunk if one else self.pf_chunk)[0].float()
+        one = len(ids) - start <= self.PF_ONE and self.pf.chunk > self.pf_chunk
+        chunk = self.pf.chunk if one else self.pf_chunk
+        self._pf_logits = self.pf.prefill(ids[start:], chunk=chunk, start=start)[0].float()
         self.pf.drop_buffers()  # (nothing of the prefill stays where a decode replay writes)
         t2 = time.perf_counter()
         kept = self.gen.resume()
@@ -723,12 +732,19 @@ class Inkling2SpecForCausalLM(Inkling2ForCausalLM):
         if k == 0:
             self._sp[2] += 1
 
-    def _prefill_chunked(self, ids):
+    def _prefill_chunked(self, ids, start=0):
         """As Inkling2ForCausalLM._prefill_chunked; the prefill also writes the drafter's context of the prompt
-        (Inkling2Prefill.drafter: DSparkDrafter.commit_chunk) while the prompt lies inside the drafter's positions."""
+        (Inkling2Prefill.drafter: DSparkDrafter.commit_chunk) while the prompt lies inside the drafter's positions.
+        The positions before `start` that steps stashed are committed first.
+        shortcut: a prompt that goes on from the conversation on the card (start > 0) does not feed the drafter: its
+        commit_chunk hung the card in the last pass of such a prefill (12,312 tokens, then 20,528 that extend them:
+        passes from 12416). The tokens do not change; drafts after it see no context for the new positions, so the
+        reply decodes slower until the conversation starts over. Upgrade when the hang is understood."""
         d = self.drafter
-        self.pf.drafter = d if d is not None and len(ids) + self.pf.chunk <= d.S else None
-        how = super()._prefill_chunked(ids)
+        self._flush()
+        fits = d is not None and start == 0 and len(ids) + self.pf.chunk <= d.S
+        self.pf.drafter = d if fits else None
+        how = super()._prefill_chunked(ids, start)
         self._stash, self._pending, self._next = False, 0, len(ids)
         return how
 

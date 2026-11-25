@@ -15,9 +15,10 @@
 #   FAST=1             fast mode (own3-l8 experts)
 #   PREFILL=<tokens>   chunked prefill for new prompts of at least that many tokens (128). PREFILL=0 or PREFILL=
 #                      (empty) turns it off: every prompt is fed token by token. A reply after a prefilled prompt
-#                      comes from the prefill's numerics. Its 48 KB kernel-config ring costs speculative
-#                      decode ~0.5 %; the server says at start what pass size the DRAM left allows, or that it
-#                      stays off
+#                      comes from the prefill's numerics. A prompt that goes on from the conversation on the
+#                      card is prefilled from its position when at least that many tokens are new. Its 48 KB
+#                      kernel-config ring costs speculative decode ~0.5 %; the server says at start what pass
+#                      size the DRAM left allows, or that it stays off
 # and the model's own: INKLING_MODE, INKLING_CACHE_DIR, INKLING_CACHE, INKLING_SPEC_MAX_CTX (modes.py).
 set -e
 : "${INKLING_CKPT:?set INKLING_CKPT to the checkpoint directory (tokenizer, chat template)}"

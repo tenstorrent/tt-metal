@@ -62,6 +62,7 @@ from models.demos.inkling2_mini.tt.attention import (
 from models.demos.inkling2_mini.tt.attention_fast import FAR_UNIT, KV_MEM, V_MEM
 from models.demos.inkling2_mini.tt.fused.common import (
     dense_matrix,
+    from_dense_matrix,
     probe_rms_bf16,
     rms_fan,
     rms_norm_bf16,
@@ -1500,6 +1501,33 @@ class Inkling2Prefill:
             tails[cache_index(L, p)] = {k: _Tail(self.c_ztail[w]) for k, w in widths}
         return {"tails": tails}
 
+    def _state_ctx(self, s):
+        """_new_ctx for a prompt that goes on from position s > 0: each application's conv tails hold its stream at
+        positions s-3 .. s-1, read from the decode state the steps (or a prefill) before s left on the card:
+        - k / v: the projections (this prefill's) of the q/k/v input rows state.x_hist keeps (attention.ROWS,
+          lags 0..2 = positions s-1 .. s-3);
+        - attn / mlp: the post-attn / post-mlp conv inputs of lags 0..2 in the dense fp32 conv rings."""
+        ctx = self._new_ctx()
+        P = s - 1
+        for L, p in APPS:
+            c = cache_index(L, p)
+            lp, tails = self.layers[L], ctx["tails"][c]
+            st, ca, cm = self.m.states[c]
+            triple = lp.lay.is_global or (LOOP_START <= L < LOOP_END and p > 1)  # as _chunk / _app
+            x = _rows(st.x_hist, 0, 32)
+            for kv, r0 in (("k", 1), ("v", 5)) if triple else (("k", 0), ("v", 0)):
+                rows = [_rows(x, r0 + lag, r0 + lag + 1) for lag in (2, 1, 0)]  # positions s-3, s-2, s-1
+                # rows 29..31: the tail's lags 3..1
+                xin = ttnn.concat([_rows(self.c_ztail[HIDDEN], 0, 29)] + rows, dim=2)
+                proj = self._proj(lp, xin, f"w_{kv}")
+                tails[kv].t = _cols(proj, 0, N_KV * HEAD_DIM)
+            for name, ring in (("attn", ca), ("mlp", cm)):
+                vecs = [from_dense_matrix(ttnn.to_torch(ring[(P - lag) % TAPS]).float(), HIDDEN) for lag in (2, 1, 0)]
+                t = torch.zeros(1, 1, 32, HIDDEN)
+                t[0, 0, 29:] = torch.cat(vecs)
+                tails[name].t = self._put(t, ttnn.bfloat16)
+        return ctx
+
     def _inputs(self, t):
         """Device buffers of a t-row chunk that the host writes: before the chunk (tokens, tau, row masks) and at
         each MoE routing (gather / expert / back indices). Made on first use of t, before its first capture."""
@@ -1826,18 +1854,20 @@ class Inkling2Prefill:
         return tuple(v.total_bytes_allocated_per_bank for v in views)
 
     # ------------------------------------------------------------------ prompt
-    def prefill(self, ids, logits_all=False, log=None, force=None, collect=None, chunk=None):
-        """ids: prompt token list. Fills the model's decode state for positions [0, len). Returns logits fp32 host
-        tensor: [len, 200058] if logits_all else [1, 200058] (last position). chunk: tokens per pass (default
-        self.chunk, at most self.chunk). Traced (self.trace) unless logits_all / force / collect / profile / debug."""
+    def prefill(self, ids, logits_all=False, log=None, force=None, collect=None, chunk=None, start=0):
+        """ids: prompt token list. Fills the model's decode state for positions [start, start + len). Returns logits
+        fp32 host tensor: [len, 200058] if logits_all else [1, 200058] (last position). chunk: tokens per pass (default
+        self.chunk, at most self.chunk). Traced (self.trace) unless logits_all / force / collect / profile / debug.
+        start > 0 (a multiple of 128; at least TAPS ids): the prompt goes on from the decode state of positions
+        [0, start) on the card (_state_ctx); a pass from inside a 1024 window ends at the window's end."""
         m = self.m
         if getattr(m, "overlap", None) is not None:
             raise RuntimeError(
                 "decode weight staging is on (Generator.capture): its L1 tensor clashes with prefill programs; "
                 "use Generator(model, overlap=False) in sessions that prefill between capture() and release()"
             )
-        L = len(ids)
-        assert 0 < L <= m.max_ctx
+        L = start + len(ids)
+        assert 0 < L <= m.max_ctx and start % QB == 0 and (start == 0 or len(ids) >= TAPS), (start, len(ids))
         chunk = chunk or self.chunk
         assert chunk <= self.chunk and self._chunk_ok(chunk), (chunk, self.chunk)
         traced = self.trace and not (
@@ -1847,15 +1877,16 @@ class Inkling2Prefill:
             self.n_dropped += 1
             self.release_traces()  # something was allocated since the last prefill call
         # no m.reset(): it zeroes the conv histories (x_hist, conv rings), and _handoff rewrites every one of them
-        ctx = self._new_ctx()
+        ctx = self._state_ctx(start) if start else self._new_ctx()
         ctx["L"] = L
         outs = []
-        s = 0
+        s = start
         while s < L:
-            n = min(chunk, L - s)
+            # from a position inside a 1024 window: a pass to the window's end first (ring writes do not wrap)
+            n = min(chunk, L - s, WINDOW - s % WINDOW if s % WINDOW else chunk)
             t = -(-n // QB) * QB
             assert s + t <= m.max_ctx, "max_ctx must cover the padded last chunk"
-            chunk_ids = list(ids[s : s + n]) + [0] * (t - n)
+            chunk_ids = list(ids[s - start : s - start + n]) + [0] * (t - n)
             last = s + n == L
             rows = list(range(n)) if logits_all else ([n - 1] if last else [])
             self._last = last

@@ -107,3 +107,31 @@ def test_prefill_code1500(device):
     agree = sum(int(a == b) for a, b in zip(after, dec))
     print(f"code1500 decode after prefill {after}\ndecode only                   {dec}\nagree {agree}/16")
     assert agree >= 14
+
+
+def test_prefill_from_position(device):
+    """A prompt that goes on from the decode state at `start` (prefill(..., start=)): the last logits and the
+    conv-history handoff (16 greedy tokens) are bit-equal to one prefill from 0 with the same passes. 640: the
+    pass from inside a 1024 window; both cross it."""
+    ids = torch.load(GOLDEN / "code1500" / "input_ids.pt")[0].tolist()
+    model = Inkling2Model(device, max_ctx=2048, root=TILE_CACHE, log=lambda s: None)
+    pf = Inkling2Prefill(model, root=TILE_CACHE)
+    gen = Generator(model, overlap=False)
+    gen.capture()
+
+    def run(parts, chunk):
+        model.reset()
+        for s, part in parts:
+            last = pf.prefill(part, chunk=chunk, start=s)[-1]
+        pf.drop_buffers()  # (nothing of the prefill stays where a decode replay writes)
+        toks = [int(last.argmax())]
+        for i in range(15):
+            toks.append(gen.read_token(gen.decode(toks[-1], len(ids) + i)))
+        return last, toks
+
+    for start, chunk in ((768, 256), (640, 128)):
+        full, t_full = run([(0, ids)], chunk)
+        ext, t_ext = run([(0, ids[:start]), (start, ids[start:])], chunk)
+        print(f"start {start}: max |diff| {float((full - ext).abs().max())}, tokens {t_full} / {t_ext}")
+        assert torch.equal(full, ext) and t_full == t_ext, start
+    gen.release()
