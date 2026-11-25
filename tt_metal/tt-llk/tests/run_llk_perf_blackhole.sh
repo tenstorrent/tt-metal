@@ -7,7 +7,8 @@
 #
 # Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <n_groups>
 # Optional: LLK_PERF_PHASE=all|compile|run, LLK_PERF_COMPILE_WORKERS, LLK_PERF_DEBUG_SYMBOLS,
-# LLK_PERF_EXITFIRST, LLK_PERF_REPORT_TAG (JUnit name suffix). Defaults keep today's commands.
+# LLK_PERF_EXITFIRST, LLK_PERF_REPORT_TAG (JUnit name suffix), LLK_PERF_NODE_LIST (measure only these
+# node ids). Defaults keep today's commands.
 set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
@@ -56,6 +57,11 @@ case "${LLK_PERF_EXITFIRST:-true}" in
     ;;
 esac
 
+NODE_LIST_ARGS=()
+if [[ -n "${LLK_PERF_NODE_LIST:-}" ]]; then
+  NODE_LIST_ARGS=(--node-list="$(realpath "$LLK_PERF_NODE_LIST")")
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/python_tests"
 mkdir -p perf_data
@@ -72,13 +78,13 @@ COMPILE_XML="${REPORT}-compile.xml"
 RUN_XML="${REPORT}-run.xml"
 
 if [[ "$PHASE" != run ]]; then
-  pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "$PYTEST_MARK_EXPR" --timeout=60 \
+  pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" "${NODE_LIST_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "$PYTEST_MARK_EXPR" --timeout=60 \
     --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
     --junitxml="$COMPILE_XML" -o "python_files=perf_*.py" .
 fi
 [[ "$PHASE" == compile ]] && exit 0
 
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "$PYTEST_MARK_EXPR" --timeout=60 \
+pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" "${NODE_LIST_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "$PYTEST_MARK_EXPR" --timeout=60 \
   --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
   --junitxml="$RUN_XML" -o "python_files=perf_*.py" .
 if [[ -f "$COMPILE_XML" ]]; then
