@@ -61,6 +61,7 @@ def _golden(src, fmt, first_tile, tiles):
     return torch.cat(out)
 
 
+@pytest.mark.nightly  # every tile count; the smoke run takes the _smoke slice
 @skip_for_wormhole
 @parametrize(
     pair=PAIRS,
@@ -197,3 +198,16 @@ def test_pack_block_alt(
     assert (
         ok_a and ok_b
     ), f"output A {'ok' if ok_a else 'wrong'}, output B {'ok' if ok_b else 'wrong'}"
+
+
+# The smoke run takes the largest half sync block and the smallest full sync block of a 32 bit DEST, and two blocks of a 16 bit DEST.
+@skip_for_wormhole
+@parametrize(
+    pair=PAIRS,
+    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    block_tiles=[4, 5],
+    l1_acc=[False, True],
+    head_form=[True, False],
+)
+def test_pack_block_alt_smoke(pair, dest_acc, block_tiles, l1_acc, head_form):
+    test_pack_block_alt(pair, dest_acc, block_tiles, l1_acc, head_form)

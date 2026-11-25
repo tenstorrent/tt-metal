@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import FACES_PER_TILE
@@ -86,6 +87,7 @@ PACK_API_SWEEP = dict(
 )
 
 
+@pytest.mark.nightly  # every format and sync; the smoke run takes the _smoke slice
 @skip_for_wormhole
 @parametrize(**PACK_API_SWEEP)
 def test_pack_api(
@@ -107,6 +109,44 @@ def test_pack_api(
         dest_index,
         block_tiles=block_tiles,
         make_config=pack_api_config(api_arm, input_dimensions, dest_sync),
+    )
+
+
+# The smoke run takes every form in two configurations: a 16 bit DEST with half sync, a 32 bit DEST with full sync.
+@skip_for_wormhole
+@parametrize(
+    **{
+        **PACK_API_SWEEP,
+        "formats": [PACK_API_SWEEP["formats"][1], PACK_API_SWEEP["formats"][2]],
+        "dest_acc": lambda formats: (
+            DestAccumulation.Yes
+            if formats.input_format == DataFormat.Float32
+            else DestAccumulation.No
+        ),
+        "dest_sync": lambda dest_acc: (
+            DestSync.Full if dest_acc == DestAccumulation.Yes else DestSync.Half
+        ),
+    }
+)
+def test_pack_api_smoke(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+    api_arm,
+):
+    test_pack_api(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        block_tiles,
+        api_arm,
     )
 
 

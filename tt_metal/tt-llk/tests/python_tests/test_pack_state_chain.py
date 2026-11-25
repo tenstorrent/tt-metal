@@ -138,6 +138,15 @@ def _acc_modes(formats):
     return [DestAccumulation.No, DestAccumulation.Yes]
 
 
+# The smoke run takes every chain in two configurations: 16 bit DEST with half sync, 32 bit DEST with full sync.
+def _smoke_acc(formats):
+    return _acc_modes(formats)[-1:] if formats != F16 else [DestAccumulation.No]
+
+
+def _smoke_sync(dest_acc):
+    return DestSync.Full if dest_acc == DestAccumulation.Yes else DestSync.Half
+
+
 def _step_golden(kind, src, formats, step, dest_acc):
     """Expected datums of one step (the region of its NT result tiles) and the (offset, length) slices that count."""
     tiles = src[step * NT * TILE_ELEMS : (step + 1) * NT * TILE_ELEMS]
@@ -222,6 +231,7 @@ def run_chain(formats, dest_acc, dest_sync, steps, fu_pack_uninit):
     assert not bad, "wrong output in " + ", ".join(bad) + f" of chain {steps}"
 
 
+@pytest.mark.nightly  # every format and sync; the smoke run takes the _smoke slice
 @skip_for_wormhole
 @parametrize(
     formats=[F16, F32, B8_F16, B8_F32],
@@ -235,6 +245,18 @@ def test_pack_state_chain_fast_untilize(formats, dest_acc, dest_sync, chain):
     run_chain(formats, dest_acc, dest_sync, steps, uninit)
 
 
+@skip_for_wormhole
+@parametrize(
+    formats=[F16, B8_F32],
+    dest_acc=_smoke_acc,
+    dest_sync=_smoke_sync,
+    chain=[c[0] for c in FU_CHAINS],
+)
+def test_pack_state_chain_fast_untilize_smoke(formats, dest_acc, dest_sync, chain):
+    test_pack_state_chain_fast_untilize(formats, dest_acc, dest_sync, chain)
+
+
+@pytest.mark.nightly  # every format and sync; the smoke run takes the _smoke slice
 @skip_for_wormhole
 @parametrize(
     formats=[F16, F32, B8],
@@ -253,6 +275,18 @@ def test_pack_state_chain_rows(formats, dest_acc, dest_sync, chain):
 @skip_for_wormhole
 @parametrize(
     formats=[F16, F32],
+    dest_acc=_smoke_acc,
+    dest_sync=_smoke_sync,
+    chain=[c[0] for c in ROWS_CHAINS],
+)
+def test_pack_state_chain_rows_smoke(formats, dest_acc, dest_sync, chain):
+    test_pack_state_chain_rows(formats, dest_acc, dest_sync, chain)
+
+
+@pytest.mark.nightly  # every format and sync; the smoke run takes the _smoke slice
+@skip_for_wormhole
+@parametrize(
+    formats=[F16, F32],
     dest_acc=_acc_modes,
     dest_sync=[DestSync.Half, DestSync.Full],
     chain=[c[0] for c in UNT_CHAINS],
@@ -263,6 +297,18 @@ def test_pack_state_chain_untilize(formats, dest_acc, dest_sync, chain):
     run_chain(formats, dest_acc, dest_sync, steps, False)
 
 
+@skip_for_wormhole
+@parametrize(
+    formats=[F16, F32],
+    dest_acc=_smoke_acc,
+    dest_sync=_smoke_sync,
+    chain=[c[0] for c in UNT_CHAINS],
+)
+def test_pack_state_chain_untilize_smoke(formats, dest_acc, dest_sync, chain):
+    test_pack_state_chain_untilize(formats, dest_acc, dest_sync, chain)
+
+
+@pytest.mark.nightly  # every format and sync; the smoke run takes the _smoke slice
 @skip_for_wormhole
 @parametrize(
     formats=[F16, F32, B8],
@@ -276,3 +322,14 @@ def test_pack_state_chain_mix(formats, dest_acc, dest_sync, chain):
     if formats in BFP_FORMATS and any(s in ("PB1", "PBW") for s in steps):
         pytest.skip("block float outputs take the closed block")
     run_chain(formats, dest_acc, dest_sync, steps, False)
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=[F16, F32],
+    dest_acc=_smoke_acc,
+    dest_sync=_smoke_sync,
+    chain=[c[0] for c in MIX_CHAINS],
+)
+def test_pack_state_chain_mix_smoke(formats, dest_acc, dest_sync, chain):
+    test_pack_state_chain_mix(formats, dest_acc, dest_sync, chain)
