@@ -1450,6 +1450,7 @@ INSTANTIATE_TEST_SUITE_P(
 namespace gcb_abi = cce_gcb_receiver_abi;
 
 using prefetcher::bank_with_sender_cce;
+using prefetcher::DramReceiverGcb;
 using prefetcher::kGcbDiscardReceiverKernel;
 using prefetcher::kUint32TilePageBytes;
 using prefetcher::kUint32TileWords;
