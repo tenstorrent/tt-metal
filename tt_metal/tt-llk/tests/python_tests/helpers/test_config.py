@@ -1888,46 +1888,73 @@ class TestConfig:
             TestConfig.TESTS_WORKING_DIR,
         )
 
+    @staticmethod
+    def _declared_name(statement):
+        match = re.fullmatch(
+            r"\s*(?:(?:static|inline)\s+)*constexpr\s+[\w:]+(?:\s*<[\w:\s,<>]*>)?"
+            r"[\s*&]+(\w+)\s*(=.*|\{.*\})\s*;\s*",
+            statement,
+            re.S,
+        )
+        if not match or re.search(
+            r"\b(?:struct|class|union|enum|operator)\b|//|/\*|\*/|%:|[\"'\\#]",
+            statement,
+        ):
+            return None
+        depth, value = 0, match[2]
+        for i, char in enumerate(value):
+            depth += (char in "([{") - (char in ")]}")
+            if depth < 0 or depth == 0 and char in ",;":
+                return None
+            if depth == 0 and value[0] == "{" and i < len(value) - 1:
+                return None
+        return match[1] if depth == 0 else None
+
     def _compile_kernel_part_once(self, compile_command, source):
-        # build.h holds every parameter of the variant, but a TRISC names only some of them, so variants
-        # often compile a TRISC to the same code. Key on the flags, the source, and the build.h lines the
-        # unit names (directly or through another kept line), and build it once. The names a unit uses
-        # do not depend on the build.h constants, so one preprocessing per flags and source finds them.
-        variant_dir = str(TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id)
+        variant_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         command = [
             compile_command[0],
             f"-ffile-prefix-map={variant_dir}=build",
             *compile_command[1:],
         ]
         cwd = TestConfig.TESTS_WORKING_DIR
-        build_h = Path(variant_dir) / "build.h"
+        build_h = variant_dir / "build.h"
         if not build_h.exists():
             run_shell_command(command, cwd, source)
             return
+        header = build_h.read_text()
         constants, statement, depth = [], "", 0
-        for line in build_h.read_text().splitlines():
-            if line.startswith("#"):
+        for line in header.replace("\\\n", " ").splitlines():
+            if not re.search("[\"']", line):
+                line = line.split("//")[0]
+            if line.lstrip().startswith(("#", "%:")):
                 constants.append((None, line + "\n"))
                 continue
             statement += line + "\n"
             depth += line.count("{") - line.count("}")
             if depth == 0 and line.rstrip().endswith(";"):
-                name = re.match(
-                    r"\s*(?:(?:static|inline)\s+)*constexpr\b[^=;{]*?\b(\w+)\s*[={]",
-                    statement,
-                )
-                constants.append((name.group(1) if name else None, statement))
+                constants.append((self._declared_name(statement), statement))
                 statement = ""
         constants.append((None, statement))
-        fixed = json.dumps([token.replace(variant_dir, "") for token in command[:-1]])
+        fixed = json.dumps(
+            [token.replace(str(variant_dir), "") for token in command[:-1]]
+        )
         fixed += source + "".join(text for name, text in constants if name is None)
+        for path in sorted(variant_dir.rglob("*")):
+            if path.is_file() and path != build_h:
+                if Path(command[-1]).parent not in path.parents:
+                    fixed += f"{path.relative_to(variant_dir)} {sha256(path.read_bytes()).hexdigest()}"
+        for token in command[1:-1]:
+            for path in (Path(cwd, token), Path(cwd, token[2:])):
+                if path.is_file():
+                    fixed += f"{path} {sha256(path.read_bytes()).hexdigest()}"
         trisc_dir = TestConfig.ARTEFACTS_DIR / "trisc"
         trisc_dir.mkdir(exist_ok=True)
         names_file = trisc_dir / f"{sha256(fixed.encode()).hexdigest()}.names"
         with FileLock(f"{names_file}.lock"):
             if not names_file.exists():
                 unit = subprocess.run(
-                    command[: command.index("-x")] + ["-E", "-x", "c++", "-"],
+                    command[: command.index("-x")] + ["-E", "-dD", "-x", "c++", "-"],
                     cwd=cwd,
                     input=source,
                     capture_output=True,
@@ -1936,33 +1963,53 @@ class TestConfig:
                 if unit.returncode:
                     run_shell_command(command, cwd, source)
                     return
-                rest, in_build_h = [], False
+                rest, macros, in_build_h, visible = [], {}, False, 0
                 for line in unit.stdout.splitlines():
                     if line.startswith("# "):
                         in_build_h = f'"{build_h}"' in line
-                    elif not in_build_h:
+                    elif line.startswith("#define "):
+                        name, body = re.match(r"#define (\w+)(.*)", line).groups()
+                        words = re.findall(r"\w+|##", body)
+                        macros[name] = " ".join([macros.get(name, ""), *words])
+                    elif in_build_h:
+                        visible = len(macros)
+                    else:
                         rest.append(line)
-                names_file.write_text(
-                    json.dumps(sorted(set(re.findall(r"\w+", "\n".join(rest)))))
-                )
-        names = set(json.loads(names_file.read_text()))
-        names.update(re.findall(r"\w+", "".join(t for n, t in constants if n is None)))
-        kept, grew = set(), True
-        while grew:
-            grew = False
-            for i, (name, text) in enumerate(constants):
-                if name is not None and i not in kept and name in names:
-                    kept.add(i)
-                    names.update(re.findall(r"\w+", text))
-                    grew = True
-        fixed += "".join(text for i, (_, text) in enumerate(constants) if i in kept)
+                names = sorted(set(re.findall(r"\w+", "\n".join(rest))))
+                macros = dict(list(macros.items())[:visible])
+                partial = Path(f"{names_file}.tmp")
+                partial.write_text(json.dumps([names, macros]))
+                os.replace(partial, names_file)
+        names, macros = json.loads(names_file.read_text())
+        names = set(names)
+        words = [set(re.findall(r"\w+", text)) for _, text in constants]
+        todo = [words[i] for i, (name, _) in enumerate(constants) if name is None]
+        kept, seen = set(), set()
+        while todo:
+            for word in todo.pop() - seen:
+                seen.add(word)
+                names.add(word)
+                body = macros.get(word, "").split()
+                if "##" in body:
+                    names.update(name for name, _ in constants if name)
+                todo.append(set(body))
+            for i, (name, _) in enumerate(constants):
+                if name and i not in kept:
+                    if name in names or words[i] & macros.keys():
+                        kept.add(i)
+                        todo.append(words[i])
+        if 'R"' in header or {"__LINE__", "__COUNTER__"} & seen.union(*words):
+            fixed += header
+        fixed += "".join(t for i, (n, t) in enumerate(constants) if not n or i in kept)
         built = trisc_dir / f"{sha256(fixed.encode()).hexdigest()}.elf"
         with FileLock(f"{built}.lock"):
             if built.exists():
                 shutil.copyfile(built, command[-1])
                 return
             run_shell_command(command, cwd, source)
-            shutil.copyfile(command[-1], built)
+            partial = Path(f"{built}.tmp")
+            shutil.copyfile(command[-1], partial)
+            os.replace(partial, built)
 
     def build_elfs(self):
 
