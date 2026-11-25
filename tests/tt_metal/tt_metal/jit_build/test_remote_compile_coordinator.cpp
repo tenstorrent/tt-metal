@@ -30,13 +30,15 @@ RemoteCompileCoordinator make_coordinator() {
     return RemoteCompileCoordinator(kUnusedEndpoints, DEFAULT_CONTEXT_ID, /*device_build_id=*/0, /*build_key=*/0);
 }
 
-// The dedup cache is process-wide, so every test starts with it empty.
+}  // namespace
+
+// The dedup cache is process-wide, so every test starts with it empty. In the named namespace:
+// TEST_F classes derive from it with external linkage, and an anonymous-namespace base trips
+// -Werror=subobject-linkage under gcc Unity builds.
 class RemoteCompileCoordinatorTest : public ::testing::Test {
 protected:
     void SetUp() override { RemoteCompileCoordinator::clear_dedup_cache(); }
 };
-
-}  // namespace
 
 TEST_F(RemoteCompileCoordinatorTest, KernelWithNothingToCompileIsReusedThenDeduplicated) {
     int descriptor_calls = 0;
