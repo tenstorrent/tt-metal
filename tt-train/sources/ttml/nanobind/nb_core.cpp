@@ -338,12 +338,16 @@ void py_module(nb::module_& m) {
         py_dist_ctx.def(
             "recv",
             [](DistributedContext& self, std::size_t nbytes, int source, int tag) -> nb::bytes {
-                std::vector<std::byte> buffer(nbytes);
+                auto result = nb::steal<nb::bytes>(PyBytes_FromStringAndSize(nullptr, static_cast<Py_ssize_t>(nbytes)));
+                if (!result.is_valid()) {
+                    throw nb::python_error();
+                }
+                auto* ptr = reinterpret_cast<std::byte*>(PyBytes_AS_STRING(result.ptr()));
                 {
                     nb::gil_scoped_release release;
-                    self.recv(ttsl::Span<std::byte>(buffer.data(), buffer.size()), DistRank{source}, DistTag{tag});
+                    self.recv(ttsl::Span<std::byte>(ptr, nbytes), DistRank{source}, DistTag{tag});
                 }
-                return nb::bytes(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+                return result;
             },
             nb::arg("nbytes"),
             nb::arg("source"),
