@@ -7,7 +7,6 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 /*
@@ -195,12 +194,12 @@ sfpi_inline void _compute_ema_math_() {
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     if constexpr (RECORD) {
-        // lltt::Exec so the first block both records and executes; the recorded copy is
+        // exec-while-load so the first block both records and executes; the recorded copy is
         // what the remaining seven replay.
-        lltt::record<lltt::Exec>(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
+        TTI_REPLAY(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN, 1, 1);
         _compute_ema_math_body_();
     } else {
-        lltt::replay(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
+        TTI_REPLAY(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN, 0, 0);
     }
 
     // Update EMA_old for next iteration: LREG4 = LREG3. Inline, not recorded.

@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import copy
-import random
 import secrets
 from dataclasses import dataclass, fields, replace
 from typing import List, Optional
@@ -617,8 +615,6 @@ class SeedManager:
         self.max_batch_size = max_batch_size
         self.seeds = [None for _ in range(max_batch_size)]
         self.seed_counters = [0 for _ in range(max_batch_size)]
-        # Pre-allocate RNG objects; actual request seeds are set via reset_seed().
-        self.rngs = [random.Random(secrets.randbits(64)) for _ in range(max_batch_size)]
         self.tt_sampling = tt_sampling
         self._sampling_debug_enabled = getattr(tt_sampling, "_sampling_debug_enabled", False)
         # True when at least one user slot has a non-None request seed.
@@ -642,19 +638,13 @@ class SeedManager:
         else:
             self._seed_mapper = None
 
-    def _next_unseeded_rng_seed(self) -> int:
-        return secrets.randbits(64)
-
     def _next_unseeded_device_seed(self) -> int:
         return secrets.randbelow(DEVICE_SEED_MAX) + 1
-
-    def _next_device_seed_from_rng(self, rng: random.Random) -> int:
-        return rng.randint(1, DEVICE_SEED_MAX)
 
     def _next_device_seed_for_slot(self, slot: int) -> int:
         request_seed = self.seeds[slot]
         if request_seed is None:
-            return self._next_device_seed_from_rng(self.rngs[slot])
+            return self._next_unseeded_device_seed()
         device_seed = _hash_request_seed_to_device_seed(int(request_seed), self.seed_counters[slot])
         self.seed_counters[slot] += 1
         return device_seed
@@ -691,10 +681,6 @@ class SeedManager:
             seed = self._seed_from_slot_params(seeds, slot)
             self.seeds[slot] = seed
             self.seed_counters[slot] = 0
-            if seed is None:
-                self.rngs[slot].seed(self._next_unseeded_rng_seed())
-            else:
-                self.rngs[slot].seed(int(seed))
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 
@@ -798,16 +784,11 @@ class SeedManager:
         )
         old_seeds = list(self.seeds)
         old_counters = list(self.seed_counters)
-        old_rngs = list(self.rngs)
         moved_sources = {old_slot for old_slot, _ in moves}
         moved_destinations = {new_slot for _, new_slot in moves}
         for old_slot, new_slot in moves:
             self.seeds[new_slot] = old_seeds[old_slot]
             self.seed_counters[new_slot] = old_counters[old_slot]
-            # copy.copy preserves internal RNG state but creates an
-            # independent object so the old slot reference does not alias
-            # the new one.
-            self.rngs[new_slot] = copy.copy(old_rngs[old_slot])
         for old_slot in moved_sources - moved_destinations:
             self.seeds[old_slot] = None
             self.seed_counters[old_slot] = 0
@@ -840,10 +821,6 @@ class SeedManager:
             seed = self._seed_from_slot_params(seeds, i)
             self.seeds[slot] = seed
             self.seed_counters[slot] = 0
-            if seed is None:
-                self.rngs[slot].seed(self._next_unseeded_rng_seed())
-            else:
-                self.rngs[slot].seed(int(seed))
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
         _log_sampling_debug(

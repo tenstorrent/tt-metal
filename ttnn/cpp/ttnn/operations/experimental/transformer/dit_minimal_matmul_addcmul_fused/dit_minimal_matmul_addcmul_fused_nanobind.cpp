@@ -13,7 +13,7 @@
 #include "dit_minimal_matmul_addcmul_fused.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 

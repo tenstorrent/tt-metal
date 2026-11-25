@@ -15,15 +15,15 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/tensor/host_tensor.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/tensor/host_tensor.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include "debug_tools_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
@@ -97,7 +97,7 @@ void RunMulticastNodeSetTest(
     const bool skips_sender = !includes_sender && sender.y == 0 && sender.x >= first_x && sender.x <= last_x;
     const uint32_t num_targets = last_x - first_x + 1 - (skips_sender ? 1u : 0u);
     const KernelSpecName kernel_name{"multicast_writer"};
-    Program program = experimental::MakeProgramFromSpec(
+    Program program(
         mesh_device,
         ProgramSpec{
             .name = "watcher_multicast_node_set",
@@ -141,15 +141,13 @@ void RunMulticastNodeSetTest(
                 .target_nodes = sender,
             }},
         });
-    experimental::SetProgramRunArgs(
-        program,
-        ProgramRunArgs{
-            .tensor_args =
-                {
-                    {TensorParamName{"source"}, TensorArgument{source}},
-                    {TensorParamName{"target"}, TensorArgument{target}},
-                },
-        });
+    program.set_program_run_args(ProgramRunArgs{
+        .tensor_args =
+            {
+                {TensorParamName{"source"}, TensorArgument{source}},
+                {TensorParamName{"target"}, TensorArgument{target}},
+            },
+    });
     if (!expect_error) {
         LaunchProgram(mesh_device, std::move(program));
         std::vector<bfloat16> expected = data;

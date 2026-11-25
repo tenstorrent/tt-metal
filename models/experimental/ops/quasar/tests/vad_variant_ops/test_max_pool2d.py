@@ -42,7 +42,9 @@ def _run_pool(mesh, n, c, h, w, output_layout=ttnn.TILE_LAYOUT):
     x_flat = x_nchw.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c).contiguous()
     x = U.to_tt(x_flat, mesh, layout=ttnn.TILE_LAYOUT)
 
-    out = ttnn.max_pool2d(
+    # Mainline max_pool2d builds legacy kernels; use the Quasar port on Quasar.
+    max_pool2d = ttnn.experimental.quasar.max_pool2d if U.is_quasar() else ttnn.max_pool2d
+    out = max_pool2d(
         input_tensor=x,
         batch_size=n,
         input_h=h,

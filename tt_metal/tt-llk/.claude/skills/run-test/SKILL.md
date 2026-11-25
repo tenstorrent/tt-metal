@@ -26,7 +26,7 @@ Examples:
 /run-test test_eltwise_binary_quasar.py --arch quasar --maxfail 5
 /run-test test_matmul_quasar.py --arch quasar --test-id 'test_matmul_quasar.py::test_matmul[math_fidelity:LoFi-...-format:Float16->Float16-...]'
 # --run-tag is single-use; choose a fresh value for every invocation.
-/run-test perf_pack_dest_bank.py --arch wormhole --perf --speed-of-light --run-tag pack-dest-bank-sol-1
+/run-test perf_pack_l1_acc.py --arch wormhole --perf --speed-of-light --run-tag pack-l1-acc-sol-1
 /run-test perf_matmul_quasar.py --arch quasar --perf --perf-counters
 ```
 

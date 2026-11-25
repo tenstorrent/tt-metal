@@ -11,22 +11,21 @@
 
 // Prefer to use API rather than internals in this
 // test as we are testing end to end functionality
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_config.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/system_mesh.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 
@@ -636,7 +635,7 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 
     ProgramSpec spec = MakeMinimalNoOpProgramSpec();
-    distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    distributed::MeshWorkload workload(*mesh_device, spec);
     EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
 }
 
@@ -651,7 +650,7 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramCompileOnForeignMeshFails) {
     auto mesh_b =
         distributed::MeshDevice::open_mesh_device(env_b, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_a, MakeMinimalNoOpProgramSpec());
+    Program program(*mesh_a, MakeMinimalNoOpProgramSpec());
     EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
 }
 

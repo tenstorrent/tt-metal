@@ -8,7 +8,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/types.hpp"
 #include "device/kernels/moe_ring_common.h"

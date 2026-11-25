@@ -6,9 +6,9 @@
 #include <limits>
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 namespace ttnn::prim {
 

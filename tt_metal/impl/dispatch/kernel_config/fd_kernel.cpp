@@ -5,17 +5,18 @@
 #include "fd_kernel.hpp"
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <utility>
 #include <variant>
 #include "impl/buffers/semaphore.hpp"
 
-#include "device.hpp"
+#include "tt-metalium/mesh/legacy/device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_s.hpp"
-#include "kernel_types.hpp"
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
 #include "prefetch.hpp"
+#include "tensor_prefetcher.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
@@ -222,6 +223,18 @@ FDKernel* FDKernel::Generate(
                 noc_selection,
                 true,
                 tunnel_index,
+                descriptor,
+                dispatch_core_manager,
+                get_control_plane,
+                get_dispatch_query_manager,
+                get_reads_dispatch_cores);
+        case TENSOR_PREFETCHER:
+            return new TensorPrefetcherKernel(
+                node_id,
+                device_id,
+                servicing_device_id,
+                cq_id,
+                noc_selection,
                 descriptor,
                 dispatch_core_manager,
                 get_control_plane,

@@ -12,8 +12,4 @@ namespace ttnn {
 
 using QueueId = ttsl::StrongType<uint8_t, struct QueueIdTag>;
 
-inline std::optional<uint8_t> raw_optional(const std::optional<QueueId>& cq_id) {
-    return cq_id.has_value() ? std::make_optional(cq_id.value().get()) : std::nullopt;
-}
-
 }  // namespace ttnn

@@ -113,7 +113,7 @@ gh workflow run "LLK perf" --ref <branch> -f architecture=all -f speed-of-light=
   `BinaryOp`;
 - add Quasar `bcast_dim` without a kernel path;
 - rename Quasar-only families (`quant`, `bf16_rne`, `max_min_*`) to
-  Blackhole names;
+  Blackhole names (axes follow `perf-test`, "Canonical axis names");
 - put `approx_mode` on the Quasar global `_PERF_AXES` when a family already
   constrains it;
 - apply a Yes/No `approx_mode` product to kernels that ignore it.

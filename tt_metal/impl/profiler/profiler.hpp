@@ -17,12 +17,12 @@
 #include <utility>
 #include <vector>
 
-#include "buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
-#include "core_coord.hpp"
-#include "mesh_device.hpp"
-#include "profiler_optional_metadata.hpp"
-#include "profiler_types.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "tt-metalium/mesh/mesh_device.hpp"
+#include "tt-metalium/observability/profiler/profiler_optional_metadata.hpp"
+#include "impl/profiler/profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
 
 namespace tt::tt_metal {

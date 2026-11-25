@@ -120,6 +120,23 @@ def is_quasar() -> bool:
     return "quasar" in ttnn.get_arch_name()
 
 
+def op(name: str, *, experimental: bool = False):
+    """The ttnn op ``name``, using its Quasar port (``ttnn.experimental.quasar.<name>``) on Quasar.
+
+    Mainline factories that still build legacy ``DataMovementKernel`` / ``ComputeKernel`` objects are
+    rejected on Quasar. Elsewhere the mainline op (``ttnn.<name>``, or ``ttnn.experimental.<name>``
+    for ``experimental=True``) is used.
+    """
+    if is_quasar():
+        return getattr(ttnn.experimental.quasar, name)
+    return getattr(ttnn.experimental if experimental else ttnn, name)
+
+
+def xfail_no_quasar_port(op_name: str) -> None:
+    """xfail on Quasar for an op whose mainline factory builds legacy kernels and has no port yet."""
+    xfail_on_quasar(f"{op_name} has no Quasar port: its mainline factory builds legacy DataMovementKernels")
+
+
 def xfail_on_quasar(reason: str) -> None:
     """Mark the running case xfail on Quasar for a known, tracked Quasar limitation."""
     if is_quasar():
