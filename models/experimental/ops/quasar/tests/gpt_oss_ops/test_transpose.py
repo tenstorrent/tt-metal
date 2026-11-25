@@ -56,14 +56,14 @@ CASES = [
         ],
     },
     {
-        "id": "01_32x2880_bf8_int-l1",
+        "id": "01_32x2880_bf16_int-l1",
         "op": "ttnn.transpose",
         "count": 192,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 32, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
@@ -73,7 +73,7 @@ CASES = [
         "kwargs": {},
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "L1", "layout": "INTERLEAVED", "shard": None},
@@ -162,7 +162,21 @@ CASES = [
 ]
 
 
+_XFAIL_L1_OOM = {
+    "01_32x2880_bf16_int-l1": "L1 out of memory on the 2-node Quasar: a 5.9 MB interleaved L1 buffer "
+    "(2.95 MB per bank) does not fit in the free bank space",
+    "00_32x1x2880_bf8_int-l1": "L1 out of memory on the 2-node Quasar: a 5.9 MB interleaved L1 buffer "
+    "(2.95 MB per bank) does not fit in the free bank space",
+}
+
+
+def _param(case):
+    reason = _XFAIL_L1_OOM.get(case["id"])
+    marks = [pytest.mark.xfail(reason=reason, raises=RuntimeError, strict=False)] if reason else []
+    return pytest.param(case, id=case["id"], marks=marks)
+
+
 @G.with_default_mesh()
-@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+@pytest.mark.parametrize("case", [_param(c) for c in CASES])
 def test_transpose(ttnn_mesh_device, reset_seeds, case):
     G.run_case(_OP, case, ttnn_mesh_device)

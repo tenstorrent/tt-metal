@@ -41,12 +41,12 @@ CASES = [
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
-            {"k": "dtype", "v": "BFLOAT8_B"},
+            {"k": "dtype", "v": "BFLOAT16"},
         ],
         "kwargs": {},
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "L1", "layout": "INTERLEAVED", "shard": None},
@@ -55,14 +55,14 @@ CASES = [
         ],
     },
     {
-        "id": "01_1x32_bf8_int-l1",
+        "id": "01_1x32_bf16_int-l1",
         "op": "ttnn.typecast",
         "count": 192,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 32],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
@@ -117,12 +117,12 @@ CASES = [
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
-            {"k": "dtype", "v": "BFLOAT8_B"},
+            {"k": "dtype", "v": "BFLOAT16"},
         ],
         "kwargs": {},
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},

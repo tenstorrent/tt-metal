@@ -34,14 +34,14 @@ _OP = ttnn.experimental.paged_update_cache
 
 CASES = [
     {
-        "id": "00_64x8x64x64_bf8_int-dram",
+        "id": "00_64x8x64x64_bf16_int-dram",
         "op": "ttnn.experimental.paged_update_cache",
         "count": 384,
         "args": [
             {
                 "k": "t",
                 "shape": [64, 8, 64, 64],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },

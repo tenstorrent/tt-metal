@@ -47,7 +47,7 @@ _OP = ttnn.matmul
 
 _W = 2048  # 64 tiles = 4 output blocks of 16 tiles
 
-_LM_HEAD_IDS = ("03_1x2880_bf8_int-l1", "04_32x2880_bf8_int-dram")
+_LM_HEAD_IDS = ("03_1x2880_bf16_int-l1", "04_32x2880_bf16_int-dram")
 
 
 def _narrow(case):

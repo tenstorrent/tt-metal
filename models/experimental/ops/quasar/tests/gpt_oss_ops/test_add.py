@@ -30,14 +30,14 @@ _OP = ttnn.experimental.quasar.add
 
 CASES = [
     {
-        "id": "00_32x2880_bf8_int-l1",
+        "id": "00_32x2880_bf16_int-l1",
         "op": "ttnn.add",
         "count": 576,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 32, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
@@ -53,14 +53,14 @@ CASES = [
             "output_tensor": {
                 "k": "t",
                 "shape": [1, 32, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "L1", "layout": "INTERLEAVED", "shard": None},
@@ -69,21 +69,21 @@ CASES = [
         ],
     },
     {
-        "id": "01_1x2880_bf8_int-l1",
+        "id": "01_1x2880_bf16_int-l1",
         "op": "ttnn.add",
         "count": 376,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 1, 1, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
             {
                 "k": "t",
                 "shape": [1, 1, 1, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
@@ -92,14 +92,14 @@ CASES = [
             "output_tensor": {
                 "k": "t",
                 "shape": [1, 1, 1, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "L1", "layout": "INTERLEAVED", "shard": None},
@@ -178,14 +178,14 @@ CASES = [
         ],
     },
     {
-        "id": "04_32x2880_bf8_int-l1",
+        "id": "04_32x2880_bf16_int-l1",
         "op": "ttnn.add",
         "count": 192,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 32, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
@@ -195,14 +195,14 @@ CASES = [
             "output_tensor": {
                 "k": "t",
                 "shape": [1, 32, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "L1", "layout": "INTERLEAVED", "shard": None},
@@ -297,7 +297,7 @@ CASES = [
             {
                 "k": "t",
                 "shape": [1, 1, 128, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
@@ -306,14 +306,14 @@ CASES = [
             "output_tensor": {
                 "k": "t",
                 "shape": [1, 1, 128, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
@@ -322,14 +322,14 @@ CASES = [
         ],
     },
     {
-        "id": "08_128x2880_bf8_int-dram",
+        "id": "08_128x2880_bf16_int-dram",
         "op": "ttnn.add",
         "count": 48,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 1, 128, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
@@ -394,21 +394,21 @@ CASES = [
         ],
     },
     {
-        "id": "10_1x2880_bf8_int-dram",
+        "id": "10_1x2880_bf16_int-dram",
         "op": "ttnn.add",
         "count": 8,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 1, 1, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
             {
                 "k": "t",
                 "shape": [1, 1, 1, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
@@ -417,14 +417,14 @@ CASES = [
             "output_tensor": {
                 "k": "t",
                 "shape": [1, 1, 1, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "L1", "layout": "INTERLEAVED", "shard": None},

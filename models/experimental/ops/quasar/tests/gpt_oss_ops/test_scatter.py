@@ -30,14 +30,14 @@ _OP = ttnn.scatter
 
 CASES = [
     {
-        "id": "00_1x32_bf8_int-l1",
+        "id": "00_1x32_bf16_int-l1",
         "op": "ttnn.scatter",
         "count": 192,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 32],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },

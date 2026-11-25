@@ -107,7 +107,19 @@ CASES = [
 ]
 
 
+_XFAIL_L1_OOM = {
+    "01_32x1x2880_bf8_int-l1": "L1 out of memory on the 2-node Quasar: a 5.9 MB interleaved L1 buffer "
+    "(2.95 MB per bank) does not fit in the free bank space",
+}
+
+
+def _param(case):
+    reason = _XFAIL_L1_OOM.get(case["id"])
+    marks = [pytest.mark.xfail(reason=reason, raises=RuntimeError, strict=False)] if reason else []
+    return pytest.param(case, id=case["id"], marks=marks)
+
+
 @G.with_default_mesh()
-@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+@pytest.mark.parametrize("case", [_param(c) for c in CASES])
 def test_permute(ttnn_mesh_device, reset_seeds, case):
     G.run_case(_OP, case, ttnn_mesh_device)

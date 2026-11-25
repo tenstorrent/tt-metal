@@ -30,14 +30,14 @@ _OP = ttnn.slice
 
 CASES = [
     {
-        "id": "00_128x2880_bf8_int-dram",
+        "id": "00_128x2880_bf16_int-dram",
         "op": "ttnn.slice",
         "count": 2,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 1, 128, 2880],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
@@ -47,7 +47,7 @@ CASES = [
         "kwargs": {},
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},

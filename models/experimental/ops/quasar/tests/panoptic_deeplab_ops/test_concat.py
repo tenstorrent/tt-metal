@@ -33,7 +33,7 @@ _OP = ttnn.concat
 
 CASES = [
     {
-        "id": "00_32x64x256_bf8_int-dram",
+        "id": "00_32x64x256_bf16_int-dram",
         "op": "ttnn.concat",
         "count": 2,
         "args": [
@@ -43,35 +43,35 @@ CASES = [
                     {
                         "k": "t",
                         "shape": [1, 32, 64, 256],
-                        "dtype": "BFLOAT8_B",
+                        "dtype": "BFLOAT16",
                         "layout": "TILE",
                         "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
                     },
                     {
                         "k": "t",
                         "shape": [1, 32, 64, 256],
-                        "dtype": "BFLOAT8_B",
+                        "dtype": "BFLOAT16",
                         "layout": "TILE",
                         "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
                     },
                     {
                         "k": "t",
                         "shape": [1, 32, 64, 256],
-                        "dtype": "BFLOAT8_B",
+                        "dtype": "BFLOAT16",
                         "layout": "TILE",
                         "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
                     },
                     {
                         "k": "t",
                         "shape": [1, 32, 64, 256],
-                        "dtype": "BFLOAT8_B",
+                        "dtype": "BFLOAT16",
                         "layout": "TILE",
                         "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
                     },
                     {
                         "k": "t",
                         "shape": [1, 32, 64, 256],
-                        "dtype": "BFLOAT8_B",
+                        "dtype": "BFLOAT16",
                         "layout": "TILE",
                         "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
                     },
@@ -84,7 +84,7 @@ CASES = [
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
@@ -93,7 +93,7 @@ CASES = [
         ],
     },
     {
-        "id": "01_64x128x64_bf8_int-dram",
+        "id": "01_64x128x64_bf16_int-dram",
         "op": "ttnn.concat",
         "count": 2,
         "args": [
@@ -103,14 +103,14 @@ CASES = [
                     {
                         "k": "t",
                         "shape": [1, 64, 128, 64],
-                        "dtype": "BFLOAT8_B",
+                        "dtype": "BFLOAT16",
                         "layout": "TILE",
                         "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
                     },
                     {
                         "k": "t",
                         "shape": [1, 64, 128, 256],
-                        "dtype": "BFLOAT8_B",
+                        "dtype": "BFLOAT16",
                         "layout": "TILE",
                         "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
                     },
@@ -123,7 +123,7 @@ CASES = [
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},

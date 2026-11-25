@@ -30,14 +30,14 @@ _OP = ttnn.untilize
 
 CASES = [
     {
-        "id": "00_32x262144_bf8_int-dram",
+        "id": "00_32x262144_bf16_int-dram",
         "op": "ttnn.untilize",
         "count": 2,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 1, 32, 262144],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },

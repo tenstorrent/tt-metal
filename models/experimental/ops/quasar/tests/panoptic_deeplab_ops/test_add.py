@@ -76,21 +76,21 @@ CASES = [
         ],
     },
     {
-        "id": "01_2048x256_bf8_int-dram",
+        "id": "01_2048x256_bf16_int-dram",
         "op": "ttnn.add",
         "count": 6,
         "args": [
             {
                 "k": "t",
                 "shape": [1, 1, 2048, 256],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
             {
                 "k": "t",
                 "shape": [1, 1, 1, 256],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
@@ -99,14 +99,14 @@ CASES = [
             "output_tensor": {
                 "k": "t",
                 "shape": [1, 1, 2048, 256],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},

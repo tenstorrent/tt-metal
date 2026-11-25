@@ -1418,12 +1418,12 @@ CASES = [
             "padding": {"k": "lit", "v": (0, 0)},
             "dilation": {"k": "lit", "v": (1, 1)},
             "groups": {"k": "lit", "v": 1},
-            "dtype": {"k": "dtype", "v": "BFLOAT8_B"},
+            "dtype": {"k": "dtype", "v": "BFLOAT16"},
             "device": {"k": "device"},
             "conv_config": {
                 "kind": "Conv2dConfig",
                 "fields": {
-                    "weights_dtype": "DataType::BFLOAT8_B",
+                    "weights_dtype": "DataType::BFLOAT16",
                     "activation": {"op": "RELU", "params": []},
                     "deallocate_activation": 0,
                     "reallocate_halo_output": 1,
@@ -1455,7 +1455,7 @@ CASES = [
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},

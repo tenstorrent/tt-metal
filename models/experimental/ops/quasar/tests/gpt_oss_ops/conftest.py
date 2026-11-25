@@ -37,7 +37,9 @@ _EMU_MAX_ROWS = 128
 # 2 nodes x (1x2 worth of usable compute cores) — deliberately conservative; the
 # run-time gate in graph_case is the real one.
 _EMU_MAX_CORES = 8
-_EMU_MAX_INPUT_BYTES = 16 << 20
+# 32 MiB: the bf8 -> bf16 conversion of the gpt_oss cases roughly doubles their input
+# bytes (e.g. matmul 00-02 and linear 00 are 23-28 MiB), which a 16 MiB cap deselected.
+_EMU_MAX_INPUT_BYTES = 32 << 20
 
 # Bytes per element, block-float dtypes including their per-face exponents.
 _ELEM_BYTES = {

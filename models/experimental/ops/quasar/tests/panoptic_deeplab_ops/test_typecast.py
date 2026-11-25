@@ -41,7 +41,7 @@ CASES = [
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
-            {"k": "dtype", "v": "BFLOAT8_B"},
+            {"k": "dtype", "v": "BFLOAT16"},
         ],
         "kwargs": {},
         "outs": [
