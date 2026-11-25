@@ -7,14 +7,14 @@
 // No tile math — just flat element-level scatter on RM sticks.
 //
 // Protocol (dual-RISC):
-//   Writer (BRISC): loads input stick→cb_input, writes cb_output→DRAM
+//   Writer (BRISC): loads input stick→cb_input, writes cb_output→output buffer
 //   Reader (NCRISC): waits cb_input, copies to cb_output, scatter, pushes
 //
 // Chunked index/src streaming (large-stick support):
 //   The output stick stays fully resident in L1 (any index[i] can target any
 //   output position), but the index and src sticks are streamed in fixed-size
 //   chunks so their L1 footprint is bounded regardless of stick length. Each
-//   chunk is a *sub-range of the single per-stick DRAM page*, read via a
+//   chunk is a *sub-range of the single per-stick page*, read via a
 //   page-relative Noc::async_read ({.page_id, .offset_bytes}) — never spanning
 //   the page boundary, so the interleaved bank mapping is never crossed. chunk_elems is
 //   either the whole index stick (one chunk at offset 0) or a multiple of 32 elements, so

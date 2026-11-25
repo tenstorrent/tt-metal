@@ -373,24 +373,36 @@ def test_scatter_codegen_streaming_rows_without_index_coverage(device):
 )
 def test_scatter_codegen_detour_bounds_keep_the_tile_factory(device, shape, index_shape):
     # Just past each detour bound (32 tile rows, 32768-element sticks) with sticks that are 32 B
-    # aligned, so only the bound declines the detour: the TILE factory's one program beyond native's,
-    # where the detour would add its untilizes and the ROW_MAJOR factory. The stick bound is crossed
-    # by the input alone. The wide row does not fit the row split, so the column split must be the
-    # cheaper plan on every grid or the wide-row rule demotes the call: with one index tile per row it
-    # is cheaper on 56, 64 and 110 cores alike, while an eight-tile index would flip to native on the
-    # Wormhole grids (the gtest pins that threshold).
+    # aligned, so only the bound declines the detour, and the call has to stay on codegen and match
+    # native. The count shows that codegen served it, not which factory did: native untilizes and
+    # tilizes these same operands, so a detour would add one program here too, and the gtest pins
+    # which side of each bound takes it. The stick bound is crossed by the input alone. The wide row
+    # does not fit the row split, so the column split must be the cheaper plan on every grid or the
+    # wide-row rule demotes the call: with one index tile per row it is cheaper on 56, 64 and 110
+    # cores alike, while an eight-tile index would flip to native on the Wormhole grids (the gtest
+    # pins that threshold).
     xt, it, st = _make_case(shape, index_shape, -1, ttnn.TILE_LAYOUT, device)
     _, added = _run_auto_against_native(device, xt, it, st, -1)
-    assert added == 1, "expected the codegen TILE factory's one program beyond native's"
+    assert added == 1, "expected codegen to serve this call with one program beyond native's"
 
 
-def test_scatter_codegen_tile_program_cache_key_follows_the_l1_frontier(device):
-    # The TILE factory choice is read off the live L1 frontier and the program hash keys on it: a
-    # row that fits the interleaved plan on a clear L1 must not replay that program once a blocker
-    # has moved the frontier past it, or its row-resident CBs would land on the blocker. Width from
-    # the bank: one column short of the widest row the interleaved plan seats, plus 8 elements to
-    # keep the raw stick off a 32 B boundary; 64 rows on two cores keep the row split from choosing
-    # streaming by itself.
+def test_scatter_codegen_interleaved_rows_without_index_coverage(device):
+    # The row split clips the index by its own copy of the logic the column split has: the index
+    # reaches 40 of the input's 96 rows, so the third tile row passes through unscattered and the
+    # second carries 8 valid index rows of 32. Two cores and four index tiles per row keep the row
+    # split the cheaper plan, and the 400 B stick keeps the call off the row-major detour.
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    xt, it, st = _make_case([1, 1, 96, 200], [1, 1, 40, 100], -1, ttnn.TILE_LAYOUT, device)
+    assert_equal(
+        ttnn.to_torch(_force_native(xt, -1, it, st, sub_core_grids=grid)),
+        ttnn.to_torch(_force_codegen(xt, -1, it, st, sub_core_grids=grid)),
+    )
+
+
+def _widest_row_split_case(device):
+    # Width from the bank: one column short of the widest row the interleaved plan seats, plus 8
+    # elements to keep the raw stick off a 32 B boundary so the row-major detour declines it; 64
+    # rows on two cores keep the row split the cheaper plan.
     torch.manual_seed(0)
     bank = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
     tile_bytes = 32 * 32 * 2
@@ -414,17 +426,42 @@ def test_scatter_codegen_tile_program_cache_key_follows_the_l1_frontier(device):
         layout=ttnn.TILE_LAYOUT,
         device=device,
     )
-    device.clear_program_cache()
-    entries_before = device.num_program_cache_entries()
-    first = ttnn.to_torch(_force_codegen(xt, -1, it, st, sub_core_grids=grid))
-    assert device.num_program_cache_entries() == entries_before + 1
-    blocker = ttnn.from_torch(
-        torch.zeros([1, 64 * 1024 // 2], dtype=torch.bfloat16),
+    return xt, it, st, grid
+
+
+def _l1_blocker(device, num_bytes):
+    return ttnn.from_torch(
+        torch.zeros([1, num_bytes // 2], dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+
+
+def test_scatter_codegen_wide_row_that_no_longer_fits_live_l1_stays_native(device):
+    # On a clear L1 the row split seats this row and codegen serves the call. Once a blocker has
+    # taken the L1 the row needs, the column split is all codegen has left; it would rescan the
+    # index per output tile where the row split scans it once per row, so the call goes native.
+    xt, it, st, grid = _widest_row_split_case(device)
+    _, added = _run_auto_against_native(device, xt, it, st, -1, sub_core_grids=grid)
+    assert added == 1, "expected codegen to serve the row on a clear L1"
+    blocker = _l1_blocker(device, 64 * 1024)
+    _, added = _run_auto_against_native(device, xt, it, st, -1, sub_core_grids=grid)
+    ttnn.deallocate(blocker)
+    assert added == 0, "auto routed a row that no longer fits live L1 to the column split; expected native"
+
+
+def test_scatter_codegen_tile_program_cache_key_follows_the_l1_frontier(device):
+    # The TILE factory choice is read off the live L1 frontier and the program hash keys on it: a
+    # row that fits the interleaved plan on a clear L1 must not replay that program once a blocker
+    # has moved the frontier past it, or its row-resident CBs would land on the blocker.
+    xt, it, st, grid = _widest_row_split_case(device)
+    device.clear_program_cache()
+    entries_before = device.num_program_cache_entries()
+    first = ttnn.to_torch(_force_codegen(xt, -1, it, st, sub_core_grids=grid))
+    assert device.num_program_cache_entries() == entries_before + 1
+    blocker = _l1_blocker(device, 64 * 1024)
     second = ttnn.to_torch(_force_codegen(xt, -1, it, st, sub_core_grids=grid))
     ttnn.deallocate(blocker)
     assert (

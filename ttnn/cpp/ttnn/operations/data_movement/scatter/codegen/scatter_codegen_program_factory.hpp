@@ -31,7 +31,7 @@ using ScatterPageMap = std::array<uint32_t, kScatterPageMapSize>;
 uint32_t scatter_page_rank(const ttnn::Shape& shape);
 
 // Builds the fixed-width logical-prefix page map shared by every reader: [rank, input_dims
-// (zero-padded to kScatterMaxPageRank with 1s), index_dims (likewise)]. `tiled` selects between the
+// (padded with 1s up to kScatterMaxPageRank), index_dims (likewise)]. `tiled` selects between the
 // TILE folding (H collapsed to tile-rows) and the ROW_MAJOR folding (no collapse). Clamps a page
 // rank past kScatterMaxPageRank rather than failing: it runs ahead of the prim's own checks
 // (through build_scatter_codegen_params), and the device operation's cache-miss checks are where
@@ -41,12 +41,17 @@ ScatterPageMap compute_scatter_page_map(const ttnn::Shape& input_shape, const tt
 // Tile-page geometry, computed from the (already dim==-1, already-normalized) input/index/src
 // tensors' PADDED shapes. TILE-only.
 struct ScatterTileGeometry {
+    // Tile rows of the whole input: every leading dim multiplied into H, in tiles.
     uint32_t Ht = 0;
+    // Tiles per row of the input (and output), and of the index (and src).
     uint32_t Wt_output = 0;
     uint32_t Wt_index = 0;
+    // Logical (unpadded) input width in elements: the bound a scatter position is held to.
     uint32_t output_logical_w = 0;
+    // Logical rows in the last tile row of one index H slice, and logical columns in its last tile.
     uint32_t idx_valid_h_last = 0;
     uint32_t idx_valid_w_last = 0;
+    // Tile rows of one H slice of the index, where Ht counts the whole input.
     uint32_t Ht_per_batch_index = 0;
 };
 ScatterTileGeometry compute_scatter_tile_geometry(const Tensor& input_tensor, const Tensor& index_tensor);
@@ -89,7 +94,8 @@ uint64_t scatter_static_l1(const Tensor& input_tensor);
 // The cores a program may use: the sub-core grid when the caller gave one, else the device's compute
 // grid. Read by select_program_factory() and by is_demoted()'s column-split costing, so both cost the
 // same grid.
-uint32_t scatter_candidate_cores(const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids);
+uint32_t scatter_candidate_cores(
+    const Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 // The per-core CB ceiling the next program will actually find: get_max_l1_space(), the bank less
 // whatever is live in L1 right now. Read by the routing gates that deduct this call's own pending

@@ -3,15 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Scatter writer – streaming mode (BRISC).
-// Loads input tiles into cb_input and writes output tiles to DRAM. It hands the
+// Loads input tiles into cb_input and writes output tiles to the output buffer. It hands the
 // reader one input tile, then waits for that tile's output, so the two RISCs
 // alternate per tile and each CB holds one page.
 //
 // Work is split by Wt_output across cores. Each core handles its assigned
 // output columns across ALL Ht rows.
 //
-// Each batch ends with async_writes_flushed(), which is all that reclaiming its CB slot needs; one
-// async_write_barrier() closes the kernel, since nothing reads the destination before the program ends.
+// Each tile ends with async_writes_flushed(), which is all that reclaiming its CB slot needs; one
+// async_write_barrier() closes the kernel: no core reads a page after a core has written it, also when the
+// destination is the input buffer.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -51,7 +52,7 @@ void kernel_main() {
     CircularBuffer out_cb(cb_output);
 
     // Reset the output-column tile id per row h (see scatter_reader_streaming.cpp):
-    // the DRAM tile id is h*Wt_output + column and this core owns the same strided
+    // the output tile id is h*Wt_output + column and this core owns the same strided
     // columns in every row. A counter carried across h drifts and streams/writes
     // the wrong row's tiles.
     for (uint32_t h = 0; h < Ht; h++) {
@@ -68,7 +69,7 @@ void kernel_main() {
             noc.async_read_barrier();
             in_cb.push_back(one_tile);
 
-            // Phase 2: Write one completed output tile to DRAM
+            // Phase 2: Write one completed output tile to the output buffer
             out_cb.wait_front(one_tile);
             noc.async_write(
                 out_cb,

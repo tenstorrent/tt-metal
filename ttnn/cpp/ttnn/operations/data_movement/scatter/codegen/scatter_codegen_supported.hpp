@@ -116,7 +116,7 @@ bool is_demoted(
     const Tensor& index_tensor,
     const Tensor& src_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
 // Live-L1 gate consulted only by ttnn::scatter()'s routing, after the gates above: whether the plan
 // the codegen factory will build fits the L1 that is free right now, with the buffers this call

@@ -41,15 +41,14 @@ _VERBOSE = False
 
 _MARGIN = 0.10
 
-# Device duration in ns per (dtype, input row length, index row length): one Blackhole chip of a QuietBox 2,
-# 2026-10-26, median of _ITERS dispatches (two runs agreed within 0.01%). The previous element-by-element copy measured
-# 199_690 / 1_576_617 / 1_723_962 ns, outside the band. Recalibrate on the perf runner: each case logs an "RT-CAL" line
-# with its measured median.
+# Device duration in ns per (dtype, input row length, index row length, kernel), median of _ITERS dispatches. The
+# float32 rows: one Blackhole chip of a QuietBox 2, 2026-10-26 (two runs agreed within 0.01%). The previous
+# element-by-element copy measured 199_690 / 1_576_617 / 1_723_962 ns, outside the band. Recalibrate on the perf
+# runner: each case logs an "RT-CAL" line with its measured median.
 _EXPECTED_NS: dict[tuple[str, int, int, str], int] = {
     ("float32", 4224, 4096, "native"): 165_207,
     ("float32", 33024, 32768, "native"): 1_307_336,
-    # The bfloat16 row on the codegen ROW_MAJOR kernel: one Blackhole P150 chip, 2026-11-19, median of _ITERS
-    # (the native kernel measured 1_454_746 ns on this row before the routing change).
+    # The bfloat16 row on the codegen ROW_MAJOR kernel: one Blackhole P150 chip, 2026-11-19.
     ("bfloat16", 33024, 32768, "codegen"): 598_746,
 }
 

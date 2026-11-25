@@ -115,12 +115,14 @@ bool supported_by_codegen(
     const Tensor& index_tensor,
     const Tensor& src_tensor,
     uint32_t reduction_mode) {
-    // Only bfloat16 input/src is in scope.
+    // Only bfloat16 input/src is in scope: it is the one dtype the port was verified and measured
+    // on. The kernels move 2- and 4-byte elements alike, so the others stay native for want of that
+    // evidence, not of a kernel.
     if (input_tensor.dtype() != DataType::BFLOAT16 || src_tensor.dtype() != DataType::BFLOAT16) {
         return false;
     }
-    // The index tensor addresses a destination position, not tile-page content; only the two integer
-    // dtypes native's own is_i32 treats as address-shaped are in scope.
+    // The readers load an index element as a 4-byte integer, so only the two 4-byte integer dtypes
+    // are in scope.
     if (index_tensor.dtype() != DataType::INT32 && index_tensor.dtype() != DataType::UINT32) {
         return false;
     }
@@ -208,8 +210,8 @@ bool supported_by_codegen(
         return false;
     }
     if (layout == Layout::TILE) {
-        // The streaming factory's footprint is a small, FIXED number of tile pages (2 output + 2
-        // input + 1 index + 1 src, none of them scaled by Wt_output/Ht), so it always fits the
+        // The streaming factory's footprint is a FIXED four tile pages (one each for output, input,
+        // index and src, none of them scaled by Wt_output/Ht), so it always fits the
         // static bank; whether it fits the L1 free right now is codegen_plan_fits_live_l1()'s
         // question. The interleaved plan is only ever an optional upgrade select_program_factory()
         // makes at descriptor-build time, when its row-resident footprint fits L1 and
@@ -261,8 +263,10 @@ namespace {
 constexpr uint32_t kRowMajorRerouteMaxHt = 32;
 constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
 // Operand bytes (input, index and src together) at or below which a ROW_MAJOR scatter off the last
-// axis stays native (is_demoted): the measured cases at 10 and 40 KiB tie native on device and lose
-// host wall clock. The index counts because it, not the input, can carry the work.
+// axis stays native (is_demoted). The bound covers the two measured cases, at 10 and 40 KiB, whose
+// device win of 1 to 4 us does not show on wall clock; where that turns is not measured, so the
+// bound is those cases' size, not a crossover. The index counts because it, not the input, can carry
+// the work.
 constexpr uint64_t kRowMajorDispatchBoundOperandBytes = 48 * 1024;
 // The untilized stick's raw byte width must be a multiple of this: the routing term the detour was
 // measured with, kept so it serves exactly those cases. Not a transport requirement -- the
@@ -485,16 +489,23 @@ bool is_demoted(
             return true;
         }
         // The streaming factory re-reads and rescans every index/src tile per output tile. When the
-        // row split would do less work per core but its row does not fit the L1 bank, and the detour
-        // declines the call, streaming is all codegen has left, and it runs quadratic where native
-        // runs linear: 38x slower than native at [1,1,2048,12800] with a 256-wide index, 5x with a
-        // 32-wide one (Blackhole). Such a call stays native.
+        // row split would do less work per core but its row does not fit L1, and the detour declines
+        // the call, streaming is all codegen has left, and it runs quadratic where native runs
+        // linear: 38x slower than native at [1,1,2048,12800] with a 256-wide index, 5x with a
+        // 32-wide one (Blackhole). Such a call stays native. The row is held to the L1 the factory
+        // will find, as select_program_factory() holds it: one that fits the empty bank but not what
+        // is free now lands on streaming all the same.
         const auto& tile = input_tensor.tensor_spec().tile();
         const uint64_t Ht = working_tile_rows(working_input, tile.get_height());
         const uint32_t Wt_output = tt::div_up(working_input[-1], tile.get_width());
         const uint32_t Wt_index = tt::div_up(working_index[-1], tile.get_width());
+        const uint64_t row_split_budget = live_l1_budget(
+            input_tensor,
+            pending_operand_copies_bytes(
+                input_tensor, index_tensor, src_tensor, axis, working_input, working_index, Layout::TILE) +
+                pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), Layout::TILE, output_mem_config));
         const bool row_split_fits = ttnn::prim::scatter_interleaved_fits_l1(
-            ttnn::prim::scatter_static_l1(input_tensor),
+            row_split_budget,
             Wt_output,
             ttnn::prim::scatter_output_aligned_page_size(input_tensor, output_mem_config, std::nullopt),
             input_tensor.buffer()->aligned_page_size(),
@@ -512,10 +523,10 @@ bool is_demoted(
     }
 
     // A small ROW_MAJOR scatter off the last axis is dispatch-bound: both legs pay the same
-    // transposes around a scatter of a few microseconds, so the port's device win (5-12% on the
-    // measured cases, Blackhole) cannot show on wall clock, which the call loses by the same few
-    // percent under host noise (Wormhole CI). Below the bound the route is not worth a coin flip and
-    // stays native.
+    // transposes around a scatter of a few microseconds, so the port's device win is 1 to 4 us on
+    // the measured cases (5-12% on Blackhole, up to 17% on Wormhole), while the whole call measures
+    // 4 to 7 us slower on wall clock through the codegen leg (Blackhole, in every measurement
+    // window). A device win that small is not worth that, so the call stays native.
     const auto operand_bytes = [](const Tensor& t) {
         return static_cast<uint64_t>(t.logical_shape().volume()) * t.element_size();
     };

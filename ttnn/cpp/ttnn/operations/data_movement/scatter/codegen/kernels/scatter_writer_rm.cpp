@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Scatter writer – ROW_MAJOR path (BRISC).
-// Dual-RISC: loads input sticks into cb_input, writes output sticks to DRAM.
+// Dual-RISC: loads input sticks into cb_input, writes output sticks to the output buffer.
 //
 // Each stick ends with async_writes_flushed(), which is all that reclaiming its CB slot needs; one
-// async_write_barrier() closes the kernel, since nothing reads the destination before the program ends.
+// async_write_barrier() closes the kernel: no core reads a page after a core has written it, also when the
+// destination is the input buffer.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"

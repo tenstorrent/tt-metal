@@ -74,6 +74,9 @@ ScatterCodegenDeviceOperation::program_factory_t ScatterCodegenDeviceOperation::
 // Because the key depends on live L1, a trace captured under one L1 state replays that state's
 // plan; a capture whose frontier differs from the warm-up's misses the cache, and the framework
 // throws on a miss during capture rather than replaying a stale plan.
+//
+// Cost: an op that defines its own hash is keyed in the canonical program-cache key by its name
+// alone, so a 64-bit collision between two distinct scatter calls is a wrong hit, not a rebuild.
 ttsl::hash::hash_t ScatterCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto factory = select_program_factory(attributes, tensor_args);

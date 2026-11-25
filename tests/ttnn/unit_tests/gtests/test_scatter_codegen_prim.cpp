@@ -4,8 +4,8 @@
 
 // The codegen scatter prim takes an optional preallocated output that no public entry exposes, so
 // its contract on that argument is only reachable from C++: the destination must be the tensor the
-// op would create for itself (standard padding included) and must not be one of the operands the
-// kernels still read. Likewise the shape relations ttnn::scatter establishes before calling (an
+// op would create for itself (standard padding included) and must not alias index or src.
+// Likewise the shape relations ttnn::scatter establishes before calling (an
 // index no wider than the input on any leading axis) are only testable against the prim directly.
 
 #include <gtest/gtest.h>
@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <exception>
 #include <optional>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -102,7 +103,30 @@ Operands make_operands_of(
     };
 }
 
+// True when `call` throws and its message names `reason`: another check firing first then fails
+// the test instead of passing it.
+template <typename Call>
+bool throws_naming(Call&& call, std::string_view reason) {
+    try {
+        call();
+    } catch (const std::exception& e) {
+        return std::string_view(e.what()).find(reason) != std::string_view::npos;
+    }
+    return false;
+}
+
 }  // namespace
+
+TEST_F(ScatterCodegenPrimFixture, RejectsASrcThatDoesNotCarryTheIndexShape) {
+    // The readers address src pages with index's geometry, and ttnn::scatter slices src to index's
+    // shape before calling, so only a direct prim call can hand over a wider or a narrower one.
+    Operands wider = make_operands(device_, 64);
+    wider.src = ttnn::zeros(ttnn::Shape({1, 1, 32, 64}), DataType::BFLOAT16, Layout::TILE, *device_);
+    EXPECT_TRUE(throws_naming([&] { run(wider, std::nullopt); }, "src must carry index's shape"));
+    Operands narrower = make_operands(device_, 64);
+    narrower.src = ttnn::zeros(ttnn::Shape({1, 1, 32, 16}), DataType::BFLOAT16, Layout::TILE, *device_);
+    EXPECT_TRUE(throws_naming([&] { run(narrower, std::nullopt); }, "src must carry index's shape"));
+}
 
 TEST_F(ScatterCodegenPrimFixture, RejectsAnIndexWiderThanTheInputOnALeadingAxis) {
     // The readers walk the input's pages and clip each page coordinate against the index's extent,
@@ -187,6 +211,28 @@ TEST_F(ScatterCodegenPrimFixture, SelectsTheFactoryByTheColumnSplitCost) {
     EXPECT_FALSE(detour(ops));
     EXPECT_TRUE(detour(make_operands(device_, 64)));
     EXPECT_FALSE(detour(two_range));
+}
+
+TEST_F(ScatterCodegenPrimFixture, DetourStopsAtItsTileRowAndStickBounds) {
+    // 128 B and 65536 B sticks are 32 B aligned and L1 is clear, so only the bounds decide: 32 tile
+    // rows and 32768-element sticks are served, one tile row or one tile column more is not. The
+    // program count cannot show this from outside: native untilizes and tilizes the same operands,
+    // so a detour adds one program beyond native's exactly as the TILE factory does.
+    const auto detour = [&](const ttnn::Shape& input_shape, const ttnn::Shape& index_shape) {
+        const Operands o = make_operands_of(device_, input_shape, index_shape, input_shape[-1]);
+        return prefers_row_major_strategy(
+            o.input,
+            o.index,
+            o.src,
+            o.input.logical_shape(),
+            o.index.logical_shape(),
+            o.input.memory_config(),
+            /*pending_tile_bytes=*/0);
+    };
+    EXPECT_TRUE(detour(ttnn::Shape({1, 1, 1024, 64}), ttnn::Shape({1, 1, 1024, 32})));
+    EXPECT_FALSE(detour(ttnn::Shape({1, 1, 1056, 64}), ttnn::Shape({1, 1, 1056, 32})));
+    EXPECT_TRUE(detour(ttnn::Shape({1, 1, 32, 32768}), ttnn::Shape({1, 1, 32, 32})));
+    EXPECT_FALSE(detour(ttnn::Shape({1, 1, 32, 32800}), ttnn::Shape({1, 1, 32, 32})));
 }
 
 TEST(ScatterCodegenFactorySelection, ColumnSplitCostFollowsTheRescans) {
@@ -305,6 +351,38 @@ TEST_F(ScatterCodegenPrimFixture, DemotesAWideRowWhoseColumnSplitWouldRescan) {
         demoted(make_operands_of(device_, ttnn::Shape({1, 1, 2048, 3200}), ttnn::Shape({1, 1, 2048, 256}), 3200)));
 }
 
+TEST_F(ScatterCodegenPrimFixture, DemotesAWideRowOnceItsRowSplitNoLongerFitsLiveL1) {
+    // 100 output tile columns seat the row split on a clear L1 (about 410 KiB), and 64 tile rows are
+    // past the detour. With 200 KiB left per bank the factory would fall to the column split, which
+    // rescans the eight index tiles per output tile, so the call is demoted while the blocker lives.
+    const Operands ops =
+        make_operands_of(device_, ttnn::Shape({1, 1, 2048, 3200}), ttnn::Shape({1, 1, 2048, 256}), 3200);
+    const auto demoted = [&]() { return is_demoted(ops.input, -1, ops.index, ops.src, ops.input.memory_config()); };
+    EXPECT_FALSE(demoted());
+    const uint32_t banks = device_->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+    const uint64_t stick_bytes = ttnn::prim::scatter_usable_l1(ops.input) - 200 * 1024;
+    const tt::tt_metal::MemoryConfig l1{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+    Tensor blocker = ttnn::zeros(
+        ttnn::Shape({banks, static_cast<uint32_t>(stick_bytes / sizeof(uint16_t))}),
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        *device_,
+        l1);
+    EXPECT_TRUE(demoted());
+    blocker.deallocate();
+    EXPECT_FALSE(demoted());
+}
+
+TEST_F(ScatterCodegenPrimFixture, DemotesAWideRowByTheCallerGrid) {
+    // 1025 output tile columns never fit the row split and the 32800-element stick is past the
+    // detour. On the device grid a core takes a few columns and the column split is the cheaper
+    // plan; on two cores each would rescan the index for 513 columns, so the call is demoted.
+    const Operands ops = make_operands_of(device_, ttnn::Shape({1, 1, 32, 32800}), ttnn::Shape({1, 1, 32, 32}), 32800);
+    const CoreRangeSet two_cores(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
+    EXPECT_FALSE(is_demoted(ops.input, -1, ops.index, ops.src, ops.input.memory_config()));
+    EXPECT_TRUE(is_demoted(ops.input, -1, ops.index, ops.src, ops.input.memory_config(), two_cores));
+}
+
 TEST_F(ScatterCodegenPrimFixture, RejectsRankZeroRowMajorOperands) {
     // The ROW_MAJOR stick geometry reads the last dim before validate runs; a scalar has none, so the
     // call must be refused there instead of walking off the empty shape.
@@ -409,11 +487,11 @@ TEST_F(ScatterCodegenPrimFixture, RejectsTransposedTilesOnAProgramCacheHit) {
     EXPECT_FALSE(
         supported_by_codegen(transposed_ops.input, -1, transposed_ops.index, transposed_ops.src, kReductionNone));
     EXPECT_THROW(run(transposed_ops, std::nullopt), std::exception);
-    device_->disable_and_clear_program_cache();
+    device_->clear_program_cache();
 }
 
 TEST_F(ScatterCodegenPrimFixture, TileRouteNeedsItsStreamingPagesInLiveL1) {
-    // The streaming plan's six tile pages are the least a TILE call seats, so an L1 that cannot hold
+    // The streaming plan's four tile pages are the least a TILE call seats, so an L1 that cannot hold
     // them must send the call native rather than fail the program's CB allocation. A 72-wide stick
     // keeps its raw bytes off a 32 B boundary, so the row-major detour, which would otherwise answer
     // for the call, declines it.
@@ -454,6 +532,12 @@ TEST(ScatterCodegenRmChunkPlanner, BudgetsTheSeatedCbsOfAnUnalignedChunk) {
         ttnn::prim::scatter_rm_chunk_elems(kFixed + 320, kFixed, kIndexElems, kIndexBytes, kSrcBytes, kCbAlign), 42u);
     EXPECT_EQ(
         ttnn::prim::scatter_rm_chunk_elems(kFixed + 319, kFixed, kIndexElems, kIndexBytes, kSrcBytes, kCbAlign), 32u);
+    // A budget under one 32-element chunk, or none at all, still plans 32 elements: a chunk of zero
+    // would never advance the readers' loop, and the CB allocation is what has to fail instead.
+    EXPECT_EQ(
+        ttnn::prim::scatter_rm_chunk_elems(kFixed + 100, kFixed, kIndexElems, kIndexBytes, kSrcBytes, kCbAlign), 32u);
+    EXPECT_EQ(
+        ttnn::prim::scatter_rm_chunk_elems(kFixed - 1, kFixed, kIndexElems, kIndexBytes, kSrcBytes, kCbAlign), 32u);
 }
 
 // A device opened with an L1_SMALL region: the allocator's L1 bank stops below that region, and the

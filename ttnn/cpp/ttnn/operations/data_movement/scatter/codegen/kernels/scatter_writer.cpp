@@ -13,7 +13,8 @@
 // Multicore: strided row assignment, same as reader.
 //
 // Each batch ends with async_writes_flushed(), which is all that reclaiming its CB slot needs; one
-// async_write_barrier() closes the kernel, since nothing reads the destination before the program ends.
+// async_write_barrier() closes the kernel: no core reads a page after a core has written it, also when the
+// destination is the input buffer.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -58,7 +59,7 @@ void kernel_main() {
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const uint32_t h = core_loop * num_cores + core_id;
 
-        // --- Phase 1: Read full input data row (Wt_output tiles) from DRAM ---
+        // --- Phase 1: Read full input data row (Wt_output tiles) from the input buffer ---
         uint32_t tiles_read = 0;
         while (tiles_read < Wt_output) {
             uint32_t batch = (Wt_output - tiles_read < read_batch) ? (Wt_output - tiles_read) : read_batch;

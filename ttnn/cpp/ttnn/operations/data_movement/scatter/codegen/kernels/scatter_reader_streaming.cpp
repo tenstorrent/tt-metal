@@ -12,7 +12,7 @@
 // for matching indices. This mirrors gather streaming (split by output columns).
 //
 // Protocol (dual-RISC, mirrors interleaved path):
-//   Writer (BRISC): loads input→cb_input, writes cb_output→DRAM
+//   Writer (BRISC): loads input→cb_input, writes cb_output→output buffer
 //   Reader (NCRISC): waits cb_input, copies to cb_output, scatter, pushes cb_output
 
 #include "scatter_common.hpp"
@@ -89,7 +89,7 @@ void kernel_main() {
     // The output-column tile id restarts at core_id for EACH tile-row h — this core
     // owns the same strided columns {core_id, core_id+num_cores, ...} in every row,
     // and both the `tile_idx == current_output_tile_id` scatter match and the
-    // writer's DRAM tile id (h*Wt_output + column) depend on it.
+    // writer's output tile id (h*Wt_output + column) depend on it.
     for (uint32_t h = 0; h < Ht; h++) {
         uint32_t current_output_tile_id = core_id;
         uint32_t h_src = 0;

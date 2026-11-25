@@ -571,8 +571,9 @@ Tensor scatter(
     //                                                                      -> native
     //   - TILE with a unit pre-last working dim that the row-major detour declines
     //                                                                      -> native (demoted)
-    //   - TILE whose row split does not fit the static L1 bank while the column split would rescan
-    //     more than it, and that the row-major detour declines
+    //   - TILE whose row split does not fit the L1 free right now, once this call's own copies and
+    //     output are deducted, while the column split would rescan more than it, and that the
+    //     row-major detour declines
     //                                                                      -> native (demoted)
     //   - ROW_MAJOR off the last axis with at most kRowMajorDispatchBoundOperandBytes of operands
     //                                                                      -> native (demoted)

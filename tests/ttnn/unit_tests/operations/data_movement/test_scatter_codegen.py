@@ -80,7 +80,7 @@ def test_scatter_codegen(device, shape, index_shape, layout, kwargs, index_max):
 
     golden = _force_native(xt, -1, it, st, **kwargs)
     output = _force_codegen(xt, -1, it, st, **kwargs)
-    if not kwargs:
+    if "reduce" not in kwargs:
         # Native is not the only oracle: an overwrite with a unique index has one answer, torch's.
         assert_equal(torch.scatter(x, -1, index, src), ttnn.to_torch(output))
 

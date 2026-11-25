@@ -35,9 +35,8 @@ struct ScatterCodegenParams {
     const ScatterPageMap page_map;
     const uint32_t reduction_mode;
     const tt::tt_metal::MemoryConfig output_mem_config;
-    // Execution control: every program factory threads it into its own work split, so it is honoured
-    // rather than dropped. Still participates in the default whole-struct hash like every other field
-    // above.
+    // Execution control: every program factory splits its work over it. Part of the program hash
+    // like every field above.
     const std::optional<CoreRangeSet> sub_core_grids;
 };
 

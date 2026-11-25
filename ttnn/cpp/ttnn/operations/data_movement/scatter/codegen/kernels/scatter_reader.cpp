@@ -9,7 +9,7 @@
 // Scatter semantics: output[index[i]] = src[i]
 //
 // Protocol (mirrors gather):
-//   Writer (BRISC): loads input→cb_input, writes cb_output→DRAM
+//   Writer (BRISC): loads input→cb_input, writes cb_output→output buffer
 //   Reader (NCRISC): waits cb_input, copies to cb_output, scatter, pushes cb_output
 //
 // Padding safety: skip elements where row/col >= valid H/W to prevent

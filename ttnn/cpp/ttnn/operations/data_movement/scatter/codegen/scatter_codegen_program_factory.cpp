@@ -144,18 +144,27 @@ std::vector<std::pair<CoreCoord, uint32_t>> scatter_assigned_cores(const CoreSpl
     assigned.reserve(split.num_cores);
     uint32_t emitted = 0;
     for (const auto& core : corerange_to_cores(split.core_range, std::nullopt, /*row_wise=*/false)) {
-        uint32_t work = 0;
-        if (split.group1.contains(core)) {
-            work = split.work_per_core_1;
-        } else if (split.group2.contains(core)) {
-            work = split.work_per_core_2;
-        } else {
-            continue;
-        }
-        work = std::min(work, total_work - emitted);
+        // Both kernels are placed on the whole core range, so a core this walk left out would run
+        // with no runtime args.
+        const bool in_group_1 = split.group1.contains(core);
+        TT_FATAL(
+            in_group_1 != split.group2.contains(core),
+            "scatter_codegen: core {} is not in exactly one work group of the split.",
+            core.str());
+        const uint32_t work = in_group_1 ? split.work_per_core_1 : split.work_per_core_2;
+        // The strided kernels give ordinal k the units k, k + num_cores, ..., so the cores that
+        // carry one unit more have to be the lowest ordinals.
+        TT_FATAL(
+            assigned.empty() || work <= assigned.back().second,
+            "scatter_codegen: core {} carries {} work units after a core carrying {}.",
+            core.str(),
+            work,
+            assigned.back().second);
         emitted += work;
         assigned.emplace_back(core, work);
     }
+    TT_FATAL(
+        emitted == total_work, "scatter_codegen: the core split hands out {} of {} work units.", emitted, total_work);
     return assigned;
 }
 
@@ -515,7 +524,6 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryStreaming::create_de
         {"cb_index", kCbIndex},
         {"cb_src", kCbSrc},
         {"Ht", attributes.Ht},
-        {"Wt_output", attributes.Wt_output},
         {"Wt_index", attributes.Wt_index},
         {"num_cores", split.num_cores},
         {"idx_valid_h_last", attributes.idx_valid_h_last},
