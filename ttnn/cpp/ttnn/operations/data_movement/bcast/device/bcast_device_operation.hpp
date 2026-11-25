@@ -13,7 +13,7 @@
 #include "bcast_multi_core_hw_program_factory.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <variant>
 
 namespace ttnn::prim {

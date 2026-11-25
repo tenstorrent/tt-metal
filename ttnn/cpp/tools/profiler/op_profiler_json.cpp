@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Non-template JSON assembly for op_profiler.
-// This file is compiled once and keeps nlohmann/json.hpp + tt-metalium/tt_metal.hpp
+// This file is compiled once and keeps nlohmann/json.hpp + tt-metalium/execution/slow_dispatch.hpp
 // out of the 1000+ TU include chain that goes through device_operation.hpp.
 
 #include "tools/profiler/op_profiler_serialize.hpp"
@@ -13,8 +13,8 @@
 #include <string_view>
 #include <unordered_set>
 #include <tt-metalium/experimental/op_profiler_support.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "ttnn/operation.hpp"
 #include <enchantum/enchantum.hpp>
 #include <fmt/format.h>

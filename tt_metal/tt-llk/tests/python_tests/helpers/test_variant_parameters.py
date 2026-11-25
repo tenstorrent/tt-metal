@@ -152,6 +152,16 @@ class BROADCAST_TYPE(TemplateParameter):
 
 
 @dataclass
+class SEED_BROADCAST_TYPE(TemplateParameter):
+    """Broadcast type of the plain pass that seeds Dest before an ``ACC_TO_DEST`` broadcast pass."""
+
+    seed_broadcast_type: BroadcastType
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto SEED_BROADCAST_TYPE = ckernel::BroadcastType::{self.seed_broadcast_type.value};"
+
+
+@dataclass
 class SFPU_BCAST_DIM(TemplateParameter):
     """Dest-side SFPU row/col broadcast for ``sfpu_binary_bcast_test.cpp``.
 
@@ -357,10 +367,19 @@ class SFPU_BINOP_MODE(TemplateParameter):
     Emits ``constexpr int SFPU_BINOP_MODE = <n>;`` consumed by
     ``sfpu_binop_scalar_{test,perf}.cpp``, matching the BINOP_MODE enum in
     ``ckernel_sfpu_binop_with_unary.h`` (ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4).
+    ``quasar/sfpu_binop_scalar_quasar_test.cpp`` also takes 5 and 6 for the int32 kernels.
     """
 
     # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
-    _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
+    _MODE = {
+        "ADD": 0,
+        "SUB": 1,
+        "MUL": 2,
+        "DIV": 3,
+        "RSUB": 4,
+        "add_int32": 5,
+        "sub_int32": 6,
+    }
 
     binop_mathop: MathOperation = None
 
@@ -2617,13 +2636,13 @@ class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
 class ZERO_PAD_ROWS(TemplateParameter):
     """SFPU row bounds for _zero_pad_tile_."""
 
-    valid_rows: int = 0
-    total_rows: int = 32
+    zero_pad_valid_rows: int = 0
+    zero_pad_total_rows: int = 32
 
     def convert_to_cpp(self) -> str:
         return (
-            f"constexpr int ZERO_PAD_VALID_ROWS = {self.valid_rows};\n"
-            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.total_rows};"
+            f"constexpr int ZERO_PAD_VALID_ROWS = {self.zero_pad_valid_rows};\n"
+            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.zero_pad_total_rows};"
         )
 
 
@@ -2650,14 +2669,14 @@ class SPARSE_K_CONFIG(TemplateParameter):
 @dataclass
 class CLAMPED_SILU_PARAMS(TemplateParameter):
     clamped_silu_op: str = "GATE"
-    scalar0: float = 1.0
-    scalar1: float = 1.0
+    clamped_silu_scalar0: float = 1.0
+    clamped_silu_scalar1: float = 1.0
 
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.clamped_silu_scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.clamped_silu_scalar1)}u;"
         )
 
 

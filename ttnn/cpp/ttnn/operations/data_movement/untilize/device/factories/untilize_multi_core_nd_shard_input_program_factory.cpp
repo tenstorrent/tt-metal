@@ -10,10 +10,10 @@
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;

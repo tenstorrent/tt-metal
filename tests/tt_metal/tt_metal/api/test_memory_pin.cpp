@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/memory/utils/memory_pin.hpp>
 #include "common/memory_pin_impl.hpp"
 
 namespace tt::tt_metal {

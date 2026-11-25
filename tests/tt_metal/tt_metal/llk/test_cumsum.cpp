@@ -9,17 +9,17 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/program/program_impl.hpp"
 #include "llk_device_fixture.hpp"

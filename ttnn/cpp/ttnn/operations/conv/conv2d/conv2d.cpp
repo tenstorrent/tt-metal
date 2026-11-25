@@ -8,11 +8,11 @@
 #include <string>
 #include <utility>
 
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

@@ -5,11 +5,11 @@
 #include <fmt/ostream.h>
 #include <cstdint>
 #include <random>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 // This example demonstrates a simple data copy from DRAM into L1(SRAM) and to another place in DRAM.
 // The general flow is as follows:

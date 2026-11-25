@@ -11,14 +11,14 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -471,7 +471,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // also decides the packet header type the kernel reads these back with, so host and
     // device stay in step without a flag — and only a 2D config pairs with the header
     // this kernel is compiled against.
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     TT_FATAL(
         tt::tt_fabric::is_2d_fabric_config(fabric_config),
         "attn_res_gather_softmax needs a 2D fabric, got {}",
