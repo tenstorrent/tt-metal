@@ -927,3 +927,66 @@ def test_permute_docstring_supported_inputs(dtype, layout, buffer_type, device):
     output = ttnn.permute(input_tensor, (0, 1, 3, 2), memory_config=memory_config)
     expected = ttnn.to_torch(input_tensor).permute(0, 1, 3, 2)
     assert_exact(expected, ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)
+
+
+def test_permute_rm_blocked_one_program_over_shapes(device):
+    # FLUX.2's VAE decoder permutes [1, h/8, w/2, 32, 2, 2] with the image size. With runtime_shapes a row-major
+    # permute that moves the last dim takes every dimension size at run time, so one program serves all of these
+    # once the core set is the whole grid (at least one block per core).
+    perm = (0, 1, 4, 2, 5, 3)
+    shapes = [(1, 16, 64, 32, 2, 2), (1, 6, 169, 32, 2, 2), (1, 12, 115, 32, 2, 2), (1, 21, 135, 32, 2, 2)]
+    grid = device.compute_with_storage_grid_size()
+    entries = None
+    for shape in shapes:
+        assert shape[1] * shape[2] * 2 >= grid.x * grid.y
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        output = ttnn.to_torch(ttnn.permute(x, perm, runtime_shapes=True))
+        assert torch.equal(output, torch_input.permute(perm))
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        assert device.num_program_cache_entries() == entries, shape
+
+
+def test_permute_rm_blocked_small_shapes_get_their_own_programs(device):
+    # With fewer blocks than cores the core set follows the block count, so each count keeps its own program.
+    perm = (0, 1, 4, 2, 5, 3)
+    shapes = [(1, 2, 3, 32, 2, 2), (1, 2, 5, 32, 2, 2)]
+    entries = []
+    for shape in shapes:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        assert torch.equal(ttnn.to_torch(ttnn.permute(x, perm, runtime_shapes=True)), torch_input.permute(perm))
+        entries.append(device.num_program_cache_entries())
+    assert entries[1] == entries[0] + 1
+
+
+def test_permute_rm_blocked_without_runtime_shapes_keeps_one_program_per_shape(device):
+    perm = (0, 1, 4, 2, 5, 3)
+    entries = device.num_program_cache_entries()
+    for shape in [(1, 16, 64, 32, 2, 2), (1, 6, 169, 32, 2, 2)]:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        assert torch.equal(ttnn.to_torch(ttnn.permute(x, perm)), torch_input.permute(perm))
+    assert device.num_program_cache_entries() == entries + 2
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        # Several x and w blocks per row, partial ones included.
+        [(1, 8, 9, 40, 3, 70), (1, 6, 13, 40, 5, 70), (1, 3, 31, 40, 4, 70)],
+        # Fewer blocks than cores, the same block count: one program.
+        [(1, 1, 2, 40, 1, 70), (1, 2, 1, 40, 1, 70)],
+    ],
+)
+def test_permute_rm_blocked_runtime_shapes_multi_block(device, shapes):
+    perm = (0, 1, 4, 2, 5, 3)
+    entries = None
+    for shape in shapes:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        assert torch.equal(ttnn.to_torch(ttnn.permute(x, perm, runtime_shapes=True)), torch_input.permute(perm)), shape
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        assert device.num_program_cache_entries() == entries, shape

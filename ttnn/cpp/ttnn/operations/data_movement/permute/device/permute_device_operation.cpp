@@ -58,6 +58,45 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
 void PermuteDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
+ttsl::hash::hash_t PermuteDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // The flag leaves out of the full hash: where it has no effect, the program is the same either way.
+    const auto full_hash = [&] {
+        const operation_attributes_t without_flag{
+            .dims = attributes.dims,
+            .output_mem_config = attributes.output_mem_config,
+            .pad_value = attributes.pad_value};
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<PermuteDeviceOperation>, without_flag, tensor_args);
+    };
+    // The cheap check first: tiled and sharded calls skip selecting the factory a second time.
+    if (!permute_blocked_generic_is_shape_free(attributes, tensor_args)) {
+        return full_hash();
+    }
+    const auto factory = select_program_factory(attributes, tensor_args);
+    if (!std::holds_alternative<MultiCoreBlockedGeneric>(factory)) {
+        return full_hash();
+    }
+    // The kernels take every dimension size at run time. The row widths set the page sizes, and with fewer
+    // blocks than cores the core set follows the block count, so those stay in the key.
+    const auto& input = tensor_args.input_tensor;
+    const auto grid = input.device()->compute_with_storage_grid_size();
+    const uint32_t num_blocks = permute_blocked_generic_num_blocks(attributes, tensor_args);
+    const uint32_t blocks_key = num_blocks >= grid.x * grid.y ? 0 : num_blocks;
+    return tt::tt_metal::operation::hash_operation<PermuteDeviceOperation>(
+        attributes.dims,
+        attributes.output_mem_config,
+        factory.index(),
+        input.dtype(),
+        input.layout(),
+        input.memory_config(),
+        input.logical_shape().rank(),
+        input.logical_shape()[-1],
+        input.logical_shape()[attributes.dims.back()],
+        input.tensor_spec().tensor_layout().get_alignment(),
+        blocks_key);
+}
+
 PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
@@ -183,7 +222,8 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     const ttsl::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    float pad_value) {
+    float pad_value,
+    bool runtime_shapes) {
     using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
 
     // BH 8-bit int RM pack_untilize drops the top 24 bits of each 32-bit Dest lane (#61827).
@@ -203,19 +243,24 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
             !(optional_output_tensor.has_value() && final_memory_config.is_sharded()),
             "prim::permute BH 8-bit RM workaround cannot honor a sharded optional_output_tensor; "
             "pass interleaved or omit it (see #61827).");
-        const auto interleaved_l1 = tt::tt_metal::MemoryConfig(
-            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+        const auto interleaved_l1 =
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
         auto staged = input_tensor.is_sharded() ? ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt)
                                                 : input_tensor;
-        auto as_u32 = ttnn::typecast(staged, DataType::UINT32, ttnn::DRAM_MEMORY_CONFIG);
+        auto as_u32 = ttnn::typecast(
+            staged, DataType::UINT32, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, std::nullopt, runtime_shapes);
         auto permuted_u32 = ttnn::device_operation::launch<OperationType>(
             OperationType::operation_attributes_t{
-                .dims = dims, .output_mem_config = ttnn::DRAM_MEMORY_CONFIG, .pad_value = pad_value},
+                .dims = dims,
+                .output_mem_config = ttnn::DRAM_MEMORY_CONFIG,
+                .pad_value = pad_value,
+                .runtime_shapes = runtime_shapes},
             OperationType::tensor_args_t{.input_tensor = as_u32, .optional_output_tensor = std::nullopt});
         const auto cast_mc = final_memory_config.is_sharded() ? interleaved_l1 : final_memory_config;
-        auto as_8bit = optional_output_tensor.has_value()
-                           ? ttnn::typecast(permuted_u32, src_dtype, cast_mc, optional_output_tensor)
-                           : ttnn::typecast(permuted_u32, src_dtype, cast_mc);
+        auto as_8bit =
+            optional_output_tensor.has_value()
+                ? ttnn::typecast(permuted_u32, src_dtype, cast_mc, optional_output_tensor, std::nullopt, runtime_shapes)
+                : ttnn::typecast(permuted_u32, src_dtype, cast_mc, std::nullopt, std::nullopt, runtime_shapes);
         return final_memory_config.is_sharded() ? ttnn::to_memory_config(as_8bit, final_memory_config, std::nullopt)
                                                 : as_8bit;
     }
@@ -224,7 +269,8 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
         OperationType::operation_attributes_t{
             .dims = dims,
             .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-            .pad_value = pad_value},
+            .pad_value = pad_value,
+            .runtime_shapes = runtime_shapes},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)});
 }

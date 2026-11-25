@@ -30,7 +30,8 @@ ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
     const ttsl::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& output_mem_config,
-    float pad_value = 0.0f) {
+    float pad_value = 0.0f,
+    bool runtime_shapes = false) {
     uint32_t rank = a.logical_shape().rank();
 
     // Irregular RM block/width sharded hits a pages_per_shard misread in noc_async_*_sharded.
@@ -62,11 +63,12 @@ ttnn::Tensor permute_impl(
         const auto interleaved_l1 =
             MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
         auto x = ttnn::to_memory_config(a, interleaved_l1, std::nullopt);
-        return permute_impl(x, dims, resolved_mc, pad_value);
+        return permute_impl(x, dims, resolved_mc, pad_value, runtime_shapes);
     }
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::prim::permute(input, dims, output_mem_config.value_or(a.memory_config()), std::nullopt, pad_value);
+        return ttnn::prim::permute(
+            input, dims, output_mem_config.value_or(a.memory_config()), std::nullopt, pad_value, runtime_shapes);
     };
 
     if (rank > 4) {
@@ -203,7 +205,8 @@ ttnn::Tensor permute(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
-    float pad_value) {
+    float pad_value,
+    bool runtime_shapes) {
     const auto input_rank = input_tensor.logical_shape().rank();
     TT_FATAL(
         input_rank == dims.size(),
@@ -243,7 +246,8 @@ ttnn::Tensor permute(
             "Shard page size must be aligned to {}B for L1 Tensor",
             l1_alignment);
     }
-    auto output_tensor = operations::data_movement::detail::permute_impl(itensor, iorder, memory_config, pad_value);
+    auto output_tensor =
+        operations::data_movement::detail::permute_impl(itensor, iorder, memory_config, pad_value, runtime_shapes);
     output_tensor = ttnn::to_layout(output_tensor, input_layout);
 
     if (input_rank < 4) {
