@@ -116,7 +116,9 @@ class Inkling2ForCausalLM:
     # take 1.43, in blocks of up to 0.36 that a fragmented pool does not have below about 2.0 free); its working
     # set per 1024 tokens of a pass. PF_CHUNKS: tokens per pass, the first that fits. PF_ONE: a prompt of up to this
     # many tokens goes in one pass when the largest chunk fits (every pass rebuilds each layer's experts).
-    PF_GIB = (1.05, 2.0, 0.26)
+    # The fourth: the room kept free beside a pass when the expert op reads the PF tensors in place (an 8192-token
+    # pass at 196608 by the rule without it ran out of DRAM: the pool fragments).
+    PF_GIB = (1.05, 2.0, 0.26, 1.0)
     PF_CHUNKS = (8192, 4096, 2048)
     PF_ONE = 8448
 
@@ -127,7 +129,7 @@ class Inkling2ForCausalLM:
 
         v = ttnn.get_memory_view(self.device, ttnn.BufferType.DRAM)
         room = v.num_banks * v.total_bytes_free_per_bank / 2**30 - self.PF_GIB[0]
-        room -= 0.0 if pf_inplace_op() else self.PF_GIB[1]
+        room -= self.PF_GIB[3] if pf_inplace_op() else self.PF_GIB[1]
         chunk = next((c for c in self.PF_CHUNKS if self.PF_GIB[2] * c / 1024 <= room), None)
         return chunk, room - self.PF_GIB[2] * (chunk or self.PF_CHUNKS[-1]) / 1024
 
