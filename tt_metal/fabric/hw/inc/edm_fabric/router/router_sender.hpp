@@ -1060,8 +1060,19 @@ __attribute__((noinline)) void run() {
         restore_worker_credit_presets(loop_copy, states);
         while (next_round()) {
             before_round(round, loop_copy, states);
-            for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
-                pass(loop_copy, states, channels_in_flight, round.send_yielded);
+            if constexpr (polls_link_sync_in_round) {
+                // In chunks, with a poll of the streaming profiler's port between them (router_round.hpp).
+                for (round_passes_left = iterations_between_ctx_switch_and_teardown_checks; round_passes_left != 0;) {
+                    size_t chunk = passes_until_link_sync_poll(round_passes_left);
+                    round_passes_left -= chunk;
+                    do {
+                        pass(loop_copy, states, channels_in_flight, round.send_yielded);
+                    } while (--chunk != 0);
+                }
+            } else {
+                for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
+                    pass(loop_copy, states, channels_in_flight, round.send_yielded);
+                }
             }
             after_round<false>(round, loop_copy, states, [] { return false; });
         }

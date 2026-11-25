@@ -102,6 +102,25 @@ FORCE_INLINE bool context_switch_requested() {
     return context_switch_state() == static_cast<uint32_t>(ContextSwitchState::RETRAIN_INTENT);
 }
 
+// The streaming profiler's clock sync port on this link (link_sync.hpp): the host gives one ERISC of a synced link a
+// role (ERISC 0, whatever router program it runs) and every other ERISC a hook that does nothing. The port sends on a
+// TX queue of its own. The loops with passes that ERISC 0 runs (sender, single ERISC) poll it between chunks of a
+// round's passes; its loop without passes (run_idle) polls it in end_round.
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+constexpr bool has_link_sync_port = link_sync::RouterHook::kHasPort;
+FORCE_INLINE size_t passes_until_link_sync_poll(size_t passes_left) {
+    return link_sync::RouterHook::passes_until_poll(passes_left);
+}
+FORCE_INLINE void poll_link_sync() { link_sync::RouterHook::poll(); }
+#else
+constexpr bool has_link_sync_port = false;
+FORCE_INLINE size_t passes_until_link_sync_poll(size_t passes_left) { return passes_left; }
+FORCE_INLINE void poll_link_sync() {}
+#endif
+constexpr bool polls_link_sync_in_round = has_link_sync_port && (NUM_ACTIVE_ERISCS == 1 || is_sender_role);
+// The round's passes still to run. In memory, as RoundCounters, so the loop's registers stay free for per-pass state.
+inline size_t round_passes_left = 0;
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Rounds
 // ---------------------------------------------------------------------------------------------------------------------
@@ -130,12 +149,9 @@ __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_atte
     if ((++counters.heartbeat & (HEARTBEAT_INTERVAL - 1)) == 0) {
         *reinterpret_cast<volatile uint32_t*>(heartbeat_addr) = HEARTBEAT_SIGNATURE | counters.heartbeat;
     }
-#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
-    // The streaming profiler's clock sync port on this link (link_sync.hpp): the host gives one ERISC of a synced link
-    // a role (ERISC 0, whatever router program it runs) and every other ERISC a hook that does nothing. The port sends
-    // on a TX queue of its own; it serves a round of stamped frames when one is due, checked every few rounds.
-    link_sync::RouterHook::step(counters.heartbeat);
-#endif
+    if constexpr (!polls_link_sync_in_round) {
+        poll_link_sync();
+    }
     if constexpr (is_context_switch_master) {
         if (IDLE_CONTEXT_SWITCHING && send_attempted) {
             counters.idle_rounds = 0;
