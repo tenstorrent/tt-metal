@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import collections
-import functools
 import json
 import threading
 from contextlib import contextmanager
@@ -16,7 +15,7 @@ import ttnn
 
 from ..distributed import exit_on_error
 from .transport import duplicate_distributed_context, recv_frame, recv_weight_dict, send_frame, send_weight_dict
-from .weight_bridge import _device0_to_host, _manifest_entries, _validate_source_tensor
+from .weight_bridge import _manifest_entries, _validate_source_tensor
 
 # Tags are matched only within this bridge's own communicator, so they cannot collide with other MPI traffic.
 _TAG_MANIFEST_LEN, _TAG_MANIFEST_BODY, _TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY = 0, 1, 2, 3
@@ -217,8 +216,14 @@ class ThreadedWeightBridge:
         keys = sorted(self._pads)
         manifest = {"weight_version": self._version, "entries": _manifest_entries(self._pads, keys)}
         self._send_blob(json.dumps(manifest).encode("utf-8"), _TAG_MANIFEST_LEN, _TAG_MANIFEST_BODY)
-        read = functools.partial(_device0_to_host, cq_id=1)
-        send_weight_dict(self._ctx.send, self._pads, read, self._peer_rank, _TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY)
+        send_weight_dict(
+            self._ctx.send, self._pads, self._read_device0, self._peer_rank, _TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY
+        )
+
+    def _read_device0(self, pad: ttnn.Tensor):
+        host = ttnn.from_device(ttnn.get_device_tensors(pad)[0], blocking=False, queue_id=1)
+        ttnn.event_synchronize(ttnn.record_event(self._mesh, 1))
+        return ttnn.to_torch(host)
 
     def _send_blob(self, blob: bytes, len_tag: int, body_tag: int) -> None:
         send_frame(self._ctx.send, blob, self._peer_rank, len_tag, body_tag)

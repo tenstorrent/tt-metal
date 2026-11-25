@@ -1771,6 +1771,28 @@ def test_threaded_weight_bridge_receiver_waits_for_the_cq0_reads_before_the_next
     assert calls == one_version + [("wait", 1, "E0")] + one_version
 
 
+def test_threaded_weight_bridge_sender_reads_device_0_on_cq1_without_blocking(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda pad: [f"{pad}/device0"])
+    monkeypatch.setattr(
+        ttnn,
+        "from_device",
+        lambda tensor, blocking, queue_id: calls.append(("from_device", tensor, blocking, queue_id)) or "host",
+    )
+    monkeypatch.setattr(ttnn, "record_event", lambda mesh, cq_id: calls.append(("record", mesh, cq_id)) or "E1")
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda event: calls.append(("synchronize", event)))
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor: calls.append(("to_torch", tensor)) or "torch")
+    sender = threaded_weight_bridge.ThreadedWeightBridge.sender(peer_rank=TTT_RANK, mesh_device="mesh")
+
+    assert sender._read_device0("pad") == "torch"
+    assert calls == [
+        ("from_device", "pad/device0", False, 1),
+        ("record", "mesh", 1),
+        ("synchronize", "E1"),
+        ("to_torch", "host"),
+    ]
+
+
 class _ScriptedBridge:
     """receive_weights yields the scripted results in order; the peer counts as closed once they run out."""
 
@@ -1971,7 +1993,9 @@ def async_rollout_over_blocking_sends(request, monkeypatch):
     monkeypatch.setattr(ttnn, "copy", lambda src, dst: setattr(dst, "value", src.value.clone()))
     monkeypatch.setattr(ttnn, "record_event", lambda mesh, cq_id: None)
     monkeypatch.setattr(ttnn, "wait_for_event", lambda cq_id, event: None)
-    monkeypatch.setattr(ttnn, "to_torch", lambda pad, cq_id: pad.value.clone())
+    monkeypatch.setattr(ttnn, "from_device", lambda pad, blocking, queue_id: pad)
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda event: None)
+    monkeypatch.setattr(ttnn, "to_torch", lambda pad: pad.value.clone())
     monkeypatch.setattr(ttnn, "get_device_tensors", lambda pad: [pad])
     monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **k: tensor)
     monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, pad, cq_id: setattr(pad, "value", host))
