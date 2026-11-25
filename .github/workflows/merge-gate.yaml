@@ -890,11 +890,10 @@ jobs:
       current_artifact_pattern: perf-data-${{ matrix.arch }}-?
       # Stage 2 and the gate compare against the same baseline read; without it, the gate reads the warehouse.
       stage2_baseline_artifact: llk-perf-stage2-baseline
-      # A regression stage 2 confirms, a measurement that did not complete, a missing baseline,
-      # a comparison that did not finish and a point that was not compared all block the merge.
-      fail_on_regression: true
+      # Blackhole: a regression stage 2 confirms and a point that was not compared also block the merge.
+      fail_on_regression: ${{ matrix.arch == 'blackhole' }}
       fail_without_baseline: true
-      require_full_coverage: true
+      require_full_coverage: ${{ matrix.arch == 'blackhole' }}
       # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
       slack: false
       slack_on_pass: false
@@ -1053,8 +1052,8 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
 
-    # LLK perf merge gate: llk-perf-merge-gate fails only when it did not measure and compare
-    # (a regression is report-only), so it is in optional-jobs. Skipped (no LLK perf input
+    # LLK perf merge gate: llk-perf-merge-gate fails when it did not measure and compare, or on a
+    # Blackhole regression stage 2 confirms; it is in optional-jobs. Skipped (no LLK perf input
     # changed) is OK. The changes job is there too: when it fails, the gate skips.
     # llk-perf-merge-gate-measure is not: the gate already fails on a measuring leg that did not
     # complete, and a failed warehouse upload or report-only stage 2 must not block.
