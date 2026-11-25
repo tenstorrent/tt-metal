@@ -1,21 +1,29 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kimi-K3 / Kimi-K3.1 MoE perf gate: host time of one MoE layer forward on the MoE block, as the models run it.
+"""Kimi-K3 / Kimi-K3.1 / GLM-5.3 MoE perf gate: host time of one MoE layer forward on the MoE block, as the models
+run it.
 
-One MoE layer through the model adapter (TtMoEBlockFfn, K3's seeded random weights from block_cases.MODELS):
+One MoE layer through the model adapter (TtMoEBlockFfn, the model's seeded random weights from block_cases.MODELS):
 
 * kimi_k3-8x4-5120: K3 on one 8x4 Galaxy, 5,120-token chunk.
 * kimi_k3_1-4x4-sp1-2560: K3.1's production stage, one tray half (SP=4 on mesh axis 1), 2,560-token chunk, K3.1's
   L1_SMALL_SIZE. Run it through tests/run_4x4_stage_tests.sh; on the full Galaxy it skips.
+* glm53-8x4-5120: GLM-5.3 on one 8x4 Galaxy ([RING, RING]), 5,120-token chunk.
+* glm53-xy4-sp1-{2560,5120,10240}: GLM-5.3's 4x4 stage on the single-Galaxy [RING, RING] carve (SP=4 on mesh axis 1),
+  forwards of one, two and four 2,560-token chunks. Run them through tests/run_subtorus_4x4_tests.sh; on the full
+  Galaxy they skip.
 
 Host time from measure_host (untraced fastest of 10 after 10 warm-up, traced one replay, CPU clock held), gated
 two-sided against TARGETS_MS ± MARGIN[mode]; the traced output must match the untraced one. Per-op device time of the
 same calls is test_moe_block_models.py::test_moe_block_perf (BLOCK_US).
 
-    python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k kimi_k3-8x4
+    python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k "8x4"
     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \\
-        models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k kimi_k3_1-4x4-sp1
+        models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k kimi_k3_1-4x4-sp1
+    models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --expect 3 \\
+        models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k glm53
+(Several cases in one process share one seeded weight build: block_cases.BlockModel.state_dict.)
 """
 
 import sys
@@ -54,12 +62,23 @@ class MoEPerfCase:
         return MESH_SP_AXIS.get(self.mesh, 0)
 
 
-CASES = [MoEPerfCase("kimi_k3", "8x4", 5120), MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560)]
+CASES = [
+    MoEPerfCase("kimi_k3", "8x4", 5120),
+    MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560),
+    MoEPerfCase("glm53", "8x4", 5120),
+    *(MoEPerfCase("glm53", "xy4-sp1", chunk) for chunk in (2560, 5120, 10240)),
+]
 # Host ms of one MoE layer forward (untraced, traced) by case id, on a 14 kW CI Galaxy (bh_sc1_high_power): untraced the
 # fastest run, traced the mean of the runs. A case without targets only reports.
 TARGETS_MS = {
     "kimi_k3-8x4-5120": (2.38, 2.27),
     "kimi_k3_1-4x4-sp1-2560": (3.63, 3.54),
+    # GLM-5.3: on one 14 kW Galaxy (bh-glx-120-b07u08), not yet re-centred on CI: each the mean over 3 runs of that run's
+    # number (fastest untraced sample, traced replay); the 10240 traced over 5 runs (one replay at 3.21)
+    "glm53-8x4-5120": (1.36, 1.24),
+    "glm53-xy4-sp1-2560": (1.61, 1.50),
+    "glm53-xy4-sp1-5120": (2.09, 1.97),
+    "glm53-xy4-sp1-10240": (3.20, 3.15),
 }
 
 
@@ -91,7 +110,7 @@ def _setup(case: MoEPerfCase, mesh_device):
         mesh_device,
         m.cfg,
         layer_idx=m.layer,
-        state_dict=m.weights(R * C),
+        state_dict=m.state_dict(R * C),
         options=MoEBlockFfnOptions(sp_axis=sp_axis),
     )
     x = (torch.randn(case.chunk, H, generator=torch.Generator().manual_seed(7)) * m.x_scale).to(torch.bfloat16)
@@ -112,7 +131,7 @@ def _setup(case: MoEPerfCase, mesh_device):
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("case, mesh_device, device_params", _params(), indirect=["mesh_device", "device_params"])
-def test_kimi_moe_perf(request, case, mesh_device, device_params):
+def test_moe_block_host_perf(request, case, mesh_device, device_params):
     label = f"{case.id} MoE block"
     require_high_power(f"{label} perf")
     ffn, x_tt = _setup(case, mesh_device)

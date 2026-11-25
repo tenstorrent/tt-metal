@@ -9,7 +9,7 @@ A packed forward of F chunks runs ONE MoE over F x 640 rows per chip instead of 
 routed experts' weights are read once per call, so if the MoE is bound by that read its time stays
 nearly flat as rows grow, and packing pays; if it scales with rows, packing saves only fixed overhead.
 
-Each row times one traced replay of the MoE forward (the test_kimi_moe_perf harness: untimed compile
+Each row times one traced replay of the MoE forward (the test_moe_block_host_perf harness: untimed compile
 pass, capture, then ``GLM_MOE_SWEEP_REPLAYS`` timed replays, median reported). Record only, no gate.
 Select with ``-k loudbox`` / ``-k galaxy`` and ``-k x1`` / ``x2`` / ``x4``.
 """
