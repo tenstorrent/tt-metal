@@ -251,6 +251,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.tensor_parameter_name = binding.tensor_parameter_name.get();
         handle.cta_offset = cta_word_offset;
         handle.llk_metadata = resolved.llk_metadata;
+        handle.llk_metadata.thread_split_pages = binding.thread_split_pages;
         handle.is_per_node = resolved.is_per_node;
         if (resolved.is_per_node) {
             handle.addr_rta_offset = static_cast<uint32_t>(rta_word_index * sizeof(uint32_t));

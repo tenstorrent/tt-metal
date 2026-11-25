@@ -702,5 +702,46 @@ TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorLayoutAlignment_PaddedShapeOnlyRep
             ::testing::HasSubstr("padded_shape does not match the binding's declared padded_shape")));
 }
 
+// KernelSpec::TensorBinding::thread_split_pages must cover the bound tensor's node-local L1 region exactly.
+// The minimal L1 tensor (1x32 bfloat16, row major, interleaved) is one page per node.
+TEST_F(ProgramRunArgsTestGen1, CPU_ThreadSplitPages_CoversRegionAccepted) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor", BufferType::L1);
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+    spec.kernels[0].tensor_bindings[0].thread_split_pages = 1;
+
+    Program program(*mesh_device_, spec);
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec);
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
+    };
+    EXPECT_NO_THROW(program.set_program_run_args(params));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_ThreadSplitPages_RegionMismatchFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor", BufferType::L1);
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+    spec.kernels[0].tensor_bindings[0].thread_split_pages = 2;
+
+    Program program(*mesh_device_, spec);
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec);
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
+    };
+    EXPECT_THAT(
+        [&] { program.set_program_run_args(params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("thread_split_pages = 2 pages must cover the node-local L1 region exactly")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

@@ -14,6 +14,23 @@
 
 namespace tt::tt_metal {
 
+// KernelSpec::TensorBinding::thread_split_pages, when set, must cover the bound tensor's node-local L1 region exactly:
+// the kernel's threads split the region by that page count. Checked on every enqueue, since the bound tensor can
+// change between enqueues.
+inline void CheckThreadSplitPages(const TensorBindingHandle& handle, const Buffer* buffer) {
+    const uint32_t split = handle.llk_metadata.thread_split_pages;
+    if (split == 0) {
+        return;
+    }
+    TT_FATAL(
+        buffer != nullptr && buffer->is_l1() &&
+            uint64_t{split} * buffer->aligned_page_size() == buffer->aligned_size_per_bank(),
+        "TensorParameter '{}': thread_split_pages = {} pages must cover the node-local L1 region exactly ({} B)",
+        handle.tensor_parameter_name,
+        split,
+        buffer != nullptr ? buffer->aligned_size_per_bank() : 0);
+}
+
 // Emit the CRTA words for a single tensor binding, in order:
 //   [base_address_word, optional runtime_field_words...]
 // invoking emit(uint32_t) once per word. Total = 1 + handle.num_runtime_field_crta_words.
@@ -43,6 +60,7 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
         handle.tensor_parameter_name,
         address);
     emit(static_cast<uint32_t>(address));
+    CheckThreadSplitPages(handle, tensor.mesh_buffer().get_reference_buffer());
 
     if (handle.num_runtime_field_crta_words == 0) {
         return;
