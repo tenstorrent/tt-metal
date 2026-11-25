@@ -13,21 +13,21 @@
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/distributed/api.hpp"
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/float8.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
-#include <tt-metalium/graph_tracking.hpp>
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
+#include <tt-metalium/data_formats/bfloat4.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -40,6 +40,7 @@
 #include <memory>
 #include <utility>
 #include <atomic>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn {
 
@@ -80,7 +81,7 @@ Tensor::Tensor(
         std::move(buffer),
         TensorSpec(
             logical_shape,
-            tt::tt_metal::TensorLayout::fromPaddedShape(
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 dtype,
                 tt::tt_metal::PageConfig(layout, tile),
                 tt::tt_metal::MemoryConfig{},
@@ -349,6 +350,13 @@ Tensor Tensor::to_device(
 }
 
 Tensor Tensor::cpu(bool blocking, std::optional<QueueId> cq_id) const { return ttnn::cpu(*this, blocking, cq_id); }
+
+std::vector<Tensor> Tensor::cpu_shards(
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+    bool blocking,
+    std::optional<QueueId> cq_id) const {
+    return ttnn::cpu_shards(*this, coords, blocking, cq_id);
+}
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;

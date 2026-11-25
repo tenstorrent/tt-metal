@@ -23,15 +23,14 @@
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -224,13 +223,17 @@ void DevicePrograms::carve_l1() {
 }
 
 bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    mc_ = &MetalContext::instance(mesh_device->impl().get_context_id());
+    mc_ = &mesh_device->impl().metal_context();
     auto& cluster = mc_->get_cluster();
     const auto& hal = mc_->hal();
     const auto& rtopts = mc_->rtoptions();
     if (!can_capture(*mc_)) {
         log_warning(
             tt::LogMetal, "[streaming profiler] not capturing: it needs Blackhole with DRAM programmable cores");
+        return false;
+    }
+    if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
+        log_info(tt::LogMetal, "[streaming profiler] mock cluster: kernels are built with the profiler, nothing runs");
         return false;
     }
     fabric_link_sync_ = mc_->get_fabric_config() != tt_fabric::FabricConfig::DISABLED;

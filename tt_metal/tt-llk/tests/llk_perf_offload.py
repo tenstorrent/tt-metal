@@ -22,6 +22,9 @@ TESTS_DIR = Path(__file__).resolve().parent
 PYTHON_TESTS = TESTS_DIR / "python_tests"
 GXX = TESTS_DIR / "sfpi/compiler/bin/riscv-tt-elf-g++"
 META_DIR = "_offload"
+# The board's run pass adds to the compile pass's seconds, so the split of the
+# next run weighs both. A fallback to compiling here starts a fresh file.
+SPLIT_DURATIONS = ".perf_split_durations"
 
 # The variant id ignores these, so the manifest must match on them.
 BUILD_ENV = [
@@ -30,6 +33,7 @@ BUILD_ENV = [
     "LLK_PERF_DEBUG_SYMBOLS",
     "TT_LLK_DISABLE_ASSERTS",
     "LLK_PERF_RUN_TYPES",
+    "PIPELINE",
     "LLK_PERF_L1_MUX_GROUP",
     "LLK_PERF_L1_CLIENT_SEL",
     "LLK_TEST_SEED",
@@ -146,6 +150,8 @@ def cmd_pack(args):
         if Path(j).is_file():
             shutil.copy(j, meta / Path(j).name)
             junits.append(Path(j).name)
+    if (PYTHON_TESTS / SPLIT_DURATIONS).is_file():
+        shutil.copy(PYTHON_TESTS / SPLIT_DURATIONS, meta / SPLIT_DURATIONS)
     t1 = time.monotonic()
 
     listing = "\0".join(files + [f"{META_DIR}/{n}" for n in os.listdir(meta)]) + "\0"
@@ -225,6 +231,8 @@ def cmd_unpack(args):
     if not args.no_junit:
         for j in meta.glob("*.xml"):
             shutil.copy(j, PYTHON_TESTS / j.name)
+        if (meta / SPLIT_DURATIONS).is_file():
+            shutil.copy(meta / SPLIT_DURATIONS, PYTHON_TESTS / SPLIT_DURATIONS)
     size = archive.stat().st_size
     if args.delete_archive:
         archive.unlink()

@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 
 import pytest
-from conftest import skip_for_blackhole
+from conftest import skip_for_blackhole, skip_for_quasar, skip_for_wormhole
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
@@ -36,7 +37,6 @@ _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Hardsigmoid,
     MathOperation.Log,
     MathOperation.Neg,
-    MathOperation.Silu,
     MathOperation.Sin,
     MathOperation.Square,
     MathOperation.Threshold,
@@ -44,8 +44,9 @@ _OPS_WITHOUT_DEST_ACC = {
     MathOperation.ReluMin,
 }
 
+# The swept ops whose dispatcher reads FAST_MODE (sfpu_operations.h); for any other op,
+# fast_mode Yes and No build the same kernel.
 _OPS_WITH_FAST_MODE = {
-    MathOperation.Exp,
     MathOperation.Rsqrt,
     MathOperation.Sqrt,
 }
@@ -145,8 +146,16 @@ assert not _UNSWEPT_FULL_MATRIX_OPS, (
 )
 
 
+# Local opt-in: LLK_PERF_FULL_FORMAT_OPS="Softplus,..." gives the named ops the full matrix too.
+_EXTRA_FULL_FORMAT_OPS = frozenset(
+    MathOperation[name.strip()]
+    for name in os.environ.get("LLK_PERF_FULL_FORMAT_OPS", "").split(",")
+    if name.strip()
+)
+
+
 def _get_formats(mathop):
-    if mathop in _FULL_FORMAT_MATRIX_OPS:
+    if mathop in _FULL_FORMAT_MATRIX_OPS or mathop in _EXTRA_FULL_FORMAT_OPS:
         return _FULL_FORMAT_PAIRS
     return _REPRESENTATIVE_FORMAT_PAIRS
 
@@ -365,6 +374,21 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
         formats.input_format.is_32_bit(),
         input_dimensions,
     )
+
+
+@pytest.mark.perf
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.QuickGelu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=_EXTRA_SLICE_DIMS,
+)
+def test_perf_eltwise_unary_sfpu_quick_gelu(
+    perf_report, formats, mathop, dest_acc, input_dimensions
+):
+    _extra_slice_run(perf_report, formats, mathop, dest_acc, False, input_dimensions)
 
 
 @pytest.mark.perf

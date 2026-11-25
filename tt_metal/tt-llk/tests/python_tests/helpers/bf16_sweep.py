@@ -112,7 +112,7 @@ def bf16_exhaustive_sweep(
         pytest.skip(f"{mathop.name} keeps the stock kernel on {TestConfig.CHIP_ARCH}")
     from helpers.sfpu_accuracy_budget import accuracy_contract
     from helpers.ulp import nonfinite_mismatches, ulp_distance
-    from helpers.ulp_sweep import _normal_input, measurable_mask, sweep_spec
+    from helpers.ulp_sweep import Swept, sweep_spec
     from helpers.ulp_table import Metric
 
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -186,7 +186,7 @@ def bf16_exhaustive_sweep(
         configuration.run().result, dtype=format_dict[formats.output_format]
     )
     # Every lane whose input the unpack does not flush must agree with the golden about
-    # being NaN or infinite. Stricter than ulp_sweep.nonfinite_failures, which also excuses
+    # being NaN or infinite. Stricter than ulp_sweep.Swept.nonfinite_failures, which also excuses
     # a NaN golden, a store saturating past the output's range and inputs outside the op's
     # claim: a kernel replacing stock's on every BF16 input is held to the golden there too.
     # NaN inputs are left to the output-class check below, which is stricter. A special input
@@ -220,9 +220,10 @@ def bf16_exhaustive_sweep(
         )
         made_nan = kept[: len(specials)].isnan() & ~src_A[tail].float().isnan()
     spared = made_nan & result[tail].float().isinf() & ~held
-    failures = nonfinite_mismatches(judged, result) & _normal_input(
-        src_A, formats.input_format, formats.output_format, dest_acc
+    swept = Swept(
+        src_A, golden, result, formats.input_format, formats.output_format, dest_acc
     )
+    failures = nonfinite_mismatches(judged, result) & swept.normal_input
     failures[tail] &= ~spared
     assert (
         not failures.any()
@@ -246,7 +247,7 @@ def bf16_exhaustive_sweep(
         f"{mathop.name}: {int(wrong.sum())} of {len(specials)} special inputs "
         f"{specials} change output class or sign"
     )
-    # The specials sit in the padding measurable_mask leaves out: a finite result there
+    # The specials sit in the padding Swept.measurable leaves out: a finite result there
     # is held to the same budget here.
     assert passed_test(
         expected,
@@ -255,9 +256,7 @@ def bf16_exhaustive_sweep(
         max_ulp=max_ulp,
         mask=torch.isfinite(expected.float()),
     ), f"{mathop.name}: special-input outputs exceed the {max_ulp}-ULP budget"
-    mask = measurable_mask(
-        src_A, golden, result, formats.input_format, formats.output_format, dest_acc
-    )
+    mask = swept.measurable
     over = int(((ulp_distance(golden.to(result.dtype), result) > max_ulp) & mask).sum())
     assert passed_test(
         golden, result, formats.output_format, max_ulp=max_ulp, mask=mask

@@ -13,10 +13,10 @@ Terms (logical vs physical pages, outer slices, fabric chunks, CB batches, outgo
 
 Per chip, per ring, per ring direction and per link, one **fabric link worker** core: a reader (NCRISC, NoC0) reads
 this chip's own shard from the input, then the shards it forwards from its own output; a sender (BRISC, NoC1) sends
-each fabric chunk one fabric hop into the same pages of the neighbour's output. **Local copy cores** write the chip's
-own shard: one per link, or two per link for a non-interleaved input (the ND-sharded KV cache), which they convert
-block by block into the output for the link workers to read from there. Link workers sit next to the Ethernet core of
-their link (`tt_fabric::get_forwarding_eth_core`).
+each fabric chunk one fabric hop into the same pages of the neighbour's output. With an interleaved input, **local
+copy cores** (one per link) write the chip's own shard into the output; with any other input (the ND-sharded KV cache)
+there are none, and the senders of one direction per ring write it from the chunks they read for sending. Link workers
+sit next to the Ethernet core of their link (`tt_fabric::get_forwarding_eth_core`).
 
 - **Fabric chunks**: up to `payload / page` consecutive pages of one page lane (pages k, k + B, k + 2B, ... for B
   DRAM banks), physically contiguous in an interleaved tensor, one packet each (a page larger than the payload is split
@@ -28,8 +28,8 @@ their link (`tt_fabric::get_forwarding_eth_core`).
 - **Fence**: before sending, each sender waits until its downstream has signalled that it started this call (the
   downstream-started counter), so a reused output is never overwritten early.
 - **Rings**: axis line / ring; for `cluster_axis=None` a snake, or on a torus with both sides >= 3 two edge-disjoint
-  Hamiltonian cycles (every chip uses all four neighbours). Even rings are balanced: the opposite shard goes half each
-  way.
+  Hamiltonian cycles (every chip uses all four neighbours), or on a 4x4 cylinder (one axis a ring, the other a line)
+  three Hamiltonian cycles. Even rings are balanced: the opposite shard goes half each way.
 
 ## Contract
 
@@ -64,8 +64,9 @@ their link (`tt_fabric::get_forwarding_eth_core`).
   warning.
 - worker cores must be exclusive to this program for its duration: one fabric
   link worker per ring, direction and link, plus one local copy core per link
-  (two for a non-interleaved input). With two links that is 6 cores for an axis
-  gather, 8 for the ND-sharded KV cache and 10 for the full-mesh torus path. Use
+  for an interleaved input. With two links that is 6 cores for an axis gather
+  and 10 for the full-mesh torus path, minus the copy cores for a non-interleaved
+  input (the ND-sharded KV cache). Use
   `sub_core_grids` to keep unrelated L1-resident tensors and concurrent programs
   off those cores.
 
@@ -112,6 +113,17 @@ all-gather: the advantage is a single program, one synchronization sequence,
 and a directly produced 32-way row-major layout, not an inherent claim of
 higher fabric bandwidth. On a torus with both sides >= 3 the snake is replaced by
 the two Hamiltonian cycles described above, which use all four links per chip.
+
+On a 4x4 cylinder (one axis wraps, the other is a line: e.g. a 4x4 submesh of a
+Galaxy under `FABRIC_2D_TORUS_XY`) the line-end chips have three neighbours, and two
+edge-disjoint Hamiltonian cycles do not exist (28 edges, not 32). The op instead
+uses three stored Hamiltonian cycles, each owning a third of every shard, with
+no edge on more than two of them. A line-end chip then receives on all three
+neighbours: the busiest directed edge carries 5 shards against the snake's 7.5,
+which is the bound (15 shards over three neighbours), so 1.5x the snake. A hop
+shared by two cycles gives each its own links, because a fabric link takes one
+worker connection: `num_links` counts links per hop, and each (cycle, direction)
+gets half of them. With fewer than two links on any hop the op uses the snake.
 
 ## External semaphore interface
 
@@ -175,7 +187,7 @@ own shard (input DRAM)                forwarded shards (this chip's output DRAM)
                            v
                 neighbour link worker reader
 
-own shard (input DRAM) --> local copy cores --> this chip's output DRAM
+own shard (input DRAM) --> local copy cores (interleaved input) or link worker senders --> this chip's output DRAM
 ```
 
 Forward and backward directions run concurrently, and on a torus with both sides >= 3 so do the two Hamiltonian

@@ -17,9 +17,9 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 
 #include "impl/buffers/semaphore.hpp"
 #include "impl/program/program_impl.hpp"
@@ -147,7 +147,7 @@ protected:
 }  // namespace
 
 TEST_F(LlamaRsSignalerTest, SemaphoresStayOnOwnedCores) {
-    Program program = tt::tt_metal::CreateProgram();
+    Program program = tt::tt_metal::CreateProgram(*device_);
     const MatmulFusedOpSignaler signaler = make_signaler(program);
     const CoreRangeSet owned = rs_cores().merge(matmul_cores());
 
@@ -171,7 +171,7 @@ TEST_F(LlamaRsSignalerTest, SemaphoresStayOnOwnedCores) {
 }
 
 TEST_F(LlamaRsSignalerTest, SignalReachesEachRsCoreOnceAndNothingElse) {
-    Program program = tt::tt_metal::CreateProgram();
+    Program program = tt::tt_metal::CreateProgram(*device_);
     const MatmulFusedOpSignaler signaler = make_signaler(program);
     std::vector<uint32_t> rs_args;
     signaler.push_llama_rs_rt_args_for_rs(rs_args);

@@ -8,9 +8,10 @@
 #include <cmath>
 #include <initializer_list>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
@@ -37,6 +38,13 @@ void check_tiled_device(const Tensor& tensor, const char* name, std::initializer
 SigmoidGatedRmsNormOperation::program_factory_t SigmoidGatedRmsNormOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return SigmoidGatedRmsNormProgramFactory{};
+}
+
+// A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
+void SigmoidGatedRmsNormOperation::validate_on_program_cache_hit(
+    const operation_attributes_t&, const tensor_args_t& in) {
+    kda_factory_detail::check_allocated_on_device(
+        in.input, {{&in.input, "input"}, {&in.gate, "gate"}, {&in.weight, "weight"}}, "sigmoid_gated_rms_norm");
 }
 
 void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(

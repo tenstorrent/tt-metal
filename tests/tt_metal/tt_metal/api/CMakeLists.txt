@@ -20,12 +20,7 @@ target_include_directories(
 )
 
 # Link libraries to the object library
-target_link_libraries(
-    unit_tests_api_lib
-    PRIVATE
-        test_metal_common_libs
-        Boost::smart_ptr
-)
+target_link_libraries(unit_tests_api_lib PRIVATE test_metal_common_libs)
 
 TT_ENABLE_UNITY_BUILD(unit_tests_api_lib)
 tt_reuse_precompile_headers(unit_tests_api_lib metal_test_pch)
@@ -60,12 +55,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(
-    unit_tests_tensor_lib
-    PRIVATE
-        test_metal_common_libs
-        Boost::smart_ptr
-)
+target_link_libraries(unit_tests_tensor_lib PRIVATE test_metal_common_libs)
 TT_ENABLE_UNITY_BUILD(unit_tests_tensor_lib)
 tt_reuse_precompile_headers(unit_tests_tensor_lib metal_test_pch)
 
@@ -117,12 +107,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(
-    dfb_init_timing_bench
-    PRIVATE
-        test_metal_common_libs
-        Boost::smart_ptr
-)
+target_link_libraries(dfb_init_timing_bench PRIVATE test_metal_common_libs)
 tt_reuse_precompile_headers(dfb_init_timing_bench metal_test_pch)
 set_target_properties(
     dfb_init_timing_bench

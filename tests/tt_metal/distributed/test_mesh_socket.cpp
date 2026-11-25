@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
@@ -19,9 +19,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 #include <cstring>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -1810,11 +1810,15 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     EXPECT_EQ(sender_config_bytes.size(), sender_page_size * sender_logical_coords.size());
     EXPECT_EQ(recv_configs.size(), recv_logical_coords.size());
 
-    const auto& sender_core_to_core_id =
-        send_socket.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+    const auto& sender_core_to_core_id = send_socket.get_config_buffer()
+                                             ->get_device_buffer(MeshCoordinate(0, 0))
+                                             ->get_buffer_page_mapping()
+                                             ->core_to_core_id;
 
-    const auto& recv_core_to_core_id =
-        recv_socket.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+    const auto& recv_core_to_core_id = recv_socket.get_config_buffer()
+                                           ->get_device_buffer(MeshCoordinate(0, 0))
+                                           ->get_buffer_page_mapping()
+                                           ->core_to_core_id;
 
     const uint32_t max_num_downstreams = 1;
     const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -1901,11 +1905,15 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     auto [send_socket_l1, recv_socket_l1] = MeshSocket::create_socket_pair(md0, md1, socket_config_l1);
     auto [send_socket_dram, recv_socket_dram] = MeshSocket::create_socket_pair(md0, md1, socket_config_dram);
 
-    const auto& sender_core_to_core_id =
-        send_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+    const auto& sender_core_to_core_id = send_socket_l1.get_config_buffer()
+                                             ->get_device_buffer(MeshCoordinate(0, 0))
+                                             ->get_buffer_page_mapping()
+                                             ->core_to_core_id;
 
-    const auto& recv_core_to_core_id =
-        recv_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+    const auto& recv_core_to_core_id = recv_socket_l1.get_config_buffer()
+                                           ->get_device_buffer(MeshCoordinate(0, 0))
+                                           ->get_buffer_page_mapping()
+                                           ->core_to_core_id;
 
     std::unordered_map<MeshCoordinate, std::vector<uint8_t>> sender_bytes_per_dev_coord;
     std::unordered_map<MeshCoordinate, std::vector<receiver_socket_md>> recv_configs_per_dev_coord;

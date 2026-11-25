@@ -10,7 +10,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 
 #include "device/dispatch_fabric2d_types.hpp"
 
@@ -47,9 +47,9 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d_buffers(
     ttnn::MeshDevice* mesh_device,
     uint32_t emb_dim,
     uint32_t seq_len_per_chip,
+    uint32_t fwd_vc_pages,
     uint32_t cluster_axis = 0,
-    uint32_t num_links = 1,
-    uint32_t fwd_vc_pages = 64);
+    uint32_t num_links = 1);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d
 

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+from tt_py_test_utils_common.comparison_funcs import (
     comp_pcc,
 )
 

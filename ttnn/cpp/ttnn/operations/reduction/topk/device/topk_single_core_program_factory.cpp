@@ -5,16 +5,15 @@
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include "tt-metalium/work_split.hpp"
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include "tt-metalium/utils/work_split.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <string>
 #include <utility>
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -449,6 +448,22 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     run_args.tensor_args.emplace(INDEX_TENSOR, index_tensor);
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+ttnn::command_list::CmdListBindings TopKDeviceOperation::TopKSingleCoreProgramFactory::map_cmd_list_parameters(
+    const TopKDeviceOperation::operation_attributes_t&,
+    const TopKDeviceOperation::tensor_args_t& tensor_args,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    if (tensor_args.indices.has_value()) {
+        binder.tensor(
+            /*invoke_name=*/"indices_tensor",
+            /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input_indices"});
+    }
+    // The values and indices outputs are a tuple, which a CmdListParam cannot carry.
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

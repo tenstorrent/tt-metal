@@ -5,8 +5,8 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::experimental::prim {
 void NlpCreateHeadsSegformerDeviceOperation::validate_on_program_cache_miss(
@@ -24,6 +24,7 @@ void NlpCreateHeadsSegformerDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.layout() == Layout::TILE, "Input tensor layout must be TILE but got {}", input_tensor.layout());
 
+    TT_FATAL(input_shape[1] == 1, "Input shape[1] must be 1 but got {}", input_shape[1]);
     TT_FATAL(
         input_shape[2] % tt::constants::TILE_HEIGHT == 0,
         "Input shape[2] ({}) must be divisible by TILE_HEIGHT ({})",
