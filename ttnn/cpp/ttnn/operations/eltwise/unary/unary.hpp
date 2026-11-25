@@ -357,23 +357,22 @@ Tensor unary_chain(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-template <typename T>
 Tensor rsub_sfpu(
     const Tensor& input_tensor,
-    T param,
+    operations::unary::ScalarVariant param,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor add_sfpu(
     const Tensor& input_tensor,
-    float param,
+    operations::unary::ScalarVariant param,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor add_sfpu(
-    float param,
+    operations::unary::ScalarVariant param,
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -395,13 +394,13 @@ Tensor mul_sfpu(
 
 Tensor sub_sfpu(
     const Tensor& input_tensor,
-    float param,
+    operations::unary::ScalarVariant param,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor sub_sfpu(
-    float param,
+    operations::unary::ScalarVariant param,
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,

@@ -34,6 +34,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -131,6 +132,7 @@ class TtLMHead(LightweightModule):
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
             cache_file_name=cache_file_name,
+            cache_dump_mode=weight_cache_dump_mode(),
         )
 
         if device is not None:
@@ -373,6 +375,8 @@ class TtLMHead(LightweightModule):
             # Find the tile-aligned start position that contains local_token_id.
             tile_start = (local_token_id // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
             token_offset = local_token_id % ttnn.TILE_SIZE
+            # ttnn.narrow bounds-checks the window against x's logical shape, so a token in a trailing partial
+            # tile (tile_start + TILE_SIZE > seq_len_per_device) is rejected there; other tokens are unaffected.
             x = ttnn.narrow(x, dim=-2, start=tile_start, length=ttnn.TILE_SIZE)
             logger.debug(
                 f"[TtLMHead.forward] After narrow ({local_token_id=} {tile_start=}): {x.shape=} {token_offset=}"

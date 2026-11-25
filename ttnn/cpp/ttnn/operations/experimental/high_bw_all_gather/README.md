@@ -13,10 +13,10 @@ Terms (logical vs physical pages, outer slices, fabric chunks, CB batches, outgo
 
 Per chip, per ring, per ring direction and per link, one **fabric link worker** core: a reader (NCRISC, NoC0) reads
 this chip's own shard from the input, then the shards it forwards from its own output; a sender (BRISC, NoC1) sends
-each fabric chunk one fabric hop into the same pages of the neighbour's output. **Local copy cores** write the chip's
-own shard: one per link, or two per link for a non-interleaved input (the ND-sharded KV cache), which they convert
-block by block into the output for the link workers to read from there. Link workers sit next to the Ethernet core of
-their link (`tt_fabric::get_forwarding_eth_core`).
+each fabric chunk one fabric hop into the same pages of the neighbour's output. With an interleaved input, **local
+copy cores** (one per link) write the chip's own shard into the output; with any other input (the ND-sharded KV cache)
+there are none, and the senders of one direction per ring write it from the chunks they read for sending. Link workers
+sit next to the Ethernet core of their link (`tt_fabric::get_forwarding_eth_core`).
 
 - **Fabric chunks**: up to `payload / page` consecutive pages of one page lane (pages k, k + B, k + 2B, ... for B
   DRAM banks), physically contiguous in an interleaved tensor, one packet each (a page larger than the payload is split
@@ -64,8 +64,9 @@ their link (`tt_fabric::get_forwarding_eth_core`).
   warning.
 - worker cores must be exclusive to this program for its duration: one fabric
   link worker per ring, direction and link, plus one local copy core per link
-  (two for a non-interleaved input). With two links that is 6 cores for an axis
-  gather, 8 for the ND-sharded KV cache and 10 for the full-mesh torus path. Use
+  for an interleaved input. With two links that is 6 cores for an axis gather
+  and 10 for the full-mesh torus path, minus the copy cores for a non-interleaved
+  input (the ND-sharded KV cache). Use
   `sub_core_grids` to keep unrelated L1-resident tensors and concurrent programs
   off those cores.
 
@@ -186,7 +187,7 @@ own shard (input DRAM)                forwarded shards (this chip's output DRAM)
                            v
                 neighbour link worker reader
 
-own shard (input DRAM) --> local copy cores --> this chip's output DRAM
+own shard (input DRAM) --> local copy cores (interleaved input) or link worker senders --> this chip's output DRAM
 ```
 
 Forward and backward directions run concurrently, and on a torus with both sides >= 3 so do the two Hamiltonian

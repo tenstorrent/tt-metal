@@ -19,12 +19,12 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/unique_ptr.h>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/d2d_pipeline_descriptor.hpp"
@@ -256,6 +256,16 @@ void py_module_types(nb::module_& mod) {
             nb::arg("coord"),
             "L1 address of the metadata buffer on this coord's service core (metadata mode).")
         .def(
+            "get_output_counters",
+            &D2DStreamServiceSender::get_output_counters,
+            nb::arg("coord"),
+            R"doc(
+                This coord's output counters: produced is the data_ready counter (an inc from every worker per
+                transfer), pushed is consumed_sem on the first worker core (1 per drained transfer), forwarded is
+                the bytes_acked word in the socket config (1 per transfer the receiver consumed). In relay mode
+                the exit relay credits bytes_acked, and an exit chip's forwarded is its slot's cable_acked word.
+            )doc")
+        .def(
             "wait_for_fabric_links",
             &D2DStreamServiceSender::wait_for_fabric_links,
             R"doc(
@@ -322,6 +332,16 @@ void py_module_types(nb::module_& mod) {
             "get_metadata_addr",
             &D2DStreamServiceReceiver::get_metadata_addr,
             "L1 address of the metadata buffer on every worker core (metadata mode).")
+        .def(
+            "get_input_counters",
+            &D2DStreamServiceReceiver::get_input_counters,
+            nb::arg("coord"),
+            R"doc(
+                This coord's input counters: arrived is the bytes_sent word in the socket config (1 per landed
+                transfer from each sender lane), consumed is the consumed counter (an inc from every worker per
+                transfer). In relay mode the entry relay feeds bytes_sent, and an entry chip's arrived is its
+                slot's relay arrived word.
+            )doc")
         .def(
             "wait_for_fabric_links",
             &D2DStreamServiceReceiver::wait_for_fabric_links,

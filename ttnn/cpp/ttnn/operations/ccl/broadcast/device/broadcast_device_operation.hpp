@@ -8,9 +8,9 @@
 #include "ttnn/operations/ccl/broadcast/device/broadcast_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 
 #include <optional>
 #include <variant>

@@ -23,9 +23,9 @@
 #include <vector>
 
 #include <fmt/format.h>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 
 #include "device_fixture.hpp"
 #include "eth_test_common.hpp"

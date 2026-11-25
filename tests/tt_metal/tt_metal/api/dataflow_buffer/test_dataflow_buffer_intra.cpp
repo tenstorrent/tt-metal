@@ -97,11 +97,11 @@ static void run_intra_tensix_dfb_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs run_params;
     run_params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE}};
-    experimental::SetProgramRunArgs(program, run_params);
+    program.set_program_run_args(run_params);
 
     const uint32_t total_size = num_entries * entry_size;
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_size / sizeof(uint32_t));
@@ -219,7 +219,7 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -239,7 +239,7 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Positive bf16 inputs → double-relu identity.
     const uint32_t total_bytes = entry_size * num_entries;
@@ -275,87 +275,6 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     ASSERT_GT(live.capacity.size(), self_rc.config.intra_shadow_tc_id);
     EXPECT_EQ(live.capacity[self_tc], num_entries);
     EXPECT_EQ(live.capacity[self_rc.config.intra_shadow_tc_id], 0u);
-}
-
-// Metal 2.0 intra-Tensix self-loop harness + test
-static void run_intra_tensix_dfb_program_2_0(
-    distributed::MeshDevice& mesh_device, uint32_t entry_size, uint32_t num_threads) {
-    if (mesh_device.arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 INTRA test is Quasar-only";
-    }
-
-    constexpr uint32_t num_entries = 16;  // matches legacy
-    TT_FATAL(num_entries % num_threads == 0, "num_entries must be divisible by num_threads");
-    const uint32_t entries_per_neo = num_entries / num_threads;
-    const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
-    const uint32_t total_bytes = num_entries * entry_size;
-
-    const DFBSpecName DFB{"intra_dfb"};
-    const KernelSpecName COMPUTE{"compute"};
-
-    DataflowBufferSpec dfb_spec{
-        .unique_id = DFB,
-        .entry_size = entry_size,
-        .num_entries = num_entries,
-        .data_format_metadata = tt::DataFormat::Float16_b,
-    };
-
-    // Compute kernel binds the same DFB as both PRODUCER ("out") and CONSUMER
-    // ("in"). M2 infers INTRA scope. Names MUST differ: using the same name for
-    // both endpoints causes M2 to only wire one Neo's slice, leaving the others'
-    // L1 untouched. No tensor_bindings (TRISC compute kernels can't include
-    // tensor_accessor.h transitively). Matches the working
-    // run_intra_tensix_dfb_program pattern in main's test_dataflow_buffer.cpp.
-    auto compute =
-        make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra_2_0.cpp", num_threads);
-    compute.dfb_bindings = {
-        {.dfb_spec_name = DFB,
-         .accessor_name = "out",
-         .endpoint_type = DFBEndpointType::PRODUCER,
-         .access_pattern = DFBAccessPattern::STRIDED},
-        {.dfb_spec_name = DFB,
-         .accessor_name = "in",
-         .endpoint_type = DFBEndpointType::CONSUMER,
-         .access_pattern = DFBAccessPattern::STRIDED},
-    };
-    compute.compile_time_args = {{"entries_per_neo", entries_per_neo}, {"words_per_entry", words_per_entry}};
-
-    // target_nodes MUST be a NodeRangeSet (not a bare NodeCoord) to match the
-    // working legacy M2 helper on main (run_intra_tensix_dfb_program). With a
-    // bare NodeCoord the framework takes a different scheduling path that
-    // exposes a PACK/UNPACK write race for some Neos' L1 slices.
-    const NodeRangeSet node_set{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}};
-    ProgramSpec spec{
-        .name = "intra_tensix_2_0",
-        .kernels = {compute},
-        .dataflow_buffers = {dfb_spec},
-        .tensor_parameters = {},
-        .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
-    };
-
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
-
-    // Kernel has no runtime args; pass kernel_spec_name only (matches legacy
-    // pattern in main's run_intra_tensix_dfb_program).
-    ProgramRunArgs params;
-    params.kernel_run_args = {{.kernel = COMPUTE}};
-    experimental::SetProgramRunArgs(program, params);
-
-    // DFB is the first L1 allocation in the program → lands at the base L1
-    // allocator address. Same trick the legacy intra test uses.
-    const uint32_t dfb_l1_addr =
-        static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
-
-    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_bytes / sizeof(uint32_t));
-    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, input);
-
-    LaunchProgram(mesh_device, std::move(program));
-
-    std::vector<uint32_t> expected(input.size());
-    std::transform(input.begin(), input.end(), expected.begin(), [](uint32_t v) { return v + 2; });
-    std::vector<uint32_t> output;
-    slow_dispatch::ReadFromL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, total_bytes, output);
-    EXPECT_EQ(expected, output) << "M2 intra-tensix DFB +2 per word mismatch (num_threads=" << num_threads << ")";
 }
 
 TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1S_2_0) {
@@ -442,7 +361,7 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
         }},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -451,7 +370,7 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
              MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Finalize before launch so the counters each DFB owns are known while the pre-launch snapshot is taken.
     program.impl().finalize_dataflow_buffer_configs();
@@ -666,7 +585,7 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto intra_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB));
@@ -684,7 +603,7 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
 
     ProgramRunArgs params;
     params.kernel_run_args = {{.kernel = COMPUTE}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Kernel only exercises TC push/pop credits; L1 payload is untouched.
     std::vector<uint32_t> scratch_zero(scratch_words, 0);
@@ -848,7 +767,7 @@ TEST_F(UnitMeshFixture, TensixIntraRemapperTeardownDoesNotAliasOverlay) {
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto intra_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB));
@@ -861,7 +780,7 @@ TEST_F(UnitMeshFixture, TensixIntraRemapperTeardownDoesNotAliasOverlay) {
 
     ProgramRunArgs params;
     params.kernel_run_args = {{.kernel = COMPUTE}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     std::vector<uint32_t> scratch_zero(1, 0);
     slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), scratch_l1_addr, scratch_zero);

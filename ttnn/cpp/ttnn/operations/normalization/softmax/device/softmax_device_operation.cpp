@@ -363,6 +363,73 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     ttnn::operations::normalization::detail::validate_sharded_input(
                         a, program_config.compute_with_storage_grid_size);
                 }
+
+                // Each core reduces only its own shard, with no reduction across cores.
+                const auto& input_shape = a.padded_shape();
+                const uint32_t shard_width = a.is_sharded() && a.shard_spec().has_value()
+                                                 ? a.shard_spec()->shape[1]
+                                                 : program_config.block_w * a.tensor_spec().tile().get_width();
+                TT_FATAL(
+                    shard_width == input_shape[-1],
+                    "Sharded softmax normalizes each shard on its own core, so every shard must hold whole rows: "
+                    "the shard width {} must equal the row width {}. Shard the input by height instead.",
+                    shard_width,
+                    input_shape[-1]);
+
+                if (attributes.is_scale_causal_mask_hw_dims_softmax && a.is_sharded()) {
+                    // The reader's mask cursor advances once per core of the program grid, in row-major order.
+                    const auto& shard_grid = a.shard_spec()->grid;
+                    const auto grid_w = program_config.compute_with_storage_grid_size.x;
+                    const auto num_shards = shard_grid.num_cores();
+                    bool shards_lead_grid = true;
+                    for (uint32_t i = 0; i < num_shards && shards_lead_grid; i++) {
+                        shards_lead_grid = shard_grid.contains(CoreCoord{i % grid_w, i / grid_w});
+                    }
+                    TT_FATAL(
+                        shards_lead_grid,
+                        "Scale causal mask HW dims softmax needs its {} shards on the first {} cores of the program "
+                        "grid in row-major order, starting at (0, 0); got shard grid {}",
+                        num_shards,
+                        num_shards,
+                        shard_grid);
+                }
+
+                if (tensors_args.mask.has_value()) {
+                    const auto& mask = tensors_args.mask.value();
+                    TT_FATAL(
+                        !(attributes.is_causal_mask && mask.layout() == Layout::ROW_MAJOR),
+                        "A causal mask needs TILE layout with SoftmaxShardedMultiCoreProgramConfig; a ROW_MAJOR mask "
+                        "holds one row per batch, which the sharded reader streams only once");
+                    if (attributes.is_causal_mask && mask.is_sharded()) {
+                        // The compute reads the resident mask shard as if it had the input's shard geometry.
+                        TT_FATAL(
+                            mask.memory_config().memory_layout() == a.memory_config().memory_layout() &&
+                                mask.shard_spec() == a.shard_spec(),
+                            "A sharded causal mask must be sharded like the input; got a {} mask with shard spec {} "
+                            "and a {} input with shard spec {}",
+                            mask.memory_config().memory_layout(),
+                            mask.shard_spec(),
+                            a.memory_config().memory_layout(),
+                            a.shard_spec());
+                    }
+                    if (!attributes.is_scale_causal_mask_hw_dims_softmax && !mask.is_sharded() &&
+                        mask.padded_shape()[0] > 1 && a.is_sharded()) {
+                        // The reader moves to the next batch's mask only between cores, never within a shard.
+                        const auto& shard_shape = a.shard_spec()->shape;
+                        const uint64_t batch_volume =
+                            static_cast<uint64_t>(input_shape[1]) * input_shape[2] * input_shape[3];
+                        const uint64_t shard_volume = static_cast<uint64_t>(shard_shape[0]) * shard_shape[1];
+                        TT_FATAL(
+                            batch_volume % shard_volume == 0,
+                            "With a mask of {} batches, each input shard must lie within one batch: a batch holds {} "
+                            "elements and a [{}, {}] shard holds {}",
+                            mask.padded_shape()[0],
+                            batch_volume,
+                            shard_shape[0],
+                            shard_shape[1],
+                            shard_volume);
+                    }
+                }
             }
         },
         attributes.program_config);

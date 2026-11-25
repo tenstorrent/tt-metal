@@ -14,7 +14,7 @@
 #include <optional>
 #include <string>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 namespace ttnn::kernel_lib::host {
 using namespace tt::tt_metal;

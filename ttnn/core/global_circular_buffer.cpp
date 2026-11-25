@@ -9,14 +9,14 @@
 #include <memory>
 #include <unordered_set>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 #include "ttnn/core.hpp"
 
@@ -29,7 +29,7 @@ GlobalCircularBuffer create_global_circular_buffer(
     BufferType buffer_type) {
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_circular_buffer");
     return tt::tt_metal::experimental::GlobalCircularBuffer(
-        device->mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()),
+        ttnn::core::current_mesh_command_queue(*device),
         sender_receiver_core_mapping,
         size,
         buffer_type);

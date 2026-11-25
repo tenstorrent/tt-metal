@@ -5,15 +5,15 @@
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <cstring>
 #include <exception>
 #include <optional>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"

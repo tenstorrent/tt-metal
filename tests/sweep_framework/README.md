@@ -315,9 +315,9 @@ python tests/sweep_framework/sweeps_runner.py \
 | `--module-name <name>` | Module(s) to run (comma-separated, or omit for all)                     |
 | `--suite-name <name>`  | Run only this suite                                                     |
 | `--vector-id <hash>`   | Run a single vector (disables hang detection for debugging)             |
-| `--vector-source`      | `vectors_export` (default) or `file`                                    |
+| `--vector-source`      | `vectors_export` or `file` (required)                                   |
 | `--file-path <path>`   | JSON path (required when `--vector-source file`)                        |
-| `--result-dest`        | `results_export` (default) or `superset`                                |
+| `--result-dest`        | `results_export` or `superset` (required)                               |
 | `--tag <tag>`          | Reserved; tag field is stored in vectors but not used for filtering yet |
 | `--skip-modules <a,b>` | Skip these modules when running all                                     |
 | `--perf`               | Measure end-to-end performance                                          |
