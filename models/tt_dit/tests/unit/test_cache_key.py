@@ -198,10 +198,9 @@ def _fill(module, sources, monkeypatch):
 
 
 def test_reclaim_keeps_served(checkpoint, monkeypatch, tmp_path):
-    """cell reclaim-keeps-served. Every tree on a box shares one cache root: the tree a rollout
-    prepares beside the served one builds its content-keyed leaf while the served tree still reads
-    the content-blind one. That fill must leave the served tree's leaf whole (f202, 2026-11-25:
-    deleting it made a user's next load cold for 666 s)."""
+    """Every tree on a box shares one cache root: the tree a rollout prepares beside the served one
+    builds its content-keyed leaf while the served tree still reads the content-blind one. That
+    fill must leave the served tree's leaf whole, or the served tree's next load is cold."""
     monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.delenv("TT_DIT_CACHE_RECLAIM_SUPERSEDED", raising=False)
     served = _legacy_dir()
@@ -235,7 +234,7 @@ def test_an_opted_in_reclaim_still_keeps_a_leaf_in_use(monkeypatch, tmp_path):
 
 
 def test_ltx_rename_hits(checkpoint, monkeypatch, tmp_path):
-    """cell ltx-rename-hits. ltx-server's model_rename moves a checkpoint to its code name in place:
+    """ltx-server's model_rename moves a checkpoint to its code name in place:
     same bytes, same size and mtime, new name and ctime. Its cache key must not move, or every
     rename rebuilds a 37GB DiT cache for weights that did not change."""
     monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
@@ -254,7 +253,7 @@ def test_a_cache_built_under_the_old_source_key_is_adopted_not_rebuilt(checkpoin
     sits under the old key. A load must adopt it (hard links, new manifest) rather than rebuild,
     and leave the old leaf, which a tree still on the old key serves, as it was."""
     monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
-    old_key = cache.content_key(_module(), [checkpoint], _source_id=cache._legacy_source_id)
+    old_key = cache.content_key(_module(), [checkpoint], _source_id=_old_source_id)
     old_dir = cache.model_cache_dir(
         model_name="m",
         subfolder="connector",
@@ -274,6 +273,70 @@ def test_a_cache_built_under_the_old_source_key_is_adopted_not_rebuilt(checkpoin
     assert module.loaded_from == [str(new_dir)], "a cache hit, with no weight rebuilt"
     assert (old_dir / cache.CACHE_DICT_FILE).read_text() == old_manifest
     assert (new_dir / "weight.tensorbin").stat().st_ino == (old_dir / "weight.tensorbin").stat().st_ino
+
+
+def _old_source_id(path):
+    """`source_id` as trees before the rename-stable key spelled it (size, mtime, ctime, inode)."""
+    st = Path(path).resolve().stat()
+    return f"stat:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}:{st.st_ino}"
+
+
+def _old_leaf(checkpoint):
+    old_key = cache.content_key(_module(), [checkpoint], _source_id=_old_source_id)
+    old_dir = cache.model_cache_dir(
+        model_name="m",
+        subfolder="connector",
+        parallel_config=SimpleNamespace(_asdict=dict),
+        mesh_shape=(4, 8),
+        mesh_device=None,
+        content=old_key,
+    )
+    cache._publish_cache(_module(), old_dir, old_key)
+    return old_dir
+
+
+def test_the_old_key_keeps_a_recorded_sha256(checkpoint, monkeypatch):
+    """A server that wraps `source_id` with a recorded content hash got that hash under the old
+    key too, so the old spelling of such a source is the wrapper's answer, not a stat key."""
+    recorded = "sha256:" + "ab" * 32
+    monkeypatch.setattr(cache, "source_id", lambda path: recorded)
+    assert cache.legacy_source_id(checkpoint) == recorded
+
+
+def test_adoption_does_not_report_the_old_leaf_as_loaded(checkpoint, monkeypatch, tmp_path):
+    """A server wraps `model_cache_dir` to log every leaf a load resolves to (its prune keeps those).
+    Looking for an old-key leaf to adopt is not a load of it: only the new leaf is reported."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    old_dir = _old_leaf(checkpoint)
+    reported = []
+    wrapped = cache.model_cache_dir
+
+    def logging_model_cache_dir(**kw):
+        path = wrapped(**kw)
+        if kw.get("content") is not None:
+            reported.append(path)
+        return path
+
+    monkeypatch.setattr(cache, "model_cache_dir", logging_model_cache_dir)
+    _fill(_LoadableStub(), [checkpoint], monkeypatch)
+    assert old_dir not in reported
+    assert set(reported) == {_key(_module(), [checkpoint])}
+
+
+def test_a_refused_link_adopts_nothing(checkpoint, monkeypatch, tmp_path):
+    """Across filesystems a link is refused; a copy would need a second full cache with no room
+    check, so the load builds the leaf instead and leaves no partial one behind."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    _old_leaf(checkpoint)
+
+    def refuse(src, dst, **kw):
+        raise OSError(18, "Invalid cross-device link")
+
+    monkeypatch.setattr(cache.os, "link", refuse)
+    module = _LoadableStub()
+    _fill(module, [checkpoint], monkeypatch)
+    assert module.loaded_from[0] == "torch", "built, not adopted"
+    assert not list(_key(_module(), [checkpoint]).parent.glob(".*staging-*")), "staging directory leaked"
 
 
 def test_a_cache_with_no_manifest_misses(checkpoint, monkeypatch, tmp_path):

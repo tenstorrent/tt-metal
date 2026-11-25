@@ -29,6 +29,12 @@ ENCODER = ROOT / "encoders" / "gemma3" / "encoder_pair.py"
 PIPELINE = ROOT / "pipelines" / "ltx" / "pipeline_ltx.py"
 
 
+def _old_source_id(path):
+    """`source_id` as trees before the rename-stable key spelled it (size, mtime, ctime, inode)."""
+    st = Path(path).resolve().stat()
+    return f"stat:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}:{st.st_ino}"
+
+
 def _load(path, names, namespace):
     tree = ast.parse(path.read_text())
     nodes = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name in names]
@@ -57,30 +63,36 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
         env = patch.dict(os.environ, {"TT_DIT_CACHE_DIR": str(self.directory / "cache")})
         env.start()
         self.addCleanup(env.stop)
-        cache_namespace = _load(ROOT / "utils" / "cache.py", {"source_id", "_is_hub_blob", "_legacy_source_id"}, {"Path": Path})
+        cache_namespace = _load(ROOT / "utils" / "cache.py", {"source_id", "_is_hub_blob", "legacy_source_id"}, {"Path": Path})
         self.cache = SimpleNamespace(
             source_id=cache_namespace["source_id"],
-            _legacy_source_id=cache_namespace["_legacy_source_id"],
+            legacy_source_id=cache_namespace["legacy_source_id"],
             CACHE_VERSION=1,
         )
-        namespace = {
+        ttnn = SimpleNamespace(_ttnn=SimpleNamespace(__file__=str(self.binary)))
+        self.encoder_namespace = {
             "Path": Path,
             "glob": glob,
             "hashlib": hashlib,
             "os": os,
             "cache_module": self.cache,
-            "ttnn": SimpleNamespace(_ttnn=SimpleNamespace(__file__=str(self.binary))),
+            "ttnn": ttnn,
         }
-        self.identity = _load(ENCODER, {"_gemma_shards", "embedding_cache_identity"}, namespace)[
+        self.identity = _load(ENCODER, {"_gemma_shards", "embedding_cache_identity"}, self.encoder_namespace)[
             "embedding_cache_identity"
         ]
-        self.path_method = _load(
+        methods = _load(
             PIPELINE,
-            {"_device_embed_cache_path"},
-            {"os": os, "json": json, "hashlib": hashlib, "cache_module": self.cache},
-        )[
-            "_device_embed_cache_path"
-        ]
+            {"_device_embed_cache_path", "_legacy_encoder_identity"},
+            {"os": os, "json": json, "hashlib": hashlib, "cache_module": self.cache, "ttnn": ttnn},
+        )
+        self.path_method = methods["_device_embed_cache_path"]
+        self.legacy_method = methods["_legacy_encoder_identity"]
+
+    def pipe(self, pair):
+        pipe = SimpleNamespace(gemma_encoder_pair=pair)
+        pipe._legacy_encoder_identity = MethodType(self.legacy_method, pipe)
+        return pipe
 
     def pair(self, tp=4):
         factor = namedtuple("ParallelFactor", "factor mesh_axis")
@@ -163,7 +175,7 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
                 self.assertNotEqual(before, pair.embedding_cache_identity())
 
     def test_a_renamed_checkpoint_keeps_its_prompt_cache(self):
-        pipe = SimpleNamespace(gemma_encoder_pair=self.pair())
+        pipe = self.pipe(self.pair())
         before = self.path_method(pipe, ["prompt"])
         renamed = self.directory / "ltx-renamed.safetensors"
         self.checkpoint.rename(renamed)
@@ -172,10 +184,13 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
 
     def test_an_entry_under_the_old_source_key_is_linked_not_reencoded(self):
         pair = self.pair()
-        pipe = SimpleNamespace(gemma_encoder_pair=pair)
+        pipe = self.pipe(pair)
         new = Path(self.path_method(pipe, ["prompt"]))
-        # The path a tree before the rename-stable key wrote for the same prompt and files.
-        legacy_identity = pair.embedding_cache_identity(_source_id=self.cache._legacy_source_id)
+        # The path a tree before the rename-stable key wrote for the same prompt and files: the
+        # same encoder file, with its cache module answering the old stat key.
+        old_cache = SimpleNamespace(source_id=_old_source_id, CACHE_VERSION=self.cache.CACHE_VERSION)
+        with patch.dict(self.encoder_namespace, {"cache_module": old_cache}):
+            legacy_identity = pair.embedding_cache_identity()
         key = hashlib.sha256(
             json.dumps({"prompts": ["prompt"], "encoder": legacy_identity}, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -213,7 +228,7 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
         legacy = self.directory / "cache" / "ltx-embeddings" / "old.device.pt"
         legacy.parent.mkdir(parents=True)
         legacy.write_bytes(b"legacy entry remains untouched")
-        pipe = SimpleNamespace(gemma_encoder_pair=self.pair())
+        pipe = self.pipe(self.pair())
         first = self.path_method(pipe, ["a||b", "c"])
         second = self.path_method(pipe, ["a", "b||c"])
         self.assertNotEqual(first, second)

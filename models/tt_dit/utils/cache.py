@@ -71,9 +71,8 @@ def source_id(path: str | Path) -> str:
     resolved filename *is* an exact content hash and costs one `readlink` — no read of the 46GB
     file. Anything else falls back to size and mtime: a re-download or a rewrite in place changes
     the mtime, so the key still tracks the weights. Neither the file's name, its directory, its
-    ctime nor its inode is part of it, because a rename in place (ltx-server's model_rename) moves
-    the ctime on and keeps the bytes: keying on it made every rename rebuild the cache (~10 min of
-    weight prep per DiT) for weights that had not changed.
+    ctime nor its inode is part of it: a rename in place (ltx-server's model_rename) moves the
+    ctime on and keeps the bytes, and must not rebuild the cache (~10 min of weight prep per DiT).
     """
     p = Path(path).resolve()
     st = p.stat()
@@ -86,16 +85,17 @@ def _is_hub_blob(p: Path) -> bool:
     return p.parent.name == "blobs" and len(p.name) == 64 and all(c in "0123456789abcdef" for c in p.name)
 
 
-def _legacy_source_id(path: str | Path) -> str:
-    """`source_id` as trees before the rename-stable key wrote it (size, mtime, ctime, inode).
+def legacy_source_id(path: str | Path) -> str:
+    """`source_id` as trees before the rename-stable key spelled it, to find what they cached.
 
-    Only `_adopt_legacy_keyed` uses it, to find the cache those trees built for an unchanged file,
-    so the key change does not rebuild every cache once on every box.
+    A sha256 answer (a hub blob, or one a wrapper of `source_id` recorded) was the same then;
+    a stat key also carried the ctime and inode. Used only to adopt an old-key cache for an
+    unchanged file, so the key change rebuilds nothing.
     """
-    p = Path(path).resolve()
-    st = p.stat()
-    if _is_hub_blob(p):
-        return f"sha256:{p.name}"
+    sid = source_id(path)
+    if sid.startswith("sha256:"):
+        return sid
+    st = Path(path).resolve().stat()
     return f"stat:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}:{st.st_ino}"
 
 
@@ -555,6 +555,32 @@ def model_cache_dir(
     content: str | None = None,
     required: bool = True,
 ) -> Path | None:
+    return _leaf_dir(
+        model_name=model_name,
+        subfolder=subfolder,
+        parallel_config=parallel_config,
+        mesh_shape=mesh_shape,
+        mesh_device=mesh_device,
+        dtype=dtype,
+        is_fsdp=is_fsdp,
+        content=content,
+        required=required,
+    )
+
+
+def _leaf_dir(
+    *,
+    model_name: str,
+    subfolder: str,
+    parallel_config: NamedTuple,
+    mesh_shape: Sequence[int],
+    mesh_device: ttnn.MeshDevice,
+    dtype: str = "bf16",
+    is_fsdp: bool = False,
+    content: str | None = None,
+    required: bool = True,
+) -> Path | None:
+    """`model_cache_dir` without the wrappers a server puts on it: a path looked at, not loaded."""
     cache_dir = _cache_root()
     if cache_dir is None:
         if required:
@@ -739,10 +765,9 @@ def _reclaim_enabled() -> bool:
 
     Off because a cache root is shared by every tree on a box: the tree being prepared beside the
     served one (a rollout's second slot) builds its keyed leaf while the served tree still reads
-    the content-blind one, and deleting it there made the served tree's next load cold (f202,
-    2026-11-25 01:36 PST: the H3 VAE decoder, a 666 s user wait). This code cannot see which
-    trees still read a leaf; ltx-server's cache_prune can (every load is logged) and removes
-    superseded leaves once nothing uses them. TT_DIT_CACHE_RECLAIM_SUPERSEDED=1 turns it back on
+    the content-blind one, and deleting it would make the served tree's next load cold. This code
+    cannot see which trees still read a leaf; ltx-server's cache_prune can (every load is logged)
+    and removes superseded leaves once nothing uses them. TT_DIT_CACHE_RECLAIM_SUPERSEDED=1 turns it back on
     for a single-tree checkout whose disk cannot hold both copies.
     """
     return os.environ.get("TT_DIT_CACHE_RECLAIM_SUPERSEDED", "0") == "1"
@@ -753,6 +778,8 @@ RECLAIM_IDLE_HOURS = 72.0
 
 
 def _last_touched(path: Path) -> float:
+    """Newest mtime or atime in a leaf. Under relatime (the Linux default) a read moves the atime
+    at least once a day; on a noatime mount a read leaves no trace, so there only writes count."""
     newest = path.stat().st_mtime
     for f in path.iterdir():
         try:
@@ -783,31 +810,30 @@ def _adopt_legacy_keyed(tt_model: Module, sources, key_args: dict, cache_dir: Pa
     """Make a cache built under the old (ctime/inode) source key readable under the new one.
 
     The tensorbins are the same bytes: only the key's spelling of the source changed. Each file is
-    hard-linked (copied if a link is refused) into a new leaf with a manifest naming the new key,
-    so no weight is rebuilt and the old leaf, which a tree still on the old key serves, stays as it
-    is. Returns whether the new leaf is now complete.
+    hard-linked into a new leaf with a manifest naming the new key, so no weight is rebuilt and
+    the old leaf, which a tree still on the old key serves, stays as it is. A refused link (another
+    filesystem) adopts nothing: a copy would need a second 37 GB without the room checks a build
+    gets. Returns whether the new leaf is now complete.
     """
     try:
-        old_key = content_key(tt_model, sources, _source_id=_legacy_source_id)
+        old_key = content_key(tt_model, sources, _source_id=legacy_source_id)
     except OSError:
         return False
     if old_key == key:
         return False
-    old_dir = model_cache_dir(**key_args, content=old_key, required=False)
+    old_dir = _leaf_dir(**key_args, content=old_key, required=False)
     if old_dir is None or not _cache_is_complete(old_dir, tt_model, old_key):
         return False
 
     cache_dir = Path(cache_dir)
     staging = cache_dir.parent / f".{cache_dir.name}.staging-{os.getpid()}-{secrets.token_hex(4)}"
     try:
+        staging.parent.mkdir(parents=True, exist_ok=True)
         staging.mkdir()
         for f in old_dir.iterdir():
             if f.name == CACHE_DICT_FILE or not f.is_file():
                 continue
-            try:
-                os.link(f, staging / f.name)
-            except OSError:
-                shutil.copy2(f, staging / f.name)
+            os.link(f, staging / f.name)
         manifest = json.loads((old_dir / CACHE_DICT_FILE).read_text()) | {"content_key": key}
         (staging / CACHE_DICT_FILE).write_text(json.dumps(manifest, indent=2, sort_keys=True))
         if _cache_is_complete(cache_dir, tt_model, key):

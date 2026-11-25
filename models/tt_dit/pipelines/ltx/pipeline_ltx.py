@@ -1524,17 +1524,37 @@ class LTXPipeline:
             key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             return os.path.join(embed_cache_dir, f"{key}.device.pt")
 
-        path = path_for(identity_of())
+        identity = identity_of()
+        path = path_for(identity)
         if not os.path.exists(path):
             # An entry written under the old (ctime/inode) source key holds the same embeddings: link it
             # under the rename-stable key rather than bring Gemma back to encode it again.
             try:
-                legacy = path_for(identity_of(_source_id=cache_module._legacy_source_id))
+                legacy = path_for(self._legacy_encoder_identity(identity))
                 if legacy != path and os.path.exists(legacy):
                     os.link(legacy, path)
-            except (OSError, TypeError):
+            except (OSError, KeyError, TypeError, AttributeError):
                 pass
         return path
+
+    def _legacy_encoder_identity(self, identity: dict) -> dict:
+        """The Gemma pair's cache identity with each source spelled by the old source key.
+
+        Built from the pair's own answer, so the code hashes and every other field stay exactly as
+        the pair gives them; only the source keys, which name files the pair reads by path, are redone.
+        """
+        pair = self.gemma_encoder_pair
+        paths = {"ltx": pair.checkpoint_name}
+        for name in identity["sources"]:
+            if name != "ltx":
+                kind, file_name = name.split("/", 1)
+                if kind != "gemma":
+                    raise KeyError(name)
+                paths[name] = os.path.join(pair.gemma_path, file_name)
+        return identity | {
+            "sources": {name: cache_module.legacy_source_id(path) for name, path in paths.items()},
+            "native_binary": cache_module.legacy_source_id(ttnn._ttnn.__file__),
+        }
 
     def encode_prompts(
         self, prompts: list[str], *, use_cache: bool = True
