@@ -26,9 +26,9 @@ FP32_TILE_BYTES = 4096
 # Expected bfloat8_b results per DRAM bank count (8 on P150 and P300, 7 on P100).
 # Smallest block size whose float32 view passes the default checks: 64 bfloat8_b pages per bank, 69,632 bytes.
 BF8_ALIGNED_BLOCK = {7: 1792, 8: 2048}
-# Fewest whole float32 pages one block holds per bank with check_slices=False. None: the block's pages do not split
-# evenly over the banks, so alias_view raises in both modes.
-BF8_MIN_WHOLE_FP32_PAGES = {7: {896: 8, 1024: None}, 8: {896: 6, 1024: 8}}
+# Fewest whole float32 pages one block holds on every bank with check_slices=False. On 7 banks the 256 pages of a
+# 1024-token block do not split evenly over the banks.
+BF8_MIN_WHOLE_FP32_PAGES = {7: {896: 8, 1024: 8}, 8: {896: 6, 1024: 8}}
 
 
 def _num_banks(device):
@@ -296,30 +296,36 @@ def test_alias_view_bf8_default_checks(device, block_size, expect_error):
 def test_alias_view_bf8_whole_pages_per_block(device, block_size, expect_error):
     """A flat float32 view (check_slices=False) of a bfloat8_b cache whose blocks are not whole float32 pages per bank.
 
-    Block b holds bytes [b * c, (b + 1) * c) on every bank, with c = (block_size / 4 / banks) * 1088. Its state goes
-    only to the float32 page rows wholly inside that range: rows ceil(b * c / 4096) to floor((b + 1) * c / 4096) - 1.
-    Slice r of the view is page row r: one float32 page on each bank, at offset r * 4096. A raw int32 view of the
-    same rows is read before and after each write, so every byte outside the written rows is compared bit for bit.
+    Block b holds pages [b * t, (b + 1) * t), t = block_size / 4, so it owns tile rows ceil(b * t / banks) to
+    floor((b + 1) * t / banks) - 1 of every bank: bytes [lo, hi) of every bank. When the bank count divides t (896 on
+    7 banks, 1024 on 8) that is [b * c, (b + 1) * c) with c = t / banks * 1088; otherwise (1024 on 7 banks, where the
+    default checks raise) some banks also hold the row just before or just after. The block's state goes only to the
+    float32 page rows wholly inside [lo, hi): rows ceil(lo / 4096) to floor(hi / 4096) - 1. Slice r of the view is
+    page row r: one float32 page on each bank, at offset r * 4096. A raw int32 view of the same rows is read before
+    and after each write, so every byte outside the written rows is compared bit for bit.
     """
     banks = _num_banks(device)
     expected = BF8_MIN_WHOLE_FP32_PAGES.get(banks, {})
     num_blocks = 16
     k = _bf8_owner(device, num_blocks, block_size)
-    if _pages_per_block(block_size) % banks:
-        assert expected.get(block_size) is None
+    pages = _pages_per_block(block_size)
+
+    def owned(b):
+        """Bytes [lo, hi) that block b owns on every bank."""
+        return math.ceil(b * pages / banks) * BF8_TILE_BYTES, (b + 1) * pages // banks * BF8_TILE_BYTES
+
+    if pages % banks:
         with expect_error(RuntimeError, "banks"):
-            ttnn.experimental.alias_view(
-                k, ttnn.Shape([num_blocks, 1, 32, 32 * banks]), ttnn.float32, check_slices=False
-            )
-        return
-    c = _block_bytes_per_bank(block_size, banks, BF8_TILE_BYTES)
-    rows = num_blocks * c // FP32_TILE_BYTES
+            ttnn.experimental.alias_view(k, ttnn.Shape([num_blocks, 1, 32, 32 * banks]), ttnn.float32)
+    rows = owned(num_blocks - 1)[1] // FP32_TILE_BYTES
     flat = ttnn.experimental.alias_view(k, ttnn.Shape([rows, 1, 32, 32 * banks]), ttnn.float32, check_slices=False)
     raw = ttnn.experimental.alias_view(k, ttnn.Shape([rows, 1, 32, 32 * banks]), ttnn.int32, check_slices=False)
     with expect_error(RuntimeError, "the input owns"):
         ttnn.experimental.alias_view(k, ttnn.Shape([rows + 1, 1, 32, 32 * banks]), ttnn.float32, check_slices=False)
 
-    whole_rows = [range(math.ceil(b * c / FP32_TILE_BYTES), (b + 1) * c // FP32_TILE_BYTES) for b in range(num_blocks)]
+    whole_rows = [
+        range(math.ceil(owned(b)[0] / FP32_TILE_BYTES), owned(b)[1] // FP32_TILE_BYTES) for b in range(num_blocks)
+    ]
     if block_size in expected:
         assert min(len(r) for r in whole_rows) == expected[block_size]
 
@@ -339,8 +345,8 @@ def test_alias_view_bf8_whole_pages_per_block(device, block_size, expect_error):
         before, decoded = after, new_decoded
 
     # A page row across a block boundary holds bytes of both blocks, which is why the runner must skip it.
-    b = next(b for b in range(num_blocks - 1) if (b + 1) * c % FP32_TILE_BYTES)
-    _fill_blocks(flat, torch.randn(1, 1, 32, 32 * banks), [(b + 1) * c // FP32_TILE_BYTES], device)
+    b = next(b for b in range(num_blocks - 1) if owned(b)[1] % FP32_TILE_BYTES)
+    _fill_blocks(flat, torch.randn(1, 1, 32, 32 * banks), [owned(b)[1] // FP32_TILE_BYTES], device)
     new_decoded = ttnn.to_torch(k)
     changed = [i for i in range(num_blocks) if not torch.equal(_bits(new_decoded[i]), _bits(decoded[i]))]
     assert changed == [b, b + 1]

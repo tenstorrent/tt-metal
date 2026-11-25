@@ -78,14 +78,15 @@ void bind_view(nb::module_& mod) {
         bfloat16 [N, 1, 1024, 256] input (256 tiles per block) can be viewed as float32 [N, 8, 128, 128]
         (128 tiles per block). On 7 banks the same view raises.
 
-        With check_slices=False, only the first two rules and the last rule apply. Each dim-0 slice i of
-        the input then still owns bytes [i * s, (i + 1) * s) on every bank, with
-        s = (pages of one input slice) / num_banks * (input page size), but a view page may straddle two
-        slices. View page q holds bytes [(q // num_banks) * p, (q // num_banks + 1) * p) of bank
-        q % num_banks, with p the view page size. The caller must write only the view pages that lie
-        wholly inside the slice it owns. Example: a bfloat8_b [N, 1, 1024, 256] input holds 34,816 bytes
-        per block per bank, 8.5 float32 pages, so a float32 view needs check_slices=False, and each
-        block then holds 8 whole float32 pages per bank.
+        With check_slices=False, only the first rule and the last rule apply. View page q then holds bytes
+        [(q // num_banks) * p, (q // num_banks + 1) * p) of bank q % num_banks, with p the view page size,
+        and a view page may straddle two dim-0 slices of the input. The caller must write only the view
+        pages that lie wholly inside bytes the slice it writes owns on that bank. Example: a bfloat8_b
+        [N, 1, 1024, 256] input holds 34,816 bytes per block per bank on 8 banks, 8.5 float32 pages, so a
+        float32 view needs check_slices=False, and each block then holds 8 whole float32 pages per bank.
+        On 7 banks the 256 tiles of a block do not spread evenly: block b owns tile rows
+        ceil(256 * b / 7) to floor(256 * (b + 1) / 7) - 1 of every bank, and on some banks also the row
+        just before or just after them.
 
         Args:
             * input_tensor: device tensor that owns the buffer.

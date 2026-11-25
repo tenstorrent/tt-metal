@@ -24,13 +24,16 @@ FP32_PAGE_BYTES = 4096
 BF16_PAGE_BYTES = 2048
 # BFLOAT8_B stores a 32x32 tile as 1024 one-byte mantissas plus one shared exponent per 16 values.
 BF8_TILE_BYTES = 1088
-# The float32 views address the state in slices of half a value head ([Dk / 2, Dv] = 8 pages). One slice is one
-# page row over 8 DRAM banks, so its pages sit at the same offset in every bank.
+# With a bank count that is a multiple of 8, the float32 views address the state in slices of half a value head
+# ([Dk / 2, Dv] = 8 pages), and a slice that starts on bank 0 covers whole page rows. With other bank counts (7 on
+# P100a and on the Bin6 Blackhole Galaxy) a slice is one page.
 HALF_HEAD_PAGES = 8
 # gdn_decode_step's packed history: 4 tiles per value head, slot 3 the newest token, slot 0 never read.
 HIST_SLOTS = 4
-# Blackhole P150 has 8 DRAM banks. The specs are built before the mesh opens; GdnBlockState checks the real count.
+# Blackhole P150 and P300 have 8 DRAM banks. The specs are built before the mesh opens, so they plan for DRAM_BANKS or
+# for DRAM_BANKS_ENV; GdnBlockState plans again with the device's own count.
 DRAM_BANKS = 8
+DRAM_BANKS_ENV = "QWEN36_DRAM_BANKS"
 # Attention block sizes the prefill supports: a power of two that divides the 2048-token prefill chunk.
 BLOCK_SIZES = (64, 128, 256, 512, 1024, 2048)
 # gdn_decode_step handles at most this many batch rows.
@@ -46,6 +49,17 @@ class GdnLayoutError(ValueError):
 def kv_cache_bf8_enabled():
     """QWEN_SDPA_BF8=1 makes Qwen36Model allocate the paged K and V caches as bfloat8_b."""
     return os.environ.get("QWEN_SDPA_BF8", "0") == "1"
+
+
+def planned_dram_banks():
+    """DRAM banks per device that the KV cache specs plan the GDN block layout for: QWEN36_DRAM_BANKS (7 on a Bin6
+    Blackhole Galaxy), else DRAM_BANKS."""
+    value = os.environ.get(DRAM_BANKS_ENV, "").strip()
+    if not value:
+        return DRAM_BANKS
+    if not value.isdigit() or int(value) < 1:
+        raise ValueError(f"{DRAM_BANKS_ENV}={value!r} is not a positive DRAM bank count")
+    return int(value)
 
 
 def _cfg(tc, name, default=None):
@@ -102,28 +116,24 @@ class GdnDims:
         return problems
 
 
-def _first_row(block, bank_bytes, page_bytes):
-    """First page row of a bank that lies wholly inside block ``block``, which owns bytes
-    [block * bank_bytes, (block + 1) * bank_bytes) of every bank."""
-    return -(-block * bank_bytes // page_bytes)
-
-
-def _period(bank_bytes, page_bytes):
-    """Blocks after which the page offsets inside a block repeat."""
-    return page_bytes // math.gcd(bank_bytes, page_bytes)
+def _cdiv(a, b):
+    return -(-a // b)
 
 
 @dataclass(frozen=True)
 class GdnBlockLayout:
     """Where one request's GDN state lies in one K and V block of a layer slot.
 
-    Interleaved page p of a buffer sits on bank p % banks at row p // banks. A block of ``tiles`` K tiles therefore owns
-    ``bank_bytes`` bytes of every bank, and a float32 view page is wholly inside the block only from row
-    ``_first_row(block)`` on; with bfloat8_b caches that row depends on the block. Value heads 0 .. heads_k - 1 take
-    the first whole float32 rows of the K block, the other heads the first whole float32 rows of the V block. The
-    packed history (4 bfloat16 pages per head) takes the last page rows of the V block, or its first rows when K holds
-    every head. gdn_decode_step reads the V heads through its second state pool, so their index values are offset by
-    the page count of the K view.
+    Interleaved page p of a buffer sits on bank p % banks at row p // banks. Block b holds tiles [b * tiles, (b + 1)
+    * tiles) of a K (or V) buffer, so it owns tile rows ceil(b * tiles / banks) to floor((b + 1) * tiles / banks) - 1
+    of every bank (owned_bytes). When the bank count does not divide ``tiles`` (7 banks and power-of-two blocks), some
+    banks also hold the row just before or just after those rows, which the layout leaves unused. A float32 or
+    bfloat16 view page is used only when its whole page row lies inside owned_bytes, so a block's state starts at its
+    own offset (with bfloat8_b caches it depends on the block), and every run of state pages starts on bank 0, as
+    ttnn.narrow needs. Value heads 0 .. heads_k - 1 take the first whole float32 rows of the K block, the other heads
+    the first whole float32 rows of the V block. The packed history (4 bfloat16 pages per head) takes the last whole
+    bfloat16 rows of the V block, or its first rows when K holds every head. gdn_decode_step reads the V heads through
+    its second state pool, so their index values are offset by the page count of the K view.
     """
 
     banks: int
@@ -132,51 +142,118 @@ class GdnBlockLayout:
     kv_tile_bytes: int
     dims: GdnDims
     heads_k: int
-    hist_first: int  # first history page of a block, counted from the block's first bfloat16 page
 
     @property
     def heads_v(self):
         return self.dims.nv - self.heads_k
 
     @property
+    def even_spread(self):
+        """True when every block has the same number of tiles on every bank."""
+        return self.tiles % self.banks == 0
+
+    @property
     def bank_bytes(self):
+        """Bytes of one block on each bank, with an even spread."""
         return self.tiles // self.banks * self.kv_tile_bytes
 
     @property
     def hist_tiles(self):
-        """bfloat16 pages of one block in the bfloat16 view of V."""
+        """bfloat16 pages of one block in the bfloat16 view of V, with an even spread."""
         return self.tiles * self.kv_tile_bytes // BF16_PAGE_BYTES
+
+    @property
+    def hist_rows(self):
+        """bfloat16 page rows of the packed history."""
+        return _cdiv(HIST_SLOTS * self.dims.nv, self.banks)
+
+    @property
+    def hist_first(self):
+        """First history page of a block, counted from the block's first bfloat16 page, with an even spread."""
+        return self.hist_tiles - self.hist_rows * self.banks if self.heads_v else 0
+
+    @property
+    def slice_pages(self):
+        """float32 pages of one dim-0 slice of the float32 views: half a value head when the bank count is a multiple
+        of HALF_HEAD_PAGES, else one page."""
+        return HALF_HEAD_PAGES if self.banks % HALF_HEAD_PAGES == 0 else 1
+
+    @property
+    def slice_shape(self):
+        """[rows, columns] of one dim-0 slice of the float32 views."""
+        return [self.dims.dk // 2, self.dims.dv] if self.slice_pages == HALF_HEAD_PAGES else [32, 32]
+
+    def state_slices(self, heads):
+        """Dim-0 slices of the float32 views that ``heads`` value heads take."""
+        return heads * self.dims.head_pages // self.slice_pages
 
     @property
     def fp32_slices_are_blocks(self):
         """True when every block is a whole number of float32 pages per bank (alias_view's default slice check)."""
-        return self.bank_bytes % FP32_PAGE_BYTES == 0
+        return self.even_spread and self.bank_bytes % FP32_PAGE_BYTES == 0
+
+    @property
+    def hist_slices_are_blocks(self):
+        """True when every block is a whole number of bfloat16 pages per bank (alias_view's default slice check)."""
+        return self.even_spread and self.bank_bytes % BF16_PAGE_BYTES == 0
+
+    @property
+    def workspace_spreads_evenly(self):
+        """True when the pages of one [1, Nv, Dk, Dv] float32 state spread evenly over the banks (alias_view's default
+        slice check of a view of a GDN layer's batch-1 workspace)."""
+        return self.dims.nv * self.dims.head_pages % self.banks == 0
+
+    def owned_bytes(self, block):
+        """[lo, hi): the bytes of every bank that ``block`` owns in a K or V buffer."""
+        lo = _cdiv(block * self.tiles, self.banks) * self.kv_tile_bytes
+        return lo, (block + 1) * self.tiles // self.banks * self.kv_tile_bytes
+
+    def _bytes_per_bank(self, num_blocks):
+        """Bytes of every bank up to the end of the last block's owned_bytes."""
+        return num_blocks * self.tiles // self.banks * self.kv_tile_bytes
 
     def fp32_pages(self, num_blocks):
         """Page count of a float32 view of a K or V buffer of ``num_blocks`` blocks: the whole page rows of every
         bank."""
-        return self.banks * (num_blocks * self.bank_bytes // FP32_PAGE_BYTES)
+        return self.banks * (self._bytes_per_bank(num_blocks) // FP32_PAGE_BYTES)
 
     def fp32_view_shape(self, num_blocks):
-        """Shape of the float32 views: one dim-0 slice per half value head."""
-        return [self.fp32_pages(num_blocks) // HALF_HEAD_PAGES, 1, self.dims.dk // 2, self.dims.dv]
+        """Shape of the float32 views: one dim-0 slice per slice_pages pages."""
+        return [self.fp32_pages(num_blocks) // self.slice_pages, 1, *self.slice_shape]
+
+    def workspace_view_shape(self):
+        """Shape of a float32 view of one [1, Nv, Dk, Dv] state in the dim-0 slices of the float32 views."""
+        return [self.state_slices(self.dims.nv), 1, *self.slice_shape]
+
+    def workspace_rows_shape(self):
+        """[1, 1, rows, columns]: one [1, Nv, Dk, Dv] state as the rows that paged_fill_cache writes into the float32
+        views, slice_shape[0] rows per slice; the tiles keep their order."""
+        rows, cols = self.slice_shape
+        return [1, 1, self.state_slices(self.dims.nv) * rows, cols]
 
     def hist_view_shape(self, num_blocks):
         """Shape of the bfloat16 history view: one dim-0 slice per page."""
-        return [num_blocks * self.hist_tiles, 1, 32, 32]
+        return [self.banks * (self._bytes_per_bank(num_blocks) // BF16_PAGE_BYTES), 1, 32, 32]
 
     def first_fp32_page(self, block):
         """First whole float32 page of ``block`` in the float32 view of K (and of V)."""
-        return self.banks * _first_row(block, self.bank_bytes, FP32_PAGE_BYTES)
+        return self.banks * _cdiv(self.owned_bytes(block)[0], FP32_PAGE_BYTES)
+
+    def _hist_row(self, block):
+        lo, hi = self.owned_bytes(block)
+        return hi // BF16_PAGE_BYTES - self.hist_rows if self.heads_v else _cdiv(lo, BF16_PAGE_BYTES)
 
     def hist_page(self, block, head):
-        return block * self.hist_tiles + self.hist_first + HIST_SLOTS * head
+        return self.banks * self._hist_row(block) + HIST_SLOTS * head
 
     def index_host(self, blocks, num_blocks):
         """gdn_decode_step ``state_page_idx`` for rows that hold ``blocks``: int32 [2 * Nv, len(blocks)]. Row h is the
         first float32 page of value head h, row Nv + h the first history page of head h."""
         b = torch.as_tensor(blocks, dtype=torch.int64).reshape(1, -1)
-        first = self.banks * (-(-b * self.bank_bytes // FP32_PAGE_BYTES))
+        n, tb = self.banks, self.kv_tile_bytes
+        lo = -(-b * self.tiles // n) * tb
+        hi = (b + 1) * self.tiles // n * tb
+        first = n * (-(-lo // FP32_PAGE_BYTES))
         h = torch.arange(self.dims.nv, dtype=torch.int64).reshape(-1, 1)
         hp = self.dims.head_pages
         rec = torch.where(
@@ -184,7 +261,8 @@ class GdnBlockLayout:
             first + hp * h,
             self.fp32_pages(num_blocks) + first + hp * (h - self.heads_k),
         )
-        hist = b * self.hist_tiles + self.hist_first + HIST_SLOTS * h
+        hist_row = hi // BF16_PAGE_BYTES - self.hist_rows if self.heads_v else -(-lo // BF16_PAGE_BYTES)
+        hist = n * hist_row + HIST_SLOTS * h
         return torch.cat([rec, hist]).to(torch.int32)
 
     def verify_tables(self, start_blocks, windows, num_blocks, rows):
@@ -219,57 +297,61 @@ class GdnBlockLayout:
         return ctrl.to(torch.int32), torch.cat([rec, hist], dim=1).to(torch.int32)
 
     def state_writes(self, block):
-        """(pool, first half-head slice, first source half-head, end source half-head) of the recurrent state of
-        ``block``: pool 0 is the float32 view of K, pool 1 the float32 view of V."""
-        s0 = self.first_fp32_page(block) // HALF_HEAD_PAGES
-        parts = [(0, s0, 0, 2 * self.heads_k)]
+        """(pool, first slice, first source slice, end source slice) of the recurrent state of ``block``, in dim-0
+        slices of the float32 views: pool 0 is the float32 view of K, pool 1 the float32 view of V."""
+        s0 = self.first_fp32_page(block) // self.slice_pages
+        k_end = self.state_slices(self.heads_k)
+        parts = [(0, s0, 0, k_end)]
         if self.heads_v:
-            parts.append((1, s0, 2 * self.heads_k, 2 * self.dims.nv))
+            parts.append((1, s0, k_end, self.state_slices(self.dims.nv)))
         return parts
 
     def write_tables(self, block):
         """paged_fill_cache page tables that put one request's state into ``block``: per state_writes part the
-        half-head slices of its view, then the history pages."""
+        slices of its view, then the history pages."""
         tables = [list(range(s0, s0 + hi - lo)) for _, s0, lo, hi in self.state_writes(block)]
         first = self.hist_page(block, 0)
         return tables + [list(range(first, first + HIST_SLOTS * self.dims.nv))]
 
 
 def plan_gdn_block_layout(*, block_size, kv_heads, head_dim, kv_bf8, dims, banks=DRAM_BANKS):
-    """The GdnBlockLayout of a K / V cache block of ``block_size`` tokens, or GdnLayoutError with the reason."""
+    """The GdnBlockLayout of a K / V cache block of ``block_size`` tokens on ``banks`` DRAM banks, or GdnLayoutError
+    with the reason."""
     tile_bytes = BF8_TILE_BYTES if kv_bf8 else BF16_PAGE_BYTES
     if block_size % 32 or head_dim % 32:
         raise GdnLayoutError(f"block {block_size} x head_dim {head_dim} is not whole 32 x 32 tiles")
     tiles = kv_heads * block_size * head_dim // 1024
-    if tiles % banks:
-        raise GdnLayoutError(
-            f"block {block_size}: {tiles} tiles per block do not spread evenly over {banks} DRAM banks"
-        )
-    if banks % HALF_HEAD_PAGES:
-        raise GdnLayoutError(f"{banks} DRAM banks: the half-head float32 slices need a multiple of {HALF_HEAD_PAGES}")
     s = tiles // banks * tile_bytes
-    if s % BF16_PAGE_BYTES:
+    # With an even spread every block holds whole bfloat16 pages per bank, so the history sits at one offset from
+    # each block's first bfloat16 page (hist_first), as in the operator tests' KV blocks.
+    if tiles % banks == 0 and s % BF16_PAGE_BYTES:
         raise GdnLayoutError(f"block {block_size}: a block holds {s} B per bank, not whole bfloat16 history pages")
     hp = dims.head_pages
-    period = _period(s, FP32_PAGE_BYTES)
-    rows_k = min((b + 1) * s // FP32_PAGE_BYTES - _first_row(b, s, FP32_PAGE_BYTES) for b in range(period))
+    lay = GdnBlockLayout(
+        banks=banks, block_size=block_size, tiles=tiles, kv_tile_bytes=tile_bytes, dims=dims, heads_k=dims.nv
+    )
+    # The page offsets inside owned_bytes repeat after this many blocks.
+    period = banks * (FP32_PAGE_BYTES // math.gcd(tiles * tile_bytes, FP32_PAGE_BYTES))
+    spans = [lay.owned_bytes(b) for b in range(period)]
+    rows_k = max(0, min(hi // FP32_PAGE_BYTES - _cdiv(lo, FP32_PAGE_BYTES) for lo, hi in spans))
     heads_k = min(dims.nv, rows_k * banks // hp)
+    # restore copies the V heads into the batch-1 workspace through a ttnn.narrow at page heads_k * Dk * Dv / 1024 of
+    # the workspace, which must lie on bank 0.
+    while heads_k and heads_k < dims.nv and heads_k * hp % banks:
+        heads_k -= 1
     heads_v = dims.nv - heads_k
-    hist_rows = -(-HIST_SLOTS * dims.nv // banks)
-    hist_tiles = tiles * tile_bytes // BF16_PAGE_BYTES
-    if hist_rows * BF16_PAGE_BYTES > s:
+    hist_rows = lay.hist_rows
+    if min(hi // BF16_PAGE_BYTES - _cdiv(lo, BF16_PAGE_BYTES) for lo, hi in spans) < hist_rows:
         raise GdnLayoutError(f"block {block_size}: a V block cannot hold the {HIST_SLOTS * dims.nv}-page history")
-    hist_first = 0
     if heads_v:
-        rows_v = -(-heads_v * hp // banks)
-        for b in range(period):
-            end = (_first_row(b, s, FP32_PAGE_BYTES) + rows_v) * FP32_PAGE_BYTES
-            if end > (b + 1) * s - hist_rows * BF16_PAGE_BYTES:
+        rows_v = _cdiv(heads_v * hp, banks)
+        for lo, hi in spans:
+            end = (_cdiv(lo, FP32_PAGE_BYTES) + rows_v) * FP32_PAGE_BYTES
+            if end > (hi // BF16_PAGE_BYTES - hist_rows) * BF16_PAGE_BYTES:
                 raise GdnLayoutError(
                     f"block {block_size}: K holds {heads_k} of {dims.nv} GDN value heads and V cannot hold the "
                     f"other {heads_v} and the history"
                 )
-        hist_first = hist_tiles - hist_rows * banks
     return GdnBlockLayout(
         banks=banks,
         block_size=block_size,
@@ -277,7 +359,6 @@ def plan_gdn_block_layout(*, block_size, kv_heads, head_dim, kv_bf8, dims, banks
         kv_tile_bytes=tile_bytes,
         dims=dims,
         heads_k=heads_k,
-        hist_first=hist_first,
     )
 
 
@@ -351,7 +432,7 @@ def pack_conv_taps(taps, dims):
 
 def choose_block_size(*, kv_heads, head_dim, kv_bf8, dims, min_block_size=None, banks=DRAM_BANKS):
     """(block size, GdnBlockLayout): the smallest size in BLOCK_SIZES, at least ``min_block_size``, whose K and V block
-    holds one GDN state. GdnLayoutError when none does."""
+    holds one GDN state on ``banks`` DRAM banks. GdnLayoutError when none does."""
     sizes = [bs for bs in BLOCK_SIZES if min_block_size is None or bs >= min_block_size]
     if not sizes:
         raise GdnLayoutError(f"block size {min_block_size} is above the largest supported block, {BLOCK_SIZES[-1]}")
@@ -364,7 +445,7 @@ def choose_block_size(*, kv_heads, head_dim, kv_bf8, dims, min_block_size=None, 
         except GdnLayoutError as e:
             reasons.append(str(e))
     raise GdnLayoutError(
-        f"no KV cache block size in {sizes} holds one GDN state ({dims.nv} value heads per device, {'bfloat8_b' if kv_bf8 else 'bfloat16'} K and V): "
+        f"no KV cache block size in {sizes} holds one GDN state ({dims.nv} value heads per device, {'bfloat8_b' if kv_bf8 else 'bfloat16'} K and V, {banks} DRAM banks): "
         + "; ".join(reasons)
     )
 
@@ -450,7 +531,7 @@ def qwen36_kv_cache_spec(
     mamba_cache_mode="none",
     min_block_size=None,
     num_speculative_blocks=0,
-    banks=DRAM_BANKS,
+    banks=None,
 ):
     """dict[layer name, KVCacheSpec] for vLLM's hybrid KV cache manager, sizes per device at ``tp`` devices.
 
@@ -460,8 +541,8 @@ def qwen36_kv_cache_spec(
     request keeps one state block per group). In mode "align" the state blocks have the attention block size, and the
     MambaSpec asks for prefill checkpoints on block boundaries, where Qwen36ForCausalLM splits a prefill.
     ``num_speculative_blocks``: K of a speculative launch, so that vLLM gives a verify one state block per query token
-    and row (1 + K per group). Raises
-    ValueError for a TP degree or a geometry gdn_decode_step does not serve."""
+    and row (1 + K per group). ``banks``: DRAM banks per device, by default planned_dram_banks(). Raises ValueError
+    for a TP degree or a geometry gdn_decode_step does not serve."""
     from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
     from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
 
@@ -486,7 +567,12 @@ def qwen36_kv_cache_spec(
     # TPAttention replicates the KV heads when TP exceeds their count.
     n_local_kv = max(1, n_kv // tp)
     block_size, layout = choose_block_size(
-        kv_heads=n_local_kv, head_dim=head_dim, kv_bf8=kv_bf8, dims=dims, min_block_size=min_block_size, banks=banks
+        kv_heads=n_local_kv,
+        head_dim=head_dim,
+        kv_bf8=kv_bf8,
+        dims=dims,
+        min_block_size=min_block_size,
+        banks=planned_dram_banks() if banks is None else int(banks),
     )
     attn_kw = {"state_content_bytes": 2 * head_dim * BF8_TILE_BYTES // 1024} if kv_bf8 else {}
     attn = FullAttentionSpec(

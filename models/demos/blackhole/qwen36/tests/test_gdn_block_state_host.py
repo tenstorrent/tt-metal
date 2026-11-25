@@ -15,7 +15,12 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tests.gdn_block_helpers import PluginLayout
 from models.demos.blackhole.qwen36.tt import gdn_block_state as gbs
-from models.demos.blackhole.qwen36.tt.kv_cache_spec import GdnDims, plan_gdn_block_layout
+from models.demos.blackhole.qwen36.tt.kv_cache_spec import (
+    DRAM_BANKS_ENV,
+    GdnDims,
+    GdnLayoutError,
+    plan_gdn_block_layout,
+)
 
 QWEN_27B_TP8 = GdnDims(nk=2, nv=6, dk=128, dv=128, kconv=4)
 ATTENTION = [i % 4 == 3 for i in range(16)]  # 4 attention layers, 12 GDN layers in 3 groups
@@ -176,3 +181,27 @@ def test_zero_blocks_in_padded_groups(ttnn_calls):
     fills = [c for c in ttnn_calls if c[0] == "fill"]
     assert len(fills) == 2 * 2 * len(st.kv_caches), "every K and V buffer, per group of blocks"
     assert {c[1] for c in fills} == {name for kv in st.kv_caches for name in kv}
+
+
+@pytest.mark.parametrize("planned", [None, "8"])
+def test_blocks_sized_for_8_banks_on_a_7_bank_device_name_the_fix(monkeypatch, expect_error, planned):
+    """The specs size the KV cache blocks before the mesh opens, for QWEN36_DRAM_BANKS banks (8 when unset). On a
+    7-bank device, bfloat8_b 1024-token blocks at TP=8 hold no GDN state, and GdnBlockState names the setting."""
+    if planned is None:
+        monkeypatch.delenv(DRAM_BANKS_ENV, raising=False)
+    else:
+        monkeypatch.setenv(DRAM_BANKS_ENV, planned)
+    plugin = PluginLayout(ATTENTION, 1, 256, QWEN_27B_TP8, True, num_blocks=8, block_size=1024)
+    args = SimpleNamespace(
+        max_batch_size=BMAX, gdn_nk_tp=2, gdn_nv_tp=6, gdn_dk=128, gdn_dv=128, gdn_conv_kernel_size=4
+    )
+    mesh = SimpleNamespace(dram_grid_size=lambda: SimpleNamespace(x=7, y=1))
+    attention = [i for i, a in enumerate(ATTENTION) if a]
+    model = SimpleNamespace(args=args, mesh_device=mesh, _attention_layer_indices=attention)
+    k = SimpleNamespace(shape=(8, 1, 1024, 256), dtype=ttnn.bfloat8_b)
+    with expect_error(GdnLayoutError, "sized 1024-token blocks for 8 DRAM banks per device, this device has 7"):
+        gbs.GdnBlockState(model, plugin.per_layer_specs, [(k, k)] * len(attention))
+    monkeypatch.setenv(DRAM_BANKS_ENV, "7")
+    with expect_error(GdnLayoutError, "K holds 0 of 6 GDN value heads") as raised:
+        gbs.GdnBlockState(model, plugin.per_layer_specs, [(k, k)] * len(attention))
+    assert DRAM_BANKS_ENV not in str(raised.value)

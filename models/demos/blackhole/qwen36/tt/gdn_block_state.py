@@ -52,14 +52,18 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.kv_cache_spec import (
+    DRAM_BANKS_ENV,
     HALF_HEAD_PAGES,
     HIST_SLOTS,
     MAX_DECODE_ROWS,
     GdnDims,
+    GdnLayoutError,
+    choose_block_size,
     gdn_state_shapes,
     layer_index,
     pack_history_rows,
     plan_gdn_block_layout,
+    planned_dram_banks,
     unpack_history_rows,
 )
 
@@ -200,14 +204,23 @@ class GdnBlockState:
             dv=args.gdn_dv,
             kconv=args.gdn_conv_kernel_size,
         )
-        self.layout = plan_gdn_block_layout(
-            block_size=block_size,
-            kv_heads=kv_heads,
-            head_dim=head_dim,
-            kv_bf8=k0.dtype == ttnn.bfloat8_b,
-            dims=self.dims,
-            banks=_dram_banks(self.mesh),
-        )
+        banks, planned = _dram_banks(self.mesh), planned_dram_banks()
+        geometry = dict(kv_heads=kv_heads, head_dim=head_dim, kv_bf8=k0.dtype == ttnn.bfloat8_b, dims=self.dims)
+        try:
+            self.layout = plan_gdn_block_layout(block_size=block_size, banks=banks, **geometry)
+        except GdnLayoutError as e:
+            if planned == banks:
+                raise
+            raise GdnLayoutError(
+                f"the KV cache specs sized {block_size}-token blocks for {planned} DRAM banks per device, this device "
+                f"has {banks} ({e}); set {DRAM_BANKS_ENV}={banks} for every process of the server, or a larger "
+                "--block-size"
+            ) from e
+        if planned != banks and choose_block_size(banks=banks, **geometry)[0] < block_size:
+            logger.warning(
+                f"the KV cache specs sized {block_size}-token blocks for {planned} DRAM banks per device "
+                f"({DRAM_BANKS_ENV}), this device has {banks}, where smaller blocks hold the GDN state"
+            )
         expected = gdn_state_shapes(self.dims)
         rep = ttnn.ReplicateTensorToMesh(self.mesh)
         null_index = self.layout.index_host([0] * self.bmax, self.num_blocks)
@@ -262,7 +275,7 @@ class GdnBlockState:
             f"GDN state in vLLM KV cache blocks: {self.num_blocks} blocks of {block_size} tokens, {block_bytes} B of K and "
             f"V per block and layer slot, {len(kv_caches)} layer slots ({block_bytes * len(kv_caches) * self.num_blocks / 2**30:.2f} "
             f"GiB per device); one GDN state uses {state_bytes} B of a block ({lay.heads_k} value heads in K, "
-            f"{lay.heads_v} in V); {len(self.layers)} GDN layers"
+            f"{lay.heads_v} in V, {lay.banks} DRAM banks); {len(self.layers)} GDN layers"
         )
 
         self._pack_table = ttnn.from_torch(
@@ -465,7 +478,9 @@ class GdnBlockState:
         rec_v = None
         if lay.heads_v:
             rec_v = ttnn.experimental.alias_view(v, lay.fp32_view_shape(n), ttnn.float32, check_slices=check)
-        hist = ttnn.experimental.alias_view(v, lay.hist_view_shape(n), ttnn.bfloat16)
+        hist = ttnn.experimental.alias_view(
+            v, lay.hist_view_shape(n), ttnn.bfloat16, check_slices=lay.hist_slices_are_blocks
+        )
         return rec_k, rec_v, hist
 
     def groups(self, mamba_state):
@@ -700,15 +715,15 @@ class GdnBlockState:
                 self._read_state(dn, block)
 
     def _block_views(self, views, block):
-        """Views of the GDN state of ``block`` in the alias views (rec_k, rec_v, hist) of one layer slot: float32
-        [2 * heads_k, 1, Dk / 2, Dv] of K, the same of V (None when K holds every head), and the packed history
-        [4 * Nv, 1, 32, 32] bfloat16. Each view starts on bank 0, as ttnn.narrow requires: with 8 DRAM banks a half-head
-        slice is one page row, and the history of a block starts on a whole page row of the bfloat16 view."""
+        """Views of the GDN state of ``block`` in the alias views (rec_k, rec_v, hist) of one layer slot: the heads_k
+        heads of K in dim-0 slices of the float32 views (GdnBlockLayout.slice_shape), the same of V (None when K holds
+        every head), and the packed history [4 * Nv, 1, 32, 32] bfloat16. Each view starts on bank 0, as ttnn.narrow
+        requires: the state and the history of a block start on whole page rows (GdnBlockLayout)."""
         rec_k, rec_v, hist = views
         lay = self.layout
-        s0 = lay.first_fp32_page(block) // HALF_HEAD_PAGES
-        k = ttnn.narrow(rec_k, 0, s0, 2 * lay.heads_k)
-        v = ttnn.narrow(rec_v, 0, s0, 2 * lay.heads_v) if lay.heads_v else None
+        s0 = lay.first_fp32_page(block) // lay.slice_pages
+        k = ttnn.narrow(rec_k, 0, s0, lay.state_slices(lay.heads_k))
+        v = ttnn.narrow(rec_v, 0, s0, lay.state_slices(lay.heads_v)) if lay.heads_v else None
         h = ttnn.narrow(hist, 0, lay.hist_page(block, 0), HIST_SLOTS * self.dims.nv)
         return k, v, h
 
@@ -717,13 +732,16 @@ class GdnBlockState:
         return sb.rec_k, sb.rec_v, sb.hist
 
     def _read_state(self, dn, block):
-        lay, nv, dk, dv = self.layout, self.dims.nv, self.dims.dk, self.dims.dv
+        lay, nv = self.layout, self.dims.nv
         k, v, hist = self._block_views(self._layer_views(dn), block)
-        # Half-head slices of the workspace: the same tile order as [1, Nv, Dk, Dv].
-        rec = ttnn.experimental.alias_view(dn.rec_state, [2 * nv, 1, dk // 2, dv], ttnn.float32)
-        ttnn.copy(k, ttnn.narrow(rec, 0, 0, 2 * lay.heads_k))
+        # The workspace in the slices of the float32 views: the same tile order as [1, Nv, Dk, Dv].
+        rec = ttnn.experimental.alias_view(
+            dn.rec_state, lay.workspace_view_shape(), ttnn.float32, check_slices=lay.workspace_spreads_evenly
+        )
+        heads_k = lay.state_slices(lay.heads_k)
+        ttnn.copy(k, ttnn.narrow(rec, 0, 0, heads_k))
         if v is not None:
-            ttnn.copy(v, ttnn.narrow(rec, 0, 2 * lay.heads_k, 2 * lay.heads_v))
+            ttnn.copy(v, ttnn.narrow(rec, 0, heads_k, lay.state_slices(lay.heads_v)))
         packed = ttnn.to_layout(hist, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         rows = ttnn.reshape(packed, (nv * HIST_SLOTS * 32, 32))
         carry = ttnn.embedding(
@@ -754,6 +772,16 @@ class GdnBlockState:
             ttnn.copy_host_to_device_tensor(host, table)
             self._write_refs.append(host)
 
+    def _state_rows(self, rec_state):
+        """A [1, Nv, Dk, Dv] float32 state as the rows that paged_fill_cache writes into the float32 views
+        (GdnBlockLayout.workspace_rows_shape); the tiles keep their order. Half-head rows are a reshape; one-tile rows
+        change the row width, so they are an alias_view of the same pages."""
+        lay = self.layout
+        shape = lay.workspace_rows_shape()
+        if lay.slice_pages == HALF_HEAD_PAGES:
+            return ttnn.reshape(rec_state, tuple(shape))
+        return ttnn.experimental.alias_view(rec_state, shape, ttnn.float32, check_slices=lay.workspace_spreads_evenly)
+
     def _write_checkpoint(self, dn):
         rec_state, conv_carry = dn.take_prefill_checkpoint()
         self._write_state(dn, rec_state, conv_carry)
@@ -763,16 +791,16 @@ class GdnBlockState:
         """Write a GDN state of ``dn`` into the block that the write tables (``tables``, by default _write_tables) name:
         ``rec_state`` [1, Nv, Dk, Dv] float32 and ``conv_carry`` [1, K - 1, C] bfloat16, by default its batch-1
         workspace."""
-        lay, nv, dk, dv = self.layout, self.dims.nv, self.dims.dk, self.dims.dv
+        lay, nv = self.layout, self.dims.nv
         sb = dn.state_blocks
         rec_state = dn.rec_state if rec_state is None else rec_state
         conv_carry = dn.conv_carry if conv_carry is None else conv_carry
         tables = self._write_tables if tables is None else tables
-        # [1, Nv, Dk, Dv] as rows of half heads; the tiles keep their order.
-        rec = ttnn.reshape(rec_state, (1, 1, nv * dk, dv))
+        rec = self._state_rows(rec_state)
+        rows, cols = lay.slice_shape
         for (pool, _, lo, hi), table in zip(lay.state_writes(0), tables):
-            whole = lo == 0 and hi == 2 * nv
-            src = rec if whole else ttnn.slice(rec, (0, 0, lo * dk // 2, 0), (1, 1, hi * dk // 2, dv))
+            whole = lo == 0 and hi == lay.state_slices(nv)
+            src = rec if whole else ttnn.slice(rec, (0, 0, lo * rows, 0), (1, 1, hi * rows, cols))
             ttnn.experimental.paged_fill_cache(sb.rec_k if pool == 0 else sb.rec_v, src, table, batch_idx=0)
             if not whole:
                 ttnn.deallocate(src)
