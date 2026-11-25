@@ -456,7 +456,7 @@
     TTNN_GRAPH_OPS_BF8_AS_BF16=1 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v -n 0 -m emulator models/experimental/ops/quasar/tests/gpt_oss_ops/
   skus:
     sim_quasar:
-      timeout: 45
+      timeout: 15
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
