@@ -207,10 +207,7 @@ protected:
             GTEST_SKIP() << "NOC debugging tests require fast dispatch mode";
         }
         if (is_quasar_) {
-            GTEST_SKIP()
-                << "NOC debug dump is not supported on Quasar yet: kernel_profiler.hpp rejects DEVICE_DEBUG_DUMP, "
-                   "the host has no Quasar DM processor mapping or DRAM poll path, and DM records no lock events "
-                   "(#45918)";
+            GTEST_SKIP() << "NOC debugging is currently not supported on Quasar";
         }
 
         MeshDispatchFixture::SetUp();
