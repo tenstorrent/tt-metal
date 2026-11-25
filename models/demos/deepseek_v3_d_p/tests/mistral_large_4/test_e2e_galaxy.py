@@ -385,7 +385,8 @@ def _meta_suite(model, tokens, seq: int, chunk: int, layers, eager_final: dict, 
 
     # (3) serving-like chunks: (slot, start, end); eager, then the metadata path, outputs (real rows) and KV
     # a start on a block boundary (prefix reuse at 4480), one inside a block with a partial end, a short last chunk
-    cases = [(1, 4480, 4480 + chunk), (1, 9024, 9024 + chunk - 151), (0, seq - chunk, seq - 320)]
+    mid = min(9024, seq - chunk - 64)  # inside a block, the whole chunk within the prompt
+    cases = [(1, 4480, 4480 + chunk), (1, mid, mid + chunk - 151), (0, seq - chunk, seq - 320)]
     kv_layers = [i for i in (0, 1, 3, 35, 39, 71) if i in layers]
     case_eager, case_res = {}, {}
     for n, (slot, start, end) in enumerate(cases):
