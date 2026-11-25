@@ -96,6 +96,7 @@ static_assert(
 
 template <typename AddrGenType, typename FabricSender>
 FORCE_INLINE void write_bank_owned_slices(
+    const Noc& noc,
     CircularBuffer& cb_output,
     AddrGenType& output_addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
@@ -111,6 +112,7 @@ FORCE_INLINE void write_bank_owned_slices(
     while (schedule.next_packet(first_page_offset, batch)) {
         cb_output.wait_front(packet_size_in_pages);
         fabric_write_unidir(
+            noc,
             output_page_base + first_page_offset,
             output_addrgen,
             pkt_hdr,
@@ -275,6 +277,7 @@ void kernel_main() {
     const uint32_t num_targets_in_direction =
         direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
 
+    // Kept on the raw header: GlobalSemaphore::up_with_state() sends without the write flush used here.
     const uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
@@ -314,6 +317,7 @@ void kernel_main() {
                         const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
                             input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
                         write_bank_owned_slices(
+                            noc_obj,
                             cb_output,
                             output_addrgens[input_idx],
                             pkt_hdr,
@@ -324,6 +328,7 @@ void kernel_main() {
                             num_links);
                         signal_output_ready();
                         write_bank_owned_slices(
+                            noc_obj,
                             cb_output,
                             output_addrgens[input_idx],
                             pkt_hdr,
@@ -334,6 +339,7 @@ void kernel_main() {
                             num_links);
                     } else {
                         write_bank_owned_slices(
+                            noc_obj,
                             cb_output,
                             output_addrgens[input_idx],
                             pkt_hdr,
@@ -380,6 +386,7 @@ void kernel_main() {
 
                         if (num_targets_in_direction) {
                             scatter_fabric_write_unidir(
+                                noc_obj,
                                 tile_id,
                                 second_tile_id,
                                 output_addrgens[input_idx],
@@ -399,6 +406,7 @@ void kernel_main() {
 
                         if (num_targets_in_direction) {
                             fabric_write_unidir(
+                                noc_obj,
                                 tile_id,
                                 output_addrgens[input_idx],
                                 pkt_hdr,
@@ -501,6 +509,7 @@ void kernel_main() {
                         const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
                             input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
                         write_bank_owned_slices(
+                            noc_obj,
                             cb_output,
                             output_addrgens[input_idx],
                             pkt_hdr,
@@ -511,6 +520,7 @@ void kernel_main() {
                             bank_stride);
                         signal_output_ready();
                         write_bank_owned_slices(
+                            noc_obj,
                             cb_output,
                             output_addrgens[input_idx],
                             pkt_hdr,
@@ -521,6 +531,7 @@ void kernel_main() {
                             bank_stride);
                     } else {
                         write_bank_owned_slices(
+                            noc_obj,
                             cb_output,
                             output_addrgens[input_idx],
                             pkt_hdr,
@@ -578,6 +589,7 @@ void kernel_main() {
                             }
 
                             scatter_fabric_write_unidir(
+                                noc_obj,
                                 first_tile_id,
                                 second_tile_id,
                                 output_addrgens[input_idx],
@@ -588,6 +600,7 @@ void kernel_main() {
                         } else {
                             ASSERT(num_pages_to_read == 1);
                             fabric_write_unidir(
+                                noc_obj,
                                 first_tile_id,
                                 output_addrgens[input_idx],
                                 pkt_hdr,
