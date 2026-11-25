@@ -8,7 +8,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 

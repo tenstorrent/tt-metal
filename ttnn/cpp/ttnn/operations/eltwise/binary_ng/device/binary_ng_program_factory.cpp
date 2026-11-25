@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_utils.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include <algorithm>
 #include <numeric>

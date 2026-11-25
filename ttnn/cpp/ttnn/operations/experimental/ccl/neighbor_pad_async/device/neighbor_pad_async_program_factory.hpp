@@ -7,8 +7,8 @@
 #include "neighbor_pad_async_device_operation_types.hpp"
 #include "ttnn/distributed/types.hpp"
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 #include <optional>
 #include <variant>

@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -133,6 +133,35 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             q_shape_unpadded[2] > 16,
             "spec_multi_pos_tiles requires full 32x32 tiles (use_half_tile must be false), but Q has {} logical heads",
             q_shape_unpadded[2]);
+    }
+
+    const uint32_t spec_pack_heads = operation_attributes.spec_pack_heads;
+    if (spec_pack_heads > 0) {
+        // Packed spec mode: each group's spec_T candidates x spec_pack_heads q rows go into one
+        // 32-row tile, candidate j on rows [j*S, j*S + spec_pack_heads), S even (see
+        // SdpaDecodeParams::spec_pack_heads). The reader gathers those row blocks out of the
+        // unpacked Q and the writer scatters the output rows back, both as face-row blocks.
+        TT_FATAL(spec_multi_pos, "spec_pack_heads={} requires spec_multi_pos_tiles > 0", spec_pack_heads);
+        const uint32_t pack_stride = spec_pack_heads + (spec_pack_heads % 2);
+        TT_FATAL(
+            spec_pack_heads <= tt::constants::FACE_HEIGHT,
+            "spec_pack_heads={} must be <= {} (the valid rows of a candidate row-tile must sit in its top faces)",
+            spec_pack_heads,
+            tt::constants::FACE_HEIGHT);
+        TT_FATAL(
+            spec_T * pack_stride <= tt::constants::TILE_HEIGHT,
+            "spec_pack_heads={}: {} candidates x {} packed rows do not fit one {}-row tile",
+            spec_pack_heads,
+            spec_T,
+            pack_stride,
+            tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            !operation_attributes.output_mem_config.is_sharded(),
+            "spec_pack_heads requires an interleaved output memory config, got {}",
+            operation_attributes.output_mem_config.memory_layout());
+        // The reader loads the sink's unpacked row-tile 0, so packed row j*S + h would get sink row j*S + h instead
+        // of row j*32 + h.
+        TT_FATAL(!tensor_args.attention_sink.has_value(), "spec_pack_heads is not supported with attention_sink");
     }
 
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
@@ -664,7 +693,8 @@ Tensor sdpa_decode(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    uint32_t spec_pack_heads) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -683,6 +713,7 @@ Tensor sdpa_decode(
             paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .spec_pack_heads = spec_pack_heads,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

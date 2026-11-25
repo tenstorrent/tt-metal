@@ -30,13 +30,13 @@
 #include "emule_tile_geometry.hpp"           // resolve_tile_geometry, ResolvedTileGeometry
 #include "host_sanitizers.hpp"               // emule_asan_enabled (host ASAN master switch)
 #include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
-#include <tt-metalium/kernel_types.hpp>      // DataMovementConfig/ComputeConfig, DataMovementProcessor
+#include <tt-metalium/workload/legacy/kernel_types.hpp>  // DataMovementConfig/ComputeConfig, DataMovementProcessor
 
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/face_geometry.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/data_formats/face_geometry.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // get_fabric_node_id_from_physical_chip_id

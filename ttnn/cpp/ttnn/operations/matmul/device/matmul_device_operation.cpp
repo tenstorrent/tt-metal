@@ -9,15 +9,15 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
-#include "tt-metalium/hal_types.hpp"
+#include "tt-metalium/vocabulary/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"
 #include "ttnn/global_circular_buffer.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
-#include "tt-metalium/work_split.hpp"
+#include "tt-metalium/utils/work_split.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unreachable.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::prim {
 

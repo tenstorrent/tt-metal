@@ -19,7 +19,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/distributed/types.hpp"
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 namespace composite_common {
 

@@ -24,15 +24,15 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
 #include "tt_metal/common/env_lib.hpp"

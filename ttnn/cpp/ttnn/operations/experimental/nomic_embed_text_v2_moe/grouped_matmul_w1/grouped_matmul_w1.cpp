@@ -8,10 +8,10 @@
 #include <cstring>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 #include "device/grouped_matmul_w1_device_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
