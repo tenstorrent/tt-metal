@@ -103,37 +103,39 @@ inline bool is_integer_dtype(DataType dtype) {
            dtype == DataType::UINT8;
 }
 
-// Dtypes each op cannot compute on, through either its LLK kernel or its composite fallback.
+// Dtypes each op computes correctly on, through either its LLK kernel or its composite fallback.
 // Kernels without an integer path read integer data as float bit patterns instead of failing,
-// so these must be rejected before dispatch.
-std::span<const DataType> unsupported_dtypes(TernaryOpType op_type) {
+// so anything not listed here must be rejected before dispatch.
+std::span<const DataType> supported_dtypes(TernaryOpType op_type) {
     using enum DataType;
-    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
-    static constexpr std::array lerp_dtypes{UINT32};
-    static constexpr std::array addcmul_dtypes{BFLOAT4_B, UINT16, UINT8};
-    static constexpr std::array addcdiv_dtypes{INT32, UINT32, UINT16, UINT8};
-    static constexpr std::array snake_beta_dtypes{BFLOAT8_B, BFLOAT4_B, INT32, UINT32, UINT16, UINT8};
+    static constexpr std::array where_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT32, UINT32, UINT16, UINT8};
+    // The LERP kernel has no UINT32 path: a UINT32 dispatch compiles but returns zeros.
+    static constexpr std::array lerp_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT32, UINT16, UINT8};
+    static constexpr std::array addcmul_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32};
+    static constexpr std::array addcdiv_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B};
+    static constexpr std::array snake_beta_dtypes{BFLOAT16, FLOAT32};
+    static constexpr std::array mac_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT32, UINT32, UINT16, UINT8};
     switch (op_type) {
-        case TernaryOpType::WHERE: return {};
+        case TernaryOpType::WHERE: return where_dtypes;
         case TernaryOpType::LERP: return lerp_dtypes;
         case TernaryOpType::ADDCMUL: return addcmul_dtypes;
         case TernaryOpType::ADDCDIV: return addcdiv_dtypes;
         case TernaryOpType::SNAKE_BETA: return snake_beta_dtypes;
-        case TernaryOpType::MAC: return {};
+        case TernaryOpType::MAC: return mac_dtypes;
     }
     TT_THROW("Unknown TernaryOpType {}", static_cast<int>(op_type));
 }
 
 void validate_dtypes(
     TernaryOpType op_type, std::initializer_list<DataType> input_dtypes, const std::optional<Tensor>& output) {
-    const auto unsupported = unsupported_dtypes(op_type);
+    const auto supported = supported_dtypes(op_type);
     auto check = [&](DataType dtype) {
         TT_FATAL(
-            std::ranges::find(unsupported, dtype) == unsupported.end(),
-            "{} does not support {}. Unsupported dtypes: {}",
+            std::ranges::find(supported, dtype) != supported.end(),
+            "{} does not support {}. Supported dtypes: {}",
             enchantum::to_string(op_type),
             dtype,
-            fmt::format("{}", fmt::join(unsupported, ", ")));
+            fmt::format("{}", fmt::join(supported, ", ")));
     };
     for (DataType dtype : input_dtypes) {
         check(dtype);

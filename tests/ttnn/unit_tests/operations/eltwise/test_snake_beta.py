@@ -278,5 +278,5 @@ def test_snake_beta_unsupported_dtype_int32(device, expect_error):
         dtype=ttnn.int32,
         device=device,
     )
-    with expect_error(RuntimeError, r"BFLOAT16 or FLOAT32"):
+    with expect_error(RuntimeError, "SNAKE_BETA does not support DataType::INT32"):
         ttnn.snake_beta(x, a, b)
