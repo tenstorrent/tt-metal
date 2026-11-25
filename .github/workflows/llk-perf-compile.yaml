@@ -184,3 +184,30 @@ jobs:
           archive: false
           retention-days: 1
           if-no-files-found: error
+      # Trial only: after the upload, rebuild the leg without the cache and compare with what was shipped.
+      - name: "Trial: rebuild cold and compare"
+        if: inputs.elf-cache == 'read'
+        continue-on-error: true
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          PIPELINE: ${{ inputs.pipeline }}
+          LLK_PERF_PHASE: compile
+          LLK_PERF_COMPILE_WORKERS: ${{ inputs.workers }}
+          LLK_ELF_CACHE: ""
+          MATRIX_CMD: ${{ fromJSON(inputs.test-group).cmd }}
+        run: |
+          mv "$RUNNER_TEMP/tt-llk-build" "$RUNNER_TEMP/warm-build"
+          bash -c "$MATRIX_CMD" > "$RUNNER_TEMP/cold.log" 2>&1 || tail -20 "$RUNNER_TEMP/cold.log"
+          python3 tests/llk_perf_offload.py verify-tree --dir "$RUNNER_TEMP/shadow" --out "$RUNNER_TEMP/trial/identity.json"
+          cp -r "$LLK_ELF_CACHE_STATS" "$RUNNER_TEMP/trial/stats"
+      - name: "Trial: upload the comparison"
+        if: inputs.elf-cache == 'read' && !cancelled()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: trial-identity-${{ env.CHIP_ARCH }}-${{ fromJSON(inputs.test-group).split_group }}
+          path: ${{ runner.temp }}/trial/
