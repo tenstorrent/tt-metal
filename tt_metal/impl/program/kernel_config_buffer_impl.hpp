@@ -9,10 +9,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/kernel_config_buffer.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 
 namespace tt::tt_metal {

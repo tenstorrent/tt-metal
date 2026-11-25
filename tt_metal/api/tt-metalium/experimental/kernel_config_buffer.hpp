@@ -7,9 +7,9 @@
 #include <cstdint>
 #include <memory>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 // Experimental and subject to change: this header carries no API-stability guarantee.
 

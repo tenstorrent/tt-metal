@@ -9,8 +9,8 @@
 #include <utility>
 
 #include <tt-metalium/experimental/kernel_config_buffer.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/distributed/types.hpp"

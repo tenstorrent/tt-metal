@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/mesh/allocator.hpp>
+#include "impl/allocator/allocator.hpp"
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt-metalium/workload/legacy/circular_buffer.hpp>
 #include <tt_stl/assert.hpp>
