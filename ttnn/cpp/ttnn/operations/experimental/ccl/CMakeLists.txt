@@ -30,6 +30,8 @@ file(
     reduce_scatter_minimal_direct/device/kernels/*.cpp
     matmul_reduce_scatter_prefill/device/kernels/*.cpp
     matmul_reduce_scatter_prefill/device/kernels/*.hpp
+    all_gather_rms_norm/device/kernels/*.cpp
+    all_gather_rms_norm/device/kernels/*.hpp
     ring_attention_all_gather_async/device/kernels/*.cpp
     ring_attention_all_gather_async/device/kernels/*.hpp
     rms_allgather/device/kernels/*.cpp
