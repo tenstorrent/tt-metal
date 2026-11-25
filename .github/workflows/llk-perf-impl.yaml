@@ -84,6 +84,16 @@ on:
         required: false
         default: 24
         type: number
+      leg-compile-runner:
+        description: "Build each leg on this CPU runner while its board sets up; the board measures that build (blank = off)"
+        required: false
+        default: ""
+        type: string
+      leg-compile-workers:
+        description: "pytest -n on the leg compile runner"
+        required: false
+        default: 16
+        type: number
 
 permissions:
   actions: read
@@ -208,98 +218,53 @@ jobs:
   llk-perf-shadow-compile:
     needs: [load-test-matrix, build-images]
     if: ${{ inputs.shadow-compile-runner != '' && inputs.architecture != 'quasar' && needs.load-test-matrix.outputs.matrix != '[]' }}
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
     # Must not match the gate's leg filter ("_<arch> group N/M").
     name: "Shadow compile, shard ${{ matrix.test-group.split_group }} on ${{ join(matrix.test-group.runs_on, ' ') }}"
-    runs-on: ${{ inputs.shadow-compile-runner }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
-    container:
+    uses: ./.github/workflows/llk-perf-compile.yaml
+    with:
+      test-group: ${{ toJSON(matrix.test-group) }}
+      runner: ${{ inputs.shadow-compile-runner }}
+      workers: ${{ inputs.shadow-compile-workers }}
+      timeout: ${{ matrix.test-group.timeout }}
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      options: "--rm"
-    steps:
-      - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
-        timeout-minutes: 20
-        with:
-          ref: ${{ inputs.ref }}
-      - name: Install SFPI and zstd
-        shell: bash
-        working-directory: ${{ env.LLK_PATH }}
-        run: |
-          cd tests
-          ./setup_testing_env.sh
-          command -v zstd || { apt-get update -qq && apt-get install -y -qq zstd; }
-      - name: Set CHIP_ARCH
-        shell: bash
-        env:
-          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
-        run: |
-          RUN_LABEL="${RUN_ON_LABELS%% *}"
-          if [[ "$RUN_LABEL" =~ N150 ]]; then
-            CHIP_ARCH=wormhole
-          elif [[ "$RUN_LABEL" =~ P150 ]]; then
-            CHIP_ARCH=blackhole
-          else
-            echo "::error::cannot tell the architecture from '$RUN_ON_LABELS'"
-            exit 1
-          fi
-          echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
-      - name: Download test durations
-        if: needs.load-test-matrix.outputs.split-durations == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: split-durations-${{ inputs.architecture }}${{ inputs.artifact-suffix }}
-          path: split-durations
-      - name: Use the test durations for --perf-splits
-        if: needs.load-test-matrix.outputs.split-durations == 'true'
-        shell: bash
-        run: |
-          if [[ -f "split-durations/$CHIP_ARCH.json" ]]; then
-            echo "LLK_SPLIT_DURATIONS=$PWD/split-durations/$CHIP_ARCH.json" >> "$GITHUB_ENV"
-          fi
-      - name: Compile
-        shell: bash
-        working-directory: ${{ env.LLK_PATH }}
-        env:
-          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
-          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
-          TT_LLK_DISABLE_ASSERTS: "1"
-          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
-          PIPELINE: ${{ inputs.pipeline }}
-          LLK_PERF_PHASE: compile
-          LLK_PERF_COMPILE_WORKERS: ${{ inputs.shadow-compile-workers }}
-          MATRIX_CMD: ${{ matrix.test-group.cmd }}
-        run: |
-          "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
-            --interval 5 \
-            --label "shadow compile ${{ matrix.test-group.name }} on ${{ inputs.shadow-compile-runner }} (-n ${{ inputs.shadow-compile-workers }})" \
-            --output "$GITHUB_STEP_SUMMARY" \
-            -- bash -c "$MATRIX_CMD"
-      - name: Pack the ELFs
-        shell: bash
-        working-directory: ${{ env.LLK_PATH }}
-        env:
-          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
-          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
-          TT_LLK_DISABLE_ASSERTS: "1"
-          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
-          PIPELINE: ${{ inputs.pipeline }}
-          MATRIX_CMD: ${{ matrix.test-group.cmd }}
-        run: |
-          python3 tests/llk_perf_offload.py pack --cmd "$MATRIX_CMD" \
-            --out "$RUNNER_TEMP/shadow/llk-elfs-${CHIP_ARCH}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst" \
-            --junit tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
-      - name: Upload the ELFs
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          path: ${{ runner.temp }}/shadow/llk-elfs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst
-          archive: false
-          retention-days: 1
-          if-no-files-found: error
+      ref: ${{ inputs.ref }}
+      architecture: ${{ inputs.architecture }}
+      artifact-suffix: ${{ inputs.artifact-suffix }}
+      split-durations: ${{ needs.load-test-matrix.outputs.split-durations }}
+      speed-of-light: ${{ inputs.speed-of-light }}
+      debug-symbols: ${{ inputs.debug-symbols }}
+      perf-run-types: ${{ inputs.perf-run-types }}
+      pipeline: ${{ inputs.pipeline }}
+
+  # Not in llk-perf-exec's needs: each board sets up while its own leg compiles, then waits for that build.
+  llk-perf-leg-compile:
+    needs: [load-test-matrix, build-images]
+    if: ${{ inputs.leg-compile-runner != '' && inputs.architecture != 'quasar' && needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    # The board leg finds this job by this name. Must not match the gate's leg filter ("_<arch> group N/M").
+    name: "Leg compile, shard ${{ matrix.test-group.split_group }} of ${{ matrix.test-group.sku }}${{ inputs.artifact-suffix }}"
+    uses: ./.github/workflows/llk-perf-compile.yaml
+    with:
+      test-group: ${{ toJSON(matrix.test-group) }}
+      runner: ${{ inputs.leg-compile-runner }}
+      workers: ${{ inputs.leg-compile-workers }}
+      timeout: 10
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      ref: ${{ inputs.ref }}
+      architecture: ${{ inputs.architecture }}
+      artifact-suffix: ${{ inputs.artifact-suffix }}
+      split-durations: ${{ needs.load-test-matrix.outputs.split-durations }}
+      speed-of-light: ${{ inputs.speed-of-light }}
+      debug-symbols: ${{ inputs.debug-symbols }}
+      perf-run-types: ${{ inputs.perf-run-types }}
+      pipeline: ${{ inputs.pipeline }}
 
   stage2-baseline:
     name: "Stage 2: read the merge baseline"
@@ -415,14 +380,45 @@ jobs:
         run: echo "LLK_PERF_NODE_LIST=$RUNNER_TEMP/node-list/nodes.txt" >> "$GITHUB_ENV"
       - name: "Offload: install zstd"
         id: offload-zstd
-        if: ${{ inputs.offload-compile && inputs.shadow-compile-runner != '' }}
+        if: ${{ (inputs.offload-compile && inputs.shadow-compile-runner != '') || inputs.leg-compile-runner != '' }}
         continue-on-error: true
         timeout-minutes: 2
         shell: bash
         run: command -v zstd || { apt-get update -qq && apt-get install -y -qq zstd; }
+      - name: "Offload: wait for this leg's CPU build"
+        id: offload-wait
+        if: ${{ steps.offload-zstd.outcome == 'success' && inputs.leg-compile-runner != '' }}
+        continue-on-error: true
+        timeout-minutes: 11
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tests/llk_perf_offload.py wait \
+            --artifact "llk-elfs-${CHIP_ARCH}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst" \
+            --job "Leg compile, shard ${{ matrix.test-group.split_group }} of ${{ matrix.test-group.sku }}${{ inputs.artifact-suffix }} /"
       - name: "Offload: download the CPU-built ELFs"
         id: offload-download
-        if: ${{ steps.offload-zstd.outcome == 'success' }}
+        if: ${{ steps.offload-zstd.outcome == 'success' && steps.offload-wait.outcome != 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: llk-elfs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst
+          path: ${{ runner.temp }}/offload-download
+      # The download lists artifacts through another API than the wait, which can lag it.
+      - name: "Offload: check the download"
+        id: offload-got
+        if: ${{ steps.offload-download.outcome == 'success' }}
+        shell: bash
+        run: echo "files=$(find "$RUNNER_TEMP/offload-download" -name '*.tar.zst' 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+      - name: "Offload: wait before the second attempt"
+        if: ${{ steps.offload-got.outputs.files == '0' }}
+        run: sleep 15
+      - name: "Offload: download the CPU-built ELFs, second attempt"
+        id: offload-download-retry
+        if: ${{ steps.offload-got.outputs.files == '0' }}
         continue-on-error: true
         timeout-minutes: 10
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -448,7 +444,7 @@ jobs:
             --dir "$RUNNER_TEMP/offload-download" --delete-archive
       - name: "Offload: fall back to a board compile"
         id: offload-fallback
-        if: ${{ inputs.offload-compile && steps.offload-unpack.outcome != 'success' }}
+        if: ${{ (inputs.offload-compile || inputs.leg-compile-runner != '') && steps.offload-unpack.outcome != 'success' }}
         shell: bash
         run: |
           echo "::warning::No usable CPU build for this shard; the board compiles it."

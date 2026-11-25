@@ -670,6 +670,10 @@ jobs:
       perf-run-types: L1_TO_L1
       pipeline: merge_baseline
       upload-to-warehouse: true
+      # Each leg compiles on a 16-core CPU runner while its board sets up; the board measures that build.
+      # Only medium and large have merge-queue pools.
+      leg-compile-runner: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      leg-compile-workers: 16
       stage2-baseline-ref: ${{ github.event.merge_group.base_sha || github.sha }}
       # Stage 2 runs on Blackhole only: same-code Wormhole runs are not repeatable yet (#62044).
       stage2-thresholds: >-

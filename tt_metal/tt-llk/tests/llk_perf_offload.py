@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Move a perf shard's ELFs from a CPU runner to a board: pack, unpack, verify-tree.
+"""Move a perf shard's ELFs from a CPU runner to a board: pack, wait, unpack, verify-tree.
 
 The ELFs embed their build path, so both runners must build in $RUNNER_TEMP/tt-llk-build.
 """
@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -307,6 +308,52 @@ def cmd_verify_tree(args):
         sys.exit(1)
 
 
+def github(path: str) -> dict:
+    url = f"{os.environ.get('GITHUB_API_URL', 'https://api.github.com')}/repos/{os.environ['GITHUB_REPOSITORY']}/{path}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def cmd_wait(args):
+    run = f"actions/runs/{os.environ['GITHUB_RUN_ID']}"
+    jobs_url = f"{run}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}/jobs?per_page=100"
+    t0 = time.monotonic()
+    ended = None
+    while True:
+        waited = time.monotonic() - t0
+        try:
+            if github(f"{run}/artifacts?name={args.artifact}")["total_count"]:
+                summary([f"### Waited {waited:.0f} s for {args.artifact}"])
+                return
+            if ended:
+                sys.exit(f"{ended} ended without {args.artifact}")
+            jobs, page = [], 1
+            while True:
+                batch = github(f"{jobs_url}&page={page}")["jobs"]
+                jobs += batch
+                if len(batch) < 100:
+                    break
+                page += 1
+            mine = [j for j in jobs if args.job in j["name"]]
+            if mine and all(j["status"] == "completed" for j in mine):
+                ended = f"{mine[0]['name']} ({mine[0]['conclusion']})"
+                continue
+            if not mine and waited > 120:
+                sys.exit(f"no job named '{args.job}' in this run attempt")
+        except OSError as error:
+            print(f"GitHub API: {error}")
+        if waited > args.timeout:
+            sys.exit(f"{args.artifact} not uploaded after {waited:.0f} s")
+        time.sleep(5)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="command", required=True)
@@ -316,6 +363,14 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--junit", nargs="*", default=[])
     p.set_defaults(func=cmd_pack)
+
+    p = sub.add_parser("wait", help="wait for this run's CPU build of the shard")
+    p.add_argument("--artifact", required=True)
+    p.add_argument(
+        "--job", required=True, help="part of the name of the job that builds it"
+    )
+    p.add_argument("--timeout", type=int, default=600, help="seconds")
+    p.set_defaults(func=cmd_wait)
 
     p = sub.add_parser("unpack")
     p.add_argument("--cmd", required=True)
