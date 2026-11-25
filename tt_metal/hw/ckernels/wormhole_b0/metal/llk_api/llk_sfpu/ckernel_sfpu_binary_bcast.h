@@ -130,8 +130,8 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects the
 //   Uses LREG0..LREG7 transiently during SFPTRANSP phases. LREG6 is NOT
 //   preserved as a persistent mask (SFPTRANSP clobbers LREG4..LREG7 window);
 //   BCAST_ROW does not need the col-0 lane mask. The band body is recorded
-//   into SFPU replay slots 0..15 per full-tile call, and (without
-//   MM_THROTTLE) ADDR_MOD_6 is reprogrammed per call; that overwrites what
+//   into SFPU replay slots [0, REPLAY_LEN_ROW_BAND) per full-tile call, and
+//   (without MM_THROTTLE) ADDR_MOD_6 is reprogrammed per call; that overwrites what
 //   another SFPU op set at init (COL bcast, reduce, fast exp, abs, i0, ...),
 //   which must re-run its init after a ROW call. The
 //   call leaves the dest base register pointed at the data tile (as the
@@ -832,9 +832,8 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
 // the dest base register pointed at the data tile. That makes the per-band
 // body band-invariant (it ends by advancing RWC.Dst to the next band), so it
 // is recorded into the replay buffer once per full-tile call - executing
-// band 0 as it records - and replayed for the remaining 7 bands. The band
-// loop then costs the RISC one REPLAY per band instead of 8 encoded `TT_`
-// instructions.
+// band 0 as it records - and replayed for the remaining 7 bands, so the band
+// loop costs the RISC one REPLAY per band.
 //
 // The recording is per call rather than per init because the init is shared
 // across ADD / SUB / MUL (`sfpu_bcast_row_init`) and the body depends on the
@@ -1033,7 +1032,7 @@ inline void _sfpu_binary_bcast_init_() {
         _record_broadcast_replay_();
     }
     // BCAST_ROW: nothing persists from the init. Each full-tile call records
-    // its band body into SFPU replay slots 0..15, clobbers LREG4..7 and
+    // its band body into SFPU replay slots [0, REPLAY_LEN_ROW_BAND), clobbers LREG4..7 and
     // (without MM_THROTTLE) reprograms ADDR_MOD_6, so any SFPU op that sets
     // that state at init (COL bcast, reduce, fast exp, abs, i0, ...) must
     // re-run its init after a ROW call.

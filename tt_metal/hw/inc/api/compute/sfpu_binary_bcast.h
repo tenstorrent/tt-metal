@@ -604,8 +604,9 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
  *
  * This operation clobbers LREG4..7, which invalidates the persistent
  * column-broadcast mask. On Wormhole it also records its body into the SFPU
- * half of the replay buffer (slots 0..15) on every call and, unless the
- * kernel is built with MM_THROTTLE, reprograms ADDR_MOD_6. A later
+ * half of the replay buffer (slots 0..14; 0..15 under MM_THROTTLE) on every
+ * call and, unless the kernel is built with MM_THROTTLE, reprograms
+ * ADDR_MOD_6. A later
  * column-broadcast operation, or any SFPU operation that sets either in its
  * init and relies on it per tile (e.g. `sfpu_reduce`, fast-approximation
  * `exp`, `where`, `binary_max_min`, `cumsum`, `abs`, `i0`), must run its
