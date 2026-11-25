@@ -98,8 +98,9 @@ class _LoRAPipelineMixin:
                 "LoRA fuse-mode pipeline constructed with dynamic_load=False — "
                 "repeated bind/unbind cycles will accumulate bf16 quantization "
                 "drift in the base weight. For long-lived sessions, snapshot "
-                "the transformer state dict at construction and re-seed via "
-                "load_torch_state_dict when drift becomes material."
+                "the transformer state dict at construction and re-seed with "
+                "deallocate_weights() followed by load_torch_state_dict when "
+                "drift becomes material."
             )
 
     @classmethod

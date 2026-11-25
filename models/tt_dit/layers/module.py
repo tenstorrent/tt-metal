@@ -208,6 +208,8 @@ class Module(ABC):
     def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
         """Load PyTorch state dict into module parameters.
 
+        A module that is already loaded evicts its coresident exclusions and is not loaded again.
+
         Args:
             state_dict: Mapping of parameter names to PyTorch tensors.
             strict: If `True`, raises ValueError on missing or unexpected keys.
@@ -215,9 +217,17 @@ class Module(ABC):
         Returns:
             `IncompatibleKeys` containing lists of missing and unexpected keys.
         """
+        self.evict_coresident_exclusions()
+        if self._is_loaded:
+            # Loads through `cache.load_model` return before this for a resident module, so a caller
+            # that gets here expected its state to replace the loaded weights.
+            logger.warning(
+                f"{type(self).__name__}: load_torch_state_dict skipped, the module is already loaded. "
+                "Call deallocate_weights() first to load other weights."
+            )
+            return IncompatibleKeys([], [])
         missing_keys = []
         unexpected_keys = []
-        self.evict_coresident_exclusions()
         with _Watchdog(f"convert {type(self).__name__}"):
             self._load_torch_state_dict_inner(
                 state_dict,
@@ -255,6 +265,12 @@ class Module(ABC):
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
 
+        self.evict_coresident_exclusions()
+        if self._is_loaded:
+            if prefix == "":
+                logger.debug(f"{type(self).__name__}: cache load skipped, the module is already loaded")
+            return
+
         # Top-level only: announce the cache load and arm a timer watchdog so a slow/stalled
         # module load is never silent. Signature is left untouched — subclasses (Mochi/Wan)
         # override this method.
@@ -263,8 +279,6 @@ class Module(ABC):
             logger.info(f"loading {self._num_parameters()} cached weight tensors from '{directory}'...")
             watchdog = _Watchdog(f"load-cache {type(self).__name__}").__enter__()
         try:
-            self.evict_coresident_exclusions()
-
             for name, child in self.named_children():
                 child.load(directory, prefix=f"{prefix}{name}.")
 
