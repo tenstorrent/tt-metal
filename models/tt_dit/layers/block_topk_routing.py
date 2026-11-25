@@ -6,15 +6,15 @@
 
 Per device, from the local Q/K/V shards ``[1, H, rows, D]`` of an SP ring of ``S`` devices (``rows`` a multiple of 32,
 cut into 64-row blocks, the last one possibly 32 rows), produces the inputs of ``ttnn.transformer.sparse_ring_sdpa``
-and the coarse branch. The program's reader, compute and writer (``kernels/block_topk_route_*.cpp``) run two phases on
-every core but the senders:
+and the coarse branch. The program's reader, compute and writer (``kernels/block_topk_routing/block_topk_route_*.cpp``)
+run two phases on every core but the senders:
 
-* pool (``kernels/block_pool_*.cpp``): per-block means of Q, K and V from per-block valid counts, into
-  ``q_bar [1, H, nb_pad, D]`` and this device's shard slot of the gathered ``kv_g [1, 2H, S * nb_pad, D]`` (K heads,
-  then V heads), the CCL manager's ping-pong buffer. Each core starts on one unit and claims the rest from a queue on
-  the first sender core (``block_pool_queue.cpp``), K and V units first; sender cores (``block_pool_send.cpp``, one per
-  link and direction) push each K/V unit over the fabric to the same slot of every peer's ``kv_g`` as soon as its
-  writer flags it, while the Q units are still pooled, then bump this shard's arrival slot on the peer.
+* pool (``kernels/block_topk_routing/block_pool_*.cpp``): per-block means of Q, K and V from per-block valid counts,
+  into ``q_bar [1, H, nb_pad, D]`` and this device's shard slot of the gathered ``kv_g [1, 2H, S * nb_pad, D]`` (K
+  heads, then V heads), the CCL manager's ping-pong buffer. Each core starts on one unit and claims the rest from a
+  queue on the first sender core (``block_pool_queue.cpp``), K and V units first; sender cores (``block_pool_send.cpp``,
+  one per link and direction) push each K/V unit over the fabric to the same slot of every peer's ``kv_g`` as soon as
+  its writer flags it, while the Q units are still pooled, then bump this shard's arrival slot on the peer.
 * route, once every pool writer has signalled a program-wide barrier: shards are scored as they arrive, this device's
   first; per (head, 32 local Q blocks): fp32 scores against every global block, a running top-k over the candidate
   columns, the k-th value, the uint32 block mask and, optionally, the coarse attention output
@@ -43,7 +43,7 @@ import ttnn
 from ..utils.tensor import from_torch
 from ..utils.tracing import StateTensor
 
-KERNEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels")
+KERNEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "block_topk_routing")
 TILE = 32
 BLOCK = 64
 TILE_BYTES_BF16 = 2048
