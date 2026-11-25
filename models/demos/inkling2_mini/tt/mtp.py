@@ -470,7 +470,9 @@ class DSparkDrafter:
                 x = x if x.dtype == ttnn.bfloat16 else ttnn.typecast(x, ttnn.bfloat16)
                 for a, c0, n_ in runs:
                     part = x if n_ == t else ttnn.slice(x, [0, 0, a, 0], [1, NKV, a + n_, D])
-                    ttnn.experimental.slice_write(part, cache, [0, 0, c0, 0], [1, NKV, c0 + n_, D], [1, 1, 1, 1])
+                    # in place: slice_write takes a TILE cache through row major and back, a new buffer each call
+                    # (the 294 MB full-length cache twice per layer per pass, off the address the traces hold)
+                    ttnn.fill_cache(cache, part, 0, update_idx=c0)
         if n is not None:
             fr = ttnn.slice(norm(mix(N_LAYERS), "rnn_norm"), [0, 0, n - 1, 0], [1, 1, n, HIDDEN])
             ttnn.copy(ttnn.typecast(fr, ttnn.bfloat16), self.f_rnn)
