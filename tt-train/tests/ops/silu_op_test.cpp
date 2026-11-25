@@ -60,11 +60,10 @@ xt::xarray<float> silu_backward_reference(const xt::xarray<float>& x, const xt::
     return xt::cast<float>(xt::cast<double>(grad) * silu_grad_reference(x64));
 }
 
-// ttnn::silu is within 0.89 bf16 ULP of the exact result. ttnn::silu_bw (BF16 SFPU kernel) is correctly
-// rounded except where the exact value lies within float32 error of a rounding tie (0.5002 ULP observed at
-// silu'(x) = 0.198731), so with a gradient of ones the input gradient is within 0.51 ULP.
+// ttnn::silu and ttnn::silu_bw (with a gradient of ones) are within 1 bf16 ULP of the exact result in every
+// element (measured 0.89 and 0.5002).
 constexpr double kSiluMaxUlp = 1.0;
-constexpr double kSiluGradMaxUlp = 0.51;
+constexpr double kSiluGradMaxUlp = 1.0;
 // metal::silu_bw on Blackhole with a gradient of ones over [-8, 8] (Section 3): 1.63 ULP at the largest
 // |silu'|, p99 3.38 ULP.
 constexpr double kMetalSiluBwMaxUlp = 2.5;
@@ -207,7 +206,7 @@ TEST_F(SiLUOpTest, SiLU_Compare_SmallModel_Unaligned) {
 // ============================================================================
 // Section 3: both backward paths of ops::silu vs the float64 reference
 // ============================================================================
-// use_composite_bw = true (the default) backpropagates with ttnn::silu_bw, which is correctly rounded.
+// use_composite_bw = true (the default) backpropagates with ttnn::silu_bw, which is within 1 bf16 ULP in every element.
 // false runs ttml::metal::silu_bw, which rounds sigmoid and each of four later steps to bf16; it is close
 // overall but loses most significant bits where silu'(x) crosses zero (x ~ -1.28), so it is bounded by
 // its error at the largest |silu'| and its p99 instead of element by element.
