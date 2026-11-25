@@ -126,11 +126,24 @@ def _restore(replaced):
         namespace[name] = value
 
 
+def _asks_for_fabric(item):
+    params = getattr(getattr(item, "callspec", None), "params", {}).get("device_params")
+    config = params.get("fabric_config") if isinstance(params, dict) else None
+    return config is not None and getattr(config, "name", "") != "DISABLED"
+
+
 def _decide(session):
-    """Whether this run gets a dry pass. Decided before it starts, from this run alone."""
+    """Whether this run gets a dry pass, and what was looked at. Decided before the dry pass, from this run alone."""
+    items = session.items
+    functions = {(item.path, getattr(item, "originalname", item.name)) for item in items}
+    seen = (
+        f"{len(items)} tests, {len(functions)} test functions, {sum(map(_asks_for_fabric, items))} asking for a "
+        f"fabric config, {len(os.sched_getaffinity(0))} CPUs, {_kernels_in_cache()} kernels in the cache"
+    )
     if _MODE in ("on", "off"):
-        return _MODE == "on", f"PRECOMPILE={_MODE}"
-    return False, "auto: no rule yet"
+        return _MODE == "on", f"PRECOMPILE={_MODE}; {seen}"
+    # No rule yet: nothing a run can see before its dry pass separated the jobs that gain from the ones that lose.
+    return False, f"auto, no rule decides on yet; {seen}"
 
 
 def _kernels_in_cache():
@@ -211,9 +224,10 @@ def pytest_pyfunc_call(pyfuncitem):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtestloop(session):
+    start = time.monotonic()
     on, why = _decide(session)
     if not on or session.testsfailed or session.config.option.collectonly:
-        print(f"\nPRECOMPILE: off ({why})", flush=True)
+        print(f"\nPRECOMPILE: off ({why}). Deciding took {time.monotonic() - start:.2f} s.", flush=True)
         return None
     import numpy
     import torch
