@@ -93,7 +93,7 @@ def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
     return float(torch.dot(a, b) / (a.norm() * b.norm()).clamp_min(1e-30))
 
 
-def convert(backbone: Path, base: Path, out: Path, *, verify: bool) -> None:
+def convert(backbone: Path, base: Path, out: Path, *, verify: bool, delete_source: bool = False) -> None:
     sana_index = json.loads((backbone / "model.safetensors.index.json").read_text())["weight_map"]
     base_transformer = base / "transformer_ref"
     base_index, read_base = _base_reader(base_transformer)
@@ -122,6 +122,8 @@ def convert(backbone: Path, base: Path, out: Path, *, verify: bool) -> None:
                     converted[new_key] = value.contiguous()
         save_file(converted, target / name, metadata={"format": "pt"})
         weight_map.update(dict.fromkeys(converted, name))
+        if delete_source:
+            (backbone / shard).unlink()
         print(f"{name}: {len(converted)} tensors", flush=True)
 
     missing = sorted(set(base_index) - set(weight_map))
@@ -148,8 +150,11 @@ def main() -> None:
     parser.add_argument("--base", type=Path, required=True, help="MiniMax-H3 diffusers snapshot")
     parser.add_argument("--out", type=Path, required=True, help="output snapshot directory")
     parser.add_argument("--verify", action="store_true", help="check every tensor against the base ref2va weights")
+    parser.add_argument(
+        "--delete-source", action="store_true", help="delete each backbone shard once converted (peak disk ~1x)"
+    )
     args = parser.parse_args()
-    convert(args.backbone, args.base, args.out, verify=args.verify)
+    convert(args.backbone, args.base, args.out, verify=args.verify, delete_source=args.delete_source)
 
 
 if __name__ == "__main__":

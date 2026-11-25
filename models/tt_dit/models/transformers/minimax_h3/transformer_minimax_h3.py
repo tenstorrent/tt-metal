@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass
 
 import torch
@@ -461,6 +462,8 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
         modulation_row_indices: ttnn.Tensor | None = None,
+        trace_key: Hashable = None,
+        modulation_key: Hashable = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -481,6 +484,9 @@ class MiniMaxH3Transformer3DModel(Module):
             capture per `(pad_to, map present)`).
         adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
+        trace_key: extends the trace key, for callers whose traces differ in state the inputs do not carry (such as
+            the K/V bank an attention layer reads).
+        modulation_key: names `timestep`'s values; every block reuses the adaLN tables it built for the same key.
         modulation_row_indices: [1, 1, 1, num_slots] uint32, this step's rows of `prepare_modulation`'s projection, one
             per slot: the blocks take their adaLN tables from there instead of projecting `temb`.
 
@@ -579,7 +585,8 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_tile_map=adaln_tile_map,
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             traced=traced,
-            tracer_trace_key=(pad_to, adaln_tile_map is not None),
+            tracer_trace_key=(pad_to, adaln_tile_map is not None, trace_key),
+            modulation_key=modulation_key,
             **(
                 {} if modulation_row_indices is None else {"modulation_row_indices": as_indices(modulation_row_indices)}
             ),
@@ -668,6 +675,7 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
         modulation_row_indices: ttnn.Tensor | None = None,
+        modulation_key: Hashable = None,
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
@@ -682,6 +690,7 @@ class MiniMaxH3Transformer3DModel(Module):
                 onehot=onehot,
                 tilerow=tilerow,
                 modulation_row_indices=modulation_row_indices,
+                modulation_key=modulation_key,
             )
         ttnn.deallocate(onehot)
         if tilerow is not None:

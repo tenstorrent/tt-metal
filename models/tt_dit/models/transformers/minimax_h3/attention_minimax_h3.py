@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import torch
 
@@ -71,6 +72,39 @@ def prepare_rope_tables(cos: torch.Tensor, sin: torch.Tensor, head_dim: int) -> 
         zeros = torch.zeros(*sin.shape[:-1], pad, dtype=sin.dtype)
         cos, sin = torch.cat([cos, ones], dim=-1), torch.cat([sin, zeros], dim=-1)
     return cos, sin
+
+
+# `sparse_ring_sdpa`'s only block size (tokens per mask block, and its Q chunk).
+_SPARSE_BLOCK = 64
+
+
+@dataclass
+class KVBankSlot:
+    """One layer's read-only prefix K/V for one-way prefix attention (streaming continuations).
+
+    A prefix forward runs with `capture=True` and leaves its post-norm, post-RoPE K/V here, fractured on TP like
+    the heads and kept as this device's SP shard of the prefix rows. A continuation forward runs with
+    `capture=False`: its rows attend to every prefix row and every row of its own, computed one of two ways.
+
+    * `block_mask` / `block_counts` set: each device's ring shard is `[own K/V ; bank shard]` and
+      `sparse_ring_sdpa` runs in kept-blocks-only mode. Own-row Q blocks keep every block that has a real token,
+      the bank's Q blocks (zero padding) keep none, and `block_counts` drops both blocks' pad rows. Exact, and no
+      mask, all-gather or concat of the full key set. Needs the own-row shard to be whole 64-row blocks.
+    * otherwise: the bank shards and this forward's K/V are gathered and plain SDPA reads `[bank ; own]` with
+      `mask` (`[1, 1, N_local, bank rows + own padded rows]`, 0 or -inf) over both blocks' pad rows.
+
+    `kv_dtype` is the precision both blocks' K/V are kept and attended in; bfloat8_b halves the bank and the
+    attention's K/V traffic. `query_pad` is a zero Q block of the bank shard's shape, shared by every layer.
+    """
+
+    capture: bool
+    key: ttnn.Tensor | None = None
+    value: ttnn.Tensor | None = None
+    mask: ttnn.Tensor | None = None
+    kv_dtype: ttnn.DataType = ttnn.bfloat16
+    block_mask: ttnn.Tensor | None = None
+    block_counts: ttnn.Tensor | None = None
+    query_pad: ttnn.Tensor | None = None
 
 
 class MiniMaxH3Attention(Module):
@@ -210,6 +244,7 @@ class MiniMaxH3Attention(Module):
         self.full_grid = full_grid
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
         self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
+        self.kv_bank: KVBankSlot | None = None
 
         # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -595,10 +630,21 @@ class MiniMaxH3Attention(Module):
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
         v_BHNE = create_heads(v_1BNF)
 
+        bank = self.kv_bank
+        if bank is not None and bank.capture:
+            # A typecast (or clone) of the shard: the forward's own K/V are freed with its other intermediates.
+            bank.key = ttnn.typecast(k_BHNE, bank.kv_dtype) if k_BHNE.dtype != bank.kv_dtype else ttnn.clone(k_BHNE)
+            bank.value = ttnn.typecast(v_BHNE, bank.kv_dtype) if v_BHNE.dtype != bank.kv_dtype else ttnn.clone(v_BHNE)
+
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
-        exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
-        if exp_program_config is not None:
+        exp_program_config = None if bank is not None else self._exp_sdpa_program_config(q_BHNE.shape[2])
+        if bank is not None and not bank.capture:
+            if bank.block_mask is not None:
+                spatial_BHNE = self._bank_attention_sparse(q_BHNE, k_BHNE, v_BHNE, bank)
+            else:
+                spatial_BHNE = self._bank_attention(q_BHNE, k_BHNE, v_BHNE, bank)
+        elif exp_program_config is not None:
             spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,
@@ -697,6 +743,100 @@ class MiniMaxH3Attention(Module):
         if addcmul_residual is not None and not fuse_gate:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         return out
+
+    @staticmethod
+    def _as_dtype(x: ttnn.Tensor, dtype: ttnn.DataType) -> ttnn.Tensor:
+        return x if x.dtype == dtype else ttnn.typecast(x, dtype)
+
+    def _gather_sequence(self, x_BHNE: ttnn.Tensor) -> ttnn.Tensor:
+        if not self.use_ring:
+            return ttnn.clone(x_BHNE)
+        return self.ccl_manager.all_gather(x_BHNE, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False)
+
+    def _bank_attention(
+        self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor, bank: KVBankSlot
+    ) -> ttnn.Tensor:
+        """Local queries against `[bank ; every device's K/V]`.
+
+        The bank is replicated on SP, so after gathering this forward's K/V every device holds all keys and
+        attention needs no ring. Both blocks are padded to `sp * TILE` rows, so the key length is a multiple
+        of 256 and a 256-row K chunk never straddles the end.
+        """
+        k_all = self._gather_sequence(self._as_dtype(k_BHNE, bank.kv_dtype))
+        v_all = self._gather_sequence(self._as_dtype(v_BHNE, bank.kv_dtype))
+        key = ttnn.concat([self._gather_sequence(bank.key), k_all], dim=2)
+        value = ttnn.concat([self._gather_sequence(bank.value), v_all], dim=2)
+        ttnn.deallocate(k_all)
+        ttnn.deallocate(v_all)
+        if bank.mask.shape[-1] != key.shape[2] or bank.mask.shape[-2] != q_BHNE.shape[2]:
+            raise ValueError(
+                f"bank mask {tuple(bank.mask.shape)} does not match Q {q_BHNE.shape[2]} x K {key.shape[2]}"
+            )
+        q_rows = q_BHNE.shape[2]
+        q_chunk = next(c for c in (256, 128, 64, 32) if q_rows % c == 0)
+        out = ttnn.transformer.scaled_dot_product_attention(
+            q_BHNE,
+            key,
+            value,
+            attn_mask=bank.mask,
+            is_causal=False,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(self.full_grid.x, self.full_grid.y),
+                q_chunk_size=q_chunk,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+                min_blocked_pack_tiles=2,
+            ),
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+        )
+        ttnn.deallocate(key)
+        ttnn.deallocate(value)
+        return out
+
+    def _bank_attention_sparse(
+        self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor, bank: KVBankSlot
+    ) -> ttnn.Tensor:
+        """Local queries against `[bank ; every device's K/V]` as one kept-only `sparse_ring_sdpa` (see `KVBankSlot`)."""
+        rows = q_BHNE.shape[2]
+        key = ttnn.concat([self._as_dtype(k_BHNE, bank.kv_dtype), bank.key], dim=2)
+        value = ttnn.concat([self._as_dtype(v_BHNE, bank.kv_dtype), bank.value], dim=2)
+        query = ttnn.concat([q_BHNE, bank.query_pad], dim=2)
+        out = ttnn.transformer.sparse_ring_sdpa(
+            query,
+            key,
+            value,
+            bank.block_mask,
+            None,
+            None,
+            persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                key.shape, 2, self.sp_mesh_axis, dtype=key.dtype
+            ),
+            persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                value.shape, 2, self.sp_mesh_axis, dtype=value.dtype
+            ),
+            logical_n=key.shape[2] * self.parallel_config.sequence_parallel.factor,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
+                q_chunk_size=_SPARSE_BLOCK,
+                k_chunk_size=512,
+                exp_approx_mode=False,
+            ),
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
+            num_links=self.ccl_manager.num_links,
+            cluster_axis=self.sp_mesh_axis,
+            mesh_device=self.mesh_device,
+            topology=self.ccl_manager.topology,
+            subdevice_id=self.ccl_manager.ccl_sub_device_id,
+            ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
+            use_column_major_ccl=True,
+            block_size=_SPARSE_BLOCK,
+            block_counts=bank.block_counts,
+        )
+        for tensor in (key, value, query):
+            ttnn.deallocate(tensor)
+        return ttnn.slice(out, [0, 0, 0, 0], [1, self.n_local_heads, rows, self.head_dim])
 
     def _agmm_kwargs(self, pins: dict | None, k: int, n: int, x: ttnn.Tensor) -> dict:
         """The fused all-gather matmul's blocking and compute kwargs at `x`'s per-device rows (class pin or swept

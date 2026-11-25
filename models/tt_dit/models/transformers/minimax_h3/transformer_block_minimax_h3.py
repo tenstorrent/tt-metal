@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Hashable
 
 import torch
 import torch.nn.functional as F
@@ -203,6 +204,8 @@ class MiniMaxH3TransformerBlock(Module):
         )
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
+        # `forward(modulation_key=...)` caches its modulation tables here, for callers that reuse a timestep set.
+        self._modulation_table_cache: dict[Hashable, list[ttnn.Tensor]] = {}
         # `prepare_modulation`'s projection of every step's temb, row-major [steps * slots, adaLN width].
         self._precomputed_adaln_projections: ttnn.Tensor | None = None
         # The dynamic-length modulation gathers: one-hot [rows, 32] @ table [32, hidden_local] through
@@ -390,6 +393,7 @@ class MiniMaxH3TransformerBlock(Module):
         onehot: ttnn.Tensor | None = None,
         tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         modulation_row_indices: ttnn.Tensor | None = None,
+        modulation_key: Hashable = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -404,19 +408,25 @@ class MiniMaxH3TransformerBlock(Module):
 
         modulation_row_indices: [1, num_slots] uint32, the rows of `prepare_modulation`'s projection to take the tables
             from in place of projecting a `temb`: the transformer's `modulation_row_indices`, flattened.
+        modulation_key: names the timesteps `temb` embeds. The tables of a key seen before are reused instead of
+            projected again; the caller guarantees one key never stands for two timestep sets.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
         if (temb is None) == (modulation_row_indices is None):
             raise ValueError("pass exactly one of temb and modulation_row_indices")
-        if modulation_row_indices is None:
-            projected = self._compute_adaln_projection(temb)
-        else:
-            projected = self._lookup_precomputed_adaln_projections(modulation_row_indices)
-        tables = self._modulation_tables(projected)
+        tables = self._modulation_table_cache.get(modulation_key) if modulation_key is not None else None
+        if tables is None:
+            if modulation_row_indices is None:
+                projected = self._compute_adaln_projection(temb)
+            else:
+                projected = self._lookup_precomputed_adaln_projections(modulation_row_indices)
+            tables = self._modulation_tables(projected)
+            if modulation_key is not None:
+                self._modulation_table_cache[modulation_key] = tables
 
         if onehot is None:
-            onehot = self.onehot_table(adaln_indices, projected.shape[-2])
+            onehot = self.onehot_table(adaln_indices, tables[0].shape[0] // MODALITY_NUM)
 
         def modulation(param: int) -> ttnn.Tensor:
             return self._gather_rows(tables[param], onehot)
