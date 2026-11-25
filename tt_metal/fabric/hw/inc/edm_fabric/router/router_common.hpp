@@ -66,9 +66,7 @@ constexpr bool has_vc2 = ACTUAL_VC2_SENDER_CHANNELS > 0;
 // UDM, which is its own mode.
 constexpr bool tensix_mux_mode = fabric_tensix_extension_mux_mode && !udm_mode;
 
-// The count in a stream credit register (packets received, free slots). A count never exceeds its channel's slot
-// count, and every channel static_asserts its slot count against this mask, so the low 11 bits hold it.
-constexpr uint32_t stream_count_mask = 0x7FFu;
+// Every count the router reads under stream_count_mask (fabric_common.h) must fit in the hardware's count.
 static_assert(stream_count_mask <= ((1u << REMOTE_DEST_WORDS_FREE_WIDTH) - 1));
 
 // The Ethernet firmware's heartbeat word. While the router runs instead of the base firmware, each loop keeps it moving
@@ -136,13 +134,9 @@ constexpr uint32_t max_downstreams = downstream_directions.size();
 
 constexpr eth_chan_directions downstream_direction(size_t compact) { return downstream_directions[compact]; }
 
-// The compact index of direction `dir` on a router facing `facing` (dir != facing): a router lists the other
-// directions in enum order, skipping its own facing.
-constexpr size_t compact_index_on(size_t facing, size_t dir) { return dir < facing ? dir : dir - 1; }
-
 // The compact index of downstream direction `dir` (dir != my_direction), on this router.
 constexpr size_t downstream_compact_index(eth_chan_directions dir) {
-    return compact_index_on(static_cast<size_t>(my_direction), static_cast<size_t>(dir));
+    return Routing2DCodec::compact_index_on(static_cast<eth_chan_directions>(my_direction), dir);
 }
 
 // Routing names a downstream by its direction (2D: action bit d is direction d); 1D's one downstream is named 0. The
@@ -213,7 +207,9 @@ constexpr bool runs_vc(size_t vc) {
 }
 
 // The VC of the downstream connections VC's receiver channel forwards on: its own, or VC1 where it crosses over.
-constexpr size_t forwards_on_vc_of(size_t vc) { return is_vc_crossover_to_vc1[vc] ? 1 : vc; }
+constexpr size_t forwards_on_vc_of(size_t vc) {
+    return receiver_channel_forwards_on_vc(vc, is_vc_crossover_to_vc1[vc]);
+}
 
 // Whether a receiver channel this router runs forwards on VC vc's downstream connections. About the connections, not
 // vc's traffic: where VC0 crosses over, its packets go on VC1's downstreams, so any_forwards_on_vc(0) is false and

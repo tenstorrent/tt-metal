@@ -4,8 +4,13 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <tt-metalium/kernel_types.hpp>                                 // DataMovementProcessor, KernelBuildOptLevel
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
@@ -22,6 +27,11 @@ class Program;
 namespace tt::tt_fabric {
 
 class FabricContext;
+class ConnectionRegistry;
+
+namespace manifest {
+struct Router;
+}  // namespace manifest
 
 // ============ Router Location ============
 
@@ -52,6 +62,20 @@ struct KernelCreationContext {
     chan_id_t master_router_chan;
     size_t num_local_fabric_routers;
     uint32_t router_channels_mask;
+};
+
+/**
+ * What inputs an ERISC's router kernel was created with.
+ */
+struct KernelInputs {
+    tt::tt_metal::DataMovementProcessor processor;
+    tt::tt_metal::NOC noc;
+    // The level the kernel is compiled and linked at (EthernetConfig::opt_level).
+    tt::tt_metal::KernelBuildOptLevel opt_level;
+    std::vector<uint32_t> compile_args;
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    std::map<std::string, std::string> defines;
+    std::vector<uint32_t> runtime_args;
 };
 
 // ============ Router Builder Abstract Base Class ============
@@ -88,6 +112,7 @@ public:
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
      * @param chip_facts The chip's routing facts (edge capabilities, ring predicates), bound at chip scope
+     * @param connection_registry Records each connection the router makes, or null to record none
      * @return A unique_ptr to the appropriate FabricRouterBuilder implementation
      */
     static std::unique_ptr<FabricRouterBuilder> create(
@@ -97,7 +122,8 @@ public:
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
         const RouterLocation& location,
-        const ChipRoutingFacts& chip_facts);
+        const ChipRoutingFacts& chip_facts,
+        std::shared_ptr<ConnectionRegistry> connection_registry = nullptr);
 
     // ============ Connection Methods ============
 
@@ -161,6 +187,12 @@ public:
      * router must return its layout, since the peer's compile time args read it.
      */
     virtual std::optional<RouterChannelLayout> get_channel_layout() const { return std::nullopt; }
+
+    /**
+     * Collect this router's manifest facts before the builder is destroyed.
+     * Call only after create_kernel(), when connection wiring and per-RISC compile-time arguments are final.
+     */
+    virtual manifest::Router collect_manifest_router(const ChipRoutingFacts& chip_facts) const = 0;
 
 protected:
     // Protected constructor - only derived classes can construct
