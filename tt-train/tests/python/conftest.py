@@ -41,8 +41,7 @@ def pytest_configure(config):
     )
 
 
-# Every mesh these fixtures open has more than one device, so a test that depends on any of them,
-# directly or through another fixture, is marked multi_device.
+# A test that uses any of these fixtures opens a mesh with at least one device so it is marked multi_device.
 _MULTI_DEVICE_FIXTURES = frozenset({"fresh_device_mesh", "tp_mesh", "fsdp_mesh", "dp_tp_mesh"})
 
 

@@ -5,8 +5,11 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <optional>
 #include <string_view>
 #include <tt-metalium/mesh_coord.hpp>
@@ -26,37 +29,38 @@ inline bool system_supports_mesh(const tt::tt_metal::distributed::MeshShape& sha
     return system_mesh_size() >= shape.mesh_size();
 }
 
-// The multi-device CI leg selects suites with --gtest_filter="Mesh*" and the single-device legs skip them, so a mesh
-// suite named otherwise runs nowhere. The mesh fixtures assert this before skipping, so it fails on every runner.
-inline constexpr std::string_view kMeshSuitePrefix = "Mesh";
+// The multi-device CI legs select suites by these prefixes (--gtest_filter="Mesh*" on QuietBox 2, "Galaxy*" on Galaxy)
+// and the single-device legs skip them, so a multi-device suite named otherwise runs nowhere.
+inline constexpr std::array<std::string_view, 2> kMultiDeviceSuitePrefixes = {"Mesh", "Galaxy"};
 
-inline bool current_suite_has_mesh_prefix() {
-    return std::string_view(::testing::UnitTest::GetInstance()->current_test_info()->test_suite_name())
-        .starts_with(kMeshSuitePrefix);
+inline bool current_suite_has_multi_device_prefix() {
+    const std::string_view suite = ::testing::UnitTest::GetInstance()->current_test_info()->test_suite_name();
+    return std::ranges::any_of(
+        kMultiDeviceSuitePrefixes, [&](std::string_view prefix) { return suite.starts_with(prefix); });
 }
 
 }  // namespace ttml::test_utils
 
-// Like SKIP_UNLESS_MESH_SUPPORTED, this has to be a macro so that the failed ASSERT returns from SetUp().
-#define ASSERT_MESH_SUITE_NAME()                                                                                     \
-    ASSERT_TRUE(ttml::test_utils::current_suite_has_mesh_prefix()) << fmt::format(                                   \
-        "Suite {} uses a mesh fixture, so its name must start with \"{}\" for the multi-device CI leg to select it", \
-        ::testing::UnitTest::GetInstance()->current_test_info()->test_suite_name(),                                  \
-        ttml::test_utils::kMeshSuitePrefix)
-
-// GTEST_SKIP() expands into a return statement, so this also has to be a macro.
-// Simple check to skip if the system does not have enough devices for the mesh.
-// Any failures with mesh open should actually fail the test elsewhere.
-#define SKIP_UNLESS_MESH_SUPPORTED(shape)                                       \
-    do {                                                                        \
-        const auto& s = (shape);                                                \
-        if (!ttml::test_utils::system_supports_mesh(s)) {                       \
-            GTEST_SKIP() << fmt::format(                                        \
-                "Skipping test: a {} mesh needs {} devices, the system has {}", \
-                s,                                                              \
-                s.mesh_size(),                                                  \
-                ttml::test_utils::system_mesh_size());                          \
-        }                                                                       \
+// ASSERT_TRUE() and GTEST_SKIP() expand into return statements, so this has to be a macro.
+// Skips if the system does not have enough devices for the mesh; any failure with the mesh open should fail the test
+// elsewhere. A multi-device suite must be named for a multi-device CI leg to select it. That is asserted before the
+// skip, so a misnamed suite fails on every runner, including single-device ones.
+#define SKIP_UNLESS_MESH_SUPPORTED(shape)                                                                            \
+    do {                                                                                                             \
+        const auto& s = (shape);                                                                                     \
+        ASSERT_TRUE(s.mesh_size() <= 1 || ttml::test_utils::current_suite_has_multi_device_prefix()) << fmt::format( \
+            "Suite {} needs a {} mesh, so its name must start with one of [{}] for a multi-device "                  \
+            "CI leg to select it",                                                                                   \
+            ::testing::UnitTest::GetInstance()->current_test_info()->test_suite_name(),                              \
+            s,                                                                                                       \
+            fmt::join(ttml::test_utils::kMultiDeviceSuitePrefixes, ", "));                                           \
+        if (!ttml::test_utils::system_supports_mesh(s)) {                                                            \
+            GTEST_SKIP() << fmt::format(                                                                             \
+                "Skipping test: a {} mesh needs {} devices, the system has {}",                                      \
+                s,                                                                                                   \
+                s.mesh_size(),                                                                                       \
+                ttml::test_utils::system_mesh_size());                                                               \
+        }                                                                                                            \
     } while (0)
 
 namespace ttml::test_utils {
@@ -70,7 +74,6 @@ protected:
     }
 
     void SetUp() override {
-        ASSERT_MESH_SUITE_NAME();
         SKIP_UNLESS_MESH_SUPPORTED(m_mesh_shape);
 
         ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(m_mesh_shape.mesh_size()));
@@ -118,7 +121,6 @@ protected:
     }
 
     void SetUp() override {
-        ASSERT_MESH_SUITE_NAME();
         SKIP_UNLESS_MESH_SUPPORTED(mesh_shape());
         ttml::autograd::ctx().get_device().clear_program_cache();
     }

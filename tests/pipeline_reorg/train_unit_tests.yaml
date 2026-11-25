@@ -41,7 +41,7 @@
   budget_type: unit
 
 - name: tt-train cpp distributed unit tests
-  # Runs only multi-device suites, which are prefixed with Mesh (e.g. Mesh1x2*); the single-device legs skip them.
+  # Runs only multi-device suites, which are prefixed with Mesh (e.g. Mesh1x2*).
   # NIGHTLY tests already run in the nightly legs on bh_p100 and bh_p150b_civ2, so this leg skips them.
   # Multi-device tests must therefore not be named NIGHTLY, or they run nowhere.
   cmd: |
@@ -63,7 +63,7 @@
     mkdir -p generated/test_reports
     export TT_METAL_WATCHER=2 TT_METAL_WATCHER_APPEND=1
     export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
-    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="GumbelSample*"
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="*GumbelSample*"
   skus:
     bh_p150b_civ2:
       timeout: 15
@@ -98,6 +98,7 @@
   cmd: |
     # Workaround for hang in QB2 https://github.com/tenstorrent/tt-metal/issues/55957
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    # Runs only tests marked multi_device
     python -m pytest tt-train/tests/python -m multi_device
   skus:
     bh_quietbox_2:
