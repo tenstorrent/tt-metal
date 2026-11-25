@@ -21,7 +21,9 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
+#ifdef ARCH_BLACKHOLE
 #include "llk_unpack_AB_matmul_main.h"
+#endif
 #include "llk_unpack_common_api.h"
 #endif
 PACK_MATMUL_API(1)

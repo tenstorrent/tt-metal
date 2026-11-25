@@ -87,7 +87,14 @@ FOLD_MIX = fold_params(
 )
 
 
-@pytest.mark.parametrize("math_fidelity,format_dest_acc_and_dims", FOLD_SAME)
+# Smoke runs one of the three block shapes of a cell, in turn; the nightly runs the other two.
+@pytest.mark.parametrize(
+    "math_fidelity,format_dest_acc_and_dims",
+    [
+        pytest.param(*p, marks=() if i % 3 == i // 3 % 3 else pytest.mark.nightly)
+        for i, p in enumerate(FOLD_SAME)
+    ],
+)
 def test_matmul_fold_cells(math_fidelity, format_dest_acc_and_dims):
     _matmul_body(math_fidelity, format_dest_acc_and_dims)
 

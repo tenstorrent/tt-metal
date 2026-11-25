@@ -31,6 +31,7 @@ from helpers.param_config import (
     input_output_formats,
     max_dest_tiles,
     parametrize,
+    parametrize_smoke,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -104,8 +105,8 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 
 
 # Blackhole builds one ELF per block shape (its compile-time block keys), where the run-time dims of main shared one per
-# format: 1 in 16 combinations (every format, accumulate mode and fidelity) run in smoke on the block keys, the others nightly
-# on main's form, which shares one ELF per format as main did. Every id keeps main's name.
+# format: 1 in 16 combinations run on the block keys, one per format, accumulate mode and fidelity in smoke and the rest of
+# them nightly; the others run nightly on main's form, which shares one ELF per format as main did. Every id keeps main's name.
 MATMUL_SMOKE_STRIDE = 16
 
 
@@ -117,11 +118,24 @@ def _matmul_params():
     names = ("math_fidelity", "format_dest_acc_and_dims")
     blackhole = get_chip_architecture() == ChipArchitecture.BLACKHOLE
     params = []
+    smoke_cells = set()
     for offset, math_fidelity in enumerate(ALL_MATH_FIDELITIES):
         for i, combination in enumerate(ALL_MATMUL_COMBINATIONS):
             param_id = build_param_id(names, (math_fidelity, combination))
-            if not blackhole or (i + offset) % MATMUL_SMOKE_STRIDE == 0:
+            cell = (math_fidelity, str(combination[0]), combination[1])
+            if not blackhole:
                 params.append(pytest.param(math_fidelity, combination, id=param_id))
+            elif (i + offset) % MATMUL_SMOKE_STRIDE == 0:
+                smoke = cell not in smoke_cells
+                smoke_cells.add(cell)
+                params.append(
+                    pytest.param(
+                        math_fidelity,
+                        combination,
+                        id=param_id,
+                        marks=() if smoke else pytest.mark.nightly,
+                    )
+                )
             else:
                 params.append(
                     pytest.param(
@@ -469,8 +483,11 @@ FULL_SYNC_BLOCKS = [
 
 
 # Wormhole's unpack AB matmul MOP zmask covers 8 tiles in config context 1, short of the 16-tile rows here.
+# Smoke pairs LoFi with Float16_b and HiFi2 with Bfp8_b on every block, the nightly runs the rest.
 @skip_for_wormhole
-@parametrize(
+@parametrize_smoke(
+    lambda math_fidelity, formats, dims: (math_fidelity == MathFidelity.LoFi)
+    == (formats == FULL_SYNC_FORMATS[0]),
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
     formats=FULL_SYNC_FORMATS,
     dims=FULL_SYNC_BLOCKS,
@@ -625,8 +642,18 @@ DYN_SWITCH_BLOCKS = [
 DYN_SWITCH_SMOKE_BLOCKS = [DYN_SWITCH_BLOCKS[1], DYN_SWITCH_BLOCKS[5]]
 
 
+# Smoke pairs LoFi with Float16_b and HiFi2 with Bfp8_b and each block with both syncs and both forms, the nightly runs the rest.
+def _dyn_switch_smoke(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch):
+    return (math_fidelity == MathFidelity.LoFi) == (
+        formats == DYN_SWITCH_FORMATS[0]
+    ) and DYN_SWITCH_SMOKE_BLOCKS.index(dims) == (
+        (dest_sync == DestSync.Full) != row_mop
+    )
+
+
 @skip_for_wormhole
-@parametrize(
+@parametrize_smoke(
+    _dyn_switch_smoke,
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
     formats=DYN_SWITCH_FORMATS,
     dims=DYN_SWITCH_SMOKE_BLOCKS,

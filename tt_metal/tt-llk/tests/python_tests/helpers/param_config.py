@@ -475,6 +475,24 @@ def parametrize(**kwargs: any):
     return decorator
 
 
+def parametrize_smoke(keep, **kwargs: any):
+    """@parametrize (the same ids) where the ids keep(**params) turns down run in the nightly only."""
+    parameters = tuple(kwargs.keys())
+    return pytest.mark.parametrize(
+        ",".join(parameters),
+        [
+            pytest.param(
+                *values,
+                id=build_param_id(parameters, values),
+                marks=(
+                    () if keep(**dict(zip(parameters, values))) else pytest.mark.nightly
+                ),
+            )
+            for values in _params_solve_dependencies(**kwargs)
+        ],
+    )
+
+
 @deprecated("Try using parametrize or python inbuilt product function")
 def generate_params(**kwargs: any) -> List[tuple]:
     wrap_list = lambda x: [x] if not isinstance(x, list) else x
