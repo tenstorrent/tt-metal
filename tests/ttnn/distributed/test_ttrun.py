@@ -666,7 +666,9 @@ class TestRankCpuBinding:
             )
         parts = shlex.split(fake_logger.info.call_args.args[0].split(": ", 1)[1])
         flags = parts[: parts.index("--mpi-args")]
-        cpu_flags = [p for i, p in enumerate(flags) if p.startswith("--rank-cpu") or flags[i - 1].startswith("--rank-cpu")]
+        cpu_flags = [
+            p for i, p in enumerate(flags) if p.startswith("--rank-cpu") or flags[i - 1].startswith("--rank-cpu")
+        ]
         assert cpu_flags == expected
 
 
