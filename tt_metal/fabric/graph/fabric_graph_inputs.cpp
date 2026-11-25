@@ -256,4 +256,15 @@ std::vector<Port> ports_from_perimeter(const std::vector<PerimeterPort>& perimet
     return ports;
 }
 
+std::map<std::pair<FabricNodeId, RoutingDirection>, RoutingDirection> vc2_directions(
+    const std::vector<Port>& ports, const InterDomainMesh& domain) {
+    std::map<std::pair<FabricNodeId, RoutingDirection>, RoutingDirection> directions;
+    for (const auto& p : ports) {
+        if (const auto d = domain.direction(p.node, p.peer)) {
+            directions[{p.node, *p.direction}] = *d;
+        }
+    }
+    return directions;
+}
+
 }  // namespace tt::tt_fabric::graph

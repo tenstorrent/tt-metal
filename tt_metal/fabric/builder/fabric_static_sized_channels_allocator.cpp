@@ -765,7 +765,7 @@ void FabricStaticSizedChannelsAllocator::configure_staged_buffer_slots(
     namespace sa = slot_allocator;
     static_assert(sa::NUM_VCS == builder_config::MAX_NUM_VCS);
     // VC0's worker-connected sender channel is its worker and its other senders forward; VC1's senders all forward;
-    // VC2's sender is its worker.
+    // VC2's sender is its worker, unless VC2 forwards.
     sa::RouterShape shape;
     shape.buffer_bytes = this->available_channel_buffering_space;
     shape.slot_bytes = this->channel_buffer_size_bytes;
@@ -776,7 +776,9 @@ void FabricStaticSizedChannelsAllocator::configure_staged_buffer_slots(
         vc0_senders - std::min<size_t>(vc0_senders, 1),
         num_used_receiver_channels_per_vc[0]};
     shape.vcs[1] = {0, num_used_sender_channels_per_vc[1], num_used_receiver_channels_per_vc[1]};
-    shape.vcs[2] = {num_used_sender_channels_per_vc[2], 0, num_used_receiver_channels_per_vc[2]};
+    const size_t vc2_senders = num_used_sender_channels_per_vc[2];
+    shape.vcs[2] = options_.vc2_forwards ? sa::RouterShape::Vc{0, vc2_senders, num_used_receiver_channels_per_vc[2]}
+                                         : sa::RouterShape::Vc{vc2_senders, 0, num_used_receiver_channels_per_vc[2]};
     // Bubble flow control runs on a ring or torus fabric's rings, on its VCs that have it; every router of the fabric
     // gets the same shape, whichever of its axes are rings.
     for (size_t vc = 0; vc < sa::NUM_VCS; ++vc) {

@@ -116,7 +116,7 @@ void validate_router_config(tt::ARCH arch, const std::unordered_map<std::string,
             (is_2d && arg("VC2_USES_COUNTER_CREDITS") != 0 &&
              (vc2_forwards || (vc2_sender_channels == 1 && arg("DISABLE_RX_CH2_FORWARDING") != 0))),
         "VC2 is supported as neighbour exchange on 2D routers, or forwarding on inter-domain fabrics");
-    TT_FATAL(!vc2_forwards || (!has_vc1 && !udm_mode && !tensix_mux_mode), "VC2 forwards on single-mesh fabrics only");
+    TT_FATAL(!vc2_forwards || (!udm_mode && !tensix_mux_mode), "VC2 forwards on fabrics without UDM or the mux");
     TT_FATAL(
         arg("ENABLE_FIRST_LEVEL_ACK_VC1") == 0 && arg("ENABLE_FIRST_LEVEL_ACK_VC2") == 0,
         "first-level acks on VC1 / VC2 are not supported");
@@ -875,6 +875,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     if (graph_inputs != nullptr) {
         inter_domain_ = graph_inputs->inter_domain;
         on_domain_edge_ = graph_inputs->on_domain_edge;
+        vc2_domain_ = graph_inputs->vc2_domain;
     }
 
     TT_FATAL(
@@ -1164,7 +1165,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     auto is_worker_channel = [&](size_t channel_id) -> bool {
         const size_t vc2_first = actual_sender_channels_vc0 + actual_sender_channels_vc1;
         return channel_id == get_worker_connected_sender_channel() || is_host_rdma_channel(channel_id) ||
-               (actual_sender_channels_vc2 > 0 && channel_id == vc2_first);
+               (actual_sender_channels_vc2 > 0 && channel_id == vc2_first &&
+                !fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards);
     };
     auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
         if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
@@ -1333,6 +1335,19 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["NUM_DOWNSTREAM_SENDERS_VC2"] = num_vc2_downstream_edms;
         named_args["VC2_DOWNSTREAM_EDM_SIZE"] = vc2_downstream_edm_size;
         named_args["OPEN_DOWNSTREAM_VC2_CONNECTIONS"] = 1;
+    }
+    if (vc2_domain_) {
+        named_args["VC2_DOMAIN_Y"] = vc2_domain_->y;
+        named_args["VC2_DOMAIN_X"] = vc2_domain_->x;
+        named_args["VC2_DOMAIN_Y_SIZE"] = vc2_domain_->rows;
+        named_args["VC2_DOMAIN_X_SIZE"] = vc2_domain_->cols;
+        named_args["VC2_DOMAIN_FACING"] = static_cast<uint32_t>(vc2_domain_->facing);
+        uint32_t routers = 0;
+        for (size_t d = 0; d < vc2_domain_->routers.size(); ++d) {
+            routers |= static_cast<uint32_t>(vc2_domain_->routers[d]) << (4 * d);
+        }
+        named_args["VC2_DOMAIN_ROUTERS"] = routers;
+        named_args["VC2_DOMAIN_TRANSLATES"] = vc2_domain_->translates ? 1 : 0;
     }
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);

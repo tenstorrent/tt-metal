@@ -19,7 +19,7 @@
 #include "distributed_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <cstring>
-#include <optional>
+#include <algorithm>
 #include <string>
 
 // hack for test_basic_fabric_apis.cpp
@@ -122,31 +122,56 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
     const auto& control_plane = env_impl.get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
     auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-    std::optional<std::vector<uint32_t>> vc2_route_table;
-    for (const auto& port : control_plane.get_fabric_context().get_builder_context().get_inter_domain_ports()) {
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& builder_context = fabric_context.get_builder_context();
+    const auto routing_table_addr = env_impl.get_hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE);
+    std::vector<uint32_t> vc2_route_table;
+    std::vector<uint32_t> vc2_chip_map;
+    for (const auto& port : builder_context.get_inter_domain_ports()) {
         if (port.node == fabric_node_id && port.has_router) {
             router_chans_and_direction.insert({port.eth_chan, eth_chan_directions::COUNT});
             // VC2 routes over the domain as a 2D mesh: no wraps, so no dateline needed
-            if (!vc2_route_table) {
-                const auto& mesh_graph = control_plane.get_mesh_graph();
-                const auto coord = mesh_graph.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+            if (vc2_route_table.empty()) {
+                const auto& domain = fabric_context.get_inter_domain_mesh();
+                const auto chip = domain.domain_chip.at(fabric_node_id);
+                const auto cols = domain.shape()[1];
                 const auto table = line_route_table_2d(
-                    mesh_graph, fabric_node_id.mesh_id, static_cast<int>(coord[0]), static_cast<int>(coord[1]));
-                vc2_route_table.emplace(sizeof(table) / sizeof(uint32_t));
-                std::memcpy(vc2_route_table->data(), &table, sizeof(table));
+                    *domain.mesh_graph, MeshId{0}, static_cast<int>(chip / cols), static_cast<int>(chip % cols));
+                vc2_route_table.resize(sizeof(table) / sizeof(uint32_t));
+                std::memcpy(vc2_route_table.data(), &table, sizeof(table));
+                // several meshes: each mesh's offset, then its chips' domain ids, in exit_node_table
+                const auto meshes = control_plane.get_mesh_graph().get_mesh_ids();
+                if (meshes.size() > 1) {
+                    std::vector<uint8_t> map(**std::max_element(meshes.begin(), meshes.end()) + 1);
+                    for (const auto& [node, domain_chip] : domain.domain_chip) {
+                        if (node.chip_id == 0) {
+                            map[*node.mesh_id] = static_cast<uint8_t>(map.size());
+                        }
+                        map.push_back(static_cast<uint8_t>(domain_chip));
+                    }
+                    TT_FATAL(map.size() <= 256, "inter-domain: {} meshes and chips exceed the chip map", map.size());
+                    vc2_chip_map.resize((map.size() + 3) / 4);
+                    std::memcpy(vc2_chip_map.data(), map.data(), map.size());
+                }
             }
+            const auto core = soc_desc.get_eth_core_for_channel(port.eth_chan, CoordSystem::LOGICAL);
             tt::tt_metal::detail::WriteToDeviceL1(
                 device,
-                soc_desc.get_eth_core_for_channel(port.eth_chan, CoordSystem::LOGICAL),
-                env_impl.get_hal().get_dev_addr(
-                    tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE) +
-                    offsetof(routing_l1_info_t, route_table_2d),
-                *vc2_route_table,
+                core,
+                routing_table_addr + offsetof(routing_l1_info_t, route_table_2d),
+                vc2_route_table,
                 CoreType::ETH);
+            if (!vc2_chip_map.empty()) {
+                tt::tt_metal::detail::WriteToDeviceL1(
+                    device,
+                    core,
+                    routing_table_addr + offsetof(routing_l1_info_t, exit_node_table),
+                    vc2_chip_map,
+                    CoreType::ETH);
+            }
         }
     }
-    const auto& fabric_context = control_plane.get_fabric_context();
-    const auto& builder_context = fabric_context.get_builder_context();
     const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
     const auto& router_config = builder_context.get_fabric_router_config();
     std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);

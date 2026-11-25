@@ -111,7 +111,7 @@ struct DownstreamTraits {
     // downstream; a 1D downstream has one forwarding channel. Only forwarding_position's check reads it.
     template <size_t ENTRY>
     static constexpr size_t ranked_forwarding_position() {
-        constexpr size_t first = VC == 0 ? 1 : VC == 1 ? VC1_FABRIC_POSITION_START : VC2_FABRIC_POSITION_START + 1;
+        constexpr size_t first = VC == 0 ? 1 : VC == 1 ? VC1_FABRIC_POSITION_START : VC2_FABRIC_POSITION_START;
         if constexpr (is_2d) {
             constexpr size_t facing = static_cast<size_t>(downstream_direction(ENTRY));
             return first + compact_index_on(facing, static_cast<size_t>(my_direction));

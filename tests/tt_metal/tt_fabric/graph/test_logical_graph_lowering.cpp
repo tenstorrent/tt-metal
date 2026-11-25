@@ -910,7 +910,10 @@ Lowered lower_with_perimeter(const std::vector<UnusedLink>& links) {
     ports.insert(ports.end(), open.begin(), open.end());
     auto vc_config = vc2_only();
     vc_config.vc2_forwards = true;
-    const WiringOptions options{.topology = Topology::Mesh, .vc_config = vc_config};
+    const WiringOptions options{
+        .topology = Topology::Mesh,
+        .vc_config = vc_config,
+        .vc2_directions = vc2_directions(ports, make_inter_domain_mesh(mesh_graph))};
     std::shared_ptr<WiringRules> rules = stock_wiring_rules(ports, options);
     auto graph = lower_to_logical(ports, *rules);
     validate(graph, *rules, ValidationLimits{});
@@ -985,8 +988,13 @@ TEST(FabricGraphInterDomain, EmptyPerimeterIsANoOp) {
     auto vc_config = vc2_only();
     vc_config.vc2_forwards = true;
     const auto with = lower_with_perimeter({});
-    const auto without =
-        lower_mesh_graph(mesh_graph, WiringOptions{.topology = Topology::Mesh, .vc_config = vc_config});
+    const auto without = lower_mesh_graph(
+        mesh_graph,
+        WiringOptions{
+            .topology = Topology::Mesh,
+            .vc_config = vc_config,
+            .vc2_directions =
+                vc2_directions(ports_from_mesh_graph(mesh_graph, {}), make_inter_domain_mesh(mesh_graph))});
     ASSERT_EQ(with.graph.routers.size(), without.graph.routers.size());
     EXPECT_EQ(with.graph.channels.size(), without.graph.channels.size());
     EXPECT_EQ(with.graph.edges.size(), without.graph.edges.size());
@@ -996,7 +1004,7 @@ TEST(FabricGraphInterDomain, ChannelIndexing) {
     const auto cg = lower_to_channels(lower_with_perimeter(kQuietBoxSplit).graph, Topology::Mesh);
     EXPECT_EQ(index_of(cg, "m0.c0.N.p0", 0, "worker"), 0u);
     EXPECT_NE(index_of(cg, "m0.c0.N.p0", 0, "E"), 0u);
-    EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "N"), 2u);
+    EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "N"), 1u);
     const auto& g = cg.logical;
     for (RouterIndex r = 0; r < g.routers.size(); ++r) {
         const bool perimeter = g.routers[r].port.capability == EdgeCapability::INTERDOMAIN;

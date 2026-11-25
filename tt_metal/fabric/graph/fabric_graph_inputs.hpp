@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "fabric_graph_types.hpp"
+#include "tt_metal/fabric/inter_domain_mesh.hpp"
 
 namespace tt {
 class Cluster;
@@ -49,5 +50,9 @@ std::vector<PerimeterPort> perimeter_ports(
     Topology topology);
 
 std::vector<Port> ports_from_perimeter(const std::vector<PerimeterPort>& perimeter);
+
+// Each port on one of the domain's edges, by its direction in the domain: where VC2 forwards.
+std::map<std::pair<FabricNodeId, RoutingDirection>, RoutingDirection> vc2_directions(
+    const std::vector<Port>& ports, const InterDomainMesh& domain);
 
 }  // namespace tt::tt_fabric::graph

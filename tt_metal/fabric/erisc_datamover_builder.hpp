@@ -346,12 +346,23 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
 
 // What a fabric graph already knows about a router, handed in instead of worked out by the builder.
 // Sender vectors are by flat sender channel (VC0's, then VC1's, then VC2's).
+// VC2 routes over the domain's mesh, which may span several of the workload's meshes.
+struct Vc2DomainInputs {
+    uint32_t y = 0, x = 0, rows = 0, cols = 0;                // this chip in the domain's mesh
+    eth_chan_directions facing = eth_chan_directions::COUNT;  // COUNT: off the domain's edges, or landing
+    // by domain direction: the router on this chip facing it, COUNT if none
+    std::array<eth_chan_directions, 4> routers{
+        eth_chan_directions::COUNT, eth_chan_directions::COUNT, eth_chan_directions::COUNT, eth_chan_directions::COUNT};
+    bool translates = false;  // a landing that maps the workload's chip ids onto the domain's
+};
+
 struct RouterGraphInputs {
     RouterChannelLayout layout;       // this router's channels
     std::vector<bool> injection;      // acquires a protected ring (bubble flow control)
     std::vector<bool> serviced;       // a channel, or a slot stock services anyway
     bool inter_domain = false;
     bool on_domain_edge = false;
+    std::optional<Vc2DomainInputs> vc2_domain;
 };
 
 /*
@@ -571,6 +582,7 @@ public:
     std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info_ = std::nullopt;
     bool inter_domain_ = false;
     bool on_domain_edge_ = false;
+    std::optional<Vc2DomainInputs> vc2_domain_;
 
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;

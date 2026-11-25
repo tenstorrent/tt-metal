@@ -596,6 +596,33 @@ constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_is_interm
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_0_INTERMESH_INGRESS")),
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_1_INTERMESH_INGRESS")),
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_2_INTERMESH_INGRESS"))};
+
+// VC2 over the domain's mesh: this chip's place in it, and the router on this chip facing each domain direction
+constexpr bool vc2_domain = has_named_ct_arg("VC2_DOMAIN_Y_SIZE");
+constexpr uint32_t VC2_DOMAIN_Y = NAMED_CT_ARG_OR("VC2_DOMAIN_Y", 0);
+constexpr uint32_t VC2_DOMAIN_X = NAMED_CT_ARG_OR("VC2_DOMAIN_X", 0);
+constexpr uint32_t VC2_DOMAIN_Y_SIZE = NAMED_CT_ARG_OR("VC2_DOMAIN_Y_SIZE", 0);
+constexpr uint32_t VC2_DOMAIN_X_SIZE = NAMED_CT_ARG_OR("VC2_DOMAIN_X_SIZE", 0);
+constexpr auto VC2_DOMAIN_FACING = static_cast<tt::tt_fabric::eth_chan_directions>(
+    NAMED_CT_ARG_OR("VC2_DOMAIN_FACING", tt::tt_fabric::eth_chan_directions::COUNT));
+constexpr bool VC2_DOMAIN_TRANSLATES = NAMED_CT_ARG_OR("VC2_DOMAIN_TRANSLATES", 0) != 0;
+static_assert(
+    VC2_DOMAIN_Y_SIZE + VC2_DOMAIN_X_SIZE <= sizeof(PACKET_HEADER_TYPE::route_buffer),
+    "the domain's action map must fit in the configured packet header");
+// a domain action's direction bits as this chip's routers'
+constexpr std::array<uint8_t, 16> vc2_domain_routers = [] {
+    constexpr uint32_t routers = NAMED_CT_ARG_OR("VC2_DOMAIN_ROUTERS", 0x5555);
+    std::array<uint8_t, 16> out{};
+    for (uint32_t mask = 0; mask < out.size(); ++mask) {
+        for (uint32_t d = 0; d < 4; ++d) {
+            const uint32_t local = (routers >> (4 * d)) & 0xF;
+            if ((mask >> d) & 1 && local < tt::tt_fabric::eth_chan_directions::COUNT) {
+                out[mask] |= 1u << local;
+            }
+        }
+    }
+    return out;
+}();
 #else
 constexpr size_t MESH_Y_SIZE = 0;
 constexpr size_t MESH_X_SIZE = 0;
