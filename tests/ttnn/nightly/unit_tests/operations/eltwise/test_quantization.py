@@ -1392,3 +1392,17 @@ def test_quantize_tensor_zero_point_honors_output_tensor(device, use_tensor_scal
     assert (
         quantized_tt.memory_config() == ttnn.L1_MEMORY_CONFIG
     ), f"expected L1 output, got {quantized_tt.memory_config()}"
+
+
+@pytest.mark.parametrize("axis", [None, 1])
+def test_quantize_row_major_input_tiled_scale(device, axis):
+    """A row-major input with a tiled scale tensor quantizes like an input of matching layout."""
+    torch.manual_seed(0)
+    input_tr = torch.randn(1, 2, 64, 128)
+    scale_tr = torch.tensor([0.02, 0.05]) if axis is not None else torch.tensor([0.02])
+    zero_point = 3
+    expected = torch.clamp(torch.round(input_tr / scale_tr.view(1, -1, 1, 1)) + zero_point, -128, 127)
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    scale_tt = ttnn.from_torch(scale_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized_tt = ttnn.quantize(input_tt, scale_tt, zero_point, axis=axis)
+    assert torch.equal(ttnn.to_torch(quantized_tt).reshape(expected.shape).float(), expected)

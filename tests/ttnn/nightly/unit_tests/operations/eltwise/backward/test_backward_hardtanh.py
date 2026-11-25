@@ -210,10 +210,7 @@ HARDTANH_BW_FUSED_CALLS = (
 
 # Calls whose composite differs from torch on main itself, on silicon: expected to fail until main
 # fixes them, and a pass fails, so the entry is dropped then.
-HARDTANH_BW_COMPOSITE_DIVERGES = {
-    "blackhole": ("mixed_layouts",),
-    "wormhole_b0": ("mixed_layouts",),
-}
+HARDTANH_BW_COMPOSITE_DIVERGES = {}
 
 
 def _hardtanh_bw_torch_gradient(grad, x, min=HARDTANH_BW_MIN, max=HARDTANH_BW_MAX):

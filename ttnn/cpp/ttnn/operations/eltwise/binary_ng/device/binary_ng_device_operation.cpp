@@ -12,6 +12,7 @@
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <cmath>
 #include <cstdint>
@@ -714,6 +715,35 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     // Valid input is allocated
     TT_FATAL(input_tensor_a.is_allocated(), "Input Tensor A is not allocated");
     TT_FATAL(input_tensor_b.is_allocated(), "Input Tensor B is not allocated");
+
+    // A ROW_MAJOR/TILE pair takes the tile path, whose readers treat the row-major buffer as tiles.
+    // Tile both, as ttnn::detail::invoke_binary_ng_impl does for the public ops.
+    if (input_tensor_a.layout() != input_tensor_b.layout()) {
+        const auto tiled = [&](const Tensor& t) {
+            if (t.layout() == Layout::TILE) {
+                return t;
+            }
+            return ttnn::to_layout(
+                t, Layout::TILE, std::nullopt, std::nullopt, t.is_sharded() ? std::nullopt : sub_core_grids);
+        };
+        return binary_ng(
+            tiled(input_tensor_a),
+            tiled(input_tensor_b),
+            binary_op_type,
+            output_dtype,
+            memory_config,
+            output_tensor,
+            fast_and_approximate_mode,
+            lhs_activations,
+            rhs_activations,
+            post_activations,
+            scalar_value,
+            sub_core_grids,
+            sub_device_id,
+            rtol,
+            atol,
+            equal_nan);
+    }
 
     // Resolve sub_device_id to sub_core_grids if provided (after device validation)
     auto resolved_sub_core_grids = sub_core_grids;
