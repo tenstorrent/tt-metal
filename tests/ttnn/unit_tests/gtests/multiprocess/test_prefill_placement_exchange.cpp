@@ -17,10 +17,10 @@
 
 #include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_chip_exchange.hpp"

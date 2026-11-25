@@ -12,8 +12,8 @@
 
 #include <algorithm>
 
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 

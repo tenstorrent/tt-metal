@@ -20,7 +20,7 @@
 #include <thread>
 #include <vector>
 
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 
 #include <internal/disaggregation/layer_completion_message.hpp>
 #include <internal/disaggregation/layer_completion_queue.hpp>

@@ -9,11 +9,11 @@
 #include <cmath>
 #include <limits>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"

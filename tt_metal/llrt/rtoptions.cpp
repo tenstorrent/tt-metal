@@ -23,8 +23,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <system_mesh.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 
 // NOLINTBEGIN(bugprone-branch-clone)
 

@@ -11,9 +11,9 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/graph_tracking.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"

@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <ttnn/distributed/distributed_configs.hpp>
 

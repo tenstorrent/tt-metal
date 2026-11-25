@@ -20,7 +20,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/program_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::generic {

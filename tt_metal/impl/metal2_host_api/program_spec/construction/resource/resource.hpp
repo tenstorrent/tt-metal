@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/kernels/kernel.hpp"

@@ -13,9 +13,9 @@
 #include <string>
 #include <utility>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::ccl::common {

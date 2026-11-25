@@ -10,9 +10,9 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 
@@ -574,7 +574,7 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES),
         ::testing::Values(TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES),
 
-        // Shapes from tt_metal/api/tt-metalium/tile.hpp
+        // Shapes from tt_metal/api/tt-metalium/data_formats/tile.hpp
         ::testing::Values(
             std::make_pair(PhysicalSize{32, 16}, PhysicalSize{16, 16}),
             std::make_pair(PhysicalSize{16, 32}, PhysicalSize{16, 16}),

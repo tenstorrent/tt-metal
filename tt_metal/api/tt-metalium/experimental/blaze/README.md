@@ -62,4 +62,4 @@ citing issue #50953 so they are easy to find and remove:
 - `impl/kernels/kernel.hpp` / `kernel.cpp` — 2 fields + 2 setters + 2 overrides
 - `impl/program/program.cpp` — gated call to `experimental::blaze::process_named_args()`
 - `impl/emulation/emule_descriptor_builder.cpp` — flattens the named-args CT/RT namespaces into the emulator descriptor
-- `api/tt-metalium/program_descriptors.hpp` — `experimental::blaze::NamedKernelArgs blaze_named_args` member
+- `api/tt-metalium/workload/legacy/program_descriptors.hpp` — `experimental::blaze::NamedKernelArgs blaze_named_args` member

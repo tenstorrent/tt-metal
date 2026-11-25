@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt_stl/indestructible.hpp>
 

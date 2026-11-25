@@ -4,9 +4,9 @@
 
 #include <benchmark/benchmark.h>
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -17,14 +17,14 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include "context.hpp"
 #include "device_utils.hpp"
 #include "perf/perf_contract_benchmark.hpp"
 #include "host_utils.hpp"
 #include "impl/program/program_impl.hpp"
-#include "tt-metalium/program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "work_thread.hpp"

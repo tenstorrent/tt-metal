@@ -11,9 +11,9 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::ccl::common {
