@@ -1911,6 +1911,16 @@ class TestConfig:
         return match[1] if depth == 0 else None
 
     def _compile_kernel_part_once(self, compile_command, source):
+        """Compile a TRISC, or copy an identical ELF another variant already built.
+
+        A build.h statement that is exactly one constexpr declaration cannot change the
+        preprocessed unit, so it changes the ELF only if the TRISC reaches its name. The key
+        is the command, the source, the files the compile reads, every other build.h
+        statement in order, and the constexpr statements whose names the TRISC reaches.
+        Reached names come from the `-E -dD` unit outside build.h, followed through macros.
+        Anything the split cannot attribute to one name stays in the key. A failed `-E`
+        falls back to a plain compile.
+        """
         variant_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         command = [
             compile_command[0],
