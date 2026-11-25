@@ -224,7 +224,7 @@ class OpTestBase:
         with ThreadPoolExecutor(num_devices) as pool:
             self.set_seed()
 
-            logger.info(f"Running on {num_devices} devices")
+            logger.debug(f"Running on {num_devices} devices")
 
             a_shape = self.activation.shape
 
@@ -240,18 +240,18 @@ class OpTestBase:
                 A.append(self.generate_torch_activations(a_shape))
             B = [self.generate_torch_input(a.shape) for a in self.arguments]
 
-            logger.info("Pushing activations to devices...")
+            logger.debug("Pushing activations to devices...")
             a_t = []
             for act in range(num_activation_tensors):
                 a_t.append(self.generate_tt_activations_from_torch(A[act]))
 
-            logger.info("Pushing inputs to devices...")
+            logger.debug("Pushing inputs to devices...")
             self.inputs = [
                 self.generate_tt_input_from_torch(b, a.dtype, a.layout, a.mem_config, i)
                 for i, (b, a) in enumerate(zip(B, self.arguments))
             ]
 
-            logger.info("Activations and inputs pushed to devices!")
+            logger.debug("Activations and inputs pushed to devices!")
 
             reference_out = None
             if self.determinism_check_enabled:
@@ -273,7 +273,7 @@ class OpTestBase:
             out = [None] * num_devices
             self.activations = self.convert_activations_to_memory_config(a_t[0])
 
-            logger.info("Starting iterations")
+            logger.debug("Starting iterations")
             for i in range(self.loop_count):
                 out = self.run_device_operation()
 
@@ -281,9 +281,9 @@ class OpTestBase:
                 # - eg. if the chip is remote, we first sync its local pair);
                 # The device ids don't necessarily start from 0, as it is possible to target a specific chip in the mesh
                 for device_idx in self.device_ids:
-                    logger.info(f"Start sync device id: {device_idx}")
+                    logger.debug(f"Start sync device id: {device_idx}")
                     ttnn.device.synchronize_device(self.get_device(device_idx))
-                    logger.info(f"End sync device id: {device_idx}")
+                    logger.debug(f"End sync device id: {device_idx}")
 
                 # Check if the output matches the first run output
                 if self.determinism_check_enabled and i % self.determinism_check_interval == 0:
@@ -293,7 +293,7 @@ class OpTestBase:
                     for output_id in range(num_devices):
                         device_idx = self.device_ids[output_id]
                         if matches[output_id]:
-                            logger.info(f"Device {device_idx} PCC: 1.0")
+                            logger.debug(f"Device {device_idx} PCC: 1.0")
                         else:
                             # For determinism check, we avoid calling comp_pcc func as it is heavy and with too many operations,
                             # part of the code that replaces nans/infs with zeros starts leaking memory, even if deallocation is forced,
@@ -306,14 +306,14 @@ class OpTestBase:
                             num_nd_outputs[output_id] += 1
 
                     current_act_tensor = (current_act_tensor + 1) % num_activation_tensors
-                    logger.info("Switching activation tensor for new determinism iterations...")
+                    logger.debug("Switching activation tensor for new determinism iterations...")
                     if self.activation.mem_config.buffer_type == ttnn.BufferType.L1:
                         self.deallocate_activations()
                     self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
 
                 out.deallocate(True)
 
-                logger.info(f"Iteration = {i}, done!")
+                logger.debug(f"Iteration = {i}, done!")
 
         catch_nd_on_fail = True
         if self.determinism_check_enabled:
@@ -329,7 +329,7 @@ class OpTestBase:
                     )
                     catch_nd_on_fail = False
                 else:
-                    logger.info(
+                    logger.debug(
                         f"Number of non-deterministic outputs on device {device_idx} is {num_nd_outputs[nd_output_id]}"
                     )
         assert catch_nd_on_fail
