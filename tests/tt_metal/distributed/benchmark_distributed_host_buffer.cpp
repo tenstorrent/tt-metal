@@ -4,7 +4,7 @@
 
 #include <benchmark/benchmark.h>
 
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 
 #include <vector>
 #include <numeric>

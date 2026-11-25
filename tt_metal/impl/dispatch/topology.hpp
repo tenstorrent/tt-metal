@@ -4,16 +4,16 @@
 
 #pragma once
 
-#include <device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <memory>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include "core_coord.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "device/device_impl.hpp"
-#include "tt-metalium/program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
 #include "tt_metal/impl/context/context_descriptor.hpp"

@@ -33,6 +33,51 @@
 #include "ttnn/operations/experimental/quasar/softmax/softmax_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/batch_norm/batch_norm_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/transformer/transformer_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/adaptive_pool/adaptive_pools_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/conv1d/conv1d_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/conv3d/conv3d_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/conv_transpose2d/conv_transpose2d_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/attn_res_block_mix/attn_res_block_mix_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/attn_res_block_stats/attn_res_block_stats_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/attn_res_gather_softmax/attn_res_gather_softmax_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/combine/combine_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/combine_fabric2d/combine_fabric2d_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/compressor_state_exchange/compressor_state_exchange_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/csa_compressor/csa_compressor_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/dispatch_fabric2d/dispatch_fabric2d_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/extract/extract_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/hybrid_routed_expert_ffn/hybrid_routed_expert_ffn_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/inbound_socket_service_sync/inbound_socket_service_sync_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/insert/insert_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/mhc_split_sinkhorn/mhc_split_sinkhorn_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/moe_fused_swiglu/moe_fused_swiglu_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/moe_hash_gate/moe_hash_gate_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/moe_padding_config/moe_padding_config_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/grid_sample/grid_sample_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/high_bw_all_gather/high_bw_all_gather_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/indexer_score/indexer_score_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/kda/kda_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/rotate/rotate_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/topk_large_indices/topk_large_indices_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/upsample/upsample_nanobind.hpp"
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -104,6 +149,62 @@ void bind_quasar(nb::module_& mod) {
 
     // transformer (nested ttnn.experimental.quasar.transformer submodule; sdpa_decode for now).
     transformer::bind_transformer(m_quasar);
+
+    // ---- Quasar copies of the convolutions / sdpa / ds_prefill codeowner ops ----
+    // conv1d / conv_transpose2d (compositional wrappers over the quasar conv2d / halo / move).
+    conv1d_impl::bind_conv1d(m_quasar);
+    conv_transpose2d_impl::bind_conv_transpose2d(m_quasar);
+
+    // pool family (grid_sample / rotate / upsample).
+    grid_sample::bind_grid_sample(m_quasar);
+    rotate::py_module(m_quasar);
+    upsample::py_module(m_quasar);
+
+    // ring_attention_all_gather_async.
+    ring_attention_all_gather_async::bind_ring_attention_all_gather_async(m_quasar);
+
+    // experimental ops (cnn, conv3d, adaptive_pool, high_bw_all_gather, topk_large_indices, indexer_score, kda,
+    // deepseek_prefill).
+    cnn::detail::bind_convert_to_chw(m_quasar);
+    cnn::detail::bind_convert_to_hwc(m_quasar);
+    conv3d::detail::bind_conv3d(m_quasar);
+    adaptive_pool::bind_adaptive_avg_pool2d_operation(m_quasar);
+    adaptive_pool::bind_adaptive_max_pool2d_operation(m_quasar);
+    deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(m_quasar);
+    high_bw_all_gather::detail::bind_experimental_high_bw_all_gather_operation(m_quasar);
+    deepseek_prefill::combine_fabric2d::detail::bind_experimental_combine_fabric2d_operation(m_quasar);
+    deepseek_prefill::dispatch_fabric2d::detail::bind_experimental_dispatch_fabric2d_operation(m_quasar);
+    deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(m_quasar);
+    deepseek_prefill::moe_padding_config::detail::bind_moe_padding_config(m_quasar);
+    deepseek_prefill::detail::bind_outbound_socket_service_sync(m_quasar);
+    deepseek_prefill::mhc_split_sinkhorn::detail::bind_experimental_mhc_split_sinkhorn_operation(m_quasar);
+    deepseek_prefill::detail::bind_post_combine_reduce(m_quasar);
+    deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(m_quasar);
+    deepseek_prefill::moe_hash_gate::detail::bind_moe_hash_gate(m_quasar);
+    deepseek_prefill::attn_res_block_mix::detail::bind_attn_res_block_mix(m_quasar);
+    deepseek_prefill::attn_res_block_stats::detail::bind_attn_res_block_stats(m_quasar);
+    deepseek_prefill::attn_res_gather_softmax::detail::bind_attn_res_gather_softmax(m_quasar);
+    deepseek_prefill::attn_res_weighted_reduce_nc::detail::bind_attn_res_weighted_reduce_nc(m_quasar);
+    deepseek_prefill::pack_scaled_fp8_kv_cache::detail::bind_pack_scaled_fp8_kv_cache(m_quasar);
+    deepseek_prefill::per_token_cast_to_fp8::detail::bind_experimental_per_token_cast_to_fp8_operation(m_quasar);
+    deepseek_prefill::per_token_cast_back::detail::bind_experimental_per_token_cast_back_operation(m_quasar);
+    deepseek_prefill::detail::bind_inbound_socket_service_sync(m_quasar);
+    topk_large_indices::detail::bind_topk_large_indices(m_quasar);
+    indexer_score::detail::bind_indexer_score(m_quasar);
+    kda::detail::bind_kda(m_quasar);
+    deepseek_prefill::detail::bind_compressor_state_exchange(m_quasar);
+    deepseek_prefill::detail::bind_csa_compressor(m_quasar);
+    deepseek_prefill::detail::bind_dispatch(m_quasar);
+    deepseek_prefill::detail::bind_combine(m_quasar);
+    deepseek_prefill::detail::bind_routed_expert_ffn(m_quasar);
+    deepseek_prefill::detail::bind_unified_routed_expert_ffn(m_quasar);
+    deepseek_prefill::detail::bind_moe_fused_swiglu(m_quasar);
+    deepseek_prefill::detail::bind_hybrid_routed_expert_ffn(m_quasar);
+    deepseek_prefill::detail::bind_extract(m_quasar);
+    deepseek_prefill::detail::bind_insert(m_quasar);
+    deepseek_prefill::detail::bind_update_padded_kv_cache(m_quasar);
+    deepseek_prefill::detail::bind_zero_padded_kv_cache(m_quasar);
+    deepseek_prefill::detail::bind_rotary_embedding_indexed(m_quasar);
 
     // NOTE: halo has no python binding (internal device backend). The binary_ng device op is exposed through the
     // binary front-end (binary::py_module -> add/subtract/multiply/...), not a direct binary_ng binding.

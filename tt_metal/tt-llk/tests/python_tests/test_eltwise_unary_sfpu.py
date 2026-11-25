@@ -799,6 +799,26 @@ def _int_unary_stimuli_spec(mathop):
     return StimuliSpec.custom(values=straddle + spread, seed=0)
 
 
+@skip_for_quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.GeluTanh],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_unary_sfpu_gelu_tanh_bf16_dest(formats, dest_acc, mathop):
+    # Both signs, past the logistic underflow; Blackhole BF16 DEST runs the generated kernel.
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+    )
+
+
 @parametrize(
     mathop=_INT_UNARY_OPS,
     dest_acc=[DestAccumulation.Yes],
@@ -1301,6 +1321,63 @@ def test_eltwise_unary_sfpu_signbit_int32():
             f"[{i}] in {int(src_A[i])} got {int(res_tensor[i]) & UINT32_MASK:#x} want {int(golden[i])}"
             for i in mismatch[:MAX_REPORTED_MISMATCHES].tolist()
         )
+    )
+
+
+# Words a float load/store could alter: both int32 extremes, -1, float NaN/inf/subnormal bit
+# patterns and mixed-byte words.
+_IDENTITY_INT32_VALUES = [
+    -(2**31),
+    -(2**31) + 1,
+    -559038737,  # 0xDEADBEEF
+    -4194303,  # 0xFFC00001, negative NaN
+    -8388608,  # 0xFF800000, -inf
+    -1,
+    0,
+    1,  # smallest subnormal
+    8388607,  # 0x007FFFFF, largest subnormal
+    305419896,  # 0x12345678
+    2139095040,  # 0x7F800000, +inf
+    2143289344,  # 0x7FC00000, quiet NaN
+    2**31 - 1,
+]
+
+
+def test_eltwise_unary_sfpu_identity_int32():
+    """Identity on Int32 Dest takes the vUInt copy and returns every input word unchanged.
+
+    The 13-value period differs from the row stride, so a row stored to its neighbour's
+    slot is caught by the exact compare.
+    """
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    input_dimensions = [64, 64]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    values = torch.tensor(_IDENTITY_INT32_VALUES, dtype=torch.int32)
+    src_A = values.repeat(num_elements // values.numel() + 1)[:num_elements]
+
+    res_from_L1 = eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=DestAccumulation.Yes,
+        approx_mode=ApproximationMode.No,
+        mathop=MathOperation.Identity,
+        fast_mode=FastMode.No,
+        input_dimensions=input_dimensions,
+        src_A=src_A,
+        src_B=src_A.clone(),
+        twos_complement=True,
+        unpack_to_dest=True,
+        check_golden=False,
+    )
+
+    res_tensor = torch.tensor(res_from_L1, dtype=torch.int64) & UINT32_MASK
+    golden = src_A.to(torch.int64) & UINT32_MASK
+    assert res_tensor.shape == golden.shape, "Result and golden differ in length"
+    mismatch = torch.nonzero(res_tensor != golden).flatten()
+    assert (
+        mismatch.numel() == 0
+    ), f"{mismatch.numel()} of {golden.numel()} words changed; first: " + ", ".join(
+        f"[{i}] in {int(golden[i]):#x} got {int(res_tensor[i]):#x}"
+        for i in mismatch[:MAX_REPORTED_MISMATCHES].tolist()
     )
 
 

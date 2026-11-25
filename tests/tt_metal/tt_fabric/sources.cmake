@@ -25,6 +25,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_express_connection_wiring.cpp
     fabric_router/test_protected_domain_effects.cpp
     fabric_router/test_fabric_edge_capability.cpp
+    fabric_router/test_master_router_selection.cpp
     fabric_router/test_direction_slot_bijection.cpp
     fabric_router/test_router_wiring_rules.cpp
     fabric_router/test_router_turn_set.cpp
@@ -45,6 +46,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_data_movement/test_sparse_mcast_perpage.cpp
     fabric_data_movement/test_basic_fabric_mux.cpp
     fabric_data_movement/test_basic_fabric_mux_v2.cpp
+    fabric_data_movement/test_host_rdma.cpp
     fabric_data_movement/test_fabric_traffic_generator_kernel.cpp
     fabric_data_movement/test_global_semaphore_fabric.cpp
     fabric_router/test_physical_descriptor_builder.cpp

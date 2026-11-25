@@ -16,6 +16,11 @@ class OptimizerBase;
 namespace ttml::serialization {
 class FlatBufferFile;
 
+// Loads `values`, row-major in the tensor's logical shape, into a bf16 or fp32 `tensor` in the dtype it is stored in,
+// replicated over its mesh, through assign(): a bf16 tensor gets the values rounded to bf16 on the host, an fp32 one
+// gets them exactly. For loaders that read floats from a file, such as the C++ safetensors loaders.
+void assign_from_floats(const autograd::TensorPtr& tensor, const std::vector<float>& values);
+
 void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const ttnn::Tensor& tensor);
 void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, ttnn::Tensor& tensor);
 

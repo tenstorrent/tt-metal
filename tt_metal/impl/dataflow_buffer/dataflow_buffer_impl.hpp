@@ -14,7 +14,7 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "impl/context/context_types.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
