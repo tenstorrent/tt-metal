@@ -4,11 +4,13 @@
 cache blocks (mamba_cache_mode "align", tt/gdn_block_state.py, Qwen36ForCausalLM.prefill_forward, and the checkpoint
 routing of Qwen36Model.prefill_traced_chunked and gdn.tp.PrefillCheckpoint).
 
-The block-state tests run GdnBlockState's own read and copy code on an emulation of the interleaved DRAM buffers:
-``ttnn.experimental.alias_view``, ``ttnn.narrow`` and ``ttnn.copy`` are replaced by functions that address pages as
-the device does (page q of a buffer on bank q % 8, at offset (q // 8) * page size), so a block's float32 pages start
-half a page later on odd bfloat8_b 1024-token blocks, as on the device. The packed history is read back through a
-stand-in for to_layout / reshape / embedding on host tensors (row-major tiles).
+The block-state tests run GdnBlockState's own read, copy and write code on an emulation of the interleaved DRAM
+buffers: ``ttnn.experimental.alias_view``, ``ttnn.narrow``, ``ttnn.copy``, ``ttnn.slice`` and
+``ttnn.experimental.paged_fill_cache`` are replaced by functions that address pages as the device does (page q of a
+buffer on bank q % banks, at offset (q // banks) * page size), on 8 banks and on 7. So a block's float32 pages start
+half a page later on odd bfloat8_b 1024-token blocks on 8 banks, and on 7 banks a block's tiles do not spread evenly
+over the banks, as on the device. The packed history is read back through a stand-in for to_layout / reshape /
+embedding on host tensors (row-major tiles).
 """
 
 import math
@@ -30,10 +32,15 @@ from models.demos.blackhole.qwen36.tt.kv_cache_spec import (
 )
 
 QWEN_27B_TP8 = GdnDims(nk=2, nv=6, dk=128, dv=128, kconv=4)
+QWEN_27B_TP4 = GdnDims(nk=4, nv=12, dk=128, dv=128, kconv=4)
 ATTENTION = [i % 4 == 3 for i in range(16)]  # 4 attention layers (4 layer slots), 12 GDN layers in 3 groups
 NUM_BLOCKS = 12
 BMAX = 4
-BANKS = 8
+# (DRAM banks, GDN dims, block size, bfloat8_b K / V) of the emulated buffers: the 8-bank layout whose odd blocks
+# start half a float32 page later, and the 7-bank layouts at TP=8 (K holds every value head) and TP=4 (7 heads in K, 5
+# in V).
+GEOMETRIES = [(8, QWEN_27B_TP8, 1024, True), (7, QWEN_27B_TP8, 2048, True), (7, QWEN_27B_TP4, 1024, False)]
+GEOMETRY_IDS = ["8banks-tp8-bf8", "7banks-tp8-bf8", "7banks-tp4-bf16"]
 
 
 # ---------------------------------------------------------------------------------------- interleaved DRAM emulation
@@ -48,7 +55,7 @@ class Buf:
 
 @dataclass
 class View:
-    """A device tensor on Buf: page q at bank q % BANKS, byte offset base + (q // BANKS) * page."""
+    """A device tensor on Buf: page q at bank q % banks, byte offset base + (q // banks) * page."""
 
     buf: Buf
     base: int
@@ -60,7 +67,8 @@ class View:
         return math.prod(self.shape[:-2]) * (self.shape[-2] // 32) * (self.shape[-1] // 32)
 
     def _at(self, q):
-        return self.buf.banks[q % BANKS], self.base + (q // BANKS) * self.page
+        n = len(self.buf.banks)
+        return self.buf.banks[q % n], self.base + (q // n) * self.page
 
     def read(self, q):
         bank, off = self._at(q)
@@ -80,6 +88,19 @@ class Host:
     t: torch.Tensor
 
 
+@dataclass
+class Pages:
+    """Pages [first, first + count) of a View, read in order: the copy that ttnn.slice makes of a tile range."""
+
+    src: View
+    first: int
+    count: int
+
+    def read(self, q):
+        assert q < self.count
+        return self.src.read(self.first + q)
+
+
 def _page_bytes():
     return {ttnn.float32: 4096, ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088}
 
@@ -93,13 +114,14 @@ def _alias_view(t, shape, dtype, check_slices=True):
 def _narrow(t, dim, start, length):
     assert all(t.shape[i] == 1 for i in range(dim)), "narrow: dims before dim must be 1"
     assert dim < len(t.shape) - 2, "the emulation narrows outer dims only"
+    n = len(t.buf.banks)
     per = t.pages // t.shape[dim]
     first = start * per
-    assert first % BANKS == 0, "narrow: the first page must be on bank 0"
+    assert first % n == 0, "narrow: the first page must be on bank 0"
     assert start + length <= t.shape[dim]
     shape = list(t.shape)
     shape[dim] = length
-    return View(t.buf, t.base + first // BANKS * t.page, t.page, tuple(shape))
+    return View(t.buf, t.base + first // n * t.page, t.page, tuple(shape))
 
 
 def _copy(src, dst):
@@ -124,6 +146,10 @@ def _to_layout(t, layout, memory_config=None):
 
 
 def _reshape(t, shape):
+    if isinstance(t, View):
+        view = View(t.buf, t.base, t.page, tuple(shape))
+        assert view.pages == t.pages and t.shape[-1] == shape[-1], "a tile reshape that keeps the tile order"
+        return view
     return Host(t.t.reshape(shape))
 
 
@@ -131,11 +157,42 @@ def _embedding(table, rows, layout=None, memory_config=None):
     return Host(rows.t[table.t.reshape(-1)].reshape(1, -1, rows.t.shape[-1]))
 
 
+def _slice(t, start, end, memory_config=None):
+    """Rows [start[-2], end[-2]) of a [1, 1, R, W] tile View: a run of whole tile rows."""
+    assert isinstance(t, View) and t.shape[:2] == (1, 1) and (start[-1], end[-1]) == (0, t.shape[-1])
+    assert start[-2] % 32 == 0 and end[-2] % 32 == 0
+    per_row = t.shape[-1] // 32
+    return Pages(t, start[-2] // 32 * per_row, (end[-2] - start[-2]) // 32 * per_row)
+
+
+def _source_page(src, q, page):
+    """Tile q of a paged_fill_cache input: a device View, a slice of one, or host rows [1, 1, R, 32] (row-major
+    tiles)."""
+    if isinstance(src, Host):
+        rows = src.t.reshape(-1, 32)[32 * q : 32 * (q + 1)]
+        data = rows.contiguous().view(torch.uint8).numpy().tobytes()
+    else:
+        data = src.read(q)
+    assert len(data) == page
+    return data
+
+
+def _paged_fill_cache(cache, src, table, batch_idx=0):
+    """Input tile i * pages_per_slice + j goes to page table[i] * pages_per_slice + j of the cache, pages_per_slice
+    the pages of one dim-0 slice of the cache."""
+    per = cache.pages // cache.shape[0]
+    for i, s in enumerate(table.host.reshape(-1).tolist()):
+        for j in range(per):
+            cache.write(s * per + j, _source_page(src, i * per + j, cache.page))
+
+
 @pytest.fixture
 def dram(monkeypatch):
     """Route the ttnn calls of GdnBlockState's read and copy paths to the emulation."""
     monkeypatch.setattr(ttnn.experimental, "alias_view", _alias_view, raising=False)
+    monkeypatch.setattr(ttnn.experimental, "paged_fill_cache", _paged_fill_cache, raising=False)
     monkeypatch.setattr(ttnn, "narrow", _narrow)
+    monkeypatch.setattr(ttnn, "slice", _slice)
     monkeypatch.setattr(ttnn, "copy", _copy)
     monkeypatch.setattr(ttnn, "to_layout", _to_layout)
     monkeypatch.setattr(ttnn, "reshape", _reshape)
@@ -150,41 +207,44 @@ def dram(monkeypatch):
 
 
 def _buffer(layout, num_blocks, gen):
-    """A K or V buffer of ``num_blocks`` blocks full of random bytes (stale content of earlier owners)."""
-    size = num_blocks * layout.bank_bytes
+    """A K or V buffer of ``num_blocks`` blocks full of random bytes (stale content of earlier owners): every bank
+    holds the rows of ceil(num_blocks * tiles / banks) tiles, as the allocator gives an interleaved buffer."""
+    size = -(-num_blocks * layout.tiles // layout.banks) * layout.kv_tile_bytes
     banks = [
         bytearray(torch.randint(0, 256, (size,), dtype=torch.uint8, generator=gen).numpy().tobytes())
-        for _ in range(BANKS)
+        for _ in range(layout.banks)
     ]
     tile = layout.kv_tile_bytes
     return View(Buf(banks), 0, tile, (num_blocks, 1, layout.block_size, layout.tiles * 1024 // layout.block_size))
 
 
-def _state(kv_bf8=True, block_size=1024, seed=0):
+def _state(kv_bf8=True, block_size=1024, seed=0, banks=8, dims=QWEN_27B_TP8):
     """A GdnBlockState over 4 layer slots (12 GDN layers in 3 groups) on emulated K and V buffers."""
     gen = torch.Generator().manual_seed(seed)
-    lay = plan_gdn_block_layout(block_size=block_size, kv_heads=1, head_dim=256, kv_bf8=kv_bf8, dims=QWEN_27B_TP8)
+    lay = plan_gdn_block_layout(block_size=block_size, kv_heads=1, head_dim=256, kv_bf8=kv_bf8, dims=dims, banks=banks)
     st = object.__new__(gbs.GdnBlockState)
-    st.mesh, st.bmax, st.num_blocks, st.dims, st.layout = None, BMAX, NUM_BLOCKS, QWEN_27B_TP8, lay
+    st.mesh, st.bmax, st.num_blocks, st.dims, st.layout = None, BMAX, NUM_BLOCKS, dims, lay
     st.kv_caches = [(_buffer(lay, NUM_BLOCKS, gen), _buffer(lay, NUM_BLOCKS, gen)) for _ in range(4)]
     slot_views = []
     for k, v in st.kv_caches:
         rec_k = _alias_view(k, lay.fp32_view_shape(NUM_BLOCKS), ttnn.float32)
         rec_v = _alias_view(v, lay.fp32_view_shape(NUM_BLOCKS), ttnn.float32) if lay.heads_v else None
         slot_views.append((rec_k, rec_v, _alias_view(v, lay.hist_view_shape(NUM_BLOCKS), ttnn.bfloat16)))
-    plugin = PluginLayout(ATTENTION, 1, 256, QWEN_27B_TP8, kv_bf8, num_blocks=NUM_BLOCKS, block_size=block_size)
+    plugin = PluginLayout(ATTENTION, 1, 256, dims, kv_bf8, num_blocks=NUM_BLOCKS, block_size=block_size)
+    ws_rows = -(-dims.nv * dims.head_pages // banks)
     st.layers = {}
     for group in plugin.gdn_groups:
         for slot, i in enumerate(group):
             rec_k, rec_v, hist = slot_views[slot]
-            ws = View(Buf([bytearray(QWEN_27B_TP8.nv * 2 * 4096) for _ in range(BANKS)]), 0, 4096, (1, 6, 128, 128))
+            ws = View(Buf([bytearray(ws_rows * 4096) for _ in range(banks)]), 0, 4096, (1, dims.nv, 128, 128))
             st.layers[i] = SimpleNamespace(
                 name=i,
                 state_blocks=SimpleNamespace(rec_k=rec_k, rec_v=rec_v, hist=hist, idx=f"idx{i}"),
                 rec_state=ws,
-                conv_carry=Host(torch.zeros(1, 3, QWEN_27B_TP8.conv_dim, dtype=torch.bfloat16)),
+                conv_carry=Host(torch.zeros(1, 3, dims.conv_dim, dtype=torch.bfloat16)),
             )
-    st._unpack_table = Host(unpack_history_rows(QWEN_27B_TP8).reshape(1, -1))
+    st._unpack_table = Host(unpack_history_rows(dims).reshape(1, -1))
+    st._pack_table = Host(pack_history_rows(dims).reshape(1, -1))
     st._group_names = st._group_layers = None
     st._decode_blocks, st._index_refs = {}, {}
     return st, plugin
@@ -234,12 +294,12 @@ def _write_slot_state(st, slot, block, gen):
 
 
 def _block_bytes(st, block):
-    """Every byte of ``block`` in every K and V buffer."""
+    """Every byte of ``block`` in every K and V buffer: its tiles [block * tiles, (block + 1) * tiles)."""
+    lay = st.layout
     out = []
     for k, v in st.kv_caches:
         for buf in (k, v):
-            lo, hi = block * st.layout.bank_bytes, (block + 1) * st.layout.bank_bytes
-            out.append(b"".join(bytes(bank[lo:hi]) for bank in buf.buf.banks))
+            out.append(b"".join(buf.read(p) for p in range(block * lay.tiles, (block + 1) * lay.tiles)))
     return out
 
 
@@ -327,11 +387,14 @@ def test_row_blocks():
 # --------------------------------------------------------------------------------- reads and decode crossings
 
 
+@pytest.mark.parametrize("geometry", GEOMETRIES, ids=GEOMETRY_IDS)
 @pytest.mark.parametrize("block", [5, 6], ids=["odd", "even"])
-def test_restore_loads_the_start_block_and_leaves_it_unchanged(dram, block):
+def test_restore_loads_the_start_block_and_leaves_it_unchanged(dram, block, geometry):
     """restore puts the start block's recurrent state into the batch-1 workspace page for page and rebuilds the
-    convolution carry from the packed history, for even and odd bfloat8_b 1024-token blocks. No block changes."""
-    st, plugin = _state()
+    convolution carry from the packed history, for even and odd bfloat8_b 1024-token blocks on 8 banks and for blocks
+    of every offset pattern on 7. No block changes."""
+    banks, dims, block_size, kv_bf8 = geometry
+    st, plugin = _state(kv_bf8=kv_bf8, block_size=block_size, banks=banks, dims=dims)
     gen = torch.Generator().manual_seed(block)
     want = _write_full_state(st, block, gen)
     before = [_block_bytes(st, b) for b in range(NUM_BLOCKS)]
@@ -348,12 +411,15 @@ def test_restore_loads_the_start_block_and_leaves_it_unchanged(dram, block):
     assert same, "restore changed a block"
 
 
-def test_decode_crossing_copies_the_start_state_into_the_destination(dram):
+@pytest.mark.parametrize("geometry", GEOMETRIES, ids=GEOMETRY_IDS)
+def test_decode_crossing_copies_the_start_state_into_the_destination(dram, geometry):
     """A decode row whose start block differs from its destination (its token crosses into a new block-table column)
     gets the start block's full state copied into the destination before the index names the destination, between
-    odd and even bfloat8_b 1024-token blocks in both directions (groups 0 and 2: 1 -> 4 and 3 -> 6, group 1: 2 -> 5);
-    the start block is unchanged, and a row whose start block is its destination copies nothing."""
-    st, plugin = _state()
+    odd and even bfloat8_b 1024-token blocks in both directions on 8 banks (groups 0 and 2: 1 -> 4 and 3 -> 6, group
+    1: 2 -> 5), and between blocks of different offsets on 7; the start block is unchanged, and a row whose start
+    block is its destination copies nothing."""
+    banks, dims, block_size, kv_bf8 = geometry
+    st, plugin = _state(kv_bf8=kv_bf8, block_size=block_size, banks=banks, dims=dims)
     gen = torch.Generator().manual_seed(7)
     starts, dests, stay = (1, 2, 3), (4, 5, 6), (7, 8, 9)
     want = {b: _write_full_state(st, b, gen) for b in starts + stay}
@@ -370,6 +436,42 @@ def test_decode_crossing_copies_the_start_state_into_the_destination(dram):
         want_idx = st.layout.index_host([dests[g], stay[g], 0, 0], NUM_BLOCKS)
         for i in layers:
             assert torch.equal(index[f"idx{i}"], want_idx)
+
+
+@pytest.mark.parametrize("geometry", GEOMETRIES, ids=GEOMETRY_IDS)
+@pytest.mark.parametrize("block", [5, 6], ids=["odd", "even"])
+def test_a_write_puts_the_workspace_into_the_block_only(dram, block, geometry):
+    """_write_state puts a GDN layer's batch-1 workspace into ``block`` through the paged_fill_cache tables of
+    write_tables: the recurrent state page for page (half-head slices on 8 banks, single pages on 7) and the packed
+    convolution history. No other block changes, also on 7 banks, where the tile rows a block holds on only some
+    banks lie next to the state."""
+    banks, dims, block_size, kv_bf8 = geometry
+    st, plugin = _state(kv_bf8=kv_bf8, block_size=block_size, banks=banks, dims=dims, seed=block)
+    gen = torch.Generator().manual_seed(100 + block)
+    slot = 1
+    i = plugin.gdn_groups[0][slot]
+    dn = st.layers[i]
+    heads = []
+    for h in range(dims.nv):
+        pages = torch.randn(16, 1024, generator=gen).numpy().tobytes()
+        for j in range(16):
+            dn.rec_state.write(16 * h + j, pages[j * 4096 : (j + 1) * 4096])
+        heads.append(pages)
+    carry = torch.randn(1, dims.kconv - 1, dims.conv_dim, generator=gen).to(torch.bfloat16)
+    dn.conv_carry = Host(carry)
+    before = [_block_bytes(st, b) for b in range(NUM_BLOCKS)]
+    tables = [SimpleNamespace(host=torch.tensor([ids], dtype=torch.int32)) for ids in st.layout.write_tables(block)]
+    st._write_state(dn, tables=tables)
+    got_heads, tiles = _slot_state(st, slot, block)
+    same = got_heads == heads
+    assert same, "recurrent state"
+    packed = carry.reshape(-1, 32)[pack_history_rows(dims)].reshape(dims.nv, HIST_SLOTS, 32, 32)
+    assert torch.equal(tiles, packed), "packed history"
+    after = [_block_bytes(st, b) for b in range(NUM_BLOCKS)]
+    changed = [b for b in range(NUM_BLOCKS) if after[b] != before[b]]
+    assert changed == [block]
+    changed_slots = [j for j in range(2 * len(st.kv_caches)) if after[block][j] != before[block][j]]
+    assert changed_slots == ([2 * slot, 2 * slot + 1] if st.layout.heads_k else [2 * slot + 1])
 
 
 # ------------------------------------------------------------------------------------------ adapter orchestration

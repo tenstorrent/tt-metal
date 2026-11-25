@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Host-only (no device): the KV cache specs of Qwen36ForCausalLM and the place of the GDN state in a KV cache block
-(tt/kv_cache_spec.py).
+(tt/kv_cache_spec.py), on 8 DRAM banks (Blackhole P150, P300) and on 7 (P100a, Bin6 Blackhole Galaxy).
 
 The spec tests need vLLM and skip without it; the geometry, packing and page index tests need only torch.
 Qwen3.6-27B / Qwen3.8-27B text config: 64 layers, 16 full attention (4 KV heads x 256) and 48 GDN (16 key heads, 48
@@ -14,6 +14,7 @@ import torch
 from models.demos.blackhole.qwen36.tests.gdn_block_helpers import PluginLayout
 from models.demos.blackhole.qwen36.tt.kv_cache_spec import (
     BF16_PAGE_BYTES,
+    DRAM_BANKS_ENV,
     FP32_PAGE_BYTES,
     HIST_SLOTS,
     GdnDims,
@@ -23,6 +24,7 @@ from models.demos.blackhole.qwen36.tt.kv_cache_spec import (
     pack_conv_taps,
     pack_history_rows,
     plan_gdn_block_layout,
+    planned_dram_banks,
     unpack_history_rows,
 )
 
@@ -59,6 +61,24 @@ SUPPORTED = [
     (QWEN_35B, 4, True, 2048),
 ]
 IDS = ["27b-tp8-bf16", "27b-tp8-bf8", "27b-tp4-bf16", "27b-tp4-bf8", "35b-tp4-bf16", "35b-tp4-bf8"]
+# The same on 7 DRAM banks, where a power-of-two block's tiles do not spread evenly over the banks.
+SUPPORTED_7 = [
+    (QWEN_27B, 8, False, 1024),
+    (QWEN_27B, 8, True, 2048),
+    (QWEN_27B, 4, False, 1024),
+    (QWEN_27B, 4, True, 2048),
+    (QWEN_35B, 4, False, 1024),
+    (QWEN_35B, 4, True, 2048),
+]
+# (checkpoint, TP, bfloat8_b K / V, block size, DRAM banks) of every supported layout.
+LAYOUTS = [(*c, 8) for c in SUPPORTED] + [(*c, 7) for c in SUPPORTED_7]
+LAYOUT_IDS = [f"{i}-8banks" for i in IDS] + [f"{i}-7banks" for i in IDS]
+
+
+@pytest.fixture(autouse=True)
+def _planned_for_8_banks(monkeypatch):
+    """The specs plan for QWEN36_DRAM_BANKS; tests that want 7 banks set it themselves."""
+    monkeypatch.delenv(DRAM_BANKS_ENV, raising=False)
 
 
 def _layout(tc, tp, bf8, banks=8, block_size=None):
@@ -71,14 +91,14 @@ def _layout(tc, tp, bf8, banks=8, block_size=None):
     )
 
 
-@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
-def test_block_size_is_the_smallest_that_holds_the_state(tc, tp, bf8, block):
-    got, layout = _layout(tc, tp, bf8)
-    assert got == block
+@pytest.mark.parametrize("tc, tp, bf8, block, banks", LAYOUTS, ids=LAYOUT_IDS)
+def test_block_size_is_the_smallest_that_holds_the_state(tc, tp, bf8, block, banks):
+    got, layout = _layout(tc, tp, bf8, banks=banks)
+    assert got == block and layout.banks == banks
     smaller = [b for b in (64, 128, 256, 512, 1024) if b < block]
     for b in smaller:
         with pytest.raises(GdnLayoutError):  # allow-pytest.raises: host test without the repo conftest
-            _layout(tc, tp, bf8, block_size=b)
+            _layout(tc, tp, bf8, banks=banks, block_size=b)
 
 
 def test_tp8_bf8_1024_matches_the_operator_test_layout():
@@ -91,46 +111,60 @@ def test_tp8_bf8_1024_matches_the_operator_test_layout():
     assert [lay.first_fp32_page(b) for b in range(4)] == [0, 72, 136, 208]
 
 
-def _owned_bytes(lay, block):
-    """{(buffer, bank): set of byte offsets} one request's state uses in ``block`` (buffer 0 = K, 1 = V)."""
-    used = {}
+def _used_ranges(lay, block):
+    """[(buffer, bank, first byte, end byte)]: the pages one request's state uses in ``block`` (buffer 0 = K, 1 = V),
+    each page at bank p % banks, row p // banks of its view."""
+    used = []
     nb, hp = lay.banks, lay.dims.head_pages
     first = lay.first_fp32_page(block)
     for h in range(lay.dims.nv):
         buf, page0 = (0, first + hp * h) if h < lay.heads_k else (1, first + hp * (h - lay.heads_k))
-        for p in range(page0, page0 + hp):
-            row = p // nb
-            used.setdefault((buf, p % nb), set()).update(range(row * FP32_PAGE_BYTES, (row + 1) * FP32_PAGE_BYTES))
-    for h in range(lay.dims.nv):
-        for s in range(HIST_SLOTS):
-            p = lay.hist_page(block, h) + s
-            row = p // nb
-            bytes_ = set(range(row * BF16_PAGE_BYTES, (row + 1) * BF16_PAGE_BYTES))
-            assert not bytes_ & used.get((1, p % nb), set()), f"block {block}: history page {p} overlaps a state page"
-            used.setdefault((1, p % nb), set()).update(bytes_)
+        used += [
+            (buf, p % nb, p // nb * FP32_PAGE_BYTES, (p // nb + 1) * FP32_PAGE_BYTES) for p in range(page0, page0 + hp)
+        ]
+    for p in range(lay.hist_page(block, 0), lay.hist_page(block, 0) + HIST_SLOTS * lay.dims.nv):
+        used.append((1, p % nb, p // nb * BF16_PAGE_BYTES, (p // nb + 1) * BF16_PAGE_BYTES))
     return used
 
 
-@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
-def test_state_pages_stay_inside_their_block(tc, tp, bf8, block):
-    """Every state and history page of a block lies inside the bytes the block owns on its bank, and blocks never
-    share a byte, for every block offset pattern."""
-    _, lay = _layout(tc, tp, bf8)
-    blocks = range(2 * FP32_PAGE_BYTES // BF16_PAGE_BYTES + 3)
-    seen = {}
-    for b in blocks:
-        for key, offsets in _owned_bytes(lay, b).items():
-            lo, hi = b * lay.bank_bytes, (b + 1) * lay.bank_bytes
-            assert min(offsets) >= lo and max(offsets) < hi, f"block {b} uses bytes outside [{lo}, {hi}) of {key}"
-            assert not offsets & seen.get(key, set()), f"block {b} shares bytes with another block on {key}"
-            seen.setdefault(key, set()).update(offsets)
+def _tile_blocks(lay, bank, lo, hi):
+    """The blocks whose K / V tiles hold bytes [lo, hi) of ``bank``: tile row r of a bank is tile r * banks + bank of
+    the buffer, and block b holds tiles [b * tiles, (b + 1) * tiles)."""
+    rows = range(lo // lay.kv_tile_bytes, (hi - 1) // lay.kv_tile_bytes + 1)
+    return {(r * lay.banks + bank) // lay.tiles for r in rows}
 
 
-@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
-def test_index_follows_the_rows_blocks(tc, tp, bf8, block):
+@pytest.mark.parametrize("tc, tp, bf8, block, banks", LAYOUTS, ids=LAYOUT_IDS)
+def test_state_pages_stay_inside_their_block(tc, tp, bf8, block, banks):
+    """Every state and history page of a block lies in tiles of that block on its bank, and no two pages of a block
+    share a byte, for every block offset pattern: so blocks never share a byte. On 7 banks a block's tiles do not
+    spread evenly, and the tile rows a block holds on only some banks stay unused."""
+    _, lay = _layout(tc, tp, bf8, banks=banks)
+    for b in range(2 * banks * FP32_PAGE_BYTES // BF16_PAGE_BYTES + 3):
+        used = sorted(_used_ranges(lay, b))
+        for buf, bank, lo, hi in used:
+            assert _tile_blocks(lay, bank, lo, hi) == {b}, f"block {b}: bytes [{lo}, {hi}) of bank {bank} buffer {buf}"
+        for (buf, bank, lo, hi), (buf2, bank2, lo2, _) in zip(used, used[1:]):
+            assert (buf, bank) != (buf2, bank2) or hi <= lo2, f"block {b}: two pages share bank {bank} of buffer {buf}"
+
+
+@pytest.mark.parametrize("tc, tp, bf8, block, banks", LAYOUTS, ids=LAYOUT_IDS)
+def test_views_fit_the_buffers(tc, tp, bf8, block, banks):
+    """The float32 and bfloat16 views need no more bytes per bank than the K / V buffer has: whole page rows up to the
+    end of the last block's tiles on every bank."""
+    _, lay = _layout(tc, tp, bf8, banks=banks)
+    for n in (1, 5, 33):
+        allocated = -(-n * lay.tiles // banks) * lay.kv_tile_bytes
+        assert lay.fp32_pages(n) // banks * FP32_PAGE_BYTES <= allocated
+        assert lay.fp32_pages(n) % banks == 0 and lay.fp32_pages(n) % lay.slice_pages == 0
+        assert lay.hist_view_shape(n)[0] // banks * BF16_PAGE_BYTES <= allocated
+
+
+@pytest.mark.parametrize("tc, tp, bf8, block, banks", LAYOUTS, ids=LAYOUT_IDS)
+def test_index_follows_the_rows_blocks(tc, tp, bf8, block, banks):
     """state_page_idx column r names the pages of row r's block; padding rows name block 0; moving a request to
     another row only moves its column (no state moves)."""
-    _, lay = _layout(tc, tp, bf8)
+    _, lay = _layout(tc, tp, bf8, banks=banks)
     num_blocks, nv, hp = 40, lay.dims.nv, lay.dims.head_pages
     idx = lay.index_host([7, 0, 12, 0], num_blocks)
     assert idx.shape == (2 * nv, 4) and idx.dtype == torch.int32
@@ -144,40 +178,48 @@ def test_index_follows_the_rows_blocks(tc, tp, bf8, block):
     assert torch.equal(moved[:, 0], idx[:, 2]) and torch.equal(moved[:, 1], idx[:, 0])
 
 
-@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
-def test_write_tables_name_the_pages_the_index_reads(tc, tp, bf8, block):
+@pytest.mark.parametrize("tc, tp, bf8, block, banks", LAYOUTS, ids=LAYOUT_IDS)
+def test_write_tables_name_the_pages_the_index_reads(tc, tp, bf8, block, banks):
     """The paged_fill_cache tables that write a block's state address the same pages that gdn_decode_step's index
-    reads: half-head slices of 8 float32 pages of the K (then V) view, one history page per table entry."""
-    _, lay = _layout(tc, tp, bf8)
+    reads: slices of the K (then V) view (half heads of 8 float32 pages on 8 banks, single pages on 7), one history
+    page per table entry."""
+    _, lay = _layout(tc, tp, bf8, banks=banks)
     num_blocks, nv, hp = 40, lay.dims.nv, lay.dims.head_pages
+    sp = lay.slice_pages
+    assert sp == (8 if banks == 8 else 1) and hp == 16
     for b in (1, 2, 7):
         idx = lay.index_host([b], num_blocks)[:, 0].tolist()
         tables = lay.write_tables(b)
-        k_pages = [8 * s for s in tables[0]]
-        assert k_pages == [idx[h] + 8 * j for h in range(lay.heads_k) for j in range(2)]
+        k_pages = [sp * s for s in tables[0]]
+        assert k_pages == [idx[h] + sp * j for h in range(lay.heads_k) for j in range(hp // sp)]
         if lay.heads_v:
             p_k = lay.fp32_pages(num_blocks)
-            v_pages = [8 * s + p_k for s in tables[1]]
-            assert v_pages == [idx[h] + 8 * j for h in range(lay.heads_k, nv) for j in range(2)]
+            v_pages = [sp * s + p_k for s in tables[1]]
+            assert v_pages == [idx[h] + sp * j for h in range(lay.heads_k, nv) for j in range(hp // sp)]
         assert tables[-1] == [idx[nv + h] + s for h in range(nv) for s in range(HIST_SLOTS)]
-        assert len(tables) == (3 if lay.heads_v else 2) and hp == 16
+        assert len(tables) == (3 if lay.heads_v else 2)
 
 
-def test_page_index_values_fit_the_views():
+@pytest.mark.parametrize("banks", [8, 7])
+def test_page_index_values_fit_the_views(banks):
     """The largest index value addresses the last pages of the float32 views (K view then V view, gdn_decode_step's
     two pools) and of the history view."""
-    _, lay = _layout(QWEN_27B, 8, True)
+    _, lay = _layout(QWEN_27B, 8, True, banks=banks)
     n = 33
     idx = lay.index_host([n - 1], n)
     nv, hp = lay.dims.nv, lay.dims.head_pages
     assert int(idx[:nv].max()) + hp <= 2 * lay.fp32_pages(n)
-    assert int(idx[nv:].max()) + HIST_SLOTS <= n * lay.hist_tiles
-    assert lay.fp32_view_shape(n)[0] * 8 == lay.fp32_pages(n)
+    assert int(idx[nv:].max()) + HIST_SLOTS <= lay.hist_view_shape(n)[0]
+    assert lay.fp32_view_shape(n)[0] * lay.slice_pages == lay.fp32_pages(n)
+    if banks == 8:
+        assert lay.hist_view_shape(n)[0] == n * lay.hist_tiles
 
 
 def test_unsupported_geometries_name_the_reason():
     dims = GdnDims.from_text_config(QWEN_27B, 8)
-    with pytest.raises(GdnLayoutError, match="do not spread evenly over 7"):  # allow-pytest.raises: no repo conftest
+    # On 7 banks a 1024-token bfloat8_b block holds 8 or 9 whole float32 rows (56 or 63 pages) per buffer: K takes
+    # no head (3 heads would leave the V heads' workspace copy off bank 0), and V cannot take all 6.
+    with pytest.raises(GdnLayoutError, match="K holds 0 of 6 GDN value heads"):  # allow-pytest.raises: no conftest
         plan_gdn_block_layout(block_size=1024, kv_heads=1, head_dim=256, kv_bf8=True, dims=dims, banks=7)
     with pytest.raises(GdnLayoutError, match="not whole bfloat16 history pages"):  # allow-pytest.raises: see above
         plan_gdn_block_layout(block_size=512, kv_heads=1, head_dim=256, kv_bf8=True, dims=dims)
@@ -248,14 +290,68 @@ def test_float32_pages_start_at_one_offset_except_bf8_tp8(tc, tp, bf8, block):
     assert leads == ([0, 2048] * 4 if (tp, bf8) == (8, True) else [0] * 8)
 
 
-@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
-def test_block_views_start_on_bank_0(tc, tp, bf8, block):
+@pytest.mark.parametrize("tc, tp, bf8, block, banks", LAYOUTS, ids=LAYOUT_IDS)
+def test_block_views_start_on_bank_0(tc, tp, bf8, block, banks):
     """GdnBlockState reads and copies a block through ttnn.narrow, which needs the first page of the narrowed range on
-    bank 0: the first state page of every block and the first page of its packed history."""
-    _, lay = _layout(tc, tp, bf8)
-    for b in range(lay.banks + 3):
+    bank 0: the first state page of every block, the first page of its packed history, and the page of the batch-1
+    workspace where restore puts the V heads. The state starts on a whole slice of the float32 views."""
+    _, lay = _layout(tc, tp, bf8, banks=banks)
+    for b in range(2 * lay.banks + 3):
         assert lay.first_fp32_page(b) % lay.banks == 0
+        assert lay.first_fp32_page(b) % lay.slice_pages == 0
         assert lay.hist_page(b, 0) % lay.banks == 0
+    if lay.heads_v:
+        assert lay.state_slices(lay.heads_k) * lay.slice_pages % lay.banks == 0
+
+
+def test_7_bank_layouts():
+    """On 7 banks at TP=8, K holds every GDN value head and V only the history; at TP=4 K holds 7 heads, so the V
+    heads start at workspace page 112, on bank 0."""
+    want = {
+        (8, False): (1024, 6),
+        (8, True): (2048, 6),
+        (4, False): (1024, 7),
+        (4, True): (2048, 7),
+    }
+    for (tp, bf8), (block, heads_k) in want.items():
+        got, lay = _layout(QWEN_27B, tp, bf8, banks=7)
+        assert (got, lay.heads_k, lay.slice_pages, lay.slice_shape) == (block, heads_k, 1, [32, 32])
+        assert not lay.even_spread and not lay.fp32_slices_are_blocks and not lay.hist_slices_are_blocks
+        assert not lay.workspace_spreads_evenly
+    _, lay = _layout(QWEN_27B, 8, True, banks=7)
+    assert lay.fp32_view_shape(10) == [lay.fp32_pages(10), 1, 32, 32]
+    assert lay.workspace_view_shape() == [96, 1, 32, 32] and lay.workspace_rows_shape() == [1, 1, 96 * 32, 32]
+
+
+@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
+def test_8_bank_layouts_keep_the_even_spread_offsets(tc, tp, bf8, block):
+    """With an even spread block b owns bytes [b * s, (b + 1) * s) of every bank, s = tiles / banks * tile bytes: the
+    state starts at the first whole float32 row from b * s, the history at hist_first bfloat16 pages after the
+    block's first bfloat16 page, and the views hold the half-head slices of 8 pages."""
+    _, lay = _layout(tc, tp, bf8)
+    s, n = lay.bank_bytes, lay.banks
+    assert lay.even_spread and lay.slice_pages == 8 and lay.slice_shape == [64, 128]
+    for b in range(20):
+        assert lay.owned_bytes(b) == (b * s, (b + 1) * s)
+        assert lay.first_fp32_page(b) == n * -(-b * s // FP32_PAGE_BYTES)
+        assert lay.hist_page(b, 1) == b * lay.hist_tiles + lay.hist_first + HIST_SLOTS
+    assert lay.fp32_view_shape(9) == [n * (9 * s // FP32_PAGE_BYTES) // 8, 1, 64, 128]
+    assert lay.hist_view_shape(9) == [9 * lay.hist_tiles, 1, 32, 32]
+    assert lay.workspace_view_shape() == [2 * lay.dims.nv, 1, 64, 128]
+    assert lay.workspace_rows_shape() == [1, 1, lay.dims.nv * 128, 128]
+    assert lay.state_writes(3) == [(0, lay.first_fp32_page(3) // 8, 0, 2 * lay.heads_k)] + (
+        [(1, lay.first_fp32_page(3) // 8, 2 * lay.heads_k, 2 * lay.dims.nv)] if lay.heads_v else []
+    )
+
+
+def test_planned_dram_banks(monkeypatch):
+    assert planned_dram_banks() == 8
+    monkeypatch.setenv(DRAM_BANKS_ENV, "7")
+    assert planned_dram_banks() == 7
+    for bad in ("0", "seven", "-7"):
+        monkeypatch.setenv(DRAM_BANKS_ENV, bad)
+        with pytest.raises(ValueError, match="not a positive DRAM bank count"):  # allow-pytest.raises: no conftest
+            planned_dram_banks()
 
 
 def _devices(n):
@@ -331,11 +427,14 @@ def vllm_kv():
     )
 
 
-@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
-def test_specs(vllm_kv, tc, tp, bf8, block):
+@pytest.mark.parametrize("tc, tp, bf8, block, banks", LAYOUTS, ids=LAYOUT_IDS)
+def test_specs(vllm_kv, monkeypatch, tc, tp, bf8, block, banks):
+    """The specs plan for QWEN36_DRAM_BANKS (8 when unset)."""
     from models.demos.blackhole.qwen36.tt.kv_cache_spec import qwen36_kv_cache_spec
 
     kv_iface, _ = vllm_kv
+    if banks != 8:
+        monkeypatch.setenv(DRAM_BANKS_ENV, str(banks))
     specs = qwen36_kv_cache_spec(tc, tp, kv_bf8=bf8, mamba_block_size=65000, min_block_size=64)
     attn = {n: s for n, s in specs.items() if isinstance(s, kv_iface.FullAttentionSpec)}
     gdn = {n: s for n, s in specs.items() if isinstance(s, kv_iface.MambaSpec)}
