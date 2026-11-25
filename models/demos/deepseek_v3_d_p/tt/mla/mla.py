@@ -613,6 +613,14 @@ class ttMLA:
         )
         sdpa_fidelity = getattr(config, "mla_chunked_sdpa_matmul_fidelity", None)
         self.sdpa_matmul_fidelity = getattr(ttnn.MathFidelity, sdpa_fidelity) if sdpa_fidelity and is_chunked else None
+        # sparse_sdpa's compute config (DSA layers). Unset (every model today): no config is passed and the op
+        # keeps its own defaults, HiFi2 with the approximate exp and fp32 DEST only for fp8 q/kv -- the fast
+        # path. Setting any of these builds a config; the ones left unset keep those defaults.
+        self._sparse_sdpa_compute = {
+            key: value
+            for key in ("math_fidelity", "math_approx_mode", "fp32_dest_acc_en")
+            if (value := getattr(config, f"mla_sparse_sdpa_{key}", None)) is not None
+        }
         self.clamp_attention_to_valid_end = bool(getattr(config, "mla_chunked_clamp_attention_to_valid_end", False))
 
         # Create CCL object for semaphore management
@@ -3010,6 +3018,21 @@ class ttMLA:
             rows //= self.tp_factor
         return (1, 1, rows, min(self.config.index_topk, self.max_seq_len))
 
+    def _sparse_sdpa_compute_kernel_config(self, q: ttnn.Tensor, kv: ttnn.Tensor):
+        """sparse_sdpa's compute config from the mla_sparse_sdpa_* config fields, or None (the op's defaults)."""
+        if not self._sparse_sdpa_compute:
+            return None
+        fidelity = self._sparse_sdpa_compute.get("math_fidelity", "HiFi2")
+        fp8 = ttnn.DataType.FP8_E4M3 in (q.dtype, kv.dtype)
+        return ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=getattr(ttnn.MathFidelity, fidelity) if isinstance(fidelity, str) else fidelity,
+            math_approx_mode=bool(self._sparse_sdpa_compute.get("math_approx_mode", True)),
+            # fp8 q/kv are tilized through a 32-bit DEST, so the op needs it on for them.
+            fp32_dest_acc_en=bool(self._sparse_sdpa_compute.get("fp32_dest_acc_en", fp8)),
+            packer_l1_acc=False,
+        )
+
     def _sparse_mla(
         self,
         q: ttnn.Tensor,
@@ -3100,6 +3123,7 @@ class ttMLA:
                 block_cyclic_cache_tp_sharded=True,
             )
         )
+        sparse_sdpa_config = self._sparse_sdpa_compute_kernel_config(q_rm, kvpe.storage)
         attention = lambda: ttnn.transformer.sparse_sdpa(
             q_rm,
             kvpe.storage,
@@ -3108,6 +3132,7 @@ class ttMLA:
             kv_format=kvpe.format.sparse_sdpa_format,
             scale=self.scale,
             k_chunk_size=k_chunk,
+            compute_kernel_config=sparse_sdpa_config,
             cache_batch_idx=cache_batch_idx,
             **block_cyclic,
         )
