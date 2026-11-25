@@ -27,14 +27,14 @@ void kernel_main() {
     using InOp = experimental::LLKOperand<static_cast<DataFormat>(in_desc.format), in_desc.shape>;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    experimental::unary_bcast_init<BroadcastType::ROW>(InOp(in_cb.read_address()));
+    experimental::unary_bcast_src_to_dest_init<BroadcastType::ROW>(InOp(in_cb.read_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         tile_regs_acquire();
         cb0.wait_front(1);
         cb16.reserve_back(1);
 
-        experimental::unary_bcast_tile<BroadcastType::ROW>(InOp(in_cb.read_address()), 0);
+        experimental::unary_bcast_src_to_dest_tile<BroadcastType::ROW>(InOp(in_cb.read_address()), 0);
 
         tile_regs_commit();
         tile_regs_wait();
