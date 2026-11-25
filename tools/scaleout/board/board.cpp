@@ -468,8 +468,8 @@ private:
 };
 
 // Quasar board: one Grendel package, one chip. Its Keraunos Ethernet channels 0 and 1 are external ports; the
-// Keraunos test chips (tests/tt_metal/tt_fabric/keraunos) list two Ethernet cores each. Assumed, pending the package's
-// real port map.
+// Keraunos test chips (tests/tt_metal/tt_fabric/keraunos) list two Ethernet cores each. Assumed: not taken from a port
+// map of the package.
 class QUASAR : public Board {
 public:
     QUASAR() : Board(create_quasar_ports(), create_quasar_internal_connections(), BoardType::QUASAR_BOARD) {}
