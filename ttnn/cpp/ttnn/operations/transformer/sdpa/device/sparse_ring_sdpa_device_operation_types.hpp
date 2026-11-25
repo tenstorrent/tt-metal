@@ -99,6 +99,8 @@ struct SparseRingSDPAParams {
 //                 softmax as pooled entries. Absent: the softmax covers the kept blocks only.
 //   block_counts  optional, uint32 row-major [1, 1, 1, n_blocks_pad]: real tokens per global block. Absent: the
 //                 geometric lengths.
+//   logical_n_tensor  optional, uint32 [1, 1, 1, 1] in DRAM: the logical length, read on device. Present: logical_n
+//                 is ignored and leaves the program hash.
 struct SparseRingSDPAInputs {
     Tensor input_q;
     Tensor input_k;
@@ -109,6 +111,7 @@ struct SparseRingSDPAInputs {
     std::optional<Tensor> pooled_k;
     std::optional<Tensor> pooled_v;
     std::optional<Tensor> block_counts;
+    std::optional<Tensor> logical_n_tensor;
 
     // The pooled route (Sol-Attn's correction for the dropped blocks) runs iff pooled K / V are given.
     bool pooled_route() const { return pooled_k.has_value(); }

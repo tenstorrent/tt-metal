@@ -158,7 +158,7 @@ train:
   pr_gate:
     bh_p150b_civ2: 10
   unit:
-    bh_p100: 105
+    bh_p100: 145
     bh_p150b_civ2: 90
     bh_quietbox_2: 50
     bh_galaxy: 20
@@ -409,7 +409,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 502
     bh_galaxy: 75
-    bh_sc1: 370
+    bh_sc1: 410
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114

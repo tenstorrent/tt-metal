@@ -470,6 +470,8 @@ class TtPrefillRuntime:
         experts_per_chip = self.config.model_cfg.NUM_ROUTED_EXPERTS // num_devices
         mtp_cached = mtp_cache_path.is_dir()
         if mtp_cached:
+            from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, resolve_has_indexer
+
             init_checker(mtp_cache_path)
             mtp_cached = TtMTPPredictor.check_cache_complete(
                 mtp_cache_path,
@@ -477,6 +479,10 @@ class TtPrefillRuntime:
                 cache_name_prefix=MTP_CACHE_PREFIX,
                 experts_per_chip=experts_per_chip,
                 model_cfg=self.config.model_cfg,
+                # Same rule as TtMTPPredictor.kv_only_module: one KV-only level loads only its cache-filling weights.
+                kv_only=k == 1 and self.config.kv_only_last_mtp_level,
+                owns_indexer=resolve_has_indexer(self.hf_config)
+                and not indexer_layer_is_reused(self.hf_config, mtp_cfg.mtp_layer_idx),
             )
             init_checker(eff)
         mtp_state_dict = {"mtp": {}, "layer": {}}

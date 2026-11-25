@@ -298,6 +298,7 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
+    void check_circular_buffers_bound();
     void compile(MeshDevice* mesh_device);
     // Compile/finalize the workload and commit its kernel binaries to DRAM without executing it.
     // The returned owner must remain alive while commands referencing the binary addresses may execute.
