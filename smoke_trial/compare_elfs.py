@@ -41,6 +41,8 @@ for a, b, strip in pairs:
         "compared": len(common),
         "different": len(diff),
         "examples": diff[:5],
+        "files": diff,
+        "outside_fused_tests": [e for e in diff if "/fused_tests/" not in e],
     }
 readelf = objcopy.replace("objcopy", "readelf")
 for a, b in [("build-pr", "build-nodedup")]:
