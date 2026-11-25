@@ -22,7 +22,7 @@
 
 namespace tt::tt_metal::experimental {
 
-// arch: Target architecture (WORMHOLE_B0, BLACKHOLE or QUASAR; QUASAR supports 1 chip only)
+// arch: Target architecture (WORMHOLE_B0, BLACKHOLE or QUASAR)
 // num_chips: Number of chips to simulate (1, 2, 4, 8, 32, etc.)
 void configure_mock_mode(tt::ARCH arch, uint32_t num_chips = 1);
 

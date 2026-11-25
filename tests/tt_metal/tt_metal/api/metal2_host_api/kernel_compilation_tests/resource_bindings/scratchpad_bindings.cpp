@@ -33,8 +33,7 @@ using test_helpers::ProgramSpecTestGen1;
 // Like the TensorAccessor smoke above, these JIT-compile a kernel that constructs a Scratchpad from
 // its binding token (scratch::<name>) and reads back the CRTA-injected base (via local_mem()) — exercising the
 // generated scratch:: namespace + ScratchpadBindingToken object and the device-side Scratchpad ctor. Compile-only on
-// the mock Wormhole device (Gen1: the Quasar TRISC firmware isn't built in this checkout, so a
-// Quasar JIT-compile would fail at link).
+// the mock Wormhole device.
 
 TEST_F(ProgramSpecTestGen1, CPU_ScratchpadAccessorBindingJITSmokeDMKernel) {
     // DM kernel constructs a Scratchpad from its binding token and reads the CRTA-injected base (via local_mem()).
