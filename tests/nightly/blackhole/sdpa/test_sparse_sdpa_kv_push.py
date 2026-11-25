@@ -295,8 +295,8 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
     cache_tokens = _TRACE_1M_START + chunk_global
     page_bytes = 704  # 656 B scaled FP8 rows, DRAM aligned
     planner = SparseKvPushPlanner(mesh_device, links)
-    attention_grid, push_grid = planner.grids(query_rows)
-    manager = planner.prefetch_manager(query_rows)
+    attention_grid, push_grid = planner.grids()
+    manager = planner.manager()
     _, kv_dtype, kv_width = _KV_FORMATS[kv_fmt]
     buffer_rows = ttnn.experimental.sparse_kv_push_output_spec(
         mesh_device,

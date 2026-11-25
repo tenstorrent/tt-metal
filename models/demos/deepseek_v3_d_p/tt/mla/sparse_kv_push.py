@@ -132,65 +132,39 @@ class SparseKvPushPlanner:
         # Pushes enqueued by part name (ALL / PREFIX / REST), counted on the host as they are enqueued.
         self.pushes = Counter()
 
-    def grids(self, query_rows: int):
-        """(attention, push) core grids for sparse_sdpa beside the next layer's prefix push.
-
-        The push takes the fewest whole columns that hold its cores (prefetch_links links), in their rows furthest from
-        the Ethernet row; attention takes every other column. More attention cores make sparse_sdpa faster even when
-        its busiest core keeps the same token count (GLM, 160 rows: 100 cores beat 80), and the push still finishes
-        well before attention when the top-k is concentrated."""
+    def grids(self):
+        """(main, push) core grids of the pushes beside other work: the rest beside a shared layer's q stem and the next
+        layer's prefix beside attention. The push takes prefetch_links' cores in the fewest last columns, in their rows
+        furthest from the Ethernet row; main takes every other core (sparse_sdpa runs on all of them, more attention
+        cores being faster even at the same per-core token count). main_columns is how many whole columns main keeps,
+        for rectangular matmul grids."""
         grid = self.mesh_device.compute_with_storage_grid_size()
         push_cores = self.prefetch_links * PUSH_CORES_PER_LINK
         push_cols = divup(push_cores, grid.y)
-        attention_cols = grid.x - push_cols
-        if attention_cols <= 0 or query_rows <= 0:
-            raise ValueError(f"no room for {push_cores} push cores beside attention on a {grid.x}x{grid.y} grid")
-        push_rows = divup(push_cores, push_cols)
-        attention = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(attention_cols - 1, grid.y - 1))]
-        )
-        push = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(attention_cols, grid.y - push_rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
-        )
-        return attention, push
-
-    def prefetch_manager(self, query_rows: int):
-        """Sub-device manager that runs attention (sub-device 0, whose cores sparse_sdpa takes by default) beside the
-        next layer's prefix push (sub-device 1), on grids(query_rows). Created at init, outside any trace capture."""
-        if query_rows not in self._managers:
-            attention, push = self.grids(query_rows)
-            self._managers[query_rows] = self.mesh_device.create_sub_device_manager(
-                [ttnn.SubDevice([attention]), ttnn.SubDevice([push])], 0
-            )
-        return self._managers[query_rows]
-
-    def q_stem_grids(self):
-        """(q stem, push) core grids for a shared layer's rest push beside its q stem: the push on prefetch_links'
-        cores in the bottom rows of the last columns (where the prefix push runs beside attention), the q stem on every
-        other core. q_stem_columns is how many whole columns the q stem keeps, for rectangular matmul grids."""
-        grid = self.mesh_device.compute_with_storage_grid_size()
-        push_cores = self.prefetch_links * PUSH_CORES_PER_LINK
-        push_cols = divup(push_cores, grid.y)
+        if push_cols >= grid.x:
+            raise ValueError(f"no room for {push_cores} push cores beside other work on a {grid.x}x{grid.y} grid")
         push_rows = divup(push_cores, push_cols)
         x0, y0 = grid.x - push_cols, grid.y - push_rows
         push = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-        q_stem = ttnn.CoreRangeSet(
+        main = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x0 - 1, grid.y - 1)),
                 ttnn.CoreRange(ttnn.CoreCoord(x0, 0), ttnn.CoreCoord(grid.x - 1, y0 - 1)),
             ]
         )
-        self.q_stem_columns = x0
-        return q_stem, push
+        self.main_columns = x0
+        return main, push
 
-    def q_stem_manager(self):
-        """Sub-device manager of q_stem_grids (q stem on sub-device 0, push on 1), created on first use."""
-        if "q_stem" not in self._managers:
-            q_stem, push = self.q_stem_grids()
-            self._managers["q_stem"] = self.mesh_device.create_sub_device_manager(
-                [ttnn.SubDevice([q_stem]), ttnn.SubDevice([push])], 0
+    def manager(self):
+        """Sub-device manager of grids(): main on sub-device 0 (whose cores sparse_sdpa takes by default), the push on
+        sub-device 1. Both pushes use it, so a shared layer keeps it loaded from its rest push through attention.
+        Created on first use, which the warm pass does before any trace capture."""
+        if "beside" not in self._managers:
+            main, push = self.grids()
+            self._managers["beside"] = self.mesh_device.create_sub_device_manager(
+                [ttnn.SubDevice([main]), ttnn.SubDevice([push])], 0
             )
-        return self._managers["q_stem"]
+        return self._managers["beside"]
 
     def release(self):
         """Unregister the sub-device managers before the mesh closes."""

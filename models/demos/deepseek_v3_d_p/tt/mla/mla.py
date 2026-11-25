@@ -457,6 +457,7 @@ class ttMLA:
         # top-k/KV-gather sub-device-manager load and clear, which cannot occur inside one trace.
         self._trace_controller = None
         self._stem_cores = None  # the q stem's cores while a shared layer's rest push runs beside it
+        self._beside_manager_loaded = False  # the push manager, loaded by the rest push and cleared after attention
         self.layer_idx = layer_idx
         self._first_layer_idx = first_layer_idx or 0  # this pipeline stage's first layer
         self.kv_only = kv_only
@@ -859,8 +860,8 @@ class ttMLA:
         self._push_prefetch_grids = None
         if self._push_next_layer or self._push_own_layer:
             query_rows = self.indexer_indices_shape()[2]
-            self._push_prefetch_grids = self._push.grids(query_rows)
-            self._push_prefetch_manager = self._push.prefetch_manager(query_rows)
+            self._push_prefetch_grids = self._push.grids()
+            self._push_prefetch_manager = self._push.manager()
         if requested_overlap_profile is not None:
             if not self._has_indexer or self.kv_only or self._indexer_reuse:
                 # Only a non-kv-only full indexer layer can launch the two independent branches. Shared
@@ -1114,7 +1115,7 @@ class ttMLA:
         pc = kwargs.get("program_config")
         if self._stem_cores is None or pc is None:
             return kwargs
-        cols = self._push.q_stem_columns
+        cols = self._push.main_columns
         grid = ttnn.CoreCoord(cols, pc.compute_with_storage_grid_size.y)
         if isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig):  # 2D: N spread over the columns
             per_core_n = -(-pc.per_core_N * pc.compute_with_storage_grid_size.x // cols)
@@ -2548,8 +2549,12 @@ class ttMLA:
             actual_end=actual_end,
             metadata=metadata,
         )
-        q_cores, push_cores = self._push.q_stem_grids()
-        with self._sub_device_manager(self._push.q_stem_manager()):
+        q_cores, push_cores = self._push.grids()
+        # The manager stays loaded through attention, which runs on the same sub-device 0 beside the next layer's prefix
+        # push on sub-device 1 (_beside_prefetch clears it): one sub-device switch fewer.
+        self._load_sub_device_manager(self._push.manager())
+        self._beside_manager_loaded = True
+        try:
             pushed = self._push_own_rows(
                 tt_kvpe=None,
                 indices=indices,
@@ -2576,6 +2581,10 @@ class ttMLA:
                 )
             finally:
                 self._stem_cores = None
+        except BaseException:
+            self._beside_manager_loaded = False
+            self._clear_sub_device_manager()
+            raise
         return tt_q, None, tt_kv_nope, kv_intermediates, pushed
 
     def _sparse_pushed_attn(
@@ -2831,26 +2840,40 @@ class ttMLA:
 
         return prefetch
 
-    @contextlib.contextmanager
-    def _sub_device_manager(self, manager_id):
-        """Loads a sub-device manager for the block and clears it after, even on error: clearing joins every
-        sub-device's work. Through the trace controller when there is one, so a capture records both."""
+    def _load_sub_device_manager(self, manager_id):
+        """Loads a sub-device manager; through the trace controller when there is one, so a capture records it."""
         if self._trace_controller is not None:
             self._trace_controller.sub_device_load(manager_id)
         else:
             self.mesh_device.load_sub_device_manager(manager_id)
+
+    def _clear_sub_device_manager(self):
+        """Clears the loaded sub-device manager, which joins every sub-device's work."""
+        if self._trace_controller is not None:
+            self._trace_controller.sub_device_clear()
+        else:
+            self.mesh_device.clear_loaded_sub_device_manager()
+
+    @contextlib.contextmanager
+    def _sub_device_manager(self, manager_id):
+        """Loads a sub-device manager for the block and clears it after, even on error."""
+        self._load_sub_device_manager(manager_id)
         try:
             yield
         finally:
-            if self._trace_controller is not None:
-                self._trace_controller.sub_device_clear()
-            else:
-                self.mesh_device.clear_loaded_sub_device_manager()
+            self._clear_sub_device_manager()
 
     def _beside_prefetch(self, prefetch, attention):
-        """Runs attention on sub-device 0 while prefetch pushes on sub-device 1; clearing the manager joins both."""
-        with self._sub_device_manager(self._push_prefetch_manager):
+        """Runs attention on sub-device 0 while prefetch pushes on sub-device 1; clearing the manager joins both. The
+        manager may already be loaded, by the rest push beside the q stem."""
+        if not self._beside_manager_loaded:
+            with self._sub_device_manager(self._push_prefetch_manager):
+                return prefetch(attention)
+        self._beside_manager_loaded = False
+        try:
             return prefetch(attention)
+        finally:
+            self._clear_sub_device_manager()
 
     def _prepare_sparse_kv_prefix(
         self,
@@ -3316,6 +3339,8 @@ class ttMLA:
             cache_batch_idx=cache_batch_idx,
             **block_cyclic,
         )
+        if prefetch is None and self._beside_manager_loaded:  # no prefix to pre-send: still clear the manager after
+            prefetch = lambda run: run()
         out = attention() if prefetch is None else self._beside_prefetch(prefetch, attention)
         if q_rm is not q:  # the caller owns q
             ttnn.deallocate(q_rm)
