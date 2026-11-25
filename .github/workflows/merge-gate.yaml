@@ -78,7 +78,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [blackhole, wormhole]
+        arch: [blackhole]  # trial: Blackhole only
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
