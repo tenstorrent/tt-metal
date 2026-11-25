@@ -27,7 +27,7 @@
       --dist=worksteal -m "$PYTEST_MARKERS" \
       --splits 2 --group 1 \
       --timeout=60 \
-      --junitxml=pytest-report-wormhole-1.xml .
+      --junitxml=pytest-report-wormhole-1.xml -o "python_files=test_*.py" .
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -48,7 +48,7 @@
       --dist=worksteal -m "$PYTEST_MARKERS" \
       --splits 2 --group 2 \
       --timeout=60 \
-      --junitxml=pytest-report-wormhole-2.xml .
+      --junitxml=pytest-report-wormhole-2.xml -o "python_files=test_*.py" .
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -69,7 +69,7 @@
       --dist=worksteal -m "$PYTEST_MARKERS" \
       --splits 3 --group 1 --splitting-algorithm least_duration \
       --timeout=60 \
-      --junitxml=pytest-report-blackhole-1.xml .
+      --junitxml=pytest-report-blackhole-1.xml -o "python_files=test_*.py" .
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -90,7 +90,7 @@
       --dist=worksteal -m "$PYTEST_MARKERS" \
       --splits 3 --group 2 --splitting-algorithm least_duration \
       --timeout=60 \
-      --junitxml=pytest-report-blackhole-2.xml .
+      --junitxml=pytest-report-blackhole-2.xml -o "python_files=test_*.py" .
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -111,7 +111,7 @@
       --dist=worksteal -m "$PYTEST_MARKERS" \
       --splits 3 --group 3 --splitting-algorithm least_duration \
       --timeout=60 \
-      --junitxml=pytest-report-blackhole-3.xml .
+      --junitxml=pytest-report-blackhole-3.xml -o "python_files=test_*.py" .
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
