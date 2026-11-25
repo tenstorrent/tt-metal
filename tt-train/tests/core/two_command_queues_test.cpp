@@ -11,10 +11,19 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-TEST(TwoCommandQueuesTest, Cq0ReadsTheCq1WriteAfterTheEvent) {
-    auto& ctx = ttml::autograd::ctx();
-    ctx.open_device(tt::tt_metal::distributed::MeshShape(1, 1), {}, /*num_command_queues=*/2);
-    auto* device = &ctx.get_device();
+class TwoCommandQueuesTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 1), {}, /*num_command_queues=*/2);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(TwoCommandQueuesTest, Cq0ReadsTheCq1WriteAfterTheEvent) {
+    auto* device = &ttml::autograd::ctx().get_device();
     EXPECT_EQ(device->num_hw_cqs(), 2);
 
     std::vector<float> values(32 * 64);
@@ -30,6 +39,4 @@ TEST(TwoCommandQueuesTest, Cq0ReadsTheCq1WriteAfterTheEvent) {
     const auto written = ttnn::events::record_mesh_event(device, ttnn::QueueId(1));
     ttnn::events::wait_for_mesh_event(ttnn::QueueId(0), written);
     EXPECT_EQ(on_device.cpu(/*blocking=*/true, ttnn::QueueId(0)).to_vector<float>(), values);
-
-    ctx.close_device();
 }
