@@ -7,10 +7,10 @@
 // Once per kernel: reduce scaler (helper), group map (NoC zeros + 32 one-hot halfword stores per tile),
 // ones tiles on unit roots (one 64 B row by RISC-V, then NoC self-copies doubling to a tile).
 // Per block (one unit = image n, channel slice [wt0, wt0 + W), rows [row_start, row_start + rows_core)):
-//   pass 1: chunks 0..B-K-1 -> cb_input_stream (or cb_input_rm sticks for RM),
-//           chunks B-K..B-1 -> cb_input_resident + cb_input_resident_keep (both views, lockstep; TILE)
+//   pass 1: chunks 0..B-1 -> the input ring (TILE: both views, lockstep) or cb_input_rm sticks (RM);
+//           compute keeps the last K chunks on the keep view
 //   affine: gamma / beta slices -> staging -> row 0 of faces 0/1 of W tiles (stall shadow of the combine)
-//   pass 2: re-read chunks 0..B-K-1 -> cb_input_stream (cb_input_rm for RM)
+//   pass 2: re-read chunks 0..B-K-1 -> the input ring (cb_input_rm for RM)
 // Every chunk pushes the nominal T pages (ragged tail: only rows_valid tile-rows transferred).
 //
 // raw_api rows (op_design.md API Mapping): map one-hot stores and affine row-0 copies have no helper
@@ -26,9 +26,8 @@
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
-constexpr uint32_t cb_input_stream = 1;
-constexpr uint32_t cb_input_resident = 2;
-constexpr uint32_t cb_input_resident_keep = 3;
+constexpr uint32_t cb_input_tiles = 2;  // input ring, pass-1 view (alias group A)
+constexpr uint32_t cb_input_keep = 3;   // input ring, pass-2 view (same bytes, pushed in lockstep)
 constexpr uint32_t cb_reduce_scaler = 6;
 constexpr uint32_t cb_group_map = 12;
 constexpr uint32_t cb_gamma_rows = 13;
@@ -62,6 +61,7 @@ void kernel_main() {
     constexpr uint32_t HW = HT * 32;
     constexpr uint32_t AFFINE_PAGE_BYTES = WT_TOTAL * TILE_SEGMENT_BYTES;
     constexpr uint32_t SLICE_BYTES = W * TILE_SEGMENT_BYTES;
+    constexpr uint32_t NUM_AFFINE = (HAS_GAMMA ? 1 : 0) + (HAS_BETA ? 1 : 0);
 
     uint32_t arg = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(arg++);
@@ -104,21 +104,20 @@ void kernel_main() {
 
     if (is_root) {
         // Ones tiles (R): matmul in0 of the root's sender sum. RISC-V writes one 64 B row, then NoC
-        // self-copies double it to a full tile and replicate the tile.
+        // self-copies keep doubling the filled prefix until all R tiles are ones (one NoC site).
         cb_reserve_back(cb_ones_tiles, R);
         const uint32_t ones_base = get_write_ptr(cb_ones_tiles);
         volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones_base);
         for (uint32_t i = 0; i < 16; ++i) {
             words[i] = BF16_ONE_PAIR;
         }
-        for (uint32_t filled = 64; filled < BF16_TILE_BYTES; filled *= 2) {
-            noc_async_read(get_noc_addr(ones_base), ones_base + filled, filled);
+        constexpr uint32_t ONES_BYTES = R * BF16_TILE_BYTES;
+        for (uint32_t filled = 64; filled < ONES_BYTES;) {
+            const uint32_t len = filled < ONES_BYTES - filled ? filled : ONES_BYTES - filled;
+            noc_async_read(get_noc_addr(ones_base), ones_base + filled, len);
             noc_async_read_barrier();
+            filled += len;
         }
-        for (uint32_t t = 1; t < R; ++t) {
-            noc_async_read(get_noc_addr(ones_base), ones_base + t * BF16_TILE_BYTES, BF16_TILE_BYTES);
-        }
-        noc_async_read_barrier();
         cb_push_back(cb_ones_tiles, R);
     }
 
@@ -137,16 +136,65 @@ void kernel_main() {
             cb_push_back(cb_ones_tiles, R);
         }
 
-        // Reads one chunk (nominal T pages) into its destination CB(s).
-        auto read_chunk = [&](uint32_t j, bool resident) {
+        // One loop, one site per NoC pattern (kernel text must fit the kernel-config ring under --dev):
+        // steps 0..B-1 are pass 1, step B emits the affine rows (stall shadow of the combine), and steps
+        // B+1..B+first_resident re-read the non-resident head for pass 2.
+        for (uint32_t step = 0; step <= num_chunks + first_resident; ++step) {
+            if (step == num_chunks) {
+                // ---------------- Affine rows ----------------
+                if constexpr (NUM_AFFINE > 0) {
+                    const uint32_t staging = get_write_ptr(cb_affine_staging);
+                    uint64_t src_noc[NUM_AFFINE];
+                    if constexpr (HAS_GAMMA) {
+                        src_noc[0] = gamma_acc.get_noc_addr(0, wt0 * TILE_SEGMENT_BYTES);
+                    }
+                    if constexpr (HAS_BETA) {
+                        src_noc[NUM_AFFINE - 1] = beta_acc.get_noc_addr(0, wt0 * TILE_SEGMENT_BYTES);
+                    }
+                    for (uint32_t k = 0; k < NUM_AFFINE; ++k) {
+                        noc_async_read(src_noc[k], staging + k * SLICE_BYTES, SLICE_BYTES);
+                    }
+                    noc_async_read_barrier();
+
+                    // Row 0 of faces 0/1 of each tile carries the 32 channels (consumed with BroadcastDim::Row).
+                    for (uint32_t k = 0; k < NUM_AFFINE; ++k) {
+                        const uint32_t cb = (HAS_GAMMA && k == 0) ? cb_gamma_rows : cb_beta_rows;
+                        const uint32_t src = staging + k * SLICE_BYTES;
+                        cb_reserve_back(cb, W);
+                        const uint32_t dst = get_write_ptr(cb);
+                        if (blk == 0) {
+                            // Rows 1..31 stay zero across blocks (the W-page ring returns to its base).
+                            DataflowBuffer rows_dfb(cb);
+                            noc.async_write_zeros(rows_dfb, W * BF16_TILE_BYTES);
+                            noc.write_zeros_l1_barrier();
+                        }
+                        for (uint32_t wt = 0; wt < W; ++wt) {
+                            volatile tt_l1_ptr uint32_t* sv =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + wt * TILE_SEGMENT_BYTES);
+                            volatile tt_l1_ptr uint32_t* d0 =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + wt * BF16_TILE_BYTES);
+                            volatile tt_l1_ptr uint32_t* d1 =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + wt * BF16_TILE_BYTES + 512);
+                            for (uint32_t i = 0; i < 8; ++i) {
+                                d0[i] = sv[i];
+                                d1[i] = sv[8 + i];
+                            }
+                        }
+                        cb_push_back(cb, W);
+                    }
+                }
+                continue;
+            }
+
+            // ---------------- One chunk (nominal T pages) ----------------
+            const uint32_t j = step < num_chunks ? step : step - num_chunks - 1;
             const uint32_t row0 = row_start + j * CHUNK_HT;
             const uint32_t rows_left = rows_core - j * CHUNK_HT;
             const uint32_t rows_valid = rows_left < CHUNK_HT ? rows_left : CHUNK_HT;
             if constexpr (IS_RM) {
                 cb_reserve_back(cb_input_rm, T);
-                const uint32_t l1 = get_write_ptr(cb_input_rm);
                 uint32_t page = n * HW + row0 * 32;
-                uint32_t dst = l1;
+                uint32_t dst = get_write_ptr(cb_input_rm);
                 for (uint32_t s = 0; s < rows_valid * 32; ++s) {
                     noc_async_read(in_acc.get_noc_addr(page, wt0 * TILE_SEGMENT_BYTES), dst, SLICE_BYTES);
                     ++page;
@@ -155,12 +203,10 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_input_rm, T);
             } else {
-                const uint32_t cb = resident ? cb_input_resident : cb_input_stream;
-                cb_reserve_back(cb, T);
-                if (resident) {
-                    cb_reserve_back(cb_input_resident_keep, T);
-                }
-                uint32_t dst = get_write_ptr(cb);
+                // Both views must have room: the keep view still holds the resident tail until pass 2.
+                cb_reserve_back(cb_input_tiles, T);
+                cb_reserve_back(cb_input_keep, T);
+                uint32_t dst = get_write_ptr(cb_input_tiles);
                 for (uint32_t r = 0; r < rows_valid; ++r) {
                     const uint32_t tile0 = (n * HT + row0 + r) * WT_TOTAL + wt0;
                     for (uint32_t wt = 0; wt < W; ++wt) {
@@ -169,64 +215,9 @@ void kernel_main() {
                     }
                 }
                 noc_async_read_barrier();
-                cb_push_back(cb, T);
-                if (resident) {
-                    cb_push_back(cb_input_resident_keep, T);
-                }
+                cb_push_back(cb_input_tiles, T);
+                cb_push_back(cb_input_keep, T);
             }
-        };
-
-        // ---------------- Pass 1 ----------------
-        for (uint32_t j = 0; j < num_chunks; ++j) {
-            read_chunk(j, j >= first_resident);
-        }
-
-        // ---------------- Affine rows (stall shadow of the combine) ----------------
-        if constexpr (HAS_GAMMA || HAS_BETA) {
-            const uint32_t staging = get_write_ptr(cb_affine_staging);
-            constexpr uint32_t beta_offset = HAS_GAMMA ? SLICE_BYTES : 0;
-            if constexpr (HAS_GAMMA) {
-                noc_async_read(gamma_acc.get_noc_addr(0, wt0 * TILE_SEGMENT_BYTES), staging, SLICE_BYTES);
-            }
-            if constexpr (HAS_BETA) {
-                noc_async_read(beta_acc.get_noc_addr(0, wt0 * TILE_SEGMENT_BYTES), staging + beta_offset, SLICE_BYTES);
-            }
-            noc_async_read_barrier();
-
-            // Row 0 of faces 0/1 of each tile carries the 32 channels (consumed with BroadcastDim::Row).
-            auto emit_rows = [&](uint32_t cb, uint32_t src) {
-                cb_reserve_back(cb, W);
-                const uint32_t dst = get_write_ptr(cb);
-                if (blk == 0) {
-                    DataflowBuffer rows_dfb(cb);
-                    noc.async_write_zeros(rows_dfb, W * BF16_TILE_BYTES);
-                    noc.write_zeros_l1_barrier();
-                }
-                for (uint32_t wt = 0; wt < W; ++wt) {
-                    volatile tt_l1_ptr uint32_t* s =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + wt * TILE_SEGMENT_BYTES);
-                    volatile tt_l1_ptr uint32_t* d0 =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + wt * BF16_TILE_BYTES);
-                    volatile tt_l1_ptr uint32_t* d1 =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + wt * BF16_TILE_BYTES + 512);
-                    for (uint32_t i = 0; i < 8; ++i) {
-                        d0[i] = s[i];
-                        d1[i] = s[8 + i];
-                    }
-                }
-                cb_push_back(cb, W);
-            };
-            if constexpr (HAS_GAMMA) {
-                emit_rows(cb_gamma_rows, staging);
-            }
-            if constexpr (HAS_BETA) {
-                emit_rows(cb_beta_rows, staging + beta_offset);
-            }
-        }
-
-        // ---------------- Pass 2 re-reads (non-resident head) ----------------
-        for (uint32_t j = 0; j < first_resident; ++j) {
-            read_chunk(j, false);
         }
     }
 }

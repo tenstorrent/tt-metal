@@ -11,7 +11,7 @@ Host-side planning:
     balanced row split and a gather/mcast combine on slot 0; U >= P -> cpi = 1 and whole-unit
     blocks round-robined contiguously over the P cores.
   * residency: K_alloc = min(B_max, K_max) resident chunks (or the TUNING_OVERRIDES value,
-    clamped to [0, K_max]); the stream CB exists iff B_max > K_alloc.
+    clamped to [0, K_max]); the input ring adds the streaming depth iff B_max > K_alloc.
 
 Every block knob (gx, chunk_ht, K, buffer depths, max_cores) is defined once here and flows into
 CB sizes and kernel args.
@@ -46,9 +46,8 @@ MCAST_FIRST_SEMAPHORE_ID = 1
 # CB indices (semantic names; see op_design.md "Circular Buffers")
 # ---------------------------------------------------------------------------
 CB_INPUT_RM = 0
-CB_INPUT_STREAM = 1
-CB_INPUT_RESIDENT = 2
-CB_INPUT_RESIDENT_KEEP = 3
+CB_INPUT_TILES = 2  # input ring, pass-1 view (alias group A)
+CB_INPUT_KEEP = 3  # input ring, pass-2 view (alias group A)
 CB_X_SQUARED = 4
 CB_OUTPUT_TILES = 5
 CB_REDUCE_SCALER = 6
@@ -97,13 +96,17 @@ def _tuning():
     return dict(TUNING_OVERRIDES)
 
 
+def input_ring_pages(*, T, K_alloc, stream, is_rm):
+    """Input ring capacity: the resident tail plus the streaming depth (TILE: D_IN, RM: 1 tilized chunk)."""
+    return K_alloc * T + int(stream) * (1 if is_rm else D_IN) * T
+
+
 def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta):
     """Per-core L1 footprint of every CB (l1_ledger.md "Per-core footprint")."""
     hg, hb = int(has_gamma), int(has_beta)
     bf16_pages = (
         (D_RM * T if is_rm else 0)
-        + (int(stream) * ((1 if is_rm else D_IN) * T))
-        + K_alloc * T
+        + input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm)
         + 1  # reduce scaler
         + R  # ones tiles
         + W * (1 + hg + hb)  # map, gamma rows, beta rows
@@ -411,18 +414,16 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     cbs = []
     if is_rm:
         cbs.append(_cb(D_RM * T * BF16_TILE_BYTES, cores, [(CB_INPUT_RM, bf16, BF16_TILE_BYTES)]))
-    if plan.stream:
-        depth = 1 if is_rm else D_IN
-        cbs.append(_cb(depth * T * BF16_TILE_BYTES, cores, [(CB_INPUT_STREAM, bf16, BF16_TILE_BYTES)]))
-    if plan.K_alloc > 0:
-        # Alias group A: two FIFO views of the resident tail, pushed in lockstep.
-        cbs.append(
-            _cb(
-                plan.K_alloc * T * BF16_TILE_BYTES,
-                cores,
-                [(CB_INPUT_RESIDENT, bf16, BF16_TILE_BYTES), (CB_INPUT_RESIDENT_KEEP, bf16, BF16_TILE_BYTES)],
-            )
+    # Alias group A: the input ring, K_alloc resident chunks + the streaming depth, as two FIFO views pushed in
+    # lockstep. Pass 1 pops every chunk from CB_INPUT_TILES; CB_INPUT_KEEP drops the streamed head in pass 1 and
+    # holds the resident tail (then the re-read head) for pass 2.
+    cbs.append(
+        _cb(
+            input_ring_pages(T=T, K_alloc=plan.K_alloc, stream=plan.stream, is_rm=is_rm) * BF16_TILE_BYTES,
+            cores,
+            [(CB_INPUT_TILES, bf16, BF16_TILE_BYTES), (CB_INPUT_KEEP, bf16, BF16_TILE_BYTES)],
         )
+    )
     # Alias group B: x^2 (pass 1) / output (pass 2), disjoint lifetimes.
     cbs.append(
         _cb(
@@ -484,15 +485,20 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     out_cb_pages = max(F32_TILE_BYTES * T, D_OUT * T * BF16_TILE_BYTES) // BF16_TILE_BYTES
     compute_ct = [W, h, int(is_rm), hg, hb, R, exp_sbw, out_cb_pages]
 
-    writer_ct = [W, h, R, plan.Wt, plan.Ht, plan.gx, out_page_bytes]
-    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    # The writer is built once per role (IS_ROOT is compile-time): each binary carries only its own mcast pipe
+    # (sender on unit roots, receiver elsewhere) and only the root's gather-wait / zero-fill code.
+    def writer_ct(is_root):
+        ct = [W, h, R, plan.Wt, plan.Ht, plan.gx, out_page_bytes, int(is_root)]
+        ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+        return ct
 
     inv_n_bits = _f32_bits(1.0 / (plan.HW * plan.Cg))
     eps_bits = _f32_bits(eps)
 
     reader_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
-    writer_rt = ttnn.RuntimeArgs()
+    writer_rt = {1: ttnn.RuntimeArgs(), 0: ttnn.RuntimeArgs()}
+    writer_cores = {1: [], 0: []}
     for wk in plan.work:
         x, y = wk.core.x, wk.core.y
         B_core = _ceil_div(wk.rows_core, h)
@@ -510,14 +516,14 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             wk.is_root,
         ]
         compute_rt[x][y] = [wk.num_blocks, wk.rows_core, K_core, wk.is_root, inv_n_bits, eps_bits]
-        writer_rt[x][y] = [
+        writer_cores[wk.is_root].append(wk.core)
+        writer_rt[wk.is_root][x][y] = [
             output_tensor.buffer_address(),
             wk.unit_start,
             wk.num_blocks,
             wk.row_start,
             wk.rows_core,
             K_core,
-            wk.is_root,
             wk.slot,
             root_virt.x,
             root_virt.y,
@@ -531,13 +537,17 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         runtime_args=reader_rt,
         config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
     )
-    writer_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_b_writer.cpp"),
-        core_ranges=cores,
-        compile_time_args=writer_ct,
-        runtime_args=writer_rt,
-        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
-    )
+    writer_kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_b_writer.cpp"),
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in writer_cores[role]]),
+            compile_time_args=writer_ct(role),
+            runtime_args=writer_rt[role],
+            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
+        )
+        for role in (1, 0)
+        if writer_cores[role]
+    ]
     compute_config = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi3,
         math_approx_mode=False,
@@ -569,6 +579,6 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         ttnn.McastFixedSenderConfig(sender_index=0),
         ttnn.McastCoreOrder.RowMajor,
     )
-    mcast.attach(descriptor, "mcast", [writer_kernel], MCAST_FIRST_SEMAPHORE_ID)
-    descriptor.kernels = [reader_kernel, writer_kernel, compute_kernel]
+    mcast.attach(descriptor, "mcast", writer_kernels, MCAST_FIRST_SEMAPHORE_ID)
+    descriptor.kernels = [reader_kernel, *writer_kernels, compute_kernel]
     return descriptor

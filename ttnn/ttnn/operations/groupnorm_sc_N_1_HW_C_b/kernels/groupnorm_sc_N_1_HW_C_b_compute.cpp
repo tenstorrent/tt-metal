@@ -35,9 +35,11 @@ using namespace compute_kernel_lib;
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
-constexpr uint32_t cb_input_stream = 1;
-constexpr uint32_t cb_input_resident = 2;
-constexpr uint32_t cb_input_resident_keep = 3;
+// The input ring: one allocation, two FIFO views pushed in lockstep (alias group A). Pass 1 consumes every
+// chunk through cb_input_tiles; cb_input_keep drops the streamed head chunks during pass 1 and holds the
+// resident tail for pass 2, followed by the re-read head - exactly the pass-2 order.
+constexpr uint32_t cb_input_tiles = 2;
+constexpr uint32_t cb_input_keep = 3;
 constexpr uint32_t cb_x_squared = 4;
 constexpr uint32_t cb_output_tiles = 5;
 constexpr uint32_t cb_reduce_scaler = 6;
@@ -69,6 +71,11 @@ constexpr uint32_t T = CHUNK_HT * W;
 // b' lives in cb_chan_work when beta is present (5e writes it back in place), else in cb_chan_shift.
 constexpr uint32_t cb_bprime = HAS_BETA ? cb_chan_work : cb_chan_shift;
 
+// RM tilize is called from three sites (pass 1 / pre-tilize / pass 2) with a runtime extent; it is emitted
+// once rather than inlined per site, so the five kernel binaries fit the kernel-config ring also under the
+// watcher/assert (--dev) build. (The map matmuls stay inlined: measured, an out-of-line body grows the code.)
+#define NOINLINE_BLOCK_OP __attribute__((noinline))
+
 // Push (and for a CB-backed producer, reserve) the nominal-T pad of a ragged chunk.
 ALWI void push_pad(uint32_t cb, uint32_t pad) {
     if (pad > 0) {
@@ -77,25 +84,32 @@ ALWI void push_pad(uint32_t cb, uint32_t pad) {
     }
 }
 
-// RM: tilize one chunk (rows_valid tile-rows of W tiles) from cb_input_rm into x_cb, then consume the
-// rm pad pages and push the x_cb pad so both rings advance by the nominal T.
-template <uint32_t x_cb>
-ALWI void tilize_chunk(uint32_t rows_valid) {
+// RM: tilize one chunk (rows_valid tile-rows of W tiles) from cb_input_rm into the input ring, then consume
+// the rm pad pages and push the pad so every ring advances by the nominal T (both ring views in lockstep).
+NOINLINE_BLOCK_OP void tilize_chunk(uint32_t rows_valid) {
     DataflowBuffer rm_dfb(cb_input_rm);
-    DataflowBuffer x_dfb(x_cb);
-    tilize<W, cb_input_rm, x_cb>(rm_dfb, x_dfb, rows_valid);
+    DataflowBuffer x_dfb(cb_input_tiles);
+    cb_reserve_back(cb_input_keep, T);
+    tilize<W, cb_input_rm, cb_input_tiles>(rm_dfb, x_dfb, rows_valid);
     const uint32_t pad = T - rows_valid * W;
     if (pad > 0) {
         cb_wait_front(cb_input_rm, pad);
         cb_pop_front(cb_input_rm, pad);
-        push_pad(x_cb, pad);
+        push_pad(cb_input_tiles, pad);
     }
+    cb_push_back(cb_input_keep, T);
 }
 
-// Pass-1 statistics of one chunk already in x_cb (T pages fronted). Both moments accumulate into the
+// Advance one view of the input ring past a chunk it does not read.
+ALWI void skip_chunk(uint32_t cb) {
+    cb_wait_front(cb, T);
+    cb_pop_front(cb, T);
+}
+
+// Pass-1 statistics of one chunk at the front of cb_input_tiles. Both moments accumulate into the
 // UnpackToDestFp32 accumulators (exact fp32 reload); publish_channel_moments() hands them to the FPU.
-template <uint32_t x_cb>
 ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
+    constexpr uint32_t x_cb = cb_input_tiles;
     DataflowBuffer x_dfb(x_cb);
     DataflowBuffer xsq_dfb(cb_x_squared);
     DataflowBuffer scaler_dfb(cb_reduce_scaler);
@@ -159,9 +173,10 @@ ALWI void publish_channel_moments() {
         PackTile<output(cb_chan_work), Dst::D1>{chan_work_dfb});
 }
 
-// Pass-2 normalize of one chunk already in x_cb: y = x*a - b' (a, b' row-mapped, resident for the block).
-template <uint32_t x_cb>
+// Pass-2 normalize of the chunk at the front of cb_input_keep: y = x*a - b' (a, b' row-mapped, held for the
+// block).
 ALWI void normalize_chunk(uint32_t rows_valid) {
+    constexpr uint32_t x_cb = cb_input_keep;
     DataflowBuffer x_dfb(x_cb);
     DataflowBuffer scale_dfb(cb_chan_scale);
     DataflowBuffer bprime_dfb(cb_bprime);
@@ -242,24 +257,16 @@ void kernel_main() {
         // ---------------- accumulate_moments (pass 1) ----------------
         for (uint32_t j = 0; j < num_chunks; ++j) {
             const uint32_t rows_valid = rows_valid_of(j);
-            const bool resident = j >= first_resident;
             if constexpr (IS_RM) {
-                if (resident) {
-                    cb_reserve_back(cb_input_resident_keep, T);
-                    tilize_chunk<cb_input_resident>(rows_valid);
-                    cb_push_back(cb_input_resident_keep, T);
-                } else {
-                    tilize_chunk<cb_input_stream>(rows_valid);
-                }
+                tilize_chunk(rows_valid);
             }
             if (blk > 0 && j == 0) {
                 // Alias group B: the writer must have drained the previous block's output before x^2 lands.
                 cb_reserve_back(cb_output_tiles, OUT_CB_PAGES);
             }
-            if (resident) {
-                accumulate_chunk<cb_input_resident>(j, rows_valid);
-            } else {
-                accumulate_chunk<cb_input_stream>(j, rows_valid);
+            accumulate_chunk(j, rows_valid);
+            if (j < first_resident) {
+                skip_chunk(cb_input_keep);  // streamed head chunk: not held for pass 2
             }
         }
         publish_channel_moments();
@@ -273,7 +280,7 @@ void kernel_main() {
         bool pretilized = false;
         if constexpr (IS_RM) {
             if (first_resident > 0) {
-                tilize_chunk<cb_input_stream>(rows_valid_of(0));
+                tilize_chunk(rows_valid_of(0));
                 pretilized = true;
             }
         }
@@ -345,16 +352,21 @@ void kernel_main() {
         // stats tile [32 x 32 lanes] x map^T [lanes x 32 channels] -> per-channel value, rows replicated.
         const auto expand_shape = MatmulBlockShape::of(1, W / EXP_SBW, 1, EXP_SBW, 1, 1);
         if constexpr (HAS_GAMMA) {
-            matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);  // rstd_ch
-            eltwise_chain(
-                IterationShape::tiles(W),
-                BinaryFpu<BinaryFpuOp::Mul, input(cb_chan_work), input(cb_gamma_rows, BroadcastDim::Row)>{
-                    chan_work_dfb, gamma_dfb},
-                PackTile<output(cb_chan_scale)>{chan_scale_dfb});  // a = rstd_ch * gamma
+            // Both expands land in cb_chan_work (rstd_ch, then mean_ch): one call site, two iterations.
+            for (uint32_t s = 0; s < 2; ++s) {
+                matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);
+                if (s == 0) {
+                    eltwise_chain(
+                        IterationShape::tiles(W),
+                        BinaryFpu<BinaryFpuOp::Mul, input(cb_chan_work), input(cb_gamma_rows, BroadcastDim::Row)>{
+                            chan_work_dfb, gamma_dfb},
+                        PackTile<output(cb_chan_scale)>{chan_scale_dfb});  // a = rstd_ch * gamma
+                }
+            }
         } else {
             matmul_with_map<true>(group_stats_cb, map_cb, chan_scale_cb, expand_shape);  // a = rstd_ch
+            matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);   // mean_ch
         }
-        matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);  // mean_ch
         // m = mean_ch * a -> cb_chan_shift (alias of cb_chan_work: tile i over tile i, in place).
         eltwise_chain(
             IterationShape::tiles(W),
@@ -374,18 +386,19 @@ void kernel_main() {
         }
 
         // ---------------- normalize_block (pass 2): resident chunks first, then re-reads ----------------
+        // cb_input_keep already fronts the resident tail; the re-read head lands behind it.
         for (uint32_t jj = 0; jj < num_chunks; ++jj) {
-            if (jj < K) {
-                normalize_chunk<cb_input_resident_keep>(rows_valid_of(first_resident + jj));
-            } else {
-                const uint32_t j = jj - K;
-                const uint32_t rows_valid = rows_valid_of(j);
-                if constexpr (IS_RM) {
-                    if (!(pretilized && j == 0)) {
-                        tilize_chunk<cb_input_stream>(rows_valid);
-                    }
+            const bool reread = jj >= K;
+            const uint32_t j = reread ? jj - K : first_resident + jj;
+            const uint32_t rows_valid = rows_valid_of(j);
+            if constexpr (IS_RM) {
+                if (reread && !(pretilized && j == 0)) {
+                    tilize_chunk(rows_valid);
                 }
-                normalize_chunk<cb_input_stream>(rows_valid);
+            }
+            normalize_chunk(rows_valid);
+            if (reread) {
+                skip_chunk(cb_input_tiles);  // the pass-1 view also carried the re-read
             }
         }
         cb_pop_front(cb_chan_scale, W);

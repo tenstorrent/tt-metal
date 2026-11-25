@@ -35,11 +35,11 @@ constexpr uint32_t F32_FACE_BYTES = 1024;
 constexpr uint32_t F32_FACE_ROW_BYTES = 64;  // 16 fp32 lanes
 constexpr uint32_t GATHER_SEMAPHORE_ID = 0;
 
-// Byte offsets of the two half-rows (lanes 0..15, 16..31) of tile row `row` in a 32x32 fp32 tile.
+// Byte offset of tile row `row`'s first half (lanes 0..15) in a 32x32 fp32 tile; the second half
+// (lanes 16..31) is one face further.
 FORCE_INLINE uint32_t face_row_lo(uint32_t row) {
     return row < 16 ? row * F32_FACE_ROW_BYTES : 2 * F32_FACE_BYTES + (row - 16) * F32_FACE_ROW_BYTES;
 }
-FORCE_INLINE uint32_t face_row_hi(uint32_t row) { return face_row_lo(row) + F32_FACE_BYTES; }
 }  // namespace
 
 void kernel_main() {
@@ -50,7 +50,8 @@ void kernel_main() {
     constexpr uint32_t HT = get_compile_time_arg_val(4);
     constexpr uint32_t GX = get_compile_time_arg_val(5);
     constexpr uint32_t OUT_PAGE_BYTES = get_compile_time_arg_val(6);
-    constexpr auto out_args = TensorAccessorArgs<7>();
+    constexpr bool IS_ROOT = get_compile_time_arg_val(7) != 0;  // one binary per role (unit root / member)
+    constexpr auto out_args = TensorAccessorArgs<8>();
     constexpr auto mc = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
@@ -66,7 +67,6 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(arg++);
     const uint32_t rows_core = get_arg_val<uint32_t>(arg++);
     const uint32_t resident_chunks = get_arg_val<uint32_t>(arg++);
-    const uint32_t is_root = get_arg_val<uint32_t>(arg++);
     const uint32_t slot = get_arg_val<uint32_t>(arg++);
     const uint32_t root_x = get_arg_val<uint32_t>(arg++);
     const uint32_t root_y = get_arg_val<uint32_t>(arg++);
@@ -84,32 +84,24 @@ void kernel_main() {
     // Destination of this core's partial row inside the root's gathered tile pair slot/32.
     const uint32_t pair_base = gathered_base + 2 * (slot / 32) * F32_TILE_BYTES;
     const uint32_t row = slot % 32;
-    const uint64_t dst_s1_lo = get_noc_addr(root_x, root_y, pair_base + face_row_lo(row));
-    const uint64_t dst_s1_hi = get_noc_addr(root_x, root_y, pair_base + face_row_hi(row));
-    const uint64_t dst_s2_lo = get_noc_addr(root_x, root_y, pair_base + F32_TILE_BYTES + face_row_lo(row));
-    const uint64_t dst_s2_hi = get_noc_addr(root_x, root_y, pair_base + F32_TILE_BYTES + face_row_hi(row));
+    const uint32_t dst_row = pair_base + face_row_lo(row);
 
-    if (is_root) {
+    if constexpr (IS_ROOT) {
         const uint32_t first_unused = cpi % 32;
         if (first_unused != 0) {
             // Zero rows first_unused..31 of both tiles of the last pair (the sender-sum matmul adds every row).
+            // Per face: faces 0/1 hold rows 0..15, faces 2/3 rows 16..31; zero that face's rows >= first_unused.
             DataflowBuffer gathered_dfb(cb_gathered_partials);
             const uint32_t last_pair = 2 * (R - 1) * F32_TILE_BYTES;
-            for (uint32_t t = 0; t < 2; ++t) {
-                const uint32_t tile = last_pair + t * F32_TILE_BYTES;
-                if (first_unused < 16) {
-                    const uint32_t lo = first_unused * F32_FACE_ROW_BYTES;
-                    noc.async_write_zeros(gathered_dfb, F32_FACE_BYTES - lo, {.offset_bytes = tile + lo});
+            for (uint32_t face = 0; face < 8; ++face) {  // 2 tiles x 4 faces
+                const uint32_t f = face & 3;
+                const uint32_t first_row = f < 2 ? first_unused : (first_unused > 16 ? first_unused - 16 : 0);
+                if (first_row < 16) {
+                    const uint32_t lo = first_row * F32_FACE_ROW_BYTES;
                     noc.async_write_zeros(
-                        gathered_dfb, F32_FACE_BYTES - lo, {.offset_bytes = tile + F32_FACE_BYTES + lo});
-                    noc.async_write_zeros(
-                        gathered_dfb, 2 * F32_FACE_BYTES, {.offset_bytes = tile + 2 * F32_FACE_BYTES});
-                } else {
-                    const uint32_t lo = (first_unused - 16) * F32_FACE_ROW_BYTES;
-                    noc.async_write_zeros(
-                        gathered_dfb, F32_FACE_BYTES - lo, {.offset_bytes = tile + 2 * F32_FACE_BYTES + lo});
-                    noc.async_write_zeros(
-                        gathered_dfb, F32_FACE_BYTES - lo, {.offset_bytes = tile + 3 * F32_FACE_BYTES + lo});
+                        gathered_dfb,
+                        F32_FACE_BYTES - lo,
+                        {.offset_bytes = last_pair + (face >> 2) * F32_TILE_BYTES + f * F32_FACE_BYTES + lo});
                 }
             }
             noc.write_zeros_l1_barrier();
@@ -126,23 +118,24 @@ void kernel_main() {
         const uint32_t wt0 = (unit % GX) * W;
 
         // ---------------- gather: local partial row -> root ----------------
-        if (is_root) {
+        if constexpr (IS_ROOT) {
             cb_reserve_back(cb_gathered_partials, 2 * R);
         }
         cb_wait_front(cb_local_partials, 2);
         {
+            // Row 0 of each partial tile (lanes 0..15 in face 0, 16..31 in face 1) -> row `slot` of the pair.
             const uint32_t src = get_read_ptr(cb_local_partials);
-            noc_async_write(src, dst_s1_lo, F32_FACE_ROW_BYTES);
-            noc_async_write(src + F32_FACE_BYTES, dst_s1_hi, F32_FACE_ROW_BYTES);
-            noc_async_write(src + F32_TILE_BYTES, dst_s2_lo, F32_FACE_ROW_BYTES);
-            noc_async_write(src + F32_TILE_BYTES + F32_FACE_BYTES, dst_s2_hi, F32_FACE_ROW_BYTES);
+            for (uint32_t k = 0; k < 4; ++k) {
+                const uint32_t off = (k >> 1) * F32_TILE_BYTES + (k & 1) * F32_FACE_BYTES;
+                noc_async_write(src + off, get_noc_addr(root_x, root_y, dst_row + off), F32_FACE_ROW_BYTES);
+            }
             noc_async_write_barrier();  // the row must land before the root sees the increment
             noc_semaphore_inc(root_sem_noc, 1);
         }
         cb_pop_front(cb_local_partials, 2);
 
         // ---------------- combine / broadcast ----------------
-        if (is_root) {
+        if constexpr (IS_ROOT) {
             volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_l1);
             noc_semaphore_wait_min(sem, cpi);
             noc_semaphore_set(sem, 0);
@@ -156,7 +149,7 @@ void kernel_main() {
             cb_push_back(cb_group_stats, 2);
             cb_pop_front(cb_stats_out, 2);
         } else {
-            // Receiver-only cores exist only when cpi > 1 (the placement then compiles a receiver pipe).
+            // Member cores exist only when cpi > 1; their binary carries the receiver pipe only.
             cb_reserve_back(cb_group_stats, 2);
             if constexpr (McastT::receiver_available) {
                 mc.receiver(noc).receive();
