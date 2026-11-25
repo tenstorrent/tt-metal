@@ -19,7 +19,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::detail {
 

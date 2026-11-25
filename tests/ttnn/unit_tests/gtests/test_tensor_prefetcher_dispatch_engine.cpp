@@ -8,11 +8,13 @@
 // directly, behind a CQ fence or an op signal, or replayed from a trace or a CommandList, and the groups a
 // mask selects of a grouped weight. The validator checks
 // every entry against the weight in DRAM and hangs on a mismatch, so a run that finishes delivered every block
-// intact.
+// intact. MeasuresDeliveryCycles times delivery instead, with receivers that drop each block unread.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -20,14 +22,28 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <fmt/format.h>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/buffers/tensor_prefetcher_fifo.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
+#include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_validator.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -85,6 +101,16 @@ protected:
 // flight so that the ordering is what protects the weight.
 enum class WeightWrite { Finished, InFlight };
 
+// The blocks of a receiver slab: each `k_block_tiles` tiles of K by `tiles_per_receiver` tiles of N, and
+// `blocks_per_receiver` of them per slab. 0 blocks means one block per receiver, the slab the validator expects.
+struct BlockShape {
+    uint32_t k_block_tiles = kKBlockTiles;
+    uint32_t tiles_per_receiver = kTilesPerReceiver;
+    uint32_t blocks_per_receiver = 0;
+
+    uint32_t block_bytes() const { return k_block_tiles * tiles_per_receiver * kBfloat16TileBytes; }
+};
+
 // A receiver-contiguous weight -- one (K, N / receivers) slab per receiver, round-robin over the DRAM banks --
 // and the PrefetcherPipes that deliver it to `receivers_per_bank` receivers of every bank, `ring_entries`
 // blocks deep per receiver. A dispatch engine holds one sender endpoint per bank, so each bank's
@@ -96,12 +122,12 @@ struct ReceiverContiguousCase {
         uint32_t receivers_per_bank,
         uint32_t ring_entries,
         uint32_t num_groups = 1,
-        WeightWrite weight_write = WeightWrite::Finished) {
+        WeightWrite weight_write = WeightWrite::Finished,
+        const BlockShape& shape = {}) {
         const uint32_t num_banks = device->dram_grid_size().x;
         const uint32_t num_receivers = receivers_per_bank * num_banks;
         const CoreCoord grid = device->compute_with_storage_grid_size();
         TT_FATAL(grid.x * grid.y >= num_receivers, "The test needs {} worker receivers", num_receivers);
-        std::vector<CoreCoord> receivers;
         receivers.reserve(num_receivers);
         for (uint32_t i = 0; i < num_receivers; ++i) {
             receivers.emplace_back(i % grid.x, i / grid.x);
@@ -117,16 +143,15 @@ struct ReceiverContiguousCase {
             receiver_domain = receiver_domain.merge(bank_receivers);
         }
 
-        // The validator delivers each receiver's slab in one K block per receiver (its ring size).
-        block_count = num_receivers;
-        const uint32_t k = block_count * kKBlockTiles * TILE_HEIGHT;
-        const uint32_t n = num_receivers * kTilesPerReceiver * TILE_WIDTH;
-        const uint32_t entry_bytes = kKBlockTiles * kTilesPerReceiver * kBfloat16TileBytes;
+        block_count = shape.blocks_per_receiver != 0 ? shape.blocks_per_receiver : num_receivers;
+        const uint32_t k = block_count * shape.k_block_tiles * TILE_HEIGHT;
+        const uint32_t n = num_receivers * shape.tiles_per_receiver * TILE_WIDTH;
+        block_bytes = shape.block_bytes();
         space = std::make_unique<metal_exp::PrefetcherPipeSpace>(metal_exp::CreatePrefetcherPipeSpace(
             device->mesh_command_queue(0),
             {.num_dram_senders = num_banks,
              .receiver_domain = receiver_domain,
-             .ring_size = ring_entries * entry_bytes,
+             .ring_size = ring_entries * block_bytes,
              .max_receivers_per_pipe = num_receivers}));
         for (auto& pipe : metal_exp::CreatePrefetcherPipesForTensorPrefetcher(*space, bank_to_receivers)) {
             pipes.push_back(std::make_shared<metal_exp::PrefetcherPipe>(std::move(pipe)));
@@ -164,6 +189,8 @@ struct ReceiverContiguousCase {
     }
 
     uint32_t block_count = 0;
+    uint32_t block_bytes = 0;
+    std::vector<CoreCoord> receivers;
     std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers;
     // Must outlive the pipes carved from it.
     std::unique_ptr<metal_exp::PrefetcherPipeSpace> space;
@@ -182,12 +209,14 @@ void queue_layers(
 }
 
 // Validates every entry of `num_layers` copies of the weight as the receivers consume them: of a grouped
-// weight, the `groups` listed, ascending, or every group when none are.
+// weight, the `groups` listed, ascending, or every group when none are. Each entry is compared at every
+// `compare_word_stride`'th word.
 void validate_layers(
     tt::tt_metal::distributed::MeshDevice* device,
     const ReceiverContiguousCase& prefetch,
     uint32_t num_layers,
-    const std::vector<uint32_t>& groups = {}) {
+    const std::vector<uint32_t>& groups = {},
+    uint32_t compare_word_stride = 1) {
     ttnn::operations::experimental::test::test_tensor_prefetcher_pipe_validator(
         device,
         prefetch.weight,
@@ -197,7 +226,15 @@ void validate_layers(
         prefetch.bank_to_receivers,
         /*streaming=*/false,
         /*rotation=*/{},
-        groups);
+        groups,
+        compare_word_stride);
+}
+
+// Pops every entry of `num_layers` copies of the weight as the receivers consume them, without checking any.
+void drain_layers(
+    tt::tt_metal::distributed::MeshDevice* device, const ReceiverContiguousCase& prefetch, uint32_t num_layers) {
+    ttnn::operations::experimental::test::test_tensor_prefetcher_pipe_consumer(
+        device, num_layers * prefetch.block_count, prefetch.block_bytes, prefetch.pipes);
 }
 
 // A group selector's mask on `device`: one UINT16 word per group in a single row-major page, in `memory_config`.
@@ -210,6 +247,13 @@ Tensor make_group_mask(
         ttnn::Shape({1, 1, 1, num_groups}),
         TensorLayout(DataType::UINT16, PageConfig(Layout::ROW_MAJOR), memory_config));
     return Tensor::from_vector(std::vector<uint16_t>(words), spec).to_device(device);
+}
+
+// The bytes of the dispatch engine's stage ring, as fast dispatch sizes it for the Tensor prefetcher kernels.
+uint32_t stage_ring_bytes(tt::tt_metal::distributed::MeshDevice* device) {
+    const auto& impl = device->impl();
+    return tt::tt_metal::tensor_prefetcher_region_layout(impl.metal_env().get_cluster())
+        .stage_ring_bytes(impl.metal_context().dispatch_mem_map().unused_l1_size());
 }
 
 // Every block of one tensor arrives, through two-entry rings.
@@ -235,7 +279,7 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, TradesCreditsAcrossLayersAndRuns) 
 
 // Back-to-back requests for different receiver counts: the stage ring is laid out per receiver count, so the
 // second request waits for the first one's blocks to leave the stage ring before it stages into it.
-TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForANewReceiverCount) {
+TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForFewerReceivers) {
     ReceiverContiguousCase wide(device_, /*receivers_per_bank=*/2, /*ring_entries=*/1);
     ReceiverContiguousCase narrow(device_, /*receivers_per_bank=*/1, /*ring_entries=*/1);
     metal_exp::StartTensorPrefetcher(*device_, {});
@@ -243,6 +287,53 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForANewReceiverC
     queue_layers(device_, narrow, /*num_layers=*/2);
     validate_layers(device_, wide, /*num_layers=*/2);
     validate_layers(device_, narrow, /*num_layers=*/2);
+    metal_exp::StopTensorPrefetcher(*device_);
+}
+
+// Back-to-back requests for one receiver per bank, then two, so every receiver's share of the stage ring halves.
+// The first request stages more than a new share for each receiver without filling its own share, so the reader
+// never reads the pusher's count again, and that count as last read trails by more than a new share. The second
+// request stages more than two new shares for each receiver, through one-entry rings that hold the pusher back, so a
+// reader that counted a share's free bytes from that stale count would overwrite blocks before they were sent.
+TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForMoreReceivers) {
+    namespace fifo = tt::tt_metal::tensor_prefetcher_fifo;
+    // queue_layers puts every layer in one request, as the delivery cases below do with eight.
+    constexpr uint32_t kMaxLayers = 8;
+    const uint32_t narrow_receivers = device_->dram_grid_size().x;
+    const uint32_t wide_receivers = 2 * narrow_receivers;
+    const uint32_t ring_bytes = stage_ring_bytes(device_);
+    const uint32_t narrow_share = fifo::stage_share_bytes(ring_bytes, narrow_receivers);
+    const uint32_t wide_share = fifo::stage_share_bytes(ring_bytes, wide_receivers);
+    // Blocks of about a third of a new share, so a new share holds three. Each receiver takes one block per receiver
+    // of every layer, an even count, so a block overwritten before it was sent differs from the block that
+    // overwrote it, although every layer repeats the weight.
+    BlockShape shape;
+    shape.k_block_tiles = std::max(1u, wide_share / 3 / BlockShape{.k_block_tiles = 1}.block_bytes());
+    const uint32_t block_footprint = fifo::stage_block_footprint(shape.block_bytes());
+    ASSERT_LE(block_footprint, fifo::max_stage_block_bytes(wide_share));
+    ASSERT_NE(wide_share / block_footprint % wide_receivers, 0u);
+    // The fewest layers that stage just over one new share per receiver in the first request, within its own share,
+    // and just over two in the second.
+    const uint32_t narrow_layers = std::min(kMaxLayers, wide_share / (narrow_receivers * block_footprint) + 1);
+    const uint32_t wide_layers = std::min(kMaxLayers, 2 * wide_share / (wide_receivers * block_footprint) + 1);
+    ASSERT_GT(narrow_layers * narrow_receivers * block_footprint, wide_share);
+    ASSERT_LE(narrow_layers * narrow_receivers * block_footprint, narrow_share);
+    ASSERT_GT(wide_layers * wide_receivers * block_footprint, 2 * wide_share);
+
+    ReceiverContiguousCase narrow(
+        device_, /*receivers_per_bank=*/1, /*ring_entries=*/1, /*num_groups=*/1, WeightWrite::Finished, shape);
+    ReceiverContiguousCase wide(
+        device_, /*receivers_per_bank=*/2, /*ring_entries=*/1, /*num_groups=*/1, WeightWrite::Finished, shape);
+    // Only the second request's blocks can be overwritten before they are sent, so the first one's are only drained.
+    // The reader that overwrites one overruns the pusher by whole blocks, and a block differs from the one that
+    // overwrote it almost everywhere, so one word in each 256 bytes finds it. Comparing every word of blocks this
+    // large takes hours on a slow simulator.
+    constexpr uint32_t kCompareWordStride = 256 / sizeof(uint32_t);
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    queue_layers(device_, narrow, narrow_layers);
+    queue_layers(device_, wide, wide_layers);
+    drain_layers(device_, narrow, narrow_layers);
+    validate_layers(device_, wide, wide_layers, /*groups=*/{}, kCompareWordStride);
     metal_exp::StopTensorPrefetcher(*device_);
 }
 
@@ -288,7 +379,9 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversTheGroupsAMaskSelects) {
         make_group_mask(device_, {1, 0, 1, 1}, MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
     const Tensor empty_mask =
         make_group_mask(device_, {0, 0, 0, 0}, MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
-    const CoreRangeSet mask_core(CoreRange(CoreCoord(0, 1)));
+    // The mask's L1 copy is on the last core of the compute grid, which every device has.
+    const CoreCoord grid = device_->compute_with_storage_grid_size();
+    const CoreRangeSet mask_core(CoreRange(CoreCoord(grid.x - 1, grid.y - 1)));
     const Tensor l1_mask = make_group_mask(
         device_,
         {0, 1, 0, 0},
@@ -321,6 +414,33 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversTheGroupsAMaskSelects) {
             validate_layers(device_, prefetch, /*num_layers=*/1, *groups);
         }
     }
+    metal_exp::StopTensorPrefetcher(*device_);
+}
+
+// Six-entry rings, so the pusher writes runs of up to three blocks, half a ring, where the tests above, with one-
+// and two-entry rings, write one block at a time. Every receiver takes several blocks of each group, so the runs wrap
+// the ring and split at its end, and with a mask the reader's runs stop at each group it skips.
+TEST_F(DispatchEngineTensorPrefetcherFixture, CoalescesRunsThroughDeepRings) {
+    constexpr uint32_t kNumGroups = 4;
+    constexpr uint32_t kNumLayers = 2;
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/6, kNumGroups);
+    const Tensor mask =
+        make_group_mask(device_, {1, 0, 1, 1}, MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    // The mask was written through the command queue, which the prefetcher does not follow on its own.
+    metal_exp::WaitForCqOnTensorPrefetcher(device_->mesh_command_queue(), std::nullopt);
+
+    queue_layers(device_, prefetch, kNumLayers);
+    validate_layers(device_, prefetch, kNumLayers);
+    const std::vector<metal_exp::TensorPrefetcherInput> inputs(
+        kNumLayers,
+        metal_exp::TensorPrefetcherInput{
+            .tensor = prefetch.weight.mesh_tensor(),
+            .block_count = prefetch.block_count,
+            .group_selector = metal_exp::TensorPrefetcherGroupSelector{mask.mesh_tensor()}});
+    metal_exp::QueueTensorPrefetcherRequest(
+        *device_, prefetch.pipe_refs(), std::nullopt, inputs, &device_->mesh_command_queue());
+    validate_layers(device_, prefetch, kNumLayers, {0, 2, 3});
     metal_exp::StopTensorPrefetcher(*device_);
 }
 
@@ -365,6 +485,319 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, SendsRecordedRequestOnEveryCommand
         command_list.deallocate();
     }
     metal_exp::StopTensorPrefetcher(*device_);
+}
+
+// The data-movement config the timing kernels below run with: RISCV_0 on NOC_0.
+tt::tt_metal::DataMovementHardwareConfig riscv0_noc0_config() {
+    using namespace tt::tt_metal;
+    return DataMovementHardwareConfig{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+        .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{}};
+}
+
+// A workload that runs `program` on every device of `device`.
+tt::tt_metal::distributed::MeshWorkload single_program_workload(
+    tt::tt_metal::distributed::MeshDevice* device, tt::tt_metal::Program&& program) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(device->shape()), std::move(program));
+    return workload;
+}
+
+// A receiver workload that times delivery (prefetcher_pipe_arrival_timer.cpp) on every receiver of `prefetch`:
+// receiver `prefetch.receivers[r]` writes the cycle at which each of its `num_entries` entries arrived to row `r`
+// of `arrivals`, a row-major UINT32 tensor in DRAM.
+tt::tt_metal::distributed::MeshWorkload make_arrival_timer_workload(
+    tt::tt_metal::distributed::MeshDevice* device,
+    const ReceiverContiguousCase& prefetch,
+    uint32_t num_entries,
+    uint32_t pop_batch,
+    const Tensor& arrivals) {
+    using namespace tt::tt_metal;
+    std::vector<metal_exp::PrefetcherPipeParamName> names;
+    std::vector<metal_exp::PrefetcherPipeParameter> parameters;
+    ProgramRunArgs run_args;
+    for (size_t i = 0; i < prefetch.pipes.size(); ++i) {
+        metal_exp::PrefetcherPipeParamName name{fmt::format("pipe_{}", i)};
+        names.push_back(name);
+        parameters.push_back(
+            {.unique_id = name,
+             .receivers = prefetch.pipes[i]->receiver_cores(),
+             .ring_size = prefetch.pipes[i]->ring_size(),
+             .entry_size = prefetch.block_bytes});
+        run_args.advanced_options.prefetcher_pipe_args.emplace(
+            name, metal_exp::PrefetcherPipeArgument{*prefetch.pipes[i]});
+    }
+    const TensorParamName arrivals_name{"arrivals"};
+    const ScratchpadSpecName stamps_name{"stamps"};
+    KernelSpec timer{
+        .unique_id = KernelSpecName{"timer"},
+        .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_arrival_timer.cpp"}};
+    timer.tensor_bindings = {{.tensor_parameter_name = arrivals_name, .accessor_name = "arrivals"}};
+    timer.scratchpad_bindings = {{.scratchpad_spec_name = stamps_name, .accessor_name = "stamps"}};
+    timer.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = names, .accessor_name = "in"}};
+    timer.compile_time_args = {{"num_entries", num_entries}, {"pop_batch", pop_batch}};
+    timer.runtime_arg_schema.runtime_arg_names = {"out_page"};
+    timer.hw_config = riscv0_noc0_config();
+    ProgramSpec spec{
+        .name = "prefetcher_pipe_arrival_timer",
+        .kernels = {std::move(timer)},
+        .scratchpads =
+            {{.unique_id = stamps_name,
+              .size_per_node = static_cast<uint32_t>(arrivals.tensor_spec().compute_page_size_bytes())}},
+        .tensor_parameters = {{.unique_id = arrivals_name, .spec = arrivals.tensor_spec()}},
+        .work_units =
+            {{.name = "timer_wu",
+              .kernels = {KernelSpecName{"timer"}},
+              .target_nodes = metal_exp::GetPrefetcherPipeReceiverCores(prefetch.pipe_refs())}},
+        .advanced_options = {.prefetcher_pipe_parameters = std::move(parameters)}};
+    Program program(*device, spec);
+
+    ProgramRunArgs::KernelRunArgs kernel_args{.kernel = KernelSpecName{"timer"}};
+    for (uint32_t r = 0; r < prefetch.receivers.size(); ++r) {
+        AddRuntimeArgsForNode(kernel_args.runtime_arg_values, prefetch.receivers[r], {{"out_page", r}});
+    }
+    run_args.kernel_run_args.push_back(std::move(kernel_args));
+    run_args.tensor_args.emplace(arrivals_name, TensorArgument{arrivals.mesh_tensor()});
+    program.set_program_run_args(run_args);
+    return single_program_workload(device, std::move(program));
+}
+
+// The fewest batches steady_cycles_per_entry measures: it needs at least one whole batch after the middle one.
+constexpr uint32_t kMinTimedBatches = 3;
+
+// Mean cycles per entry at one receiver, over the second half of its batches: `stamps` holds the cycle at which each
+// batch of `pop_batch` entries (the last one possibly short) had all arrived, for `num_entries` entries, in at least
+// kMinTimedBatches batches. The first batches can arrive back to back, out of the pipe ring and stage ring the
+// prefetcher filled before the receiver started.
+double steady_cycles_per_entry(const uint32_t* stamps, uint32_t num_entries, uint32_t pop_batch) {
+    const uint32_t num_batches = tt::div_up(num_entries, pop_batch);
+    const uint32_t first = num_batches / 2;
+    const uint32_t last = num_batches - 1;
+    // The entries of batches first + 1 through last.
+    const uint32_t entries = num_entries - (first + 1) * pop_batch;
+    // Unsigned, so a stamp that wrapped still subtracts to the elapsed cycles.
+    return static_cast<double>(stamps[last] - stamps[first]) / entries;
+}
+
+// One case of MeasuresDeliveryCycles: the blocks each receiver gets, how many of them its pipe ring holds, how many
+// receivers each DRAM bank serves, and what fraction of its ring a receiver frees at a time (1 / pop_divisor).
+struct DeliveryCase {
+    BlockShape shape;
+    uint32_t ring_entries = 0;
+    uint32_t receivers_per_bank = 1;
+    uint32_t pop_divisor = 2;
+};
+
+// Each case opens its own device, so no case inherits another's pipes or dispatch-engine state.
+class DispatchEngineTensorPrefetcherDeliveryFixture : public DispatchEngineTensorPrefetcherFixture,
+                                                      public testing::WithParamInterface<DeliveryCase> {};
+
+// Each tensor is at least kDeliveryMinTensorBytes and kDeliveryMinBlocks blocks per receiver, so a tensor's own setup
+// does not set the pace of small blocks.
+constexpr uint32_t kDeliveryMinBlocks = 8;
+constexpr uint32_t kDeliveryMinTensorBytes = 256 * 1024;
+constexpr uint32_t kDeliveryLayers = 8;
+
+// Times delivery from the dispatch-engine Tensor prefetcher to its receivers. Each receiver stamps every block as it
+// arrives and drops it unread, so the pace it sees is the prefetcher's alone. A stamp is the receiver's own cycle
+// count, so the result is cycles per block, and a simulator's are not silicon times. Logs one line.
+TEST_P(DispatchEngineTensorPrefetcherDeliveryFixture, MeasuresDeliveryCycles) {
+    const auto& [shape, ring_entries, receivers_per_bank, pop_divisor] = GetParam();
+    const uint32_t num_entries = shape.blocks_per_receiver * kDeliveryLayers;
+    // A receiver frees a fixed part of its ring at a time, as a consumer that takes several blocks at once does, and
+    // stamps each batch as it arrives, so its own per-block cost does not set the pace.
+    const uint32_t pop_batch = std::max(1u, ring_entries / pop_divisor);
+    const uint32_t num_batches = tt::div_up(num_entries, pop_batch);
+    ASSERT_GE(num_batches, kMinTimedBatches) << "The pace is timed over the batches after the middle one";
+    // A receiver's stamps fill one row-major page of the output, in whole 64 B lines.
+    constexpr uint32_t kWordsPerLine = 64 / sizeof(uint32_t);
+    const uint32_t row_words = tt::round_up(num_batches, kWordsPerLine);
+    const CoreCoord grid = device_->compute_with_storage_grid_size();
+    if (grid.x * grid.y < receivers_per_bank * device_->dram_grid_size().x) {
+        GTEST_SKIP() << "Needs " << receivers_per_bank << " worker receivers per DRAM bank";
+    }
+    ReceiverContiguousCase prefetch(
+        device_, receivers_per_bank, ring_entries, /*num_groups=*/1, WeightWrite::Finished, shape);
+    const auto num_receivers = static_cast<uint32_t>(prefetch.receivers.size());
+    const TensorSpec arrivals_spec(
+        ttnn::Shape({num_receivers, row_words}),
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)));
+    const Tensor arrivals =
+        Tensor::from_vector(std::vector<uint32_t>(num_receivers * row_words, 0), arrivals_spec).to_device(device_);
+    auto timer = make_arrival_timer_workload(device_, prefetch, num_entries, pop_batch, arrivals);
+
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    // The receivers go first, so that blocks reach receivers that are already waiting for them.
+    tt::tt_metal::distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), timer, /*blocking=*/false);
+    queue_layers(device_, prefetch, kDeliveryLayers);
+    tt::tt_metal::distributed::Finish(device_->mesh_command_queue());
+    metal_exp::StopTensorPrefetcher(*device_);
+
+    const std::vector<uint32_t> stamps = arrivals.cpu().to_vector<uint32_t>();
+    std::vector<double> cycles_per_block;
+    for (uint32_t r = 0; r < num_receivers; ++r) {
+        const uint32_t* row = stamps.data() + static_cast<size_t>(r) * row_words;
+        for (uint32_t b = 1; b < num_batches; ++b) {
+            ASSERT_NE(row[b], row[b - 1])
+                << "receiver " << r << " recorded no time between batches " << b - 1 << " and " << b;
+        }
+        cycles_per_block.push_back(steady_cycles_per_entry(row, num_entries, pop_batch));
+    }
+    const auto [fewest, most] = std::minmax_element(cycles_per_block.begin(), cycles_per_block.end());
+    // Each receiver's pace comes from its own clock over its own stamps, so the total counts every receiver at the
+    // slowest one's pace: summing their paces would overstate it when one receiver finishes ahead of another.
+    const double total_bytes_per_cycle = num_receivers * prefetch.block_bytes / *most;
+    log_info(
+        tt::LogTest,
+        "{}: dispatch-engine Tensor prefetcher, {} B blocks, {}-entry rings, {} receivers: {:.0f} to {:.0f} cycles "
+        "per block per receiver, {:.1f} B/cycle in total at the slowest receiver's pace",
+        testing::UnitTest::GetInstance()->current_test_info()->name(),
+        prefetch.block_bytes,
+        ring_entries,
+        num_receivers,
+        *fewest,
+        *most,
+        total_bytes_per_cycle);
+}
+
+DeliveryCase delivery_case(
+    uint32_t k_block_tiles,
+    uint32_t tiles_per_receiver,
+    uint32_t ring_entries,
+    uint32_t receivers_per_bank,
+    uint32_t pop_divisor = 2) {
+    return {
+        .shape =
+            {.k_block_tiles = k_block_tiles,
+             .tiles_per_receiver = tiles_per_receiver,
+             .blocks_per_receiver = std::max(
+                 kDeliveryMinBlocks,
+                 kDeliveryMinTensorBytes / BlockShape{k_block_tiles, tiles_per_receiver}.block_bytes())},
+        .ring_entries = ring_entries,
+        .receivers_per_bank = receivers_per_bank,
+        .pop_divisor = pop_divisor};
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    BlockSizesAndRingDepths,
+    DispatchEngineTensorPrefetcherDeliveryFixture,
+    testing::Values(
+        // Two receivers per bank, both workers of a 2x3 grid, with 256 KiB rings.
+        delivery_case(1, 1, 128, 2),
+        delivery_case(2, 2, 32, 2),
+        delivery_case(4, 4, 8, 2),
+        delivery_case(4, 8, 4, 2),
+        delivery_case(8, 8, 2, 2),
+        // One receiver.
+        delivery_case(4, 8, 4, 1),
+        // 512 KiB rings that receivers free a quarter at a time, so more of each ring is in flight.
+        delivery_case(1, 1, 256, 2, 4),
+        delivery_case(2, 2, 64, 2, 4),
+        delivery_case(4, 4, 16, 2, 4),
+        delivery_case(4, 8, 8, 2, 4)),
+    [](const testing::TestParamInfo<DeliveryCase>& info) {
+        const BlockShape& shape = info.param.shape;
+        return fmt::format(
+            "{}KiBBlocks_{}EntryRing_{}PerBank{}",
+            shape.block_bytes() / 1024,
+            info.param.ring_entries,
+            info.param.receivers_per_bank,
+            info.param.pop_divisor == 2 ? "" : fmt::format("_PopsOneIn{}", info.param.pop_divisor));
+    });
+
+// What one worker moves over the NoC on its own, the bound for any one tile's sender, the dispatch engine's
+// included. Worker (0, 0) writes 4 MiB to worker (1, 0), or reads 4 MiB from DRAM bank 0, with every transfer issued
+// before any is waited on, from one or several of its data-movement cores. Logs one line per case.
+TEST_F(DispatchEngineTensorPrefetcherFixture, MeasuresWorkerNocBandwidth) {
+    using namespace tt::tt_metal;
+    constexpr uint32_t kTotalBytes = 4u << 20;
+    constexpr uint32_t kScratchBytes = 512u << 10;
+    constexpr uint32_t kDramBytes = 256u << 10;
+    const TensorSpec dram_spec(
+        ttnn::Shape({1, kDramBytes / sizeof(uint32_t)}),
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)));
+    const Tensor dram =
+        Tensor::from_vector(std::vector<uint32_t>(kDramBytes / sizeof(uint32_t), 0), dram_spec).to_device(device_);
+    tt::tt_metal::distributed::Finish(device_->mesh_command_queue());
+    const uint32_t dram_addr = dram.mesh_buffer().address();
+    const CoreCoord peer = device_->worker_core_from_logical_core(CoreCoord(1, 0));
+    struct ProbeCase {
+        uint32_t mode = 0;
+        uint32_t tx_bytes = 0;
+        uint32_t num_vc = 0;
+        uint32_t threads = 0;
+    };
+    for (const auto& [mode, tx_bytes, num_vc, threads] :
+         {ProbeCase{0, 8192, 1, 1},
+          ProbeCase{0, 8192, 1, 4},
+          ProbeCase{0, 8192, 4, 4},
+          ProbeCase{1, 65536, 1, 1},
+          ProbeCase{1, 65536, 1, 4}}) {
+        const ScratchpadSpecName buf_name{"buf"};
+        KernelSpec probe{
+            .unique_id = KernelSpecName{"probe"},
+            .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/misc/noc_bandwidth_probe.cpp"},
+            .num_threads = threads};
+        probe.scratchpad_bindings = {{.scratchpad_spec_name = buf_name, .accessor_name = "buf"}};
+        probe.compile_time_args = {
+            {"total_bytes", kTotalBytes}, {"tx_bytes", tx_bytes}, {"mode", mode}, {"num_vc", num_vc}};
+        probe.runtime_arg_schema.runtime_arg_names = {"role", "peer_x", "peer_y", "dram_addr", "dram_bytes"};
+        probe.hw_config = riscv0_noc0_config();
+        ProgramSpec spec{
+            .name = "noc_bandwidth_probe",
+            .kernels = {std::move(probe)},
+            .scratchpads = {{.unique_id = buf_name, .size_per_node = kScratchBytes}},
+            .work_units = {
+                {.name = "probe_wu",
+                 .kernels = {KernelSpecName{"probe"}},
+                 .target_nodes = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)))}}};
+        Program program(*device_, spec);
+        ProgramRunArgs run_args;
+        ProgramRunArgs::KernelRunArgs kernel_args{.kernel = KernelSpecName{"probe"}};
+        for (uint32_t x = 0; x < 2; ++x) {
+            AddRuntimeArgsForNode(
+                kernel_args.runtime_arg_values,
+                CoreCoord(x, 0),
+                {{"role", x},
+                 {"peer_x", static_cast<uint32_t>(peer.x)},
+                 {"peer_y", static_cast<uint32_t>(peer.y)},
+                 {"dram_addr", dram_addr},
+                 {"dram_bytes", kDramBytes}});
+        }
+        run_args.kernel_run_args.push_back(std::move(kernel_args));
+        program.set_program_run_args(run_args);
+        auto workload = single_program_workload(device_, std::move(program));
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, /*blocking=*/true);
+        const std::vector<uint32_t> counts = dram.cpu().to_vector<uint32_t>();
+        // Each DM core reports in its own 64 B.
+        constexpr uint32_t kReportWords = 64 / sizeof(uint32_t);
+        uint32_t slowest = 0;
+        for (uint32_t t = 0; t < threads; ++t) {
+            slowest = std::max(slowest, counts[t * kReportWords + 1]);
+        }
+        log_info(
+            tt::LogTest,
+            "Worker {} {} B per transfer, {} VCs, {} DM cores: slowest core {} cycles = {:.1f} B/cycle in total "
+            "(core 0: issue {}, {} {}, acked {})",
+            mode == 0 ? "NoC write to a worker," : "DRAM read,",
+            tx_bytes,
+            num_vc,
+            threads,
+            slowest,
+            static_cast<double>(kTotalBytes) / slowest,
+            counts[0],
+            mode == 0 ? "left the core" : "landed",
+            counts[1],
+            counts[2]);
+    }
 }
 
 }  // namespace

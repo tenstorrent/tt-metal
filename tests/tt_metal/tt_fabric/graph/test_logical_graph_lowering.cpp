@@ -17,7 +17,7 @@
 #include <set>
 #include <string>
 
-#include <tt-metalium/cluster.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"

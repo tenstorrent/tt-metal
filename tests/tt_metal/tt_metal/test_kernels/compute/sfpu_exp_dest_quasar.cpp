@@ -33,8 +33,10 @@ void kernel_main() {
             dfb_out.reserve_back(1);
 
             tile_regs_acquire();
+            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             copy_init(in_id);
             copy_tile(in_id, /*tile_index=*/0, /*dst_index=*/0);
+            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
             ExpOp::tile(0);  // exp(Dest[0]) in place
             tile_regs_commit();
             tile_regs_wait();

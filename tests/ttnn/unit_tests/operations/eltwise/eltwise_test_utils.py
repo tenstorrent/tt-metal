@@ -517,6 +517,69 @@ def generate_int32_values(include_int_min=True):
     return values.reshape(256, 256)
 
 
+INT32_BINARY_GRID_SIZE = 2048
+INT32_BINARY_GRID_DENSE_HALF_RANGE = 256
+
+
+def generate_int32_binary_grid(include_int_min=True):
+    """
+    2048 unique int32 values for a pairwise (binary) integer accuracy sweep.
+
+    The outer product of generate_int32_values would be 4.3e9 pairs, so the
+    binary grid trades density for every operand class appearing against
+    every other:
+      - every integer in [-256, 256), so small operands, sign changes and
+        division by small divisors are exhaustive,
+      - int32_edge_values() outside that range, including 2^24 + 1, INT32_MIN
+        and INT32_MAX,
+      - log-uniform random values (a random bit length, then a random value of
+        that length and a random sign), so products and quotients land in
+        every magnitude rather than overflowing as uniform pairs nearly
+        always do,
+      - uniformly random int32 values filling the rest.
+
+    The outer product is 4,194,304 pairs, the size of the bfloat16 binary grid.
+
+    Args:
+        include_int_min (bool, optional): If False, INT32_MIN is left out and
+            the slot goes to a random value. Defaults to True.
+
+    Returns:
+        torch.Tensor: 1D tensor of length 2048, dtype int32, all unique.
+    """
+    dense = torch.arange(-INT32_BINARY_GRID_DENSE_HALF_RANGE, INT32_BINARY_GRID_DENSE_HALF_RANGE, dtype=torch.int64)
+    edges = int32_edge_values()
+    edges = edges[(edges < -INT32_BINARY_GRID_DENSE_HALF_RANGE) | (edges >= INT32_BINARY_GRID_DENSE_HALF_RANGE)]
+    if not include_int_min:
+        edges = edges[edges != INT32_MIN]
+
+    seen = set(torch.cat([dense, edges]).tolist())
+    generator = torch.Generator().manual_seed(0)
+    num_random = INT32_BINARY_GRID_SIZE - len(seen)
+    num_log_uniform = num_random // 2
+    random = []
+    while len(random) < num_random:
+        if len(random) < num_log_uniform:
+            bits = int(torch.randint(9, 32, (1,), generator=generator))
+            magnitude = int(torch.randint(2 ** (bits - 1), 2**bits, (1,), generator=generator))
+            sign = -1 if int(torch.randint(0, 2, (1,), generator=generator)) else 1
+            value = sign * magnitude
+        else:
+            value = int(torch.randint(INT32_MIN + 1, INT32_MAX + 1, (1,), generator=generator, dtype=torch.int64))
+        if value not in seen:
+            seen.add(value)
+            random.append(value)
+
+    values = torch.cat([dense, edges, torch.tensor(random, dtype=torch.int64)]).to(torch.int32)
+    assert values.numel() == INT32_BINARY_GRID_SIZE
+    return values
+
+
+def int32_pairwise_inputs(include_int_min=True):
+    """Outer product of the 2048-value int32 binary grid: A[i, j] = v[i], B[i, j] = v[j]."""
+    return pairwise_from_values(generate_int32_binary_grid(include_int_min=include_int_min))
+
+
 def wrap_int32(tensor):
     """Reduce an integer tensor to int32 with two's-complement wraparound, as int32 arithmetic does."""
     return ((tensor.to(torch.int64) - INT32_MIN) % 2**32 + INT32_MIN).to(torch.int32)
@@ -553,6 +616,29 @@ def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, input_d
     else:
         result = ttnn.to_torch(ttnn_op(tt_a, tt_b, **device_kwargs))
     return golden, result
+
+
+def run_int32_binary(device, ttnn_op, input_a, input_b, **op_kwargs):
+    """Run a ttnn binary op on ttnn.int32 inputs and return the device result as a torch tensor.
+
+    ``input_b`` is a torch tensor (uploaded as ttnn.int32) or a Python scalar
+    (passed through). Inplace ops (``__name__`` ending in ``_``) are read back
+    from lhs, as in ``run_binary``. The golden is left to the caller: int32
+    results are compared against an int64 reference wrapped with
+    ``wrap_int32``, not against torch's int32 arithmetic.
+    """
+    tt_a = to_int32_tt_tensor(input_a, device)
+    tt_b = to_int32_tt_tensor(input_b, device) if torch.is_tensor(input_b) else input_b
+    if ttnn_op.__name__.endswith("_"):
+        ttnn_op(tt_a, tt_b, **op_kwargs)
+        return ttnn.to_torch(tt_a)
+    return ttnn.to_torch(ttnn_op(tt_a, tt_b, **op_kwargs))
+
+
+def scalar_rows(values, tile_width=32):
+    """Repeat each value across one tile width, (N,) -> (N, 32), so a tensor-scalar
+    sweep spans N / 32 full tiles instead of one padded tile row."""
+    return values.unsqueeze(1).expand(values.numel(), tile_width).contiguous()
 
 
 def run_ternary(device, ttnn_op, input_a, input_b, input_c, *, golden_kwargs=None, **op_kwargs):

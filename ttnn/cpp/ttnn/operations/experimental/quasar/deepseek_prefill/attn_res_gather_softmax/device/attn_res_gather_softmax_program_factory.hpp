@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include "attn_res_gather_softmax_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"

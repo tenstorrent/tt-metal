@@ -80,9 +80,11 @@ FORCE_INLINE void process_sfpu_tiles(
     }
 #else
     copy_init(dfb_post_lhs_id);
+    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_lhs_id, a_one_entry ? 0u : i, i * 2);
     }
+    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 #endif
     reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
 #if B_ROW && !B_FILLED
@@ -94,7 +96,10 @@ FORCE_INLINE void process_sfpu_tiles(
 #if B_ROW && !B_FILLED
         unary_bcast<BroadcastType::ROW>(dfb_post_rhs_id, i, i * 2 + 1);
 #else
+        // One loan per tile: the binary op below works on Dest from MATH, so it cannot run under the loan.
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(dfb_post_rhs_id, b_one_entry ? 0u : i, i * 2 + 1);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 #endif
 #if HAS_ACTIVATIONS(POST)
         // Each tile's post activation runs its own SFPU init, which can overwrite what the binary op set up (a
@@ -306,10 +311,12 @@ void kernel_main() {
         dfb_tail_out.reserve_back(1);
         tile_regs_acquire();
         copy_init(dfb_tail_lhs_id);
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(dfb_tail_lhs_id, 0, 0);
         reconfig_data_format_srca(dfb_tail_lhs_id, dfb_tail_rhs_id);
         copy_init(dfb_tail_rhs_id);
         copy_tile(dfb_tail_rhs_id, 0, 1);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 #if ISCLOSE_OP
         BINARY_SFPU_OP(0, 1, 0, rtol_bits, atol_bits);
 #else

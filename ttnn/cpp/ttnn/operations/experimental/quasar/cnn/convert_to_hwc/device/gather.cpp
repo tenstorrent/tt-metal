@@ -7,7 +7,7 @@
  */
 
 #include "gather.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <algorithm>
 #include <cstring>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"

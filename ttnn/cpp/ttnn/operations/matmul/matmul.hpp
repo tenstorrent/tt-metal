@@ -6,7 +6,7 @@
 
 #include <string>
 #include <variant>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

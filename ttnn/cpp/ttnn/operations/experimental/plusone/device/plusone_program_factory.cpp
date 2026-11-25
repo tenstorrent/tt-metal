@@ -7,10 +7,10 @@
 #include "plusone_device_operation_types.hpp"
 
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 #include <tt-metalium/workload/specification/program_spec.hpp>

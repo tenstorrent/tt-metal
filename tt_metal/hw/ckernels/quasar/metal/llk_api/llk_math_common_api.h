@@ -20,9 +20,6 @@ template <auto...>
 inline constexpr bool always_false_v = false;
 }  // namespace llk_math_detail
 
-// Defined in the Quasar TRISC firmware (trisc.cc); reset per program in llk_math_pack_sync_init.
-extern thread_local bool unpack_math_seeded;
-
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
@@ -98,30 +95,12 @@ inline void llk_math_set_dvalid() {
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  */
-inline void llk_math_wait_for_dest_available() {
-    _llk_math_wait_for_dest_available_();
-
-    if constexpr (UnpackToDestEn) {
-        // First section only! No wait on UNPACK_MATH may be pending when the unpacker's SEMINIT of it lands
-        // and its first post follows that SEMINIT. A program with no sections should never get here.
-        if (!unpack_math_seeded) {
-            WAYPOINT("MHBW");
-            _llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);
-            WAYPOINT("MHBD");
-            unpack_math_seeded = true;
-        }
-        _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
-            semaphore::UNPACK_MATH);
-        // The UNPACK_MATH get is in llk_math_dest_section_done: the tile stays counted until MATH_PACK holds it.
-    }
-}
+inline void llk_math_wait_for_dest_available() { _llk_math_wait_for_dest_available_(); }
 
 /**
- * @brief Signals that the current destination section is done.
- * After math is done, posts to the MATH_PACK semaphore so the packer can proceed; on the unpack-to-dest path it then
- * gets UNPACK_MATH, releasing the unpacker's count for this section. SyncHalf: flips this thread's section base in
- * both paths, so under unpack-to-dest the SFPU follows the bank the unpacker wrote.
- * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @brief Signals that the current Dest section is done.
+ * Posts MATH_PACK so the packer can proceed. In SyncHalf mode, it also switches this thread to the other section.
+ * @tparam EN_32BIT_DEST: Set to true for Dest values with 32 bits in Float32 or Int32 format.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
@@ -129,36 +108,18 @@ inline void llk_math_wait_for_dest_available() {
  */
 template <bool EN_32BIT_DEST>
 inline void llk_math_dest_section_done() {
-    // Always post MATH_PACK, the math thread is in the chain for every op, including the
-    // no-real-work unpack-to-dest forwarder.
-    _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
-    if constexpr (UnpackToDestEn) {
-        // Release the unpacker's count for this section. This comes after the MATH_PACK post on purpose: the section
-        // is then always held by one of the two semaphores, from the unpacker's write until pack releases it.
-        // No stall before the get: the post above already waited for MATH and SFPU, and nothing ran in between.
-        _llk_sync_get_(semaphore::UNPACK_MATH);
-    }
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-        _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
-    }
+    _llk_math_dest_section_done_<DST_SYNC_MODE, EN_32BIT_DEST>();
 }
 
 /**
- * @brief Initializes math–pack synchronization for the destination register.
- * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore. In the
- * unpack-to-dest path it also re-arms the first-section spin in @ref llk_math_wait_for_dest_available.
+ * @brief Initializes synchronization between math and pack for Dest.
+ * Waits for previous packs to finish, resets the destination base, and initializes MATH_PACK and the loan semaphores.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  */
-inline void llk_math_pack_sync_init() {
-    _llk_math_pack_sync_init_<DST_SYNC_MODE>();
-
-    if constexpr (UnpackToDestEn) {
-        unpack_math_seeded = false;
-    }
-}
+inline void llk_math_pack_sync_init() { _llk_math_pack_sync_init_<DST_SYNC_MODE>(); }
 
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
 // The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h

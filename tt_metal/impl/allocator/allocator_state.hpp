@@ -8,8 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 
 namespace tt::tt_metal {
 

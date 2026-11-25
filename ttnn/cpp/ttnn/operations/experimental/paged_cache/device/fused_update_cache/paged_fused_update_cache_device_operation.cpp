@@ -7,9 +7,9 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/program_cache_l1.hpp"
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 using namespace tt::tt_metal;
 
