@@ -424,7 +424,32 @@ void run(bool all_at_once) {
                 for (uint32_t i = 0; i < kBytes / 4; ++i) {
                     wrong += got[i] != pattern(*peer_domain, from, round, i);
                 }
-                if (wrong == 0 || std::chrono::steady_clock::now() > deadline) {
+                if (wrong == 0) {
+                    break;
+                }
+                if (std::chrono::steady_clock::now() > deadline) {
+                    // each wrong packet: stale (zero or last round's), or whose data it holds
+                    std::map<std::string, uint32_t> kinds;
+                    for (uint32_t p = 0; p < kBytes / 4; p += 256) {
+                        if (got[p] == pattern(*peer_domain, from, round, p)) {
+                            continue;
+                        }
+                        std::string kind = "other";
+                        if (got[p] == 0 || (round > 0 && got[p] == pattern(*peer_domain, from, round - 1, p))) {
+                            kind = "stale";
+                        }
+                        for (const auto& [asic, _] : peer.rx) {
+                            for (uint32_t j = 0; j < kBytes / 4; j += 256) {
+                                if (got[p] == pattern(*peer_domain, asic, round, j)) {
+                                    kind = fmt::format("asic {} packet {}", asic, j / 256);
+                                }
+                            }
+                        }
+                        kinds[fmt::format("packet {}: {}", p / 256, kind)]++;
+                    }
+                    for (const auto& [kind, n] : kinds) {
+                        log_error(tt::LogTest, "chip {} from asic {}: {}", node_of.at(to), from, kind);
+                    }
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
