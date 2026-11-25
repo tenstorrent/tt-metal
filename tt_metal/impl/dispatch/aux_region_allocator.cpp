@@ -7,7 +7,7 @@
 #include <cstring>
 #include <utility>
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "dispatch_settings.hpp"

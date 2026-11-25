@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "mesh_coord.hpp"
+#include "tt-metalium/vocabulary/mesh_coord.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 #include <cmath>
@@ -32,9 +32,9 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 #include "gtest/gtest.h"
 

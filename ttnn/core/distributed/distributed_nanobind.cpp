@@ -4,7 +4,7 @@
 
 #include "ttnn/distributed/distributed_nanobind.hpp"
 
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <nanobind/stl/map.h>
 
 #include <tt_stl/reflection.hpp>
@@ -27,16 +27,16 @@
 
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/system_mesh.hpp>
-#include <tt-metalium/maybe_remote.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/vocabulary/maybe_remote.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 #include "ttnn/types.hpp"
@@ -345,6 +345,16 @@ void py_module(nb::module_& mod) {
               in-use state. Call before closing a mesh that has carved submeshes so the shared
               command queue is idle, otherwise close throws "cq is in use by child submesh".
         )doc")
+        .def(
+            "lowest_occupied_compute_l1_address",
+            [](const MeshDevice& self) { return self.lowest_occupied_compute_l1_address(); },
+            R"doc(
+           Lowest L1 address occupied by an L1 buffer, as reported by the mesh's global allocator and the
+           active sub-devices' allocators, or None when they report no L1 buffer. This is the address the
+           runtime checks a program's circular buffers against (they must end below it). It does not cover
+           the L1_SMALL region, which sits above all L1 buffers, nor per-core (HYBRID mode) allocations held
+           by each device's own allocator. It is a snapshot of current allocations.
+       )doc")
         .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,

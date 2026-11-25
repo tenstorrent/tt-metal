@@ -14,7 +14,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 namespace ttnn::experimental {
 

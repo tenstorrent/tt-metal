@@ -17,7 +17,7 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "device_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"

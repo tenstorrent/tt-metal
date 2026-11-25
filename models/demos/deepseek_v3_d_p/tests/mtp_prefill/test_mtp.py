@@ -45,6 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_f
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload_size
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
     MTPDeviceEmbedSource,
     MTPSplitChipLookahead,
@@ -114,13 +115,17 @@ def _assert_level_pcc(expected, actual, pcc: float, k: int, what: str):
     logger.info(f"{what} PCC: {msg}")
 
 
+# The MTP layer's MoE is GLM-5.3's, the MoE block (tt/moe_impl.py): a fabric payload of one combine row and L1_SMALL
+# for the block's persistent words, on every mesh.
+_MTP_DEVICE_KW = dict(
+    fabric_payload_size=moe_block_fabric_payload_size(GLM53Config, GLM53Config.FABRIC_PAYLOAD_SIZE),
+    worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    l1_small_size=GLM53Config.L1_SMALL_SIZE,
+)
 _MESH_PARAMS = [
     pytest.param(
         (8, 4),
-        torus_xy_device_params(
-            fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
-            worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
-        ),
+        torus_xy_device_params(**_MTP_DEVICE_KW),
         2,
         0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -130,14 +135,19 @@ _MESH_PARAMS = [
     # level is a full sparse-MLA block, so 8x4 at SP on axis 1 (TP=8) is not a GLM layout.
     pytest.param(
         (4, 4),
-        torus_x_device_params(
-            fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
-            worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
-        ),
+        torus_x_device_params(**_MTP_DEVICE_KW),
         2,
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="torus-x-4x4-sp1",
+    ),
+    pytest.param(
+        (4, 4),
+        torus_xy_device_params(**_MTP_DEVICE_KW),
+        2,
+        1,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-xy-4x4-sp1",
     ),
 ]
 

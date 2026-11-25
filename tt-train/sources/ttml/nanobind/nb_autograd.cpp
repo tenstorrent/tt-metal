@@ -25,7 +25,7 @@
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 #include "ops/binary_ops.hpp"
-#include "tt-metalium/distributed_context.hpp"
+#include "tt-metalium/mesh/multihost/distributed_context.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

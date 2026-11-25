@@ -8,10 +8,10 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <sys/types.h>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <cmath>
@@ -26,30 +26,30 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "llk_device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <impl/context/metal_context.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/mxfp4.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/data_formats/mxfp4.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 #include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
@@ -821,9 +821,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
     }
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     std::vector<std::uint32_t> shape = {1, 3, 19 * TILE_HEIGHT, 17 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -868,9 +865,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -910,9 +904,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -961,9 +952,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -1013,9 +1001,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -1061,9 +1046,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHWMathOnly) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);

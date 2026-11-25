@@ -23,19 +23,19 @@
 
 #include <tt_stl/reflection.hpp>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 
-#include <tt-metalium/tensor/tensor_types.hpp>
-#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -43,12 +43,12 @@
 #include <numeric>
 #include <tuple>
 
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
 
 #include "impl/tensor/mesh_tensor_impl.hpp"

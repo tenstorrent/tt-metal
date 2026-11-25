@@ -9,7 +9,7 @@
 #include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt_stl/overloaded.hpp>
 
 namespace ttnn::experimental::prim {
