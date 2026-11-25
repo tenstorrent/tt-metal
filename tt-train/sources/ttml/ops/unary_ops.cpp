@@ -63,7 +63,9 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant)
 autograd::TensorPtr silu(const autograd::TensorPtr& tensor) {
     auto out = autograd::create_tensor(ttnn::silu(tensor->get_value()));
     autograd::GradFunction grad = [tensor, out]() {
-        auto res = ttnn::silu_bw(out->get_grad(), tensor->get_value());
+        // An explicit output placement keeps ttnn on its BF16 SFPU kernel when the upstream gradient is placed
+        // differently from the input; without one it falls back to the composite.
+        auto res = ttnn::silu_bw(out->get_grad(), tensor->get_value(), tensor->get_value().memory_config());
         tensor->add_grad(res[0].value());
     };
 

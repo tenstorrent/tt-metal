@@ -15,6 +15,7 @@
 #include "ops/unary_ops.hpp"
 #include "test_utils/bf16_ulp.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 class SiLUOpTest : public ::testing::Test {
 protected:
@@ -210,4 +211,25 @@ TEST_F(SiLUOpTest, SiLU_Backward_WideRange_vs_Reference) {
     result->backward();
     test_utils::expect_each_within_bf16_ulp(
         core::to_xtensor(input->get_grad()), expected, "silu backward", kSiluGradMaxUlp);
+}
+
+// The upstream gradient in L1 and the input in DRAM: ttnn::silu_bw keeps its accurate kernel only when it is told
+// where the result goes, and otherwise falls back to a composite that loses bits near the zero of silu'.
+TEST_F(SiLUOpTest, SiLU_Backward_GradientInL1_InputInDram_vs_Reference) {
+    using namespace ttml;
+
+    const std::vector<uint32_t> shape = {2, 1, 64, 512};
+    const auto input_data = test_utils::make_uniform_xarray<float>(shape, -8.0F, 8.0F, 11U);
+
+    auto input = autograd::create_tensor(
+        core::from_xtensor(input_data, &autograd::ctx().get_device()), /* requires_grad */ true);
+    ASSERT_EQ(input->get_value().memory_config().buffer_type(), tt::tt_metal::BufferType::DRAM);
+    const xt::xarray<double> expected = silu_grad_reference(xt::cast<double>(core::to_xtensor(input->get_value())));
+
+    auto result = ops::silu(input);
+    result->set_grad(ttnn::to_memory_config(core::ones_like(result->get_value()), ttnn::L1_MEMORY_CONFIG));
+    result->backward();
+    EXPECT_EQ(input->get_grad().memory_config().buffer_type(), tt::tt_metal::BufferType::DRAM);
+    test_utils::expect_each_within_bf16_ulp(
+        core::to_xtensor(input->get_grad()), expected, "silu backward, L1 gradient", kSiluGradMaxUlp);
 }
