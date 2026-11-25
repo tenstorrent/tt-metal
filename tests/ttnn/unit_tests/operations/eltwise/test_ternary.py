@@ -354,6 +354,20 @@ def test_addcdiv_rejects_integer_dtypes(device, expect_error, a_dtype, b_dtype, 
         ttnn.addcdiv(make(a_dtype), make(b_dtype), make(c_dtype), value=1.0)
 
 
+@pytest.mark.parametrize("out_dtype, pcc", [(ttnn.bfloat8_b, 0.999), (ttnn.bfloat4_b, 0.97)], ids=["bfp8", "bfp4"])
+def test_addcmul_block_float_output(device, out_dtype, pcc):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 64)
+    in_data = [torch.empty(shape, dtype=torch.bfloat16).uniform_(-4, 4) for _ in range(3)]
+    expected = torch.addcmul(*[t.float() for t in in_data], value=0.5)
+
+    inputs = [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in in_data]
+    output = ttnn.from_torch(torch.zeros(shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.addcmul(*inputs, value=0.5, output_tensor=output)
+
+    assert_with_pcc(expected, ttnn.to_torch(output).float(), pcc)
+
+
 def test_addcdiv_rejects_integer_output(device, expect_error):
     shape = (1, 1, 32, 32)
     inputs = [

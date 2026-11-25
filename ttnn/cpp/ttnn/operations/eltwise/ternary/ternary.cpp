@@ -126,22 +126,36 @@ std::span<const DataType> supported_dtypes(TernaryOpType op_type) {
     TT_THROW("Unknown TernaryOpType {}", static_cast<int>(op_type));
 }
 
+// Block-float conversion happens when packing the result, so a float op can write BFLOAT8_B and
+// BFLOAT4_B into a preallocated output even when it does not accept them as inputs.
+std::span<const DataType> supported_output_dtypes(TernaryOpType op_type) {
+    using enum DataType;
+    static constexpr std::array addcmul_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT32, UINT32};
+    static constexpr std::array snake_beta_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B};
+    switch (op_type) {
+        case TernaryOpType::ADDCMUL: return addcmul_dtypes;
+        case TernaryOpType::SNAKE_BETA: return snake_beta_dtypes;
+        default: return supported_dtypes(op_type);
+    }
+}
+
 void validate_dtypes(
     TernaryOpType op_type, std::initializer_list<DataType> input_dtypes, const std::optional<Tensor>& output) {
-    const auto supported = supported_dtypes(op_type);
-    auto check = [&](DataType dtype) {
+    auto check = [&](DataType dtype, std::span<const DataType> supported, const char* role) {
         TT_FATAL(
             std::ranges::find(supported, dtype) != supported.end(),
-            "{} does not support {}. Supported dtypes: {}",
+            "{} does not support {} {}. Supported {} dtypes: {}",
             enchantum::to_string(op_type),
             dtype,
+            role,
+            role,
             fmt::format("{}", fmt::join(supported, ", ")));
     };
     for (DataType dtype : input_dtypes) {
-        check(dtype);
+        check(dtype, supported_dtypes(op_type), "input");
     }
     if (output.has_value()) {
-        check(output->dtype());
+        check(output->dtype(), supported_output_dtypes(op_type), "output");
     }
 }
 
