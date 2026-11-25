@@ -5,32 +5,31 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
-#include <climits>
-#include <type_traits>
-
-using RouteEntry = std::remove_extent_t<decltype(PACKET_HEADER_TYPE::route_buffer)>;
-constexpr uint32_t kEntriesPerArg = sizeof(uint32_t) / sizeof(RouteEntry);
-constexpr uint32_t kEntryBits = sizeof(RouteEntry) * CHAR_BIT;
-
-// One connection, the same route, to each destination in turn.
+// To each destination in turn over one connection: the cable's, or (behind) a router's toward the exit chip, whose
+// route ends out the cable.
 void kernel_main() {
     size_t i = 0;
     const uint32_t src_addr = get_arg_val<uint32_t>(i++);
     const uint32_t header_addr = get_arg_val<uint32_t>(i++);
     const uint32_t num_packets = get_arg_val<uint32_t>(i++);
     const uint32_t packet_size = get_arg_val<uint32_t>(i++);
-    const uint32_t route_len = get_arg_val<uint32_t>(i++);
+    const uint32_t behind = get_arg_val<uint32_t>(i++);
+    const uint32_t exit_chip = get_arg_val<uint32_t>(i++);
+    const uint32_t exit_mesh = get_arg_val<uint32_t>(i++);
+    const uint32_t out_cable = get_arg_val<uint32_t>(i++);  // the perimeter direction's action bit
     auto* header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_addr);
     for (uint32_t w = 0; w < sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t); w++) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(header_addr)[w] = 0;
     }
-    uint32_t word = 0;
-    for (uint32_t b = 0; b < route_len; b++) {
-        if (b % kEntriesPerArg == 0) {
-            word = get_arg_val<uint32_t>(i++);
+    if (behind) {
+        fabric_set_unicast_route(header, exit_chip, exit_mesh);
+        for (uint32_t b = 0; b < sizeof(header->route_buffer); b++) {
+            if (header->route_buffer[b] & Routing2DCodec::ACTION_LOCAL_DELIVER) {
+                header->route_buffer[b] = out_cable;
+            }
         }
-        header->route_buffer[b] = static_cast<RouteEntry>(word >> (kEntryBits * (b % kEntriesPerArg)));
     }
     const uint32_t num_dsts = get_arg_val<uint32_t>(i++);
     const size_t dsts = i;
