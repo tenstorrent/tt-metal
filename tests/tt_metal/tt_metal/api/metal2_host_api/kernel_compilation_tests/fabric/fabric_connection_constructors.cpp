@@ -49,6 +49,16 @@ void kernel_main() {
 }
 )";
 
+constexpr const char* kConnectionManagerFromOptionalBindingsKernel = R"(
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+void kernel_main() {
+    auto connections = FabricConnectionManager::build_from_optional_bindings<
+        FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION>(
+        fabric::get_token_if_present<"fwd">(), fabric::get_token_if_present<"bwd">());
+    connections.close();
+}
+)";
+
 constexpr const char* kRoutingPlaneKernel = R"(
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
@@ -100,6 +110,49 @@ TEST_F(ProgramSpecFabric1DTest, CPU_ConnectionManagerBuiltFromBindingJITSmoke) {
     ProgramSpec spec = MakeSpecWithFabricConnectionForTest(MakeFabricConnectionForTest(
         experimental::Fabric1DTargets{fixture_neighbour_direction(), fixture_other_neighbour_direction()}));
     spec.kernels[0].source = KernelSpec::SourceCode{kConnectionManagerKernel};
+    EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_ConnectionManagerFromOnlyForwardBindingJITSmoke) {
+    // A kernel builds a FabricConnectionManager from optional bindings when only the forward one is bound.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()}));
+    spec.kernels[0].advanced_options.fabric_connection_bindings[0].accessor_name = "fwd";
+    spec.kernels[0].source = KernelSpec::SourceCode{kConnectionManagerFromOptionalBindingsKernel};
+    EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_ConnectionManagerFromOnlyBackwardBindingJITSmoke) {
+    // The same kernel source compiles when only the backward binding is bound.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()}));
+    spec.kernels[0].advanced_options.fabric_connection_bindings[0].accessor_name = "bwd";
+    spec.kernels[0].source = KernelSpec::SourceCode{kConnectionManagerFromOptionalBindingsKernel};
+    EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_ConnectionManagerFromForwardAndBackwardBindingsJITSmoke) {
+    // The same kernel source compiles when a forward and a backward binding are both bound.
+    experimental::FabricConnectionsSpec backward =
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_other_neighbour_direction()});
+    backward.unique_id = experimental::FabricConnectionsSpecName{"backward"};
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()}));
+    spec.kernels[0].advanced_options.fabric_connection_bindings[0].accessor_name = "fwd";
+    spec.advanced_options.fabric_connections.push_back(backward);
+    spec.kernels[0].advanced_options.fabric_connection_bindings.push_back(experimental::FabricConnectionBinding{
+        .fabric_connections_spec_name = backward.unique_id, .accessor_name = "bwd"});
+    spec.kernels[0].source = KernelSpec::SourceCode{kConnectionManagerFromOptionalBindingsKernel};
+    EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_ConnectionManagerFromNoBindingJITSmoke) {
+    // The same kernel source compiles in a KernelSpec that binds no fabric connection.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()}));
+    spec.advanced_options.fabric_connections.clear();
+    spec.kernels[0].advanced_options.fabric_connection_bindings.clear();
+    spec.kernels[0].source = KernelSpec::SourceCode{kConnectionManagerFromOptionalBindingsKernel};
     EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
 }
 
