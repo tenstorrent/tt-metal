@@ -777,6 +777,15 @@ def all_gather_matmul_prefill(
     return out
 
 
+PREFILL_GDN_GLUE_ENV = "QWEN36_PREFILL_GDN_GLUE"
+
+
+def prefill_gdn_b_select_enabled():
+    """QWEN36_PREFILL_GDN_GLUE=1 (default 0): the GDN prefill takes b out of the [a | b] block of the qkvzab projection
+    with an exact one-hot matmul instead of a slice (TPGatedDeltaNet._select_b)."""
+    return os.environ.get(PREFILL_GDN_GLUE_ENV, "0") == "1"
+
+
 def mlp_gateup_agmm_enabled(num_devices):
     """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather)."""
     return num_devices > 1

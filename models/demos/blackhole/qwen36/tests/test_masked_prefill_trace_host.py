@@ -314,7 +314,7 @@ def _gdn_layer(monkeypatch, log):
     dn.prefill_init = None
     dn.prefill_checkpoint_buffers = None
     dn._prefill_init_zero = True
-    dn._project_qkvzab = lambda x, T, out_mc=None: (Dev("qkv"), Dev("z"), Dev("a"), Dev("b"))
+    dn._project_qkvzab = lambda x, T, out_mc=None, select_b=False: (Dev("qkv"), Dev("z"), Dev("a"), Dev("b"))
 
     def fir(qkv, weight, bias, k, mesh, **kw):
         log.append(("conv", kw.get("valid_len"), getattr(kw.get("new_state_select"), "name", None)))
