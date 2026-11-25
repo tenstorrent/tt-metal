@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-# M3 model A/B in ONE process (one 128K load): baseline without staging, then variants.
+# Model A/B of the weight staging in ONE process (one 128K load): baseline without staging, then variants.
 # A variant is JSON: {"tag": str, "ov": {tt/mk/overlap.install kwargs} or null (no staging), "pipe":
 # {tt/mk/pipe_stage.PipeOverlap kwargs} (staging by the DRAM cores), "norm": bool (fused MoE
 # norm, tt/mk/moe_norm.py)}. Per variant: trace capture, 6 traced positions' logits vs baseline (bit-equal, max abs,
 # PCC, argmax), replay bit-equal, median ms of 3 x 10 steps at pos 2048 and 122880, overlap stats. DRAM-busy fraction
-# = GB per step (P3: 4.864 / 7.230) / (ms * 443 GB/s).
-# usage: python models/demos/inkling2_mini/tests/m3_model_ab.py <out.jsonl> '<variant json>' ...
+# = GB per step (profiled: 4.864 / 7.230) / (ms * 443 GB/s).
+# usage: python models/demos/inkling2_mini/tests/staging_model_ab.py <out.jsonl> '<variant json>' ...
 # "experts": {tt/mk/expert_overlap.ExpertOverlap kwargs} (guessed experts streamed ahead; needs a PF-layout cache).
 # "hold": KB (L1 probe): one extra lock-step L1 tensor of that many KB per core on the expert step's worker cores.
-# M3_EAGER_ONLY=1 (mock device): two eager steps per variant, no traces, no numbers.
+# AB_EAGER_ONLY=1 (mock device): two eager steps per variant, no traces, no numbers.
 import json
 import os
 import statistics
@@ -29,7 +29,7 @@ from models.demos.inkling2_mini.tt.model import Inkling2Model
 OUT = sys.argv[1]
 VARIANTS = [json.loads(v) for v in sys.argv[2:]]
 GB = {2048: 4.864, 122880: 7.230}
-EAGER = bool(os.environ.get("M3_EAGER_ONLY"))
+EAGER = bool(os.environ.get("AB_EAGER_ONLY"))
 dev = ttnn.open_device(device_id=0, trace_region_size=512 << 20)
 
 
@@ -72,7 +72,7 @@ def emit(res):
 
 try:
     m = Inkling2Model(
-        dev, max_ctx=4096 if EAGER else 131072, log=print if os.environ.get("M3_LOG") else (lambda s: None)
+        dev, max_ctx=4096 if EAGER else 131072, log=print if os.environ.get("AB_LOG") else (lambda s: None)
     )
     m.set_inputs(0, 2048 if EAGER else 0)
     m.step()

@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-# M2 unit check: w_all (local, 2304 x 8608 BFP8) as attention's BankLinear (kb 2, 2 cores/bank, bf16 out).
+# Weight staging unit check: w_all (local, 2304 x 8608 BFP8) as attention's BankLinear (kb 2, 2 cores/bank, bf16 out).
 #  1. split 1/3/5 (14/42/70 cores) and staged (prefix from L1) outputs bit-equal to split 1;
 #  2. traced times: linear alone, fill alone, staged linear alone;
 #  3. overlap: [busy 1-core program; linear] vs [busy program + fill kernels in ONE program; staged linear].
-# usage: python models/demos/inkling2_mini/tests/m2_stage_check.py <out.jsonl> [busy_us]
+# usage: python models/demos/inkling2_mini/tests/stage_check.py <out.jsonl> [busy_us]
 import json
 import os
 import sys
@@ -91,7 +91,7 @@ try:
         ttnn.generic_op([x, x], busy_prog(bcore))
         ym = ttnn.to_torch(merged()).float()
         res["bit_equal_merged"] = bool(torch.equal(ym, ref))
-        if os.environ.get("M2_EAGER_ONLY"):  # mock device: compile every program, no traces
+        if os.environ.get("AB_EAGER_ONLY"):  # mock device: compile every program, no traces
             print("M2STAGE", json.dumps(res), flush=True)
             ttnn.deallocate(st.stage)
             continue

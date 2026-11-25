@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-# M2 model A/B in ONE process (one 128K load): baseline, then tt/mk/overlap.py variants.
+# Model A/B of the weight fill pieces in ONE process (one 128K load): baseline, then tt/mk/overlap.py variants.
 # A variant prefixed 'twin0,' / 'twin1,' first sets the MoE output's dense twin off / on (moe_bank DENSE_OUT); a
 # variant that is only 'twin1' runs without the overlap.
 # Per variant: trace capture, 6 traced positions' logits (bit-equal vs baseline, replay), median ms of 3 x 10 steps at
-# pos 2048 and 122880, overlap stats. DRAM-busy fraction = GB per step (P3: 4.864 / 7.230) / (ms * 443 GB/s).
-# usage: python models/demos/inkling2_mini/tests/m2_model_ab.py <out.jsonl> [variant ...]   variant = weights:split:staged_kb:parts:max_cores
+# pos 2048 and 122880, overlap stats. DRAM-busy fraction = GB per step (profiled: 4.864 / 7.230) / (ms * 443 GB/s).
+# usage: python models/demos/inkling2_mini/tests/overlap_model_ab.py <out.jsonl> [variant ...]   variant = weights:split:staged_kb:parts:max_cores
 #   e.g. w_all:3:0:4:1 or w_all+w_o:3:0:4:1 (staged_kb 0 = all)
 import json
 import os
@@ -71,7 +71,7 @@ try:
                     F._TWIN.pop(id(f._last), None)
                     f._last = None
 
-    if os.environ.get("M2_EAGER_ONLY"):  # mock device: compile every program of an eager step per variant, no traces
+    if os.environ.get("AB_EAGER_ONLY"):  # mock device: compile every program of an eager step per variant, no traces
         import models.demos.inkling2_mini.tt.mk.moe_norm as MN
 
         for v in VARIANTS:
@@ -106,7 +106,7 @@ try:
             print("M2EAGER", v, json.dumps(ov.stats()), flush=True)
             ov.uninstall(m)
         sys.exit(0)
-    TWIN0 = os.environ.get("M2_BASE_TWIN", "0") == "1"
+    TWIN0 = os.environ.get("AB_BASE_TWIN", "0") == "1"
     set_twin(TWIN0)
     m.step()
     m.step()
@@ -153,7 +153,7 @@ try:
             max_cores=mc,
             exclude_rows=xr,
             gates=gates,
-            budget=None,  # M2 mode (equal pieces on single-core hosts)
+            budget=None,  # parts mode (equal pieces on single-core hosts)
         )
         try:
             m.step()  # two eager steps: the attach pattern is periodic from the 2nd step on (capture must not see new
