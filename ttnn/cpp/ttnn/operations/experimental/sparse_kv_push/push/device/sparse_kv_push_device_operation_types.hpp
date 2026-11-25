@@ -23,6 +23,9 @@ struct SparseKvPushParams {
     uint32_t num_links = 2;
     CoreRangeSet core_grid;
     uint32_t sp_axis = 0;
+    // kRest only: the push before this one was the kPrefix of the same plan into the same output, so the writers skip
+    // the start fence (see the program factory).
+    bool after_prefix = false;
     tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
 
     // Not hashed: runtime args, patched and validated on every dispatch.

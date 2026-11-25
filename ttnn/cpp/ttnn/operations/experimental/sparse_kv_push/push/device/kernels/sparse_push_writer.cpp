@@ -85,7 +85,7 @@ void kernel_main() {
     auto* done_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem);
 
     auto run = [&](auto& conn) {
-    // Start fence (not for the rest part: see the program factory).
+    // Start fence (skipped for a kRest right after its kPrefix: see the program factory).
 #ifndef SKIP_START_FENCE
         if (link == 0 && sender_index == 0) {
             const uint64_t remote_ready = get_noc_addr(sync_core_x, sync_core_y, ready_sem);

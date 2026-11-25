@@ -158,6 +158,9 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
         "the sparse KV push needs a DRAM bank count that is a multiple of {}, got {}",
         ::sparse_push::kBatch,
         mesh_device->num_dram_channels());
+    TT_FATAL(
+        !params.after_prefix || params.part == SparseKvPushPart::kRest,
+        "after_prefix applies only to the rest part of the sparse KV push");
     TT_FATAL(params.sp_axis < 2, "the sparse KV push's sp_axis must be 0 or 1, got {}", params.sp_axis);
     validate_stripe_chunk(params.stripe_chunk, params.max_rows);
     validate_semaphore_placement(params, mesh_device);
@@ -238,6 +241,7 @@ ttsl::hash::hash_t program_hash(const SparseKvPushParams& params, const SparseKv
         params.num_links,
         params.core_grid,
         params.sp_axis,
+        params.after_prefix,
         params.fabric_config,
         mesh_device->shape(),
         tensor_args.input_tensor.tensor_spec(),
@@ -323,7 +327,8 @@ Tensor sparse_kv_push(
     uint32_t batch_slot_num_layers,
     uint32_t batch_slot_layer_idx,
     const std::optional<CoreRangeSet>& core_grid,
-    uint32_t sp_axis) {
+    uint32_t sp_axis,
+    bool after_prefix) {
     using namespace ttnn::operations::experimental::sparse_kv_push;
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "sparse_kv_push input must be on device");
@@ -337,6 +342,7 @@ Tensor sparse_kv_push(
             .num_links = num_links,
             .core_grid = grid,
             .sp_axis = sp_axis,
+            .after_prefix = after_prefix,
             .fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device),
             .ready_semaphore = ready_semaphore,
             .done_semaphore = done_semaphore,

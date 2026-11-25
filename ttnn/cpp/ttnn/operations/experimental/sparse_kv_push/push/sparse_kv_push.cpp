@@ -26,7 +26,8 @@ Tensor sparse_kv_push(
     uint32_t batch_slot_num_layers,
     uint32_t batch_slot_layer_idx,
     const std::optional<CoreRangeSet>& core_grid,
-    uint32_t sp_axis) {
+    uint32_t sp_axis,
+    bool after_prefix) {
     return ttnn::prim::sparse_kv_push(
         input_tensor,
         output_tensor,
@@ -42,7 +43,8 @@ Tensor sparse_kv_push(
         batch_slot_num_layers,
         batch_slot_layer_idx,
         core_grid,
-        sp_axis);
+        sp_axis,
+        after_prefix);
 }
 
 bool is_sparse_kv_push_supported(MeshDevice* mesh_device, uint32_t stripe_chunk, uint32_t max_rows) {

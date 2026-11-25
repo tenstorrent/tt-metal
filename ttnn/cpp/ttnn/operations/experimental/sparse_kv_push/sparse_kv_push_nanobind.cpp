@@ -186,6 +186,9 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
                     it and ``t`` on the other axis owns blocks ``s * chips_on_other_axis + t`` (+ ``k * chips``).
                     Axis 0 is row-major chip order. Must match how the plan's owners are ordered (block ``b`` on
                     owner ``b % chips``).
+                after_prefix: Only with ``part=REST``, when the previous push into ``output_tensor`` was the
+                    ``PREFIX`` of the same plan: the push then skips its start fence (that prefix already fenced the
+                    buffer). Leave False for a standalone rest push.
 
             Returns:
                 ttnn.Tensor: ``output_tensor``, holding the pushed rows. Each chip's rows differ, so it is labelled
@@ -207,7 +210,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("batch_slot_num_layers") = 1,
         nb::arg("batch_slot_layer_idx") = 0,
         nb::arg("core_grid") = nb::none(),
-        nb::arg("sp_axis") = 0);
+        nb::arg("sp_axis") = 0,
+        nb::arg("after_prefix") = false);
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push::detail
