@@ -35,10 +35,9 @@ using test_helpers::ProgramSpecTestGen1;
 // and actually compiles: the on-hardware compute test (TtKernelNamedArgsLoopbackCompute) skips in
 // CI, and the shim unit tests only check the generated string, not its genfiles wiring.
 //
-// (A Quasar variant would also exercise the 4th TRISC, isolate_sfpu, but mock-Quasar JIT-compile
-// isn't wired up in this checkout — the Quasar TRISC firmware objects aren't built, so the link
-// step fails. The fix is arch-correct by construction regardless: the shim is appended to the same
-// source for every TRISC, and run_kernel() calls kernel_main() on Quasar too.)
+// (A Quasar variant would also exercise the 4th TRISC, isolate_sfpu. The shim is arch-correct by
+// construction regardless: it is appended to the same source for every TRISC, and run_kernel()
+// calls kernel_main() on Quasar too.)
 
 // Minimal TT_KERNEL compute entry: CTAs as template params, RTA/CRTA as function params, producing
 // into a DFB. The point is solely that the kernel_main() shim is generated on the TRISC path and

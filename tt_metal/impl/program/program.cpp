@@ -3382,13 +3382,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     Inspector::program_compile_started(this, device, build_env.build_key());
 
-    // Currently JIT compile on Quasar mock devices is non functional
-    if (cluster.get_target_device_type() == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) {
-        compiled_.insert(build_env.build_key());
-        Inspector::program_compile_finished(this, device, build_env.build_key());
-        return;
-    }
-
     // Emule never links a real RISC-V kernel binary -- DispatchCompiledProgramToDevice already skips
     // this function for Emule, JIT-compiling to x86 in execute_program_emulated instead. Eager callers
     // (the Metal 2.0 Program/MeshWorkload constructors) reach compile() directly, so skip here too.
