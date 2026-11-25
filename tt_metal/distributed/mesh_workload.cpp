@@ -711,6 +711,14 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
         mesh_device->wait_for_thread_pool();
     }
     finalize_offsets(mesh_device);
+    if (trace_allocation_overlap_only_enabled()) [[unlikely]] {
+        // Replay rewrites the captured programs' static circular buffers; they count as memory the capture used.
+        uint64_t region_end = 0;
+        for (auto& [_, program] : programs_) {
+            region_end = std::max(region_end, program.impl().static_l1_region_end());
+        }
+        mesh_device->impl().record_trace_l1_region(region_end);
+    }
 }
 
 void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {

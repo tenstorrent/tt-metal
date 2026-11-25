@@ -629,6 +629,8 @@ public:
     // True if a cached compile_and_allocate on `device` may replace the full CB/DFB validation with the
     // lockstep L1 frontier check.
     bool simple_l1_validation_usable(const IDevice* device) const;
+    // End of this program's static CB and DFB L1 region once compiled and allocated (0 when it has none).
+    uint64_t static_l1_region_end() const { return simple_l1_validation_region_end_; }
     void validate_dataflow_buffer_region(const IDevice* device);
     // Ensures that circular buffer core ranges are within the device compute grid
     void validate_circular_buffer_core_ranges(const IDevice* device);

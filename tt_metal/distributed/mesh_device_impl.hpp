@@ -302,6 +302,10 @@ public:
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(
         SubDeviceManagerId manager_id, const MeshTraceId& trace_id) const;
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ranges(const MeshTraceId& trace_id) const;
+    void verify_no_trace_overlaps(const MeshTraceId& trace_id) const;
+    // Overlap mode: counts the static L1 region of a program enqueued while a trace is captured.
+    void record_trace_l1_region(DeviceAddr region_end);
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
 

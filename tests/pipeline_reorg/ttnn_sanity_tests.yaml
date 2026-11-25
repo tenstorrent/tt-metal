@@ -356,6 +356,7 @@
     pytest --timeout 300 tests/ttnn/unit_tests/test_trace_allocation_tracker_config.py -xv
     TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking' -xv
     TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking_acknowledgments_and_lifetime' -xv
+    TT_METAL_TRACE_ALLOC_OVERLAP=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_overlap' -xv
   skus:
     bh_p150b_civ2:
       timeout: 10

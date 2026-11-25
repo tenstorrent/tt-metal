@@ -37,7 +37,8 @@ AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     view_(std::make_unique<Allocator>(this)),
     tracking_enabled_(trace_allocation_tracking_enabled()),
     traceback_capture_enabled_(tracking_enabled_ && trace_allocation_diagnostics_enabled()),
-    skip_program_cache_(trace_allocation_skip_program_cache_enabled()) {
+    skip_program_cache_(trace_allocation_skip_program_cache_enabled()),
+    overlap_only_(tracking_enabled_ && trace_allocation_overlap_only_enabled()) {
     // Aggregate allocation queries need every tracking-enabled allocator, even
     // when traceback diagnostics are disabled.
     if (tracking_enabled_) {
@@ -183,10 +184,11 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
         buffer->impl().set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
+        const DeviceAddr first_address = buffer->impl().per_core_addresses_.at(cores[0]);
         if (tracking_enabled_ && !unsafe_tracked_ids_by_manager_and_trace_.empty()) [[unlikely]] {
-            this->record_allocation_if_unsafe(buffer);
+            this->record_allocation_if_unsafe(buffer, first_address);
         }
-        return buffer->impl().per_core_addresses_.at(cores[0]);
+        return first_address;
     }
 
     switch (buffer_type) {
@@ -290,8 +292,10 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
-    if (tracking_enabled_ && !unsafe_tracked_ids_by_manager_and_trace_.empty()) [[unlikely]] {
-        this->record_allocation_if_unsafe(buffer);
+    if (tracking_enabled_ && (!unsafe_tracked_ids_by_manager_and_trace_.empty() || !capturing_footprints_.empty()))
+        [[unlikely]] {
+        this->record_trace_footprint(buffer, address);
+        this->record_allocation_if_unsafe(buffer, address);
     }
     return address;
 }

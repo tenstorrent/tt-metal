@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gc
+import re
 import tempfile
 import threading
 import typing
@@ -163,7 +164,8 @@ def test_single_device_multi_trace(device, shape, blocking):
 
 @skip_for_slow_dispatch()
 @pytest.mark.skipif(
-    not trace_allocation_tracker.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup"
+    not trace_allocation_tracker.TRACE_ALLOC_TRACKING or trace_allocation_tracker.TRACE_ALLOC_OVERLAP,
+    reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 (without TT_METAL_TRACE_ALLOC_OVERLAP) at startup",
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}, {"trace_region_size": 0}], indirect=True)
 def test_trace_allocation_tracking_is_per_trace(device, expect_error):
@@ -211,7 +213,8 @@ def test_trace_allocation_tracking_is_per_trace(device, expect_error):
 
 @skip_for_slow_dispatch()
 @pytest.mark.skipif(
-    not trace_allocation_tracker.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup"
+    not trace_allocation_tracker.TRACE_ALLOC_TRACKING or trace_allocation_tracker.TRACE_ALLOC_OVERLAP,
+    reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 (without TT_METAL_TRACE_ALLOC_OVERLAP) at startup",
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
 def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_error):
@@ -338,6 +341,156 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
         ttnn.release_trace(device, trace_id)
 
     assert trace_output.is_allocated()
+
+
+def _capture_trace_with_freed_intermediate(device, memory_config):
+    """Capture a trace whose capture allocates and frees an intermediate; return its address."""
+    shape = ttnn.Shape((1, 1, 32, 32))
+    trace_input = ttnn.allocate_tensor_on_device(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config)
+    ttnn.neg(ttnn.neg(trace_input, memory_config=memory_config), memory_config=memory_config)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    intermediate = ttnn.neg(trace_input, memory_config=memory_config)
+    intermediate_address = intermediate.buffer_address()
+    trace_output = ttnn.neg(intermediate, memory_config=memory_config)
+    intermediate.deallocate()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    def allocate():
+        return ttnn.allocate_tensor_on_device(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config)
+
+    return trace_id, trace_input, trace_output, intermediate_address, allocate
+
+
+def _allocate_into(allocate, address, max_tries=8):
+    """Allocate same-size buffers until one lands at ``address``; return it and the others."""
+    others = []
+    for _ in range(max_tries):
+        tensor = allocate()
+        if tensor.buffer_address() == address:
+            return tensor, others
+        others.append(tensor)
+    raise AssertionError(f"no allocation landed at {address:#x}: {[f'{t.buffer_address():#x}' for t in others]}")
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.skipif(
+    not trace_allocation_tracker.TRACE_ALLOC_OVERLAP, reason="requires TT_METAL_TRACE_ALLOC_OVERLAP=1 at startup"
+)
+@pytest.mark.parametrize(
+    "memory_config, buffer_type", [(ttnn.DRAM_MEMORY_CONFIG, "DRAM"), (ttnn.L1_MEMORY_CONFIG, "L1")]
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_trace_allocation_overlap_reports_only_overlapping_buffers(device, memory_config, buffer_type, expect_error):
+    trace_id, _, trace_output, intermediate_address, allocate = _capture_trace_with_freed_intermediate(
+        device, memory_config
+    )
+    try:
+        # Lands in the freed intermediate's memory, which replay writes.
+        victim, fillers = _allocate_into(allocate, intermediate_address)
+        victim_id = victim.buffer_unique_id()
+        # Also allocated after the capture, but outside the memory the capture used.
+        bystanders = fillers + [allocate()]
+        bystander_ids = [tensor.buffer_unique_id() for tensor in bystanders]
+
+        unsafe = ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+        assert set(unsafe) == {victim_id}
+        ranges = ttnn._ttnn.operations.trace.get_unsafe_tracked_ranges(device, trace_id)
+        assert ranges[victim_id].startswith(f"{buffer_type} [{intermediate_address:#x}, ")
+
+        with expect_error(RuntimeError, rf"before replay of trace {int(trace_id)} in memory its capture used") as error:
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert re.search(rf"Buffer {victim_id}\b", str(error.value))
+        assert f"{buffer_type} [{intermediate_address:#x}, " in str(error.value)
+        assert not any(re.search(rf"Buffer {bystander_id}\b", str(error.value)) for bystander_id in bystander_ids)
+
+        # The replay itself refuses too, for callers that bypass the Python wrapper.
+        with expect_error(RuntimeError, rf"Replaying trace {int(trace_id)} would overwrite 1 live buffer") as error:
+            ttnn._ttnn_execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert re.search(rf"buffer {victim_id}\b", str(error.value))
+        assert f"{buffer_type} [{intermediate_address:#x}, " in str(error.value)
+
+        victim.deallocate()
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert all(tensor.is_allocated() for tensor in bystanders)
+    finally:
+        ttnn.release_trace(device, trace_id)
+
+    # A released trace no longer counts.
+    late, _ = _allocate_into(allocate, intermediate_address)
+    assert late.is_allocated()
+    assert not ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+    assert trace_output.is_allocated()
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.skipif(
+    not trace_allocation_tracker.TRACE_ALLOC_OVERLAP, reason="requires TT_METAL_TRACE_ALLOC_OVERLAP=1 at startup"
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_trace_allocation_overlap_reports_l1_in_traced_circular_buffers(device, expect_error):
+    # Every buffer the capture allocates is in DRAM; in L1 the trace only uses its programs' circular buffers.
+    shape = ttnn.Shape((1, 1, 32, 32))
+    trace_input = ttnn.allocate_tensor_on_device(
+        shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn.neg(trace_input, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    trace_output = ttnn.neg(trace_input, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    # Fill L1 so that the lowest buffers reach down into the circular-buffer region.
+    l1_tensors = []
+    try:
+        while len(l1_tensors) < 4096:
+            l1_tensors.append(
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape((1, 1, 128, 1024)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+                )
+            )
+    except RuntimeError as error:
+        assert "Out of Memory" in str(error)
+    try:
+        by_id = {tensor.buffer_unique_id(): tensor for tensor in l1_tensors}
+        unsafe = ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+        assert unsafe and set(unsafe) <= set(by_id)
+        ranges = ttnn._ttnn.operations.trace.get_unsafe_tracked_ranges(device, trace_id)
+        assert all(ranges[buffer_id].startswith("L1 [") for buffer_id in unsafe)
+        # Only the lowest L1 buffers count: each reported buffer sits below every buffer that is not reported.
+        reported = [by_id[buffer_id].buffer_address() for buffer_id in unsafe]
+        others = [tensor.buffer_address() for buffer_id, tensor in by_id.items() if buffer_id not in unsafe]
+        assert others and max(reported) < min(others)
+
+        with expect_error(RuntimeError, rf"before replay of trace {int(trace_id)} in memory its capture used") as error:
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert "L1 [" in str(error.value)
+
+        for buffer_id in unsafe:
+            by_id[buffer_id].deallocate()
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert trace_output.is_allocated()
+    finally:
+        ttnn.release_trace(device, trace_id)
+        for tensor in l1_tensors:
+            if tensor.is_allocated():
+                tensor.deallocate()
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.skipif(trace_allocation_tracker.TRACE_ALLOC_TRACKING, reason="checks the default, untracked mode")
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_trace_allocation_overlap_check_is_off_by_default(device):
+    trace_id, _, _, intermediate_address, allocate = _capture_trace_with_freed_intermediate(
+        device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    try:
+        victim, _ = _allocate_into(allocate, intermediate_address)
+        assert victim.is_allocated()
+        assert not ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+        assert not ttnn._ttnn.operations.trace.get_unsafe_tracked_ranges(device, trace_id)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    finally:
+        ttnn.release_trace(device, trace_id)
 
 
 @skip_for_slow_dispatch()
