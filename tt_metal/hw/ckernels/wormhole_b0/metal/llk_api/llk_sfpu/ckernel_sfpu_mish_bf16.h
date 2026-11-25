@@ -76,6 +76,7 @@ inline bool bf16_dest_mish() {
 #endif
 }
 // Each call records replay slots 0-31, overwriting what an init recorded there (from 16).
+// The slots are the compiled call's, the SFPI compiler's own replay records included.
 template <int ITERATIONS = 32>
 __attribute__((noinline)) inline void calculate_mish_bf16() {
     ckernel::sfpu::bf16::mish::calculate_exponent_alu_product<ckernel::sfpu::MishBf16Config, ITERATIONS>();
