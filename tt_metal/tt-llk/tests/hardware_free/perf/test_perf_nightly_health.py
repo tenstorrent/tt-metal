@@ -15,6 +15,7 @@ from nightly_health import (
     NIGHTLIES,
     assess,
     build_text,
+    finished_after,
     gate_result,
     leg_limits,
     owners,
@@ -171,15 +172,14 @@ def test_the_health_check_starts_after_every_nightly_is_due():
     assert min(health) > max(nightlies)
 
 
-@pytest.mark.skipif(
-    not (_WORKFLOWS / _HEALTH).exists(),
-    reason="the workflow files are not in this checkout",
-)
-def test_the_health_check_is_not_driven_by_the_nightlies_finishing():
-    """The first nightly to finish would ask about a run that does not exist yet."""
-    doc = yaml.safe_load((_WORKFLOWS / _HEALTH).read_text()) or {}
-    triggers = doc.get("on", doc.get(True)) or {}
-    assert "workflow_run" not in triggers
+def test_only_a_nightly_that_finishes_after_the_check_sends():
+    check = {**RUN, "created_at": "2026-10-13T08:03:00Z"}
+    assert finished_after({**RUN, "updated_at": "2026-10-13T09:42:00Z"}, check)
+    assert not finished_after(RUN, check)
+    assert not finished_after(RUN, None)
+    assert not finished_after(None, check)
+    late = {**RUN, "status": "in_progress", "updated_at": "2026-10-13T09:42:00Z"}
+    assert not finished_after(late, check)
 
 
 def test_gate_result_reads_the_lines_the_gate_really_prints(
