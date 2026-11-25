@@ -1929,3 +1929,98 @@ def test_indexer_score_compressed_key_ratio4_block_cyclic(mesh_device):
         )
     ref = torch.cat(refs, dim=2)
     assert_indexer_match(out_t, ref, query_chunk, total_keys, check_neg=True)
+
+
+# Program-cache hits must re-apply every per-dispatch value. Each call uses fresh q/k/w tensors (new
+# buffers), and the last call runs after a pad allocation shifts the allocator, so an address that is not
+# re-applied on a hit reads the previous call's data. chunk_start_idx / cache_batch_idx / kv_len change too
+# (all hash-excluded), and only the first call may add a program-cache entry.
+CACHE_HIT = dict(dim=128, sq=64, t=256, slots=2)
+CACHE_HIT_CALLS = [  # (seed, chunk_start, cache_batch_idx, kv_len)
+    (101, 128, 0, 256),
+    (102, 192, 1, 224),
+    (103, 64, 1, 128),
+]
+
+
+@pytest.mark.parametrize("flavour", ["dsa", "msa"])
+def test_indexer_score_cache_hit_rebinds(device, flavour):
+    c = CACHE_HIT
+    # DSA: 8 learned-gate heads. MSA: one head (the fused single-head path), weights = q placeholder.
+    heads = 8 if flavour == "dsa" else 1
+    scale = c["dim"] ** -0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    entries = None
+    pad = None
+    for i, (seed, chunk_start, slot, kv_len) in enumerate(CACHE_HIT_CALLS):
+        if i == len(CACHE_HIT_CALLS) - 1:
+            pad = to_device(torch.zeros(1, 1, 96, c["dim"], dtype=torch.bfloat16), device, layout=ttnn.ROW_MAJOR_LAYOUT)
+        g = torch.Generator().manual_seed(seed)
+        q = torch.randn(1, heads, c["sq"], c["dim"], generator=g, dtype=torch.bfloat16)
+        w = torch.randn(1, 1, c["sq"], heads, generator=g, dtype=torch.bfloat16)
+        k_cache = torch.randn(c["slots"], 1, c["t"], c["dim"], generator=g, dtype=torch.bfloat16)
+        q_dev, k_dev = to_device(q, device), to_device(k_cache, device)
+        persistent = dict(chunk_start_idx=chunk_start, cache_batch_idx=slot, kv_len=kv_len, program_config=cfg)
+        if flavour == "dsa":
+            out = ttnn.experimental.indexer_score_dsa(q_dev, k_dev, to_device(w, device), **persistent)
+            ref = indexer_score_dsa_ref(q, k_cache[slot : slot + 1, :, :kv_len], w, chunk_start)
+        else:
+            out = ttnn.experimental.indexer_score_msa(q_dev, k_dev, num_groups=1, scale=scale, **persistent)
+            w_scale = _msa_scale_w(heads, c["sq"], scale)
+            ref = indexer_score_msa_ref(q, k_cache[slot : slot + 1, :, :kv_len], w_scale, chunk_start)
+        assert_indexer_match(ttnn.to_torch(out)[:, :, :, :kv_len], ref, c["sq"], kv_len)
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, f"call {i} added a program-cache entry"
+    del pad
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], ids=["sp2"], indirect=True)
+def test_indexer_score_cache_hit_rebinds_mesh(mesh_device):
+    """Per-device programs on a 2-device SP ring: each device's chunk_start (base + rank * Sq) is rebuilt
+    from its mesh coordinate on every cache hit, along with the fresh buffer addresses."""
+    sp_axis = 1
+    heads, dim, sq, t = 8, 128, 64, 512
+    sp = mesh_device.shape[sp_axis]
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    shard_dims = (None, 2)  # q / w sequence sharded over the SP (column) axis
+    entries = None
+    pad = None
+    for i, (seed, base) in enumerate([(201, 256), (202, 128), (203, 320)]):
+        if i == 2:
+            pad = ttnn.from_torch(
+                torch.zeros(1, 1, 96, dim, dtype=torch.bfloat16),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+        q_g, k_g, w_g = make_inputs(heads, dim, sp * sq, t, seed=seed)
+        shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+        out = ttnn.experimental.indexer_score_dsa(
+            _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard),
+            _to_mesh(mesh_device, k_g, ttnn.bfloat16, ttnn.ReplicateTensorToMesh(mesh_device)),
+            _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard),
+            chunk_start_idx=base,
+            seq_shard_axes=[sp_axis],
+            program_config=cfg,
+        )
+        out_t = ttnn.to_torch(
+            out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(1, 2)),
+        )
+        ref = torch.cat(
+            [
+                indexer_score_dsa_ref(
+                    q_g[:, :, r * sq : (r + 1) * sq], k_g, w_g[:, :, r * sq : (r + 1) * sq], base + r * sq
+                )
+                for r in range(sp)
+            ],
+            dim=2,
+        )
+        assert_indexer_match(out_t, ref, sp * sq, t, check_neg=True)
+        if entries is None:
+            entries = mesh_device.num_program_cache_entries()
+        else:
+            assert mesh_device.num_program_cache_entries() == entries, f"call {i} added a program-cache entry"
+    del pad
