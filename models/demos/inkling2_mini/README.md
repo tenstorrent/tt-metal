@@ -240,8 +240,16 @@ Each one skips when its weight cache, the golden prompts, the checkpoint or the 
 `tt/generator_vllm.py` is the model class for the vLLM TT plugin
 ([tenstorrent/vllm-tt-plugin](https://github.com/tenstorrent/vllm-tt-plugin), upstream vLLM 0.32): an OpenAI
 server (`/v1/chat/completions`, `/v1/completions`, streamed or not) for one request at a time. Install vLLM and
-the plugin into the tt-metal python env as the plugin's README says (`source docs/install-vllm-tt.sh`), then,
-from the tt-metal root:
+the plugin into the tt-metal python env as the plugin's README says (`source docs/install-vllm-tt.sh`), then:
+
+```
+INKLING_CKPT=<checkpoint dir> models/demos/inkling2_mini/vllm/serve.sh [more vllm serve arguments]
+```
+
+Any OpenAI client then works with base URL `http://127.0.0.1:8000/v1` (any API key) and model `Inkling-2-Mini`.
+`vllm/serve.sh` is the launch line below with its switches as environment variables: `HOST`, `PORT`, `CTX`
+(`--max-model-len`), `SPEC=0` (the plain class), `FAST=1`, `PREFILL=<tokens>` (see "Chunked prefill" below). What
+it runs with `SPEC=0`:
 
 ```
 export TT_MODEL_CLASS_OVERRIDES=Inkling2ForCausalLM=models.demos.inkling2_mini.tt.generator_vllm:Inkling2ForCausalLM
@@ -250,8 +258,6 @@ vllm serve models/demos/inkling2_mini/vllm --tokenizer $INKLING_CKPT --served-mo
     --reasoning-parser inkling --enable-auto-tool-choice --tool-call-parser inkling \
     --additional-config '{"tt": {"worker_l1_size": 1394752, "trace_region_size": 134217728, "sample_on_device_mode": "all"}}'
 ```
-
-Any OpenAI client then works with base URL `http://127.0.0.1:8000/v1` (any API key) and model `Inkling-2-Mini`.
 
 | argument | what it is for |
 |---|---|
@@ -293,6 +299,28 @@ vllm serve ... (as above, with "trace_region_size": 536870912) --no-async-schedu
   `logit_bias` on a speculative launch.
 - It needs the drafter weights (`convert.mtp`) and DRAM for them; when they are missing it says so and decodes
   plain.
+
+Chunked prefill (`PREFILL=<tokens>` in `serve.sh`, i.e. `INKLING_VLLM_PREFILL`; off by default): a new prompt of
+at least that many tokens runs through the chunked prefill instead of token by token. The process keeps the one
+PF-layout decode cache: for each expert step the prefill rebuilds the layer's plain expert tensors on the card
+from the PF tensors (`tt/pf_tiles.py`: whole-tile moves, about 10 ms a layer; the rebuilt tensors are the TILE
+cache's byte for byte and the prefill's logits are bit-equal to a TILE-cache process's). The decode traces are
+released around the prefill and the reply's first six steps capture them again (about 0.2 s each).
+
+| `--max-model-len` | tokens per pass | first token, 8,424-token prompt | first token, 33,000-token prompt |
+|---|---:|---:|---:|
+| any, token by token | | 126.5 s | about 500 s |
+| 36864 | 8192 (one pass up to 8448) | 2.4 s; 2.1 s when the same length came before | 10.5 s |
+| 131072 | 4096 | 6.7 s; 3.6 s | 13.2 s |
+| 196608 | off: 0.2 GiB of DRAM short | | |
+
+- It costs DRAM, so context: 1.05 GiB for the prefill's own tensors, 2 GiB of room for a layer's rebuilt experts,
+  0.26 GiB per 1024 tokens of a pass. Passes of 8192 tokens fit up to about a 70K context, 4096 up to 124K, 2048
+  up to 155K; the server says at start what it uses, or how much is short.
+- It costs decode speed: the plain class only (no speculative decode: 64 against 77 tok/s on predictable text),
+  and no expert prefetch (its L1 ring is not given back when the traces are released): 15.2 against 14.9 ms a step.
+- The reply after a prefill is the demo's prefill reply, not the token-by-token one: for that prompt they part at
+  token 30 (in a TILE-cache process too).
 
 Measured on one p100a, default mode, `--max-model-len 196608`, at 4K positions (plain = `Inkling2ForCausalLM`,
 spec = `Inkling2SpecForCausalLM`; the same tokens in both columns of a row):
