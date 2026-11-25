@@ -51,7 +51,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBCustomTileCompiles) {
     const uint64_t build_key =
         metal_context.build_env_manager().get_device_build_env(mesh_device_->build_id()).build_key();
 
-    for (const std::string& kernel_name : {"dm_kernel", "compute_kernel"}) {
+    for (const std::string kernel_name : {"dm_kernel", "compute_kernel"}) {
         SCOPED_TRACE(kernel_name);
         const std::shared_ptr<Kernel> kernel = program.impl().get_kernel_by_spec_name(kernel_name);
         for (const ll_api::memory* binary : kernel->binaries(build_key)) {
