@@ -25,6 +25,10 @@ test in the same xdist worker.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import COMPRESSED_META, LOOP_FACTOR, TILE_COUNT
@@ -359,3 +363,159 @@ def test_a_shared_device_keeps_one_core_per_worker(monkeypatch, worker_location)
 
     assert worker_location == [7, 7]
     assert TestConfig.TENSIX_LOCATION == "core-7"
+
+
+# --------------------------------------------------------------------------- #
+# A TRISC reused from another variant must be the TRISC that variant builds.
+# --------------------------------------------------------------------------- #
+
+SFPI_GXX = Path(__file__).resolve().parents[2] / "sfpi/compiler/bin/riscv-tt-elf-g++"
+
+
+@pytest.fixture
+def build_trisc(tmp_path, monkeypatch):
+    compiler = [str(SFPI_GXX), "-mcpu=tt-wh-tensix"]
+    if not SFPI_GXX.exists():
+        compiler = [shutil.which("c++") or pytest.skip("no C++ compiler")]
+    monkeypatch.setattr(
+        TestConfig, "ARTEFACTS_DIR", tmp_path / "artefacts", raising=False
+    )
+    monkeypatch.setattr(TestConfig, "TESTS_WORKING_DIR", tmp_path, raising=False)
+
+    def build(variant, build_h, prelude="", use="0", files=(), flags=()):
+        (tmp_path / "prelude.h").write_text(prelude)
+        (tmp_path / "unit.cpp").write_text(
+            '#include "prelude.h"\n#include "build.h"\n'
+            f'extern "C" int use() {{ return {use}; }}\n'
+        )
+        variant_dir = tmp_path / "artefacts" / "test" / variant
+        (variant_dir / "elf").mkdir(parents=True, exist_ok=True)
+        (variant_dir / "build.h").write_text(build_h)
+        for name, text in files:
+            (variant_dir / name).write_text(text)
+        elf = variant_dir / "elf" / "trisc.o"
+        command = [*compiler, "-O2", "-g0", f"-I{tmp_path}", f"-I{variant_dir}", *flags]
+        command += ["-c", "-x", "c++", "-", "-o", str(elf)]
+        config = TestConfig.__new__(TestConfig)
+        config.test_name, config.variant_id = "test", variant
+        config._compile_kernel_part_once(command, '#include "unit.cpp"\n')
+        subprocess.run(
+            command[:-1] + [str(tmp_path / "fresh.o")],
+            cwd=tmp_path,
+            input='#include "unit.cpp"\n',
+            text=True,
+            check=True,
+        )
+        return elf.read_bytes(), (tmp_path / "fresh.o").read_bytes()
+
+    return build
+
+
+@pytest.mark.parametrize(
+    "prelude, build_h, use",
+    [
+        pytest.param("", "constexpr int A = 1, B = {v};", "B", id="second-declarator"),
+        pytest.param(
+            "", "constexpr int A = 1; constexpr int B = {v};", "B", id="two-per-line"
+        ),
+        pytest.param(
+            "", "constexpr int A = 1; // A\nconstexpr int B = {v};", "B", id="comment"
+        ),
+        pytest.param(
+            "", "constexpr struct S {{ int v; }} s{{{v}}};", "s.v", id="struct"
+        ),
+        pytest.param(
+            "",
+            "constexpr int f() noexcept {{ return 1; }}\nconstexpr int B = {v};",
+            "B",
+            id="function",
+        ),
+        pytest.param(
+            "#define M B",
+            "constexpr int B = {v};\nconstexpr int A = M;",
+            "A",
+            id="macro-value",
+        ),
+        pytest.param("#define M B", "constexpr int M = {v};", "B", id="macro-name"),
+        pytest.param(
+            "#define CAT(a, b) a##b",
+            "constexpr int AB = {v};\nconstexpr int C = CAT(A, B);",
+            "C",
+            id="token-paste",
+        ),
+        pytest.param(
+            "#define M(x) x, B = x",
+            "constexpr int A = M({v});",
+            "B",
+            id="macro-declares",
+        ),
+        pytest.param(
+            "",
+            "constexpr int A = 1; // A\n  #define M {v}\nconstexpr int B = 0;",
+            "M",
+            id="indented-directive",
+        ),
+        pytest.param(
+            "", "constexpr int A = {v};\nconstexpr int B = A + 1;", "B", id="closure"
+        ),
+        pytest.param(
+            "",
+            lambda v: (
+                "#define M 1\nconstexpr int A = M;\n#undef M\n#define M 2\n"
+                if v == 1
+                else "#define M 1\n#undef M\n#define M 2\nconstexpr int A = M;\n"
+            ),
+            "A",
+            id="directive-order",
+        ),
+        pytest.param(
+            "",
+            lambda v: "constexpr int B[] = {1,\n" + "\n" * v + "2};\n"
+            "constexpr int A = __LINE__;",
+            "A",
+            id="line",
+        ),
+        pytest.param(
+            "",
+            lambda v: f"constexpr int B = {'__COUNTER__' if v == 2 else 0};\n"
+            "constexpr int A = __COUNTER__;",
+            "A",
+            id="counter",
+        ),
+        pytest.param(
+            "",
+            'constexpr const char* A = R"(\n;\nconstexpr int B = {v};\n)";',
+            "[] { int s = 0; for (auto p = A; *p; ++p) s += *p; return s; }()",
+            id="raw-string",
+        ),
+    ],
+)
+def test_a_reused_trisc_is_the_trisc_its_variant_builds(
+    build_trisc, prelude, build_h, use
+):
+    variant = build_h if callable(build_h) else lambda v: build_h.format(v=v)
+    first, _ = build_trisc("first", variant(1), prelude, use)
+    second, fresh = build_trisc("second", variant(2), prelude, use)
+    assert second == fresh != first
+
+
+@pytest.mark.parametrize("where", ["variant-dir", "command"])
+def test_files_the_compile_reads_are_keyed_by_content(build_trisc, tmp_path, where):
+    prelude = '#if __has_include("extra.h")\n#include "extra.h"\n#endif\n'
+    forced = tmp_path / "forced.h"
+    outputs = []
+    for variant, value in (("first", 1), ("second", 2)):
+        forced.write_text(f"#define X {value}\n")
+        files = [("extra.h", f"#define X {value}\n")] if where == "variant-dir" else []
+        flags = ["-include", str(forced)] if where == "command" else []
+        outputs.append(build_trisc(variant, "", prelude, "X", files, flags))
+    (first, _), (second, fresh) = outputs
+    assert second == fresh != first
+
+
+def test_a_constant_no_trisc_uses_reuses_the_trisc(build_trisc, tmp_path):
+    for variant, value in (("first", 1), ("second", 2)):
+        build_trisc(
+            variant, f"constexpr int A = {value}; // A\nconstexpr int B = 3;", "", "B"
+        )
+    assert len(list((tmp_path / "artefacts" / "trisc").glob("*.elf"))) == 1
