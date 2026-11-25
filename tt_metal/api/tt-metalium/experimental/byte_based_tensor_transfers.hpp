@@ -43,8 +43,8 @@ namespace experimental {
 
 // One byte range of one shard of a mesh tensor's buffer and the host memory it is copied to / from.
 // ``shard`` is the shard's linear index in the mesh (row-major over the mesh shape); ``offset`` and ``size`` are bytes
-// of that shard's buffer (for an interleaved buffer, a range of whole pages is one contiguous range); ``host`` points
-// at ``size`` bytes of host memory owned by the caller.
+// of that shard's buffer, whole pages only (the buffer must be interleaved, where page i is bytes
+// [i * page_size, (i + 1) * page_size)); ``host`` points at ``size`` bytes of host memory owned by the caller.
 struct ShardRegionTransfer {
     uint32_t shard = 0;
     uint64_t offset = 0;

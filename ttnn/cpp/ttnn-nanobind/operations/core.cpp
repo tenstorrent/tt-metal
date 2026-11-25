@@ -408,8 +408,8 @@ void py_module(nb::module_& mod) {
         Copies byte ranges of a device tensor's per-device buffers to host memory owned by the caller.
 
         Args:
-            device_tensor (ttnn.Tensor): the tensor to read (any mesh; DRAM interleaved buffers read whole pages as
-                one contiguous range: page i is bytes [i * buffer_page_size(), (i + 1) * buffer_page_size())).
+            device_tensor (ttnn.Tensor): the tensor to read (any mesh; interleaved only, sharded tensors raise).
+                Regions are whole pages: page i is bytes [i * buffer_page_size(), (i + 1) * buffer_page_size()).
             regions (List[Tuple[int, int, int, int]] or numpy.ndarray): (device index in the mesh, row-major; byte
                 offset in that device's buffer; byte count; destination host address), as tuples or as the rows of
                 an (N, 4) uint64 array. Regions that continue one another on a device and in host memory are merged.

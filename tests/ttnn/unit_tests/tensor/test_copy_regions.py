@@ -70,6 +70,41 @@ def test_non_blocking_read_lands_after_synchronize(device):
     np.testing.assert_array_equal(host, expected)
 
 
+def test_non_blocking_write_lands_after_synchronize(device):
+    dtype = ttnn.bfloat8_b
+    src, dst = _paged_cache(device, dtype, seed=6), _paged_cache(device, dtype, seed=7)
+    bb = _block_bytes(dtype)
+    src_bytes, dst_before = _all_bytes(src, dtype), _all_bytes(dst, dtype)
+
+    # Block 1 of src into block 3 of dst, without blocking; the host copy is changed only after the synchronize.
+    host = src_bytes[bb : 2 * bb].copy()
+    regions = np.array([(0, 3 * bb, bb, host.ctypes.data)], dtype=np.uint64)
+    ttnn.copy_host_to_device_regions(dst, regions, blocking=False)
+    ttnn.synchronize_device(device)
+    host[:] = 0
+
+    expected = dst_before.copy()
+    expected[3 * bb : 4 * bb] = src_bytes[bb : 2 * bb]
+    np.testing.assert_array_equal(_all_bytes(dst, dtype), expected)
+
+
+def test_sharded_tensor_is_rejected(device, expect_error):
+    shape = (1, 1, 64, 64)
+    memory = ttnn.create_sharded_memory_config(
+        shape, ttnn.CoreGrid(y=1, x=1), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    tensor = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory,
+    )
+    host = np.zeros(TILE_BYTES[ttnn.bfloat16], dtype=np.uint8)
+    with expect_error(RuntimeError, "interleaved tensors only"):
+        ttnn.copy_device_to_host_regions(tensor, [(0, 0, host.nbytes, host.ctypes.data)])
+
+
 def test_page_by_page_regions_equal_one_region(device):
     dtype = ttnn.bfloat8_b
     src = _paged_cache(device, dtype, seed=3)

@@ -48,6 +48,11 @@ std::vector<distributed::ShardDataTransfer> to_shard_transfers(
     distributed::MeshCommandQueue& queue,
     const MeshTensor& device_tensor,
     const std::vector<ShardRegionTransfer>& transfers) {
+    // In an interleaved buffer, byte offset ``i * page_size`` is the start of page i; no such map holds for a sharded
+    // buffer, whose pages a byte range would select in shard order.
+    TT_FATAL(
+        !device_tensor.memory_config().is_sharded(),
+        "shard region transfers support interleaved tensors only, got a sharded tensor");
     TT_FATAL(
         !per_core_allocation::is_per_core_allocation(device_tensor.memory_config()),
         "shard region transfers do not support per-core allocated tensors");
