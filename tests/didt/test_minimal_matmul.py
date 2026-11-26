@@ -35,6 +35,15 @@ class MinimalMatmulWorstCaseTest(OpTestBase):
         )
 
 
+DTYPE_FIDELITY_PARAMS = [
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False, 8, 16, 8, 2, 4),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, 8, 16, 4, 2, 4),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
+    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
+]
+DTYPE_FIDELITY_IDS = ["bf16_HiFi2", "bf8b_HiFi2", "bf8b_LoFi", "bf4b_LoFi"]
+
+
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -48,13 +57,8 @@ class MinimalMatmulWorstCaseTest(OpTestBase):
 )
 @pytest.mark.parametrize(
     "dtype, math_fidelity, fp32_acc, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
-    [
-        (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False, 8, 16, 8, 2, 4),
-        (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, 8, 16, 4, 2, 4),
-        (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
-        (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
-    ],
-    ids=["bf16_HiFi2", "bf8b_HiFi2", "bf8b_LoFi", "bf4b_LoFi"],
+    DTYPE_FIDELITY_PARAMS,
+    ids=DTYPE_FIDELITY_IDS,
 )
 def test_minimal_matmul(
     mesh_device,
@@ -146,3 +150,42 @@ def test_minimal_matmul(
     minimalMatmulTest.nd_core_grid_size = (grid_x, grid_y)
 
     minimalMatmulTest.run_op_test()
+
+
+@pytest.mark.parametrize("logical_chip_id", range(32), ids=[f"galaxy_chip_{i}" for i in range(32)])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="galaxy")], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "dtype, math_fidelity, fp32_acc, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    DTYPE_FIDELITY_PARAMS,
+    ids=DTYPE_FIDELITY_IDS,
+)
+def test_specific_chip_minimal_matmul(
+    mesh_device,
+    logical_chip_id,
+    dtype,
+    math_fidelity,
+    fp32_acc,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    didt_workload_iterations,
+    determinism_check_interval,
+    grid_size,
+):
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
+    test_minimal_matmul(
+        submesh_devices[logical_chip_id],
+        dtype,
+        math_fidelity,
+        fp32_acc,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        didt_workload_iterations,
+        determinism_check_interval,
+        grid_size,
+    )
