@@ -50,7 +50,11 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& rel_logits = std::nullopt,
     /// rel_logits in the skewed layout [B, NQH, Sq, W + 32]: row i holds rel[i, d] at column W - d + (i % 32), so
     /// the 32 rows of a mask tile read the same columns (aligned word copies instead of a reversed gather).
-    bool rel_skewed = false);
+    bool rel_skewed = false,
+    /// rel_logits only: position of query row 0 among the keys (default Sk - Sq). A runtime argument, so one
+    /// program serves every offset: with K/V padded past the last query, the keys after it are masked as d < 0
+    /// and the K chunks past it are not read. A multiple of 32, offset + Sq <= Sk.
+    std::optional<uint32_t> rel_q_offset = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

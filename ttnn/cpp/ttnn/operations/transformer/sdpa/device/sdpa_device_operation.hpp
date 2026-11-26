@@ -64,6 +64,7 @@ Tensor sdpa(
     bool output_concat_heads = false,
     const std::optional<Tensor>& attn_mask_block_map = std::nullopt,
     const std::optional<Tensor>& rel_logits = std::nullopt,
-    bool rel_skewed = false);
+    bool rel_skewed = false,
+    std::optional<uint32_t> rel_q_offset = std::nullopt);
 
 }  // namespace ttnn::prim

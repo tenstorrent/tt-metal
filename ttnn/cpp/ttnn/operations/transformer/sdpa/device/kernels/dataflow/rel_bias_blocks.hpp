@@ -13,7 +13,9 @@
 
 constexpr uint16_t kRelMasked = 0xCE6E;  // bf16 -1.0e9
 constexpr uint32_t kRelW = SDPA_REL_W;
-constexpr uint32_t kRelQOff = SDPA_REL_Q_OFF;
+// Query row 0's position among the keys: a runtime argument (set by the kernel before any use), so one program
+// serves every offset.
+inline uint32_t kRelQOff = 0;
 constexpr uint32_t kRelRowBytes = SDPA_REL_ROW_BYTES;
 
 #ifdef SDPA_REL_TILIZE

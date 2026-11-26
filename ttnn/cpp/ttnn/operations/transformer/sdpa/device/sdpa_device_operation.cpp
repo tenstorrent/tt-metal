@@ -583,6 +583,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             (!is_windowed_mode(attrs.windowed_mode) && !is_chunked_mode && attrs.sliding_window_size.value_or(0) == 0),
         "attn_mask_block_map cannot be combined with cu_window_seqlens, sliding_window_size or chunked prefill");
 
+    TT_FATAL(!attrs.rel_q_offset.has_value() || tensors.rel_logits.has_value(), "rel_q_offset needs rel_logits");
     if (tensors.rel_logits.has_value()) {
         const auto& rel = tensors.rel_logits.value();
         const auto q_shape = q.logical_shape();
@@ -623,6 +624,13 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             q_shape[2] % tt::constants::TILE_HEIGHT == 0 && k_shape[2] % tt::constants::TILE_HEIGHT == 0 &&
                 k_shape[2] >= q_shape[2],
             "rel_logits needs Sq and Sk multiples of 32 and Sk >= Sq; got Sq {} Sk {}",
+            q_shape[2],
+            k_shape[2]);
+        TT_FATAL(
+            !attrs.rel_q_offset.has_value() || (*attrs.rel_q_offset % tt::constants::TILE_HEIGHT == 0 &&
+                                                *attrs.rel_q_offset + q_shape[2] <= k_shape[2]),
+            "rel_q_offset must be a multiple of 32 with rel_q_offset + Sq <= Sk; got {} for Sq {} Sk {}",
+            attrs.rel_q_offset.value_or(0),
             q_shape[2],
             k_shape[2]);
     }
@@ -769,7 +777,8 @@ Tensor sdpa(
     bool output_concat_heads,
     const std::optional<Tensor>& attn_mask_block_map,
     const std::optional<Tensor>& rel_logits,
-    bool rel_skewed) {
+    bool rel_skewed,
+    std::optional<uint32_t> rel_q_offset) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -791,6 +800,7 @@ Tensor sdpa(
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
             .output_concat_heads = output_concat_heads,
             .rel_skewed = rel_skewed,
+            .rel_q_offset = rel_q_offset,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

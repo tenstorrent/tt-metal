@@ -1166,6 +1166,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // rel_logits: causal by construction, but the mask (bias, window, causal) is built by the reader and applied
     // through the provided-mask path with the reader's K-range narrowing.
     const bool use_rel_bias = tensor_args.rel_logits.has_value();
+    // rel_logits: query row 0's position among the keys (a runtime argument of all three kernels)
+    const uint32_t rel_q_off =
+        operation_attributes.rel_q_offset.value_or(tensor_args.k.logical_shape()[2] - tensor_args.q.logical_shape()[2]);
     const bool use_causal_kernel = operation_attributes.is_causal && !is_windowed && !use_rel_bias;
     // rel_logits without a window is causal too (the reader's K range ends at the diagonal), so its Q chunks get the
     // same zigzag light/heavy pairing across cores. Each Q chunk's math is unchanged; only its core changes.
@@ -1736,7 +1739,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (use_rel_bias) {
-        // Reader-only: band width W, query row 0's position (Sk - Sq), row bytes of the scratch, and a per-query sink.
+        // Reader-only: band width W, row bytes of the scratch, and a per-query sink. Query row 0's position
+        // (rel_q_offset, default Sk - Sq) is a runtime argument of the reader, the writer and compute.
         const auto& rel_shape = tensor_args.rel_logits->logical_shape();
         defines_map["SDPA_REL_BIAS"] = "1";
         const bool skewed = operation_attributes.rel_skewed;
@@ -1746,7 +1750,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             defines_map["SDPA_REL_SKEW"] = "1";
             defines_map["SDPA_REL_TILIZE"] = "1";
         }
-        defines_map["SDPA_REL_Q_OFF"] = std::to_string(k_shape[2] - q_shape[2]);
         defines_map["SDPA_REL_ROW_BYTES"] = std::to_string(rel_row_bytes);
         if (attention_sink.has_value() && attention_sink->logical_shape()[2] == q_shape[2]) {
             defines_map["SDPA_PER_QUERY_SINK"] = "1";
@@ -2184,6 +2187,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         }
         if (use_rel_bias) {
             reader_args.push_back(tensor_args.rel_logits->buffer());
+            reader_args.push_back(rel_q_off);
         }
 
         reader_desc.emplace_runtime_args(core, reader_args);
@@ -2210,6 +2214,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         }
         if (rel_in_writer) {  // runtime arg rel_writer_arg (13 + the chain tail above)
             writer_args.push_back(tensor_args.rel_logits->buffer());
+            writer_args.push_back(rel_q_off);  // rel_writer_arg + 1
         }
         writer_desc.emplace_runtime_args(core, writer_args);
 
@@ -2220,7 +2225,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              chunked_q_chunk_offset,                           // 2: phase_1
              0u,                                               // 3: phase_2 chunked offset (unused, num_phases==1)
              global_q_start,                                   // 4
-             global_q_count});                                 // 5
+             global_q_count,                                   // 5
+             rel_q_off});                                      // 6: rel_logits only
     }
 
     desc.kernels.push_back(std::move(reader_desc));

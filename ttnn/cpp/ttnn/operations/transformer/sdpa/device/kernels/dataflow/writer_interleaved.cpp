@@ -132,6 +132,7 @@ void kernel_main() {
     // accessor follows the CB-id block, its address is runtime arg SDPA_REL_WRITER_ARG.
     constexpr auto rel_args = TensorAccessorArgs<cb_arg_offset + 8>();
     const auto rel_reader = TensorAccessor(rel_args, get_arg_val<uint32_t>(SDPA_REL_WRITER_ARG));
+    kRelQOff = get_arg_val<uint32_t>(SDPA_REL_WRITER_ARG + 1);
 #ifdef SDPA_REL_STAGE_CB
     // Staged bias rows (rel_stage_issue): two buffers of a group each, the next group (also the next Q chunk's
     // first) in flight while the current one is copied out. Read transaction ids 1 / 2 for the two buffers, 3 for

@@ -36,6 +36,8 @@ struct SDPAParams {
     bool output_concat_heads = false;
     // rel_logits in the skewed layout (see scaled_dot_product_attention).
     bool rel_skewed = false;
+    // rel_logits: position of query row 0 among the keys (unset: Sk - Sq). Passed to the kernels at runtime.
+    std::optional<uint32_t> rel_q_offset;
 };
 
 struct SDPAInputs {

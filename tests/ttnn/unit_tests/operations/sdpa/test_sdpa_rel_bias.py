@@ -85,3 +85,48 @@ def test_sdpa_rel_bias(device, sq, sk, w, window, nh, nkh, qc, kc, scale, use_si
     got = ttnn.to_torch(out).float()
     ok, pcc = comp_pcc(ref, got, 0.9999)
     assert ok, f"PCC {pcc}"
+
+
+@pytest.mark.parametrize(
+    "sq, sk, pad, window, skewed",
+    [
+        (256, 768, 1024, 256, False),  # local: K / V padded past the last query
+        (256, 1024, 2048, None, False),  # global
+        (512, 1536, 512, 1024, True),  # Inkling local shape, skewed bias
+        (384, 1408, 1792, None, True),  # Inkling global, skewed bias
+    ],
+)
+def test_sdpa_rel_q_offset(device, sq, sk, pad, window, skewed):
+    """rel_q_offset with K / V padded past the last query equals K / V cut there, bit for bit: the keys past the last
+    query are masked and their K chunks not read."""
+    torch.manual_seed(1)
+    nh, nkh, dh, w = 4, 2, 128, 1024 if skewed else 256
+    q = torch.randn(1, nh, sq, dh)
+    k = torch.randn(1, nkh, sk + pad, dh)
+    v = torch.randn(1, nkh, sk + pad, dh)
+    rel = torch.randn(1, nh, sq, w + (32 if skewed else 0)) * 2
+    sink = torch.randn(1, nh, sq, 1)
+    tt = lambda t, layout=ttnn.TILE_LAYOUT: ttnn.from_torch(  # noqa: E731
+        t, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    pc = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=128,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+    ckc = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    qt, rt, st = tt(q), tt(rel, ttnn.ROW_MAJOR_LAYOUT), tt(sink)
+
+    def run(kk, vv, **kw):
+        o = ttnn.transformer.scaled_dot_product_attention(
+            qt, tt(kk), tt(vv), is_causal=True, scale=1.0, sliding_window_size=window, rel_logits=rt,
+            rel_skewed=skewed, attention_sink=st, program_config=pc, compute_kernel_config=ckc, **kw
+        )  # fmt: skip
+        return ttnn.to_torch(o)
+
+    for off in (sk - sq, sk - sq - 128):  # two offsets on the same padded K / V
+        cut = run(k[:, :, : off + sq], v[:, :, : off + sq])
+        assert torch.equal(cut, run(k, v, rel_q_offset=off)), off

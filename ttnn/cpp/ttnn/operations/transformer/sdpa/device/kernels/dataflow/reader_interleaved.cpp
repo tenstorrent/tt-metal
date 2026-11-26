@@ -68,7 +68,7 @@ FORCE_INLINE void post_kv_forward(CircularBuffer& cb_kv_fwd, uint32_t address, u
 
 #ifdef SDPA_REL_BIAS
 // Banded relative bias (rel_logits): one mask tile row of Sk_chunk_t tiles, built from the bias rows instead of read.
-// Query row q (absolute position q + SDPA_REL_Q_OFF) and key k are at distance d = q + SDPA_REL_Q_OFF - k:
+// Query row q (absolute position q + kRelQOff) and key k are at distance d = q + kRelQOff - k:
 // d < 0 masked, 0 <= d < W bias rel[q, d], d >= W visible without bias, unless a sliding window masks d >= window.
 // Masked logits get a large finite negative (not -inf): a row can be fully masked inside one K chunk.
 #include "rel_bias_blocks.hpp"
@@ -464,6 +464,7 @@ void kernel_main() {
     }
 #ifdef SDPA_REL_BIAS
     const uint32_t rel_addr = get_arg_val<uint32_t>(argidx++);
+    kRelQOff = get_arg_val<uint32_t>(argidx++);
 #endif
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.

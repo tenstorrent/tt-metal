@@ -410,6 +410,7 @@ void bind_sdpa(nb::module_& mod) {
             attn_mask_block_map (ttnn.Tensor, optional): Defaults to `None`. Non causal with `attn_mask` only. [Bm x Hm x ceil(Sq / q_chunk) x ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR with the mask's batch and head dims, nonzero where a (q chunk, k chunk) block of the mask has a visible entry. Blocks flagged 0 are not read or computed; rows whose every block is 0 are unspecified. Heads whose K/V chunks are forwarded between their cores keep those chains, and stream every block, while fewer than 40 percent of the blocks in a sample of the map's rows are masked; skipping blocks pays only past that.
             rel_logits (ttnn.Tensor, optional): Defaults to `None`. Banded relative bias [b x nqh x sq x w], bf16 ROW_MAJOR in DRAM, with `w` a multiple of 32. Needs `is_causal=True` and no `attn_mask`. Query row `i` sits at position `i + sk - sq` (the queries are the last `sq` keys); `rel_logits[b, h, i, d]` is added to its logit for the key at distance `d = i + sk - sq - j` when `0 <= d < w`. Keys at `d < 0` are masked; keys at `d >= w` are visible without bias, or masked when `sliding_window_size` is set and `d >= sliding_window_size`. Like `attn_mask`, the bias is added unscaled. The mask is built in the kernel, one tile at a time, and K chunks outside the window are skipped. With `rel_logits`, `attention_sink` may also be per query: [b or 1 x nqh x sq x 1] TILE. Needs `fp32_dest_acc_en=True` (the non streaming kernel), `sq` and `sk` multiples of 32.
             rel_skewed (bool, optional): Defaults to `False`. `rel_logits` in the skewed layout [b x nqh x sq x (w + 32)]: row `i` holds `rel[i, d]` at column `w - d + (i % 32)` (other columns unused), so every row of a mask tile reads the same columns.
+            rel_q_offset (int, optional): Defaults to `None` (`sk - sq`). With `rel_logits`: the position of query row 0 among the keys, a multiple of 32 with `rel_q_offset + sq <= sk`. It is a runtime argument of the kernels, so one compiled program serves every offset; keys after the last query are masked (`d < 0`) and K chunks past it are not read, so K / V may be padded to a fixed length.
 
 
         Grouped-query attention (non-causal, `nqh > nkh`) is scheduled automatically. Cores working on the query
@@ -447,7 +448,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("output_concat_heads") = false,
         nb::arg("attn_mask_block_map") = nb::none(),
         nb::arg("rel_logits") = nb::none(),
-        nb::arg("rel_skewed") = false);
+        nb::arg("rel_skewed") = false,
+        nb::arg("rel_q_offset") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,
