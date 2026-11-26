@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from tt_py_test_utils_common.utility_functions import is_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_blackhole, is_slow_dispatch
 
 
 def fa_rand(*shape):
@@ -716,3 +716,189 @@ def test_sdpa_window_between_tile_boundaries(device, is_causal, fp32_dest_acc_en
     )
     passed, pcc = comp_pcc(expected, ttnn.to_torch(actual), 0.999)
     assert passed, pcc
+
+
+# SDPAProgramConfig.prefix_reuse at the per-device shape of Qwen3.8-27B prefill at TP=8: 3 Q heads, 1 KV head, head dim
+# 256, paged K/V in 64-token blocks, HiFi2 with fp32 dest, K chunk 128, full grid.
+PREFIX_REUSE_NH, PREFIX_REUSE_NKV, PREFIX_REUSE_D, PREFIX_REUSE_BLOCK, PREFIX_REUSE_K_CHUNK = 3, 1, 256, 64, 128
+# (Q rows, chunk start): 8192 rows have more Q chunks than cores, 2048 rows and fewer fit the grid; prefixes from 0 to
+# 96K, some 128-aligned but not 256-aligned.
+PREFIX_REUSE_CASES = [
+    (8192, 0),
+    (8192, 24576),
+    (2048, 0),
+    (2048, 30720),
+    (1024, 9216),
+    (512, 2048),
+    (256, 6144),
+    (128, 0),
+    (128, 39936),
+    (256, 98304),
+]
+# (q_chunk, prefix_reuse) against (PREFIX_REUSE_K_CHUNK, 0): every bit alone and combined, chains of at most 4 and 16
+# cores, and Q chunks smaller than the K chunk.
+PREFIX_REUSE_VARIANTS = [
+    (128, 1),
+    (128, 2),
+    (128, 3),
+    (128, 4),
+    (128, 7),
+    (128, 0x407),
+    (128, 0x1007),
+    (64, 0),
+    (64, 5),
+    (64, 7),
+    (32, 0),
+    (32, 4),
+    (32, 5),
+    (32, 7),
+]
+
+
+class _PrefixReusePagedKV:
+    """A paged K/V cache of at least ``tokens`` tokens behind a random block permutation, its page table padded to a
+    multiple of 32 blocks, and the K/V values the device holds in logical order."""
+
+    def __init__(self, device, tokens, dtype, seed):
+        generator = torch.Generator().manual_seed(seed)
+        blocks = -(-tokens // PREFIX_REUSE_BLOCK)
+        shape = (blocks, PREFIX_REUSE_NKV, PREFIX_REUSE_BLOCK, PREFIX_REUSE_D)
+        self.permutation = torch.randperm(blocks, generator=generator)
+        self.k, self.k_host = self._place(device, torch.randn(shape, generator=generator), dtype)
+        self.v, self.v_host = self._place(device, torch.randn(shape, generator=generator), dtype)
+        page_table = torch.zeros(1, -(-blocks // 32) * 32, dtype=torch.int32)
+        page_table[0, :blocks] = self.permutation.to(torch.int32)
+        self.page_table = ttnn.from_torch(page_table, dtype=ttnn.int32, device=device)
+
+    def _place(self, device, logical, dtype):
+        physical = torch.empty_like(logical)
+        physical[self.permutation] = logical
+        tensor = ttnn.from_torch(physical, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return tensor, ttnn.to_torch(tensor).float()[self.permutation]
+
+    def reference(self, q, start):
+        """Causal attention of the Q rows at positions [start, start + rows) over the cache's first tokens."""
+        end = start + q.shape[2]
+        blocks = -(-end // PREFIX_REUSE_BLOCK)
+
+        def logical(cache):
+            return cache[:blocks].permute(1, 0, 2, 3).reshape(1, PREFIX_REUSE_NKV, -1, PREFIX_REUSE_D)[:, :, :end]
+
+        k = logical(self.k_host).repeat_interleave(PREFIX_REUSE_NH // PREFIX_REUSE_NKV, dim=1)
+        v = logical(self.v_host).repeat_interleave(PREFIX_REUSE_NH // PREFIX_REUSE_NKV, dim=1)
+        visible = torch.arange(end)[None, :] <= torch.arange(start, end)[:, None]
+        scores = (q @ k.transpose(-2, -1) * PREFIX_REUSE_D**-0.5).masked_fill(~visible, float("-inf"))
+        return scores.softmax(dim=-1) @ v
+
+
+def _prefix_reuse_sdpa(device, q, paged, start, start_tensor, q_chunk, prefix_reuse, exp_approx_mode):
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk,
+        k_chunk_size=PREFIX_REUSE_K_CHUNK,
+        exp_approx_mode=exp_approx_mode,
+        prefix_reuse=prefix_reuse,
+    )
+    start_argument = (
+        {"chunk_start_idx_tensor": start_tensor} if start_tensor is not None else {"chunk_start_idx": start}
+    )
+    out = ttnn.transformer.chunked_scaled_dot_product_attention(
+        q,
+        paged.k,
+        paged.v,
+        paged.page_table,
+        **start_argument,
+        program_config=program_config,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
+    )
+    result = ttnn.to_torch(out)
+    ttnn.deallocate(out)
+    return result
+
+
+def _check_prefix_reuse_bitwise(device, rows, start, dtype, exp_approx_mode, variants):
+    """Every (q_chunk, prefix_reuse) of ``variants`` gives the output of the call with Q chunk = K chunk and
+    prefix_reuse 0 bit for bit, on its program cache miss and on the hit after it; the miss builds a new program."""
+    paged = _PrefixReusePagedKV(device, start + rows, dtype, seed=rows + start)
+    q_host = torch.randn(1, PREFIX_REUSE_NH, rows, PREFIX_REUSE_D, generator=torch.Generator().manual_seed(start))
+    q = ttnn.from_torch(q_host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    mismatches = []
+    # The tensor start is the traced path. The scalar start is part of the program, so it runs at the extreme row
+    # counts only.
+    for flexible in (True, False) if rows in (128, 8192) else (True,):
+        start_tensor = ttnn.from_torch(torch.tensor([start], dtype=torch.int32), device=device) if flexible else None
+        base = _prefix_reuse_sdpa(device, q, paged, start, start_tensor, PREFIX_REUSE_K_CHUNK, 0, exp_approx_mode)
+        if flexible and rows * (start + rows) <= 2048 * 8192:
+            passed, pcc = comp_pcc(paged.reference(ttnn.to_torch(q).float(), start), base, 0.99)
+            assert passed, f"prefix_reuse 0 against torch at {rows} rows after {start}: {pcc}"
+        for q_chunk, prefix_reuse in variants:
+            if q_chunk > rows:
+                continue
+            entries = device.num_program_cache_entries()
+            miss = _prefix_reuse_sdpa(device, q, paged, start, start_tensor, q_chunk, prefix_reuse, exp_approx_mode)
+            assert device.num_program_cache_entries() == entries + 1, (q_chunk, hex(prefix_reuse))
+            hit = _prefix_reuse_sdpa(device, q, paged, start, start_tensor, q_chunk, prefix_reuse, exp_approx_mode)
+            assert device.num_program_cache_entries() == entries + 1, (q_chunk, hex(prefix_reuse))
+            if not (torch.equal(miss, base) and torch.equal(hit, base)):
+                max_diff = (miss.float() - base.float()).abs().max().item()
+                mismatches.append((flexible, q_chunk, hex(prefix_reuse), max_diff))
+    assert not mismatches, f"{rows} rows after {start}: not bit-identical to prefix_reuse 0 (flexible, q, bits, diff)"
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="prefix_reuse applies on Blackhole only")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("rows, start", PREFIX_REUSE_CASES, ids=[f"{r}rows_at{s}" for r, s in PREFIX_REUSE_CASES])
+def test_chunked_sdpa_prefix_reuse_bitwise(device, rows, start):
+    """bfloat8_b Q and K/V with the approximate exponential, as Qwen3.8 serves its prefill. Calls with more Q chunks
+    than cores check the 128-row Q chunk and one split."""
+    variants = PREFIX_REUSE_VARIANTS if rows <= 2048 else [v for v in PREFIX_REUSE_VARIANTS if v[0] == 128] + [(32, 7)]
+    _check_prefix_reuse_bitwise(device, rows, start, ttnn.bfloat8_b, True, variants)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="prefix_reuse applies on Blackhole only")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("rows, start", [(2048, 4096), (256, 8192)], ids=["2048rows_at4096", "256rows_at8192"])
+def test_chunked_sdpa_prefix_reuse_bitwise_bfloat16(device, rows, start):
+    """bfloat16 Q and K/V (other K/V tile sizes, so other read batches) with the accurate exponential."""
+    variants = [(128, 1), (128, 2), (128, 7), (32, 5), (32, 7)]
+    _check_prefix_reuse_bitwise(device, rows, start, ttnn.bfloat16, False, variants)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="prefix_reuse applies on Blackhole only")
+def test_sdpa_prefix_reuse_ignored_outside_chunked_prefill(device):
+    """A causal SDPA without a page table gives the same output with every prefix_reuse bit set."""
+    torch.manual_seed(5)
+    operands = [
+        ttnn.from_torch(torch.randn(1, 3, 1024, 256), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    ]
+    outputs = []
+    for prefix_reuse in (0, 7):
+        out = ttnn.transformer.scaled_dot_product_attention(
+            *operands,
+            is_causal=True,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                q_chunk_size=128,
+                k_chunk_size=128,
+                exp_approx_mode=True,
+                prefix_reuse=prefix_reuse,
+            ),
+        )
+        outputs.append(ttnn.to_torch(out))
+    assert torch.equal(outputs[0], outputs[1])
+
+
+def test_sdpa_program_config_prefix_reuse_defaults_to_off():
+    config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8), q_chunk_size=128, k_chunk_size=128
+    )
+    assert config.prefix_reuse == 0
+    config.prefix_reuse = 0x407
+    assert config.prefix_reuse == 0x407
+    assert "prefix_reuse=1031" in repr(config)
