@@ -22,6 +22,7 @@
 namespace ttnn::operations::data_movement {
 
 void bind_fold_operation(nb::module_& mod) {
+    // The BFLOAT16 NaN rule in this docstring tracks tenstorrent/tt-metal#31406; drop it once that issue is fixed.
     const auto* doc = R"doc(
         Moves each ``stride_h x stride_w`` block of pixels of an ``[N, H, W, C]`` tensor into the channel dimension
         (space-to-depth). `padding` first pads the input with zeros to ``[N, Hp, Wp, Cp]``. Output pixel ``(n, h, w)``
@@ -56,7 +57,7 @@ void bind_fold_operation(nb::module_& mod) {
                * - BFLOAT8_B
                  - TILE
 
-            ``BFLOAT16`` TILE input values must not be NaN.
+            ``BFLOAT16`` TILE input values must not be NaN or -0.0.
 
         Memory Support:
             - Interleaved: DRAM and L1
