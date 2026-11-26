@@ -432,8 +432,10 @@ def _masked_columns(logits, n, gen):
 def test_spec_vllm_class_masked_verify(mesh_device, monkeypatch):
     """supports_spec_device_mask on Qwen36MTPContractForCausalLM, called as the plugin calls it: each verify of a
     greedy request is first run as a logits verify, which reads the block's [1+K, V] logits, then again over the same
-    block (the verify is idempotent: same start state, same KV writes) as decode_forward(defer_device_sampling=True)
-    followed by sample_deferred_decode with a token mask that rules out each column's argmax. The ids of the deferred
+    block as decode_forward(defer_device_sampling=True) followed by sample_deferred_decode with a token mask that rules
+    out each column's argmax. The logits verify writes its GDN states into scratch blocks, so the deferred verify reads
+    the same start state (in mamba_cache_mode "none" a step's start block is one of its own window blocks), and its
+    KV writes are those of the deferred verify. The ids of the deferred
     verify must equal the host's masked argmax of the logits verify column by column (the host logits path of the
     plugin), the request then commits them and the propose after the deferred verify continues them. No program
     compiles after the capture, and the verify trace is captured once."""
@@ -468,6 +470,8 @@ def test_spec_vllm_class_masked_verify(mesh_device, monkeypatch):
     n_prog = mesh_device.num_program_cache_entries()
 
     runner = PluginRunner(cls, kv, layout, seed=7)
+    # GDN window blocks a reference logits verify writes instead of the step's own.
+    scratch = [[runner.free.pop() for _ in range(K + 1)] for _ in range(layout.num_groups)]
     vocab = model.args.vocab_size
     gen = torch.Generator().manual_seed(11)
     greedy = SimpleNamespace(temperature=[0.0], top_k=[1], top_p=[1.0], seed=[None])
@@ -502,17 +506,23 @@ def test_spec_vllm_class_masked_verify(mesh_device, monkeypatch):
             pos = torch.full((1, 1 + K), PAD, dtype=torch.int32)
             tok[0, : 1 + n] = torch.tensor([out[-1]] + proposal, dtype=torch.int32)
             pos[0, : 1 + n] = torch.arange(pos0, pos0 + 1 + n, dtype=torch.int32)
+            windows, starts = runner.state.decode(0, pos0, 1 + n)
             block = dict(
                 tokens=tok,
                 start_pos=pos,
                 page_table=runner._table(pos0),
                 num_valid_drafts=torch.tensor([n], dtype=torch.int32),
                 accepted_counts=torch.tensor([acc], dtype=torch.int32),
-                mamba_state=runner.state.state({0: runner.state.decode(0, pos0, 1 + n)}, 1),
                 page_tables_per_layer=[runner._table(pos0)] * len(model.layer_indices),
                 **common,
             )
-            read = cls.decode_forward(spec_mode="logits", read_from_device=True, **block)
+            read = cls.decode_forward(
+                spec_mode="logits",
+                read_from_device=True,
+                mamba_state=runner.state.state({0: (scratch, starts)}, 1),
+                **block,
+            )
+            block["mamba_state"] = runner.state.state({0: (windows, starts)}, 1)
             col = read.logits[0, :, :vocab].float()
             mask = _masked_columns(col, n, gen) if step % 3 != 2 else None  # every third step is unconstrained
             payload = cls.decode_forward(
