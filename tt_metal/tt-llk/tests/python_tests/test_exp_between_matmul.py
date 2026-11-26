@@ -6,7 +6,8 @@
 The matmul replays its MVMUL sequence from the FPU half of the replay buffer, recorded once in
 its init. Exp records its body into the replay buffer on every call; a record longer than the
 SFPU half overwrites the start of the matmul sequence, and the second K step then computes
-garbage. Exp writes a spare Dest tile, so the packed result is the plain matmul.
+garbage. Each exp call runs on its own spare Dest tile, seeded with an A tile; those tiles are
+packed after the matmul result and checked against torch.
 
 A throttled matmul (THROTTLE_LEVEL > 0, built with MM_THROTTLE as ttnn does) programs ADDR_MOD_6,
 which selects the exp body's MM_THROTTLE dest-advance path.
@@ -26,6 +27,7 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_dispatch_constants import EXP_WITH_BASE_SCALE
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -57,6 +59,13 @@ class EXP_VARIANT(TemplateParameter):
             f"constexpr SfpuType EXP_OP = SfpuType::{self.op};\n"
             f"constexpr bool EXP_CLAMP_NEGATIVE = {str(self.clamp_negative).lower()};"
         )
+
+
+EXP_GOLDEN = {
+    "exponential": torch.exp,
+    "exp2": torch.exp2,
+    "exp_with_base": lambda x: torch.exp(EXP_WITH_BASE_SCALE * x),
+}
 
 
 @dataclass
@@ -112,6 +121,15 @@ def test_exp_between_matmul(formats, math_fidelity, dims, variant, throttle):
     tilized_B = tilize_block(
         src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
     )
+    # K steps 1..kt-1 run exp on A tiles 0..kt-2, packed after the matmul result.
+    exp_tile_cnt = matmul_dims.kt_dim - 1
+    exp_input = tilized_A.flatten()[: exp_tile_cnt * 1024].to(torch.float32)
+    golden_tensor = torch.cat(
+        [
+            golden_tensor.flatten(),
+            EXP_GOLDEN[variant[0]](exp_input).to(format_dict[formats.output_format]),
+        ]
+    )
 
     configuration = TestConfig(
         "sources/exp_between_matmul_test.cpp",
@@ -139,7 +157,7 @@ def test_exp_between_matmul(formats, math_fidelity, dims, variant, throttle):
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=matmul_dims.output_tile_cnt,
+            tile_count_res=matmul_dims.output_tile_cnt + exp_tile_cnt,
         ),
         dest_acc=DestAccumulation.No,
     )
