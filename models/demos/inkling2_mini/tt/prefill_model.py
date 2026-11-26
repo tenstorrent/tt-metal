@@ -104,6 +104,10 @@ QB = 128  # local attention query block (SDPA batch element)
 FAR_ROWS = 16384
 # the SDPA takes the query position as a runtime argument (ttnn builds from 2026-11-25 on; older: K / V cut at s + t)
 _HAS_QOFF = "rel_q_offset" in (ttnn.transformer.scaled_dot_product_attention.__doc__ or "")
+# the SDPA reads K and V in place from the far cache rows [v | k] (program config k_head_col / v_head_col): no copy of
+# the cache rows [0, kb) per global layer (2 x 142 MB of DRAM at 128K, which a 196608 context with spec decode does not
+# have left), and one key shape for every start (older builds: the copies, kb in FAR_ROWS buckets)
+_KV_IN_PLACE = _HAS_QOFF and hasattr(ttnn.SDPAProgramConfig, "k_head_col")
 # rows kept from the end of the last chunk for the decode handoff: the last real row n - 1 lies in the last QB rows,
 # its lags 1..3 go back 3 more, and the conv tails put 32 rows in front: QB + 32 covers both
 KEEP = QB + 32
@@ -883,14 +887,16 @@ class Inkling2Prefill:
             kc = ttnn.typecast(new, ring.dtype) if ring.dtype != ttnn.bfloat16 else new
         ttnn.fill_cache(ring, kc, 0, update_idx=o)
 
-    def _sdpa_cfg(self, qc, kc):
-        key = (qc, kc)
+    def _sdpa_cfg(self, qc, kc, k_col=0):
+        """k_col > 0: K at that column of the far cache rows [v | k], V at column 0 (read in place)."""
+        key = (qc, kc, k_col)
         if key not in self._sdpa_pc:
             self._sdpa_pc[key] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
                 q_chunk_size=qc,
                 k_chunk_size=kc,
                 exp_approx_mode=False,
+                **({"k_head_col": k_col} if k_col else {}),
             )
         return self._sdpa_pc[key]
 
@@ -985,14 +991,18 @@ class Inkling2Prefill:
             proj = lp.rel_proj_half if rel.shape[-1] == 32 else lp.rel_proj  # PfHeads rel: [proj; proj] (half_proj)
             rl = ttnn.matmul(rel, proj, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,24,t,1024]
             rl = ttnn.to_layout(rl, ttnn.ROW_MAJOR_LAYOUT)
-        qoff, qt = {}, t
+        qoff, qt, k_col = {}, t, 0
         if lp.lay.is_global:
             if s == 0:
                 kk, vv = k_c, v_c
             elif _HAS_QOFF:
                 qt, kb = self._far_q(s, t, st.kv_full.shape[2])
-                kk = ttnn.slice(st.kv_full, [0, 0, 0, V_MEM], [1, N_KV, kb, KV_MEM])
-                vv = ttnn.slice(st.kv_full, [0, 0, 0, 0], [1, N_KV, kb, HEAD_DIM])
+                if _KV_IN_PLACE:  # the whole cache as K and V: chunks past the last query are not read
+                    kk = vv = st.kv_full
+                    k_col = V_MEM
+                else:
+                    kk = ttnn.slice(st.kv_full, [0, 0, 0, V_MEM], [1, N_KV, kb, KV_MEM])
+                    vv = ttnn.slice(st.kv_full, [0, 0, 0, 0], [1, N_KV, kb, HEAD_DIM])
                 if qt > t:  # pad query rows: they see keys past the chunk, their outputs are dropped
                     qs, rl, sink = (ttnn.pad(x, [(0, 0), (0, 0), (0, qt - t), (0, 0)], 0.0) for x in (qs, rl, sink))
                 qoff = {"rel_q_offset": s}
@@ -1027,7 +1037,7 @@ class Inkling2Prefill:
             rel_logits=rl,
             rel_skewed=skewed,
             attention_sink=_bf16(sink),
-            program_config=self._sdpa_cfg(*self.r3_chunks),
+            program_config=self._sdpa_cfg(*self.r3_chunks, k_col),
             compute_kernel_config=self.sdpa_ckc,
             **qoff,
         )
@@ -1905,7 +1915,7 @@ class Inkling2Prefill:
         for o in range(QB, WINDOW, QB):  # a first pass to the window's end, last or not; then the same past 1024
             n = WINDOW - o
             w += [(o, n - p), (o, n + QB - p), (WINDOW + o, n - p), (WINDOW + o, n + QB - p)]
-        if _HAS_QOFF:
+        if _HAS_QOFF and not _KV_IN_PLACE:  # in place: one key shape, the passes above cover it
             qts = sorted({self._far_q(FAR_ROWS, t, max_ctx)[0] for t in ts})
             for kb in range(FAR_ROWS, max_ctx + 1, FAR_ROWS):
                 w += [(kb - q, q - p) for q in qts if kb - q >= WINDOW]
