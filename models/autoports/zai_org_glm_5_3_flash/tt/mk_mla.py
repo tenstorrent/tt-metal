@@ -97,11 +97,12 @@ MLA_REV_MFAST = 77
 # MSPLIT); the same integers and survivor array. Only the knob-on builds carry 81 (the define's value = CB_AKEY's index
 # for the BRISC): with the knob off every define and instruction is rev 77's
 MLA_REV_MSPLIT = 81
-# 82 (GLM53_DSA_SHARD_RS1_PIPE=1, opt-in, on RS1_EARLY + RS1_SPLIT + RS1_TSPLIT; the t-row builds of
-# tt/shard_plan.py rs1_pipe_engaged: whole-token TSPLIT halves, >= 2 tokens per lane -- t 16 at 8 lanes): the split
-# RS1's lanes each gated by their own token half's root signals, rs1's waiter signalling the roots twice, the roots
-# landing / combining half 0 while rs1a is in flight (kernels/mla/dsa_shard.hpp RS1 PIPE; same pages, order and compute
-# messages). Only the engaged builds carry 82: every other build keeps its define, arguments and instructions
+# 82 (GLM53_DSA_SHARD_RS1_PIPE=1, default 0; on in tt/galaxy_defaults.py; rides on RS1_EARLY + RS1_SPLIT + RS1_TSPLIT;
+# the t-row builds of tt/shard_plan.py rs1_pipe_engaged: whole-token TSPLIT halves, >= 2 tokens per lane -- t 16 at 8
+# lanes): the split RS1's lanes each gated by their own token half's root signals, rs1's waiter signalling the roots
+# twice, the roots landing / combining half 0 while rs1a is in flight (kernels/mla/dsa_shard.hpp RS1 PIPE; same pages,
+# order and compute messages). Only the engaged builds carry 82: every other build keeps its define, arguments and
+# instructions
 MLA_REV_RS1_PIPE = 82
 
 

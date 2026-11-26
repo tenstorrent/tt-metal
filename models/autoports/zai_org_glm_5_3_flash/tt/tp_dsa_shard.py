@@ -332,10 +332,11 @@ class TPMlaShard(TPM.TPMla):
                     logger.info(f"TPMlaShard: GLM53_DSA_SHARD_RS1_TSPLIT active (RS1 lanes = the halves of every block: "
                                 f"spans {SP.rs1_tsplit_spans(t)} of {SP.rs_sent_pages(t, SP.RS1_DATA_PAGES)} pages at t {t})")  # fmt: skip
                     _RS1T_LOGGED.append(True)
-            # rev 82 GLM53_DSA_SHARD_RS1_PIPE (opt-in, on RS1_EARLY + RS1_SPLIT + RS1_TSPLIT; the builds of
-            # SP.rs1_pipe_engaged: whole-token halves, >= 2 tokens per lane): each RS1 lane counts its own half's root
-            # signals (rs1 the tokens [0, t / 2): SP.rs1_pipe_waits) and rs1's waiter names every root twice (SEM_RSC
-            # weight 2) -- the roots land / combine half 0 while rs1a is in flight (dsa_shard.hpp RS1 PIPE)
+            # rev 82 GLM53_DSA_SHARD_RS1_PIPE (default 0; on in tt/galaxy_defaults.py; rides on RS1_EARLY + RS1_SPLIT +
+            # RS1_TSPLIT; the builds of SP.rs1_pipe_engaged: whole-token halves, >= 2 tokens per lane): each RS1 lane
+            # counts its own half's root signals (rs1 the tokens [0, t / 2): SP.rs1_pipe_waits) and rs1's waiter names
+            # every root twice (SEM_RSC weight 2) -- the roots land / combine half 0 while rs1a is in flight
+            # (dsa_shard.hpp RS1 PIPE)
             pipe = SP.rs1_pipe_engaged(t, nl, SP.shard_rs1_pipe(self.P, early, rs1s, rs1t))
             rs1_wait, rs1a_n, split1, split0, rs1_cons = rs_wait, rs_wait[1], split, split, (MK.SEM_RSC, roots)
             if pipe:

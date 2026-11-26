@@ -1424,16 +1424,16 @@ assert RS1_PIPE_WAITS == (2, 3, 4) and RS1_PIPE_WAITS[2] == sum(RS1_PIPE_W.value
 
 
 def shard_rs1_pipe(pair: int, early: bool = True, rs1s: bool = True, rs1t: bool = True) -> bool:
-    """rev 82 GLM53_DSA_SHARD_RS1_PIPE (default 0, opt-in; the 8x4): the lane tokens pipelined through the split RS1.
-    Under RS1_TSPLIT the two RS1 lanes carry the halves of every destination block -- whole token halves
-    (rs1_pipe_halves: rs1 the tokens [0, t / 2), every lane's first token at 8 lanes x 2) -- but both counted every
-    token's root signals, so both opened behind the last pass-0 slice and landed together, and a root combined round 1
-    of its lane tokens only after both. With the knob each lane counts its own half's signals (rs1_pipe_waits: rs1
-    opens a token pass earlier) and rs1's waiter signals the roots with weight 2 (RS1_PIPE_W), so a root lands /
+    """rev 82 GLM53_DSA_SHARD_RS1_PIPE (default 0; on in tt/galaxy_defaults.py; the 8x4): the lane tokens pipelined
+    through the split RS1. Under RS1_TSPLIT the two RS1 lanes carry the halves of every destination block -- whole token
+    halves (rs1_pipe_halves: rs1 the tokens [0, t / 2), every lane's first token at 8 lanes x 2) -- but both counted
+    every token's root signals, so both opened behind the last pass-0 slice and landed together, and a root combined
+    round 1 of its lane tokens only after both. With the knob each lane counts its own half's signals (rs1_pipe_waits:
+    rs1 opens a token pass earlier) and rs1's waiter signals the roots with weight 2 (RS1_PIPE_W), so a root lands /
     combines / scatters its half-0 tokens while rs1a is still in flight (dsa_shard.hpp RS1 PIPE, the kernels'
     MLA_DSA_SHARD_RS1_PIPE; rs1_pipe_gates / rs1_pipe_root emulate it). The same pages, landing order and compute
-    messages: bit-exact. Which builds take it: rs1_pipe_engaged. Needs RS1_EARLY (the per-pass fields), RS1_SPLIT
-    and RS1_TSPLIT; the pair / the 2x4 never take it"""
+    messages: bit-exact. Which builds take it: rs1_pipe_engaged. Needs RS1_EARLY (the per-pass fields), RS1_SPLIT and
+    RS1_TSPLIT; the pair / the 2x4 never take it"""
     on = pair > 2 and _flag("GLM53_DSA_SHARD_RS1_PIPE")
     if on and not (early and rs1s and rs1t):
         raise ValueError(

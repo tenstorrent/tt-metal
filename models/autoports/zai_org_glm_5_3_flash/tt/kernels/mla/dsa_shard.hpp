@@ -780,10 +780,11 @@ inline uint32_t pf_keep_bm(
 #endif
 // rev 82, RS1 PIPE (MLA_DSA_SHARD_RS1_PIPE, tt/shard_plan.py GLM53_DSA_SHARD_RS1_PIPE; the 8x4 with RS1_EARLY +
 // RS1_SPLIT and the host's RS1_TSPLIT, on t-row builds whose TSPLIT halves are whole tokens and whose token lanes hold
-// >= 2 tokens each (tt/shard_plan.py rs1_pipe_engaged: t 16 at 8 lanes); unset: every build unchanged; opt-in). Under
-// TSPLIT the split RS1's lanes carry the halves of every destination block -- rs1 (link 1) the slices of the launch
-// tokens [0, t / 2), rs1a (link 0) the rest -- but both counted every token's signals, so both opened behind the last
-// pass-0 slice, landed together, and a root combined round 1 of its lane tokens only after both. With the knob:
+// >= 2 tokens each (tt/shard_plan.py rs1_pipe_engaged: t 16 at 8 lanes); unset: every build unchanged; the host knob:
+// default 0, on in tt/galaxy_defaults.py). Under TSPLIT the split RS1's lanes carry the halves of every destination
+// block -- rs1 (link 1) the slices of the launch tokens [0, t / 2), rs1a (link 0) the rest -- but both counted every
+// token's signals, so both opened behind the last pass-0 slice, landed together, and a root combined round 1 of its
+// lane tokens only after both. With the knob:
 //   - a root signals only the lane that carries token t's slices (rs1_pipe_half0) and each lane's two gates count its
 //     half's tokens (tt/shard_plan.py rs1_pipe_waits: t / 2 per field): rs1 opens on every lane's first token, one
 //     token pass before rs1a;

@@ -82,6 +82,16 @@ KNOBS = {
     # split engaged (B 4 build, KPH 2), served gate hash unchanged; an explicit MFAST = 0 (or R8 / AGK / PREFILTER = 0)
     # drops it
     "GLM53_DSA_SHARD_MSPLIT": "1",
+    # GLM53_DSA_SHARD_RS1_PIPE (rev 82, on RS1_EARLY + RS1_SPLIT + RS1_TSPLIT; engaged on the t 16 builds at 8 lanes):
+    # each split RS1 lane counts only its own token half's root signals, so a root lands and combines round 1 of its
+    # lane's first token while the second half is in flight -- the same pages, order and compute messages. Served build
+    # (B 16 + the narrow-width knobs), stamped 8 x 1 verify (8 live, ISL 32 K, OSL 96; the four decode-step knobs below
+    # on in every arm), A / B / A: the 11 DSA MLA programs 9,386.7 / 9,082.9 / 9,383.6 us, full replay 27.866 / 27.529 /
+    # 27.875 ms, in-loop 26.896 / 26.495 / 26.839 ms. Ids identical to the knob-off pins at 8 x 1 (t 16, engaged) and
+    # 4 x 3 (t 16, engaged; spec 64cbb5a1c37ad50c, plain c771d577ecc97865); the lone 1 x 3 (t 4) does not take the
+    # define. An explicit RS1_EARLY / RS1_SPLIT / RS1_TSPLIT = 0 drops it, and an explicit RSB / RSNP = 0 too (through
+    # TSPLIT)
+    "GLM53_DSA_SHARD_RS1_PIPE": "1",
     # GLM53_DSA_SHARD_COMB (rev 65): the fold combine on the lane roots -- each RS round's slices combined in one pass
     # (FOLD1 / FOLD2 matmuls, kernels/mla/att_c.cpp fold1 / fold2). Correct but not bitwise: the FPU rounds the matmul
     # operands to tf32 -- the O partials once instead of once per pairwise chain step, but also the softmax
@@ -157,6 +167,26 @@ KNOBS = {
     # waits only for the coefficient tile; mhc_post reads coef ungated, so coef still lands before the 1/rms(h)
     # signal; an explicit 0 keeps the knob-off kernels
     "GLM53_MHC_RMS_EARLY": "1",
+    # GLM53_MHC_MSG_TRIM (every mhc_pre site): the round-1 pre message as 4 x T words, no mailbox zero fill -- the same
+    # values (every reader reads t < T): traced plain step probe (B 16, 16 live, width 16) 25,690.5 / 25,665.2 / 25,688.0
+    # us at 32 K (A / B / A), 28,521.2 -> 28,499.7 us at 1 M; the CI pins and 16 identical rows unchanged
+    "GLM53_MHC_MSG_TRIM": "1",
+    # GLM53_ACCEPT_BATCH (spec_ctl.cpp ACCEPT / RING): a user's reads behind one barrier and its DSA ring move in one round
+    # trip -- the same bytes: in the stamped 8 x 1 verify step (B 16, 8 live, ISL 32 K, the step profiler's per-program
+    # stamps) ACCEPT 309 -> 54 us and the step span 28.40 -> 28.12 ms; spec ids identical at 8 x 1, 4 x 3, the lone 1 x 3
+    # and on the single-user kernel. Not a GLM53_SPEC_* name (apply_spec)
+    "GLM53_ACCEPT_BATCH": "1",
+    # GLM53_HEAD_SELECT_FAST (topk_select.cpp TOPK_SEL_FAST, every head): one write barrier for all rows, the heap merge
+    # of the chips' candidates -- the same rows: traced plain step probe (B 16, 16 live, 32 K) 25,635 / 25,603 / 25,634
+    # us at top-K 1 (A / B / A: a head call 294.6 -> 262.5 us), 25,808 -> 25,744 us at the served K 10 (467 -> 402 us);
+    # the CI pins, 16 identical rows (top-k 10 sampled) and the 8 x 1 / lone 1 x 3 spec ids identical
+    "GLM53_HEAD_SELECT_FAST": "1",
+    # GLM53_KDA_VERIFY_FLAT (kda_pre reader.cpp KDA_VERIFY_FLAT, on PIPE): every verify group's reads behind one barrier --
+    # the same windows. With ACCEPT_BATCH, on the served build (B 16 + the narrow-width knobs), 8 x 1 verify (8 live, ISL
+    # 32 K, OSL 96): host-timed replay 28.14 / 27.71 / 28.12 ms, in-loop 27.31 / 26.73 / 27.32 ms (A / B / A); FLAT's own
+    # share (ACCEPT_BATCH on in both arms, without the narrow knobs) 28.01 -> 27.70 ms; 8 x 1 / 4 x 3 spec ids identical.
+    # The served gate with all four of these knobs on: 1-user hash, 8-user errors and coherence unchanged
+    "GLM53_KDA_VERIFY_FLAT": "1",
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE
     "GLM53_DSA_POOL": "1",  # the sparse_dsa layers' intermediates from one AllocPool (stack_model._dsa_pools)
     "GLM53_MOE_SHARE_M": "1",  # one shared-expert intermediate per stack (mk_moe.MkMoE)
@@ -215,8 +245,16 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
         for k in ("GLM53_DSA_SHARD_RS1_SPLIT", "GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_RSNP")
     ):
         want.pop("GLM53_DSA_SHARD_RS1_TSPLIT")  # TSPLIT rides on RS1_SPLIT + RSNP (RSNP on RSB): an explicit 0 drops it
+    if any(
+        os.environ.get(k, want.get(k, "0")) != "1"
+        for k in ("GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_RS1_SPLIT", "GLM53_DSA_SHARD_RS1_TSPLIT")
+    ):
+        # RS1_PIPE rides on RS1_EARLY + RS1_SPLIT + RS1_TSPLIT: an explicit 0 on any drops the RS1_PIPE default
+        want.pop("GLM53_DSA_SHARD_RS1_PIPE")
     if os.environ.get("GLM53_MLA_ATT_OBF16") == "1":
         want.pop("GLM53_DSA_SHARD_COMB")  # COMB needs fp32 O partials: an explicit OBF16=1 drops the COMB default
+    if os.environ.get("GLM53_KDA_VERIFY_PIPE", want["GLM53_KDA_VERIFY_PIPE"]) != "1":
+        want.pop("GLM53_KDA_VERIFY_FLAT")  # FLAT rides on PIPE: an explicit PIPE=0 drops the FLAT default with it
     want["GLM53_MODEL_TRACE_MB"] = str(trace_mb(int(seq)))
     ladder = sparse_t(int(seq))
     if ladder:

@@ -1620,10 +1620,10 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     not bitwise -- ids move at near-ties -- gated on tau / coherence and the served 1 M / AgentX rows); an
     explicit environment value wins (an explicit AGK=0 drops the AGB default with it, an explicit RSB=0 the RSNP
     default, an explicit RS1_SPLIT=0 / RSB=0 / RSNP=0 the RS1_TSPLIT default, an explicit MFAST=0 (or R8 / AGK / PREFILTER
-    = 0) the MSPLIT default, an explicit GLM53_MLA_ATT_OBF16=1 the
-    COMB default); the speculative verify's step cuts and its kda_rec
-    value split (GLM53_REC_SPLIT_VERIFY: no default is a GLM53_SPEC_* name, so apply_spec's speculative defaults still
-    follow apply); the 1 M prefill window ladder; other meshes get nothing"""
+    = 0) the MSPLIT default, an explicit GLM53_MLA_ATT_OBF16=1 the COMB default, an explicit RS1_EARLY / RS1_SPLIT /
+    RS1_TSPLIT = 0 (or RSB / RSNP = 0, through TSPLIT) the RS1_PIPE default); the speculative verify's step cuts and
+    its kda_rec value split (GLM53_REC_SPLIT_VERIFY: no default is a GLM53_SPEC_* name, so apply_spec's speculative
+    defaults still follow apply); the 1 M prefill window ladder; other meshes get nothing"""
     import os
 
     from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
@@ -1753,6 +1753,40 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     )
     assert got["GLM53_MLA_DSA_BATON_GROUPS"] == got["GLM53_KDA_VERIFY_PIPE"] == "1"
     assert got["GLM53_MK_READER_PLACE"] == "row" and got["GLM53_REC_SPLIT_VERIFY"] == "2"
+    # the bitwise decode-step knobs and their readers: SP.accept_batch / head_select_fast / kda_verify_flat, and
+    # mhc_pre.py's MSG_TRIM env read + define (a misspelled name would build knob-off silently)
+    for k in ("GLM53_MHC_MSG_TRIM", "GLM53_ACCEPT_BATCH", "GLM53_HEAD_SELECT_FAST", "GLM53_KDA_VERIFY_FLAT"):
+        assert GD.KNOBS[k] == got[k] == "1", k
+    assert SP.accept_batch() and SP.head_select_fast() and SP.kda_verify_flat()
+    assert 'os.environ.get("GLM53_MHC_MSG_TRIM") == "1"' in mhc_src and '("MHC_MSG_TRIM", "1")' in mhc_src
+    # FLAT rides on PIPE: an explicit PIPE=0 drops the FLAT default (the others stay)
+    monkeypatch.setenv("GLM53_KDA_VERIFY_PIPE", "0")
+    monkeypatch.delenv("GLM53_KDA_VERIFY_FLAT", raising=False)
+    got_np = GD.apply((8, 4), 4096, 4096)
+    assert "GLM53_KDA_VERIFY_FLAT" not in got_np and not SP.kda_verify_flat()
+    monkeypatch.delenv("GLM53_KDA_VERIFY_PIPE")
+    # rev 82 GLM53_DSA_SHARD_RS1_PIPE: a default on the 8x4 (never the pair / 2x4); it rides on RS1_EARLY + RS1_SPLIT +
+    # RS1_TSPLIT: an explicit 0 on any of them drops the RS1_PIPE default (else shard_rs1_pipe refuses the build)
+    assert GD.KNOBS["GLM53_DSA_SHARD_RS1_PIPE"] == got["GLM53_DSA_SHARD_RS1_PIPE"] == "1"
+    assert SP.shard_rs1_pipe(8) and not SP.shard_rs1_pipe(2)
+    for k in ("GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_RS1_SPLIT", "GLM53_DSA_SHARD_RS1_TSPLIT"):
+        monkeypatch.setenv(k, "0")
+        monkeypatch.delenv("GLM53_DSA_SHARD_RS1_PIPE", raising=False)
+        assert "GLM53_DSA_SHARD_RS1_PIPE" not in GD.apply((8, 4), 4096, 4096), k
+        assert os.environ.get("GLM53_DSA_SHARD_RS1_PIPE") is None, k
+        monkeypatch.setenv(k, "1")
+    # an explicit RSB=0 or RSNP=0 drops it through TSPLIT (whose default goes): the derived defaults cleared first, as
+    # in a fresh process (an RSNP / TSPLIT left in the environment by the apply above would count as explicit)
+    for k in ("GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_RSNP"):
+        for d in ("GLM53_DSA_SHARD_RSNP", "GLM53_DSA_SHARD_RS1_TSPLIT", "GLM53_DSA_SHARD_RS1_PIPE"):
+            monkeypatch.delenv(d, raising=False)
+        monkeypatch.setenv(k, "0")
+        got_k = GD.apply((8, 4), 4096, 4096)
+        assert "GLM53_DSA_SHARD_RS1_TSPLIT" not in got_k and "GLM53_DSA_SHARD_RS1_PIPE" not in got_k, (k, got_k)
+        assert os.environ.get("GLM53_DSA_SHARD_RS1_PIPE") is None, k
+        for d in ("GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_RSNP", "GLM53_DSA_SHARD_RS1_TSPLIT"):
+            monkeypatch.setenv(d, "1")
+    monkeypatch.setenv("GLM53_DSA_SHARD_RS1_PIPE", "1")
     _protect_env(monkeypatch, [k for k in os.environ if k.startswith("GLM53_SPEC_")] + list(GD.SPEC_KNOBS_B16))
     spec_set, spec_mode, spec_why = GD.apply_spec((8, 4), 16, 4)  # (after apply, as test_mk_e2e runs them)
     assert spec_mode == "spec" and spec_set["GLM53_SPEC_K"] == "3", (spec_mode, spec_why)
@@ -1855,9 +1889,10 @@ def test_rs1_split_build_refusals(monkeypatch):
     monkeypatch.delenv("GLM53_DSA_SHARD_RS1_TSPLIT")
     SP.rs1_tsplit_header_check()
     assert SP.rs1_tsplit_spans(16) == {1: (0, 72), 0: (72, 72)} and SP.rs1_tsplit_spans(1) == {1: (0, 4), 0: (4, 6)}
-    # rev 82 GLM53_DSA_SHARD_RS1_PIPE: off by default (not a galaxy default), 0 / 1 only, the 8x4 only, needs RS1_EARLY
-    # + RS1_SPLIT + RS1_TSPLIT; the TSPLIT halves as tokens (None where a span splits a token's pages); engaged only
-    # with >= 2 tokens per lane (t 16 at 8 lanes; never the t 1 / 4 / 8 builds); each lane's gates count its half
+    # rev 82 GLM53_DSA_SHARD_RS1_PIPE (default 0; on in tt/galaxy_defaults.py): 0 / 1 only, the 8x4 only, needs
+    # RS1_EARLY + RS1_SPLIT + RS1_TSPLIT; the TSPLIT halves as tokens (None where a span splits a token's pages);
+    # engaged only with >= 2 tokens per lane (t 16 at 8 lanes; never the t 1 / 4 / 8 builds); each lane's gates count
+    # its half
     monkeypatch.delenv("GLM53_DSA_SHARD_RS1_PIPE", raising=False)
     assert not SP.shard_rs1_pipe(8, False, False, False)
     monkeypatch.setenv("GLM53_DSA_SHARD_RS1_PIPE", "1")
@@ -1905,7 +1940,7 @@ def test_rs1_split_build_refusals(monkeypatch):
     assert SP.rs1_pipe_waits(16) == {1: (8, 8), 0: (8, 8)} and SP.rs1_pipe_waits(16, 2) == {1: (16, 16), 0: (16, 16)}
     SP.rs1_pipe_header_check()
     with open(os.path.join(os.path.dirname(SP.KDIR), "galaxy_defaults.py")) as fh:
-        assert "GLM53_DSA_SHARD_RS1_PIPE" not in fh.read()  # opt-in
+        assert '"GLM53_DSA_SHARD_RS1_PIPE": "1"' in fh.read()  # a galaxy default (test_galaxy_defaults_shard_tail)
     # the sizing model: knob off the root combines after both halves; with the knob half 0 behind rs1 alone -- the gain
     # is min(rs1a - rs1 landing, the half-0 work), 0 when both land together (layer 3 at 32 K x 16 live, 11-25 probe:
     # both lanes land 249.4 us after the merge, round-1 work 51.6 us for 2 tokens; rs1 a token pass (~31 us) earlier)
