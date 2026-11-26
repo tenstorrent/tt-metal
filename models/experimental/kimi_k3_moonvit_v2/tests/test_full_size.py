@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device, the 4-chip ring (one LoudBox row): full-size encoder layers, each on its own, the full 27-layer
-encoder and the full model against reference outputs saved by `goldens.py`, real weights only.
+encoder and the full model against reference outputs saved by `goldens.py`, real weights. Also
+`test_full_size_model_trace_perf`, random weights, which asserts the traced model's time and checks no output.
 
 Two image sizes (`SIZES`), each with its own saved outputs:
   256x256: 65,536 of the 67,584 padded rows real
@@ -39,6 +40,7 @@ from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import checkpoi
 from models.experimental.kimi_k3_moonvit_v2.tests import goldens
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     REAL,
+    SYNTHETIC,
     ALL_LAYERS,
     RING,
     RING_TRACE,
@@ -72,6 +74,10 @@ LAYER_RELATIVE_RMSE = 0.03
 ENCODER_PCC = 0.99
 ENCODER_RELATIVE_RMSE = 0.15
 MODEL_RELATIVE_RMSE = 0.17
+# `test_full_size_model_trace_perf`: the largest grid the processor makes, and the upper limit on one
+# traced replay of the model there, with headroom over the current time so run-to-run noise does not fail it.
+PERF_SIZE = SIZES["510x132"]
+MODEL_TRACE_LIMIT_MS = 3100
 
 
 @pytest.fixture(params=list(SIZES.values()), ids=list(SIZES))
@@ -221,8 +227,8 @@ def test_full_size_layer_trace(mesh_device, sp_axis, num_links, config, referenc
         out = to_host(trace.replay(), mesh_device, sp_axis, config, size)
         assert_same_as_untraced(untraced, out, f"layer {layer}")
         check_layer(saved, out, config, parallel, size, layer, "traced ")
-        seconds = trace.time_replays(f"full-size {size[0]}x{size[1]} layer {layer}, run twice")
-        logger.info(f"full-size {size[0]}x{size[1]} layer {layer}: {seconds / 2 * 1e3:.3f} ms per traced layer")
+        milliseconds = trace.time_replays(f"full-size {size[0]}x{size[1]} layer {layer}, run twice")
+        logger.info(f"full-size {size[0]}x{size[1]} layer {layer}: {milliseconds / 2:.3f} ms per traced layer")
 
 
 def encoder_inputs(mesh_device, sp_axis, num_links, config, reference, size):
@@ -379,3 +385,27 @@ def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, referenc
             f"(host prep + input writes {(written - start) * 1e3:.1f} ms, traced replay "
             f"{(ran - written) * 1e3:.1f} ms, gather {(done - ran) * 1e3:.1f} ms)"
         )
+
+
+@RING_TRACE
+@SYNTHETIC
+def test_full_size_model_trace_perf(mesh_device, sp_axis, num_links, config, reference):
+    """`test_full_size_model_trace` on PERF_SIZE with random weights, for time only: no saved outputs,
+    no output checks. Asserts the time per replay against MODEL_TRACE_LIMIT_MS."""
+    tt, pixels, grid_thws = model_inputs(mesh_device, sp_axis, num_links, config, reference, PERF_SIZE)
+    inputs = tt.prepare_inputs(pixels, grid_thws)
+
+    def forward():
+        return tt(**inputs)
+
+    # Untraced first: compiles the programs and allocates the ring attention buffers (`Trace`).
+    ttnn.deallocate(forward())
+
+    with Trace(mesh_device, forward) as trace:
+        milliseconds = trace.time_replays(
+            f"full-size {PERF_SIZE[0]}x{PERF_SIZE[1]} model ({config.num_hidden_layers} layers, merger, "
+            "projector), random weights"
+        )
+    assert (
+        milliseconds <= MODEL_TRACE_LIMIT_MS
+    ), f"{milliseconds:.1f} ms per traced replay > {MODEL_TRACE_LIMIT_MS} ms limit"

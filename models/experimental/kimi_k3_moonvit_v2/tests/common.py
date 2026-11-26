@@ -458,19 +458,19 @@ class Trace(_Trace):
     """`tt/trace.py`'s `Trace`, plus timing."""
 
     def time_replays(self, label: str, iterations: int = TRACE_ITERATIONS, warmup: int = TRACE_WARMUP) -> float:
-        """Seconds per replay on the current inputs: `warmup` untimed replays, then `iterations` back to
+        """Milliseconds per replay on the current inputs: `warmup` untimed replays, then `iterations` back to
         back with one wait for the device at the end, so that wait is spread over all of them (as the
         CCL perf tests time their traces). Nothing is written or read in between. Logged, not asserted."""
         for _ in range(warmup):
             self._execute()
         ttnn.synchronize_device(self.mesh_device)
-        start = time.perf_counter()
+        start_ns = time.perf_counter_ns()
         for _ in range(iterations):
             self._execute()
         ttnn.synchronize_device(self.mesh_device)
-        seconds = (time.perf_counter() - start) / iterations
-        logger.info(f"{label}: {seconds * 1e3:.3f} ms per traced replay ({iterations} replays)")
-        return seconds
+        milliseconds = (time.perf_counter_ns() - start_ns) / iterations / 1e6
+        logger.info(f"{label}: {milliseconds:.3f} ms per traced replay ({iterations} replays)")
+        return milliseconds
 
 
 def check_ring_layer(
