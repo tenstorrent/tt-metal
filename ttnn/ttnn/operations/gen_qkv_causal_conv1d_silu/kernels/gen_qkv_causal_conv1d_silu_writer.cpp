@@ -15,6 +15,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"  // TEMP zones
 
 namespace {
 
@@ -41,9 +42,11 @@ FORCE_INLINE void write_segment(
     const Accessor& acc, const Segment& seg, uint32_t dst_width_tiles, uint32_t tile_row, uint32_t l1_row_base) {
     const uint32_t first_page = tile_row * dst_width_tiles + seg.first_col;
     const uint32_t src = l1_row_base + seg.cb_offset * tile_bytes;
+#ifndef ABLATE_WRITES
     for (uint32_t i = 0; i < seg.count; ++i) {
         noc_async_write(src + i * tile_bytes, acc.get_noc_addr(first_page + i), tile_bytes);
     }
+#endif
 }
 
 }  // namespace
@@ -76,7 +79,11 @@ void kernel_main() {
     const Segment v_seg = make_segment(ch_group_tile_start, group_hi, q_tiles + k_tiles, q_tiles + k_tiles + v_tiles);
 
     for (uint32_t r = core_seq_start; r < core_seq_start + core_seq_tiles; ++r) {
-        cb_wait_front(cb_output_tiles, block_ch_tiles);
+        {
+            DeviceZoneScopedN("WR_WAIT");
+            cb_wait_front(cb_output_tiles, block_ch_tiles);
+        }
+        DeviceZoneScopedN("WR_ROW");
         const uint32_t l1_row_base = get_read_ptr(cb_output_tiles);
         write_segment<tile_bytes>(q_acc, q_seg, q_tiles, r, l1_row_base);
         write_segment<tile_bytes>(k_acc, k_seg, k_tiles, r, l1_row_base);

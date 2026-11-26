@@ -46,6 +46,16 @@ UNTILIZED_DEPTH = 2  # TILE regime: cb_untilized_rows tile-rows (untilize j+1 du
 # Mechanism caps
 # ---------------------------------------------------------------------------------------------
 MAX_BLOCK_CH_TILES = 255  # fast tilize requires block_width_tiles < 256 (tilize_helpers.inl)
+
+# ---------------------------------------------------------------------------------------------
+# Block-rows target (op_design.md Perf lamps -> Overlap). block_rows is the coarsest balanced block
+# that fits L1 *up to this target*. Measured on conv1d-004 (BH 11x10, device kernel time): target 3
+# (the L1 bound) 152.9 us, 2: 151.5 us, 1: 130.7 us — a whole-block windowed tilize before the conv
+# pass leaves the writer idle and delays the first output; tile-row granularity overlaps reader,
+# compute and writer. conv1d-020: 75.2 us (5) vs 73.7 us (1). plan_limits(max_block_rows=...)
+# replaces the target (pinned plans).
+# ---------------------------------------------------------------------------------------------
+OVERLAP_BLOCK_ROWS = 1
 L1_BOUND_BYTES = 1_048_576  # BB-05: L1 the model leaves to the op on every core
 
 # ---------------------------------------------------------------------------------------------
@@ -113,7 +123,8 @@ def select_plan(
     Candidates: every divisor w of tensor_ch_tiles with w <= 255, G = C_t / w groups <= N cores,
     footprint(w, 1) <= budget. Per candidate U = min(N // G, T_t, max_cores_per_group) token
     ranges per group; makespan = ceil(T_t / U) * w. Choose min makespan, ties -> larger w, then
-    fewer cores. block_rows = the coarsest balanced block that fits the budget.
+    fewer cores. block_rows = the coarsest balanced block that fits the budget, up to
+    max_block_rows (default OVERLAP_BLOCK_ROWS, the measured overlap optimum).
     """
     num_grid_cores = grid_x * grid_y
     cpg_cap = tensor_seq_tiles if max_cores_per_group is None else max(1, min(max_cores_per_group, tensor_seq_tiles))
@@ -141,7 +152,8 @@ def select_plan(
         )
     _, w, groups, ranges, core_seq_tiles_max = best
 
-    row_cap = core_seq_tiles_max if max_block_rows is None else max(1, min(max_block_rows, core_seq_tiles_max))
+    block_rows_target = OVERLAP_BLOCK_ROWS if max_block_rows is None else max_block_rows
+    row_cap = max(1, min(block_rows_target, core_seq_tiles_max))
     block_rows_fit = row_cap
     while (
         block_rows_fit > 1
@@ -222,6 +234,8 @@ READER_ADDR_SLOTS = 6  # input, history, tap0..tap3
 WRITER_ADDR_SLOTS = 3  # q, k, v
 READER_KERNEL_INDEX = 0
 WRITER_KERNEL_INDEX = 1
+READER_NOC = ttnn.NOC.NOC_0  # ReaderConfigDescriptor lowers to RISCV_1 on NOC_0
+TAPS_MCAST_PREFIX = "taps_mcast"  # named CT args taps_mcast_ct_offset / taps_mcast_rt_offset
 
 
 def reader_addresses(input_tensor, history, taps):
@@ -328,10 +342,23 @@ def create_program_descriptor(
         runtime_args=compute_rt,
         config=compute_config,
     )
+    # Regime tap_multicast_per_group: the taps are reuse-shared across a group's token ranges, so the
+    # group's slot-0 core reads them from DRAM once and multicasts the packed tap tiles to the other
+    # cores_per_group - 1 cores (groups are U consecutive row-major cores: <= 3 rectangles each).
+    taps_mcast = ttnn.Mcast(
+        input_tensor.device(),
+        ttnn.McastConfig(noc=READER_NOC),
+        core_ranges,
+        plan.cores_per_group,
+        ttnn.McastFixedSenderConfig(sender_index=0),
+        ttnn.McastCoreOrder.RowMajor,
+    )
+    descriptor = ttnn.ProgramDescriptor(cbs=cbs)
+    taps_mcast.attach(descriptor, TAPS_MCAST_PREFIX, [reader], 0)
     kernels = [None, None, compute]
     kernels[READER_KERNEL_INDEX] = reader
     kernels[WRITER_KERNEL_INDEX] = writer
-    descriptor = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+    descriptor.kernels = kernels
     return descriptor, work
 
 

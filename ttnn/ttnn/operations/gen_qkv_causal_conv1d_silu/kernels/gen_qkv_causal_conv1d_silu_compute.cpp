@@ -34,7 +34,9 @@
 #include "api/compute/pack.h"
 #include "api/compute/reg_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/debug/kernel_profiler.hpp"  // TEMP zones
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
@@ -60,8 +62,14 @@ using compute_kernel_lib::tilize_config::WaitMode;
 // One window: tilize 32 sticks from the slot's read pointer, then pop `pages` sticks.
 template <uint32_t block_ch_tiles, InitUninitMode init_mode, ReconfigureRegisterDatatypeMode reconfig>
 ALWI void tilize_window(DataflowBuffer& rows, DataflowBuffer& windows, uint32_t pages) {
+#ifdef ABLATE_TILIZE
+    windows.reserve_back(block_ch_tiles);
+    windows.push_back(block_ch_tiles);
+    rows.pop_front(pages);
+#else
     compute_kernel_lib::tilize<block_ch_tiles, cb_rows, cb_window_tiles, init_mode, WaitMode::NoWait, reconfig>(
         rows, windows, 1, pages);
+#endif
 }
 
 // windowed_tilize_block: rows_this_block tile-rows x 4 windows x block_ch_tiles tiles, layout
@@ -70,7 +78,10 @@ template <uint32_t block_ch_tiles>
 void windowed_tilize_block(DataflowBuffer& rows, DataflowBuffer& windows, uint32_t rows_this_block) {
     constexpr auto Keep = ReconfigureRegisterDatatypeMode::NoReconfigure;
     for (uint32_t m = 0; m < rows_this_block; ++m) {
-        rows.wait_front(WINDOW_STICKS);
+        {
+            DeviceZoneScopedN("ROWS_WAIT");
+            rows.wait_front(WINDOW_STICKS);
+        }
         // p = 0
         if (m == 0) {
             tilize_window<
@@ -106,26 +117,44 @@ void conv_silu_block(DataflowBuffer& windows, DataflowBuffer& outputs, uint32_t 
     reconfig_data_format(cb_window_tiles, cb_tap_tiles);
     pack_reconfig_data_format(cb_output_tiles);
     mul_bcast_rows_init(cb_window_tiles, cb_tap_tiles);
+#ifdef SILU_ON_MATH
     silu_tile_init();
+#else
+    // SiLU runs on the packer thread (TRISC2), overlapping the math thread's next group of MACs.
+    compute_kernel_lib::ActivationInitHelper<KernelActivation::SILU>::init();
+#endif
 
     for (uint32_t m = 0; m < rows_this_block; ++m) {
-        outputs.reserve_back(block_ch_tiles);
+        {
+            DeviceZoneScopedN("OUT_RSV");
+            outputs.reserve_back(block_ch_tiles);
+        }
         const uint32_t row_base = m * TAP_COUNT * block_ch_tiles;
         for (uint32_t c0 = 0; c0 < block_ch_tiles; c0 += dest_group) {
             const uint32_t group = (block_ch_tiles - c0 < dest_group) ? (block_ch_tiles - c0) : dest_group;
             tile_regs_acquire();
             for (uint32_t i = 0; i < group; ++i) {
                 const uint32_t c = c0 + i;
+#ifndef ABLATE_MAC
                 for (uint32_t p = 0; p < TAP_COUNT; ++p) {
                     mul_tiles_bcast_rows(
                         cb_window_tiles, cb_tap_tiles, row_base + p * block_ch_tiles + c, c, i, TAP_ROW_STRIDE * p);
                 }
+#endif
             }
+#if defined(SILU_ON_MATH) && !defined(ABLATE_SILU)
             for (uint32_t i = 0; i < group; ++i) {
                 silu_tile(i);
             }
+#endif
             tile_regs_commit();
+#if defined(SILU_ON_MATH) || defined(ABLATE_SILU)
             tile_regs_wait();
+#else
+            // Replaces tile_regs_wait(): math->pack handshake, SiLU on each tile in DEST from the
+            // packer thread, SFPU-done stall before pack.
+            compute_kernel_lib::apply_activation_from_pack<KernelActivation::SILU>(group);
+#endif
             for (uint32_t i = 0; i < group; ++i) {
                 pack_tile(i, cb_output_tiles);
             }
@@ -176,11 +205,17 @@ void kernel_main() {
             const uint32_t extra_rows = (block_idx == 0 && core_seq_start > 0) ? 1 : 0;
             untilize_rows_block<block_ch_tiles>(rows_this_block + extra_rows);
         }
-        windowed_tilize_block<block_ch_tiles>(rows, windows, rows_this_block);
+        {
+            DeviceZoneScopedN("TILIZE_BLK");
+            windowed_tilize_block<block_ch_tiles>(rows, windows, rows_this_block);
+        }
         if (block_idx == 0) {
             taps.wait_front(block_ch_tiles);  // first use: the tap fetch hid behind the first tilize
         }
-        conv_silu_block<block_ch_tiles>(windows, outputs, rows_this_block);
+        {
+            DeviceZoneScopedN("CONV_BLK");
+            conv_silu_block<block_ch_tiles>(windows, outputs, rows_this_block);
+        }
     }
     taps.pop_front(block_ch_tiles);
 }

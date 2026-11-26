@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// gen_qkv_causal_conv1d_silu reader (NCRISC / NoC0).
+// gen_qkv_causal_conv1d_silu reader (NCRISC).
 //
 // Block operations owned here (op_design.md -> Block schedule):
-//   load_taps        once per core: 2 x 32 B reads per (tap, channel tile) — row 0 of tap p's tile
-//                    (face 0 and face 1) lands in row 2p of the packed tap tile. Issued before the
-//                    first block; covered by the first block's barrier and pushed right after it, so
-//                    the tap fetch hides behind the first windowed tilize.
+//   load_taps        once per channel group (regime tap_multicast_per_group): the group's sender core
+//                    (slot 0) reads row 0 of tap p's tile into row 2p of the packed tap tile (2 x 32 B
+//                    reads per (tap, channel tile)) and multicasts the packed tiles to the other cores
+//                    of the group (kernel_lib mcast pipe). Every other core issues its first tile-row's
+//                    input reads, then receives the taps. Taps cross DRAM once per channel instead of
+//                    once per core: at 110 cores the per-core tap fetch (~14k tiny DRAM requests)
+//                    measured up to 80 us ahead of the first input row.
 //   load_rows_block  one cb_rows slot per block: sticks [0,3) = halo (tokens t0-3..t0-1),
 //                    sticks [3, 3 + 32*rows) = body. A stick is the block's contiguous channel slice
 //                    of one token row (64 * block_ch_tiles B).
@@ -30,6 +33,8 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "api/debug/kernel_profiler.hpp"  // TEMP zones
 
 namespace {
 
@@ -86,11 +91,15 @@ void kernel_main() {
     constexpr auto tap1_args = TensorAccessorArgs<tap0_args.next_compile_time_args_offset()>();
     constexpr auto tap2_args = TensorAccessorArgs<tap1_args.next_compile_time_args_offset()>();
     constexpr auto tap3_args = TensorAccessorArgs<tap2_args.next_compile_time_args_offset()>();
+    constexpr auto taps_mcast = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("taps_mcast_ct_offset"),
+        get_named_compile_time_arg_val("taps_mcast_rt_offset")>();
 
     constexpr uint32_t channel_tile_bytes = TILE_DIM * elem_bytes;  // one channel tile of one token row
     constexpr uint32_t stick_bytes = block_ch_tiles * channel_tile_bytes;
     constexpr uint32_t untilized_row_bytes = TILE_DIM * stick_bytes;  // one untilized tile-row = 32 sticks
     constexpr uint32_t first_row_push = TILE_DIM + HALO_ROWS;         // halo + first tile-row
+    constexpr uint32_t tap_tiles_bytes = block_ch_tiles * tile_bytes;
 
     // ---- runtime args ----
     uint32_t arg = 0;
@@ -110,26 +119,42 @@ void kernel_main() {
 
     const auto input_acc = TensorAccessor(input_args, input_addr);
     const auto history_acc = TensorAccessor(history_args, history_addr);
-    const auto tap0_acc = TensorAccessor(tap0_args, tap0_addr);
-    const auto tap1_acc = TensorAccessor(tap1_args, tap1_addr);
-    const auto tap2_acc = TensorAccessor(tap2_args, tap2_addr);
-    const auto tap3_acc = TensorAccessor(tap3_args, tap3_addr);
     Noc noc;
 
     // Byte offset of this core's channel slice inside a token row (input) / history row.
     const uint32_t input_byte_offset = (input_col_offset_tiles + ch_group_tile_start) * channel_tile_bytes;
     const uint32_t history_byte_offset = ch_group_tile_start * channel_tile_bytes;
 
-    // ---- load_taps (issue only; the first block's barrier covers it) ----
+    // ---- load_taps: the group's sender issues the DRAM reads; receivers wait for the multicast ----
+    auto tap_sender = taps_mcast.optional_sender(noc);
+    auto tap_receiver = taps_mcast.optional_receiver(noc);
     cb_reserve_back(cb_tap_tiles, block_ch_tiles);
-    {
-        const uint32_t tap_base = get_write_ptr(cb_tap_tiles);
-        issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(tap0_acc, 0, tap_base, ch_group_tile_start);
-        issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(tap1_acc, 1, tap_base, ch_group_tile_start);
-        issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(tap2_acc, 2, tap_base, ch_group_tile_start);
-        issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(tap3_acc, 3, tap_base, ch_group_tile_start);
+    const uint32_t tap_base = get_write_ptr(cb_tap_tiles);  // same L1 address on every core of the group
+    if (tap_sender) {
+        issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(
+            TensorAccessor(tap0_args, tap0_addr), 0, tap_base, ch_group_tile_start);
+        issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(
+            TensorAccessor(tap1_args, tap1_addr), 1, tap_base, ch_group_tile_start);
+        issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(
+            TensorAccessor(tap2_args, tap2_addr), 2, tap_base, ch_group_tile_start);
+        issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(
+            TensorAccessor(tap3_args, tap3_addr), 3, tap_base, ch_group_tile_start);
     }
+    // Called once, after the core's first tile-row reads are in flight: those reads keep landing while
+    // the taps are distributed. Leaves every outstanding read complete.
     bool taps_pending = true;
+    auto publish_taps_and_barrier = [&]() {
+        DeviceZoneScopedN("TAPS");
+        if (tap_sender) {
+            noc_async_read_barrier();  // own tap rows (and the first tile-row) landed
+            tap_sender->send(tap_base, tap_base, tap_tiles_bytes);
+        } else if (tap_receiver) {
+            tap_receiver->receive();
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_tap_tiles, block_ch_tiles);
+        taps_pending = false;
+    };
 
     uint32_t prev_slot_base = 0;
     for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
@@ -166,16 +191,17 @@ void kernel_main() {
         if constexpr (!tile_input) {
             // Body: per tile-row, 32 stick reads -> ONE barrier -> push.
             for (uint32_t m = 0; m < rows_this_block; ++m) {
+                DeviceZoneScopedN("RD_ROW");
                 const uint32_t token0 = (block_seq_start + m) * TILE_DIM;
                 const uint32_t dst = slot_base + (HALO_ROWS + TILE_DIM * m) * stick_bytes;
                 for (uint32_t i = 0; i < TILE_DIM; ++i) {
                     noc_async_read(
                         input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
                 }
-                noc_async_read_barrier();
                 if (taps_pending) {
-                    cb_push_back(cb_tap_tiles, block_ch_tiles);
-                    taps_pending = false;
+                    publish_taps_and_barrier();
+                } else {
+                    noc_async_read_barrier();
                 }
                 cb_push_back(cb_rows, m == 0 ? first_row_push : TILE_DIM);
             }
@@ -194,12 +220,12 @@ void kernel_main() {
             };
 
             issue_input_tile_row(first_tile_row);
-            noc_async_read_barrier();
-            cb_push_back(cb_input_tiles, block_ch_tiles);
             if (taps_pending) {
-                cb_push_back(cb_tap_tiles, block_ch_tiles);
-                taps_pending = false;
+                publish_taps_and_barrier();
+            } else {
+                noc_async_read_barrier();
             }
+            cb_push_back(cb_input_tiles, block_ch_tiles);
             for (uint32_t j = 0; j < rows_to_untilize; ++j) {
                 const bool next_pending = (j + 1 < rows_to_untilize);
                 if (next_pending) {
@@ -225,5 +251,8 @@ void kernel_main() {
         }
         prev_slot_base = slot_base;
     }
+    // BB-03: nothing this kernel issued (reads, multicast writes, semaphore updates) is left in flight.
     noc_async_read_barrier();
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
