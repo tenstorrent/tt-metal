@@ -68,7 +68,7 @@ def heads_column(x: ttnn.Tensor, num_frames: int) -> ttnn.Tensor:
 
 
 def _pad_dim(x: ttnn.Tensor, dim: int, size: int) -> ttnn.Tensor:
-    """Zero-pad an outer dim (0 or 1) of a tensor to `size`, by concatenating zeros in its layout."""
+    """Zero-pad dim `dim` of a tensor to `size` (tile-aligned for the inner dims), by concatenating zeros."""
     if x.shape[dim] == size:
         return x
     shape = list(x.shape)
@@ -168,7 +168,7 @@ class OpenVDNLinearBranch(Module):
         #: same (replicated) tokens, or None. Set by the caller. With `branch_split` the other per-frame stages are
         #: split too; `parallel_scan` takes the log-depth scan.
         self.frame_split: tuple[int, int, object] | None = None
-        self.branch_split = False
+        self.branch_split = ""  # "", "frames" or "heads"
         self.parallel_scan = False
 
     # ------------------------------------------------------------------ weights
@@ -290,13 +290,16 @@ class OpenVDNLinearBranch(Module):
         delta = ttnn.add(delta, self.alpha_dt_bias.data)
         return ttnn.exp(ttnn.neg(ttnn.multiply(softplus(delta), self.alpha_scale.data)))
 
-    def text_state(self, text_x: ttnn.Tensor, text_k_raw: ttnn.Tensor, text_v_raw: ttnn.Tensor) -> ttnn.Tensor:
+    def text_state(
+        self, text_x: ttnn.Tensor, text_k_raw: ttnn.Tensor, text_v_raw: ttnn.Tensor, local=None
+    ) -> ttnn.Tensor:
         """`_text_state`: `TEXT_STATE_SCALE * (B (I + A)^-1)` over all prompt rows as one chunk, `[1, H, d_v, d_k]`
-        fp32."""
+        fp32 (`local` given: this device's heads only, see `_head_split`)."""
+        local = local or (lambda t: t)
         length = text_x.shape[-2]
-        key = self.features(text_k_raw, "k", 1, None)
-        value = self.features(text_v_raw, "v", 1, None)
-        a, b = ops.frame_statistics(key, value, self.beta(text_x, 1), config=self.config)
+        key = local(self.features(text_k_raw, "k", 1, None))
+        value = local(self.features(text_v_raw, "v", 1, None))
+        a, b = ops.frame_statistics(key, value, local(self.beta(text_x, 1)), config=self.config)
         _, injection = ops.vdn_factor_apply(None, a, b, max_eig=1.0 + length, config=self.config)
         return ttnn.multiply(injection, self.TEXT_STATE_SCALE)
 
@@ -318,6 +321,17 @@ class OpenVDNLinearBranch(Module):
 
         # With `branch_split` (and `frame_split`), every per-frame stage (features, statistics, alpha, inverse,
         # readout) runs on this device's share of the frames; only the scans see all frames, between two gathers.
+        if self.branch_split == "heads" and self.frame_split is not None:
+            return self._readout_head_split(
+                xv,
+                q_raw,
+                k_raw,
+                v_raw,
+                num_frames=num_frames,
+                frame_size=frame_size,
+                bounds=bounds,
+                text_state=text_state,
+            )
         partition = gather = None
         if self.branch_split and self.frame_split is not None:
             axis, factor, all_gather = self.frame_split
@@ -365,6 +379,76 @@ class OpenVDNLinearBranch(Module):
         mark("readout")
         return out
 
+    def _head_split(self):
+        """`(local, local_channels, gather)` splitting this device's heads over the `frame_split` devices (padded to
+        a multiple of the factor): `local` on a head dim 1, `local_channels` on `[.., H*d]` channel rows, `gather`
+        back to all real heads on dim 1."""
+        axis, factor, all_gather = self.frame_split
+        heads, d = self.num_local_heads, self.head_dim
+        padded = heads + (-heads % factor)
+
+        def local(t: ttnn.Tensor) -> ttnn.Tensor:
+            return ttnn.mesh_partition(_pad_dim(t, 1, padded), dim=1, cluster_axis=axis)
+
+        def local_channels(t: ttnn.Tensor) -> ttnn.Tensor:
+            return ttnn.mesh_partition(_pad_dim(t, 3, padded * d), dim=3, cluster_axis=axis)
+
+        def gather(t: ttnn.Tensor) -> ttnn.Tensor:
+            t = all_gather(t, 1)
+            return t if t.shape[1] == heads else ttnn.slice(t, [0] * 4, [t.shape[0], heads, t.shape[2], t.shape[3]])
+
+        return local, local_channels, gather
+
+    def _readout_head_split(
+        self,
+        xv: ttnn.Tensor,
+        q_raw: ttnn.Tensor,
+        k_raw: ttnn.Tensor,
+        v_raw: ttnn.Tensor,
+        *,
+        num_frames: int,
+        frame_size: tuple[int, int],
+        bounds: Sequence[Range],
+        text_state: ttnn.Tensor | None,
+    ) -> ttnn.Tensor:
+        """`readout` with the delta-rule math split by head over the SP devices: statistics, inverse, scans, state
+        gather and q . state run on this device's heads (the text state comes in already split, see `forward`);
+        one gather at the end. The features (conv, layout) are computed whole, as without the split."""
+        per_frame = frame_size[0] * frame_size[1]
+        mark = lambda name: ops.mark(self.mesh_device, f"linear branch: {name}")  # noqa: E731
+        local, local_channels, gather = self._head_split()
+        factor = self.frame_split[1]
+        local_heads = -(-self.num_local_heads // factor)
+
+        query = local(self.features(q_raw, "q", num_frames, frame_size))
+        mark("q features")
+        key = local(self.features(k_raw, "k", num_frames, frame_size))
+        mark("k features (conv)")
+        value = local(self.features(v_raw, "v", num_frames, frame_size))
+        mark("v features (conv)")
+
+        a, b = ops.frame_statistics(key, value, local(self.beta(xv, num_frames)), config=self.config)
+        alpha_rows = local_channels(self.alpha(xv, num_frames))
+        alpha = ops.rows_to_heads(alpha_rows, num_frames, local_heads, self.head_dim)
+        mark("frame statistics and alpha")
+        transition, injection = ops.vdn_factor_apply(alpha, a, b, max_eig=1.0 + per_frame, config=self.config)
+        mark("inverse")
+        scan = ops.parallel_bidirectional_scan if self.parallel_scan else ops.bidirectional_scan
+        prefix, suffix = scan(transition, injection, text_state=text_state, config=self.config)
+        mark("scans")
+        state = ops.gather_linear_state(prefix, suffix, alpha_rows, bounds, text_state=text_state, config=self.config)
+        mark("state gather")
+
+        out = ops.split_matmul(query, ttnn.transpose(state, -2, -1), config=self.config)  # [F, h, S, d_v]
+        mean_square = ttnn.multiply(ttnn.sum(ttnn.multiply(out, out), dim=-1, keepdim=True), 1.0 / self.head_dim)
+        out = ttnn.multiply(out, ttnn.rsqrt(ttnn.add(mean_square, self.NORM_EPS)))
+        out = from_heads(gather(ttnn.multiply(out, self.norm_weight.data)))
+
+        gate = ttnn.sigmoid(self.gate_up(self.gate_down(xv)))
+        out = ttnn.typecast(ttnn.multiply(out, ttnn.typecast(gate, ttnn.float32)), ttnn.bfloat16)
+        mark("readout")
+        return out
+
     def forward(
         self,
         xv: ttnn.Tensor,
@@ -382,7 +466,9 @@ class OpenVDNLinearBranch(Module):
         pre-RoPE projections), text: `(text_x, text_k_raw, text_v_raw)` prompt rows or None. Returns the gated, normed
         readout `[1, 1, F*S, H*d]` bf16 (before `to_out_linear`), zero on frames 0 and F-1 when `skip_ends`."""
         per_frame = frame_size[0] * frame_size[1]
-        text_state = None if text is None else self.text_state(*text)
+        head_split = self.branch_split == "heads" and self.frame_split is not None
+        local = self._head_split()[0] if head_split else None
+        text_state = None if text is None else self.text_state(*text, local=local)
         ops.mark(self.mesh_device, "linear branch: text state")
         if not skip_ends:
             return self.readout(
