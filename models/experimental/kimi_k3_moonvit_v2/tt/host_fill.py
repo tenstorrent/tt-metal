@@ -93,15 +93,19 @@ def normalized_patches_into(dst: torch.Tensor, pixels: np.ndarray, config: MoonV
     rows_per_window_row = (w // kw) * kh * kw
 
     def work(i0: int, i1: int) -> None:
-        # Window rows i0..i1-1: (window row, kh, py, window col, kw, px, c) -> (window row, window col, kh, kw, c, py, px)
-        src = pixels[i0 * kh * p : i1 * kh * p].reshape(i1 - i0, kh, p, w // kw, kw, p, 3)
-        dst_rows = out[i0 * rows_per_window_row : i1 * rows_per_window_row]
-        np.take(
-            table,
-            src.transpose(0, 3, 1, 4, 6, 2, 5),
-            out=dst_rows.reshape(i1 - i0, w // kw, kh, kw, 3, p, p),
-            mode="clip",  # uint8 indices are always in range; "raise" would buffer the output
-        )
+        # One window row per np.take: it copies its uint8 indices to intp first, and a copy of one window row is small
+        # enough for the allocator to reuse freed memory. A copy of the whole share would be new memory on every call,
+        # and on a host with fragmented memory numpy's huge-page request for it can stall for hundreds of ms.
+        for i in range(i0, i1):
+            # (kh, py, window col, kw, px, c) -> (window col, kh, kw, c, py, px)
+            src = pixels[i * kh * p : (i + 1) * kh * p].reshape(1, kh, p, w // kw, kw, p, 3)
+            dst_rows = out[i * rows_per_window_row : (i + 1) * rows_per_window_row]
+            np.take(
+                table,
+                src.transpose(0, 3, 1, 4, 6, 2, 5),
+                out=dst_rows.reshape(1, w // kw, kh, kw, 3, p, p),
+                mode="clip",  # uint8 indices are always in range; "raise" would buffer the output
+            )
 
     _run_split(h // kh, rows_per_window_row * config.patch_dim, work)
 
