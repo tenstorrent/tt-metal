@@ -82,10 +82,11 @@ CASES = [
 TARGETS_MS = {
     "kimi_k3-8x4-5120": (2.38, 2.27),
     "kimi_k3_1-4x4-sp1-2560": (3.63, 3.54),
-    # GLM-5.3: on one 14 kW Galaxy (bh-glx-120-b07u08), not yet re-centred on CI: each the mean over 3 runs of that run's
-    # number (fastest untraced sample, traced replay). The carve's packed forwards report only, no targets yet.
-    "glm53-8x4-5120": (1.36, 1.24),
-    "glm53-xy4-sp1-2560": (1.61, 1.50),
+    # GLM-5.3: each the mean over 3 runs of that run's number (fastest untraced sample, traced replay)
+    "glm53-8x4-5120": (1.32, 1.21),
+    "glm53-xy4-sp1-2560": (1.55, 1.44),
+    "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (2.04, 1.91),
+    "glm53-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (3.16, 3.10),
 }
 
 
