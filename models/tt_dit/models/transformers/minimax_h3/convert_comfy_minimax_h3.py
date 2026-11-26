@@ -40,7 +40,9 @@ _RENAMES = (
     (".mlp.fc1.", ".ff.net.0.proj."),
     (".mlp.fc2.", ".ff.net.2."),
 )
-_DROPPED = ("rope.inv_freq",)
+# adaln_basis / adaln_mean: the curve table's unfold factors that 10Eros-Max files carry beside adaln_t_table.
+# ComfyUI builds no parameter for them (comfy/ldm/minimax/model.py) and never reads them at inference.
+_DROPPED = ("rope.inv_freq", "adaln_basis", "adaln_mean")
 
 
 def is_comfy_layout(keys) -> bool:

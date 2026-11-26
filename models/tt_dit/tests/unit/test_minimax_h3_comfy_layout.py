@@ -76,6 +76,14 @@ def test_convert_splits_stacked_qkv_and_swaps_gated_ff():
     assert torch.equal(out["transformer_blocks.7.ff.net.0.proj.weight"], torch.cat([value, gate]))
 
 
+def test_curve_unfold_factors_are_dropped():
+    # 10Eros-Max files carry the curve table's basis and mean; ComfyUI ignores both.
+    header = dict(FIXTURE["comfy_pruned"], adaln_basis=[8, 2688], adaln_mean=[2688])
+    assert cc.map_comfy_shapes(header) == cc.map_comfy_shapes(FIXTURE["comfy_pruned"])
+    state = {"adaln_t_table": torch.zeros(1025, 8), "adaln_basis": torch.zeros(8, 2688), "adaln_mean": torch.zeros(2688)}
+    assert set(cc.convert_comfy_state_dict(state)) == {"adaln_t_table"}
+
+
 def _comfy_curve(table, t):
     # comfy/ldm/minimax/model.py, written out independently.
     g = table.shape[0]
