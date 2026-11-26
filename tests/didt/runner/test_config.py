@@ -68,8 +68,27 @@ def test_shipped_config_steps():
         "nd:mcast-ack",
         "nd:mcast-ack-duty",
     ]
-    assert all([f.name for f in s.fallbacks] == ["throttle"] for s in c.steps)
+    assert all([f.name for f in s.fallbacks] == ["throttle", "pin_core"] for s in c.steps)
     assert c.steps[0].fallbacks[0].env == {"TT_MM_THROTTLE_PERF": "5"}
+    pin = c.steps[0].fallbacks[1]
+    assert pin.kind == "pin_core" and pin.hang_reset == {"cmd": "tt-smi -r", "timeout": 600}
+
+
+def test_shipped_pin_ids():
+    pins = {s.key: s.pin_id for s in load(SHIPPED).steps}
+    assert pins == {
+        "nd:minimal": "tests/didt/test_minimal_matmul.py::test_specific_chip_minimal_matmul"
+        "[blackhole-bf16_HiFi2-galaxy-galaxy_chip_0]",
+        "nd:ff1": "tests/didt/test_ff1_matmul.py::test_specific_chip_ff1_matmul[blackhole-galaxy_chip_0-without_gelu]",
+        "nd:lm-head": "tests/didt/test_lm_head_matmul.py::test_specific_chip_lm_head_matmul"
+        "[blackhole-galaxy-logical_chip_0_]",
+        "nd:duty-cycle-bursty-5": "tests/didt/test_duty_cycle.py::test_specific_chip_duty_cycle"
+        "[blackhole-duty-5-rep-1000x-galaxy-galaxy_chip_0]",
+        "nd:run-to-run": None,
+        "nd:core-sweep": None,
+        "nd:mcast-ack": None,
+        "nd:mcast-ack-duty": None,
+    }
 
 
 def test_shipped_config_matches_spec_table():
@@ -178,3 +197,35 @@ def test_unknown_field_in_reset(tmp_path):
     cfg = copy.deepcopy(BASE)
     cfg["reset"]["retries"] = 3
     assert any("reset: unknown field 'retries'" in e for e in _errors(tmp_path, cfg))
+
+
+PIN = {"kind": "pin_core", "hang_reset": {"cmd": "tt-smi -r", "timeout": 600}}
+
+
+def test_pin_core_fallback_loads(tmp_path):
+    cfg = copy.deepcopy(BASE)
+    cfg["fallbacks"]["pin_core"] = PIN
+    cfg["steps"][0].update(fallbacks=["throttle", "pin_core"], pin_id="tests/didt/x.py::t_chip[p]")
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(cfg))
+    step = load(path).steps[0]
+    assert step.pin_id == "tests/didt/x.py::t_chip[p]"
+    assert [(f.name, f.kind) for f in step.fallbacks] == [("throttle", "env"), ("pin_core", "pin_core")]
+
+
+def test_unknown_fallback_kind(tmp_path):
+    cfg = copy.deepcopy(BASE)
+    cfg["fallbacks"]["pin"] = {"kind": "per_core"}
+    assert any("fallback pin: unknown kind 'per_core'" in e for e in _errors(tmp_path, cfg))
+
+
+def test_pin_core_fallback_fields(tmp_path):
+    cfg = copy.deepcopy(BASE)
+    cfg["fallbacks"]["pin_core"] = {**PIN, "env": {}, "max_devices": 2}
+    errors = _errors(tmp_path, cfg)
+    assert any("fallback pin_core: unknown field 'env'" in e for e in errors)
+    assert any("fallback pin_core: unknown field 'max_devices'" in e for e in errors)
+
+
+def test_pin_id_without_colons(tmp_path):
+    assert any("pin_id without '::'" in e for e in _errors(tmp_path, _with_step(pin_id="tests/didt/x.py")))

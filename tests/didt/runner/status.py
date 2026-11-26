@@ -7,7 +7,7 @@
 import json
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .checks import Status
@@ -27,6 +27,8 @@ class Attempt:
     log: str
     start: float | None
     end: float | None
+    # Fallback-kind fields written between name/env/opts and the result (pin_core: target, trigger, cores, iterations).
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -50,7 +52,9 @@ def _result(a: Attempt) -> dict:
 
 def _step(s: StepState) -> dict:
     r = _result(s.first)
-    fallbacks = [{"name": f.name, "env": dict(f.env), "opts": list(f.opts), **_result(f)} for f in s.fallbacks]
+    fallbacks = [
+        {"name": f.name, "env": dict(f.env), "opts": list(f.opts), **f.extra, **_result(f)} for f in s.fallbacks
+    ]
     return {
         "key": s.key,
         **{k: r[k] for k in ("status", "reason", "details", "log", "start", "end", "devices")},
