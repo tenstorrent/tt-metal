@@ -12,7 +12,7 @@ from tt_py_test_utils_common.perf.device_perf_utils import run_device_perf_detai
 @pytest.mark.parametrize(
     "warmup_iters, arch_type, perf_target_avg_max_us, perf_target_avg_min_us",
     [
-        (5, "T3K", 2500, 2200),
+        (5, "T3K", 2100, 1970),
     ],
     ids=["T3K_dit_perf"],
 )
@@ -28,10 +28,7 @@ def test_all_gather_minimal_perf_t3000(warmup_iters, arch_type, perf_target_avg_
     command = file + '::test_all_gather -k "dit_shape and perf and fabric_ring"'
 
     cols = ["DEVICE KERNEL"]
-    # Production ttnn.all_gather emits the AllGather device op (not AllGatherAsync).
-    # NOTE: op_name and the perf_target_avg window above are inherited from the old
-    # experimental op and must be confirmed/recalibrated against the production op on T3K hardware.
-    op_name = "AllGather"
+    op_name = "AllGatherDeviceOperation"
 
     profiler.start("run")
     profiler.start(step_name)

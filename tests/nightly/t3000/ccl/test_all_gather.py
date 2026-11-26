@@ -569,7 +569,8 @@ SUBGRID_DISJOINT = ttnn.CoreRangeSet(
         ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, SUBGRID_DISJOINT),  # check
         ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, SUBGRID_DISJOINT),  # perf
         ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, SUBGRID_DISJOINT),  # check
-        # 1 worker per direction: direct fabric connection, relayed
+        # 1 worker per direction: direct fabric connection, relayed (unicast). A WH 1D line multicasts, so on WH only
+        # fabric_ring takes this path; on BH both topologies do.
         (
             [1, 8, 512, 512],
             1,

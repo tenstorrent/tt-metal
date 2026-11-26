@@ -32,6 +32,17 @@ std::pair<bool, std::string> use_composite_all_gather(
     const auto& mesh_shape = input_tensor.device()->shape();
     const uint32_t num_devices = cluster_axis.has_value() ? mesh_shape[*cluster_axis] : mesh_shape[0] * mesh_shape[1];
 
+    // A persistent output must hold the gathered shape; reject it here rather than route it to composite.
+    if (persistent_output_tensor.has_value()) {
+        auto gathered_logical_shape = logical_shape;
+        gathered_logical_shape[gather_dim_from_end] *= num_devices;
+        TT_FATAL(
+            persistent_output_tensor->logical_shape() == gathered_logical_shape,
+            "Output tensor shape must be {}, got {}",
+            gathered_logical_shape,
+            persistent_output_tensor->logical_shape());
+    }
+
     // Gather-dim padding would need the output's gather-dim extent to be num_devices * the input's
     // padded extent, but it is num_devices * the logical one.
     auto gathered_padded_shape = input_tensor.padded_shape();
