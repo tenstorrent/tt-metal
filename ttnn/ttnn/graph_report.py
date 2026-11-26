@@ -174,6 +174,25 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
                         # Release the other ranks even if rank 0's import raised, or they wait here forever.
                         if distributed:
                             ttnn.distributed_context_barrier()
+            elif enable_comparison_mode and world_size > 1:
+                # Each rank writes its records to its own file and rank 0 merges them, rather than every rank writing
+                # comparison_records.json and opening db.sqlite at once. Collective: every rank reaches both barriers,
+                # with or without records of its own, and even when its write fails.
+                write_error = None
+                try:
+                    if ttnn.graph.has_comparison_records():
+                        ttnn.graph.flush_comparison_records_to_db(report_path)
+                except Exception as e:
+                    write_error = e
+                ttnn.distributed_context_barrier()
+                try:
+                    if rank == 0:
+                        import_rank_comparison_records(report_path)
+                finally:
+                    # Release the other ranks even if rank 0's merge raised, or they wait here forever.
+                    ttnn.distributed_context_barrier()
+                if write_error is not None:
+                    raise write_error
             elif enable_comparison_mode and ttnn.graph.has_comparison_records():
                 ttnn.graph.flush_comparison_records_to_db(report_path)
         finally:
@@ -314,6 +333,43 @@ class _ReportFile(NamedTuple):
 def _rank_file_suffix(rank: int, world_size: int) -> str:
     """``_<r>_of_<N>``, numbering the 0-based distributed ``rank`` from 1, as every per-rank report file name does."""
     return f"_{rank + 1}_of_{world_size}"
+
+
+# Comparison-only mode on a multi-rank run: each rank's records, which rank 0 merges into db.sqlite.
+_RANK_COMPARISON_RECORDS_NAME_RE = re.compile(r"^comparison_records_(\d+)_of_(\d+)\.json$")
+
+
+def rank_comparison_records_name(rank: int, world_size: int) -> str:
+    """File a rank writes its comparison records to in comparison-only mode on a multi-rank run; ``rank`` is 0-based."""
+    return f"comparison_records{_rank_file_suffix(rank, world_size)}.json"
+
+
+def import_rank_comparison_records(report_dir: Union[str, Path], db_name: str = "db.sqlite") -> Path:
+    """Merge every rank's comparison-only records (``comparison_records_<r>_of_<N>.json``) into ``db_name``.
+
+    In comparison-only mode on a multi-rank run each rank writes its records to its own file, since the ranks would
+    otherwise all write the same database at once; rank 0 merges them here, tagging each rank's rows with its rank.
+    Like ``ttnn.graph.flush_comparison_records_to_db`` on a single process, it adds to an existing database.
+    """
+    report_dir = Path(report_dir)
+    db_path = report_dir / db_name
+    rank_files = []
+    for path in report_dir.glob("comparison_records_*_of_*.json"):
+        m = _RANK_COMPARISON_RECORDS_NAME_RE.match(path.name)
+        if m:
+            rank_files.append((int(m.group(1)) - 1, path))
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        create_database_schema(cursor)
+        save_database_schema_version(cursor)
+        for rank, path in sorted(rank_files):
+            with open(path, "r") as f:
+                import_tensor_comparison_records(cursor, json.load(f), rank=rank)
+        conn.commit()
+    finally:
+        conn.close()
+    return db_path
 
 
 def _rank_capture_name(rank: int, world_size: int) -> str:
@@ -2582,6 +2638,7 @@ def _is_sidecar_path(path: Path) -> bool:
         or name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
         or name.endswith(TENSOR_LIFETIME_SIDECAR_SUFFIX)
         or name == COMPARISON_RECORDS_FALLBACK_NAME
+        or _RANK_COMPARISON_RECORDS_NAME_RE.match(name) is not None
     )
 
 
