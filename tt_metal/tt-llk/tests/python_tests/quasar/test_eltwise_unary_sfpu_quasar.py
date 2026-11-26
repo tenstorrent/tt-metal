@@ -304,6 +304,41 @@ def prepare_square_inputs(
     return _log_uniform_signed_inputs(src_A, src_B, input_format, max_safe_value)
 
 
+LOG_OPS = (MathOperation.Log, MathOperation.LogWithBase, MathOperation.Log10)
+
+# Log inputs outside the polynomial, planted on the first lanes; NaN-result ones only in Float32
+# because the Float16_b golden turns NaN into +inf.
+LOG_SPECIAL_VALUES = (
+    0.0,
+    -0.0,
+    math.inf,
+    2.0**-126,
+    1.5 * 2.0**-126,
+    1.75 * 2.0**-126,
+    2.0**-125,
+    1.0,
+    2.0,
+    0.5,
+    2.0**100,
+    2.0**-100,
+    3.0e38,
+)
+LOG_NAN_VALUES = (-math.inf, math.nan, -1.0, -2.5, -(2.0**-126))
+
+
+def _log_special_values(torch_format) -> tuple:
+    return LOG_SPECIAL_VALUES + (
+        LOG_NAN_VALUES if torch_format == torch.float32 else ()
+    )
+
+
+def _plant_log_special_values(src_A: torch.Tensor) -> torch.Tensor:
+    values = _log_special_values(src_A.dtype)
+    flat = src_A.flatten().clone()
+    flat[: len(values)] = torch.tensor(values, dtype=torch.float32).to(flat.dtype)
+    return flat.view(src_A.shape)
+
+
 def prepare_inputs_for_operation(
     src_A: torch.Tensor,
     mathop: MathOperation,
@@ -427,9 +462,9 @@ def prepare_inputs_for_operation(
             src_A_float32,
         )
         src_A = src_A_float32.to(torch_format)
-    elif mathop == MathOperation.Rsqrt:
+    elif mathop == MathOperation.Rsqrt or mathop in LOG_OPS:
         # Full representable range via log-uniform distribution
-        # (rsqrt accepts only positive inputs).
+        # (rsqrt and log accept only positive inputs).
         finfo = torch.finfo(torch_format)
         min_val = max(1e-6, finfo.tiny * 100)
         max_val = finfo.max
@@ -438,6 +473,8 @@ def prepare_inputs_for_operation(
         src_A = torch.exp(log_min + src_A.to(torch.float32) * (log_max - log_min)).to(
             torch_format
         )
+        if mathop in LOG_OPS:
+            src_A = _plant_log_special_values(src_A)
     elif mathop == MathOperation.Tanh:
         # Scale to range [-10, 10] for tanh
         min_val = -10.0
@@ -1398,6 +1435,9 @@ DEST_SYNC_MODES = (DestSync.Half, DestSync.Full)
 _APPROX_MATHOPS = (
     MathOperation.Exp,
     MathOperation.Gelu,
+    MathOperation.Log,
+    MathOperation.LogWithBase,
+    MathOperation.Log10,
     MathOperation.Reciprocal,
     MathOperation.Rsqrt,
     MathOperation.Softsign,
@@ -1407,6 +1447,7 @@ _QSR_EXTRA_MATHOPS = (
     MathOperation.Cumsum,
     MathOperation.Ema,
     MathOperation.Dropout,
+    MathOperation.Log10,
 )
 _BH_UNARY_OPS = sfpu_unary_ops()
 
@@ -1454,6 +1495,13 @@ OP_CONFIGS = [
     ],
     OpConfig(MathOperation.Reciprocal, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Log, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(
+        MathOperation.LogWithBase, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True
+    ),
+    OpConfig(MathOperation.Log10, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Shares the log kernel's calculate_log_body.
+    OpConfig(MathOperation.Erfinv, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
@@ -1881,6 +1929,22 @@ def run_eltwise_unary_sfpu_quasar(
         assert not bool(
             mismatch.any()
         ), f"{mathop.name} differs from torch in {int(mismatch.sum())} lanes"
+
+    if mathop in LOG_OPS:
+        # The special inputs must match exactly: -inf for zeros, +inf for +inf, NaN for negatives
+        # and NaN, and the finite value for the smallest normal binade.
+        values = _log_special_values(src_A.dtype)
+        n = len(values)
+        got = res_tensor.flatten()[:n].to(torch.float32)
+        want = golden_tensor.flatten()[:n].to(torch.float32)
+        same = (got == want) | (torch.isnan(got) & torch.isnan(want))
+        if mathop == MathOperation.Log10:
+            # log10's scale multiply rounds once more, so finite lanes may be one ULP off.
+            ulp = torch.nextafter(want.abs(), torch.tensor(math.inf)) - want.abs()
+            same |= torch.isfinite(want) & ((got - want).abs() <= ulp)
+        assert bool(
+            same.all()
+        ), f"{mathop} special inputs {[values[i] for i in torch.nonzero(~same).flatten().tolist()]}: got {got[~same].tolist()}, want {want[~same].tolist()}"
 
     if mathop == MathOperation.Tan:
         # The suite tolerance passes a tangent whose polynomial coefficients are bound in the
