@@ -120,7 +120,8 @@ constexpr bool landing_on_flat_expert_cores = combine_options::landing_on_flat_e
 constexpr bool accumulators_on_ports = combine_options::accumulators_on_ports;
 constexpr uint32_t cb_out = get_named_compile_time_arg_val(combine_names::kOutputCb);
 constexpr uint32_t NT_ = get_named_compile_time_arg_val(combine_names::kRowTiles);
-constexpr uint32_t cb_done = get_named_compile_time_arg_val(combine_names::kDoneCb);  // (each output row's token)
+// each finished row's accumulator-local token index, in the order the rows come out of cb_out
+constexpr uint32_t cb_finished = get_named_compile_time_arg_val(combine_names::kFinishedCb);
 constexpr auto o_args =
     TensorAccessorArgs<get_named_compile_time_arg_val(combine_names::kPortWriterOutputAccessorFirstArg)>();
 
@@ -312,13 +313,13 @@ void kernel_main() {
     };
     // the accumulator writer's step (as accumulator_writer): one finished token row to the output
     auto write_out = [&]() {
-        if (accumulators_on_ports && wr_i < n_tok && cb_pages_available_at_front(cb_done, 1) &&
+        if (accumulators_on_ports && wr_i < n_tok && cb_pages_available_at_front(cb_finished, 1) &&
             cb_pages_available_at_front(cb_out, NT_)) {
-            const uint32_t token = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_done));
+            const uint32_t token = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_finished));
             noc_async_write(get_read_ptr(cb_out), ob.get_noc_addr(token * A + acc_me), row_bytes);
             noc_async_writes_flushed();
             cb_pop_front(cb_out, NT_);
-            cb_pop_front(cb_done, 1);
+            cb_pop_front(cb_finished, 1);
             ++wr_i;
         }
     };
