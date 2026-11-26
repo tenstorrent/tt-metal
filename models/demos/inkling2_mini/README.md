@@ -321,6 +321,14 @@ compiles its kernels: 8.4 s for 8,424 tokens):
 | plain (`SPEC=0`) | 196608 | 4096 | 2.7 s | 16.6 s | 62.1 to 62.7 tok/s |
 | speculative (the default launch) | 196608 | 1024 | 7.1 to 7.2 s | 28.9 s | 77.6 to 77.8 tok/s |
 
+Longer prompts, the default launch (speculative, 196608, passes of 1024), warm:
+
+| prompt | first token | prefill speed | reply |
+|---:|---:|---:|---:|
+| 65,336 tokens | 45.2 s | 1,450 tok/s | 80.7 tok/s |
+| 130,872 tokens | 88.9 s | 1,470 tok/s | 76.4 tok/s |
+| 196,208 tokens, the 130,872 above on the card: 65,305 new from position 130,944 | 101.8 s (its first run: kernels compiled) | 650 tok/s | 46.2 tok/s (speculative decode stops at 143360) |
+
 A conversation that goes on (8,192-token prompt, 24-token replies, `--max-model-len 196608`), first token:
 
 | launch | + 4,096-token paste | then + 8,192-token paste | fed token by token |
@@ -404,6 +412,11 @@ one traced call over the whole prompt, after the capture call; 32768 tokens: med
 | decode step at position 122880 (128K context) | 19.7 ms (51 tok/s) | 18.3 ms (55 tok/s) |
 | chunked prefill, 8424-token prompt | 1.61 s (5250 tok/s) | 1.58 s (5330 tok/s) |
 | chunked prefill, 32768 tokens | 7.31 s (4480 tok/s) | 7.23 s (4530 tok/s) |
+
+These prefill numbers are the prefill alone: one pass over the whole prompt, replayed from a captured trace, with
+the card's DRAM to itself. The vLLM server does not run it that way: there the prefill runs eagerly, in passes
+the DRAM left beside decode allows (1024 tokens in the default launch), and the default launch's prefill is about
+1,200 to 1,500 tokens per second (8,424 tokens in 7.0 s, 130,872 in 89 s; "Serve with vLLM" has the table).
 
 Quality against the CPU golden (bf16 Hugging Face model), four short prompts, 143 positions:
 
