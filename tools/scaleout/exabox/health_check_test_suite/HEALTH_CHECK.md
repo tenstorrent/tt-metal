@@ -159,7 +159,7 @@ filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
 on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
 or fabric mesh mapping fails.
 
-GDDR ACT screen (pytest, `tests/dram_stress/test_dram_act_patterns.py`):
+GDDR ACT screen (pytest, `tests/dram/test_dram_act_patterns.py`):
 
 - Targets the lane-3 64 MB alias (address bit 26) that the DramDeployment patterns miss.
 - SDPA-like read stream (row 0x200, GDDR bank 3) on every chip, matmul load on, 300 s per pass.

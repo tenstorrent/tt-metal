@@ -350,7 +350,7 @@ tests/didt/ @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT @mbezuljTT @pavlepopovic
 
 # Deployment tests
 tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT
-tests/dram_stress/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT
+tests/dram/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT
 
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core
