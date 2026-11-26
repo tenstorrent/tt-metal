@@ -281,7 +281,7 @@ Either way the contradiction means the pre-port vetting was wrong.
 
 It surfaces two ways, and they are the same defect:
 
-- **At verification** — a `TensorSpec` legality failure on the *second and later* dispatches (program cache hot), never the first. It is reported by whichever call refreshes the cache hit on your concept: `Program::update_tensor_args` on the base concept, `Program::update_program_run_args` on the custom one.
+- **At verification** — a `TensorSpec` legality failure on the *second and later* dispatches (program cache hot), never the first, and only with TTNN's `validate_program_args` on ([port recipe — legality checks](../port/metal2_port.md#ensure-the-metal-20-host-side-legality-checks-are-enabled)). It is reported by whichever call refreshes the cache hit on your concept: `Program::update_tensor_args` on the base concept, `Program::update_program_run_args` on the custom one.
 - **By reading** — you notice, while working from the inventory, that the hash omits part of the `TensorSpec`; equivalently, that its tolerance could be expressed as a relaxation. A failing test is not required to have found this. Don't go hunting for it — but don't sit on it either.
 
 Either way the response is the same, and it is **not** a fix:

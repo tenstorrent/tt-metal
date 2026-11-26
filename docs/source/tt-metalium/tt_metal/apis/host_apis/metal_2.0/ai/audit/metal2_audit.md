@@ -737,7 +737,7 @@ This list is **authoritative**: if a construct isn't here, it's supported — do
 
 ### GlobalCircularBuffer — UNSUPPORTED
 
-**Status**: Not yet supported in Metal 2.0. No equivalent of `experimental::GlobalCircularBuffer` on `KernelSpec` or `DataflowBufferSpec`. GlobalCircularBuffer is a *user-managed* buffer; its eventual analog is the (unimplemented) user-managed `GlobalDataflowBuffer` — the mapping is by *lifetime*. It has **no DataflowBuffer destination of any kind today**: not the local `DataflowBuffer`, and **not** the cross-node DFB stub in `dataflow_buffer_spec.hpp` — despite the legacy *"remote CB"* nickname for GlobalCircularBuffer, that cross-node DFB is a separate *ephemeral* construct with no legacy analog. Do not map a GlobalCircularBuffer onto any DFB variant.
+**Status**: Not yet supported in Metal 2.0. No equivalent of `experimental::GlobalCircularBuffer` on `KernelSpec` or `DataflowBufferSpec`. GlobalCircularBuffer is a *user-managed* buffer; its eventual analog is the (unimplemented) user-managed `GlobalDataflowBuffer` — the mapping is by *lifetime*. It has **no DataflowBuffer destination of any kind today**: not the local `DataflowBuffer`, and **not** a cross-node DFB (device-side `experimental::CrossNodeDFB`) — despite the legacy *"remote CB"* nickname for GlobalCircularBuffer, that cross-node DFB is a separate *ephemeral* construct with no legacy analog. Do not map a GlobalCircularBuffer onto any DFB variant.
 
 **Recognition — definitely this feature** (refuse and report):
 
