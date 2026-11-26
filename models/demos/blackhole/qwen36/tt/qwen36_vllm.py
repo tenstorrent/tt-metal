@@ -572,11 +572,14 @@ class Qwen36ForCausalLM(_Qwen36Generator):
             f"page_table_blocks={num_blocks}"
         )
         model.prepare_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
+        # The whole 8192-row blocks of a prefill's full chunks replay a second chunk trace of that size.
+        model.prepare_prefill_trace_chunked_big(self.mesh_device, page_table)
         # The partial last chunk of every prefill (the whole of a prompt up to one chunk) replays a trace per bucket.
         model.prepare_prefill_traces_masked()
         if enable_trace:
             if model._chunked_trace_id is None:
                 model.record_prefill_trace_chunked(self.mesh_device)
+            model.record_prefill_trace_chunked_big(self.mesh_device)
             model.record_prefill_traces_masked()
         model.gdn_blocks.warmup()
         if enable_trace:

@@ -13,7 +13,7 @@ decode chain incl. the rope_tp seam) must match it.
 * ``test_model_tp_long_prefill``        — >2048 chunk-outer eager prefill (cross-chunk
   GDN/conv state carry).
 * ``test_model_tp_long_prefill_traced`` — >2048 prefill via the captured chunk-outer
-  trace (the path vLLM serves at long ISL).
+  trace (the path vLLM serves at long ISL), with the 8192-row big chunk trace at T >= 8192.
 
 Run:
   MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
@@ -133,7 +133,11 @@ def test_model_tp_long_prefill(mesh_device, reset_seeds, ensure_gc):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize("T", [4096, 4352], ids=["exact_2chunks", "2chunks_plus_tail"])
+@pytest.mark.parametrize(
+    "T",
+    [4096, 4352, 8192, 8192 + 2048 + 256, 2 * 8192 + 300],
+    ids=["exact_2chunks", "2chunks_plus_tail", "exact_big", "big_chunk_tail", "2big_tail"],
+)
 def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     """TP long-prompt (>2048) prefill via the CAPTURED chunk-outer trace — the path vLLM serves
     at long ISL (and the fix for the eager path's >7872-token crash). Replays the per-chunk trace
@@ -147,10 +151,16 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     T<=2304. We use it here instead of prefill_tp because prefill_tp does the whole sequence in one
     GDN pass, and the batched GDN chunk-prefill's L1 footprint scales with T/128 sub-chunks and
     overflows at T>=4096 (production never single-passes >2048). Both the eager reference and the
-    traced replay re-zero GDN state at the start, so running them back-to-back on one model is safe."""
+    traced replay re-zero GDN state at the start, so running them back-to-back on one model is safe.
+
+    T >= 8192 also captures the big chunk trace (prepare_prefill_trace_chunked_big). Its reference is then the same
+    traces with the big one left out, the 2048-row chunks (the eager path is not used past 7872 tokens): the whole
+    8192-row blocks replay the big trace, the rest the 2048-row one, and the traced prefill compiles no program."""
     nd = mesh_device.get_num_devices()
     assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
-    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=8192, n_layers=8)
+    big = T >= Qwen36Model._PREFILL_BIG_CHUNK
+    max_seq_len = max(8192, math.ceil((T + 64) / 1024) * 1024)
+    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=max_seq_len, n_layers=8)
     args = model.args
     vocab = args.vocab_size
     torch.manual_seed(0)
@@ -163,22 +173,48 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     kv_shape = (num_blocks, args.n_local_kv_heads, block_size, args.head_dim)
     model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
 
-    # Reference: eager chunk-outer prefill (no trace parked yet -> _prefill_chunked_eager_tp).
-    assert model._chunked_trace_id is None, "eager reference must run before the trace is captured"
-    ref_dev = model.prefill_traced_chunked(torch.tensor([prompt], dtype=torch.long), page_table, actual_len=T)
-    ref = ttnn.to_torch(ref_dev, mesh_composer=comp0).reshape(-1, vocab)[0].float()
+    def prefill():
+        dev = model.prefill_traced_chunked(torch.tensor([prompt], dtype=torch.long), page_table, actual_len=T)
+        return ttnn.to_torch(dev, mesh_composer=comp0).reshape(-1, vocab)[0].float()
 
-    # Contract path: capture the chunk-outer trace, then replay it per full chunk + tail.
-    model.capture_prefill_trace_chunked(mesh_device, page_table, chunk_size=2048)
+    if not big:
+        # Reference: eager chunk-outer prefill (no trace parked yet -> _prefill_chunked_eager_tp).
+        assert model._chunked_trace_id is None, "eager reference must run before the trace is captured"
+        ref = prefill()
+
+    # Contract path: capture the chunk-outer traces (every set prepared before any capture), then replay them per full
+    # chunk + tail.
+    model.prepare_prefill_trace_chunked(mesh_device, page_table, chunk_size=2048)
+    if big:
+        model.prepare_prefill_trace_chunked_big(mesh_device, page_table)
+    model.record_prefill_trace_chunked(mesh_device)
+    model.record_prefill_trace_chunked_big(mesh_device)
     assert model._chunked_trace_id is not None, "TP chunk-outer trace was not captured"
+    assert model.big_chunk_rows() == (Qwen36Model._PREFILL_BIG_CHUNK if big else 0)
 
-    c_dev = model.prefill_traced_chunked(torch.tensor([prompt], dtype=torch.long), page_table, actual_len=T)
-    c_logits = ttnn.to_torch(c_dev, mesh_composer=comp0).reshape(-1, vocab)[0].float()
+    if big:
+        model.big_chunk_rows = lambda: 0  # the reference: 2048-row chunks only
+        ref = prefill()
+        del model.big_chunk_rows
+        assert model.prefill_big_chunk_replays == 0
+        ttnn.synchronize_device(mesh_device)
+        before = mesh_device.num_program_cache_entries()
+        mesh_device.set_program_cache_misses_allowed(False)
+        try:
+            c_logits = prefill()
+            ttnn.synchronize_device(mesh_device)
+        finally:
+            mesh_device.set_program_cache_misses_allowed(True)
+        assert mesh_device.num_program_cache_entries() == before, "the traced big-chunk prefill compiled a program"
+        assert model.prefill_big_chunk_replays == T // Qwen36Model._PREFILL_BIG_CHUNK
+        logger.info(f"big chunk vs 2048-row chunks (T={T}): logits bit-identical = {torch.equal(ref, c_logits)}")
+    else:
+        c_logits = prefill()
 
     _, pcc = comp_pcc(ref.reshape(-1), c_logits.reshape(-1), 0.99)
-    logger.info(f"traced vs eager chunk-outer prefill (T={T}) logits PCC = {pcc}")
+    logger.info(f"traced vs {'2048-row traced' if big else 'eager'} chunk-outer prefill (T={T}) logits PCC = {pcc}")
     assert float(pcc) >= 0.99, f"traced chunk-outer prefill PCC below 0.99 at T={T}: {pcc}"
-    logger.info(f"PASSED: TP traced chunk-outer prefill matches eager chunk-outer (B=1, T={T})")
+    logger.info(f"PASSED: TP traced chunk-outer prefill matches its reference (B=1, T={T})")
 
 
 @parametrize_mesh_tp()

@@ -12,6 +12,9 @@ and checkpoint blocks.
 
     MESH_DEVICE=P150x8 HF_MODEL=<Qwen3.8-27B dir> pytest models/demos/blackhole/qwen36/tests/test_prefill_checkpoint_split.py
 
+test_big_chunk_rows_match_2048_chunk_rows prefills rows with whole 8192-row blocks from the captured traces twice into
+the same blocks, with the 8192-row big chunk trace and with the 2048-row chunk trace only, and compares what they leave.
+
 QWEN36_CKPT_DUMP=<file> makes test_traced_rows_dump save what the traced rows leave, so that two builds can be compared
 byte for byte:
 
@@ -30,7 +33,7 @@ from loguru import logger
 import ttnn
 from models.common.tests.vllm_stubs import stub_vllm_if_missing
 from models.demos.blackhole.qwen36.tests.gdn_block_helpers import PluginLayout
-from models.demos.blackhole.qwen36.tests.test_factory import _resolve_mesh_shape, model_path
+from models.demos.blackhole.qwen36.tests.test_factory import _resolve_mesh_shape, compute_pcc, model_path
 from models.demos.blackhole.qwen36.tests.test_gdn_block_state import BMAX, CTX, _device_tensors, _prompts
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
@@ -83,11 +86,11 @@ def _single_call_checkpoint(self, delta_fn, call, qkvbg, init_state, checkpoint,
 
 
 class Rows:
-    """Qwen36ForCausalLM on a model of ``n_layers`` layers with GDN block state for ``n`` requests in KV cache blocks of
-    ``block_size`` tokens (the serving launch's 1024 by default): request r owns ``bpu`` attention pages, a destination
-    and a checkpoint block per GDN group."""
+    """Qwen36ForCausalLM on a model of ``n_layers`` layers and ``ctx`` tokens with GDN block state for ``n`` requests in
+    KV cache blocks of ``block_size`` tokens (the serving launch's 1024 by default): request r owns ``bpu`` attention
+    pages, a destination, a checkpoint and a spare block per GDN group."""
 
-    def __init__(self, mesh_device, monkeypatch, n_layers, n, bmax=BMAX, block_size=1024):
+    def __init__(self, mesh_device, monkeypatch, n_layers, n, bmax=BMAX, block_size=1024, ctx=CTX):
         stub_vllm_if_missing(monkeypatch)
         from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
 
@@ -95,7 +98,7 @@ class Rows:
         self.model = Qwen36Model.from_pretrained(
             mesh_device,
             max_batch_size=bmax,
-            max_seq_len=CTX,
+            max_seq_len=ctx,
             n_layers=n_layers,
             hf_model=model_path(),
             enable_mtp=False,
@@ -103,14 +106,15 @@ class Rows:
         self.gen = Qwen36ForCausalLM([self.model], [self.model.args], mesh_device)
         probe = PluginLayout.for_model(self.model, num_blocks=1, block_size=block_size)
         self.bs, self.groups = probe.block_size, probe.num_groups
-        self.bpu = -(-CTX // self.bs)
-        per = self.bpu + 2 * self.groups
+        self.bpu = -(-ctx // self.bs)
+        per = self.bpu + 3 * self.groups
         self.layout = PluginLayout.for_model(self.model, num_blocks=1 + n * per, block_size=block_size)
         self.kv = self.gen.allocate_kv_cache_per_layer(self.layout.per_layer_specs)
         first = [1 + r * per for r in range(n)]
         self.pages = torch.stack([torch.arange(f, f + self.bpu, dtype=torch.int32) for f in first])
         self.dest = [tuple(f + self.bpu + g for g in range(self.groups)) for f in first]
         self.ck = [tuple(f + self.bpu + self.groups + g for g in range(self.groups)) for f in first]
+        self.spare = [tuple(f + self.bpu + 2 * self.groups + g for g in range(self.groups)) for f in first]
 
     def checkpoint(self, length, r):
         pos = (length - 1) // self.bs * self.bs  # vLLM's align-mode checkpoint: the last block boundary before the end
@@ -120,21 +124,28 @@ class Rows:
         for enable_trace in (False, True):
             self.gen.warmup_model_prefill(enable_trace=enable_trace, kv_cache=self.kv, can_sample_on_device=False)
 
-    def prefill(self, lens, rows, prompts):
-        """One prefill step of ``rows`` (request r prefills lens[i] tokens of prompts[r]); host logits [n, vocab]."""
+    def prefill(self, lens, rows, prompts, starts=None, start_blocks=None, dest=None):
+        """One prefill step of ``rows`` (request r prefills tokens [starts[i], lens[i]) of prompts[r], from start_blocks[i]
+        when it starts past 0, into dest[i], by default its destination blocks); host logits [n, vocab]."""
+        starts = starts or [0] * len(rows)
         logits, _ = self.gen.prefill_forward(
             prompts[rows],
             self.pages[rows],
             self.kv,
             list(lens),
-            start_pos=[0] * len(rows),
+            start_pos=list(starts),
             mamba_state=self.layout.step_state(
-                [self.dest[r] for r in rows],
+                dest or [self.dest[r] for r in rows],
                 self.bmax,
-                checkpoints=[self.checkpoint(n, r) for n, r in zip(lens, rows)],
+                start_blocks=start_blocks,
+                checkpoints=[self._checkpoint_after(n, s, r) for n, s, r in zip(lens, starts, rows)],
             ),
         )
         return logits[:, 0, : self.model.args.vocab_size].float()
+
+    def _checkpoint_after(self, length, start, r):
+        ck = self.checkpoint(length, r)
+        return ck if ck and ck[0] > start else None
 
     def snapshot(self, lens, rows, logits):
         """{label: [per-device host tensors]} of everything the rows wrote."""
@@ -230,6 +241,120 @@ def test_traced_rows_dump(mesh_device, n_layers, monkeypatch, reset_seeds, ensur
     prompts = _prompts(len(rows), max(LENS), seed=71)
     t.warmup()
     torch.save(t.snapshot(LENS, rows, t.prefill(LENS, rows, prompts)), f"{path}.{n_layers}")
+
+
+BIG = Qwen36Model._PREFILL_BIG_CHUNK
+# Rows from position 0, with vLLM's checkpoint on the last block boundary before the end: after 8192 tokens, on a chunk
+# boundary (two segments, the first one big chunk); after 9216, in the tail behind one big chunk; after 18432 (two big
+# chunks and a 2048-row chunk, then the tail); after 15360, in a whole last chunk behind one big and three 2048-row
+# chunks.
+BIG_LENS = (BIG + 808, BIG + 1808, 2 * BIG + 2748, 2 * BIG)
+# A request resumed at 1024 from its state after a first step: its big chunk starts off an 8192 boundary.
+RESUMED = (1024, 1024 + BIG + 808)
+# Big chunk replays of the BIG_LENS rows and of the resumed row's second step.
+BIG_REPLAYS = 1 + 1 + 2 + 1 + 1
+
+
+def _near(got, want, pcc):
+    """[(label, device, PCC)] of the entries whose PCC is below ``pcc``, and the number of entries that are not equal
+    byte for byte."""
+    low, inexact = [], 0
+    for label in sorted(want):
+        for d, (g, w) in enumerate(zip(got[label], want[label], strict=True)):
+            if torch.equal(_bytes(g), _bytes(w)):
+                continue
+            inexact += 1
+            if torch.equal(g.float(), w.float()):
+                continue
+            p = compute_pcc(g.float().nan_to_num(), w.float().nan_to_num())
+            if not p >= pcc:
+                low.append((label, d, p))
+    return low, inexact
+
+
+@torch.no_grad()
+@pytest.mark.timeout(7200)
+@_parametrize
+def test_big_chunk_rows_match_2048_chunk_rows(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """Four rows with whole 8192-row blocks in one prefill step (BIG_LENS) and a row resumed at 1024 (RESUMED), from the
+    captured traces after the plugin's warmup, twice into the same blocks: with the big chunk trace, then with the
+    2048-row chunk trace only. The big pass compiles no program and replays the big trace for every whole big block.
+    The logits, attention K and V and the GDN end and checkpoint states of the two passes agree (PCC 0.999, argmax of
+    the logits equal unless the top two are within 0.25)."""
+    n = len(BIG_LENS) + 1
+    rows, resumed = list(range(len(BIG_LENS))), len(BIG_LENS)
+    t = Rows(mesh_device, monkeypatch, 8, n, ctx=3 * BIG)
+    prompts = _prompts(n, max(BIG_LENS + RESUMED), seed=73)
+    t.warmup()
+    assert t.model.big_chunk_rows() == BIG
+
+    def run():
+        out = t.prefill(BIG_LENS, rows, prompts)
+        t.prefill([RESUMED[0]], [resumed], prompts, dest=[t.spare[resumed]])
+        out = torch.cat([out, t.prefill([RESUMED[1]], [resumed], prompts, [RESUMED[0]], [t.spare[resumed]])])
+        return out
+
+    ttnn.synchronize_device(mesh_device)
+    before = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        logits = run()
+        ttnn.synchronize_device(mesh_device)
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    assert mesh_device.num_program_cache_entries() == before, "the big-chunk prefill compiled a program"
+    lens = BIG_LENS + (RESUMED[1],)
+    assert t.model.prefill_big_chunk_replays == BIG_REPLAYS
+    got = t.snapshot(lens, rows + [resumed], logits)
+
+    monkeypatch.setattr(t.model, "big_chunk_rows", lambda: 0)
+    replays = t.model.prefill_big_chunk_replays
+    want = t.snapshot(lens, rows + [resumed], run())
+    assert t.model.prefill_big_chunk_replays == replays
+    for i, n_tok in enumerate(lens):
+        a, b = got[f"row {i} logits"][0], want[f"row {i} logits"][0]
+        top = b.topk(2).values
+        near_tie = float(top[0] - top[1]) <= 0.25
+        assert int(a.argmax()) == int(b.argmax()) or near_tie, f"row {i} ({n_tok} tokens): argmax differs"
+    low, inexact = _near(got, want, 0.999)
+    for label, d, p in low[:20]:
+        logger.error(f"big vs 2048-row chunks: {label} device {d}: PCC {p:.6f}")
+    logger.info(
+        f"BIG CHUNK PARITY: {len(want)} entries, {inexact} entry-devices not byte-equal, {len(low)} below 0.999"
+    )
+    assert not low
+
+
+@torch.no_grad()
+@pytest.mark.timeout(7200)
+@_parametrize
+def test_long_prefill_time(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """Wall time of a cold prefill (Qwen36ForCausalLM.prefill_forward from position 0, checkpoint on the last block
+    boundary) of 22829 tokens (the vLLM model test's prefix-caching prompt) and of 131072 tokens on the full 64-layer
+    model from the captured traces, with the 2048-row chunk trace only and with the big chunk trace; the faster of two
+    runs per case (LONG PREFILL lines). Not a pass / fail gate."""
+    lens = (22829, 16 * BIG)
+    t = Rows(mesh_device, monkeypatch, 64, 1, ctx=16 * BIG + 1024)
+    prompts = _prompts(1, max(lens), seed=74)
+    t.warmup()
+    assert t.model.big_chunk_rows() == BIG
+    big_rows = t.model.big_chunk_rows
+    times = {}
+    for arm in ("2048-row chunks", "big chunks"):
+        monkeypatch.setattr(t.model, "big_chunk_rows", big_rows if arm == "big chunks" else lambda: 0)
+        for n_tok in lens:
+            runs = []
+            for _ in range(2):
+                ttnn.synchronize_device(mesh_device)
+                t0 = time.perf_counter()
+                t.prefill([n_tok], [0], prompts)
+                ttnn.synchronize_device(mesh_device)
+                runs.append(time.perf_counter() - t0)
+            times[arm, n_tok] = min(runs)
+            logger.info(f"LONG PREFILL: {n_tok} tokens, {arm}: {min(runs):.3f} s (runs {[round(x, 3) for x in runs]})")
+    for n_tok in lens:
+        a, b = times["2048-row chunks", n_tok], times["big chunks", n_tok]
+        logger.info(f"LONG PREFILL: {n_tok} tokens: {a:.3f} s -> {b:.3f} s with big chunks ({(b - a) / a:+.1%})")
 
 
 @torch.no_grad()
