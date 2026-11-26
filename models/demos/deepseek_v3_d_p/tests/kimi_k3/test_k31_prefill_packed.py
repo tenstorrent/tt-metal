@@ -20,7 +20,8 @@ counterparts of `test_k3_prefill_multiuser.py`, with the index cache compared be
   replay compiles a program.
 * test_k31_packed_pipeline_matches_one_rank: the K3.1 runtime split over two pipeline ranks on one mesh (layers 0-11
   and 12-15, two DSA layers each side), packed activations handed rank to rank and D2H acks from rank 0, must match
-  one rank (plain residual, eager: bit-exact), and traced must match eager on both ranks (bit-exact). No indexer
+  one rank (plain residual, eager: bit-exact), and traced must match eager on both ranks (bit-exact), at two and at
+  four chunks per forward; the handoff rank 0 sends for a forward with an empty tail is compared too. No indexer
   indices cross the boundary.
 
 Synthetic weights and the dense-FFN stand-in for the MoE (synthetic.py): the MoE is K3's, covered by the K3 test.
@@ -106,10 +107,11 @@ def _schedule(mesh_device):
 
 
 def _schedule4(mesh_device):
-    """(user lengths, forwards) at four chunks per forward, the production shape: forwards with 3, 1, 2 and 4 real
-    chunks, so every partial capture replays and one zero block fills up to three empty positions of a forward."""
+    """(user lengths, forwards) at four chunks per forward, the production shape: forwards with 3, 1, 2, 4, 1, 3, 2
+    and 1 real chunks, so every partial capture replays two or three times, with other captures in between, and one
+    zero block fills up to three empty positions of a forward. The last forward is a partial chunk alone."""
     C = stage_layout(mesh_device).chunk
-    lengths = [3 * C, C + 704, C + 896, 3 * C]
+    lengths = [6 * C, C + 704, C + 896, 6 * C + 1344]
     E = PrefillChunk(0, 0, 0)
     forwards = [
         [PrefillChunk(0, 0, C), PrefillChunk(1, 0, C), PrefillChunk(2, 0, C), E],
@@ -121,6 +123,10 @@ def _schedule4(mesh_device):
             PrefillChunk(2, C, C + 896),
             PrefillChunk(3, 2 * C, 3 * C),
         ],
+        [PrefillChunk(0, 3 * C, 4 * C), E, E, E],
+        [PrefillChunk(3, 3 * C, 4 * C), PrefillChunk(3, 4 * C, 5 * C), PrefillChunk(0, 4 * C, 5 * C), E],
+        [PrefillChunk(0, 5 * C, 6 * C), PrefillChunk(3, 5 * C, 6 * C), E, E],
+        [PrefillChunk(3, 6 * C, 6 * C + 1344), E, E, E],
     ]
     return lengths, forwards
 
@@ -181,6 +187,26 @@ def _chunk_rows(hidden, k, n, chunk, sp, chunk_len):
             if chunk.actual_start + c * s + r < chunk.actual_end:
                 rows.append(hidden[(c * n + k) * s + r])
     return torch.stack(rows)
+
+
+def _handoff_real_rows(mesh_device, handoff, chunks):
+    """The real rows of a packed handoff (`[1, planes, n * chunk / sp, emb / tp]`: the live stream and the sealed
+    AttnRes snapshots) on the host, every plane, chunk by chunk."""
+    layout = stage_layout(mesh_device)
+    dims = [None, None]
+    dims[layout.sp_axis], dims[layout.tp_axis] = 2, 3
+    host = ttnn.to_torch(
+        handoff, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+    )[0]
+    sp, n = mesh_device.shape[layout.sp_axis], len(chunks)
+    return torch.cat(
+        [
+            _chunk_rows(plane, k, n, c, sp, layout.chunk)
+            for plane in host
+            for k, c in enumerate(chunks)
+            if not c.is_empty
+        ]
+    ).to(torch.float32)
 
 
 def _forward(model, caches, mesh_device, chunks, streams, user_of=lambda s: s):
@@ -543,16 +569,21 @@ def test_k31_packed_traced_matches_eager(mesh_device, device_params, forward_chu
     placements(l1_small_size=PACKED_TEST_L1_SMALL_SIZE, trace_region_size=TRACE_REGION_SIZE),
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("traced, residual", [(False, "plain"), (True, "attnres")], ids=["eager-plain", "traced"])
-def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced, residual):
+@pytest.mark.parametrize(
+    "traced, residual, forward_chunks",
+    [(False, "plain", 2), (True, "attnres", 2), (True, "attnres", 4)],
+    ids=["eager-plain", "traced", "traced-4-chunks"],
+)
+def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced, residual, forward_chunks):
     """Packed forwards over two pipeline ranks (layers 0-11, 12-15) with D2H acks from rank 0.
 
     Eager on the plain residual stream: every layer's KV, index keys and KDA carries on both ranks bit-exact against
-    one rank holding all 16 layers (run first and released before the ranks are built). Traced (AttnRes): the ranks'
-    replays into slots 0..3 bit-exact against the same two models run eagerly into slots 4..7. The ranks pass no
-    indexer indices: each DSA layer runs its own indexer, so the runner's PP split needs no
-    supports_packed_forward_indexer_indices."""
-    lengths, forwards = _schedule(mesh_device)
+    one rank holding all 16 layers (run first and released before the ranks are built). Traced (AttnRes), at two
+    chunks per forward and at the production four: the ranks' replays into slots 0..3 bit-exact against the same two
+    models run eagerly into slots 4..7, and so are the real rows of the handoff rank 0 sends for the first forward
+    with one real chunk (its empty tail skips its attention). The ranks pass no indexer indices: each DSA layer runs
+    its own indexer, so the runner's PP split needs no supports_packed_forward_indexer_indices."""
+    lengths, forwards = (_schedule if forward_chunks == 2 else _schedule4)(mesh_device)
     num_users = len(lengths)
     num_slots = num_users * (2 if traced else 1)
     mesh_device.enable_program_cache()
@@ -565,7 +596,7 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
     assert not adapter.passes_indexer_indices
     assert (
         packed_forward_refusals(
-            FORWARD_CHUNKS, indexer_indices=adapter.passes_indexer_indices, **packed_forward_capabilities(adapter)
+            forward_chunks, indexer_indices=adapter.passes_indexer_indices, **packed_forward_capabilities(adapter)
         )
         == []
     )
@@ -578,7 +609,16 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
     ref_state = None
     if not traced:
         ref = _runtime(
-            mesh_device, device_params, state_dict, 0, PIPELINE_LAYERS, PIPELINE_LAYERS, num_slots, False, runtime_cls
+            mesh_device,
+            device_params,
+            state_dict,
+            0,
+            PIPELINE_LAYERS,
+            PIPELINE_LAYERS,
+            num_slots,
+            False,
+            runtime_cls,
+            forward_chunks,
         )
         try:
             ref[0].compile(ref[1])
@@ -593,9 +633,23 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
 
     split = [(0, PIPELINE_SPLIT), (PIPELINE_SPLIT, PIPELINE_LAYERS - PIPELINE_SPLIT)]
     ranks = [
-        _runtime(mesh_device, device_params, state_dict, first, n, PIPELINE_LAYERS, num_slots, traced, runtime_cls)
+        _runtime(
+            mesh_device,
+            device_params,
+            state_dict,
+            first,
+            n,
+            PIPELINE_LAYERS,
+            num_slots,
+            traced,
+            runtime_cls,
+            forward_chunks,
+        )
         for first, n in split
     ]
+    # The first forward with one real chunk: its traced handoff is compared with the eager one below.
+    handoff_forward = next(f for f, chunks in enumerate(forwards) if sum(not c.is_empty for c in chunks) == 1)
+    traced_handoff = None
     d2h = ttnn.D2HStreamService(
         mesh_device,
         global_spec=None,
@@ -619,13 +673,21 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
             logger.info(f"[pipeline] drained {len(warm)} warm-up D2H records")
 
         (rt0, caches0), (rt1, caches1) = ranks
+        compiled = [0, 0]  # programs compiled inside each rank's prefill_forward (traced: none may)
         for f, chunks in enumerate(forwards):
             logger.info(f"[pipeline {'traced' if traced else 'eager'}] forward {f}: {chunks}")
-            out = rt0.prefill_forward(tokens(rt0, chunks), caches0, chunks, d2h_service=d2h)
+            inp = tokens(rt0, chunks)
+            programs = mesh_device.num_program_cache_entries()
+            out = rt0.prefill_forward(inp, caches0, chunks, d2h_service=d2h)
+            compiled[0] += mesh_device.num_program_cache_entries() - programs
+            if traced and f == handoff_forward:
+                traced_handoff = _handoff_real_rows(mesh_device, out, chunks)
             act = ttnn.clone(out)  # what the D2D socket delivers
             if not traced:
                 ttnn.deallocate(out)
+            programs = mesh_device.num_program_cache_entries()
             assert rt1.prefill_forward(act, caches1, chunks) is None
+            compiled[1] += mesh_device.num_program_cache_entries() - programs
             want = [
                 (c.slot_id, c.actual_start, c.actual_end)
                 for c in chunks
@@ -637,7 +699,8 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
 
         if traced:
             assert replays == [_expected_replays(forwards)] * 2, f"replays by real-chunk count per rank {replays}"
-            for chunks in forwards:
+            assert compiled == [0, 0], f"traced forwards compiled programs, per rank: {compiled}"
+            for f, chunks in enumerate(forwards):
                 shifted = [
                     c if c.is_empty else PrefillChunk(c.slot_id + num_users, c.actual_start, c.actual_end)
                     for c in chunks
@@ -645,6 +708,10 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
                 inp = tokens(rt0, shifted)
                 h = rt0.model.forward_packed(inp, caches0.kvpe, shifted, index_kv_cache=caches0.index)
                 ttnn.deallocate(inp)
+                if f == handoff_forward:
+                    diff = (traced_handoff - _handoff_real_rows(mesh_device, h, shifted)).abs().max().item()
+                    logger.info(f"[pipeline-traced] forward {f} ({chunks[0]}, empty tail): handoff diff {diff:.3e}")
+                    assert diff == 0, f"forward {f}: the traced handoff's real rows differ from eager's by {diff:.3e}"
                 out = rt1.model.forward_packed(h, caches1.kvpe, shifted, index_kv_cache=caches1.index)
                 ttnn.deallocate(h)
                 if out is not None:
