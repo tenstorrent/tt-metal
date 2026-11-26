@@ -27,7 +27,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
 
             Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
 
-            Passing an MX format (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) as :attr:`dtype` produces an MX tile tensor.
+            Passing an MX format (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) as :attr:`dtype` produces an MX tile tensor.
             The input must then be BFLOAT16 or FLOAT32; the padding is applied before the MX packing.
 
             Args:
@@ -75,7 +75,7 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
 
             Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 or UINT32 data type.
 
-            Passing an MX format (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) as :attr:`dtype` produces an MX tile tensor.
+            Passing an MX format (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) as :attr:`dtype` produces an MX tile tensor.
             The input must then be BFLOAT16 or FLOAT32.
 
             Args:

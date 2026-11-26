@@ -29,7 +29,7 @@ void bind_slice_write(nb::module_& mod) {
                 Steps must be all ones.
                 Slicing along the last dimension is not supported.
 
-                MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) are supported as a sharded TILE input written into a
+                MX tensors (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) are supported as a sharded TILE input written into a
                 TILE output of the same MX dtype, with unit steps and tile-aligned starts in the last two dimensions
                 (whole tiles are copied). All other MX uses are rejected.
 

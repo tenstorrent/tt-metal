@@ -19,7 +19,7 @@ void bind_untilize(nb::module_& mod) {
         R"doc(
             Changes data layout of input tensor to ROW_MAJOR.
 
-            Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 or an MX format (MXFP8R, MXFP8P, MXFP6, MXFP4 or MXINT8/4/2) data type.
+            Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 or an MX data type (any of ``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) data type.
 
             Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type
             (ROW_MAJOR has no MX layout, so an MX input comes out as BFLOAT16).

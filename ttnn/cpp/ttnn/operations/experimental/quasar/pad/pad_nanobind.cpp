@@ -35,7 +35,7 @@ void bind_pad(nb::module_& mod) {
             * :attr:`sub_core_grids`: (Optional[ttnn.CoreRangeSet]): Sub core grids to run the operation on. Defaults to `None`.
 
         Note:
-            MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) support only whole zero tiles: ``value`` must be 0,
+            MX tensors (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) support only whole zero tiles: ``value`` must be 0,
             the input must be tile-aligned and the padding a multiple of the tile size in the last two dimensions,
             memory must be interleaved and the rank at most 4. Other MX pads are rejected.
 

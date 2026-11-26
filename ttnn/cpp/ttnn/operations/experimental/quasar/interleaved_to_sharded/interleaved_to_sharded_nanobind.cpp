@@ -32,7 +32,7 @@ void bind_interleaved_to_sharded(nb::module_& mod) {
             preallocated_output (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Note:
-            MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) are TILE layout only and keep their format, or convert
+            MX tensors (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) are TILE layout only and keep their format, or convert
             to or from BFLOAT16 through ``output_dtype``. A ROW_MAJOR input cannot produce an MX output.
 
         Returns:

@@ -26,7 +26,7 @@ void bind_fold_operation(nb::module_& mod) {
         Fold TT Tensor.
         Input tensor must be on TT accelerator device, in ROW_MAJOR.
         Output tensor will be on TT accelerator device, in ROW_MAJOR.
-        MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) are not supported: typecast to BFLOAT16 first.
+        MX tensors (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) are not supported: typecast to BFLOAT16 first.
 
         Args:
             input (ttnn.Tensor): Input tensor to be folded. Tensor of shape [N, H, W, C].

@@ -1743,7 +1743,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&add),
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc",
-        R"doc(MX formats (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.)doc");
+        R"doc(MX formats (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.)doc");
 
     detail::bind_binary_inplace_operation<"add_">(
         mod,
@@ -1761,7 +1761,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&subtract),
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc",
-        R"doc(MX formats (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.)doc");
+        R"doc(MX formats (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.)doc");
 
     detail::bind_binary_inplace_operation<"subtract_">(
         mod,
@@ -1905,7 +1905,7 @@ void py_module(nb::module_& mod) {
         When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
 
-        MX formats (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.
+        MX formats (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.
         )doc");
     detail::bind_binary_operation_with_fast_approx<"divide">(
         mod,
@@ -1919,7 +1919,7 @@ void py_module(nb::module_& mod) {
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handle division by zero.
         When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.
 
-        MX formats (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.
+        MX formats (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.
         )doc");
 
     detail::bind_binary_operation<"xlogy">(
@@ -2022,7 +2022,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes minimum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         static_cast<detail::BinaryUnaryMaxScalarFn>(&minimum),
         static_cast<detail::BinaryUnaryMaxTensorFn>(&minimum),
-        R"doc(MX formats (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.)doc");
+        R"doc(MX formats (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.)doc");
 
     detail::bind_binary_composite<"atan2">(
         mod,
@@ -2159,7 +2159,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         static_cast<detail::BinaryUnaryMaxScalarFn>(&maximum),
         static_cast<detail::BinaryUnaryMaxTensorFn>(&maximum),
-        R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216]. MX formats (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.)doc");
+        R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216]. MX formats (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) on Quasar: a and b may be tensors in the same MX format, or one bfloat16 and one MX tensor (TILE layout). The output is bfloat16 or an MX format. A scalar operand and activations are not supported with MX; a subtile broadcast (ROW, COL, SCALAR) is.)doc");
 
     detail::bind_prelu<"prelu">(
         mod,

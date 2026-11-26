@@ -37,7 +37,7 @@ void bind_transpose(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor
 
             Note:
-                MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) support only the N<->C swap (dims 0 and 1 of a
+                MX tensors (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) support only the N<->C swap (dims 0 and 1 of a
                 rank-4 tensor), which moves whole tiles. Transposes that involve H or W reorder elements inside tiles and
                 are rejected.
         )doc";
