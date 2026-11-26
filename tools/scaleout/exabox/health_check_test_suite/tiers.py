@@ -52,9 +52,8 @@ class Tier:
     # Device tests, in order: names from TESTS / PYTESTS.
     tests: tuple[str, ...] = ()
 
-    # Rerun after retest_reset + snapshot (GDDR ACT alias is boot-dependent).
-    # Only if all passed the first time. --skip-reset / --skip-tests skip it.
-    # -glx_reset to match the deployment runner's per-iteration reset.
+    # Rerun after retest_reset + snapshot: the GDDR ACT alias is boot-dependent.
+    # -glx_reset matches the deployment runner's per-iteration reset.
     retest: tuple[str, ...] = ()
     retest_reset: str = "-glx_reset"
 

@@ -63,8 +63,8 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="SYS-4365 diag tool")
     ap.add_argument("--tier", choices=[*TIERS, *DEPRECATED_TIER_ALIASES], required=True)
     ap.add_argument("--dry-run", action="store_true", help="Print intended subprocess calls; skip destructive steps.")
-    ap.add_argument("--skip-reset", action="store_true", help="Skip phase 3 (reset loop) entirely.")
-    ap.add_argument("--skip-tests", action="store_true", help="Skip phase 4 (gtest deployment binary) entirely.")
+    ap.add_argument("--skip-reset", action="store_true", help="Skip every reset, and so the retest.")
+    ap.add_argument("--skip-tests", action="store_true", help="Skip the tests and the retest.")
     ap.add_argument(
         "--skip-triage",
         action="store_true",

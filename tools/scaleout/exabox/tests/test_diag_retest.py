@@ -24,7 +24,8 @@ sys.path.insert(0, str(SUITE_DIR / "test_infrastructure"))
 from diag import retest  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, Check, Phase  # noqa: E402
 from tiers import TIERS  # noqa: E402
-from utils.report import has_actionable_failure  # noqa: E402
+from analyze_health_check_results import category_for  # noqa: E402
+from utils.report import has_actionable_failure, normalize_health_report  # noqa: E402
 
 
 def first_run(**statuses: str) -> Phase:
@@ -38,13 +39,15 @@ class TestRetest(unittest.TestCase):
     def setUp(self):
         self.logs = Path(tempfile.mkdtemp())
 
-    def _run(self, first: Phase, reset_status: str = PASS, dry_run: bool = False):
+    def _run(self, first: Phase, reset_status: str = PASS, dry_run: bool = False, snapshot_error: bool = False):
         phase = Phase(name="retest")
 
         def fake_reset(tt_smi, plan, ph, dry, logs_dir=None):
             ph.add(Check(name=f"reset_1_{plan[0].lstrip('-')}", status=reset_status))
 
         def fake_snapshot(tt_smi, out):
+            if snapshot_error:
+                raise RuntimeError("tt-smi snapshot failed")
             return {}
 
         def fake_validate(snap, sp):
@@ -107,6 +110,23 @@ class TestRetest(unittest.TestCase):
         self.assertEqual(ok.status, FAIL)
         report = {"phases": {"retest": {"checks": [{"name": c.name, "status": c.status} for c in phase.checks]}}}
         self.assertTrue(has_actionable_failure(report))
+
+    def test_failed_snapshot_keeps_the_pre_test_snapshot_as_verdict(self):
+        phase, snap, reset, tests = self._run(first_run(gddr_act_c3=PASS, gddr_act_all=PASS), snapshot_error=True)
+        self.assertIsNone(snap)
+        tests.assert_called_once()
+        self.assertIn("snapshot_capture", [c.name for c in phase.checks])
+        report = {
+            "phases": {
+                "snapshot_after_r3_glx_reset": {"checks": [{"name": "gddr_training", "status": FAIL}]},
+                "retest": {"checks": [{"name": c.name, "status": c.status} for c in phase.checks]},
+            }
+        }
+        self.assertTrue(has_actionable_failure(normalize_health_report(report)))
+
+    def test_retest_checks_roll_up_as_stress_and_reset(self):
+        self.assertEqual(category_for("retest", {"name": "gddr_act_c3_after_reset", "ip": "other"}), "stress_test")
+        self.assertEqual(category_for("retest", {"name": "retest_reset_ok", "ip": "other"}), "reset")
 
     def test_dry_run_takes_no_snapshot(self):
         phase, snap, reset, tests = self._run(first_run(gddr_act_c3=PASS, gddr_act_all=PASS), dry_run=True)

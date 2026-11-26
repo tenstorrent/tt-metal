@@ -17,7 +17,7 @@ from .resets import reset_loop
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import validate_snapshot
 
-# Appended to each rerun's check and log name.
+# Keeps the first run's checks and logs.
 RETEST_SUFFIX = "_after_reset"
 
 
@@ -74,11 +74,14 @@ def run_retest(
         try:
             validate_snapshot(take_snapshot(tt_smi, snapshot_out), snap_phase)
         except Exception as e:
-            snap_phase.error = repr(e)
-            snap_phase.add(Check(name="snapshot_capture", status=FAIL, details=repr(e), ip="other"))
-        snap_phase.duration_s = time.time() - t0
-        snap_phase.rollup()
-        print_phase_summary(snap_phase.name, asdict(snap_phase))
+            # snapshot_capture is not a verdict; returned, this phase would displace
+            # the pre-test snapshot and leave the run with no snapshot verdict.
+            phase.add(Check(name="snapshot_capture", status=FAIL, details=repr(e), ip="other"))
+            snap_phase = None
+        if snap_phase is not None:
+            snap_phase.duration_s = time.time() - t0
+            snap_phase.rollup()
+            print_phase_summary(snap_phase.name, asdict(snap_phase))
 
     run_tests(tt_metal, names, phase, dry_run, logs_dir, name_suffix=RETEST_SUFFIX)
     return snap_phase
