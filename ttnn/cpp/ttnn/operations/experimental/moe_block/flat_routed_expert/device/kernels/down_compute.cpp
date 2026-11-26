@@ -23,7 +23,6 @@
 #include "api/compute/pack.h"
 #include "api/compute/pack_untilize.h"
 #include "flat_options.hpp"
-#include "zz_probes.hpp"
 #include "schedule_meta.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
@@ -61,14 +60,11 @@ constexpr uint32_t largest_divisor(uint32_t value, uint32_t cap) {
 }
 
 uint32_t blocks_freed = 0;
-ZZ_COUNTER(zz_h_wait);
-ZZ_COUNTER(zz_w_wait);
-ZZ_COUNTER(zz_out_wait);
 
 // The weight CB tile offset of stream block `block`, once it has landed. The blocks sit in the ring in stream order
 // (block b in ring slot b % ring_blocks) and are freed in that order.
 FORCE_INLINE uint32_t weight_block(uint32_t block) {
-    ZZ_WAIT(zz_w_wait, cb_wait_front(weight_cb, (block - blocks_freed + 1) * block_tiles));
+    cb_wait_front(weight_cb, (block - blocks_freed + 1) * block_tiles);
     return static_cast<uint32_t>(
                static_cast<int32_t>(block % ring_blocks) - static_cast<int32_t>(blocks_freed % ring_blocks)) *
            block_tiles;
@@ -79,7 +75,7 @@ FORCE_INLINE uint32_t weight_block(uint32_t block) {
 // gate_up_compute.cpp's gate/up weight ring).
 FORCE_INLINE uint32_t weight_block_in_region(uint32_t block, uint32_t ring_slot) {
     if (block + 1 > blocks_freed) {
-        ZZ_WAIT(zz_w_wait, cb_wait_front(weight_cb, (block + 1 - blocks_freed) * block_tiles));
+        cb_wait_front(weight_cb, (block + 1 - blocks_freed) * block_tiles);
     }
     return static_cast<uint32_t>(static_cast<int32_t>(ring_slot) - static_cast<int32_t>(blocks_freed % ring_blocks)) *
            block_tiles;
@@ -100,7 +96,6 @@ void compute_schedule() {
     }
     // The schedule page (schedule_meta.hpp, from down_core_writer.cpp)
     cb_wait_front(schedule_cb, 1);
-    [[maybe_unused]] const uint32_t zz_start = ZZ_NOW();
     auto page_word = [](uint32_t word) { return read_tile_value(schedule_cb, 0, word); };
     const uint32_t entries = page_word(schedule_page::kEntries);
     const uint32_t total_sub_blocks = page_word(schedule_page::kTotalSubBlocks);
@@ -122,13 +117,13 @@ void compute_schedule() {
             last_sub_block && (!reads_per_load || schedule_page::load_word_last_use(entry_load_word));
         const uint32_t load = schedule_page::load_word_load(entry_load_word);
         const uint32_t region_first_slot = schedule_page::load_word_ring_region(entry_load_word) * blocks_per_expert;
-        ZZ_WAIT(zz_h_wait, cb_wait_front(h_cb, h_tiles));
+        cb_wait_front(h_cb, h_tiles);
         if constexpr (!row_major_y) {
-            ZZ_WAIT(zz_out_wait, cb_reserve_back(out_cb, row_tiles * columns));
+            cb_reserve_back(out_cb, row_tiles * columns);
         }
         for (uint32_t row = 0; row < rows; ++row) {
             if constexpr (row_major_y) {
-                ZZ_WAIT(zz_out_wait, cb_reserve_back(out_cb, columns));
+                cb_reserve_back(out_cb, columns);
             }
             for (uint32_t first_column = 0; first_column < columns; first_column += pass_columns) {
                 const uint32_t width = columns - first_column < pass_columns ? columns - first_column : pass_columns;
@@ -190,10 +185,6 @@ void compute_schedule() {
         }
     }
     cb_pop_front(schedule_cb, 1);
-    UNPACK((ZZ_EMIT("ZZ-DN-HWAIT", zz_h_wait)));
-    UNPACK((ZZ_EMIT("ZZ-DN-WWAIT", zz_w_wait)));
-    UNPACK((ZZ_EMIT("ZZ-DN-SPAN", ZZ_NOW() - zz_start)));
-    PACK((ZZ_EMIT("ZZ-DN-OUTWAIT", zz_out_wait)));
 }
 
 }  // namespace

@@ -31,7 +31,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "flat_accessors.hpp"
 #include "flat_options.hpp"
-#include "zz_probes.hpp"
 #include "expert_schedule.hpp"
 
 void kernel_main() {
@@ -64,11 +63,8 @@ void kernel_main() {
     // (MT x 32 words, <= 512 B: within this RISC's schedule scratch)
     const uint32_t idx_l1 = schedule_scratch(ScratchOwner::Brisc);
     uint32_t in_batch = 0, l1 = 0;
-    ZZ_COUNTER(zz_read);
-    ZZ_COUNTER(zz_reserve);
-    [[maybe_unused]] const uint32_t zz_start = ZZ_NOW();
     auto flush = [&]() {
-        ZZ_WAIT(zz_read, noc_async_read_barrier());
+        noc_async_read_barrier();
         cb_push_back(rm_cb, 32 * in_batch);
         in_batch = 0;
     };
@@ -109,7 +105,7 @@ void kernel_main() {
                 }
                 for (uint32_t m = 0; m < mt; ++m) {
                     if (in_batch == 0) {
-                        ZZ_WAIT(zz_reserve, cb_reserve_back(rm_cb, 32 * batch));
+                        cb_reserve_back(rm_cb, 32 * batch);
                         l1 = get_write_ptr(rm_cb);
                     }
                     const uint32_t dst = l1 + in_batch * 32 * seg;
@@ -127,9 +123,6 @@ void kernel_main() {
     if (in_batch) {
         flush();
     }
-    ZZ_EMIT("ZZ-XR-READ", zz_read);
-    ZZ_EMIT("ZZ-XR-RESERVE", zz_reserve);
-    ZZ_EMIT("ZZ-XR-SPAN", ZZ_NOW() - zz_start);
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
 }
