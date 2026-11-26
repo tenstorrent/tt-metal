@@ -160,11 +160,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_sfpu_init_();
         ckernel::sfpu::init_reduce<POOL_TYPE, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en>();
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             _llk_math_pack_sync_init_<dest_sync>();
         }
-        else
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             set_up_zero_dest_dvalid_handshake_for_sfpu();
         }
@@ -214,9 +214,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         BLOCK_RT_DIM);
                 }
 
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
                 {
                     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+                {
+                    // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                 }
             }
 

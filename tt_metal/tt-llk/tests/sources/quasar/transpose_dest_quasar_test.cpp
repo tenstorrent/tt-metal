@@ -208,9 +208,11 @@ inline void run_datacopy_transpose_loop(
                 _llk_math_transpose_dest_(dst_index + i);
             }
 
-            if constexpr (sync_dest)
+            _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            if constexpr (!sync_dest)
             {
-                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
             }
         }
     }
@@ -243,6 +245,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Math isolate has no destination producer before FPU, so make FPU
             // the producer and restore immediate ownership of the destination.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
+            _llk_math_pack_sync_init_<dest_sync>();
         }
 
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);

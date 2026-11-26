@@ -188,6 +188,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // chain whose producer would also wait for inactive UNPACK/PACK.
             set_up_zero_dest_dvalid_handshake_for_math();
             set_up_zero_dest_dvalid_handshake_for_sfpu();
+            _llk_math_pack_sync_init_<dest_sync>();
         }
 
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
@@ -241,9 +242,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     SFPU_SIGN_MAGNITUDE,
                     APPROX_MODE,
                     BROADCAST_TYPE>(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX, math_format);
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
                 {
                     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+                {
+                    // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                 }
             }
             // Drain SFPU, FPU, and MOP queues before PACK takes over.

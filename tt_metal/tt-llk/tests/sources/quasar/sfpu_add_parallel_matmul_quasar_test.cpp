@@ -127,6 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            _llk_math_pack_sync_init_<dest_sync>();
         }
 
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
@@ -151,6 +152,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_math_matmul_block_(CT_DIM, rt_block);
                 }
+                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
             }
         }
         else

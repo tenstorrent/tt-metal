@@ -166,11 +166,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // the INIT zone before the measured TILE_LOOP.
         _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             _llk_math_pack_sync_init_<dest_sync>();
         }
-        else
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             // CFG wait masks persist across run types. MATH_ISOLATE runs without
             // a pack consumer; UNPACK_ISOLATE only mocks Src
@@ -225,9 +225,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     DST_INDEX + 0u /*DST_OUT*/,
                     VECTOR_MODE);
 
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
                 {
                     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+                {
+                    // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                 }
             }
             // Drain every execution unit driven by T1 before PACK takes over.

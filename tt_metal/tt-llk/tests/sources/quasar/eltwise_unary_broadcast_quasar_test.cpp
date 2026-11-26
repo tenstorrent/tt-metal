@@ -197,6 +197,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // of the destination register.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            _llk_math_pack_sync_init_<dest_sync>();
+        }
 
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
@@ -251,6 +255,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
                         _llk_math_eltwise_unary_broadcast_(tile);
+                    }
+                    if constexpr (!unpack_to_dest)
+                    {
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                        ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                     }
                 }
             }

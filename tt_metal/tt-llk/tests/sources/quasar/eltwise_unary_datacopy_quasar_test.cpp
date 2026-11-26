@@ -145,6 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Math isolate requires FPU destination ownership.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
+            _llk_math_pack_sync_init_<dest_sync>();
         }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
@@ -184,6 +185,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
                     }
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                 }
             }
         }

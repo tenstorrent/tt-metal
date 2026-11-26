@@ -118,6 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Math isolate keeps the FPU→PACK dest-dvalid producer setup.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
+            _llk_math_pack_sync_init_<dest_sync>();
         }
 
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
@@ -159,9 +160,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         const std::uint32_t dst_tile_idx = IS_REDUCE_TO_ONE ? 0 : block_tile;
                         _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(dst_tile_idx, tensor_shape_A);
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
                     {
                         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+                    {
+                        // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                        ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                     }
                 }
             }
