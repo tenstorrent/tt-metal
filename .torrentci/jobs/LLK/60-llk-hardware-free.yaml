@@ -4,7 +4,7 @@ jobs:
   - id: llk-hardware-free
     name: LLK hardware-free tests
     description: Run PR Gate's host-only LLK hardware-free tests (no card)
-    timeout: 45m
+    timeout: 20m
     runs-on:
       kubernetes:
         os: linux
@@ -40,6 +40,8 @@ jobs:
             - mkdir -p "$HOME"
             - cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
       - id: hardware-free
+        # GitHub's cap (llk_hardware_free_tests.yaml: 10 min).
+        timeout-ms: 600000
         kind: shell
         shell:
           run:

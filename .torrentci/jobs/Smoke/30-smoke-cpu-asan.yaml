@@ -5,7 +5,8 @@ jobs:
     name: Runtime smoke, CPU only (ASan)
     checkout: false
     description: "Run the PR Gate runtime validation smoke cpu-only test (CPU_* cases, mock cluster) on the ASan packages"
-    timeout: 1h
+    # GitHub's caps: smoke.yaml's 30 min job, runtime_validation_pr_gate_tests.yaml's 10 min test.
+    timeout: 30m
     runs-on:
       kubernetes:
         os: linux
@@ -37,6 +38,7 @@ jobs:
       - {name: LSAN_OPTIONS, value: "suppressions=/usr/share/tt-metalium/lsan.supp"}
     steps:
       - id: smoke-cpu
+        timeout-ms: 600000
         kind: shell
         shell:
           run:
