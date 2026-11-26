@@ -10,7 +10,59 @@ import ttnn
 from qwen36_resident import PKG_DIR
 
 TILE = 32
-TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
+# S0-9 stage 2: "bfp2" stands for the Bfp2_b tile format ttnn has no dtype for (raw uint32 pages, host codec below)
+BFP2 = "bfp2"
+BFP2_FORMAT = 15  # tt::DataFormat::Bfp2_b (CBFormatDescriptor.data_format_as_uint8)
+TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, BFP2: 320}
+
+
+def bfp2_round(x):
+    """x [..., n] (n a multiple of 16) on the Bfp2_b grid: per 16 consecutive elements of the last dim (a tile face row)
+    e = floor(log2 max |x|), each element sign(x) 2^e if |x| >= 2^(e - 1) else 0 (ties up; acc_agree's bfp_round(x, 1)
+    but for the ties) — what the decode writer and the prefill store"""
+    sh = x.shape
+    g = x.reshape(-1, 16).float()
+    amax = g.abs().amax(-1, keepdim=True)
+    e = torch.floor(torch.log2(amax.clamp(min=1e-38)))
+    v = torch.pow(2.0, e)
+    q = torch.where(g.abs() >= v / 2, v, torch.zeros_like(v)) * torch.sign(g)
+    q = torch.where(amax > 0, q, torch.zeros_like(q))
+    return q.reshape(sh)
+
+
+def bfp2_encode(x):
+    """x [R * 32, C] (C a multiple of 32) -> uint8 [R, (C / 32) * 320]: tile row r's tiles, each 320 B — 64 exponent
+    bytes (face F row i at 16 F + i), then 4 B a face row (element c at bits 2 (c % 4) of byte c / 4, the pair's high
+    bit the sign, low bit the magnitude), value m 2^(e - 127) (tests/bfp2_probe.py: the unpacker decodes it so)"""
+    R, C = x.shape[0] // 32, x.shape[1] // 32
+    t = x.float().reshape(R, 32, C, 32).permute(0, 2, 1, 3)  # [R, C, 32, 32]
+    f = t.reshape(R, C, 2, 16, 2, 16).permute(0, 1, 2, 4, 3, 5).reshape(R, C, 4, 16, 16)  # faces [F, row, col]
+    amax = f.abs().amax(-1)  # [R, C, 4, 16]
+    e = torch.floor(torch.log2(amax.clamp(min=1e-38)))
+    ebyte = torch.where(amax > 0, (e + 127).clamp(0, 255), torch.zeros_like(e)).to(torch.uint8)
+    v = torch.pow(2.0, e)[..., None]
+    m = ((f.abs() >= v / 2) & (amax[..., None] > 0)).to(torch.uint8)
+    sgn = ((f < 0) & (m > 0)).to(torch.uint8)
+    two = (sgn << 1) | m  # [R, C, 4, 16, 16]
+    two = two.reshape(R, C, 4, 16, 4, 4).to(torch.int32)
+    mant = (two[..., 0] | (two[..., 1] << 2) | (two[..., 2] << 4) | (two[..., 3] << 6)).to(torch.uint8)
+    out = torch.cat([ebyte.reshape(R, C, 64), mant.reshape(R, C, 256)], -1)  # [R, C, 320]
+    return out.reshape(R, C * 320)
+
+
+def bfp2_decode(b, C):
+    """uint8 [R, (C / 32) * 320] (bfp2_encode's) -> float [R * 32, C]"""
+    R, nt = b.shape[0], C // 32
+    t = b.reshape(R, nt, 320)
+    e = t[..., :64].to(torch.float32).reshape(R, nt, 4, 16)
+    mant = t[..., 64:].to(torch.int32).reshape(R, nt, 4, 16, 4)
+    two = torch.stack([(mant >> (2 * j)) & 3 for j in range(4)], -1).reshape(R, nt, 4, 16, 16)
+    mag = (two & 1).float() * torch.pow(2.0, e - 127)[..., None]
+    f = torch.where((two >> 1) & 1 > 0, -mag, mag)  # [R, nt, F, row, col]
+    t = f.reshape(R, nt, 2, 2, 16, 16).permute(0, 1, 2, 4, 3, 5).reshape(R, nt, 32, 32)
+    return t.permute(0, 2, 1, 3).reshape(R * 32, nt * 32)
+
+
 HIDDEN = 5120
 INTER = 17408  # full MLP width; each chip holds INTER / num_chips
 EPS = 1e-6
