@@ -149,7 +149,9 @@ void kernel_main() {
     constexpr uint32_t AFF_ELEM = get_compile_time_arg_val(17);
     constexpr bool AFF_TILE = get_compile_time_arg_val(18) != 0;
     constexpr uint32_t AFF_PAGE_BYTES = get_compile_time_arg_val(19);
-    constexpr auto in_args = TensorAccessorArgs<20>();
+    // Refinement 5: an image's true row count (RM stick paging). HT = ceil(HW / 32) tile rows per image.
+    constexpr uint32_t HW = get_compile_time_arg_val(20);
+    constexpr auto in_args = TensorAccessorArgs<21>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     // The output (written for this RISC's pass-2 share; DRAM interleaved only).
@@ -167,7 +169,11 @@ void kernel_main() {
         !SHARDED || (IN_ELEM == 2 && AFF_ELEM == 2 && !AFF_TILE),
         "sharded: bf16 input with bf16 ROW_MAJOR gamma / beta (the op's EXCLUSIONS)");
     constexpr uint32_t T = CHUNK_HT * W;
-    constexpr uint32_t HW = HT * 32;
+    // hw_non_aligned (Refinement 5): valid rows of each image's last tile row (0 = whole tile rows). Its pad rows are
+    // k-filled in pass 1 (x - k = 0 and x * (x - k) = 0 add nothing to either moment); RM reads only the valid sticks.
+    constexpr uint32_t HR = HW % 32;
+    static_assert(HT * 32 == HW + (HR ? 32 - HR : 0), "HT = ceil(HW / 32)");
+    constexpr uint32_t FACE_ROW_BYTES = 16 * IN_ELEM;  // one face row of an input tile
     constexpr uint32_t SLICE_BYTES = W * TILE_SEGMENT_BYTES;
     constexpr uint32_t G_CORE = P / CG;  // interleaved: group lanes of a slice (slices start on group boundaries)
     // Per-tensor affine staging (host: affine_stage_bytes). RM: the slice's P channels from a 64 B-aligned start;
@@ -584,6 +590,57 @@ void kernel_main() {
         return;
     }
 
+    // k of group lane l = the staged pilot sample of its first channel (interleaved slices start on group boundaries),
+    // as bf16: a Float32 sample's upper halfword. TILE staging holds 64 B of row 0 of faces 0 / 1 per tile.
+    auto extract_kv = [&]() {
+        for (uint32_t l = 0; l < G_CORE; ++l) {
+            const uint32_t c = l * CG;
+            const uint32_t byte =
+                IS_RM ? c * IN_ELEM
+                      : (c >> 5) * 2 * ROW0_READ_BYTES + ((c >> 4) & 1) * ROW0_READ_BYTES + (c & 15) * IN_ELEM;
+            kv[l] = sv[(byte + IN_ELEM - 2) >> 1];
+        }
+    };
+
+    // hw_non_aligned (Refinement 5): the pass-1 copy of an image's last tile row (ring tile row `lr` of the chunk at
+    // `base`) gets k in its pad rows HR..31, so they add nothing to S1' = Sigma (x - k) or T2 = Sigma x * (x - k) and
+    // n stays HW * Cg (TILE padding is unspecified; RM never read those sticks). The same mechanism as the sharded RM
+    // staged rows (Refinement 3); the moments program itself is unchanged. The k row (lane v -> k of its group, in
+    // the input's format) is built in the staging, free between the pilot (step 0) and the affine reads issued after
+    // the last pass-1 push; local NoC writes then copy it over the pad: RM, one per pad stick; TILE, one per pad face
+    // row (16 lanes) per tile. The writes complete before the chunk's push.
+    [[maybe_unused]] auto k_fill_last_row = [&](uint32_t base, uint32_t lr) {
+        MaybeDeviceZoneScope("r_k_fill");
+        for_each_run(0, 0, P, [&](uint32_t v, uint32_t ve, uint32_t lane, uint32_t) {
+            if constexpr (IN_ELEM == 4) {
+                volatile tt_l1_ptr uint32_t* kr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
+                for (uint32_t i = v; i < ve; ++i) {
+                    kr[i] = kv[lane] << 16;
+                }
+            } else {
+                for (uint32_t i = v; i < ve; ++i) {
+                    sv[i] = static_cast<uint16_t>(kv[lane]);
+                }
+            }
+        });
+        if constexpr (IS_RM) {
+            for (uint32_t s = HR; s < 32; ++s) {
+                noc_async_write(staging, get_noc_addr(base + (lr * 32 + s) * SLICE_BYTES), SLICE_BYTES);
+            }
+        } else {
+            noc_async_write_one_packet_set_state(get_noc_addr(base), FACE_ROW_BYTES);
+            for (uint32_t wt = 0; wt < W; ++wt) {
+                const uint32_t tile = base + (lr * W + wt) * IN_TILE_BYTES;
+                for (uint32_t r = HR; r < 32; ++r) {
+                    const uint32_t row = tile + (r >> 4) * 2 * IN_FACE_BYTES + (r & 15) * FACE_ROW_BYTES;
+                    noc_async_write_one_packet_with_state(staging + wt * 32 * IN_ELEM, row);
+                    noc_async_write_one_packet_with_state(staging + (wt * 32 + 16) * IN_ELEM, row + IN_FACE_BYTES);
+                }
+            }
+        }
+        noc_async_write_barrier();
+    };
+
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         MaybeDeviceZoneScope("r_block");
         const uint32_t unit = unit_start + blk;
@@ -672,18 +729,21 @@ void kernel_main() {
                     cb_reserve_back(cb_input_keep, T);
                 }
             }
+            const uint32_t chunk_base = IS_RM ? get_write_ptr(cb_input_rm) : get_write_ptr(cb_input_tiles);
             if constexpr (IS_RM) {
                 MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_issue");
                 uint32_t page = n * HW + row0 * 32;
-                uint32_t dst = get_write_ptr(cb_input_rm);
-                for (uint32_t s = 0; s < rows_valid * 32; ++s) {
+                uint32_t dst = chunk_base;
+                // The image's last tile row holds HR valid sticks (the sticks after it are the next image's).
+                const uint32_t sticks = rows_valid * 32 - (HR != 0 && row0 + rows_valid == HT ? 32 - HR : 0);
+                for (uint32_t s = 0; s < sticks; ++s) {
                     noc_async_read(in_acc.get_noc_addr(page, wt0 * TILE_SEGMENT_BYTES), dst, SLICE_BYTES);
                     ++page;
                     dst += SLICE_BYTES;
                 }
             } else {
                 MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_issue");
-                uint32_t dst = get_write_ptr(cb_input_tiles);
+                uint32_t dst = chunk_base;
                 for (uint32_t r = 0; r < rows_valid; ++r) {
                     const uint32_t tile0 = (n * HT + row0 + r) * WT_TOTAL + wt0;
                     for (uint32_t wt = 0; wt < W; ++wt) {
@@ -698,6 +758,15 @@ void kernel_main() {
                 noc_async_read_barrier();
             }
 
+            if constexpr (HR != 0) {
+                if (step == 0) {
+                    extract_kv();  // before the push: chunk 0 may hold the image's last tile row
+                }
+                if (step < num_chunks && row0 + rows_valid == HT) {
+                    k_fill_last_row(chunk_base, rows_valid - 1);
+                }
+            }
+
             if constexpr (IS_RM) {
                 cb_push_back(cb_input_rm, T);
             } else {
@@ -706,14 +775,8 @@ void kernel_main() {
             }
 
             if (step == 0) {
-                // k of group lane l = the staged sample of its first channel (slices start on group boundaries), as
-                // bf16: a Float32 sample's upper halfword. TILE staging holds 64 B of row 0 of faces 0 / 1 per tile.
-                for (uint32_t l = 0; l < G_CORE; ++l) {
-                    const uint32_t c = l * CG;
-                    const uint32_t byte =
-                        IS_RM ? c * IN_ELEM
-                              : (c >> 5) * 2 * ROW0_READ_BYTES + ((c >> 4) & 1) * ROW0_READ_BYTES + (c & 15) * IN_ELEM;
-                    kv[l] = sv[(byte + IN_ELEM - 2) >> 1];
+                if constexpr (HR == 0) {
+                    extract_kv();
                 }
                 build_shift_rows(0, 0, P, G_CORE, blk);
             }

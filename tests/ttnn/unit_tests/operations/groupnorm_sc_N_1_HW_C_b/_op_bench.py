@@ -152,6 +152,17 @@ FORMAT_CASES = [
 ]
 
 
+# Refinement 5: HW % 32 != 0 (Mochi, HW % 32 = 24; the reader k-fills each image's last tile row) next to its aligned
+# twin (HW rounded up to whole tile rows): the fill and the trimmed RM reads should cost ~nothing.
+# name, shape, G, layout, eps
+HW_NON_ALIGNED_CASES = [
+    ("mochi_hwna_4x6360x768_tile", (4, 1, 6360, 768), 32, ttnn.TILE_LAYOUT, 1e-6),
+    ("mochi_hwna_4x6360x768_rm", (4, 1, 6360, 768), 32, ttnn.ROW_MAJOR_LAYOUT, 1e-6),
+    ("mochi_twin_4x6368x768_tile", (4, 1, 6368, 768), 32, ttnn.TILE_LAYOUT, 1e-6),
+    ("mochi_twin_4x6368x768_rm", (4, 1, 6368, 768), 32, ttnn.ROW_MAJOR_LAYOUT, 1e-6),
+]
+
+
 def _bench(
     device, shape, G, layout, eps, dtype=ttnn.bfloat16, aff_dtype=ttnn.bfloat16, aff_layout=ttnn.ROW_MAJOR_LAYOUT
 ):
@@ -182,6 +193,11 @@ def test_bench(device, name, shape, G, layout, eps):
 )
 def test_bench_formats(device, name, shape, G, layout, eps, dtype, aff_dtype, aff_layout):
     _bench(device, shape, G, layout, eps, dtype, aff_dtype, aff_layout)
+
+
+@pytest.mark.parametrize("name, shape, G, layout, eps", HW_NON_ALIGNED_CASES, ids=[c[0] for c in HW_NON_ALIGNED_CASES])
+def test_bench_hw_non_aligned(device, name, shape, G, layout, eps):
+    _bench(device, shape, G, layout, eps)
 
 
 @pytest.mark.parametrize("name, shape, G, grid, layout, eps", SHARDED_CASES, ids=[c[0] for c in SHARDED_CASES])

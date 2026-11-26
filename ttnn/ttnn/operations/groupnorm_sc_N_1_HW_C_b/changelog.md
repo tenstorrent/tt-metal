@@ -925,3 +925,75 @@ Ragged shards (newly supported; the base op refuses them) vs the same tensor thr
     - Float32 multi-unit per core (`max_cores = 4`).
     - Float32 wide (64×4096) and deep (16384×512).
   - `_op_bench.py`: `test_bench_formats` (Float32 / TILE γ/β / Float32 γ/β cases). `test_bench` now shares a `_bench` helper.
+
+## Refinement 5 — hw_non_aligned (HW % 32 ≠ 0)
+- Date: 2026-11-26
+- What was done:
+  - **Registry.**
+    - `SUPPORTED["alignment"]` gains `"hw_non_aligned"`.
+    - A new `EXCLUSION` refuses `{memory_layout: BLOCK_SHARDED, alignment: hw_non_aligned}`. The refinement's scope is DRAM interleaved, feature_spec has no block-sharded `HW % 32 ≠ 0` entry, and the sharded planner already refuses TILE images that are not whole tile rows.
+  - **Mechanism: reader k-fill instead of `ReducePartialScaler::with_partial()`. This deviates from the verifier note.**
+    - The design's partial-scaler plan predates Perf 1. Pass 1's moments are now a raw FPU DEST accumulation of `S1' = Σ(x − k)` and `T2 = Σ x·(x − k)`, with `k` the per-group pilot. No reduce helper is left to take a partial scaler.
+    - Instead, the reader overwrites the pad rows `HR = HW % 32 .. 31` of the pass-1 copy of each image's last tile row with `k`. Then `x − k = 0` and `x·0 = 0`, so each pad row adds exactly 0 to both moments.
+    - This is the mechanism R3 already uses for the sharded-RM staged rows. Compute does not change, so there is no new reduce variant and no `--dev` kernel-text growth on the compute side.
+  - **Descriptor.**
+    - `plan_or_raise` uses `Ht = ceil(HW/32)` per image. It is the row unit of the `n × xs × ht` split, so N > 1 keeps per-image padding. The TILE page id stays `(n·HT + ht)·WT + wt`.
+    - `inv_n = 1/(HW·Cg)` already used the true `HW`.
+    - New reader CT arg 20 is `HW`; the `TensorAccessorArgs` chain now starts at 21.
+    - The writer walks `HT = ceil` tile rows per image, writing the output's pad rows too: they are the output tensor's TILE padding.
+  - **Reader (same file).**
+    - `HR = HW % 32` is a constexpr.
+    - The k extraction moved into an `extract_kv` lambda. For `HR ≠ 0` it runs before chunk 0's push, because chunk 0 may already hold an image's last tile row.
+    - `k_fill_last_row(chunk_base, lr)` builds the k row in `cb_affine_staging`, in the input's format. That buffer is free from the pilot extraction until the affine reads, which are issued after the last pass-1 push. The lambda then issues core-local NoC writes and a write barrier before the push:
+      - RM: one write per pad stick.
+      - TILE: one `16·in_elem` B face row per pad row, per face pair, per tile, via `noc_async_write_one_packet_with_state`.
+    - The fill runs on pass-1 steps only (`step < num_chunks`), and only on the chunk where `row0 + rows_valid == HT`. A pass-2 re-read of that chunk needs no fill: its pad rows become output pad rows only.
+    - The RM issue loop reads `rows_valid·32 − (32 − HR)` sticks on that chunk. Stick paging is `n·HW + row`, so reading past `HW` would read the next image. The pad sticks are never read from DRAM.
+    - With `HR = 0` every new site is `if constexpr`-dead, so the aligned reader is the R4 reader apart from the CT index shift.
+  - **Compute and writer: no change.**
+- Reused: R3's k-fill idea (pad rows ← pilot `k`) and `cb_affine_staging` as the k-row source; the pilot `kv` and `for_each_run` lane walk; the existing chunk / residency / pass-2 re-read structure; and the golden helper `run_groupnorm_sc_N_1_HW_C` / `check_output` for the tests.
+- Added: reader CT 20 (`HW`), `extract_kv` (a moved block) and `k_fill_last_row`, the RM short-last-row stick count, `Ht = ceil` in the plan, and the `BLOCK_SHARDED × hw_non_aligned` EXCLUSION. No new CB, no new kernel file.
+- Accuracy achieved (Blackhole, HiFi3, fp32 DEST, γ+β RM in the input dtype; probe_025):
+
+  | Shape | Groups | bf16 PCC | bf16 relative RMS | Float32 PCC | Float32 relative RMS |
+  |---|---|---|---|---|---|
+  | (1,1,17,64) | g1 | 0.999997 | 2.42e-3 | 0.999999 | 1.77e-3 |
+  | (1,1,47,256) | g1 | 0.999998 | 2.29e-3 | 0.999999 | 1.76e-3 |
+  | (2,1,100,128) | g1 | 0.999998 | 1.88e-3 | 0.999999 | 1.43e-3 |
+  | Mochi (4,1,6360,768) | g32 | 0.999998 | 1.94e-3 | 0.999999 | 1.35e-3 |
+
+  TILE and RM give identical metrics on every shape.
+- Golden test progress:
+  - **180/180** `alignment=hw_non_aligned` cells pass. That is every valid cell: DRAM interleaved, bf16 / Float32 input, TILE / RM, and every γ/β form, including Mochi.
+  - Plus **32/32** tile-aligned DRAM representatives: 4×2048×256 and 4096×320, gamma_beta, all formats.
+  - Run as node ids with `--precompile --run-all`.
+  - Unit tests:
+    - New file: 62/62 plain and `--dev`.
+    - The whole unit directory: 261/261 plain.
+    - Spec, `_dtypes`, `_sharded` and `_ragged`: 192/192 under `--dev`, so the reader text still fits the watcher build's kernel-config ring.
+- Sensitivity check: with the fill disabled (`if (false)`), 16/16 targeted cases fail. PCC drops to 0.10–0.98, and output is Inf with NaN padding. The fill is what carries correctness.
+- Perf (Blackhole, DEVICE KERNEL DURATION [ns], one fresh-cache profiled run per case, `_op_bench.py`):
+
+  | Case | ns | Comparison |
+  |---|---|---|
+  | mochi_hwna_4x6360x768_tile | 223 098 | aligned twin 4×6368×768: 224 482 (−0.6%) |
+  | mochi_hwna_4x6360x768_rm | 228 659 | aligned twin: 230 395 (−0.8%) |
+  | mid_4096x640_tile | 36 633 | R4/Perf 2: 36 623 (flat) |
+  | mid_4096x640_rm | 44 502 | R4: 44 228 (+0.6%, noise) |
+  | mid_16384x320_tile | 65 466 | R4: 66 182 (−1.1%) |
+  | mid_16384x320_rm | 76 750 | Perf 2: 77 749 (−1.3%) |
+
+  - The k-fill costs nothing measurable: the non-aligned Mochi shape tracks its aligned twin by bytes moved, on 108 cores.
+  - The fill is bounded by `(32 − HR)·W·2` face-row writes per block. It sits behind the chunk's read barrier and is a small fraction of one chunk's NoC time.
+- Issues encountered:
+  - None in the kernel: the first run of the new tests passed 62/62.
+  - The first golden-id extraction found 0 ids, because `--collect-only -q` prints `<Function test_op[...]>` lines rather than node ids. Parsing those lines fixed it.
+- Tests added:
+  - `tests/.../test_groupnorm_sc_N_1_HW_C_b_hw_non_aligned.py`, 62 cases:
+    - The 5 golden hw_non_aligned shapes plus HR edges (HR = 1, 16, 31, and HW = 5 < 16), Cg = 10 / 20, and N > 1. Each runs on TILE / RM × bf16 / Float32.
+    - γ-only and no-affine.
+    - TILE inputs whose pad rows hold 1e4 or NaN, injected through a `ttnn.reshape(logical, padded)` view.
+    - An offset-heavy input (`randn + 3`).
+    - Stream-only and partial residency (`K < B`, with the k-filled chunk re-read in pass 2).
+    - Several units per core (`max_cores = 4`).
+  - `_op_bench.py`: `test_bench_hw_non_aligned`, covering Mochi 6360 and its 6368 twin on TILE and RM.

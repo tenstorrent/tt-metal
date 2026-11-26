@@ -484,7 +484,9 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta, in_place=Fal
         )
     N, _, HW, C = tuple(input_tensor.shape)
     G = num_groups
-    Ht, Wt = HW // 32, C // 32
+    # Refinement 5 (hw_non_aligned): an image is ceil(HW / 32) tile rows (TILE pads each image's last tile row; RM
+    # has no rows there). The reader k-fills the last tile row's pad rows, so the moments see only the HW valid rows.
+    Ht, Wt = _ceil_div(HW, 32), C // 32
     Cg = C // G
     L = _lcm(Cg, 32)
     if C % L != 0:
@@ -1052,6 +1054,9 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     reader_ct.extend(
         [in_tile, fmt.aff_elem, int(fmt.aff_tile), aff_ref.buffer_page_size() if aff_ref is not None else 0]
     )
+    # Refinement 5, CT 20: the image's true row count HW (RM stick paging; HW % 32 != 0 -> the last tile row of each
+    # image holds HW % 32 valid rows, the reader k-fills the rest).
+    reader_ct.append(plan.HW)
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         (ttnn.TensorAccessorArgs(gamma) if gamma is not None else ttnn.TensorAccessorArgs()).get_compile_time_args()

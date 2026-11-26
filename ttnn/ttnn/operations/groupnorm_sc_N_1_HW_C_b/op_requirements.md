@@ -243,7 +243,7 @@ The output is fp32 for fp32 input. Statistics and intermediates stay Float32 wit
 - Float32 input costs 1.5–2.55× bf16. That tracks the bytes moved, because Float32 halves `K_max`.
 - Float32 relative RMS is ~1.2e-3 on `randn`. With a +10σ mean it rises to ~7e-3; the cause is TF32 at srcA/srcB in pass 2's `x·a − b'`.
 
-### [ ] Refinement 5 — hw_non_aligned (HW % 32 ≠ 0)
+### [x] Refinement 5 — hw_non_aligned (HW % 32 ≠ 0)
 
 **Goal**: add `"hw_non_aligned"` to `SUPPORTED["alignment"]` for DRAM-interleaved input, in both layouts and every dtype supported at that point. This includes the real Mochi per-device shape `(4,1,6360,768)`, where `HW % 32 = 24`.
 - The last tile-row of each image is partly valid. Its padding (TILE padding contents are unspecified; RM has no rows there) must not enter Σx or Σx².
@@ -261,6 +261,17 @@ The output is fp32 for fp32 input. Statistics and intermediates stay Float32 wit
 **Done when**:
 - Every `alignment=hw_non_aligned` cell passes whose other axes are in SUPPORTED at that point (bf16 / fp32 input; bf16 / fp32 / TILE γ/β).
 - Earlier cells stay green.
+
+**Outcome**: Done (2026-11-26).
+- `SUPPORTED["alignment"] = ["tile_aligned", "hw_non_aligned"]`, DRAM interleaved, TILE + RM, bf16 + Float32, every γ/β form. `BLOCK_SHARDED × hw_non_aligned` is an `EXCLUSION`: feature_spec has no such INPUTS entry, and the sharded planner refuses TILE images that are not whole tile rows.
+- **Mechanism: k-fill, not the partial scaler.** Pass 1's moments are a raw FPU DEST accumulation of `x − k` and `x·(x − k)`, so there is no reduce helper to hand `ReducePartialScaler::with_partial()`.
+  - The reader overwrites the pad rows of the pass-1 copy of each image's last tile row with the group pilot `k`. Each pad row then adds exactly 0 to both moments. This is R3's sharded-RM staged-row mechanism.
+  - RM reads only the `HW % 32` valid sticks; the sticks after them belong to the next image. TILE padding is never trusted: tests fill it with 1e4 and NaN.
+  - `Ht = ceil(HW/32)` per image. `inv_n` is computed from the true `HW·Cg`.
+  - No compute or writer change, and no new CB: the k row is built in `cb_affine_staging`.
+- **Slice.** 180/180 hw_non_aligned golden cells and 32 tile-aligned DRAM representatives pass. The new unit file passes 62/62 plain and `--dev`. The unit directory passes 261/261 plain, and the spec, dtype, sharded and ragged tests pass 192/192 under `--dev`.
+- **Accuracy.** bf16: PCC ≥ 0.999997, relative RMS 1.9e-3 – 2.4e-3. Float32: relative RMS 1.35e-3 – 1.8e-3. Measured on the golden shapes including Mochi (4,1,6360,768).
+- **Speed.** Mochi 6360 runs 223.1 µs on TILE and 228.7 µs on RM, against 224.5 µs and 230.4 µs for its aligned twin with HW = 6368. The fill costs nothing measurable. Aligned DRAM cases are within noise.
 
 ### [ ] Refinement 6 — c_non_aligned (C % 32 ≠ 0)
 
