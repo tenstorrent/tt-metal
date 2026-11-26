@@ -21,7 +21,6 @@ inline void sign_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_sign(const std::uint32_t /*exponent_size_8*/) {
     static_assert(ITERATIONS % 2 == 0, "calculate_sign processes two rows per iteration");
-    // Two rows per iteration share one dst_reg increment.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat v0 = sfpi::dst_reg[0];
