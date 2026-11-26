@@ -1,0 +1,202 @@
+[
+ {
+  "variant": "src@rz",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 11594
+ },
+ {
+  "variant": "src@rz_ob",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 11579
+ },
+ {
+  "variant": "src@rz_oz",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 11609
+ },
+ {
+  "variant": "src@rz_ob_oz_oe",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 11543
+ },
+ {
+  "variant": "src@rz",
+  "case": "refiner_rm_ip_256x1536",
+  "pcc": 0.9999981518335381,
+  "rms": 0.0019275213365171373,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 10043
+ },
+ {
+  "variant": "src@rz_ob",
+  "case": "refiner_rm_ip_256x1536",
+  "pcc": 0.9999981518335381,
+  "rms": 0.0019275213365171373,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 8904
+ },
+ {
+  "variant": "src@rz_oz",
+  "case": "refiner_rm_ip_256x1536",
+  "pcc": 0.9999981518335381,
+  "rms": 0.0019275213365171373,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 10232
+ },
+ {
+  "variant": "src@rz_ob_oz_oe",
+  "case": "refiner_rm_ip_256x1536",
+  "pcc": 0.9999981518335381,
+  "rms": 0.0019275213365171373,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 9353
+ },
+ {
+  "variant": "src@rz",
+  "case": "unet_rm_ip_1024x1280",
+  "pcc": 0.9999981804773981,
+  "rms": 0.0019073255665823358,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 13191
+ },
+ {
+  "variant": "src@rz_ob",
+  "case": "unet_rm_ip_1024x1280",
+  "pcc": 0.9999981804773981,
+  "rms": 0.0019073255665823358,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 13183
+ },
+ {
+  "variant": "src@rz_oz",
+  "case": "unet_rm_ip_1024x1280",
+  "pcc": 0.9999981804773981,
+  "rms": 0.0019073255665823358,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 13186
+ },
+ {
+  "variant": "src@rz_ob_oz_oe",
+  "case": "unet_rm_ip_1024x1280",
+  "pcc": 0.9999981804773981,
+  "rms": 0.0019073255665823358,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 13000
+ },
+ {
+  "variant": "src@rz",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 68886
+ },
+ {
+  "variant": "src@rz_ob",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 68867
+ },
+ {
+  "variant": "src@rz_oz",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 68898
+ },
+ {
+  "variant": "src@rz_ob_oz_oe",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 68930
+ },
+ {
+  "variant": "src@rz",
+  "case": "mid_4096x640_rm",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 46525
+ },
+ {
+  "variant": "src@rz_ob",
+  "case": "mid_4096x640_rm",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 46630
+ },
+ {
+  "variant": "src@rz_oz",
+  "case": "mid_4096x640_rm",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 45007
+ },
+ {
+  "variant": "src@rz_ob_oz_oe",
+  "case": "mid_4096x640_rm",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "bitexact_vs": "src@rz",
+  "bitexact": false,
+  "nan": 0,
+  "ns": 46844
+ }
+]

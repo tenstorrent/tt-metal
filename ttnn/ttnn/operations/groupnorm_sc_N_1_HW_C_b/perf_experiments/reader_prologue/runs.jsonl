@@ -1,0 +1,8 @@
+{"variant": "graduate", "case": "unet_tile_1024x1280", "pcc": 0.9999981833428374, "rms": 0.0019064261655769574, "hash": "1af3ff9472b8bfee", "nan": 0}
+{"variant": "op", "case": "unet_tile_1024x1280", "pcc": 0.9999981833428374, "rms": 0.0019064261655769574, "hash": "1af3ff9472b8bfee", "nan": 0}
+{"variant": "graduate", "case": "unet_tile_4096x640_4x8", "pcc": 0.9999982703513858, "rms": 0.001865367572178539, "hash": "c94664ddeca39e3e", "nan": 0}
+{"variant": "op", "case": "unet_tile_4096x640_4x8", "pcc": 0.9999982703513858, "rms": 0.001865367572178539, "hash": "c94664ddeca39e3e", "nan": 0}
+{"variant": "graduate", "case": "refiner_rm_ip_256x1536", "pcc": 0.9999981518335381, "rms": 0.0019275213365171373, "hash": "eb73feb3c9f073a5", "nan": 0}
+{"variant": "op", "case": "refiner_rm_ip_256x1536", "pcc": 0.9999981518335381, "rms": 0.0019275213365171373, "hash": "eb73feb3c9f073a5", "nan": 0}
+{"variant": "graduate", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "hash": "1af3ff9472b8bfee", "nan": 0}
+{"variant": "op", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "hash": "1af3ff9472b8bfee", "nan": 0}

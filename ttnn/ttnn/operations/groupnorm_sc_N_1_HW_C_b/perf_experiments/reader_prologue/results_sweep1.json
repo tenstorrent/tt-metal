@@ -1,0 +1,290 @@
+[
+ {
+  "variant": "op",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "hash": "666879ddde246b52",
+  "nan": 0,
+  "ns": 68927
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "hash": "666879ddde246b52",
+  "nan": 0,
+  "ns": 68876
+ },
+ {
+  "variant": "op",
+  "case": "vae_tile_16384x512",
+  "pcc": 0.999998461015635,
+  "rms": 0.0017568213362174274,
+  "hash": "3cce01bcc339a279",
+  "nan": 0,
+  "ns": 33147
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "vae_tile_16384x512",
+  "pcc": 0.999998461015635,
+  "rms": 0.0017568213362174274,
+  "hash": "3cce01bcc339a279",
+  "nan": 0,
+  "ns": 33068
+ },
+ {
+  "variant": "op",
+  "case": "unet_rm_oop_1024x1280",
+  "pcc": 0.9999981804773981,
+  "rms": 0.0019073255665823358,
+  "hash": "1af3ff9472b8bfee",
+  "nan": 0,
+  "ns": 13189
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "unet_rm_oop_1024x1280",
+  "pcc": 0.9999981804773981,
+  "rms": 0.0019073255665823358,
+  "hash": "1af3ff9472b8bfee",
+  "nan": 0,
+  "ns": 13171
+ },
+ {
+  "variant": "op",
+  "case": "vae_dram_65536x512",
+  "pcc": 0.9999984395742231,
+  "rms": 0.0017685554981331127,
+  "hash": "f6411482ca84e413",
+  "nan": 0,
+  "ns": 375204
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "vae_dram_65536x512",
+  "pcc": 0.9999984395742231,
+  "rms": 0.0017685554981331127,
+  "hash": "f6411482ca84e413",
+  "nan": 0,
+  "ns": 372681
+ },
+ {
+  "variant": "op",
+  "case": "refiner_dram_16384x1152",
+  "pcc": 0.9999981690675384,
+  "rms": 0.001919320903469321,
+  "hash": "8effddddb0d0be2c",
+  "nan": 0,
+  "ns": 215233
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "refiner_dram_16384x1152",
+  "pcc": 0.9999981690675384,
+  "rms": 0.001919320903469321,
+  "hash": "8effddddb0d0be2c",
+  "nan": 0,
+  "ns": 215987
+ },
+ {
+  "variant": "op",
+  "case": "flux1_dram_16384x256",
+  "pcc": 0.9999983791181052,
+  "rms": 0.001810615273418217,
+  "hash": "14f4a2110033d1bc",
+  "nan": 0,
+  "ns": 53316
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "flux1_dram_16384x256",
+  "pcc": 0.9999983791181052,
+  "rms": 0.001810615273418217,
+  "hash": "14f4a2110033d1bc",
+  "nan": 0,
+  "ns": 53032
+ },
+ {
+  "variant": "op",
+  "case": "mid_4096x640_rm",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "hash": "557b92c38b97fc3b",
+  "nan": 0,
+  "ns": 45904
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "mid_4096x640_rm",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "hash": "557b92c38b97fc3b",
+  "nan": 0,
+  "ns": 45438
+ },
+ {
+  "variant": "op",
+  "case": "g_rm_ip_1024x1280_gonly",
+  "pcc": 0.9999973072217135,
+  "rms": 0.0023322539153932237,
+  "hash": "3ff93a5961dd4f2c",
+  "nan": 0,
+  "ns": 12710
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "g_rm_ip_1024x1280_gonly",
+  "pcc": 0.9999973072217135,
+  "rms": 0.0023322539153932237,
+  "hash": "3ff93a5961dd4f2c",
+  "nan": 0,
+  "ns": 12684
+ },
+ {
+  "variant": "op",
+  "case": "g_rm_ip_1024x1280_none",
+  "pcc": 0.9999975072082912,
+  "rms": 0.002292446112330109,
+  "hash": "5b16b268522d95ff",
+  "nan": 0,
+  "ns": 12671
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "g_rm_ip_1024x1280_none",
+  "pcc": 0.9999975072082912,
+  "rms": 0.002292446112330109,
+  "hash": "5b16b268522d95ff",
+  "nan": 0,
+  "ns": 12619
+ },
+ {
+  "variant": "op",
+  "case": "g_tile_oop_1024x1280_gonly",
+  "pcc": 0.9999973072217135,
+  "rms": 0.0023322539153932237,
+  "hash": "3ff93a5961dd4f2c",
+  "nan": 0,
+  "ns": 11186
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "g_tile_oop_1024x1280_gonly",
+  "pcc": 0.9999973072217135,
+  "rms": 0.0023322539153932237,
+  "hash": "3ff93a5961dd4f2c",
+  "nan": 0,
+  "ns": 11060
+ },
+ {
+  "variant": "op",
+  "case": "g_tile_oop_1024x1280_none",
+  "pcc": 0.9999975072082912,
+  "rms": 0.002292446112330109,
+  "hash": "5b16b268522d95ff",
+  "nan": 0,
+  "ns": 11008
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "g_tile_oop_1024x1280_none",
+  "pcc": 0.9999975072082912,
+  "rms": 0.002292446112330109,
+  "hash": "5b16b268522d95ff",
+  "nan": 0,
+  "ns": 10906
+ },
+ {
+  "variant": "op",
+  "case": "g_dram_tile_4096x640_gonly",
+  "pcc": 0.9999976493966742,
+  "rms": 0.0021690965846799474,
+  "hash": "8221645202024b6e",
+  "nan": 0,
+  "ns": 37587
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "g_dram_tile_4096x640_gonly",
+  "pcc": 0.9999976493966742,
+  "rms": 0.0021690965846799474,
+  "hash": "8221645202024b6e",
+  "nan": 0,
+  "ns": 37843
+ },
+ {
+  "variant": "op",
+  "case": "g_dram_tile_4096x640_none",
+  "pcc": 0.9999973726538126,
+  "rms": 0.002336429154347653,
+  "hash": "d1c1960e65413e1a",
+  "nan": 0,
+  "ns": 36954
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "g_dram_tile_4096x640_none",
+  "pcc": 0.9999973726538126,
+  "rms": 0.002336429154347653,
+  "hash": "d1c1960e65413e1a",
+  "nan": 0,
+  "ns": 37035
+ },
+ {
+  "variant": "op",
+  "case": "g_dram_rm_4096x640_gonly",
+  "pcc": 0.9999976493966742,
+  "rms": 0.0021690965846799474,
+  "hash": "8221645202024b6e",
+  "nan": 0,
+  "ns": 45453
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "g_dram_rm_4096x640_gonly",
+  "pcc": 0.9999976493966742,
+  "rms": 0.0021690965846799474,
+  "hash": "8221645202024b6e",
+  "nan": 0,
+  "ns": 44947
+ },
+ {
+  "variant": "op",
+  "case": "g_dram_rm_4096x640_none",
+  "pcc": 0.9999973726538126,
+  "rms": 0.002336429154347653,
+  "hash": "d1c1960e65413e1a",
+  "nan": 0,
+  "ns": 44866
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "g_dram_rm_4096x640_none",
+  "pcc": 0.9999973726538126,
+  "rms": 0.002336429154347653,
+  "hash": "d1c1960e65413e1a",
+  "nan": 0,
+  "ns": 44788
+ },
+ {
+  "variant": "op",
+  "case": "g_dram_tile_16384x96_cg3",
+  "pcc": 0.999997799282496,
+  "rms": 0.0021316492878646915,
+  "hash": "09c6846f42be3022",
+  "nan": 0,
+  "ns": 26459
+ },
+ {
+  "variant": "src@ob_oz_oe_os_op_or",
+  "case": "g_dram_tile_16384x96_cg3",
+  "pcc": 0.999997799282496,
+  "rms": 0.0021316492878646915,
+  "hash": "09c6846f42be3022",
+  "nan": 0,
+  "ns": 26553
+ }
+]

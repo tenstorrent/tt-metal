@@ -1,0 +1,172 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""reader_prologue bench (copied from _round2/bench.py): the full op with KERNEL_DIR swapped per variant.
+    Every variant of one case must be bit-identical to the first checked variant of that case (R2_CHECK=1).
+
+    R2_VARIANTS=dirA,dirB  kernel dirs (relative to this file's dir, or absolute); 'op' = the op's own kernels
+    R2_CASES=a,b           case names (see CASES) or a group: focus_sh, focus_dram, small, all
+    R2_CHECK=0             skip the correctness gate (ablation stubs produce garbage)
+    R2_CHUNK_ZONES=1       request the op's per-chunk zones
+One line per run -> runs.jsonl (variant, case, pcc, rms); the ops CSV rows follow the same order.
+"""
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import pytest
+import ttnn
+
+from eval.metrics import compute_metrics_torch
+from eval.golden_tests.groupnorm_sc_N_1_HW_C_b.helpers import block_shard_memory_config, pytorch_groupnorm_sc_N_1_HW_C
+import ttnn.operations.groupnorm_sc_N_1_HW_C_b.groupnorm_sc_N_1_HW_C_b_program_descriptor as pd
+from ttnn.operations.groupnorm_sc_N_1_HW_C_b import groupnorm_sc_N_1_HW_C_b
+import importlib
+
+opmod = importlib.import_module("ttnn.operations.groupnorm_sc_N_1_HW_C_b.groupnorm_sc_N_1_HW_C_b")
+HERE = Path(__file__).parent
+RM, TL = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+G88, G48 = (8, 8), (4, 8)
+# name: (shape, G, grid or None (DRAM), layout, eps, in_place)
+CASES = {
+    # PERF FOCUS, sharded (RM in place, TILE out of place: the model forms)
+    "unet_rm_ip_1024x1280": ((1, 1, 1024, 1280), 32, G88, RM, 1e-5, True),
+    "unet_rm_ip_16384x320": ((1, 1, 16384, 320), 32, G88, RM, 1e-5, True),
+    "unet_rm_ip_4096x320": ((1, 1, 4096, 320), 32, G88, RM, 1e-5, True),
+    "unet_rm_ip_4096x640": ((1, 1, 4096, 640), 32, G88, RM, 1e-5, True),
+    "unet_rm_ip_1024x640": ((1, 1, 1024, 640), 32, G88, RM, 1e-5, True),
+    "refiner_rm_ip_256x1536": ((1, 1, 256, 1536), 32, G88, RM, 1e-5, True),
+    "refiner_rm_ip_16384x384": ((1, 1, 16384, 384), 32, G88, RM, 1e-5, True),
+    "unet_rm_ip_16384x640": ((1, 1, 16384, 640), 32, G88, RM, 1e-5, True),
+    "unet_rm_ip_16384x960": ((1, 1, 16384, 960), 32, G88, RM, 1e-5, True),
+    "unet_tile_1024x1280": ((1, 1, 1024, 1280), 32, G88, TL, 1e-6, False),
+    "unet_tile_4096x640_4x8": ((1, 1, 4096, 640), 32, G48, TL, 1e-6, False),
+    "vae_tile_16384x512": ((1, 1, 16384, 512), 32, G88, TL, 1e-6, False),
+    # PERF FOCUS, DRAM interleaved TILE
+    "vae_dram_1048576x128": ((1, 1, 1048576, 128), 32, None, TL, 1e-6, False),
+    "vae_dram_65536x512": ((1, 1, 65536, 512), 32, None, TL, 1e-6, False),
+    "vae_dram_262144x256": ((1, 1, 262144, 256), 32, None, TL, 1e-6, False),
+    "vae_dram_262144x512": ((1, 1, 262144, 512), 32, None, TL, 1e-6, False),
+    "vae_dram_1048576x256": ((1, 1, 1048576, 256), 32, None, TL, 1e-6, False),
+    "refiner_dram_16384x1152": ((1, 1, 16384, 1152), 32, None, TL, 1e-5, False),
+    "flux1_dram_16384x256": ((1, 1, 16384, 256), 16, None, TL, 1e-6, False),
+    "flux1_dram_1048576x64": ((1, 1, 1048576, 64), 16, None, TL, 1e-6, False),
+    "mochi_dram_8x407040x128": ((8, 1, 407040, 128), 32, None, TL, 1e-6, False),
+    # mid / guard
+    "mid_4096x640_rm": ((1, 1, 4096, 640), 32, None, RM, 1e-5, False),
+    "mid_16384x320_tile": ((1, 1, 16384, 320), 32, None, TL, 1e-5, False),
+    "unet_tile_ip_1024x1280": ((1, 1, 1024, 1280), 32, G88, TL, 1e-6, True),
+    "unet_rm_oop_1024x1280": ((1, 1, 1024, 1280), 32, G88, RM, 1e-5, False),
+    # guards (affine mode suffix: _gonly = gamma only, _none = no affine), Cg = 3
+    "g_rm_ip_1024x1280_gonly": ((1, 1, 1024, 1280), 32, G88, RM, 1e-5, True),
+    "g_rm_ip_1024x1280_none": ((1, 1, 1024, 1280), 32, G88, RM, 1e-5, True),
+    "g_tile_oop_1024x1280_gonly": ((1, 1, 1024, 1280), 32, G88, TL, 1e-5, False),
+    "g_tile_oop_1024x1280_none": ((1, 1, 1024, 1280), 32, G88, TL, 1e-5, False),
+    "g_dram_tile_4096x640_gonly": ((1, 1, 4096, 640), 32, None, TL, 1e-5, False),
+    "g_dram_tile_4096x640_none": ((1, 1, 4096, 640), 32, None, TL, 1e-5, False),
+    "g_dram_rm_4096x640_gonly": ((1, 1, 4096, 640), 32, None, RM, 1e-5, False),
+    "g_dram_rm_4096x640_none": ((1, 1, 4096, 640), 32, None, RM, 1e-5, False),
+    "g_dram_tile_16384x96_cg3": ((1, 1, 16384, 96), 32, None, TL, 1e-5, False),
+}
+GROUPS = {
+    "focus_sh": [k for k, v in CASES.items() if v[2] is not None and not k.startswith(("unet_tile_ip", "unet_rm_oop"))],
+    "focus_dram": [k for k, v in CASES.items() if k.split("_")[1] == "dram" or k.startswith("mochi")],
+    "all": list(CASES),
+}
+
+
+def _case_names():
+    sel = os.environ.get("R2_CASES", "focus_sh")
+    out = []
+    for s in sel.split(","):
+        out += GROUPS.get(s, [s])
+    return out
+
+
+VARIANTS = os.environ.get("R2_VARIANTS", "op").split(",")
+PARAMS = [(v, c) for c in _case_names() for v in VARIANTS]
+RUNS = HERE / os.environ.get("R2_RUNS", "runs.jsonl")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _fresh_log():
+    RUNS.write_text("")
+    yield
+
+
+@pytest.mark.parametrize("variant, case", PARAMS, ids=[f"{v}-{c}" for v, c in PARAMS])
+def test_r2(device, variant, case):
+    import torch
+
+    shape, G, grid, layout, eps, in_place = CASES[case]
+    saved = pd.KERNEL_DIR
+    saved_tuning = dict(opmod.TUNING_OVERRIDES)
+    # variant = <kernel dir>[@<flags>]: flags '_'-joined -> GN_ABL_<FLAG>=1 defines on every kernel (one source dir,
+    # so the profiler's 16-bit zone-location hashes do not multiply per variant and collide)
+    vdir, _, flags = variant.partition("@")
+    if vdir != "op":
+        p = Path(vdir)
+        pd.KERNEL_DIR = p if p.is_absolute() else HERE / p
+    saved_create = pd.create_program_descriptor
+    if flags:
+        defs = [(f"GN_ABL_{f.upper()}", "1") for f in flags.split("_")]
+
+        def _create(*a, **kw):
+            desc = saved_create(*a, **kw)
+            for k in desc.kernels:
+                k.defines = list(k.defines) + defs
+            return desc
+
+        pd.create_program_descriptor = _create
+    if os.environ.get("R2_CHUNK_ZONES") == "1":
+        opmod.TUNING_OVERRIDES["chunk_zones"] = True
+    try:
+        torch.manual_seed(0)
+        C = shape[-1]
+        xt = torch.randn(shape, dtype=torch.bfloat16)
+        gt = torch.randn((1, 1, 1, C), dtype=torch.bfloat16)
+        bt = torch.randn((1, 1, 1, C), dtype=torch.bfloat16)
+        mem = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if grid is None
+            else block_shard_memory_config(shape, grid, layout=layout, dtype=ttnn.bfloat16, device=device)
+        )
+        x = ttnn.from_torch(xt, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem)
+        g = ttnn.from_torch(gt, dtype=ttnn.bfloat16, layout=RM, device=device)
+        b = ttnn.from_torch(bt, dtype=ttnn.bfloat16, layout=RM, device=device)
+        if case.endswith("_none"):
+            g = b = None
+        elif case.endswith("_gonly"):
+            b = None
+        out = groupnorm_sc_N_1_HW_C_b(x, G, gamma=g, beta=b, eps=eps, in_place=in_place)
+        ttnn.synchronize_device(device)
+        stubbed = bool(set(flags.split("_")) & {"p1", "p2", "tz", "cmb", "peer", "dm"}) if flags else False
+        check = os.environ.get("R2_CHECK", "1") != "0" and not stubbed  # ablation stubs produce garbage
+        rec = dict(variant=variant, case=case)
+        if check:
+            y = ttnn.to_torch(out).reshape(shape)
+            ref = pytorch_groupnorm_sc_N_1_HW_C(
+                xt, G, gamma=None if g is None else gt, beta=None if b is None else bt, eps=eps
+            )
+            m = compute_metrics_torch(y, ref, readback_dtype=torch.bfloat16)
+            # numpy, bit patterns (torch ops may be wrapped by ttnn's tracer)
+            yb = y.float().numpy().view("uint32").copy()
+            # Bit identity is judged offline from this hash (parse.py / bitcheck.py): the precompile collect pass
+            # runs this body in the same process, so an in-process reference dict gets seeded by that pass.
+            rec.update(
+                pcc=m.pcc, rms=m.rms, hash=hashlib.sha1(yb.tobytes()).hexdigest()[:16], nan=int(torch.isnan(y).sum())
+            )
+        with RUNS.open("a") as f:
+            f.write(json.dumps(rec) + "\n")
+        if in_place:
+            ttnn.deallocate(out, force=True)
+        else:
+            out.deallocate()
+            x.deallocate()
+        if check:
+            assert rec["pcc"] >= 0.999 and rec["rms"] <= 0.01, rec
+    finally:
+        pd.KERNEL_DIR = saved
+        pd.create_program_descriptor = saved_create
+        opmod.TUNING_OVERRIDES.clear()
+        opmod.TUNING_OVERRIDES.update(saved_tuning)
