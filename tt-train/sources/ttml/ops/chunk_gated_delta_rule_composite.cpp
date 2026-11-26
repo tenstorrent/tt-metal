@@ -207,7 +207,7 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
     const uint32_t NC = T / C;
     const float q_scale = scale.value_or(1.0F / std::sqrt(static_cast<float>(K)));
 
-    auto* device = &autograd::ctx().get_device();
+    auto* device = q.device();
 
     // The state-independent per-chunk terms come from ttnn's chunk_gdn_prep, the first phase of ttnn's chunked
     // forward.  It reads q and k head-major [BH, NC, C, K] bf16 (GVA repeated), v flat [B, T, HV*V] and the gates
