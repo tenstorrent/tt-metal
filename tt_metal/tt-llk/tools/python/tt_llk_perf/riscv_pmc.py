@@ -13,9 +13,8 @@ from . import headers, riscv_metrics
 COUNTS_MARKER_ID = 9092  # (mhpmcounter4 delta << 32) | mhpmcounter3 delta
 CYCLES_MARKER_ID = 9093  # (minstret delta << 32) | mcycle delta
 EVENTS_MARKER_ID = 9094  # (mhpmevent4 << 32) | mhpmevent3
-COUNTS_UPPER_MARKER_ID = (
-    9095  # (mhpmcounter6 delta << 32) | mhpmcounter5, Quasar data-movement cores only
-)
+# Quasar data-movement cores with counter 5 or 6 armed only.
+COUNTS_UPPER_MARKER_ID = 9095  # (mhpmcounter6 delta << 32) | mhpmcounter5 delta
 EVENTS_UPPER_MARKER_ID = 9096  # (mhpmevent6 << 32) | mhpmevent5
 MARKER_IDS = (COUNTS_MARKER_ID, CYCLES_MARKER_ID, EVENTS_MARKER_ID)
 UPPER_MARKER_IDS = (COUNTS_UPPER_MARKER_ID, EVENTS_UPPER_MARKER_ID)
@@ -74,8 +73,12 @@ def unpack_launch(counts, cycles, events, counts_upper=0, events_upper=0) -> Lau
 
 @lru_cache(maxsize=None)
 def event_label(arch, kind, select, include_dir=None) -> str:
-    """Name of the events a select arms, joined with '|'; 'DISABLED' for a zero select."""
+    """Name of the events a select arms, joined with '|'; 'DISABLED' when it arms nothing. Bits no table entry
+    explains read as UNKNOWN_0x..., so a mistyped select still shows its count."""
     names = headers.riscv_select_events(arch, kind, select, include_dir)
+    unknown = headers.riscv_select_unknown(arch, kind, select, include_dir)
+    if unknown:
+        names = names + [f"UNKNOWN_{unknown:#x}"]
     return "|".join(names) if names else "DISABLED"
 
 

@@ -225,7 +225,7 @@ _RISCV_ARCH_HEADER = {
     "quasar": "riscv_pmc_quasar.h",
 }
 _RISCV_TABLE_DECL = re.compile(
-    r"std::array<\s*Entry\s*,\s*(\d+)\s*>\s+(baby|trisc|dm)_events\b[^=;]*="
+    r"std::array<\s*Entry\s*,\s*(\d+)\s*>\s+(baby|trisc_extra|trisc|dm)_events\b[^=;]*="
 )
 _RISCV_ENTRY = re.compile(r"\{\s*PmcEvent::(\w+)\s*,\s*(0[xX][0-9a-fA-F]+|\d+)\s*\}")
 
@@ -258,7 +258,8 @@ def parse_riscv_tables(text: str) -> Dict[str, List[tuple]]:
 
 
 def riscv_event_tables(arch, include_dir=None) -> Dict[str, List[tuple]]:
-    """Core kind -> [(event name, select)] for one arch. Wormhole returns {'baby': []}: it has no counters."""
+    """Core kind -> [(event name, select)] for one arch. Wormhole returns {'baby': []}: it has no counters. Quasar
+    TRISCs are the Blackhole baby cores plus the events of trisc_extra_events."""
     arch = normalize_arch(arch)
     if arch not in _RISCV_ARCH_HEADER:
         raise ValueError(
@@ -268,6 +269,9 @@ def riscv_event_tables(arch, include_dir=None) -> Dict[str, List[tuple]]:
     tables = parse_riscv_tables(header.read_text())
     if not tables:
         raise ValueError(f"{header}: no *_events tables parsed")
+    if "trisc_extra" in tables:
+        baby = riscv_event_tables("blackhole", include_dir)["baby"]
+        tables["trisc"] = baby + tables.pop("trisc_extra")
     return tables
 
 
@@ -286,6 +290,33 @@ def riscv_select_events(arch, kind, select, include_dir=None) -> List[str]:
         if (select >> position) & 0xF == s >> position:
             names.append(n)
     return names
+
+
+def riscv_select_unknown(arch, kind, select, include_dir=None) -> int:
+    """The bits of a select that arm no event in the tables: a nibble value (baby, TRISC) or mask bits of a set (DM)
+    with no entry. 0 when every armed field is known."""
+    entries = riscv_event_tables(arch, include_dir).get(kind)
+    if entries is None:
+        raise ValueError(f"arch {arch!r} has no {kind!r} cores")
+    select = int(select)
+    if kind == "dm":
+        event_set, mask = select & 0xFF, select >> 8
+        known = 0
+        for _, s in entries:
+            if s & 0xFF == event_set:
+                known |= s >> 8
+        unknown = mask & ~known
+        return (unknown << 8) | event_set if unknown else 0
+    known = {(s.bit_length() - 1) // 4 * 4: set() for _, s in entries}
+    for _, s in entries:
+        position = (s.bit_length() - 1) // 4 * 4
+        known[position].add(s >> position)
+    unknown = 0
+    for position in range(0, 32, 4):
+        value = (select >> position) & 0xF
+        if value and value not in known.get(position, ()):
+            unknown |= value << position
+    return unknown
 
 
 def riscv_event_select(arch, kind, names, include_dir=None) -> int:

@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""RISC-V performance monitor metrics. Kept apart from metrics.py: that module's keys are the warehouse metric catalog
-(helpers/perf/schema.py METRIC_BASES), and these are per-run profiler metrics with dynamic keys.
-"""
+"""RISC-V performance monitor metrics."""
 
 from .metrics import bounded, pct, safe_div
 
@@ -24,8 +22,21 @@ def _riscv_key(label: str, suffix: str) -> str:
     return f"{RISCV_PREFIX}{label.lower().replace('|', '_or_')}{suffix}"
 
 
-def _riscv_is_stall(label: str) -> bool:
-    return all("STALL" in part for part in label.split("|"))
+# The stall-any event of every pipeline domain; only a counter that ORs all of them is the core's stall fraction.
+STALL_UNION = frozenset(
+    (
+        "BP_PC_STALL_ANY",
+        "IF_STALL_ANY",
+        "DE_STALL_ANY",
+        "EX_STALL_ANY",
+        "LS_STALL_ANY",
+        "MEM_STALL_ANY",
+    )
+)
+
+
+def _riscv_is_stall_union(label: str) -> bool:
+    return frozenset(label.split("|")) == STALL_UNION
 
 
 def compute_riscv_metrics(cycles, instret, counts) -> dict:
@@ -33,7 +44,7 @@ def compute_riscv_metrics(cycles, instret, counts) -> dict:
     A rate is a bounded per-cycle percentage, a per-instruction value an unbounded ratio. Absent inputs read None.
     """
     out = {"riscv_ipc_ratio": safe_div(instret, cycles)}
-    stall_labels = [label for label in counts if _riscv_is_stall(label)]
+    stall_labels = [label for label in counts if _riscv_is_stall_union(label)]
     out["riscv_stall_pct"] = (
         pct(bounded(safe_div(counts[stall_labels[0]], cycles)))
         if stall_labels
