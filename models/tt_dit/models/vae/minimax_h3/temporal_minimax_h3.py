@@ -184,6 +184,9 @@ class StreamingClipAssembly:
         self._failed = False
 
     def add(self, clip) -> None:
+        """Queue one decoded clip; raises the frame consumer's error once it has failed, so the decode stops."""
+        if self._failed:
+            self.result()
         with self._lock:
             index = self._added
             self._added += 1

@@ -134,3 +134,31 @@ def test_a_missing_clip_fails_the_result():
             stream.result()
     finally:
         stream.close()
+
+
+def test_a_clip_after_a_consumer_error_raises_it():
+    failed = threading.Event()
+
+    def on_frames(frames):
+        failed.set()
+        raise RuntimeError("encoder gone")
+
+    stream = StreamingClipAssembly(
+        3,
+        chunk_num_frames=CHUNK_FRAMES,
+        frame_pre_padding=PRE_PADDING,
+        token_drop=3,
+        frame_overlap=OVERLAP,
+        trim=0,
+        on_frames=on_frames,
+    )
+    clips = _clips(3, 3)
+    try:
+        stream.add(clips[0])
+        assert failed.wait(5)
+        stream._futures[0].exception(timeout=5)
+        with pytest.raises(RuntimeError, match="encoder gone"):
+            stream.add(clips[1])
+        assert len(stream._futures) == 1
+    finally:
+        stream.close()

@@ -2273,6 +2273,7 @@ class MiniMaxH3Pipeline:
         seed: int = 0,
         on_event: PipelineEventCallback | None = None,
         on_video_frames: Callable[[np.ndarray], None] | None = None,
+        on_audio: Callable[[torch.Tensor, int], None] | None = None,
     ) -> MiniMaxH3Output:
         """`image` and/or `last_image` select `fl2va`; `references` selects `ref2va`; neither `t2va`.
 
@@ -2281,6 +2282,12 @@ class MiniMaxH3Pipeline:
         `on_video_frames` (yuv420 output only) gets the decoded planar frames in order, as read-only
         views of the returned `video`, each run as soon as its VAE chunk is decoded, so an encoder can
         consume them while the rest of the video and the audio decode. It runs on a background thread.
+
+        `on_audio` gets the decoded soundtrack and its sampling rate, the same tensor as the output's
+        `audio`, as soon as it is decoded. Where every module stays resident the audio decodes before
+        the video VAE, so an encoder can work on it during the video decode; elsewhere the audio decoder
+        only has room after the video, and `on_audio` runs at the end. It runs on the calling thread,
+        between device decodes: it must return quickly, and its errors fail the request.
 
         Note that `fl2va` at a given seed does **not** reproduce `t2va` at that seed, even with a
         keyframe that contributes nothing: the conditioning noise is the first draw off the request
@@ -2315,6 +2322,7 @@ class MiniMaxH3Pipeline:
                 seed=seed,
                 on_event=on_event,
                 on_video_frames=on_video_frames,
+                on_audio=on_audio,
             )
         if num_frames is None:
             raise ValueError("num_frames may only be left to the references, and only for ref2va")
@@ -2426,6 +2434,7 @@ class MiniMaxH3Pipeline:
             num_audio_latents=num_audio_latents,
             on_event=on_event,
             on_video_frames=on_video_frames,
+            on_audio=on_audio,
         )
 
     @torch.no_grad()
@@ -2443,6 +2452,7 @@ class MiniMaxH3Pipeline:
         seed: int,
         on_event: PipelineEventCallback,
         on_video_frames: Callable[[np.ndarray], None] | None = None,
+        on_audio: Callable[[torch.Tensor, int], None] | None = None,
     ) -> MiniMaxH3Output:
         """`ref2va`: an ordered list of references in, a video and its soundtrack out.
 
@@ -2584,6 +2594,7 @@ class MiniMaxH3Pipeline:
             on_event=on_event,
             condition_spec=condition_spec,
             on_video_frames=on_video_frames,
+            on_audio=on_audio,
         )
 
     def _build_schedulers(self, num_inference_steps: int) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
@@ -2627,6 +2638,7 @@ class MiniMaxH3Pipeline:
         on_event: PipelineEventCallback,
         condition_spec: Sequence[tuple[str, int]] | None = None,
         on_video_frames: Callable[[np.ndarray], None] | None = None,
+        on_audio: Callable[[torch.Tensor, int], None] | None = None,
     ) -> MiniMaxH3Output:
         """The half every task shares: denoise the packed sequence, then decode both modalities.
 
@@ -2657,6 +2669,19 @@ class MiniMaxH3Pipeline:
                 on_event=on_event,
             )
 
+        def decode_audio() -> torch.Tensor:
+            with self._track_cache_misses(on_event, "audio"):
+                audio = self._decode_audio(
+                    self._prepare_audio_decoder(), audio_rows, num_audio_latents, layout.num_condition_audio_rows
+                )
+            if on_audio is not None:
+                on_audio(audio, self.audio_sampling_rate)
+            return audio
+
+        # The audio decode is short; ahead of the video VAE, its encode overlaps the video decode instead
+        # of following it. Only a coresident pipeline has room for the audio decoder while the transformer
+        # is loaded: elsewhere the VAE decoder evicts the transformer first, and the audio waits for that.
+        audio = decode_audio() if self.coresident else None
         with self._track_cache_misses(on_event, "vae"):
             video = self._decode_video(
                 self._vae,
@@ -2667,12 +2692,9 @@ class MiniMaxH3Pipeline:
                 layout.num_condition_video_rows,
                 on_frames=on_video_frames,
             )
-
-        with self._track_cache_misses(on_event, "audio"):
-            audio = self._decode_audio(
-                self._prepare_audio_decoder(), audio_rows, num_audio_latents, layout.num_condition_audio_rows
-            )
-        dram_probe.report("end of request (after audio decode)")
+        if audio is None:
+            audio = decode_audio()
+        dram_probe.report("end of request (after both decodes)")
 
         self._log(f"program cache misses: {self.last_program_cache_misses}")
         yuv = self.vae_output_type == "yuv420"
