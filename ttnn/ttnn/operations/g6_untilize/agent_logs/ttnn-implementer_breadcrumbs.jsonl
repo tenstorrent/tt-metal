@@ -1,0 +1,1 @@
+{"event":"test_run","result":"pass","detail":"acceptance 13/13 dev+non-dev, golden 6/6; row_gather single DM kernel on RISCV_0/NOC_0","ts":"2026-11-26T23:05:47+00:00"}
