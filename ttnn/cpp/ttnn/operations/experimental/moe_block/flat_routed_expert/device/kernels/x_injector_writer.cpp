@@ -114,7 +114,10 @@ void kernel_main() {
                     src + (m * sbt + k * kblk) * tb,
                     get_noc_addr(hxy >> 16, hxy & 0xFFFF, dst + m * piece),
                     piece,
-                    1 + cb_iss % kChainDepth);
+                    1 + cb_iss % kChainDepth,
+                    write_cmd_buf,
+                    noc_index,
+                    flat_options::x_vc);
             }
         }
         ++cb_iss;
