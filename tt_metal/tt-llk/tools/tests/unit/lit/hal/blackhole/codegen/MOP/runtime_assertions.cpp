@@ -36,8 +36,7 @@ using Template0Runner = mop::Runner<mop::MopTemplate::Template0>;
 //   7    | SkipA0                              | Loop0Last
 //   8    | SkipB                               | Loop1Last
 //
-// Template 0 skips the words of a disabled group. Template 1 writes EndOp1 only with
-// end ops, and words 5-8 only with a nonzero inner count.
+// Template 0 skips the words of a disabled group. Template 1 writes EndOp1 only with end ops.
 inline volatile std::uint32_t *reference_mop_cfg()
 {
     return reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
@@ -81,13 +80,10 @@ extern "C" __attribute__((noinline, used)) void reference_template1_runtime_coun
     mop_cfg[2] = OP;
     mop_cfg[3] = OP;
     mop_cfg[4] = TT_OP_NOP;
-    if (inner != 0)
-    {
-        mop_cfg[5] = OP;
-        mop_cfg[6] = TT_OP_NOP;
-        mop_cfg[7] = OP;
-        mop_cfg[8] = OP;
-    }
+    mop_cfg[5] = OP;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP;
+    mop_cfg[8] = OP;
 }
 
 // Without a start op and with only EndOp0, an inner count of zero triggers the count anomaly.
@@ -107,13 +103,10 @@ extern "C" __attribute__((noinline, used)) void reference_template1_runtime_inne
     mop_cfg[2] = TT_OP_NOP;
     mop_cfg[3] = OP;
     mop_cfg[4] = TT_OP_NOP;
-    if (inner != 0)
-    {
-        mop_cfg[5] = OP;
-        mop_cfg[6] = TT_OP_NOP;
-        mop_cfg[7] = OP;
-        mop_cfg[8] = OP;
-    }
+    mop_cfg[5] = OP;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP;
+    mop_cfg[8] = OP;
 }
 
 // The count anomaly does not depend on the outer count, so with both end ops and an inner
@@ -156,13 +149,10 @@ extern "C" __attribute__((noinline, used)) void reference_template1_runtime_patc
     mop_cfg[1] = inner;
     mop_cfg[2] = OP;
     mop_cfg[3] = TT_OP_NOP;
-    if (inner != 0)
-    {
-        mop_cfg[5] = OP;
-        mop_cfg[6] = TT_OP_NOP;
-        mop_cfg[7] = OP;
-        mop_cfg[8] = operation;
-    }
+    mop_cfg[5] = OP;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP;
+    mop_cfg[8] = operation;
 }
 
 // Without a start op and end ops, an inner count of zero hits the unsupported EndOp1 read.
@@ -182,13 +172,10 @@ extern "C" __attribute__((noinline, used)) void reference_template1_runtime_unsu
     mop_cfg[1] = inner;
     mop_cfg[2] = TT_OP_NOP;
     mop_cfg[3] = TT_OP_NOP;
-    if (inner != 0)
-    {
-        mop_cfg[5] = OP;
-        mop_cfg[6] = TT_OP_NOP;
-        mop_cfg[7] = OP;
-        mop_cfg[8] = OP;
-    }
+    mop_cfg[5] = OP;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP;
+    mop_cfg[8] = OP;
 }
 
 // A last_inner patch with a runtime outer count checks that the outer count is above 1.

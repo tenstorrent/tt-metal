@@ -125,7 +125,7 @@ extern "C" __attribute__((noinline, used)) void program_mop_with_replay()
 //   7    | Loop0Last
 //   8    | Loop1Last
 //
-// EndOp1 is written only with end ops, and words 5-8 only with a nonzero inner count.
+// EndOp1 is written only with end ops; every other word is always written.
 extern "C" __attribute__((noinline, used)) void reference_program_mop_with_replay()
 {
     constexpr std::uint32_t replay_op = TT_OP_REPLAY(16 /*start_idx*/, 2 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
