@@ -41,6 +41,54 @@ def test_metrics_sidecar_splits_the_config_suffix_with_its_layout(tmp_path, monk
         assert (rec["model"], rec["config"]) == (model, config)
 
 
+def test_perf_summary_and_gate_name_what_ran(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from models.demos.common.prefill.runners.ci import perf_gate
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics, _setup_from_logs
+
+    # Each runner rank's start-up line, as mpirun tags it; the last stage is shorter.
+    logs = tmp_path / "ranklogs"
+    logs.mkdir()
+    (logs / "stdout").write_text(
+        "".join(
+            f"[1,{r}]<stdout>: [pp rank {r}/8] mesh=(4, 4) layers=[{12 * r}, {min(12 * r + 12, 93)}) is_first={r == 0} "
+            f"is_last={r == 7} chunk_size=2560 forward_chunks=4 max_seq_len=1064960 num_users=87 "
+            "sp=4 tp=4 sp_axis=1 traced=1\n"
+            for r in range(8)
+        )
+    )
+    setup = _setup_from_logs(logs)
+    assert setup == (
+        "8 stages x [4,4] (SP4 on mesh axis 1, TP4), 93 layers as 12+12+12+12+12+12+12+9, 87 slots, "
+        "2560-token chunks, 4 per forward (packed), traced"
+    )
+    lines, rec = _perf_metrics(_packed_spans(40, 4, 0.2, tail_s=0.2), 2560, 8, {39}, chunks_per_forward=4, setup=setup)
+    assert lines[1] == f"run: {setup}"
+    assert rec["setup"] == setup
+
+    summaries = tmp_path / "summaries"
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(summaries))
+    perf_json = tmp_path / "kimi_k3_1_packed_sc4.json"
+    perf_json.write_text(json.dumps(rec))
+    label = next(iter(rec["throughput_tok_s"]))
+    table = tmp_path / "baselines.json"
+    table.write_text(
+        json.dumps(
+            {
+                "margin": {"throughput_tok_s": 0.05},
+                "baselines": {"kimi_k3_1": {"sc4_packed": {"probe": label, "8kw": {"throughput_tok_s": 1}}}},
+            }
+        )
+    )
+    args = [str(perf_json), "--table", str(table), "--model", "kimi_k3_1", "--config", "sc4_packed", "--power", "8kw"]
+    monkeypatch.setattr(sys, "argv", ["perf_gate.py", *args])
+    perf_gate.main()
+    gate = (summaries / "perf" / "kimi_k3_1_packed_sc4_gate.md").read_text().splitlines()
+    assert gate[2] == f"run: {setup}; baseline kimi_k3_1/sc4_packed on the 8kw power class"
+
+
 def _packed_spans(num_chunks, chunks_per_forward, forward_s, tail_s):
     # Every chunk of a packed forward retires at the forward's end. A short final forward is padded to a
     # full one, so it costs tail_s (near forward_s), not its share of forward_s.

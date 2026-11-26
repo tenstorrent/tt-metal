@@ -2539,6 +2539,9 @@
 # SC4 Kimi-K3.1: 93 layers as 8 stages of [4,4], two per galaxy; stage shape, chunk, KV dedup and slots come from
 # the kimi_k3_1 manifest. Replaces K3's SC4 leg (K3's own SC4 run stays reachable by hand: run_multirank_pcc.sh
 # kimi_k3). Own test_type, so the scarce 4-galaxy leg is dispatchable without a single-galaxy one.
+# [2/2] runs the same request packed, as the SC1 L24 leg does: four 2,560-token chunks per forward
+# (kimi_k3_1_packed.json), traced with D2H acks, against the same golden; perf is gated on kimi_k3_1/sc4_packed in
+# perf_baselines.json once it has an entry, and until then must still measure.
 - name: "(Kimi-K3.1) disaggregated prefill 8x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
@@ -2547,13 +2550,21 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1
+    # Below the job timeout, as for the SC1 legs; the job deadline caps it further for the second launch.
+    export TABLE_WAIT_SECS=2400
+    export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 90 * 60 ))  # the bh_sc4 timeout below
+    echo "===== [1/2] (Kimi-K3.1) prefill KV accuracy 8k@2.5k + perf 1M@2.5k, one chunk per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc4 || exit $?
+    echo "===== [2/2] (Kimi-K3.1) packed prefill KV accuracy 8k@2.5k + perf 1M@2.5k, four chunks per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc4 --variant packed || exit $?
+    echo "===== both runs passed ====="
   test_type: k31_prefill_runner_93l
-  test_tags: [kimi_k3_1, k31_runner, runner, kv_cache]
+  test_tags: [kimi_k3_1, k31_runner, runner, kv_cache, k31_packed]
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # K3's leg took about 19 min warm; 90 leaves room for a cold Weka cache of the weights.
+      # [1/2] took 12 min warm (run 45759152284), the packed run about as long; 90 leaves room for a cold Weka
+      # cache of the weights (the packed run reads the TP-axis-0 cache).
       # shield/demo bh_sc4 is a SUM over the team's legs on that SKU: 60 (GLM-5.3) + 25 (DSpark) + 90 of 380.
       timeout: 90
       tier: 1
