@@ -264,6 +264,16 @@ void kernel_main() {
                         flush + d * kKvTile, tail_pos[u], knr + d * kTile, kTailBatched ? u : 0, kKPatch == 1);
                 }
             }
+            if constexpr (kVBfp2 && !verify) {
+                // (S0-9: the new v row re-encoded to nearest in the packed Bfp2_b tail tile from the reader's bf16
+                // copy — the step's attention used it unrounded)
+                cb_wait_front(cb_vnr, Dt);
+                invalidate_l1_cache();
+                const uint32_t vnr = get_read_ptr(cb_vnr), flushv = get_read_ptr(cb_flushv);
+                for (uint32_t d = 0; d < Dt; d++) {
+                    patch_bfp2_row(flushv + d * kVTile, tail_pos[u], vnr + d * kTile, kTailBatched ? u : 0);
+                }
+            }
             for (uint32_t kv = 0; kv < 2; kv++) {
                 // (k from cb_flush in bf8 rows, v from cb_flushv in V's rows: kVRow)
                 const uint32_t row = kv == 0 ? kKvRow : kVRow;
@@ -290,6 +300,13 @@ void kernel_main() {
             // (the unrounded copy is done with: single — this pass's row; batched — the layer's rows)
             if (role >= 2 && (kTailBatched ? i % n_act == n_act - 1 : true)) {
                 cb_pop_front(cb_knr, Dt);
+            }
+        }
+        if constexpr (kVBfp2 && !packed && !verify) {
+            // (S0-9: the reader's bf16 v copy, the same lifetime)
+            if (role >= 2 && (kTailBatched ? i % n_act == n_act - 1 : true)) {
+                cb_wait_front(cb_vnr, Dt);
+                cb_pop_front(cb_vnr, Dt);
             }
         }
     };

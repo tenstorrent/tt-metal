@@ -327,25 +327,47 @@ FORCE_INLINE void rtn_bfp4_tile_row(uint32_t tile, uint32_t row) {
 }
 
 // S0-9 stage 2 (named arg kv_v_bfp2): V is stored in Bfp2_b — per 16-element face row one shared exponent (the row's
-// max), a value is 0 or +-2^e. The device packer truncates (values below 2^e become 0), so the tail reader rounds each
-// new v row in bf16 onto that grid first (common.py bfp2_round: +-2^e where |x| >= 2^(e - 1), else 0 — bf16 exponent
-// field >= emax - 1); the tail update and the packer then carry it exactly, and the step's attention (the verify rows'
-// tail tiles in V's format included) sees the row as a later step reads it back
+// max), a value is 0 or +-2^e (common.py bfp2_round: +-2^e where |x| >= 2^(e - 1), else 0 — bf16 exponent field >=
+// emax - 1). The device packer truncates (values below 2^e become 0), so a decode-written v row is rounded in software:
+// plain rows (row groups or one user a pass) as S0-8's K — the step's attention takes the unrounded row, the tail
+// writer re-encodes the stored row in the packed tail tile from a bf16 copy (cb_vnr, the reader's) at the write-back
+// (patch_bfp2_row, off the critical path); verify rows — whose tail tiles are kept in V's format within the step — are
+// rounded in bf16 by the tail reader before the tail update (rtn_bfp2_tile_row), which the packer then carries exactly.
+// Both on two bf16 a word at once: E = the two exponent fields (bits 0..7, 16..23); a value stays iff E >= emax - 1
+// (emax >= 2; a row of emax <= 1 — magnitudes below 2^-125 — becomes 0), the lane test borrow-free with guard bits 8 /
+// 24
 constexpr bool kVBfp2 = get_named_compile_time_arg_val("kv_v_bfp2") != 0;
-FORCE_INLINE uint32_t rtn_bfp2_one(uint32_t b, uint32_t emax) {
-    const uint32_t e = (b >> 7) & 0xFF;
-    return e == 0 || e + 1 < emax ? 0 : (b & 0x8000) | (emax << 7);
-}
-FORCE_INLINE void rtn_bfp2_face_row(volatile tt_l1_ptr uint32_t* w) {
-    uint32_t emax = 0;
+constexpr uint32_t cb_vnr = 47;  // S0-9 plain rows: the new v rows in bf16 for the writer's re-encoding (Dt)
+FORCE_INLINE uint32_t bfp2_emax(const uint32_t* w) {
+    uint32_t m = 0;  // (per lane: the max over the row's 8 words, lanes kept apart)
     for (uint32_t i = 0; i < 8; i++) {
-        const uint32_t x = w[i], e0 = (x >> 7) & 0xFF, e1 = (x >> 23) & 0xFF;
-        emax = e0 > emax ? e0 : emax;
-        emax = e1 > emax ? e1 : emax;
+        const uint32_t e = (w[i] >> 7) & 0x00FF00FFu;
+        const uint32_t lo = e & 0xFF, hi = e >> 16;
+        const uint32_t x = lo > hi ? lo : hi;
+        m = x > m ? x : m;
     }
+    return m;
+}
+FORCE_INLINE uint32_t bfp2_keep(uint32_t x, uint32_t t2) {
+    // bits 8 / 24 set where the lane's exponent >= emax - 1 (t2 = (emax - 1) in both lanes)
+    return (((x >> 7) & 0x00FF00FFu) | 0x01000100u) - t2;
+}
+FORCE_INLINE void rtn_bfp2_face_row(volatile tt_l1_ptr uint32_t* row) {
+    uint32_t w[8];
     for (uint32_t i = 0; i < 8; i++) {
-        const uint32_t x = w[i];
-        w[i] = rtn_bfp2_one(x & 0xFFFF, emax) | (rtn_bfp2_one(x >> 16, emax) << 16);
+        w[i] = row[i];
+    }
+    const uint32_t emax = bfp2_emax(w);
+    if (emax <= 1) {
+        for (uint32_t i = 0; i < 8; i++) {
+            row[i] = 0;
+        }
+        return;
+    }
+    const uint32_t t2 = (emax - 1) * 0x00010001u, val = (emax << 7) * 0x00010001u;
+    for (uint32_t i = 0; i < 8; i++) {
+        const uint32_t g = (bfp2_keep(w[i], t2) >> 8) & 0x00010001u;
+        row[i] = ((w[i] & 0x80008000u) | val) & (g * 0xFFFFu);
     }
 }
 FORCE_INLINE void rtn_bfp2_tile_row(uint32_t tile, uint32_t row) {
@@ -353,6 +375,34 @@ FORCE_INLINE void rtn_bfp2_tile_row(uint32_t tile, uint32_t row) {
     const uint32_t base = (row < 16 ? 0 : 256) + (row & 15) * 8;
     rtn_bfp2_face_row(t + base);
     rtn_bfp2_face_row(t + base + 128);
+}
+// row `row` of a PACKED Bfp2_b tile at t (64 exponent bytes, face f row r at 16 f + r; then a word a face row, element
+// c at bits 2c: magnitude, 2c + 1: sign) re-encoded to nearest from row src_row of the bf16 tile at s
+FORCE_INLINE void patch_bfp2_row(uint32_t t, uint32_t row, uint32_t s, uint32_t src_row) {
+    volatile tt_l1_ptr uint8_t* ex = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(t);
+    volatile tt_l1_ptr uint32_t* man = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(t + 64);
+    volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s);
+    for (uint32_t h = 0; h < 2; h++) {
+        const uint32_t f = (row < 16 ? 0 : 2) + h, r = row & 15;
+        const uint32_t sf = (src_row < 16 ? 0 : 2) + h, sr = src_row & 15;
+        uint32_t w[8];
+        for (uint32_t i = 0; i < 8; i++) {
+            w[i] = src[sf * 128 + sr * 8 + i];
+        }
+        const uint32_t emax = bfp2_emax(w);
+        uint32_t o = 0;
+        if (emax > 1) {
+            const uint32_t t2 = (emax - 1) * 0x00010001u;
+            for (uint32_t i = 0; i < 8; i++) {
+                const uint32_t g = bfp2_keep(w[i], t2);
+                const uint32_t m0 = (g >> 8) & 1, m1 = (g >> 24) & 1;
+                const uint32_t s0 = (w[i] >> 15) & m0, s1 = (w[i] >> 31) & m1;
+                o |= (m0 | (s0 << 1) | (m1 << 2) | (s1 << 3)) << (4 * i);
+            }
+        }
+        ex[f * 16 + r] = emax;
+        man[f * 16 + r] = o;
+    }
 }
 constexpr uint32_t cb_stage = 2;   // leader: gated output rows as batch x 32 tiles (heads x Dt)
 

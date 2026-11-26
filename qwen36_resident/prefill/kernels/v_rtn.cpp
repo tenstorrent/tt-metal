@@ -9,6 +9,10 @@
 // trace and hung served, 2026-11-23). Ties round up (half away from zero); m is capped at 7 (the row's exponent is
 // kept).
 //
+// Compile-time arg 0 (S0-9): 1 = the Bfp2_b grid instead — per face row 0 or +-2^(emax - 127), the magnitude kept iff
+// the value's exponent is >= emax - 1 (|x| >= 2^(e - 1), ties up; common.py bfp2_round). The prefill keeps such V in a
+// bfp4_b cache (exact: magnitude 4 of the same exponent), the handoff transcodes it into the decode's Bfp2_b pool.
+//
 // Runtime args: 0 the tensor's DRAM address (interleaved bf16 tiles, 2048 B pages), 1 first tile, 2 tiles.
 
 #include <cstdint>
@@ -17,6 +21,19 @@
 
 constexpr uint32_t cb_buf = 0;
 constexpr uint32_t kTileBytes = 2048;
+constexpr bool kBfp2 = get_compile_time_arg_val(0) != 0;
+
+FORCE_INLINE void round_row_bfp2(volatile tt_l1_ptr uint16_t* r) {
+    uint32_t emax = 0;
+    for (uint32_t i = 0; i < 16; i++) {
+        const uint32_t e = (r[i] >> 7) & 0xFF;
+        emax = e > emax ? e : emax;
+    }
+    for (uint32_t i = 0; i < 16; i++) {
+        const uint32_t b = r[i], e = (b >> 7) & 0xFF;
+        r[i] = e == 0 || e + 1 < emax ? 0 : (b & 0x8000) | (emax << 7);
+    }
+}
 
 FORCE_INLINE void round_row(volatile tt_l1_ptr uint16_t* r) {
     uint32_t emax = 0;
@@ -56,9 +73,15 @@ void kernel_main() {
         const uint64_t src = s.get_noc_addr(t);
         noc_async_read(src, buf, kTileBytes);
         noc_async_read_barrier();
+        // (NOC-written: Blackhole's RISC-V L1 cache invalidated before the reads)
+        invalidate_l1_cache();
         volatile tt_l1_ptr uint16_t* v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buf);
         for (uint32_t row = 0; row < kTileBytes / 32; row++) {
-            round_row(v + row * 16);
+            if constexpr (kBfp2) {
+                round_row_bfp2(v + row * 16);
+            } else {
+                round_row(v + row * 16);
+            }
         }
         noc_async_write(buf, src, kTileBytes);
         noc_async_write_barrier();

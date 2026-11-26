@@ -1700,6 +1700,8 @@ class ResidentModel:
                 *(
                     [cb(45, tail_grid, 2 * Dt)] if K_BFP4 and K_RTN else []
                 ),  # (S0-8: the tail's rotated k before the writer rounds it)
+                # (S0-9 plain rows: the new v rows in bf16 for the writer's Bfp2_b re-encoding, attn_common.hpp cb_vnr)
+                *([cb(47, tail_grid, Dt)] if V_BFP2 and not self.vrows else []),
                 # (row groups: + the tail core's per-row rope tiles, attn_common.hpp kTailBatched)
                 cb(
                     17,

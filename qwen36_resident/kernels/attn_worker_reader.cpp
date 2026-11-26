@@ -459,12 +459,12 @@ void kernel_main() {
                     }
                     noc_async_read_barrier();
                     if constexpr (kVBfp2) {
-                        invalidate_l1_cache();
-                        for (uint32_t a2 = 0; a2 < n_act; a2++) {
-                            for (uint32_t d = 0; d < Dt; d++) {
-                                rtn_bfp2_tile_row(v + d * kTile, act.row[a2]);
-                            }
-                        }
+                        // (S0-9 plain rows: the layer's new v rows, unrounded, for the writer's re-encoding at the
+                        // write-backs — one local copy of the tile set)
+                        cb_reserve_back(cb_vnr, Dt);
+                        noc_async_read(get_noc_addr(v), get_write_ptr(cb_vnr), Dt * kTile);
+                        noc_async_read_barrier();
+                        cb_push_back(cb_vnr, Dt);
                     }
                     cb_push_back(cb_kraw, Dt);
                     cb_push_back(cb_vraw, Dt);
@@ -480,7 +480,13 @@ void kernel_main() {
                     place_row0(grows + (v0 + d) * kRowTile + user_offset(u % batch), v + d * kTile);
                 }
                 noc_async_read_barrier();
-                if constexpr (kVBfp2) {
+                if constexpr (kVBfp2 && !verify) {
+                    // (S0-9 plain rows: the new v row, unrounded, for the writer's re-encoding at the write-back)
+                    cb_reserve_back(cb_vnr, Dt);
+                    noc_async_read(get_noc_addr(v), get_write_ptr(cb_vnr), Dt * kTile);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_vnr, Dt);
+                } else if constexpr (kVBfp2) {
                     invalidate_l1_cache();
                     for (uint32_t d = 0; d < Dt; d++) {
                         rtn_bfp2_tile_row(v + d * kTile, 0);

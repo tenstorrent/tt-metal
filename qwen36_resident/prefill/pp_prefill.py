@@ -35,7 +35,7 @@ from qwen36_resident import PKG_DIR
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from qwen36_resident.prefill import pp_weights as PW
 from qwen36_resident.prefill.smm import SmallMatmul
-from qwen36_resident.common import EPS, HIDDEN, INTER, TILE_BYTES, device_zeros, zero_dram
+from qwen36_resident.common import BFP2, EPS, HIDDEN, INTER, TILE_BYTES, device_zeros, zero_dram
 from qwen36_resident.model import (
     CONV_K,
     DK,
@@ -62,6 +62,17 @@ from qwen36_resident.model import (
 KDIR = f"{PKG_DIR}/prefill/kernels/"
 # the decode pools' tile bytes, K (bf8) and V (bf8, or bfp4 with S0's RESIDENT_KV_V_BFP4): the handoff copies raw pages
 KV_TILE_BYTES = (TILE_BYTES[K_DT], TILE_BYTES[V_DT])  # (S0-8: K bfp4 with RESIDENT_KV_K_BFP4)
+# (S0-9 stage 2b, V in Bfp2_b — a format ttnn has no dtype for: the prefill's V cache is bfp4_b holding values on the
+# Bfp2_b grid (kernels/v_rtn.cpp grid 2, then the typecast keeps them exactly), and the handoff transcodes tiles,
+# kernels/handoff.cpp job word 8: 1 bfp4 -> bfp2 into the decode pool, 2 back for load_prefix)
+PP_V_DT = ttnn.bfloat4_b if V_DT == BFP2 else V_DT
+# (the grid the prefill rounds V to with V in Bfp2_b: "bfp4" (default) — S0's bfp4 V for the prefill's attention,
+# rounded to bfp2 by the handoff: the prefill's layers do not compound 2-bit V error into the prefix's deeper K / V /
+# GDN states (acc_agree 8K NLL 1.4359 vs 1.4461, results/20261126-s09b); "bfp2" — its attention reads V as the decode)
+PP_V_GRID = os.environ.get("RESIDENT_PP_V_GRID", "bfp4")
+assert PP_V_GRID in ("bfp2", "bfp4"), PP_V_GRID
+PP_TILE_BYTES = (TILE_BYTES[K_DT], TILE_BYTES[PP_V_DT])
+V_XC = int(V_DT == BFP2)
 
 
 # (S0 bfp4 V) the device's bfp4 packer truncates toward zero (relative error ~0.20 vs ~0.11 rounded, biased toward zero:
@@ -189,6 +200,7 @@ class PPPrefill:
         positions (read_taps; the DFlash2 drafter's context): every chip writes its x after its stage-layers
         j = layer % Ls into a ring of tap_window + C positions (a paged fill per tick), the tap's chip holds it
         (tap_rows on device, read_taps on the host)"""
+
         self.mesh, self.n = mesh, mesh.get_num_devices()
         self.taps = list(taps or [])  # (before the conv taps' helper below takes the name)
         n = self.n
@@ -308,7 +320,7 @@ class PPPrefill:
             if attn:
                 # zero-filled on device: at max_len 256K a host image would be 4.3 GB of fp32 per cache
                 kv = lambda dt: device_zeros(mesh, [kv_blocks, NKV, block, HD], dt, DRAM)
-                self.K[j], self.V[j] = kv(K_DT), kv(V_DT)  # (S0 / S0-8: the decode pool's formats)
+                self.K[j], self.V[j] = kv(K_DT), kv(PP_V_DT)  # (S0 / S0-8: the decode pool's formats; S0-9 bfp4)
             else:
                 self.S[j] = dev(torch.zeros(n, NV, DK, DV), ttnn.float32)
                 self.carry[j] = dev(torch.zeros(n, 1, TILE, CONV_CH), ttnn.bfloat16)
@@ -943,9 +955,10 @@ class PPPrefill:
         out = self._linear(o, w["out"], "out")
         return out
 
-    def _v_rtn(self, v):
+    def _v_rtn(self, v, bfp2=False):
         """S0: v (a bf16 tile tensor in DRAM) rounded to nearest on the bfp4 grid in place (kernels/v_rtn.cpp, software
-        on data-movement cores: allocates nothing, unlike rtn_bfp4's ttnn ops, which hung served inside the trace)"""
+        on data-movement cores: allocates nothing, unlike rtn_bfp4's ttnn ops, which hung served inside the trace);
+        bfp2: on the Bfp2_b grid (S0-9)"""
         tiles = v.volume() // (TILE * TILE)  # (a mesh tensor's volume: one chip's)
         grid = self.mesh.compute_with_storage_grid_size()
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
@@ -966,7 +979,7 @@ class PPPrefill:
             kernel_source=KDIR + "v_rtn.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=crs,
-            compile_time_args=[],
+            compile_time_args=[int(bfp2)],
             runtime_args=rt,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
@@ -995,9 +1008,11 @@ class PPPrefill:
             if V_RTN:
                 self._v_rtn(k)
         ttnn.experimental.paged_fill_cache(self.K[j], ttnn.typecast(k, K_DT), self.fill_pt, batch_idx=0)
-        if V_DT == ttnn.bfloat4_b and V_RTN:  # (S0: rounded to nearest first, the packer truncates)
+        if V_DT == BFP2:  # (S0-9: onto the Bfp2_b grid, which the bfp4 container and the handoff keep exactly)
+            self._v_rtn(v, bfp2=PP_V_GRID == "bfp2")
+        elif V_DT == ttnn.bfloat4_b and V_RTN:  # (S0: rounded to nearest first, the packer truncates)
             self._v_rtn(v)
-        ttnn.experimental.paged_fill_cache(self.V[j], ttnn.typecast(v, V_DT), self.fill_pt, batch_idx=0)
+        ttnn.experimental.paged_fill_cache(self.V[j], ttnn.typecast(v, PP_V_DT), self.fill_pt, batch_idx=0)
         o = ttnn.transformer.chunked_scaled_dot_product_attention(
             q,
             self.K[j],
@@ -1217,7 +1232,8 @@ class PPPrefill:
                 for pool, dst in ((model.K_t, self.K[j]), (model.V_t, self.V[j])):
                     tb = KV_TILE_BYTES[pool is model.V_t]  # (S0: V's tile bytes)
                     for c in range(n):
-                        r = torch.empty(tiles, 8, dtype=torch.int64)
+                        r = torch.empty(tiles, 9, dtype=torch.int64)
+                        r[:, 8] = 2 * V_XC if pool is model.V_t else 0  # (S0-9: Bfp2_b pool -> bfp4 pages)
                         r[:, 0] = p
                         r[:, 1] = pool.buffer_address() + (page // banks) * (HD // TILE) * tb
                         r[:, 2] = page % banks
@@ -1234,7 +1250,7 @@ class PPPrefill:
                     for hh in range(d.nv):
                         src_page = ((g_i * d.nv + hh) * LR + row) * 16
                         row8 = [p, target["state"].buffer_address(), src_page, 4096, 0]
-                        row8 += [self.S[j].buffer_address(), (c * d.nv + hh) * 16, 16]
+                        row8 += [self.S[j].buffer_address(), (c * d.nv + hh) * 16, 16, 0]
                         jobs[c].append(torch.tensor([row8], dtype=torch.int64))
                         pks[c].append(torch.tensor([16 if c != p else 0], dtype=torch.int64))
                 g_i += 1
@@ -1479,7 +1495,7 @@ class PPPrefill:
                     [p for p, _ in finished], [self.S[j] for j in gdn_js] + [self.carry[j] for j in gdn_js]
                 )
                 continue
-            jobs = [torch.zeros(0, 8, dtype=torch.int64) for _ in range(n)]
+            jobs = [torch.zeros(0, 9, dtype=torch.int64) for _ in range(n)]
             pks = [torch.zeros(0, dtype=torch.int64) for _ in range(n)]
             for p, i in finished:
                 if i not in stage_of:
@@ -1492,7 +1508,7 @@ class PPPrefill:
                 copies = torch.tensor(
                     [
                         [p, self.carry[j].buffer_address(), 0, 2048, 0, stages[stage_of[i]][j].buffer_address(), 0]
-                        + [pages]
+                        + [pages, 0]
                         for j in gdn_js
                     ],
                     dtype=torch.int64,
@@ -1784,11 +1800,12 @@ class PPPrefill:
                     tb = KV_TILE_BYTES[dst is model.V_t]  # (S0: V's tile bytes; its fabric packets below)
                     kv_row = (HD // TILE) * tb
                     for c in range(n):
-                        r = torch.empty(tiles_max, 8, dtype=torch.int64)
+                        r = torch.empty(tiles_max, 9, dtype=torch.int64)
                         r[:, 0] = c
                         r[:, 1] = src.buffer_address()
                         r[:, 2] = ((bk * NKV + c) * per_block + rt) * (HD // TILE)
-                        r[:, 3] = tb
+                        r[:, 3] = PP_TILE_BYTES[dst is model.V_t]  # (the source's: S0-9 bfp4 pages, sent as bfp2)
+                        r[:, 8] = V_XC if dst is model.V_t else 0
                         r[:, 4] = 1
                         r[:, 5] = dst.buffer_address() + (a_i * model.rpb + t // banks) * kv_row
                         r[:, 6] = t % banks
@@ -1813,7 +1830,7 @@ class PPPrefill:
                             torch.tensor(
                                 [
                                     [c, self.S[j].buffer_address(), c * pages + off, 4096, 0]
-                                    + [model.state_t.buffer_address(), dst_page, cnt]
+                                    + [model.state_t.buffer_address(), dst_page, cnt, 0]
                                 ],
                                 dtype=torch.int64,
                             )
@@ -1964,7 +1981,8 @@ class PPPrefill:
         table = torch.zeros(self.n, most, 16, dtype=torch.int32)
         for p in range(self.n):
             # (the low 32 bits, as the device's uint32 words: torch's int64 -> int32 cast wraps)
-            table[p, : len(jobs[p]), :8] = (jobs[p] & 0xFFFFFFFF).to(torch.int32)
+            if len(jobs[p]):
+                table[p, : len(jobs[p]), : jobs[p].shape[1]] = (jobs[p] & 0xFFFFFFFF).to(torch.int32)
         return table.reshape(self.n * most, 16)
 
     def _ho_copy(self, model, jobs_ts, lanes, slot, extra_io=()):
