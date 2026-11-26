@@ -5,7 +5,7 @@
 // Row blocks of the MoE head: the kernels' loop over a call's rows, a block of rows at a time.
 //
 // Why: a call whose rows do not fit the head's L1 at once runs as k blocks of rows, one after another, in one launch
-// (the head's planner picks k from its L1 fit - plan_moe_head, HeadFit.row_blocks; 1 wherever the rows fit). k is the
+// (the head's planner picks k - plan_moe_head, HeadFit.row_blocks). k is the
 // named compile-time arg "row_blocks" of every kernel. The owner-order outputs keep the block layout - block b's owned
 // tokens after block b - 1's - which the tail takes as its own (MoEHeadOutputs.row_blocks).
 //

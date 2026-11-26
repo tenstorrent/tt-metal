@@ -100,7 +100,7 @@ struct MoEBlockConfig {
     // plan for one piece (split_tokens); a call names its piece (split) for a padded chunk's real rows. 0 is 1.
     uint32_t chunk_splits = 0;
     // Test only: the MoE head's row blocks (its kernels' loop over the chunk's rows, a block's rows each). 0 (always,
-    // outside tests): the head's planner picks the count from its L1 fit - 1 wherever the chunk fits at once.
+    // outside tests): the head's planner picks the count (plan_moe_head).
     uint32_t force_head_row_blocks = 0;
     // Padding rows: the ops run the chunk with pad_tokens more tokens, pad_tokens / SP rows appended to each SP row's
     // (a chunk whose rows a mesh row are not a multiple of 32 x TP - the head's rows rule); they are padding tokens of
