@@ -21,7 +21,7 @@ void bind_softmax(nb::module_& mod) {
         Same contract as :func:`ttnn.softmax` with ``dim=-1``; see that op for the full description.
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor (TILE layout, interleaved, bfloat16).
+            input_tensor (ttnn.Tensor): the input tensor (TILE layout, interleaved, bfloat16 or an MX data type (any of ``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``)).
 
         Keyword args:
             dim (int): must resolve to the last dimension. Defaults to `-1`.
@@ -30,7 +30,12 @@ void bind_softmax(nb::module_& mod) {
             numeric_stable (bool): subtract the row max before the exponent. Defaults to `True`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the output tensor, in the input's data type.
+
+        Note:
+            MX inputs are expanded to Float16_b by the unpacker and the result is packed back to the input's MX
+            format. The row statistics stay in Float16_b (Float32 with ``fp32_dest_acc_en``), so the output is
+            quantized once.
         )doc";
 
     ttnn::bind_function<"softmax", "ttnn.experimental.quasar.">(
