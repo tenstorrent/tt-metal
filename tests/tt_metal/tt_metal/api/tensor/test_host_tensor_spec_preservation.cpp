@@ -181,10 +181,10 @@ TEST(HostTensorSpecPreservation, ToTileLayoutBfpTileMismatchThrows) {
     EXPECT_ANY_THROW(std::ignore = to_tile_layout(source, Tile({16, 16})));
 }
 
-TEST(HostTensorSpecPreservation, DISABLED_PadUnpadDropsMemoryConfigToDefault) {
+TEST(HostTensorSpecPreservation, PadUnpadResetsMemoryConfigToDefault) {
     const Shape logical{2, 3};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(logical.volume());
-    // Pre-#50285 host pad/unpad always emit MemoryConfig{} (interleaved DRAM).
+    // tensor_host_pad_apis.hpp post-condition: host pad/unpad emit MemoryConfig{} (interleaved DRAM).
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto source_spec =
         TensorSpec(logical, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
@@ -219,7 +219,7 @@ TEST(HostTensorSpecPreservation, DISABLED_PadUnpadDropsMemoryConfigToDefault) {
     }
 }
 
-TEST(HostTensorSpecPreservation, DISABLED_PadShardedLegacyDropsSharding) {
+TEST(HostTensorSpecPreservation, PadShardedLegacyResetsToInterleaved) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{
@@ -236,7 +236,7 @@ TEST(HostTensorSpecPreservation, DISABLED_PadShardedLegacyDropsSharding) {
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(padded);
 }
 
-TEST(HostTensorSpecPreservation, DISABLED_UnpadShardedLegacyDropsSharding) {
+TEST(HostTensorSpecPreservation, UnpadShardedLegacyResetsToInterleaved) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{
@@ -253,7 +253,7 @@ TEST(HostTensorSpecPreservation, DISABLED_UnpadShardedLegacyDropsSharding) {
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(unpadded);
 }
 
-TEST(HostTensorSpecPreservation, DISABLED_PadShardedConvertibleNdDropsSharding) {
+TEST(HostTensorSpecPreservation, PadShardedConvertibleNdResetsToInterleaved) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     // Convertible ND: 2D height-sharded via NdShardSpec (auto-fills legacy shard_spec).
@@ -271,7 +271,7 @@ TEST(HostTensorSpecPreservation, DISABLED_PadShardedConvertibleNdDropsSharding) 
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(padded);
 }
 
-TEST(HostTensorSpecPreservation, DISABLED_UnpadShardedConvertibleNdDropsSharding) {
+TEST(HostTensorSpecPreservation, UnpadShardedConvertibleNdResetsToInterleaved) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     NdShardSpec nd_shard_spec{Shape{32, 32}, CoreRangeSet({CoreRange({0, 0}, {0, 0})}), ShardOrientation::ROW_MAJOR};
@@ -284,6 +284,48 @@ TEST(HostTensorSpecPreservation, DISABLED_UnpadShardedConvertibleNdDropsSharding
     EXPECT_EQ(unpadded.memory_config(), MemoryConfig{});
     EXPECT_EQ(unpadded.logical_shape(), Shape({16, 32}));
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(unpadded);
+}
+
+TEST(HostTensorSpecPreservation, UnpadMultiDeviceHostStoragePerShard) {
+    const Shape shape{4, 6};
+    const Shape start{1, 2};
+    const Shape end{3, 5};
+    auto source_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+
+    auto topology = TensorTopology::create_fully_replicated_tensor_topology(distributed::MeshShape(1, 2));
+    auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 2));
+    auto data_0 = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+    auto data_1 = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+    for (auto& v : data_1) {
+        v += 100.0f;
+    }
+    distributed_buffer.emplace_shard(
+        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<float>(data_0)); });
+    distributed_buffer.emplace_shard(
+        distributed::MeshCoordinate(0, 1), [&]() { return HostBuffer(std::vector<float>(data_1)); });
+    auto source = host_tensor_from_buffer_with_topology(std::move(distributed_buffer), source_spec, topology);
+
+    auto unpadded = unpad(source, start, end);
+    EXPECT_EQ(unpadded.logical_shape(), Shape({2, 3}));
+    EXPECT_EQ(get_tensor_topology(unpadded), topology);
+    EXPECT_EQ(unpadded.buffer().shard_coords(), source.buffer().shard_coords());
+
+    // Each shard is unpadded from its own data.
+    for (const auto& [coord, data] :
+         {std::pair{distributed::MeshCoordinate(0, 0), &data_0},
+          std::pair{distributed::MeshCoordinate(0, 1), &data_1}}) {
+        std::vector<float> expected;
+        for (uint32_t row = start[0]; row < end[0]; ++row) {
+            for (uint32_t col = start[1]; col < end[1]; ++col) {
+                expected.push_back((*data)[(row * shape[1]) + col]);
+            }
+        }
+        auto shard = unpadded.buffer().get_shard(coord);
+        ASSERT_TRUE(shard.has_value());
+        auto view = shard->view_as<float>();
+        EXPECT_EQ(std::vector<float>(view.begin(), view.end()), expected);
+    }
 }
 
 }  // namespace

@@ -57,7 +57,7 @@ ctx.open_device({4, 8});  // 4×8 = 32 devices
 ctx.initialize_parallelism_context({
     .enable_ddp = true,   // Data parallelism on axis 0
     .enable_tp = true,    // Tensor parallelism on axis 1
-    .enable_cp = false    // No context parallelism
+    .cp = std::nullopt    // No context parallelism (set a ContextParallelConfig to enable it)
 });
 
 // Now you can query:
@@ -480,6 +480,7 @@ In the device config, you can specify which parallelism strategies to use:
 - **`enable_ddp`**: Enable data parallelism (replicate model, shard data)
 - **`enable_pp`**: Enable pipeline parallelism (shard layers sequentially)
 - **`enable_cp`**: Enable context parallelism (shard input along sequence dimension)
+- **`cp_reuse_forward_kv`**: With CP, ring attention keeps the forward's K/V for backward instead of shifting them again (default off; costs 2 × (cp_size − 2) K-sized tensors per device per layer that holds them)
 
 ### Mesh Shape Determination
 
@@ -531,13 +532,13 @@ if (is_line_topology) {
         if (mesh_shape[i] > 1) { active_axis = i; break; }
     }
     if (config.enable_ddp)      m_ddp_axis = active_axis;
-    else if (config.enable_cp)  m_cp_axis  = active_axis;
+    else if (config.cp)         m_cp_axis  = active_axis;
     else if (config.enable_tp)  m_tp_axis  = active_axis;
 } else {
     // 2D mesh: must enable exactly 2 parallelisms; assign in order DDP -> CP -> TP
     uint32_t axis = 0;
     if (config.enable_ddp) { m_ddp_axis = axis++; }
-    if (config.enable_cp)  { m_cp_axis  = axis++; }
+    if (config.cp)         { m_cp_axis  = axis++; }
     if (config.enable_tp)  { m_tp_axis  = axis++; }
 }
 ```
