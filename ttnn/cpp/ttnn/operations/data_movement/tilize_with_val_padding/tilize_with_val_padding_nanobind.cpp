@@ -36,6 +36,11 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+                runtime_shapes (bool, optional): One program serves every shape with the same last dims and rank,
+                    at more host time per call, for an interleaved input and output of rank 4 or less padded only
+                    in the last two dims, with use_multicore, rows of at most 32 tiles (wider rows can take the
+                    block factory, depending on the shape) and enough L1 for a tile row. Other calls keep a
+                    program per shape. Defaults to `False`.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -52,7 +57,8 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
             const std::optional<MemoryConfig>&,
             std::optional<DataType>,
             bool,
-            const std::optional<CoreRangeSet>&>(&ttnn::tilize_with_val_padding),
+            const std::optional<CoreRangeSet>&,
+            bool>(&ttnn::tilize_with_val_padding),
         nb::arg("input_tensor"),
         nb::arg("output_tensor_shape"),
         nb::arg("pad_value"),
@@ -60,7 +66,8 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("use_multicore") = true,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("runtime_shapes") = false);
 }
 
 void bind_tilize_with_zero_padding(nb::module_& mod) {

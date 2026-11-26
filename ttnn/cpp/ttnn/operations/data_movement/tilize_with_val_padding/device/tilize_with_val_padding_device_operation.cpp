@@ -101,6 +101,43 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
     return TilizeWithValPaddingMultiCoreDefaultFactory{};
 }
 
+ttsl::hash::hash_t TilizeWithValPaddingDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensor) {
+    const auto full_hash = [&] {
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<TilizeWithValPaddingDeviceOperation>, operation_attributes, input_tensor);
+    };
+    // The flag first: without it no call pays for selecting the factory a second time.
+    if (!tilize_with_val_padding_interleaved_is_shape_free(operation_attributes, input_tensor)) {
+        return full_hash();
+    }
+    const auto factory = select_program_factory(operation_attributes, input_tensor);
+    if (!std::holds_alternative<TilizeWithValPaddingMultiCoreDefaultFactory>(factory)) {
+        return full_hash();
+    }
+    // The kernels take the counts at run time and the buffers and page sizes follow the row widths, so of the
+    // shapes only the last dims and the ranks stay in. enough_space_width steers no factory here, and the pad
+    // value is a runtime arg.
+    const auto& layout = input_tensor.tensor_spec().tensor_layout();
+    return tt::tt_metal::operation::hash_operation<TilizeWithValPaddingDeviceOperation>(
+        factory.index(),
+        operation_attributes.output_padded_shape.rank(),
+        operation_attributes.output_padded_shape[-1],
+        operation_attributes.output_mem_config,
+        operation_attributes.output_dtype,
+        operation_attributes.use_multicore,
+        operation_attributes.enough_space_height,
+        operation_attributes.sub_core_grids,
+        operation_attributes.runtime_shapes,
+        layout.get_data_type(),
+        layout.get_page_config(),
+        layout.get_memory_config(),
+        layout.get_alignment(),
+        input_tensor.logical_shape().rank(),
+        input_tensor.logical_shape()[-1],
+        input_tensor.padded_shape()[-1]);
+}
+
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
@@ -248,7 +285,8 @@ Tensor tilize_with_val_padding(
     bool use_multicore,
     bool enough_space_width,
     bool enough_space_height,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool runtime_shapes) {
     return ttnn::device_operation::launch<TilizeWithValPaddingDeviceOperation>(
         TilizeWithValPaddingParams{
             .output_padded_shape = output_padded_shape,
@@ -263,6 +301,7 @@ Tensor tilize_with_val_padding(
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .sub_core_grids = sub_core_grids,
+            .runtime_shapes = runtime_shapes,
         },
         input_tensor);
 }

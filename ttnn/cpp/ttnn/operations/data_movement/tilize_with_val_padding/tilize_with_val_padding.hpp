@@ -18,6 +18,8 @@ ttnn::Tensor tilize_with_val_padding(
     bool use_multicore = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
+// runtime_shapes opts the multi-core interleaved program into serving every shape with the same last dims (see
+// TilizeWithValPaddingParams::runtime_shapes).
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
@@ -25,7 +27,8 @@ ttnn::Tensor tilize_with_val_padding(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> output_dtype = std::nullopt,
     bool use_multicore = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool runtime_shapes = false);
 
 ttnn::Tensor tilize_with_zero_padding(
     const ttnn::Tensor& input_tensor,

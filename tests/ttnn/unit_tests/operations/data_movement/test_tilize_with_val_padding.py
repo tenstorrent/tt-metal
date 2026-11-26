@@ -1114,3 +1114,89 @@ def test_tilize_with_val_padding_wide_row_dram_width_sharded(device):
 
     assert tt_tile.layout == ttnn.TILE_LAYOUT
     assert torch.equal(torch_tensor, ttnn.to_torch(tt_tile))
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        # FLUX.2's VAE decoder: [1, h/4, w/2, C] over the latent sizes, whole tiles first, as the warm size is.
+        [(1, 32, 64, 32), (1, 12, 169, 32), (1, 24, 115, 32), (1, 90, 45, 32)],
+        [(1, 32, 64, 512), (1, 12, 169, 512), (1, 24, 115, 512)],
+        # Fewer tile rows than cores.
+        [(1, 1, 50, 64), (1, 1, 100, 64), (1, 2, 40, 64)],
+    ],
+)
+def test_tilize_with_val_padding_runtime_shapes_one_program(device, shapes):
+    # With runtime_shapes the multi-core interleaved program runs on the whole grid and takes every count at run
+    # time, so one program serves every shape with the same last dims, whole tiles or not.
+    entries = None
+    for shape in shapes:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        padded = list(shape[:-2]) + [-(-shape[-2] // 32) * 32, -(-shape[-1] // 32) * 32]
+        y = ttnn.tilize_with_val_padding(x, padded, 0.0, runtime_shapes=True)
+        assert list(y.padded_shape) == padded, shape
+        assert torch.equal(ttnn.to_torch(y), torch_input), shape
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        assert device.num_program_cache_entries() == entries, shape
+
+
+def test_tilize_with_val_padding_without_runtime_shapes_keeps_one_program_per_shape(device):
+    entries = []
+    for shape in [(1, 24, 115, 32), (1, 42, 135, 32)]:
+        x = ttnn.from_torch(torch.randn(shape, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        padded = list(shape[:-2]) + [-(-shape[-2] // 32) * 32, 32]
+        ttnn.tilize_with_val_padding(x, padded, 0.0)
+        entries.append(device.num_program_cache_entries())
+    assert entries[1] == entries[0] + 1
+
+
+def test_tilize_with_val_padding_runtime_shapes_pads_outer_dims(device):
+    # Padding an outer dim is outside the shape-free program, which keeps padding to the last two dims; with
+    # runtime_shapes such a call still runs, on a program of its own per shape.
+    new_entries = []
+    for shape, padded in [((64, 3, 20, 30), [64, 4, 32, 32]), ((64, 5, 20, 30), [64, 6, 32, 32])]:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        before = device.num_program_cache_entries()
+        y = ttnn.tilize_with_val_padding(x, padded, 0.0, runtime_shapes=True)
+        new_entries.append(device.num_program_cache_entries() - before)
+        assert list(y.padded_shape) == padded
+        full = ttnn.to_torch(ttnn.untilize_with_unpadding(y, [d - 1 for d in padded]))
+        expected = torch.zeros(padded, dtype=torch.bfloat16)
+        expected[: shape[0], : shape[1], : shape[2], : shape[3]] = torch_input
+        assert torch.equal(full, expected), shape
+    assert all(n > 0 for n in new_entries), new_entries
+
+
+def test_tilize_with_val_padding_runtime_shapes_sub_core_grids(device):
+    sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2))])
+    entries = None
+    for shape in [(1, 12, 169, 32), (1, 24, 115, 32), (1, 1, 50, 32)]:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        padded = list(shape[:-2]) + [-(-shape[-2] // 32) * 32, 32]
+        y = ttnn.tilize_with_val_padding(x, padded, 0.0, sub_core_grids=sub_core_grids, runtime_shapes=True)
+        assert list(y.padded_shape) == padded, shape
+        assert torch.equal(ttnn.to_torch(y), torch_input), shape
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        assert device.num_program_cache_entries() == entries, shape
+
+
+def test_tilize_with_val_padding_runtime_shapes_pad_value_is_a_runtime_arg(device):
+    # Pad values share the program; each call fills its own.
+    shape, padded = (1, 1, 50, 60), [1, 1, 64, 64]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    entries = None
+    for pad_value in [0.0, 7.0, -3.0]:
+        y = ttnn.tilize_with_val_padding(x, padded, pad_value, runtime_shapes=True)
+        full = ttnn.to_torch(ttnn.untilize_with_unpadding(y, [d - 1 for d in padded]))
+        expected = torch.full(padded, pad_value, dtype=torch.bfloat16)
+        expected[..., : shape[-2], : shape[-1]] = torch_input
+        assert torch.equal(full, expected), pad_value
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        assert device.num_program_cache_entries() == entries, pad_value

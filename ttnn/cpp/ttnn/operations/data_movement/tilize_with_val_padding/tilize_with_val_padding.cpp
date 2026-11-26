@@ -72,7 +72,8 @@ ttnn::Tensor tilize_with_val_padding(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool runtime_shapes) {
     // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller doesn't
     // request a specific output dtype, default an FP8 input to FLOAT32 (the format it unpacks to in
     // DEST) so every downstream value_or() below resolves to a legal TILE dtype.
@@ -174,7 +175,8 @@ ttnn::Tensor tilize_with_val_padding(
             use_multicore,
             enough_space_width,
             enough_space_height,
-            sub_core_grids);
+            sub_core_grids,
+            runtime_shapes);
     };
 
     return operations::data_movement::build_ndiml_tilize_val(base_tilize, sub_core_grids)(input_tensor);

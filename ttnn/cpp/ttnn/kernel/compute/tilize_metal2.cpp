@@ -39,6 +39,10 @@
 void kernel_main() {
 #ifdef TILIZE_RUNTIME_BLOCK_CNT
     const uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    // A program over the whole grid leaves the cores past the work idle; the helper asserts at least one block.
+    if (per_core_block_cnt == 0) {
+        return;
+    }
 #else
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
 #endif
