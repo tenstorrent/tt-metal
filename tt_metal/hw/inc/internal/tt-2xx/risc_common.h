@@ -428,6 +428,7 @@ constexpr uint32_t INTERRUPT_TABLE_BASE = MEM_INTERRUPT_TABLE_BASE;
 constexpr uint32_t SYNC_INTERRUPT_INDEX = 0;                // synchronized interrupts index
 constexpr uint32_t MACHINE_EXTERNAL_INTERRUPT_OFFSET = 11;  // machine external interrupt offset
 constexpr uint32_t ROCC_INTERRUPT_INDEX = 13;               // rocc interrupt index
+constexpr uint32_t MSTATUS_MIE = 1u << 3;                   // mstatus.MIE bit mask
 
 // Encodes a 21-bit byte offset into a RISC-V J-type immediate field
 inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset) {
@@ -473,19 +474,20 @@ inline __attribute__((always_inline)) void setup_isr_csrs() {
     }
 }
 
-inline __attribute__((always_inline)) void enable_dfb_tile_isr() {
-    // Enable ROCC interrupt in mie
-    asm volatile("csrrs zero, mie, %0" : : "r"(1 << 13));
-
-    // Enable MIE in mstatus
-    asm volatile("csrrs zero, mstatus, %0" : : "r"(1 << 3));
+// mie bit n gates the interrupt whose mcause code is n, which is also its vectored table slot.
+inline __attribute__((always_inline)) void enable_machine_interrupt(uint32_t interrupt_index) {
+    asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << interrupt_index));
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(MSTATUS_MIE));
 }
 
-inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
-    // Disable ROCC interrupt in mie
-    asm volatile("csrrc zero, mie, %0" : : "r"(1 << 13));
-    // Keep machine interrupts enabled so an FDS machine-external go interrupt can reach DM0.
+// mstatus.MIE stays set: other interrupts may still be enabled in mie.
+inline __attribute__((always_inline)) void disable_machine_interrupt(uint32_t interrupt_index) {
+    asm volatile("csrrc zero, mie, %0" : : "r"(uint32_t{1} << interrupt_index));
 }
+
+inline __attribute__((always_inline)) void enable_dfb_tile_isr() { enable_machine_interrupt(ROCC_INTERRUPT_INDEX); }
+
+inline __attribute__((always_inline)) void disable_dfb_tile_isr() { disable_machine_interrupt(ROCC_INTERRUPT_INDEX); }
 #else
 // HW error interrupt entry, in trisc.cc.
 extern "C" void trisc_irq_entry();

@@ -8,11 +8,11 @@
 #include <ranges>
 #include <optional>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "ttnn/operations/experimental/ccl/all_reduce_async/device/all_reduce_async_program_factory.hpp"

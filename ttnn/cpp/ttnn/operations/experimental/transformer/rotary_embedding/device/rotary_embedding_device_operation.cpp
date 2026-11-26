@@ -6,9 +6,9 @@
 #include "rotary_embedding_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/device_operation.hpp"
 
 using namespace tt::constants;

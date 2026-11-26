@@ -4,7 +4,7 @@
 
 #include "embedding_program_factory_common.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::prim {
 

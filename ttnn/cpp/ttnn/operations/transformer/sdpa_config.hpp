@@ -7,8 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 namespace ttnn::operations::transformer {
 

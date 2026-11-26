@@ -7,8 +7,8 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <bit>
 
 namespace ttnn::prim {

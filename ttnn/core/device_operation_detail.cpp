@@ -15,10 +15,10 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "ttnn/distributed/types.hpp"

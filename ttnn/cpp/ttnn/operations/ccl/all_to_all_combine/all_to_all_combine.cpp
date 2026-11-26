@@ -6,7 +6,7 @@
 #include "device/all_to_all_combine_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/core/core.hpp"

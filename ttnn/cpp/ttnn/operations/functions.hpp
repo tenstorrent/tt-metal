@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <functional>
 #include <iterator>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <optional>
 #include <random>

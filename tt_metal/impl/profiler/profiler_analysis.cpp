@@ -17,7 +17,7 @@
 #include <fstream>
 
 #include "context/metal_env_accessor.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "common/filesystem_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"

@@ -13,16 +13,16 @@
 #include "mesh_tensor_impl.hpp"
 #include "tensor_impl.hpp"
 
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 // Redeclares the HostTensor overloads defined below as deprecated. The attribute must come before
 // their definitions, or a later file of the same unity batch that includes it fails to compile.
-#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "pinned_upload.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"

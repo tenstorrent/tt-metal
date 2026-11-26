@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 
 namespace ttnn::operations::experimental::fusion {

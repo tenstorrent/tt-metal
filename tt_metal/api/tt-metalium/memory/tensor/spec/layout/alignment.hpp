@@ -16,7 +16,7 @@
 
 #include <string_view>
 #include <tt_stl/small_vector.hpp>
-#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/vocabulary/shape_base.hpp>
 #include <tuple>
 
 namespace tt::tt_metal {

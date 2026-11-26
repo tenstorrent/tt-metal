@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include <sys/types.h>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <functional>
 #include <map>
 #include <sstream>
@@ -13,14 +13,14 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 #include <tt-umd/types/arch.hpp>
 

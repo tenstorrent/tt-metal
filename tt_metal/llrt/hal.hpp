@@ -11,7 +11,7 @@
 
 #include <cstddef>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt_stl/enum.hpp>
 #include <cstdint>
 #include <functional>
@@ -36,7 +36,7 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/io_window_config.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
 #include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
 enum class AddressableCoreType : uint8_t;

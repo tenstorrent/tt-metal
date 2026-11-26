@@ -5,9 +5,9 @@
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include "tt-metalium/work_split.hpp"
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include "tt-metalium/utils/work_split.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <string>

@@ -35,7 +35,14 @@ void kernel_main() {
         // when the operand unpacks to SrcA: unpacking straight to Dest skips the math-side datacopy
         // loop that advances the Dest index, and every tile lands on Dest tile 0 instead. The host
         // picks the mode, so Int32 -- which has to unpack to Dest -- stays single-tile.
+        // Only Int32 unpacks straight to Dest (the host picks the mode), and only then does the copy need a loan.
+        if constexpr (REDUCE_FORMAT == DataFormat::Int32) {
+            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
+        }
         copy_block(dfb_in.get_id(), /* start_in_tile_index */ 0, /* start_dst_tile_index */ 0, tiles_per_block);
+        if constexpr (REDUCE_FORMAT == DataFormat::Int32) {
+            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
+        }
 
 #ifdef REDUCE_AXIS_ROW
         sfpu_reduce<REDUCE_POOL_TYPE, REDUCE_FORMAT, ReduceDim::REDUCE_ROW>(/* idst */ 0, block_ct_dim, block_rt_dim);

@@ -8,7 +8,7 @@
 #include <algorithm>
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
