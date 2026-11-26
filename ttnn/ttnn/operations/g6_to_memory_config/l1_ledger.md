@@ -1,50 +1,62 @@
-# L1 ledger: g6_to_memory_config
+# L1 Ledger: g6_to_memory_config
 
-Block axes (from op_design.md Blocking Model): `tile_row`, `tile_col`, `page`, `run`.
-No compute kernel and no DEST use: `fp32_dest_acc_en` does not apply; every page format is the
-tensor's own dtype carried as bytes (never unpacked).
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md` → Blocking Model.
+
+## Circular buffers
+
+The four owner regimes (`shard_pull`, `shard_push`, `bank_pull`, `bank_push`) allocate **no CB**: a pulled page lands at its final address in the output's own L1 region, a pushed page leaves from the input's own L1 region. Inventory before solve: the only buffer in the op is the staging buffer of `staged`, which exists because a NoC transaction cannot move DRAM → DRAM.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_staged_pages` (STAGE) | `stage_depth * stage_block_pages`, `stage_block_pages = min(core_pages_max, STAGE_BLOCK_PAGES_CAP)` | `2 * stage_block_pages` (one block landing, one draining) | `{tile_row: streams → flat range, tile_col: streams → flat range, page: spans → whole page, run: streams → 1 page (interleaved ends)}` — the flat block spans `stage_block_pages` of the folded `tile_row×tile_col` range | input dtype (Float16_b / Bfp8_b / Bfp4_b bytes) | reader | writer | whole STAGE kernel | none: only CB the op allocates; PULL/PUSH do not instantiate it (regimes are disjoint programs). Capacity = live set × 2 because of double buffering (overlap of NoC0 reads with NoC1 writes) |
-| `cb_output_shard` (PULL) | output shard pages (`shard_tile_rows * shard_tile_cols`, nominal) | the whole shard (every page written in place) | `{tile_row: spans → block_tile_rows, tile_col: spans → block_tile_cols, page: spans, run: streams}` | output dtype | pull kernel (lands NoC reads) | none in-program | program | aliases the **output tensor's shard** (zero-copy `cb_descriptor_from_sharded_tensor`) — no allocation of its own; it is the output, counted once below as output L1 |
-| `cb_input_shard` (PUSH) | input shard pages (nominal) | the whole shard (read in place) | `{tile_row: spans → block_tile_rows, tile_col: spans → block_tile_cols, page: spans, run: streams}` | input dtype | none in-program (model's tensor) | push kernel | program | aliases the **input tensor's shard** — no allocation; the input is the model's tensor and is not counted (contract) |
+| `cb_staged_pages` (`staged` only) | `staged_buffer_depth · staged_block_pages` = 2 · 16 = 32 | `2 · staged_block_pages` at peak — the block the writer drains plus the block the reader fills; capacity == live set | `{page_linear: spans → staged_block_pages per depth slot, streams over core_pages; page_row: flattened into page_linear; page_col: flattened into page_linear; intra_tile: spans → 1 whole page per slot (atomic); mover: n/a — staged uses one reader + one writer}` | input dtype (`Float16_b` / `Bfp8_b` / `Bfp4_b`): dataflow-only payload, never unpacked or packed, so DEST width (`fp32_dest_acc_en`) does not apply — audit 2 answered by "dataflow-only payload" | reader (staged) | writer (staged) | whole `staged` kernel | nothing to share with: it is the op's only CB and exists only in the `staged` regime; depth 2 is the explicit pipelining decision (reader fills block k+1 while writer drains block k) |
 
-### Symbol table
+## L1 counted against the BB-05 bound that is not a CB
 
-| Symbol | Bound | Predicate establishing it |
-|---|---|---|
-| `page_size` | ≤ 2048 B (bf16), 1088 (bf8), 576 (bf4) | TILE layout, dtype ∈ TARGET |
-| `STAGE_BLOCK_PAGES_CAP` | 16 | host constant |
-| `stage_depth` | 2 | host constant |
-| `core_pages_max` | ≤ `ceil(num_pages / num_stage_cores)` | `split_work_to_cores`; only `min` with the cap enters the CB |
-| output shard pages | ≤ 20 bf16 pages (40960 B) in the golden INPUTS (largest: [32, 640]) | output shard spec; BB-05 predicate below |
-| output L1-interleaved pages per core | `ceil(num_pages / num_l1_banks)`; ≤ 94 bf16 pages (192512 B) in the golden INPUTS (2078) | allocator round-robin; BB-05 predicate below |
+The bound counts the output's own L1 on each core. These are allocations of the output tensor, not op buffers; they are listed so the total is closed-form.
 
-### Total per-core footprint
+| Resident | Bytes per core | Present when | Axis accounting |
+|----------|----------------|--------------|-----------------|
+| Output L1 shard | `shard_tile_rows(out) · shard_tile_cols(out) · aligned_page_size` | output is L1-sharded (`shard_pull`, or `shard_push` between two L1-sharded placements) | `{page_row: spans → shard_tile_rows(out); page_col: spans → shard_tile_cols(out); page_linear: n/a; intra_tile: whole}` |
+| Output L1-interleaved bank region | `ceil(tensor_pages / NB) · aligned_page_size` | output is L1-interleaved (`bank_pull`, or `shard_push` to L1 interleaved) | `{page_linear: spans → ceil(tensor_pages/NB) (cyclic share); page_row, page_col: flattened; intra_tile: whole}` |
+| Input (any placement) | not counted (the model's tensor, per the spec) | always | — |
+
+## Symbol table
+
+| Symbol | Meaning | Bound | Predicate establishing the bound |
+|--------|---------|-------|----------------------------------|
+| `aligned_page_size` | bytes per tile page | 2048 (bf16), 1088 (bf8b), 576 (bf4b) | dtype ∈ TARGET; each is a multiple of the 16 B L1 and 64 B DRAM alignment |
+| `staged_block_pages` | staged block extent | 16 (Phase 0 constant `STAGED_BLOCK_PAGES`) | host constant; CT arg; clamped to `core_pages` |
+| `staged_buffer_depth` | staged depth | 2 (`STAGED_BUFFER_DEPTH`) | host constant |
+| `NB` | L1 banks = worker cores | 110 on this board (`l1_num_banks == compute_with_storage_grid` checked per device) | allocator: one L1 bank per worker core (`l1_banking_allocator.cpp:96-111`) |
+| `tensor_pages` | `prod(leading)·ceil(H/32)·ceil(W/32)` | unbounded by contract; golden max 81920 (bf4b, DRAM→DRAM, no L1 term) and 10240 for an L1 output (Qwen 2078) | enters L1 only through `ceil(tensor_pages/NB)`; bounded by the BB-05 refusal predicate below |
+| `shard_tile_rows(out)`, `shard_tile_cols(out)` | target shard extent in pages | caller's shard spec | bounded by the BB-05 refusal predicate below |
+| `L1_BUDGET` | per-core L1 the model leaves to the op | 1347776 B | spec (BB-05) |
+
+## Total per-core footprint
 
 ```
-op_l1(regime) = (regime == STAGE) ? stage_depth * stage_block_pages * page_size : 0
-output_l1     = (out in L1) ? (out sharded ? shard_pages * page_size
-                                           : ceil(num_pages / num_l1_banks) * page_size) : 0
-BB-05 predicate (host refusal if false):  op_l1 + output_l1 <= 1347776
+op_l1_bytes_per_core =
+      [out is L1-sharded]      · shard_tile_rows(out) · shard_tile_cols(out) · aligned_page_size
+    + [out is L1-interleaved]  · ceil(tensor_pages / NB) · aligned_page_size
+    + [regime == staged]       · staged_buffer_depth · staged_block_pages · aligned_page_size
 ```
-Scaling: `op_l1` scales with `stage_block_pages` and `stage_depth` only (≤ 2·16·2048 = 65536 B); `output_l1`
-scales with the placement, not with any op knob. Worst golden case: 2078 STAGE, 65536 + 192512 = 258048 B.
-PULL and PUSH allocate nothing.
+
+- Scales with the target placement only (shard extent or `tensor_pages/NB`); the owner regimes add **0** bytes of op buffer for any shape.
+- The only knob-scaled term is the `staged` CB (`staged_buffer_depth · staged_block_pages`): 65536 B bf16, 34816 B bf8b, 18432 B bf4b at Phase 0 values; it never coexists with an L1 output term (`staged` ⇔ both ends DRAM).
+- Host refusal (BB-05): `ValueError` when `op_l1_bytes_per_core > 1347776`, evaluated before the output is allocated.
+- Golden INPUTS maximum: Qwen 2078, `bank_pull`, `ceil(10240/110) · 2048 = 192512 B` (14.3 % of the budget); next Qwen 2075 163840 B; the largest L1 shard output is 17 pages (34816 B, Qwen 2064/2092/2127/2161). Every golden shape fits; the refusal concerns shapes outside the golden INPUTS only.
 
 ## Data-movement budget
 
-Phase 0 (bfloat16). DRAM crossings counted per whole tensor.
+Per regime, `B = tensor_pages · aligned_page_size` bytes:
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| input, DRAM-interleaved source (PULL 16 cases, STAGE 27) | 1 | each page read by exactly one mover, never re-read | PULL: 0 beyond the read itself (lands in the owner's shard); STAGE: +1 NoC write per page (mover → L1 bank) |
-| input, L1 source (PULL from L1-int/L1-sharded 15, PUSH 28) | 0 | L1 resident | PULL: 1 NoC read per maximal run; PUSH: 0 reads (local shard) |
-| output, DRAM-interleaved target (PUSH 19) | 1 | each page written once by its source owner | 1 NoC write per page (interleaved → run 1) |
-| output, L1 target (PULL 31, PUSH 9 to L1-int, STAGE 27) | 0 | — | as above; STAGE pays 2 NoC crossings per page |
-| output, DRAM width-sharded (refinement, STAGE) | 1 | written once | 1 NoC read (DRAM) + 1 NoC write (DRAM) per page — structural minimum DRAM→DRAM |
+| input (`shard_*`, `bank_*`) | 1 if in DRAM, else 0 | each page read once by the core that owns its source or target slot; nothing is re-read (each core's slice is disjoint and every transfer is one run) | 1 NoC crossing per page (B bytes total); 0 extra |
+| output (`shard_*`, `bank_*`) | 1 if in DRAM, else 0 | written once, straight from the mover's L1 | included above (the same single crossing) |
+| input (`staged`) | 1 | read once into `cb_staged_pages` | DRAM → staging core: B bytes |
+| output (`staged`) | 1 | written once from `cb_staged_pages` | staging core → DRAM: B bytes |
 
-Totals per tier: DRAM = `bytes(x) [x in DRAM] + bytes(y) [y in DRAM]` (the minimum, every regime); NoC = `bytes(x)` per page moved for PULL/PUSH, `2·bytes(x)` for STAGE.
+Totals per tier: DRAM `B · ([in DRAM] + [out DRAM])`; NoC `B` (owner regimes) or `2B` (`staged`, the structural minimum for DRAM → DRAM); core-local L1 `B` (the owner's own side of each transfer). Production extremes: Qwen 2078 `bank_pull` B = 20971520 B, DRAM 1×B, NoC 1×B; PERF FOCUS Qwen 2183 `staged` B = 47185920 B, DRAM 2×B, NoC 2×B.
 
-> Cheapest-traffic split considered: L1-bank owner (BANK-OWNER) for the 27 DRAM-interleaved → L1-interleaved cases — saves one NoC crossing per page (`bytes(x)` of NoC traffic, e.g. 20 MB for 2078), DRAM unchanged. Implemented: STAGE for those cases (PULL/PUSH, which are the cheapest split, for every sharded-L1 end). Deferred because the L1-bank→logical-core map needed to place movers on bank cores is not exposed to the Python program-descriptor layer (`ttnn/cpp/ttnn-nanobind/device.cpp:811` exposes the DRAM map only); STAGE's reader with a local landing (`is_local_page`) is that regime with a different core-assignment, so it stays reachable.
+> Cheapest-traffic split considered: owner moves (the core holding the page in L1 moves it) — 1 NoC crossing and no staging per page wherever an L1 end exists; any-core staging would add B bytes of L1→L1 traffic and a `2·block·page` buffer per core. Implemented: owner moves (`shard_pull` / `shard_push` / `bank_pull` / `bank_push`), plus `staged` only for DRAM → DRAM where 2 crossings is the minimum. The implemented split **is** the cheapest; nothing is deferred on traffic grounds (`helper_fanout` and `staged_coalesced` are deferred for issue rate and transaction count, not bytes).
