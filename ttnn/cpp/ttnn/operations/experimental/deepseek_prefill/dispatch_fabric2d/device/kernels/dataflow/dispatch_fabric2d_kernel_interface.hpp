@@ -17,7 +17,7 @@
 #ifndef KERNEL_BUILD
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "../../dispatch_fabric2d_placement.hpp"

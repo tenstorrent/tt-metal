@@ -11,7 +11,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {

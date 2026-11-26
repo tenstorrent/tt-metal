@@ -10,7 +10,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 namespace ttnn::operations::ccl {
 

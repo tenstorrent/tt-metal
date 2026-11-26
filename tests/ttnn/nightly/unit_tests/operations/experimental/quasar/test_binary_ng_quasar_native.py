@@ -29,35 +29,21 @@ passes only on exactly the predicted wrong tiles.
 import json
 import math
 import os
-import pathlib
 import re
 import subprocess
 import sys
-import time
 
 import pytest
 import torch
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _ROUNDING_HINT,
     _add_goldens,
     _matches_none,
     _run,
+    bound_kernel_sources,
 )
 from tt_py_test_utils_common.utility_functions import is_quasar
-
-# Resolve the inspector output the way the runtime does: <logs_dir>/generated/inspector, where
-# logs_dir is TT_METAL_LOGS_PATH if set, else the root dir (TT_METAL_HOME, else cwd). See
-# tt_metal/llrt/rtoptions.cpp. A hardcoded absolute path would be the only one in this directory and
-# would silently miss the file under any relocated logs dir.
-_LOGS_ROOT = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
-INSPECTOR_YAML = _LOGS_ROOT / "generated" / "inspector" / "kernels.yaml"
-
-# Wall-clock at module import. pytest imports every test module during collection, strictly before any
-# fixture runs, so kernels.yaml -- created when the `device` fixture opens the device -- is necessarily
-# newer than this. See bound_kernel_sources() for why that matters.
-_IMPORT_TIME = time.time()
 
 # The benchmark shape: 32x40 tiles = 1280 tiles, ~40/core on the Quasar simulator's 8x4 worker grid.
 # Matches _INTERLEAVED_SHAPE in test_binary_ng_no_bcast.py so cycle counts are comparable.
@@ -180,33 +166,12 @@ def _expectation_marks(expected_wrong):
 def _matches_prediction(got, goldens, expected_wrong, what):
     """Assert that exactly the predicted number of output tiles differ from the oracles; 0 means exact.
 
-    Returns True when the output is wrong as predicted. Every caller compares an FPU add, so a failure ends with
-    _ROUNDING_HINT: a craq-sim older than b05091aa rounds the add once, and fails here.
+    Returns True when the output is wrong as predicted.
     """
     wrong = _wrong_tiles(got, goldens)
     total = got.numel() // (32 * 32)
-    assert (
-        wrong == expected_wrong
-    ), f"{what}: {wrong} of {total} tiles differ, the prediction is {expected_wrong}. {_ROUNDING_HINT}"
+    assert wrong == expected_wrong, f"{what}: {wrong} of {total} tiles differ, the prediction is {expected_wrong}."
     return wrong > 0
-
-
-def bound_kernel_sources():
-    """Kernel `source:` lines from THIS process's inspector output.
-
-    Do NOT unlink kernels.yaml first: the inspector opens it once with std::ios::trunc at device
-    creation and holds the handle, and the `device` fixture runs before the test body -- so deleting the
-    path unlinks a live inode and it never reappears. Truncate-at-open is what makes the contents this
-    process's; the mtime assertion is what rejects a stale leftover, which for the fallback arm would
-    otherwise be a false green (a previous run's file holds exactly the kernels_dfb sources it asserts).
-    """
-    mtime = INSPECTOR_YAML.stat().st_mtime
-    assert mtime >= _IMPORT_TIME, (
-        f"{INSPECTOR_YAML} predates this process (mtime {mtime} < import {_IMPORT_TIME}); it is a stale "
-        "leftover, so it proves nothing about this run. Is the inspector disabled?"
-    )
-    text = INSPECTOR_YAML.read_text()
-    return [ln.split("source:", 1)[1].strip() for ln in text.splitlines() if "source:" in ln]
 
 
 def _run_benchmark_add(device):
@@ -305,11 +270,9 @@ _RAGGED_TILE_COUNTS = [
     129,  # two core groups, tails, no empties
 ]
 
-# (R, C, W) arms run as subprocesses. Constrained by two independent rules, so most tuples are NOT
-# usable: each DFB requires max(p,c) % min(p,c) == 0, which the gate checks, and R and W stay at or below
-# C, because some craq-sim builds corrupt the output when the DM side outnumbers the Tensix side. A tuple
-# the gate refuses falls back to the single-threaded factory and then passes while testing nothing --
-# which is why every arm asserts routing, not just values.
+# (R, C, W) arms run as subprocesses. Each DFB requires max(p,c) % min(p,c) == 0, which the gate checks, so
+# most tuples are NOT usable. A tuple the gate refuses falls back to the single-threaded factory and then passes
+# while testing nothing -- which is why every arm asserts routing, not just values.
 #
 # 4,4,2 alone is NOT sufficient: its input DFBs are entirely num_tcs_to_rr = 1, so it never reaches the
 # handle_final_credits tail branch. 1,4,4 and 4,4,1 are what drive num_tcs_to_rr = 4, with one thread
@@ -319,7 +282,8 @@ _RAGGED_TILE_COUNTS = [
 #   1,4,4  num_tcs_to_rr = 4 on the PRODUCER side
 #   4,4,1  num_tcs_to_rr = 4 on the CONSUMER side
 #   2,4,2  N = 2 on both sides at once
-_NATIVE_ARMS = [(1, 1, 1), (4, 4, 2), (1, 4, 4), (4, 4, 1), (2, 4, 2)]
+#   2,1,2  num_tcs_to_rr = 2 on the compute side: the compute thread owns two tile counters of each ring
+_NATIVE_ARMS = [(1, 1, 1), (4, 4, 2), (1, 4, 4), (4, 4, 1), (2, 4, 2), (2, 1, 2)]
 
 # Run in a fresh process per arm: native_tuning() reads the knobs ONCE per process into a static, and
 # the program cache resolves the factory from a cached index, so setting the env vars mid-process
@@ -332,7 +296,7 @@ _ARM_SRC = """
 import hashlib, json, os, pathlib, sys
 import torch, ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _ROUNDING_HINT, _add_goldens, _matches_none)
+    _add_goldens, _matches_none)
 
 TILE_COUNTS = json.loads(os.environ["ARM_TILE_COUNTS"])
 
@@ -372,9 +336,6 @@ if failures or mismatches:
     print("FAIL")
     for f in failures + mismatches:
         print("  " + f)
-    if mismatches:
-        # Every case is a bf16 add.
-        print("  " + _ROUNDING_HINT)
     # 2 means only the output is wrong: every op ran and routed as expected.
     sys.exit(1 if failures else 2)
 print("OK over {} shapes".format(len(TILE_COUNTS)))
@@ -399,9 +360,7 @@ def _check_arm(p, what, expect_wrong=None):
     An expected-failure marker restricted to _WrongOutput therefore cannot hide a crash, a hang, a
     refusal or a fallback. expect_wrong maps the label of each shape the prediction gets wrong to the
     number of output tiles a modeled defect leaves wrong. Only exactly those counts raise
-    _WrongOutput, so a new defect, or a shape that is wrong where the prediction is 0, fails the test. The arm scripts
-    print _ROUNDING_HINT after their mismatch lines where an FPU add or subtract differs, and it reaches the message
-    through p.stdout.
+    _WrongOutput, so a new defect, or a shape that is wrong where the prediction is 0, fails the test.
     """
     expect_wrong = expect_wrong or {}
     if p.returncode == 2:
@@ -791,8 +750,8 @@ _MISMATCHED_SHARDS = [
 ]
 
 # The bit-exact configurations of the borrowed path. The rule runs 1,4,1, with a compute batch of 8 on the FPU kernel
-# and 4 on the SFPU kernel (2 in fp32); rule-n1 is the same program at batch 1. R and W stay at or below C, because some
-# craq-sim builds corrupt the output when the DM side outnumbers the Tensix side.
+# and 4 on the SFPU kernel (2 in fp32); rule-n1 is the same program at batch 1. R and W stay at or below C. The 2,1,2
+# arm of _NATIVE_ARMS covers a DM side that outnumbers the Tensix side.
 _BORROWED_CONFIGS = {
     "R1C1W1": _threads(1, 1, 1),
     "rule-n1": _COMPUTE_BATCH_1,
@@ -878,7 +837,7 @@ _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _FPU_ADD_ROUNDINGS, _ROUNDING_HINT, _ULP, _matches_none)
+    _FPU_ADD_ROUNDINGS, _ULP, _matches_none, _truncate_to_bf16)
 
 SHARDS = json.loads(os.environ["ARM_SHARDS"])
 EXPECT = os.environ["ARM_EXPECT"]
@@ -900,12 +859,6 @@ def round_to_bf16(x):
     return x.to(torch.bfloat16)
 
 
-def truncate_to_bf16(x):
-    # Quasar's SFPU multiply drops the low 16 bits of the fp32 result today, where the Wormhole and Blackhole LLKs
-    # round to nearest even.
-    return (x.contiguous().view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
-
-
 # op -> (the op, its extra arguments, the kernel's bf16 results from the operands; an element is right when it matches
 # one). The FPU kernel adds and subtracts as _FPU_ADD_ROUNDINGS says, and multiplies with rounding to nearest even. The
 # SFPU kernel runs multiply out of fast mode, which truncates, and divide, which rounds to nearest even. It runs maximum
@@ -913,7 +866,7 @@ def truncate_to_bf16(x):
 OPS = {"add": (ttnn.experimental.quasar.add, {}, _FPU_ADD_ROUNDINGS),
        "subtract": (ttnn.experimental.quasar.subtract, {},
                     tuple(lambda a, b, rounding=rounding: rounding(a, -b) for rounding in _FPU_ADD_ROUNDINGS)),
-       "multiply": (ttnn.experimental.quasar.multiply, {}, (lambda a, b: truncate_to_bf16(torch.multiply(a, b)),)),
+       "multiply": (ttnn.experimental.quasar.multiply, {}, (lambda a, b: _truncate_to_bf16(torch.multiply(a, b)),)),
        "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True},
                          (lambda a, b: round_to_bf16(torch.multiply(a, b)),)),
        "divide": (ttnn.experimental.quasar.divide, {}, (lambda a, b: round_to_bf16(torch.divide(a, b)),)),
@@ -923,7 +876,7 @@ OPS = {"add": (ttnn.experimental.quasar.add, {}, _FPU_ADD_ROUNDINGS),
 
 def square(x):
     # SQUARE runs on the SFPU on both kernels, and truncates as the SFPU multiply does.
-    return truncate_to_bf16(x * x).float()
+    return _truncate_to_bf16(x * x).float()
 
 
 # act ->(the op's activation arguments, the output from the operands and one of the op's results). SQUARE
@@ -1031,7 +984,6 @@ def memory_config(strategy, shard_shape, rng, orientation="row"):
 
 
 mismatches, failures = [], []
-add_wrong = False  # a bf16 add or subtract is among the mismatches
 keep, seen = {}, set()
 specs = [json.dumps(entry[1:]) for entry in SHARDS]
 device = ttnn.open_device(device_id=0)
@@ -1114,7 +1066,6 @@ try:
             h, w = differ.shape[-2:]
             wrong = int(differ.reshape(-1, h // 32, 32, w // 32, 32).any(dim=4).any(dim=2).sum())
             mismatches.append("{}: {} of {} tiles differ".format(name, wrong, differ.numel() // 1024))
-            add_wrong = add_wrong or (not fp32 and opts.get("op", "add") in ("add", "subtract"))
         # Free this entry's tensors before the next entry allocates its own; `keep` holds the ones a repeat needs.
         del ta, tb, out, op_kwargs
 finally:
@@ -1158,8 +1109,6 @@ if failures or mismatches:
     print("FAIL")
     for f in failures + mismatches:
         print("  " + f)
-    if add_wrong:
-        print("  " + _ROUNDING_HINT)
     # 2 means only the output is wrong: every op ran and routed as expected.
     sys.exit(1 if failures else 2)
 print("OK over {} shards".format(len(SHARDS)))
@@ -3294,14 +3243,12 @@ def test_native_rule_follows_a_set_compute_count():
     _check_arm(p, "C = 2 on the NoC path")
 
 
-# Each case: the knobs, the values each part of the settings line must name with their sources, and whether the
+# Each case: the knobs, and the values each part of the settings line must name with their sources. Every case's
 # output must be exact. The line has five parts: every operand over the NoC, the output borrowed beside an input
 # that moves, the inputs borrowed beside an output that moves, all of them borrowed, and the SFPU kernel over the
 # NoC. With no knob set, the rule runs the FPU kernel at 8 and the SFPU kernel at 4 and 2, at every ring stride.
 # C = 1 alone gives 1,1,1 by the rule. R = 2 beside C = 1 makes each compute thread own two tile counters of the
-# input rings, so the rule's compute batch drops to 1 where the inputs move. That case checks the line only: its
-# output is exact only on craq-sim builds without the defect that corrupts a run whose DM side outnumbers its Tensix
-# side. A hang still fails it.
+# input rings, so the rule's compute batch drops to 1 where the inputs move.
 _NOC_SHAPE = "the operands move over the NoC"
 _OUTPUT_SHAPE = "the output is borrowed and an input moves"
 _INPUTS_SHAPE = "the inputs are borrowed and the output moves"
@@ -3327,7 +3274,6 @@ _LOG_CASES = {
                 "tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE) in a 32-bit DST",
             ],
         },
-        True,
     ),
     "rule": (
         {},
@@ -3348,7 +3294,6 @@ _LOG_CASES = {
                 "entries_per_thread=4 (rule) dm_batch=2 (rule) tiles_per_cycle=2 (rule) in a 32-bit DST",
             ],
         },
-        True,
     ),
     "C1": (
         {"TTNN_QSR_COMPUTE_THREADS": "1"},
@@ -3359,7 +3304,6 @@ _LOG_CASES = {
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
             _SFPU_SHAPE: ["tiles_per_cycle=4 (rule) in a 16-bit DST", "tiles_per_cycle=2 (rule) in a 32-bit DST"],
         },
-        True,
     ),
     "R2C1": (
         {"TTNN_QSR_READER_THREADS": "2", "TTNN_QSR_COMPUTE_THREADS": "1"},
@@ -3375,7 +3319,6 @@ _LOG_CASES = {
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
             _SFPU_SHAPE: ["tiles_per_cycle=1 (rule) in a 16-bit DST", "tiles_per_cycle=1 (rule) in a 32-bit DST"],
         },
-        False,
     ),
 }
 
@@ -3389,12 +3332,9 @@ def test_native_tuning_log_names_each_source(name):
     program shape's values are checked in its own part of the line, so one shape cannot satisfy another's.
     The line is an info message, so the arm sets the logger to info.
     """
-    knobs, expected, exact = _LOG_CASES[name]
+    knobs, expected = _LOG_CASES[name]
     p = _run_arm([32], knobs={**knobs, "TT_LOGGER_LEVEL": "info"}, timeout=300)
-    if exact:
-        _check_arm(p, f"the logged configuration, {name}")
-    else:
-        assert p.returncode in (0, 2), f"{name} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
+    _check_arm(p, f"the logged configuration, {name}")
     log = p.stdout + p.stderr
     line = next((ln for ln in log.splitlines() if "Quasar-native ENABLED" in ln), "")
     parts = {part.split(":", 1)[0]: part for part in line.split("Where ")[1:]}

@@ -9,12 +9,12 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

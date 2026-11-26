@@ -4,10 +4,10 @@
 
 #include "trace_buffer.hpp"
 
-#include <device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <utility>
 
-#include "buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
 
 namespace tt::tt_metal {
 

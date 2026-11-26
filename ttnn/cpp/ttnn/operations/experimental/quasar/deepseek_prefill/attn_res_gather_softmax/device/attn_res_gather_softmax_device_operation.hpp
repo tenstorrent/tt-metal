@@ -23,8 +23,7 @@ struct AttnResGatherSoftmaxDeviceOperation {
     // nothing extra.
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
-    using program_factory_t = std::variant<AttnResGatherSoftmaxMeshWorkloadFactory>;
-    using shared_variables_t = AttnResGatherSoftmaxMeshWorkloadFactory::shared_variables_t;
+    using program_factory_t = std::variant<AttnResGatherSoftmaxProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     // `site` is kept out of the program hash so a walk of read sites lands on one cached

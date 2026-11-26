@@ -12,8 +12,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 
 #include "mx_common.hpp"
 
