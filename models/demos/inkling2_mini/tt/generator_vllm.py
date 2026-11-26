@@ -61,6 +61,19 @@ from loguru import logger
 
 import ttnn
 
+_DUMP = os.environ.get("INKLING_VLLM_DUMP")  # debug: a JSON line per greedy token: position, logits hash, top 5
+
+
+def _dump(kind, pos, lg):
+    """INKLING_VLLM_DUMP: the logits a greedy token comes from (a sha1 of the fp32 row: equal rows, equal hash)."""
+    import hashlib
+    import json
+
+    v, i = torch.topk(lg, 5)
+    with open(_DUMP, "a") as f:
+        f.write(json.dumps({"kind": kind, "pos": pos, "sha": hashlib.sha1(lg.numpy().tobytes()).hexdigest()[:16],
+                            "top": i.tolist(), "val": v.tolist()}) + "\n")  # fmt: skip
+
 
 class Inkling2ForCausalLM:
     model_capabilities = {
@@ -430,6 +443,12 @@ class Inkling2ForCausalLM:
         k = len(fed)
         # the conversation on the card goes on (when all of it is the prompt, the last step's output is the answer)
         if not (0 < k <= n and ids[:k] == fed and (k < n or self._out is not None)):
+            if k:  # what on the card does not match (the new prompt starts over from 0)
+                i = next((i for i, (x, y) in enumerate(zip(fed, ids)) if x != y), min(k, n))
+                logger.info(
+                    f"the card's {k} tokens are not the start of the {n}-token prompt: from position {i}, card "
+                    f"{fed[i : i + 4]} prompt {ids[i : i + 4]}"
+                )
             self._reset()
             k = 0
         last = self._request_log()
@@ -441,11 +460,15 @@ class Inkling2ForCausalLM:
         elif self.pf is not None and 0 < k and max(self.pf_min, 4) <= n - a and n <= self.max_ctx - 8:
             for i in range(k, a):
                 self._step(ids[i], i)
+                if _DUMP:
+                    _dump("feed", i, self._logits())
             how = f"from position {a} ({a - k} fed first): {self._prefill_chunked(ids, a)}"
         else:
             for i in range(k, n):
                 self._step(ids[i], i)
         out = self._output(sampling_params)
+        if _DUMP:
+            _dump("prompt", n - 1, self._pf_logits if self._pf_logits is not None else self._logits())
         self.fed = ids
         dt = time.perf_counter() - t0
         logger.info(f"prompt {n} tokens, {k} already on the card, {n - k} {how} in {dt:.2f} s{last}")
@@ -507,6 +530,8 @@ class Inkling2ForCausalLM:
         self._pf_logits = None
         self._step(token, pos)
         out = self._output(sampling_params)
+        if _DUMP:
+            _dump("step", pos, self._logits())
         fed.append(token)
         self.fed = fed
         t[3] = time.perf_counter()
@@ -702,7 +727,27 @@ class Inkling2SpecForCausalLM(Inkling2ForCausalLM):
 
     def _reset(self):
         self.model.reset()
-        self._stash, self._pending, self._next = False, 0, 0
+        self._stash, self._pending, self._next, self._lastc = False, 0, 0, None
+
+    def _trim(self, ids):
+        """The last verify pass of a request committed one token that vLLM did not return: its accepted drafts ran
+        past max_tokens (the pass's tokens lag its outputs by one, so by one token at most). The new prompt then
+        holds the card's tokens but the last. Commit that pass again with one row fewer: the commit takes every row
+        from the pass's own outputs (rings, window states, conv ring slots of its positions, the drafter's f_rnn),
+        so the state is the one the shorter accept leaves (its positions set again: the draft after the pass moved
+        the verify steps' position inputs on); the one conv ring slot the longer commit overwrote held a position no
+        later step reads (4 phases, 3 taps of history)."""
+        lc, k = getattr(self, "_lastc", None), len(self.fed)
+        if lc is None or k < 2 or len(ids) < k or ids[: k - 1] != self.fed[:-1] or ids[k - 1] == self.fed[-1]:
+            return
+        rows, pos, acc = lc
+        if acc < 2 or pos + acc != k:
+            return
+        # the commit reads its positions from the pass's verify step; the draft after the pass moved them on
+        self.gen.verifies[rows].set_positions(pos)
+        ttnn.execute_trace(self.device, self.gen.ctrace[(rows, pos % 4, acc - 1)], cq_id=0, blocking=False)
+        self.fed, self._next, self._lastc, self._out = self.fed[:-1], k - 1, None, None
+        logger.info(f"the last verify pass committed again with {acc - 1} of {acc} rows (vLLM kept one token less)")
 
     def release_request(self, slot):
         self._draft = None  # the proposal after a request's last step is never verified
@@ -788,6 +833,7 @@ class Inkling2SpecForCausalLM(Inkling2ForCausalLM):
 
     def _step(self, token, pos):
         """The plain step, as Inkling2ForCausalLM._step, in the form the drafter needs at this position."""
+        self._lastc = None
         if self.drafter is None:
             return super()._step(token, pos)
         from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
@@ -836,6 +882,7 @@ class Inkling2SpecForCausalLM(Inkling2ForCausalLM):
             raise RuntimeError(f"accepted count {acc} for a verify pass of {rows} rows")
         ttnn.execute_trace(self.device, self.gen.ctrace[(rows, pos % 4, acc)], cq_id=0, blocking=False)
         self._pend, self.fed, self._next = None, p["fed"] + p["cand"][:acc], pos + acc
+        self._lastc = (rows, pos, acc)  # until the next step: _trim can commit this pass again with fewer rows
         self._note(rows - 1, acc - 1, p["pr"], pos)
         self._sp[0], self._sp[1] = self._sp[0] + 1, self._sp[1] + acc
 
@@ -849,6 +896,8 @@ class Inkling2SpecForCausalLM(Inkling2ForCausalLM):
     # ------------------------------------------------------------ the plugin's calls
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, start_pos=None, sampling_params=None, **kw):
         self._draft, self._pend = None, None  # (a pass never committed: self.fed is empty, the prompt starts over)
+        if self.drafter is not None:
+            self._trim([int(t) for t in tokens[0, : int(torch.as_tensor(prompt_lens).reshape(-1)[0])].tolist()])
         self._sampled = sampling_params is not None and float(sampling_params.temperature[0]) >= 1e-5
         self._begin()
         return super().prefill_forward(tokens, page_table, kv_cache, prompt_lens, start_pos, sampling_params, **kw)
@@ -915,6 +964,8 @@ class Inkling2SpecForCausalLM(Inkling2ForCausalLM):
                 ids[0, 0] = self._sample(self._logits(), temp, top_k, top_p)
             else:
                 ids[0, 0] = int(ttnn.to_torch(self._out["token"]).reshape(-1)[0])
+                if _DUMP:
+                    _dump("vstep", pos, self._logits())
             fed.append(token)
             self.fed = fed
         else:
@@ -927,6 +978,9 @@ class Inkling2SpecForCausalLM(Inkling2ForCausalLM):
             ttnn.execute_trace(self.device, g.vtrace[(rows, pos % 4, g._shared(pos, rows))][0], cq_id=0, blocking=False)
             if not self._sampled:
                 ids[0, :rows] = ttnn.to_torch(g.vtok[rows]).reshape(-1)[:rows].to(torch.int32)
+                for r in range(rows) if _DUMP else ():
+                    ttnn.execute_trace(self.device, self.vtail[r][0], cq_id=0, blocking=False)
+                    _dump(f"verify{rows}", pos + r, self._vrow_logits(r))
             else:
                 # row r's token = one draw on row r's logits, rows in order, while the draws are the drafts (the
                 # plugin's walk reads no column after the first miss). The tails run one row ahead of the draws.
