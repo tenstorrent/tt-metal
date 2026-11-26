@@ -122,7 +122,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    if constexpr (unpack_to_dest)
+                    if constexpr (unpack_to_dest && MATH_TRANSPOSE_FACES && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        // transpose_tile: one DEST loan per tile, holding that tile's unpack and dummy SrcB valid.
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                            _llk_unpack_unary_operand_to_dest_tile_(block * tiles_in_block + i /*l1_tile_idx*/, i /*dst_tile_idx*/);
+                            _llk_unpack_set_srcB_dummy_valid_();
+                            _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                        }
+                    }
+                    else if constexpr (unpack_to_dest)
                     {
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
@@ -139,11 +150,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
                     }
 
-                    // After datacopy consumes SrcA and clears its dvalid, provide
-                    // dummy SrcA+SrcB dvalid so transpose dest can use srcA/B.
-                    for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                    if constexpr (!(unpack_to_dest && MATH_TRANSPOSE_FACES && PERF_RUN_TYPE == PerfRunType::L1_TO_L1))
                     {
-                        _llk_unpack_set_srcB_dummy_valid_();
+                        // After datacopy consumes SrcA and clears its dvalid, provide
+                        // dummy SrcA+SrcB dvalid so transpose dest can use srcA/B.
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_unpack_set_srcB_dummy_valid_();
+                        }
                     }
                 }
             }
@@ -194,7 +208,7 @@ inline void run_datacopy_transpose_loop(
                     _llk_math_eltwise_unary_datacopy_(dst_index + i);
                 }
             }
-            else if constexpr (sync_dest)
+            else if constexpr (sync_dest && !MATH_TRANSPOSE_FACES)
             {
                 _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
                 _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
@@ -205,6 +219,12 @@ inline void run_datacopy_transpose_loop(
             _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
             for (std::uint32_t i = 0; i < tiles_in_block; ++i)
             {
+                if constexpr (sync_dest && unpack_to_dest && MATH_TRANSPOSE_FACES)
+                {
+                    // transpose_tile lends DEST to unpack for each tile.
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                }
                 _llk_math_transpose_dest_(dst_index + i);
             }
 
