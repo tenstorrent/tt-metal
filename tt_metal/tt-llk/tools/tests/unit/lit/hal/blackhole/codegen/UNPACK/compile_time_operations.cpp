@@ -181,16 +181,16 @@ extern "C" __attribute__((noinline, used)) void clear_after_matrix_bank()
 // CHECK-NEXT: ttunpacr_nop 0,0,0,0,0,0,0,2,1{{$}}
 // CHECK-NEXT: ret
 
-// The experimental both-bank clear is one UNPACR_NOP with Bank_Clr_Ctrl set and no data-valid handoff.
+// The experimental both-bank clear is one UNPACR_NOP with Bank_Clr_Ctrl set, the Matrix-bank wait, and no data-valid handoff.
 extern "C" __attribute__((noinline, used)) void clear_both_banks()
 {
-    unpack::experimental::clear_both_banks<unpack::experimental::BothBanksClear {.wait = unpack::ClearWait::MatrixBank}>(unpack::Unpacker1);
+    unpack::experimental::clear_both_banks<unpack::experimental::BothBanksClear {}>(unpack::Unpacker1);
     unpack::experimental::clear_both_banks<unpack::experimental::BothBanksClear {.value = unpack::ClearValue::NegativeInfinity}>(unpack::Unpacker0);
 }
 
 // CHECK-LABEL: <clear_both_banks>:
 // CHECK-NEXT: ttunpacr_nop 1,0,0,0,0,0,1,0,1{{$}}
-// CHECK-NEXT: ttunpacr_nop 0,0,0,0,0,1,1,1,1{{$}}
+// CHECK-NEXT: ttunpacr_nop 0,0,0,0,0,0,1,1,1{{$}}
 // CHECK-NEXT: ret
 
 //--- codegen.cpp
@@ -205,8 +205,7 @@ extern "C" __attribute__((noinline, used)) void store_encoded_operations(std::ui
     words[1] = unpack::Unpacker1.operation().increment_context_counter();
     words[2] = unpack::Unpacker0.operation().flush_row_start_cache<unpack::CacheScope::AllEntries>();
     words[3] = unpack::Unpacker1.operation().clear<unpack::Clear {.handoff = unpack::SrcHandoff::FlipAndSetDataValid}>();
-    words[4] =
-        unpack::experimental::clear_both_banks_operation<unpack::experimental::BothBanksClear {.wait = unpack::ClearWait::MatrixBank}>(unpack::Unpacker1);
+    words[4] = unpack::experimental::clear_both_banks_operation<unpack::experimental::BothBanksClear {}>(unpack::Unpacker1);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_store_encoded_operations(std::uint32_t* words)
@@ -406,7 +405,7 @@ extern "C" __attribute__((noinline, used)) void reference_clear_srca_after_matri
 extern "C" __attribute__((noinline, used)) void clear_srcb_both_banks()
 {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-    unpack::experimental::clear_both_banks<unpack::experimental::BothBanksClear {.wait = unpack::ClearWait::MatrixBank}>(unpack::Unpacker1);
+    unpack::experimental::clear_both_banks<unpack::experimental::BothBanksClear {}>(unpack::Unpacker1);
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
 }
 
