@@ -446,6 +446,8 @@ def test_pin_core_nd_reruns_every_failing_device(tmp_path):
     assert call["cmd"].startswith("pytest " + shlex.quote(PIN_MINIMAL) + " --didt-workload-iterations=2000")
     assert call["env"]["DIDT_DEVICE_ID"] == "19" and "TT_MM_THROTTLE_PERF" not in call["env"]
     assert shell.reset_cmds("nd/minimal_pin_core_dev19") == ["tt-smi -glx_reset_auto"]
+    # run.log shows the pin verdict, not the raw pytest result it was derived from
+    assert "nd:minimal pin_core dev 19 result WARN not reproduced on chip alone" in (run_dir / "run.log").read_text()
 
 
 def test_pin_core_reproduced_nd_is_fail_with_rerun_cores(tmp_path):
