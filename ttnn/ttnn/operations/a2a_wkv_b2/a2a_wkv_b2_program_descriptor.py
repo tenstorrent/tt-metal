@@ -230,7 +230,7 @@ def create_mesh_program_descriptor(
         ]
 
         # ---------------- worker kernels ----------------
-        w_reader_ct = [CB_WEIGHT, CB_ATTN_RM, Kt, Nt, Mt, mt_block, T, stick_bytes, attn_page_bytes, w_tile_bytes]
+        w_reader_ct = [CB_WEIGHT, CB_ATTN_RM, Kt, Nt, Mt, mt_block, T, stick_bytes, attn_page_bytes, w_tile_bytes, TILE]
         w_reader_ct += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
         w_reader_ct += ttnn.TensorAccessorArgs(weight).get_compile_time_args()
         w_reader_rt = ttnn.RuntimeArgs()

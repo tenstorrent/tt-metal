@@ -28,10 +28,10 @@ void kernel_main() {
     constexpr uint32_t stick_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t attn_page_bytes = get_compile_time_arg_val(8);
     constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(9);
-    constexpr auto attn_args = TensorAccessorArgs<10>();
+    constexpr uint32_t tile_h = get_compile_time_arg_val(10);  // token rows per tile row (host TILE)
+    constexpr auto attn_args = TensorAccessorArgs<11>();
     constexpr auto w_args = TensorAccessorArgs<attn_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t tile_h = 32;
     constexpr uint32_t num_mt_blocks = (Mt + mt_block - 1) / mt_block;
     constexpr uint32_t w_block_tiles = Kt * Nt;
 

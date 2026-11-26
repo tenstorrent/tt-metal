@@ -30,6 +30,10 @@ void kernel_main() {
     constexpr uint32_t l1_alignment = get_compile_time_arg_val(7);
     constexpr auto out_args = TensorAccessorArgs<8>();
 
+    // tiles_per_packet is clamped on the host to the scatter cap (and the fabric payload); restated
+    // here only as a guard, never as a second source of the packet size.
+    static_assert(tiles_per_packet >= 1 && tiles_per_packet <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+
     constexpr uint32_t num_mt_blocks = (Mt + mt_block - 1) / mt_block;
     constexpr uint32_t tiles_per_source_head = ring_size * Mt * Nt;
 
@@ -74,7 +78,7 @@ void kernel_main() {
     [[maybe_unused]] auto scatter_ch =
         stream.arm_scatter_write(tile_bytes, tiles_per_packet > 1 ? tiles_per_packet : 2);
 
-    uint64_t dst_addrs[4] = {0, 0, 0, 0};
+    uint64_t dst_addrs[tiles_per_packet] = {};
     for (uint32_t mb = 0; mb < num_mt_blocks; ++mb) {
         const uint32_t mt0 = mb * mt_block;
         const uint32_t mt_rows = (Mt - mt0) < mt_block ? (Mt - mt0) : mt_block;
