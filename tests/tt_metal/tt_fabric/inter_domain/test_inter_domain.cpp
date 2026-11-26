@@ -396,7 +396,9 @@ void run(Mode mode) {
             }
         }
         Side sent;
-        std::map<uint64_t, Program> programs;  // all at once: every chip's sends in one program, a core each
+        // all at once: in waves, each chip's sends a core each; a chip's next send in the next wave, as two could share
+        // a router's worker channel (one worker at a time). Routes' sends each have their cable's own: one wave.
+        std::map<uint32_t, std::map<uint64_t, Program>> waves;
         std::map<uint64_t, uint32_t> cores_used;
         for (auto& send : sends) {
             IDevice* dev = device_of.at(send.from);
@@ -412,7 +414,7 @@ void run(Mode mode) {
             }
             tt::tt_metal::detail::WriteToDeviceL1(dev, core, base + kSrcOffset, data);
             Program single = CreateProgram();
-            Program& program = all_at_once ? programs[send.from] : single;
+            Program& program = all_at_once ? waves[mode == Mode::Routes ? 0 : k - 1][send.from] : single;
             const auto kernel = CreateKernel(
                 program,
                 "tests/tt_metal/tt_fabric/inter_domain/kernels/inter_domain_sender.cpp",
@@ -469,7 +471,7 @@ void run(Mode mode) {
                 distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, true);
             }
         }
-        if (all_at_once && !programs.empty()) {
+        for (auto& [_, programs] : waves) {
             distributed::MeshWorkload workload;
             for (auto& [asic, program] : programs) {
                 workload.add_program(distributed::MeshCoordinateRange(coord_of.at(asic)), std::move(program));
