@@ -182,6 +182,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("INIT")
+        // copy_init's ALU config, unpack to dest included, before the datacopy init.
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
         if constexpr (!unpack_to_dest)
         {
             // Math isolate runs keep the FPU→PACK dest-dvalid producer setup.
