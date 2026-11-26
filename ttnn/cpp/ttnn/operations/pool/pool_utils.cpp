@@ -4,7 +4,6 @@
 #include "pool_utils.hpp"
 #include <limits>
 #include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt_stl/assert.hpp>
@@ -109,9 +108,9 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
     return pconfig;
 }
 
-DataType get_index_data_type(uint32_t in_h, uint32_t in_w) {
+DataType get_index_data_type(uint32_t in_h, uint32_t in_w, tt::ARCH arch) {
     // Quasar has no UInt16/UInt32 formats and its SFPU integer add is Int32-only.
-    if (tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR) {
+    if (arch == tt::ARCH::QUASAR) {
         return DataType::INT32;
     }
     uint32_t hw = in_h * in_w;
@@ -135,9 +134,10 @@ FactoryParameters get_factory_parameters(
     bool return_indices,
     uint32_t in_h,
     uint32_t in_w,
-    const Layout& output_layout) {
+    const Layout& output_layout,
+    tt::ARCH arch) {
     uint32_t multi_buffering_factor = 2;
-    const bool is_quasar = tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR;
+    const bool is_quasar = arch == tt::ARCH::QUASAR;
     // Quasar has no split reader: its MPWI reader0/reader1 pair is an input producer plus a writer
     // sharing one input CB, and non-MPWI uses one multi-threaded reader.
     const bool split_reader = !is_quasar;
@@ -155,7 +155,7 @@ FactoryParameters get_factory_parameters(
     // since block float formats don't have a fixed datum size per element (they use block compression)
     auto dtype = is_block_float(input_dtype) ? DataType::BFLOAT16 : input_dtype;
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
-    auto index_dtype = get_index_data_type(in_h, in_w);
+    auto index_dtype = get_index_data_type(in_h, in_w, arch);
     tt::DataFormat index_format = datatype_to_dataformat_converter(index_dtype);
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output_dtype);
 
@@ -233,9 +233,9 @@ uint32_t PoolCBSizes::local_cb_total() const {
 }
 
 uint32_t PoolCBSizes::global_cb_total() const {
-    uint32_t total = sliding_window::align_buffer(out_cb_pagesize * out_cb_npages);
+    uint32_t total = sliding_window::align_buffer(out_cb_pagesize * out_cb_npages, dram_alignment);
     if (has_out_idx) {
-        total += sliding_window::align_buffer(out_idx_cb_pagesize * out_idx_cb_npages);
+        total += sliding_window::align_buffer(out_idx_cb_pagesize * out_idx_cb_npages, dram_alignment);
     }
     return total;
 }
@@ -250,10 +250,12 @@ PoolCBSizes calculate_pool_cb_sizes(
     const DataType& output_dtype,
     const std::array<uint32_t, 2>& output_shard_shape,
     bool config_tensor_in_dram,
+    uint32_t dram_alignment,
     std::optional<uint32_t> reader_indices_actual_page_size,
     std::optional<uint32_t> scalar_config_actual_page_size,
     uint32_t pre_tilize_tile_rows) {
     PoolCBSizes sizes;
+    sizes.dram_alignment = dram_alignment;
     const bool is_output_tiled = output_layout == Layout::TILE;
 
     // Scalar CB (coefficient of reduce)
@@ -346,6 +348,7 @@ PoolCBSizes calculate_pool_cb_sizes(
 }
 
 pool_op_l1_usage calculate_L1_usage(
+    const tt::tt_metal::distributed::MeshDevice& device,
     DataType input_dtype,
     uint32_t in_h,
     uint32_t in_w,
@@ -390,7 +393,8 @@ pool_op_l1_usage calculate_L1_usage(
         return_indices,
         in_h,
         in_w,
-        output_layout);
+        output_layout,
+        tt::tt_metal::experimental::get_device_properties(device).arch());
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
@@ -404,6 +408,7 @@ pool_op_l1_usage calculate_L1_usage(
         output_dtype,
         {output_shard_shape[0], output_shard_shape[1]},
         config_tensor_in_dram,
+        tt::tt_metal::experimental::get_device_properties(device).dram_alignment(),
         /*reader_indices_actual_page_size=*/std::nullopt,
         /*scalar_config_actual_page_size=*/std::nullopt,
         pre_tilize_tile_rows);
@@ -419,6 +424,7 @@ pool_op_l1_usage calculate_L1_usage(
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
+    const tt::tt_metal::distributed::MeshDevice& device,
     const DataType& input_dtype,
     const Layout& input_layout,
     CoreCoord compute_grid_size,
@@ -480,6 +486,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
                 input_parallel_config};
         }
         pool_op_l1_usage l1_usage = calculate_L1_usage(
+            device,
             input_dtype,
             sliding_window_config.input_hw.first,
             sliding_window_config.input_hw.second,
@@ -626,6 +633,7 @@ uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) 
 }
 
 pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
+    const tt::tt_metal::distributed::MeshDevice& device,
     uint32_t slice_input_height,
     uint32_t slice_input_width,
     uint32_t slice_output_height,
@@ -721,7 +729,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
 
     // Pad CBs: 2 CBs with 1 page each of aligned stick size
     const uint32_t stick_nbytes = input_shard_shape[1] * pool_datum_size;
-    const uint32_t alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t alignment = tt::tt_metal::experimental::get_device_properties(device).node_local_mem_alignment();
     uint32_t aligned_stick_nbytes = tt::round_up(stick_nbytes, alignment);
     uint32_t pad_cb_size = 2 * aligned_stick_nbytes;  // 2 CBs
     halo_cb_overhead += pad_cb_size;
@@ -766,6 +774,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         input_memory_config.memory_layout(), input_memory_config.buffer_type(), output_shard_spec);
 
     pool_op_l1_usage pool_l1 = calculate_L1_usage(
+        device,
         dtype,
         sliding_window_config.input_hw.first,
         sliding_window_config.input_hw.second,

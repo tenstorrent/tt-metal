@@ -55,6 +55,7 @@ bool determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_
 // true per-core page size; auto-shard estimation passes std::nullopt and falls back to the worst
 // case (1 uint16 index per output row).
 conv_op_l1_usage calculate_L1_usage(
+    const tt::tt_metal::distributed::MeshDevice& device,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Conv2dBlockConfig& block_config,
     const Conv2dParallelizationConfig& pconfig,

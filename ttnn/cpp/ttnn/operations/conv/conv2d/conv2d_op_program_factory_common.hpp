@@ -64,6 +64,7 @@ struct CBInfo {
 // size so the predicted READER_INDICES CB footprint matches the CB the factory creates. Auto-shard
 // L1 estimation passes std::nullopt and falls back to the worst case (1 uint16 index per output row).
 std::vector<CBInfo> get_cb_info(
+    const tt::tt_metal::distributed::MeshDevice& device,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Conv2dBlockConfig& block_config,
     const Conv2dParallelizationConfig& pconfig,
@@ -94,6 +95,7 @@ bool is_split_reader_viable(
     uint32_t input_channels_padded,
     uint32_t kernel_width,
     tt::ARCH arch,
+    uint32_t l1_alignment,
     DataType input_datatype,
     uint32_t weights_block_ntiles,
     uint32_t weights_tile_size,

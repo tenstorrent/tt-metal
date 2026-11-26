@@ -1314,8 +1314,7 @@ Tensor move_config_tensor_to_device(
     return config_tensor.to_device(device, memory_config);
 }
 
-uint32_t align_buffer(uint32_t size) {
-    uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
+uint32_t align_buffer(uint32_t size, uint32_t alignment_bytes) {
     uint32_t factor = (size + alignment_bytes - 1) / alignment_bytes;
     return factor * alignment_bytes;
 };

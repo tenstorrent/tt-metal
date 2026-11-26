@@ -19,6 +19,7 @@
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <algorithm>
@@ -339,7 +340,8 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         return_indices,
         in_h,
         in_w,
-        output_layout);
+        output_layout,
+        input.device()->arch());
     uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
     uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
     uint32_t pad_h = pad_t + pad_b;
@@ -368,6 +370,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         outputs[0].dtype(),
         {output_shard_shape[0], output_shard_shape[1]},
         config_tensor_in_dram,
+        tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment(),
         reader_indices_actual_page_size);
 
     const auto& input_shape = input.padded_shape();

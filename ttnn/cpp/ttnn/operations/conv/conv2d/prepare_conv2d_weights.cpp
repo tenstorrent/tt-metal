@@ -32,6 +32,7 @@
 #include <tt-metalium/data_formats/bfloat4.hpp>
 #include <tt-metalium/data_formats/bfloat8.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 namespace ttnn::operations::conv {
 using namespace tt;
@@ -1132,8 +1133,10 @@ static Conv2dBlockConfig get_opt_block_config(
     const MemoryConfig& input_memory_config,
     const bool has_bias) {
     auto compute_grid_size = device->compute_with_storage_grid_size();
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*device);
 
     conv_config = determine_conv_config_for_auto_shard(
+        *device,
         conv_config,
         mm_conv,
         batch_size,
@@ -1165,7 +1168,8 @@ static Conv2dBlockConfig get_opt_block_config(
         input_layout,
         input_memory_config.buffer_type() == BufferType::DRAM,
         mm_conv,
-        input_memory_config);
+        input_memory_config,
+        device_props.node_local_mem_alignment());
 
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
@@ -1231,7 +1235,8 @@ static Conv2dBlockConfig get_opt_block_config(
         in_channels_padded,
         kernel_size[1],
         dilation[1],
-        input_dtype);
+        input_dtype,
+        device_props.arch());
 
     return determine_per_core_conv_block_config(
         parallel_config,
@@ -1439,8 +1444,14 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         conv_config.shard_layout = input_memory_config.memory_layout();
     }
 
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*device);
     uint32_t input_channels_alignment = get_input_channels_alignment(
-        conv_config.shard_layout.value(), input_layout, is_dram_conv, mm_conv, input_memory_config);
+        conv_config.shard_layout.value(),
+        input_layout,
+        is_dram_conv,
+        mm_conv,
+        input_memory_config,
+        device_props.node_local_mem_alignment());
 
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
@@ -1477,6 +1488,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             device->compute_with_storage_grid_size(),
             input_layout,
             is_dram_conv ? BufferType::DRAM : BufferType::L1,
+            device_props.node_local_mem_alignment(),
             parallel_config,
             conv_config.act_block_h_override);
 
@@ -1504,7 +1516,12 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             has_bias);
 
         input_channels_alignment = get_input_channels_alignment(
-            conv_config.shard_layout.value(), input_layout, false, mm_conv, input_tensor_sharded_memory_config);
+            conv_config.shard_layout.value(),
+            input_layout,
+            false,
+            mm_conv,
+            input_tensor_sharded_memory_config,
+            device_props.node_local_mem_alignment());
     }
 
     auto output_compute_grid_size =
@@ -1522,7 +1539,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         in_channels_padded,
         kernel_size[1],
         dilation[1],
-        input_dtype);
+        input_dtype,
+        device_props.arch());
 
     const bool auto_shard = !input_memory_config.is_sharded() && !conv_config.shard_layout.has_value();
     return Conv2dWeightsBiasPrepConfig(
