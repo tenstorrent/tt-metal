@@ -58,9 +58,9 @@ static Tensor convert_output_layout(const Tensor& tensor, const std::optional<La
     TT_FATAL(
         *output_layout != Layout::ROW_MAJOR ||
             (!tt::tt_metal::is_block_float(tensor.dtype()) && !tt::tt_metal::is_mx(tensor.dtype())),
-        "output_layout=ROW_MAJOR is not supported for a {} result: block-float and MX formats only exist in "
-        "TILE layout, so honoring the request would silently widen the dtype to BFLOAT16. Reduce to "
-        "TILE and typecast explicitly if a row-major result is needed.",
+        "output_layout=ROW_MAJOR is not supported for a {} result: block-float formats only exist in "
+        "TILE layout (as do the MX formats), so honoring the request would silently widen the dtype to "
+        "BFLOAT16. Reduce to TILE and typecast explicitly if a row-major result is needed.",
         tensor.dtype());
     return ttnn::to_layout(tensor, *output_layout);
 }
