@@ -141,6 +141,20 @@ message MeshGraphDescriptor {
     // Top-level pinnings section (separate from descriptors and instances).
     // Maps logical fabric nodes to physical ASIC positions for pinning constraints.
     repeated AsicPinning pinnings = 5;
+
+    // Optional: the hardware an inter-domain fabric domain reserves. VC2 then spans it as one grid, including chips the
+    // workload's meshes leave unused (their routers carry VC2 only).
+    InterDomain inter_domain = 6;
+}
+
+// -----------------------------------------------------------------------------
+// InterDomain
+// The grid VC2 spans across a fabric domain: two LINE dims whose product is at least the workload's chip count.
+//
+// Example (a 4x4 reserved for a pipeline of four 1x2 meshes):
+//   inter_domain { domain_topology { dims: [ 4, 4 ] } }
+message InterDomain {
+    TorusTopology domain_topology = 1;
 }
 
 // -----------------------------------------------------------------------------

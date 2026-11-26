@@ -786,6 +786,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(
         validate_graph_descriptors(proto, all_errors);
         validate_graph_topology_and_connections(proto, all_errors);
         validate_pinnings(proto, all_errors);
+        validate_inter_domain(proto, all_errors);
         if (!all_errors.empty()) {
             return all_errors;
         }
@@ -815,6 +816,21 @@ void MeshGraphDescriptor::populate() {
     populate_inter_mesh_policy();
 
     populate_pinnings();
+
+    if (proto_->has_inter_domain()) {
+        const auto& dims = proto_->inter_domain().domain_topology().dims();
+        inter_domain_shape_ = tt::tt_metal::distributed::MeshShape(dims[0], dims[1]);
+        size_t chips = 0;
+        for (const auto mesh : mesh_instances_) {
+            chips += get_instance(mesh).sub_instances.size();
+        }
+        TT_FATAL(
+            inter_domain_shape_->mesh_size() >= chips,
+            "inter_domain: domain_topology {}x{} is smaller than the workload's {} chips",
+            dims[0],
+            dims[1],
+            chips);
+    }
 }
 
 void MeshGraphDescriptor::populate_inter_mesh_policy() {
@@ -2395,6 +2411,24 @@ void MeshGraphDescriptor::populate_pinnings() {
     // A logical fabric node may appear in several pinning groups. Each group is carried through as its own
     // constraint; the consumer filters out whatever is not present on the physical mesh being solved and
     // applies the rest, so a node listed in a wide group and in a 1:1 anchor is narrowed by the anchor.
+}
+
+void MeshGraphDescriptor::validate_inter_domain(
+    const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    if (!proto.has_inter_domain()) {
+        return;
+    }
+    const auto& topology = proto.inter_domain().domain_topology();
+    if (topology.dims_size() != 2 || topology.dims(0) <= 0 || topology.dims(1) <= 0) {
+        error_messages.push_back("inter_domain: domain_topology needs two positive dims");
+        return;
+    }
+    for (const auto type : topology.dim_types()) {
+        if (type != proto::TorusTopology::LINE) {
+            error_messages.push_back("inter_domain: domain_topology dims are LINE (VC2 has no wraps)");
+            return;
+        }
+    }
 }
 
 void MeshGraphDescriptor::validate_pinnings(

@@ -358,6 +358,63 @@ TEST(MeshGraphDescriptorTests, InferFabricTypePerMeshInMultiMeshGraph) {
     EXPECT_EQ(got, (std::set<FabricType>{FabricType::TORUS_X, FabricType::TORUS_Y}));
 }
 
+namespace {
+// two 1x4 meshes, chained, with an optional inter_domain block
+std::string two_line_meshes(const std::string& inter_domain) {
+    return R"proto(
+               mesh_descriptors: {
+                 name: "M0"
+                 arch: BLACKHOLE
+                 device_topology: { dims: [ 1, 4 ] }
+                 channels: { count: 2 }
+                 host_topology: { dims: [ 1, 1 ] }
+               }
+               graph_descriptors: {
+                 name: "G0"
+                 type: "FABRIC"
+                 instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+                 instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+                 connections: {
+                   nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+                   nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+                   channels: { count: 2 }
+                 }
+               }
+               top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+           )proto" +
+           inter_domain;
+}
+}  // namespace
+
+TEST(MeshGraphDescriptorTests, InterDomainShapeOptional) {
+    MeshGraphDescriptor desc(two_line_meshes(""));
+    EXPECT_FALSE(desc.get_inter_domain_shape().has_value());
+}
+
+TEST(MeshGraphDescriptorTests, InterDomainShapeReservesMoreThanTheWorkload) {
+    MeshGraphDescriptor desc(two_line_meshes("inter_domain: { domain_topology: { dims: [ 4, 4 ] } }"));
+    ASSERT_TRUE(desc.get_inter_domain_shape().has_value());
+    EXPECT_EQ(*desc.get_inter_domain_shape(), tt::tt_metal::distributed::MeshShape(4, 4));
+}
+
+TEST(MeshGraphDescriptorTests, InterDomainShapeSmallerThanTheWorkloadFails) {
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(two_line_meshes("inter_domain: { domain_topology: { dims: [ 2, 3 ] } }")); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("smaller than the workload's 8 chips")));
+}
+
+TEST(MeshGraphDescriptorTests, InterDomainShapeIsTwoLineDims) {
+    EXPECT_THAT(
+        ([&]() {
+            MeshGraphDescriptor desc(
+                two_line_meshes("inter_domain: { domain_topology: { dims: [ 4, 4 ] dim_types: [ RING, LINE ] } }"));
+        }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("dims are LINE")));
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(two_line_meshes("inter_domain: { domain_topology: { dims: [ 16 ] } }")); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("two positive dims")));
+}
+
 TEST(MeshGraphDescriptorTests, InvalidProtoNoMeshDescriptors) {
     std::string text_proto = R"proto(
         top_level_instance: { mesh: { mesh_descriptor: "M0" id: 0 } }

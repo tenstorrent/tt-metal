@@ -341,6 +341,11 @@ public:
     // (all-to-all). Groups are split by mesh at construction (regex and literal entries).
     const std::map<MeshId, std::vector<AsicPinningGroup>>& get_pinnings() const { return pinnings_; }
 
+    // The grid VC2 spans across an inter-domain fabric domain, where the MGD reserves one (`inter_domain`).
+    const std::optional<tt::tt_metal::distributed::MeshShape>& get_inter_domain_shape() const {
+        return inter_domain_shape_;
+    }
+
     // Textproto file this descriptor was loaded from; unset for string / programmatic / merged descriptors.
     const std::optional<std::filesystem::path>& get_file_path() const { return file_path_; }
 
@@ -374,6 +379,7 @@ private:
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
     std::map<MeshId, std::vector<AsicPinningGroup>> pinnings_;
+    std::optional<tt::tt_metal::distributed::MeshShape> inter_domain_shape_;
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
     bool inter_mesh_relaxed_policy_ = false;
     bool inter_mesh_policy_specified_ = false;
@@ -399,6 +405,8 @@ private:
     static void validate_graph_topology_and_connections(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_pinnings(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_inter_domain(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
     static void validate_legacy_requirements(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
