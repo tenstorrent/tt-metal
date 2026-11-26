@@ -196,7 +196,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
     {
         _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
     }
@@ -233,7 +233,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_pack_(i, block * OUTPUT_NUM_TILES_IN_BLOCK + i, tensor_shape);
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+                    {
+                        // Stands in for the idle math's post, so the section done's SEMGET never underflows.
+                        ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
                     {
                         _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                     }
