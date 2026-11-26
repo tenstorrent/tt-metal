@@ -162,6 +162,8 @@ jobs:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
             export TT_METAL_LOG_JIT_TELEMETRY=1
+            # The summary is logged at info; the CI image sets TT_LOGGER_LEVEL=warn.
+            export TT_LOGGER_LEVEL=info
             ${{ matrix.test-group.cmd }}
       - name: Print tt-smi data on failure
         if: ${{ failure() }}
