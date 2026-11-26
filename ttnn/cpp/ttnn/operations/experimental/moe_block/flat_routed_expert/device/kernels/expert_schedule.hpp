@@ -119,23 +119,37 @@ struct ExpertSchedule {
     uint32_t max_tokens = 0;                         // the most tokens of an entry
 };
 
-// Row tiles holding tokens in entry `entry`'s last sub-block.
+// Row tiles holding tokens in entry `entry`'s last sub-block (of ROWS rows: the x path's view takes
+// flat_options::x_rows_per_sub_block, to_x_schedule).
+template <uint32_t ROWS = flat_options::rows_per_sub_block>
 inline uint32_t last_sub_block_row_tiles(const ExpertSchedule& schedule, uint32_t entry) {
-    const uint32_t rows = schedule.tokens[entry] - (schedule.sub_blocks[entry] - 1u) * flat_options::rows_per_sub_block;
+    const uint32_t rows = schedule.tokens[entry] - (schedule.sub_blocks[entry] - 1u) * ROWS;
     return (rows + kTileRows - 1) / kTileRows;
+}
+
+// The x path's view of a schedule: every entry's sub-blocks counted at flat_options::x_rows_per_sub_block rows (with
+// row passes, a compute sub-block's x arrives as one x sub-block a pass, in pass order).
+inline void to_x_schedule(ExpertSchedule& schedule) {
+    schedule.total_sub_blocks = 0;
+    for (uint32_t entry = 0; entry < schedule.entries; ++entry) {
+        schedule.sub_blocks[entry] =
+            (schedule.tokens[entry] + flat_options::x_rows_per_sub_block - 1) / flat_options::x_rows_per_sub_block;
+        schedule.total_sub_blocks += schedule.sub_blocks[entry];
+    }
 }
 
 // Row tiles holding tokens in the schedule's sub-block `sub_block` (counted over all entries, in schedule order): a
 // full sub-block's for all but an entry's last. The x path ships only those; the compute computes only those.
+template <uint32_t ROWS = flat_options::rows_per_sub_block>
 inline uint32_t sub_block_row_tiles(const ExpertSchedule& schedule, uint32_t sub_block) {
     for (uint32_t entry = 0; entry < schedule.entries; ++entry) {
         if (sub_block < schedule.sub_blocks[entry]) {
-            return sub_block + 1u == schedule.sub_blocks[entry] ? last_sub_block_row_tiles(schedule, entry)
-                                                                : kSubBlockRowTiles;
+            return sub_block + 1u == schedule.sub_blocks[entry] ? last_sub_block_row_tiles<ROWS>(schedule, entry)
+                                                                : ROWS / kTileRows;
         }
         sub_block -= schedule.sub_blocks[entry];
     }
-    return kSubBlockRowTiles;
+    return ROWS / kTileRows;
 }
 
 // The loads' ring regions from the order the loads retire in (see Ring regions); false if some load would wait on a

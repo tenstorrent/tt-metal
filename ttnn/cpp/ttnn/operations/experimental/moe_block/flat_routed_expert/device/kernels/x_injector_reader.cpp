@@ -40,7 +40,7 @@ void kernel_main() {
     constexpr uint32_t rm_cb = get_named_compile_time_arg_val("x_row_major_cb");
     constexpr uint32_t row_bytes = get_named_compile_time_arg_val("x_page_bytes");
     constexpr uint32_t num_e = flat_options::local_experts;
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t mt = flat_options::x_row_tiles;  // (the x path's sub-blocks: to_x_schedule)
     constexpr uint32_t nsb = flat_options::super_blocks_per_sub_block;
     constexpr uint32_t batch = get_named_compile_time_arg_val("row_chunks_per_read_barrier");
     constexpr uint32_t sbt = flat_options::super_block_tiles;
@@ -85,6 +85,7 @@ void kernel_main() {
     // the tilizer gets this relay's super-block count in CB 6.
     ExpertSchedule schedule;
     load_schedule<num_e>(schedule, 3, schedule_scratch(ScratchOwner::Brisc));
+    to_x_schedule(schedule);
     {
         const uint32_t tot = schedule.total_sub_blocks * nsb;
         cb_reserve_back(tt::CBIndex::c_6, 1);

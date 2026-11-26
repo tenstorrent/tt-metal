@@ -173,7 +173,16 @@ FlatProgramHandles add_flat_routed_expert_program(
         banks);
     // x after the tilize and h after gate/up: bfp8 tiles, or bf16 with layout.x_bf16 / h_bf16 (the plan's sizes)
     const uint32_t x_tile = p.x_tile_bytes, h_tile = p.h_tile_bytes;
-    const uint32_t x_blk = MT * kKBlk, x_bytes = x_blk * x_tile;
+    // the x path's blocks: a row pass's rows with row passes (each pass then reads and frees its own x blocks, so the
+    // next sub-block's x streams in through the whole sub-block, not only behind its last pass), else a sub-block's.
+    // The ring keeps its bytes: x_ring_blocks of MT rows hold MT / XR times as many x blocks.
+    const uint32_t XR = p.gate_up_row_passes && !p.gate_up_full_sync &&
+                                !(std::getenv("FLAT_X_FULL_ROWS") && std::getenv("FLAT_X_FULL_ROWS")[0] == '1')
+                            ? std::max(1u, 4 / p.gate_up_weight_tiles_per_row)
+                            : MT;
+    TT_FATAL(MT % XR == 0, "flat_routed_expert: x rows {} do not divide the sub-block's {}", XR, MT);
+    const uint32_t x_blk = MT * kKBlk, x_ring_bytes = p.x_ring_blocks * x_blk * x_tile;
+    const uint32_t x_bytes = XR * kKBlk * x_tile;  // an x block
     const uint32_t PIN = cfg.pin;
     TT_FATAL(NR == 2, "flat_routed_expert: two gate/up rectangles");
 
@@ -347,7 +356,8 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["gate_up_units"] = p.units_per_core;
     options["gate_up_units_h_tiles"] = p.units_per_core ? p.h_tiles_per_core : 0;
     options["row_pass_rows"] = gu_rp ? std::max(1u, 4 / p.gate_up_weight_tiles_per_row) : 0;
-    options["x_ring_blocks"] = p.x_ring_blocks;
+    options["x_ring_blocks"] = p.x_ring_blocks * (MT / XR);
+    options["x_row_tiles"] = XR;
     options["y_row_major"] = cfg.y_row_major ? 1 : 0;
     // (MEASUREMENT ONLY: the kernels' wait probes, kernels/zz_probes.hpp)
     // (MEASUREMENT ONLY: FLAT_GU_K_STEPS=0 - the gate/up matmul a matmul_block a K step, the A/B of matmul_block_k)
@@ -840,7 +850,7 @@ FlatProgramHandles add_flat_routed_expert_program(
     arena_cb(0, 0, kRmChunks * 32 * p.row_segment_bytes, helper_relays, tt::DataFormat::Float16_b, p.row_segment_bytes);
     arena_cb(1, p.super_block_offset, kSbSlots * MT * p.super_block_tiles * x_tile, helper_relays, xf, x_tile);
     arena_cb(1, 0, p.gate_up_weight_ring_blocks * p.weight_block_tiles * w_tile, p.gate_up_cores, wf, w_tile);
-    arena_cb(0, p.x_ring_offset, p.x_ring_blocks * x_bytes, p.gate_up_cores, xf, x_tile);
+    arena_cb(0, p.x_ring_offset, x_ring_bytes, p.gate_up_cores, xf, x_tile);
     arena_cb(3, p.h_local_offset, p.down_h_buffers * MT * p.h_tiles_per_core * h_tile, p.gate_up_cores, hf, h_tile);
     arena_cb(16, p.pack_cb_offset, 2048, p.gate_up_cores, tt::DataFormat::Float16_b, 2048);
     arena_cb(2, p.down_h_offset, p.down_h_buffers * p.down_h_buffer_tiles * h_tile, p.down_cores, hf, h_tile);

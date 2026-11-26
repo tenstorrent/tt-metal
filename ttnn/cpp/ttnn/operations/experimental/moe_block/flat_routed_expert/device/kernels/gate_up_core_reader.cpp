@@ -46,7 +46,9 @@ void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
     constexpr uint32_t x_cb = get_named_compile_time_arg_val("x_cb");
     constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
-    constexpr uint32_t x_blk = mt * flat_options::x_block_k_tiles;
+    // (x blocks: flat_options::x_row_tiles row tiles - a row pass's with row passes, to_x_schedule)
+    constexpr uint32_t xmt = flat_options::x_row_tiles;
+    constexpr uint32_t x_blk = xmt * flat_options::x_block_k_tiles;
     constexpr uint32_t in1_cb = get_named_compile_time_arg_val("weight_cb");
     constexpr uint32_t slot = flat_options::gate_up_block_tiles;
     constexpr uint32_t nk_gu = flat_options::gate_up_blocks_per_expert;
@@ -103,6 +105,7 @@ void kernel_main() {
     publish_schedule(schedule, tt::CBIndex::c_6);
     const uint32_t total_w = schedule.loads * nk_gu;  // gate/up loads
     const uint32_t num_v = schedule.total_sub_blocks;
+    uint32_t x_num_v = 0;  // (the x path's sub-blocks, below)
     volatile tt_l1_ptr uint32_t* data_sem = sem(data_sem_id);
     volatile tt_l1_ptr uint32_t* go_sem = sem(go_sem_id);
     volatile tt_l1_ptr uint32_t* xarr_sem = sem(xarr_sem_id);
@@ -116,11 +119,15 @@ void kernel_main() {
         for (uint32_t l = 0; l < schedule.loads; ++l) {
             mb[1 + l] = schedule.load_expert[l] | (uint32_t(schedule.load_region[l]) << 8);
         }
-        // then the x forwarder's: the entries' sub-blocks and their last one's row tiles holding tokens
+        // then the x forwarder's: the entries' x sub-blocks (to_x_schedule) and their last one's row tiles holding
+        // tokens
         volatile tt_l1_ptr uint32_t* xe = mb + 1 + schedule.loads;
         xe[0] = schedule.entries;
         for (uint32_t a = 0; a < schedule.entries; ++a) {
-            xe[1 + a] = schedule.sub_blocks[a] | (last_sub_block_row_tiles(schedule, a) << 16);
+            constexpr uint32_t xr = flat_options::x_rows_per_sub_block;
+            const uint32_t xs = (schedule.tokens[a] + xr - 1) / xr;
+            x_num_v += xs;
+            xe[1 + a] = xs | (((schedule.tokens[a] - (xs - 1) * xr + kTileRows - 1) / kTileRows) << 16);
         }
         *sem(flat_options::gate_up_mailbox_sem) = 1;
     }
@@ -156,7 +163,7 @@ void kernel_main() {
     constexpr uint32_t x_cmd_buf = write_reg_cmd_buf;
     constexpr uint32_t h_trid = 8;
     static_assert(!x_fwd || (depth >= 1 && depth < h_trid));
-    constexpr uint32_t x_bytes = mt * flat_options::x_block_k_tiles * flat_options::x_tile_bytes;
+    constexpr uint32_t x_bytes = xmt * flat_options::x_block_k_tiles * flat_options::x_tile_bytes;
     constexpr uint32_t piece = x_bytes / xp;
     constexpr uint32_t nb =
         flat_options::super_blocks_per_sub_block * flat_options::super_block_tiles / flat_options::x_block_k_tiles;
@@ -171,8 +178,8 @@ void kernel_main() {
     uint32_t ca = 0, cs = 0, cv_end = nb, cnp = xp;  // the block cursor (gate_up_x_forwarder.cpp)
     auto set_np = [&]() {
         const uint32_t subs = ca < n_ent ? (xe[1 + ca] & 0xFFFF) : 1u;
-        const uint32_t lr = ca < n_ent && cs + 1 == subs ? (xe[1 + ca] >> 16) : mt;
-        cnp = (lr * xp + mt - 1) / mt;
+        const uint32_t lr = ca < n_ent && cs + 1 == subs ? (xe[1 + ca] >> 16) : xmt;
+        cnp = (lr * xp + xmt - 1) / xmt;
     };
     if constexpr (x_fwd) {
         set_np();
@@ -227,7 +234,7 @@ void kernel_main() {
     uint32_t granted = w_first, pushed = 0;
     uint32_t h_sent = 0, h_pending = 0;
 
-    const uint32_t x_total = num_v * nk_gu;
+    const uint32_t x_total = x_num_v * nk_gu;
     while (h_sent < num_v || pushed < total_w) {
         invalidate_l1_cache();
         x_step();

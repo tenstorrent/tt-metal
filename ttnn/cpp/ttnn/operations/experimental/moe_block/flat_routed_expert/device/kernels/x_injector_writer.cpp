@@ -32,7 +32,7 @@ constexpr uint32_t kXnh = 2;  // the helper relays feeding a primary
 
 void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t mt = flat_options::x_row_tiles;
     constexpr uint32_t tb = flat_options::x_tile_bytes;
     constexpr uint32_t x_slots = flat_options::x_ring_blocks;
     constexpr uint32_t xarr_sem = flat_options::x_arrived_sem;
@@ -102,6 +102,7 @@ void kernel_main() {
     constexpr uint32_t schedule_args = 7;
     ExpertSchedule schedule;
     load_schedule<num_e>(schedule, schedule_args, schedule_scratch(ScratchOwner::Ncrisc));
+    to_x_schedule(schedule);
     const uint32_t num_sb = schedule.total_sub_blocks * nsb;
     uint32_t sent = 0;
     constexpr uint32_t kChainDepth = 4;  // batches of head writes in flight (transaction ids 1..kChainDepth)
@@ -167,7 +168,7 @@ void kernel_main() {
         // along the snake, gate_up_core_reader.cpp
         chain_retire(kChainDepth - 1);  // (room for this batch's id)
         // (a short last sub-block: only its row tiles holding tokens go; the head's XARR still counts every piece)
-        const uint32_t lr = sub_block_row_tiles(schedule, b / nsb);
+        const uint32_t lr = sub_block_row_tiles<flat_options::x_rows_per_sub_block>(schedule, b / nsb);
         [[maybe_unused]] const uint32_t zz_i0 = ZZ_NOW();
         for (uint32_t k = 0; k < per_sb; ++k) {
             const uint32_t dst = ring + ((sent + k) % x_slots) * blk_bytes;

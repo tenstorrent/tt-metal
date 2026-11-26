@@ -244,19 +244,16 @@ FORCE_INLINE void compute_sub_block(uint32_t first_block, uint32_t first_slot, b
     cb_push_back(h_cb, row_tiles * h_row_tiles);
 }
 
-uint32_t x_blocks_freed = 0;  // (the x ring's read slot: x_blocks_freed % x_ring_blocks)
-
 // One sub-block in row passes, for when DST cannot hold all of a sub-block's gate/up tiles: each pass computes
-// pass_row_tiles row tiles over all K blocks, as compute_sub_block does. The passes read the same x and weight blocks,
-// which stay in their rings until the last pass frees them. Only the first pass waits for x (the blocks arrive in
-// order; the later passes find them all here), and the ring slot is stepped rather than recomputed: the unpack
-// thread's own work per block is on the matmul's critical path.
+// pass_row_tiles row tiles over all K blocks, as compute_sub_block does. The passes read the same weight blocks, which
+// stay in their ring until the last pass frees them; each pass has its own x blocks (flat_options::x_row_tiles =
+// pass_row_tiles: the x path sends a sub-block's x as one x sub-block a pass, in pass order), waited for and freed
+// block by block, so the next x streams in through the whole sub-block rather than only behind its last pass.
 FORCE_INLINE void compute_sub_block_in_row_passes(
     uint32_t first_block, uint32_t first_slot, bool frees_weights, uint32_t rows) {
-    constexpr uint32_t x_block_tiles = row_tiles * x_block_k_tiles;
-    constexpr uint32_t x_ring_blocks = flat_options::x_ring_blocks;
+    static_assert(flat_options::x_row_tiles == pass_row_tiles, "row passes: an x block holds a pass's rows");
+    constexpr uint32_t x_block_tiles = pass_row_tiles * x_block_k_tiles;
     const uint32_t passes = (rows + pass_row_tiles - 1) / pass_row_tiles;
-    const uint32_t front = x_blocks_freed % x_ring_blocks;  // the ring slot of the sub-block's first block
     ZZ_WAIT(zz_h_wait, cb_reserve_back(h_cb, row_tiles * h_row_tiles));
     for (uint32_t pass = 0; pass < passes; ++pass) {
         const uint32_t first_row = pass * pass_row_tiles;
@@ -265,8 +262,6 @@ FORCE_INLINE void compute_sub_block_in_row_passes(
         matmul_rows_init(pass_rows);
         ZZ_WAIT(zz_acquire, tile_regs_acquire());
         [[maybe_unused]] const uint32_t zz_m0 = ZZ_NOW();
-        // (unpacker indices do not wrap: a block past the ring's end gets a negative offset from the read pointer)
-        int32_t slot_offset = 0;  // block `block`'s slot - front, wrapped once past the ring's end
         // The load's weight blocks sit at ring slots first_slot .. in order, and a load is freed whole (in the last
         // pass of its last sub-block, block by block as used): block b's offset from the read pointer is w_base +
         // b blocks, or w_base for every block while the pass frees them.
@@ -275,10 +270,8 @@ FORCE_INLINE void compute_sub_block_in_row_passes(
             static_cast<int32_t>(weight_block_tiles);
         const bool freeing = last_pass && frees_weights;
         for (uint32_t block = 0; block < blocks_per_load; ++block) {
-            if (pass == 0) {  // (block by block: grouped waits / frees cost the x chain its slack)
-                ZZ_WAIT(zz_x_wait, cb_wait_front(x_cb, last_pass ? x_block_tiles : (block + 1) * x_block_tiles));
-            }
-            const uint32_t x_offset = last_pass ? 0 : static_cast<uint32_t>(slot_offset) * x_block_tiles;
+            // (block by block: grouped waits / frees cost the x chain its slack)
+            ZZ_WAIT(zz_x_wait, cb_wait_front(x_cb, x_block_tiles));
             const uint32_t wb = first_block + block;
             if (wb + 1 > weight_blocks_landed) {
                 ZZ_WAIT(zz_w_wait, cb_wait_front(weight_cb, (wb + 1 - weight_blocks_freed) * weight_block_tiles));
@@ -286,17 +279,11 @@ FORCE_INLINE void compute_sub_block_in_row_passes(
             }
             const uint32_t w_offset =
                 static_cast<uint32_t>(freeing ? w_base : w_base + static_cast<int32_t>(block * weight_block_tiles));
-            matmul_x_block<pass_row_tiles>(x_offset + first_row * x_block_k_tiles, w_offset, pass_rows);
-            if (last_pass) {
-                cb_pop_front(x_cb, x_block_tiles);
-                ++x_blocks_freed;
-                if (frees_weights) {
-                    free_weight_block();
-                }
+            matmul_x_block<pass_row_tiles>(0, w_offset, pass_rows);
+            cb_pop_front(x_cb, x_block_tiles);
+            if (freeing) {
+                free_weight_block();
             }
-            slot_offset = front + slot_offset + 1 == static_cast<int32_t>(x_ring_blocks)
-                              ? slot_offset + 1 - static_cast<int32_t>(x_ring_blocks)
-                              : slot_offset + 1;
         }
         tile_regs_commit();
         if constexpr (zz::on) {

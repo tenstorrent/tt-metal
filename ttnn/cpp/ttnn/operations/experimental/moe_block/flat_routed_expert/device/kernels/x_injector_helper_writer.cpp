@@ -29,7 +29,7 @@
 void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
     constexpr uint32_t sb_cb = get_named_compile_time_arg_val("x_super_block_cb");
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t mt = flat_options::x_row_tiles;
     constexpr uint32_t tb = flat_options::x_tile_bytes;
     constexpr uint32_t land_slots = get_named_compile_time_arg_val("x_landing_slots");
     constexpr uint32_t data_sem = get_named_compile_time_arg_val("x_primary_data_sem");
@@ -42,6 +42,7 @@ void kernel_main() {
     ExpertSchedule schedule;
     // RT 3 / 4: the primary's round (1 + helpers) and this helper's place in it (its super-blocks b % round == place)
     load_schedule<flat_options::local_experts>(schedule, 5, schedule_scratch(ScratchOwner::Ncrisc));
+    to_x_schedule(schedule);
     const uint32_t tot_all = schedule.total_sub_blocks * flat_options::super_blocks_per_sub_block,
                    x2s = moe_block_args::arg(5 + kScheduleArgs), x2k = moe_block_args::arg(6 + kScheduleArgs);
     const uint32_t tot_sb = tot_all > x2k ? (tot_all - x2k + x2s - 1) / x2s : 0;

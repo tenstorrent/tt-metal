@@ -18,7 +18,7 @@ constexpr uint32_t sbt = flat_options::super_block_tiles;  // K tiles per super-
 void kernel_main() {
     constexpr uint32_t rm_cb = get_named_compile_time_arg_val("x_row_major_cb");
     constexpr uint32_t sb_cb = get_named_compile_time_arg_val("x_super_block_cb");
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t mt = flat_options::x_row_tiles;
     cb_wait_front(tt::CBIndex::c_6, 1);  // this relay's super-block count (from x_injector_reader.cpp)
     const uint32_t num_sb = read_tile_value(tt::CBIndex::c_6, 0, 0);
     cb_pop_front(tt::CBIndex::c_6, 1);

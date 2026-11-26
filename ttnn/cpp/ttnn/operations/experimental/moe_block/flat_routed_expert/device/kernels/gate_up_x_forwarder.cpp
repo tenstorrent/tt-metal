@@ -39,7 +39,7 @@ void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
     zz::hist.start(moe_block_args::arg(6 + 1));  // (MEASUREMENT: the bank id)
     // (MT: row tiles a block; NB: x blocks a sub-block)
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t mt = flat_options::x_row_tiles;  // (x blocks: the receiver lists the x sub-blocks)
     constexpr uint32_t x_slots = flat_options::x_ring_blocks;
     constexpr uint32_t x_bytes = mt * flat_options::x_block_k_tiles * flat_options::x_tile_bytes;
     constexpr uint32_t xp = flat_options::x_chain_pieces, xarr_id = flat_options::x_arrived_sem;
