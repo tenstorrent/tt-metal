@@ -13,6 +13,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -83,6 +84,23 @@ ttnn::Tensor permute_impl(
 
     TT_FATAL(dims.size() == 4, "Only 4D tensor are supported for permute.");
     uint32_t N = dims[0], C = dims[1], H = dims[2], W = dims[3];
+
+    // An MX tile (Quasar) is not a flat element array: only the CN permute moves whole tiles. Every other
+    // interleaved MX permute runs in bfloat16 and is packed back to MX. The bfloat16 copy is 2x the MX size (more
+    // for a padded dim), so it is staged in DRAM rather than in the L1 the caller asked for.
+    if (tt::tt_metal::is_mx(a.dtype()) && !a.is_sharded() && !(N == 0 && C == 1 && H == 2 && W == 3) &&
+        !(N == 1 && C == 0 && H == 2 && W == 3)) {
+        const auto dram = ttnn::DRAM_MEMORY_CONFIG;
+        auto as_bf16 = ttnn::typecast(a, DataType::BFLOAT16, dram);
+        auto permuted = permute_impl(as_bf16, dims, dram, pad_value);
+        // typecast requires matching memory layouts: pack straight into an interleaved target, otherwise pack in
+        // DRAM and move the MX result to the (sharded) target.
+        const MemoryConfig target = output_mem_config.value_or(a.memory_config());
+        if (target.memory_layout() == permuted.memory_config().memory_layout()) {
+            return ttnn::typecast(permuted, a.dtype(), target);
+        }
+        return ttnn::to_memory_config(ttnn::typecast(permuted, a.dtype(), dram), target);
+    }
 
     auto formatted_input_tensor = a;
     // WH and CN should be supported without typecast.
