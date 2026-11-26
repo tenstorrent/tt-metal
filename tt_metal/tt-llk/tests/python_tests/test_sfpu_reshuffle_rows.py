@@ -143,12 +143,13 @@ def _run_sfpu_reshuffle_rows(
         test_config_kwargs={
             "test_name": "sources/sfpu_reshuffle_rows_test.cpp",
             "formats": formats,
+            # The mask is L1 stimulus; perf records it as a column so the masks stay distinct rows.
             "templates": [
                 APPROX_MODE(ApproximationMode.No),
                 TILE_COUNT(TILE_CNT),
                 LOOP_FACTOR(loop_factor),
-                RESHUFFLE_MASK(mask_name),
-            ],
+            ]
+            + ([RESHUFFLE_MASK(mask_name)] if is_perf else []),
             "runtimes": [],
             "variant_stimuli": StimuliConfig(
                 device_src_A,
