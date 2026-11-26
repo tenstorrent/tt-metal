@@ -288,8 +288,8 @@ inline void compute_du_and_dL_dgate(const uint32_t row) {
     //   du       = dL_dout * silu(gate), with silu(gate) = gate * s, into cb_du;
     //   dL_dgate = q * silu'(gate) * a, with silu'(gate) = s * (1 + gate - silu(gate)), into cb_dL_dgate;
     //   the scale components a * (gamma / rms_a) * du, summed into one cb_scale tile by packer L1 accumulation.
-    // silu'(gate) is evaluated entirely in fp32 DEST; swiglu_gate_bw_block's CB round trips lose precision. With
-    // fold_gain, cb_du gets gained_du = q * silu(gate) instead of du. cb_du keeps the whole row for the later stages.
+    // silu'(gate) is evaluated entirely in fp32 DEST. With fold_gain, cb_du gets gained_du = q * silu(gate) instead
+    // of du. cb_du keeps the whole row for the later stages.
     cb_reserve_back(cb_scale_idx, onetile);
     for (uint32_t col = 0; col < Wt; col += block_size) {
         // The input and gamma are read again after this loop, so their waits are cumulative; dL_dout and the gate are
