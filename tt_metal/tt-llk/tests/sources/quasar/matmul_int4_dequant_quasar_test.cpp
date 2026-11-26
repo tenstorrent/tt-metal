@@ -117,15 +117,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr ckernel::TensorShape tensor_shape_B = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 #endif
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
         // A partial last group would stay in a Dest section that is never handed to the SFPU.
         LLK_ASSERT(GROUP_KT_DIM > 0 && KT_DIM % GROUP_KT_DIM == 0, "KT_DIM must be a whole number of quantization groups");
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            _llk_math_pack_sync_init_<dest_sync>();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
@@ -462,13 +463,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     constexpr bool active = PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE;
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
-        }
-        else if constexpr (active)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
             if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)

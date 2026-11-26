@@ -130,13 +130,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces);
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            _llk_math_pack_sync_init_<dest_sync>();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Math isolate keeps the FPU→PACK dest-dvalid producer setup.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
@@ -233,6 +234,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE packs without a math↔pack handshake.
@@ -240,10 +246,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
-            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
             _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 

@@ -114,13 +114,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK  = params.INPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
 #endif
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            _llk_math_pack_sync_init_<dest_sync>();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Math isolate requires FPU destination ownership.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
@@ -194,16 +195,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res                     = params.buffer_Res;
 #endif
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
         // Clear a stale FPU-to-PACK wait in modes without a math handshake.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
-            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
             _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 

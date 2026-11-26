@@ -92,9 +92,11 @@ from `max_dest_tiles(dest_acc, dest_sync)`, which halves when `dest_acc=Yes`, so
 - `L1_TO_L1` hands Dest between threads with the semaphore scheme the compute
   API uses on Quasar (`reg_api.h`), not the dest-dvalid scheme; the two must
   not be mixed (`llk_math_common_api.h`, `llk_pack_common_api.h`):
-  - `INIT`: math `_llk_math_pack_sync_init_<dest_sync>()`, pack
-    `_llk_pack_dest_init_<p_pacr::PACK0, dest_sync>()`, unpack-to-dest
-    `_llk_unpack_dest_init_()`;
+  - before the `INIT` zone: math `_llk_math_pack_sync_init_<dest_sync>()`,
+    pack `_llk_pack_dest_init_<p_pacr::PACK0, dest_sync>()`. Production runs
+    them in `compute_kernel_hw_startup`, not in the op's init, so `INIT`
+    leaves them out. Unpack-to-dest still calls `_llk_unpack_dest_init_()`
+    in `INIT`;
   - per Dest section, math opens with `_llk_math_wait_for_dest_available_()`
     and closes with `_llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>()`;
     pack opens with `_llk_packer_wait_for_math_done_()` and closes with

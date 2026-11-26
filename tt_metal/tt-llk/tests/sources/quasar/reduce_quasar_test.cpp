@@ -108,13 +108,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Reduce-to-one folds every tile into DEST index 0 inside one section, the production REDUCE_ROW shape.
     const std::uint32_t tiles_per_section = IS_REDUCE_TO_ONE ? TILE_CNT : max_tiles_dest;
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            _llk_math_pack_sync_init_<dest_sync>();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Math isolate keeps the FPU→PACK dest-dvalid producer setup.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
@@ -194,6 +195,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
     const std::uint32_t output_tile_cnt       = IS_REDUCE_TO_ONE ? 1 : TILE_CNT;
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
         // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
@@ -201,10 +207,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
-            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
             _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
