@@ -237,6 +237,9 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         is_floating_point(input_tensor_b.dtype()),
         "Input tensor B must be a floating point type, got {}",
         input_tensor_b.dtype());
+    if (operation_attributes.output_dtype.has_value()) {
+        ttnn::operations::matmul::validate_matmul_output_dtype(operation_attributes.output_dtype.value());
+    }
     TT_FATAL(
         sparsity.layout() == ttnn::Layout::ROW_MAJOR,
         "Sparsity tensor must be ROW_MAJOR layout, got {}",

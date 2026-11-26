@@ -15,6 +15,11 @@ void CloneOperation::validate_inputs(
     const auto& input = tensor_args.input;
     if (operation_attributes.dtype != input.dtype()) {
         TT_FATAL(input.layout() == Layout::TILE, "Clone: data type conversion is only supported with tile layout");
+        TT_FATAL(
+            is_datacopy_safe_dtype_conversion(input.dtype(), operation_attributes.dtype),
+            "Clone: datacopy cannot convert {} -> {} (reinterprets bits); use ttnn.typecast.",
+            input.dtype(),
+            operation_attributes.dtype);
     }
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Clone: input must be on device");
     TT_FATAL(input.is_allocated(), "Clone: input must be allocated in buffer on device");

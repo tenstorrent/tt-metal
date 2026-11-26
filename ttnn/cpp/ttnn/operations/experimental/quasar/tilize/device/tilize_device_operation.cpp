@@ -4,6 +4,7 @@
 
 #include "tilize_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "tilize_multi_core_default_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
@@ -136,6 +137,13 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.dtype() != DataType::FP8_E4M3 || (operation_attributes.output_dtype == DataType::BFLOAT8_B),
         "FP8_E4M3 input requires output_dtype=BFLOAT8_B for tilize; the default output dtype would produce an "
         "invalid TILE output specification");
+    // Datacopy via unpack/pack cannot convert int<->float or uint16<->{int32,uint32}.
+    TT_FATAL(
+        ttnn::operations::data_movement::is_datacopy_safe_dtype_conversion(
+            input_tensor_a.dtype(), operation_attributes.output_dtype),
+        "tilize (quasar): datacopy cannot convert {} -> {} (reinterprets bits); use ttnn.typecast.",
+        input_tensor_a.dtype(),
+        operation_attributes.output_dtype);
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
 

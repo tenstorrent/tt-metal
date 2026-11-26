@@ -53,6 +53,12 @@ void ShardedToInterleavedPartialDeviceOperation::validate_on_program_cache_miss(
             input_tensor.layout() == Layout::TILE,
             "Input tensor layout must be TILE but got {}",
             input_tensor.layout());
+        TT_FATAL(
+            ttnn::operations::data_movement::is_datacopy_safe_dtype_conversion(input_tensor.dtype(), args.output_dtype),
+            "sharded_to_interleaved_partial: datacopy cannot convert {} -> {} (reinterprets bits); use "
+            "ttnn.typecast.",
+            input_tensor.dtype(),
+            args.output_dtype);
     }
 }
 

@@ -13,6 +13,7 @@
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
@@ -964,6 +965,10 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = args.input_tensors.at(1);
     const auto& optional_output_tensors = args.optional_output_tensors;
     const auto& optional_input_tensors = args.optional_input_tensors;
+
+    if (attributes.output_dtype.has_value()) {
+        ttnn::operations::matmul::validate_matmul_output_dtype(attributes.output_dtype.value());
+    }
 
     const auto& a_shape = operations::experimental::quasar::matmul::utilities::get_matmul_tensor_logical_shape(
         input_tensor_a, attributes.transpose_a);

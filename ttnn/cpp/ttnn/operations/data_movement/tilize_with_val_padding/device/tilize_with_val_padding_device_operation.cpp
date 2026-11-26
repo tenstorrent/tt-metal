@@ -119,6 +119,14 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
           operation_attributes.output_dtype != DataType::INT32),
         "INT32 tilize to {} is not supported on Quasar; the output must be INT32",
         operation_attributes.output_dtype);
+    // Datacopy via unpack/pack cannot convert across int<->float or uint16<->{int32,uint32}.
+    // to_layout(rm->TILE, dtype=) on non-tile-aligned shapes lands here.
+    TT_FATAL(
+        ttnn::operations::data_movement::is_datacopy_safe_dtype_conversion(
+            input_tensor.dtype(), operation_attributes.output_dtype),
+        "tilize_with_val_padding: datacopy cannot convert {} -> {} (reinterprets bits); use ttnn.typecast.",
+        input_tensor.dtype(),
+        operation_attributes.output_dtype);
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     if (input_tensor.dtype() == DataType::FP8_E4M3) {
