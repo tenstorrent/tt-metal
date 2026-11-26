@@ -275,3 +275,106 @@ _FABRIC_1D_CASES = [
 @pytest.mark.parametrize("use_mcast", [True, False], ids=["mcast", "relay"])
 def test_all_gather_minimal_matmul_fabric1d(mesh_device, case, use_mcast):
     _run(mesh_device, **case, use_mcast=use_mcast)
+
+
+def _run_gather_in1(
+    mesh_device,
+    *,
+    gather_axis,
+    rows,
+    K,
+    n,
+    M_block,
+    K_block,
+    N_block,
+    subblock_h,
+    subblock_w,
+    transpose_b,
+):
+    """in0 [rows, K], whole on every device, times in1 [K, n] gathered along K (gather_in1). in1 is held as it is,
+    [K / ring, n], or with transpose_b as its transpose, [n, K / ring]."""
+    full_grid = mesh_device.compute_with_storage_grid_size()
+    grid = ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
+    matmul_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    dims = [None, None]
+    dims[gather_axis] = 1 if transpose_b else 0
+
+    def to_device(tensor, mapper):
+        return ttnn.from_torch(
+            tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
+        )
+
+    torch.manual_seed(0)
+    torch_inputs = [torch.randn(rows, K) for _ in range(NUM_CALLS)]
+    torch_in1 = torch.randn(K, n)
+    tt_inputs = [to_device(x, ttnn.ReplicateTensorToMesh(mesh_device)) for x in torch_inputs]
+    arguments = dict(
+        weight_tensor=to_device(
+            torch_in1.T.contiguous() if transpose_b else torch_in1,
+            ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=tuple(dims)),
+        ),
+        config=ttnn.MinimalMatmulConfig(
+            M_block_size=M_block,
+            K_block_size=K_block,
+            N_block_size=N_block,
+            subblock_h=subblock_h,
+            subblock_w=subblock_w,
+            compute_with_storage_grid_size=grid,
+        ),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
+        multi_device_global_semaphore=[ttnn.create_global_semaphore(mesh_device, matmul_cores, 0) for _ in range(2)],
+        barrier_semaphore=ttnn.create_global_semaphore(mesh_device, matmul_cores, 0),
+        persistent_output_buffer=ttnn.allocate_tensor_on_device(
+            ttnn.Shape([n, K]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        ),
+        topology=ttnn.Topology.Ring,
+        cluster_axis=gather_axis,
+        num_links=NUM_LINKS,
+        num_workers_per_link=full_grid.y // NUM_LINKS,
+        num_buffers_per_channel=24,
+        force_transpose=False,
+        gather_in1=True,
+        transpose_b=transpose_b,
+    )
+    # Back to back, no synchronisation in between.
+    outputs = [ttnn.experimental.all_gather_minimal_matmul_async(input_tensor=x, **arguments)[0] for x in tt_inputs]
+    ttnn.synchronize_device(mesh_device)
+
+    for call, (torch_input, tt_output) in enumerate(zip(torch_inputs, outputs)):
+        expected = torch_input.to(torch.bfloat16).float() @ torch_in1.to(torch.bfloat16).float()
+        for index, device_output in enumerate(ttnn.get_device_tensors(tt_output)):
+            actual = ttnn.to_torch(device_output).float()
+            assert actual.shape == expected.shape, (call, index, actual.shape, expected.shape)
+            passed, pcc = comp_pcc(expected, actual, 0.9999)
+            assert passed, f"call {call}, device {index}: {pcc}"
+
+
+# gather_in1 runs the transposed product: the op's M is in1's N, over the 10 rows of the 11 x 10 matmul grid, and its N
+# is the activation's rows, over the 11 columns. 2 tile rows and 8 tile columns per core, K over the TP ring.
+_GATHER_IN1 = dict(
+    gather_axis=1, rows=11 * 8 * 32, K=4096, n=10 * 2 * 32, M_block=2, K_block=8, N_block=8, subblock_h=2, subblock_w=2
+)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "SP8xTP4-torus-xy")], indirect=True
+)
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(_GATHER_IN1, id="subblock_2x2"),
+        pytest.param(dict(_GATHER_IN1, subblock_h=1, subblock_w=4), id="subblock_1x4"),
+        # 19 tiles of in1's N over 10 rows of cores, 87 tile rows of the activation over 11 columns: short blocks.
+        pytest.param(dict(_GATHER_IN1, n=19 * 32, rows=87 * 32), id="partial_blocks"),
+        pytest.param(dict(_GATHER_IN1, gather_axis=0), id="sp_ring_8"),
+    ],
+)
+@pytest.mark.parametrize("transpose_b", [False, True], ids=["in1", "in1_transposed"])
+def test_all_gather_minimal_matmul_fabric2d_gather_in1(mesh_device, case, transpose_b):
+    _run_gather_in1(mesh_device, **case, transpose_b=transpose_b)
