@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import functools
 import hashlib
 import json
@@ -853,6 +854,21 @@ def _adopt_legacy_keyed(tt_model: Module, sources, key_args: dict, cache_dir: Pa
     return _cache_is_complete(cache_dir, tt_model, key)
 
 
+@contextmanager
+def _leaf_lock(cache_dir: Path):
+    """Hold an exclusive lock on one leaf's replacement (flock on a dot-file beside the leaf).
+
+    Only a builder about to delete an incomplete leaf takes it; readers and the first-publish
+    rename never do. Opened read-only so a lock file another user created (0644) still locks.
+    """
+    fd = os.open(cache_dir.parent / f".{cache_dir.name}.lock", os.O_CREAT | os.O_RDONLY, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> None:
     """Write the cache to a scratch directory and move it into place in one step.
 
@@ -893,14 +909,18 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
         # complete — for a content key its bytes are ours by construction — so adopt it rather than
         # delete a valid cache out from under a concurrent reader mid-load. rename() refuses a
         # non-empty target, so a leaf is deleted only when found incomplete after that refusal.
+        # Two builders can both find the same stale leaf: the check and the delete are one step
+        # under the leaf's lock, so the second sees the first's complete leaf instead of deleting it.
         try:
             os.rename(staging, cache_dir)
         except OSError:
-            if _cache_is_complete(cache_dir, tt_model, key):
-                logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
-                return
-            shutil.rmtree(cache_dir)
-            os.replace(staging, cache_dir)
+            with _leaf_lock(cache_dir):
+                if _cache_is_complete(cache_dir, tt_model, key):
+                    logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
+                    return
+                if cache_dir.exists():
+                    shutil.rmtree(cache_dir)
+                os.replace(staging, cache_dir)
     except OSError:
         # A racing process may have published this exact key first. Its content key matches ours,
         # so its bytes are ours; adopt them rather than fight over the directory.

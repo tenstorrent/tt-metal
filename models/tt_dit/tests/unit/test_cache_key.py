@@ -20,6 +20,7 @@ import os
 import shutil
 import stat
 import subprocess
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -404,6 +405,50 @@ def test_a_build_never_deletes_a_leaf_another_process_published_meanwhile(checkp
     cache._publish_cache(_module(), new_dir, key)
     assert published and (new_dir / "weight.tensorbin").stat().st_ino == published[0], "B's leaf was replaced"
     assert not list(new_dir.parent.glob(".*staging-*")), "staging directory leaked"
+
+
+def test_two_builders_of_one_stale_leaf_never_delete_a_complete_one(checkpoint, monkeypatch, tmp_path):
+    """Both builders find the same stale, incomplete leaf. A has decided to delete it when B deletes
+    it too and publishes its complete leaf; A must not then delete B's leaf. The stale leaf is still
+    cleaned up, and the key ends complete."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    module, key = _module(), cache.content_key(_module(), [checkpoint])
+    cache_dir = _key(module, [checkpoint])
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "stale.tensorbin").write_bytes(b"half a build")
+
+    a_at_the_delete, b_published = threading.Event(), threading.Event()
+    complete_when_deleted, errors = [], []
+    real_rmtree = cache.shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        if Path(path) == cache_dir:
+            if threading.current_thread().name == "A":
+                a_at_the_delete.set()
+                b_published.wait(1.0)  # B never gets here while A holds the leaf's lock
+            complete_when_deleted.append(cache._cache_is_complete(cache_dir, module, key))
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(cache.shutil, "rmtree", rmtree)
+
+    def build():
+        try:
+            cache._publish_cache(_module(), cache_dir, key)
+        except BaseException as err:  # reported by the assert below
+            errors.append(err)
+
+    a = threading.Thread(target=build, name="A")
+    a.start()
+    assert a_at_the_delete.wait(5), "A never reached the delete"
+    build()  # B, on this thread
+    b_published.set()
+    a.join(5)
+
+    assert not errors, errors
+    assert complete_when_deleted and not any(complete_when_deleted), "a complete leaf was deleted"
+    assert cache._cache_is_complete(cache_dir, module, key)
+    assert not (cache_dir / "stale.tensorbin").exists(), "the stale leaf was not cleaned up"
+    assert not list(cache_dir.parent.glob(".*staging-*")), "staging directory leaked"
 
 
 def test_a_cache_with_no_manifest_misses(checkpoint, monkeypatch, tmp_path):
