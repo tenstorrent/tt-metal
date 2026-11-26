@@ -26,6 +26,7 @@ GLM 4x4 M 320, after the commits below (1094 us):
 | `f3fcf1d0ed0` | x forwarder: 6 pieces in flight for experts of 6+ row tiles, 3 below (6 everywhere slowed short experts / the Galaxy MoE block) | -> 1157 (-5.1%) |
 | `e0f2d6148c2` | x snake + head writes on unicast VC 3 (was VC 1 with the weight read requests; h 0, y 2) | -> 1108 (-4.1%) |
 | `789fcaa2888` | gate/up weight grants capped at 8 until a core's first sub-block x is in (loads of 24+ blocks) | -> 1094 (-1.4%) |
+| (next) | 1 gate/up weight read in flight at 16+ experts a chip, whole-tile gate / up (was 2); determinism test compares token rows only | 1096 -> 1093 (-0.3%); M 80 / 160 / 240 / 480 -2.9 / -2.7 / -4.7 / -0.8%, zipf -1.6% |
 
 Zipf 1381 -> 1288. Every commit: full perf matrix (21 cases, all models) + accuracy / determinism (52 passed).
 Side effects elsewhere: 8x4 10240 -10%, DSV4.1-Flash hot -15%, K3 hot -3%; worst +1% (short experts).
@@ -49,7 +50,8 @@ Side effects elsewhere: 8x4 10240 -10%, DSV4.1-Flash hot -15%, K3 hot -3%; worst
 - `FLAT_DW_BATCH` 1 / 4 (down weight reads a barrier): no gain.
 - `FLAT_GU_RIF=1` (one gate/up weight read in flight, not 2): GLM 4x4 M 80 / 160 / 240 -3.2 / -3.4 / -4.0%, the 8 cores
   of a bank share it more evenly (at 2, some cores of a bank waited 300-450 us at M 80, their slot-mates 6-30).
-  8 experts a chip and unit splits slower (DSV4.1-Flash up to +7%). NOT enabled: see the open bug below.
+  8 experts a chip and unit splits slower (DSV4.1-Flash up to +7%). Enabled at 16+ experts a chip, whole-tile gate / up
+  only (A/B over the 23-case matrix: GLM 4x4 -0.3 .. -4.7%, every other case within +-0.8%).
 
 ## Status (GLM-5.3, 16 experts a chip, uniform, at `789fcaa2888`)
 
@@ -68,18 +70,18 @@ call, x / y bf16 rows.
 M <= 320 DRAM-bound (~430-450 GB/s: the lab's pure-read figure is 465), above gate/up-math-bound. M 480: ideal math
 1292 + in-op slowdown ~60 + x wait 71 + weight wait 32 + down tail ~45 = 1510.
 
-## Open bug (pre-existing): GLM 4x4 M 80 determinism
+## Resolved: GLM 4x4 M 80 "determinism" failure (a test bug, not the op)
 
-`test_flat_expert_determinism[glm53-4x4-2560-uniform]` (a case added only for this study, not in the suite) fails
-whenever it runs after the other glm53-4x4 cases: the first row of every expert's region differs between calls.
-Alone it passes (4 / 4); with `FLAT_GU_RIF=1` it fails alone too (1 in 2). Same failure on the pre-task sources
-(`0f15f622221` flat_routed_expert + routed_experts_combine checked out, rebuilt): pre-existing. M 80 = 3 row tiles
-an expert: every expert one short sub-block (3 of MT 4 row tiles). Looks like a read before this program's write
-(stale L1 from the previous program). Under investigation.
+`test_flat_expert_determinism[glm53-4x4-2560-uniform]` failed after the other glm53-4x4 cases (and with
+`FLAT_GU_RIF=1` alone). A per-row dump (a scratch test running 10240 first, then 2560 six times) showed every
+differing row at or past its expert's token count, only on call 0, never a token row. y is row major and its
+writer (y_row_major.hpp) skips rows past an expert's count, even inside the last row tile, so those rows hold whatever
+the y allocation held. The test compared whole row tiles on the stale assumption "padding rows are zero"; the 10240
+cases just happened to find matching DRAM there. Fix: the determinism test compares the token rows only. With it,
+glm53-4x4 determinism (incl. M 80 / M 480) passes at defaults and with `FLAT_GU_RIF=1`.
 
 ## Next
 
-- the M 80 determinism bug (then `FLAT_GU_RIF=1` for GLM 4x4: -3 .. -4% at M <= 240)
 - gate/up in-op math 19.4 -> 18.1 cycles a tile (~7% at large M)
 - x startup ramp (~50 us at the snake tail)
 - remove measurement switches before any PR
