@@ -899,6 +899,7 @@ inline void _llk_math_matmul_uninit_()
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool ROW_MOP = false>
 inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
+    asm volatile("j 1f\n\t.space 12\n1:"); // trial: jump over a pad, work stays the same
     static_assert(!ROW_MOP, "The matmul row MOP is only implemented for Blackhole");
     // Zero-flag leak guard. MVMUL reads ALU_ACC_CTRL_Zero_Flag_disabled_src, which for
     // denormal Src operands changes the result (flush vs keep — measured on WH n150 / BH p150b). Matmul is
@@ -1096,6 +1097,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool ROW_MOP = false>
 inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t k_steps)
 {
+    asm volatile("j 1f\n\t.space 12\n1:"); // trial: jump over a pad, work stays the same
     for (std::uint32_t k = 0; k < k_steps; k++)
     {
         _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(dst_index, ct_dim, rt_dim);
