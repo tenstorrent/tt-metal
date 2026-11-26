@@ -23,7 +23,8 @@
 // x_forward_depth_shallow, x_forward_deep_row_tiles (below); flat_options:
 // X_SLOTS = x_ring_blocks, X_BYTES = MT x x_block_k_tiles x x_tile_bytes, X_PIECES = x_chain_pieces, XARR_SEM =
 // x_arrived_sem, SFREE_SEM = x_slot_free_sem, XCONS_SEM = x_consumed_sem, XEND_SEM = x_end_sem, NB (x blocks a
-// sub-block) = super_blocks_per_sub_block x super_block_tiles / x_block_k_tiles, MT = row_tiles_per_sub_block
+// sub-block) = super_blocks_per_sub_block x super_block_tiles / x_block_k_tiles, MT = x_row_tiles (an x block's row
+// tiles)
 // RT: 0 x ring address, 1 predecessor xy (0: chain head), 2 sem id of this core's free word on the predecessor,
 //     3 successor xy (0: chain tail), 4 relay xy, 5 the relay's word for this core (a chain head), 6.. the
 //     gate_up_weight_read.hpp args
@@ -43,8 +44,9 @@ void kernel_main() {
     constexpr uint32_t xp = flat_options::x_chain_pieces, xarr_id = flat_options::x_arrived_sem;
     constexpr uint32_t sfree_id = flat_options::x_slot_free_sem, xcons_id = flat_options::x_consumed_sem;
     constexpr uint32_t xend_id = flat_options::x_end_sem;
-    // DEPTH: the transaction ids (pieces in flight at most); pieces in flight while forwarding an expert of fewer
-    // than DEEP_ROWS row tiles: SHALLOW (the deep forwarding slows short experts' weight reads beside it)
+    // DEPTH: the transaction ids (pieces in flight at most); pieces in flight while forwarding a schedule entry (an
+    // expert, or a pinned expert's share) of fewer than DEEP_ROWS row tiles: SHALLOW (deep forwarding slows the
+    // weight reads beside it for short entries)
     constexpr uint32_t depth = get_named_compile_time_arg_val("x_forward_depth");
     constexpr uint32_t shallow = get_named_compile_time_arg_val("x_forward_depth_shallow");
     constexpr uint32_t deep_rows = get_named_compile_time_arg_val("x_forward_deep_row_tiles");
