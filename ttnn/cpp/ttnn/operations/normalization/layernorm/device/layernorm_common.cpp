@@ -43,7 +43,7 @@ tt::tt_metal::ShardSpec interleaved_block_shard_spec(
     const uint32_t grid_x = K / block_w;
     const uint32_t grid_y = M / block_h;
     return tt::tt_metal::ShardSpec(
-        CoreRangeSet(CoreRange({0, 0}, {grid_x - 1, grid_y - 1})),
+        tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid_x - 1, grid_y - 1})),
         {block_h, block_w},
         tt::tt_metal::ShardOrientation::ROW_MAJOR);
 }
