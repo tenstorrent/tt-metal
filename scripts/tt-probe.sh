@@ -137,6 +137,19 @@ if [[ -n "${TT_METAL_SIMULATOR:-}" ]]; then
 fi
 PROBE_STDOUT_LOG="/tmp/tt-probe-stdout-$$.log"
 
+# --- One chip of a multi-chip host (CHIP=N, hardware only) ---
+# CHIP_TOOL is the path to the host's chip tool (chip.py). With CHIP set, only that chip is locked, reset and
+# visible to tt-metal, so agents on other chips keep running. Without CHIP: the whole host, as before.
+RESET_CMD=(tt-smi -r)
+if [[ -n "${CHIP:-}" && "$SIM_MODE" == false ]]; then
+    : "${CHIP_TOOL:?CHIP is set but CHIP_TOOL (path to chip.py) is not}"
+    CHIP_ENV="$(python3 "$CHIP_TOOL" env --runtime metal)" || exit 3
+    export TT_VISIBLE_DEVICES="$(sed -n 's/^export TT_VISIBLE_DEVICES=//p' <<< "$CHIP_ENV")"
+    LOCK_FILE="$(sed -n 's/^export CHIP_LOCK_FILE=//p' <<< "$CHIP_ENV")"
+    DIRTY_FLAG="${LOCK_FILE%.lock}.metal-dirty"
+    RESET_CMD=(tt-smi -r "$(sed -n 's/^export CHIP_UMD=//p' <<< "$CHIP_ENV")")
+fi
+
 # --- Timeout config ---
 DISPATCH_TIMEOUT=5
 if [[ "$SIM_MODE" == false ]]; then
@@ -214,10 +227,14 @@ if [[ "$SIM_MODE" == false ]]; then
     flock 9
     TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
     echo "TT_PROBE: Device lock acquired"
+    if [[ -n "${CHIP:-}" ]]; then
+        # resets first if another runtime used the chip last or it needs a reset; records tt-metal's use
+        python3 "$CHIP_TOOL" prepare --runtime metal || exit 3
+    fi
 
     if [[ -f "$DIRTY_FLAG" ]]; then
         echo "TT_PROBE: Device dirty from previous run, resetting..."
-        if ! tt-smi -r; then
+        if ! "${RESET_CMD[@]}"; then
             echo "TT_PROBE_ERROR: Device reset failed"
             exit 3
         fi
@@ -286,7 +303,7 @@ fi
 # --- Reset device (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
     echo "TT_PROBE: Resetting device..."
-    if tt-smi -r; then
+    if "${RESET_CMD[@]}"; then
         sleep 2
         rm -f "$DIRTY_FLAG"
         echo "TT_PROBE: Device reset complete"
