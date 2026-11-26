@@ -284,7 +284,7 @@ run_tests() {
 		last_dram_ok=1 || last_dram_ok=0
 
 	# Boot-dependent fault: run every iteration.
-	run_test 'DRAM ACT test' env STRESS_OUT_DIR="$LOGDIR" $PYTHON -m pytest tests/tt_metal/tt_metal/deployment/dram/test_dram_act_patterns.py::test_dram_act_c3_screen -s -q -p no:randomly &&
+	run_test 'DRAM ACT test' env STRESS_OUT_DIR="$LOGDIR" $PYTHON -m pytest tests/dram_stress/test_dram_act_patterns.py::test_dram_act_c3_screen -s -q -p no:randomly &&
 		last_dram_act_ok=1 || last_dram_act_ok=0
 
 	run_test 'PCIe read test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Reading Host/size:1073741824/page_size:32768/readers:1/writers:0/host_copy:0/iterations:5/manual_time' --device-id=0 &&
