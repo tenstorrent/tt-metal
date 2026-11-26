@@ -4,6 +4,7 @@
 
 // DRISC seat locks without a device: each test gets its own lock directory through TT_DRISC_SEAT_LOCK_DIR.
 
+#include <fcntl.h>
 #include <gtest/gtest.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -219,14 +220,14 @@ TEST_F(SeatLockFiles, CPU_ForkedChildLeavesItsParentsLocksAlone) {
 }
 
 // share() turns a sole client's lock into a shared one without freeing the seat in between: another process that
-// keeps trying to take the seat across many shares never gets it.
+// keeps asking whether the chip file is free across many shares never sees it free.
 TEST_F(SeatLockFiles, CPU_SharingNeverFreesTheSeat) {
     struct Rounds {
-        std::atomic<int> started{0};  // The round the parent started, -1 to stop the child.
-        std::atomic<int> trying{0};   // The round the child is trying to take the seat in.
-        std::atomic<int> stopped{0};  // The round the parent finished sharing in.
-        std::atomic<int> done{0};     // The round the child stopped trying in.
-        std::atomic<int> taken{0};    // Times the child took the seat.
+        std::atomic<int> started{0};    // The round the parent started, -1 to stop the child.
+        std::atomic<int> watching{0};   // The round the child is watching the seat in.
+        std::atomic<int> stopped{0};    // The round the parent finished sharing in.
+        std::atomic<int> done{0};       // The round the child stopped watching in.
+        std::atomic<int> seen_free{0};  // Times the child saw the seat free.
     };
     void* mem = ::mmap(nullptr, sizeof(Rounds), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     ASSERT_NE(mem, MAP_FAILED);
@@ -234,6 +235,8 @@ TEST_F(SeatLockFiles, CPU_SharingNeverFreesTheSeat) {
     const pid_t child = ::fork();
     ASSERT_GE(child, 0);
     if (child == 0) {
+        // Watches with F_OFD_GETLK on the whole file, a single syscall, so it looks often enough to land in a gap.
+        int fd = -1;
         for (int round = 1;; round++) {
             int started = 0;
             while ((started = rounds->started.load()) != round && started != -1) {
@@ -241,10 +244,19 @@ TEST_F(SeatLockFiles, CPU_SharingNeverFreesTheSeat) {
             if (started == -1) {
                 ::_exit(0);
             }
-            rounds->trying = round;
+            if (fd < 0 && (fd = ::open(chip_file().c_str(), O_RDONLY)) < 0) {
+                ::_exit(1);
+            }
+            rounds->watching = round;
             while (rounds->stopped.load() != round) {
-                if (SeatLock::try_acquire_exclusive(seat).has_value()) {
-                    rounds->taken++;
+                struct flock probe{};
+                probe.l_type = F_WRLCK;
+                probe.l_whence = SEEK_SET;
+                if (::fcntl(fd, F_OFD_GETLK, &probe) != 0) {
+                    ::_exit(1);
+                }
+                if (probe.l_type == F_UNLCK) {
+                    rounds->seen_free++;
                 }
             }
             rounds->done = round;
@@ -263,7 +275,7 @@ TEST_F(SeatLockFiles, CPU_SharingNeverFreesTheSeat) {
         std::optional<SeatLock> client = SeatLock::try_acquire_client(seat);
         ASSERT_TRUE(client.has_value() && client->sole()) << "round " << round;
         rounds->started = round;
-        while (rounds->trying.load() != round) {
+        while (rounds->watching.load() != round) {
         }
         client->share();
         std::this_thread::sleep_for(std::chrono::microseconds(50));
@@ -272,7 +284,7 @@ TEST_F(SeatLockFiles, CPU_SharingNeverFreesTheSeat) {
         }
     }
     rounds->started = -1;
-    EXPECT_EQ(rounds->taken.load(), 0) << "another process took the seat while a client shared it";
+    EXPECT_EQ(rounds->seen_free.load(), 0) << "another process saw the seat free while a client shared it";
     ::munmap(mem, sizeof(Rounds));
 }
 
