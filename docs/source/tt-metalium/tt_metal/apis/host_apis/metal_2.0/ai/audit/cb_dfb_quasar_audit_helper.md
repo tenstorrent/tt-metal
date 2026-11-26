@@ -532,13 +532,13 @@ DataflowBuffer cb_acc(dfb::acc);
 
 ## LocalTensorAccessor (LTA)
 
-> **Scope:** `LocalTensorAccessor` is the **local-L1, typed** counterpart to `TensorAccessor`. It works on **both DM and compute** kernels (TRISC-safe — no NoC machinery). It replaces the legacy **“pinned CB as L1 pointer”** idiom: `get_pointer_to_cb_data`, sync-free `get_read_ptr()` / `get_write_ptr()` on a **borrowed** tensor CB, or Case-2 `TensorAccessor::get_bank_base_address()` when access stays on the node-local shard.
+> **Scope:** `LocalTensorAccessor` is the **local-L1, typed** counterpart to `TensorAccessor`. It works on **both DM and compute** kernels (TRISC-safe — no NoC machinery). It replaces the legacy **“pinned CB as L1 pointer”** idiom: `get_pointer_to_cb_data`, sync-free `get_read_ptr()` / `get_write_ptr()` on a **borrowed** tensor CB, or a Case-2 raw base address when access stays on the node-local shard.
 >
 > **Port recipe:** LTA is a **port prerequisite**, not autoportable — audit as **Portable (prereq: LTA)** → op rollup **YELLOW** until the kernel uses `LocalTensorAccessor` (host `TensorBinding` is out of this audit; see [Port-recipe rollup](#port-recipe-rollup-lta-vs-scratchpad)).
 
 **Litmus:** Does the kernel touch resident tensor L1 **without** FIFO sync that another kernel waits on (`push_back` / `wait_front` never form a real hand-off)? If yes **and** backing is **borrowed from a tensor** → target **LTA**, not a DFB. If backing is **private** (non-borrowed) L1 → use **scratchpad**, not LTA.
 
-**Kernel end-state:** construct `LocalTensorAccessor<T>(tensor::name)` (see `[local_tensor_accessor.h](../../../../../../../../../tt_metal/hw/inc/api/tensor/local_tensor_accessor.h)`). For Case-2a ports, prefer `**get_bank_base_address()` / `get_unsafe_ptr()`** and keep legacy byte arithmetic — do not rewrite into `operator[]` iteration during the port.
+**Kernel end-state:** construct `LocalTensorAccessor<T>(tensor::name)` (see `[local_tensor_accessor.h](../../../../../../../../../tt_metal/hw/inc/api/tensor/local_tensor_accessor.h)`). It has no address getter: access goes through `operator[]` (within `scoped_lock()`), `local_mem()` (a `CoreLocalMem<T>`), or the object itself as a `Noc` endpoint. A Case-2a site that keeps legacy byte arithmetic has no form today; flag it for the DFB/tensor API owner.
 
 **Where LTA applies** (by audit class):
 
