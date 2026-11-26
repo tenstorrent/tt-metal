@@ -15,6 +15,7 @@
 #include <ostream>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -165,74 +166,31 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
 CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreCoord> core_coords) {
-    // One pass over a bounding-box occupancy grid gives the same ranges, in the same order, as
-    // merge_ranges() over single-core ranges, without its std::set churn or the O(n^2) validate_no_overlap().
-    if (core_coords.empty()) {
-        return;
+    // Gives the same ranges, in the same order, as merge_ranges() over single-core ranges, without its std::set churn
+    // or the O(n^2) validate_no_overlap(). Row-major order puts duplicates side by side and each row's x runs together.
+    const auto row_major = [](const CoreCoord& a, const CoreCoord& b) {
+        return std::tie(a.y, a.x) < std::tie(b.y, b.x);
+    };
+    std::vector<CoreCoord> cores(core_coords.begin(), core_coords.end());
+    if (!std::is_sorted(cores.begin(), cores.end(), row_major)) {
+        std::sort(cores.begin(), cores.end(), row_major);
     }
-    size_t min_x = std::numeric_limits<size_t>::max(), max_x = 0, min_y = std::numeric_limits<size_t>::max(), max_y = 0;
-    for (const auto& core : core_coords) {
-        min_x = std::min(min_x, core.x);
-        max_x = std::max(max_x, core.x);
-        min_y = std::min(min_y, core.y);
-        max_y = std::max(max_y, core.y);
+    if (const auto dup = std::adjacent_find(cores.begin(), cores.end()); dup != cores.end()) {
+        TT_THROW("Cannot create CoreRangeSet because core {} is listed more than once", dup->str());
     }
-    TT_FATAL(
-        max_x - min_x < std::numeric_limits<size_t>::max() && max_y - min_y < std::numeric_limits<size_t>::max(),
-        "CoreRangeSet core coordinates span too large a grid");
-    const size_t width = max_x - min_x + 1;
-    const size_t height = max_y - min_y + 1;
-    TT_FATAL(
-        width <= std::numeric_limits<size_t>::max() / height,
-        "CoreRangeSet core coordinates span too large a grid: {} x {}",
-        width,
-        height);
-
-    std::vector<uint8_t> grid(width * height, 0);
-    for (const auto& core : core_coords) {
-        auto& cell = grid[((core.y - min_y) * width) + (core.x - min_x)];
-        if (cell) {
-            TT_THROW(
-                "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
-                CoreRange(core).str(),
-                CoreRange(core).str());
+    const auto run_breaks = [](const CoreCoord& a, const CoreCoord& b) { return b.y != a.y || b.x != a.x + 1; };
+    for (auto first = cores.begin(); first != cores.end();) {
+        const auto last = std::min(std::adjacent_find(first, cores.end(), run_breaks), std::prev(cores.end()));
+        // A run extends the rectangle ending on the row above with the same x span (CoreRange::merge's vertical rule).
+        const auto above = std::find_if(ranges_.begin(), ranges_.end(), [&](const CoreRange& r) {
+            return r.end_coord.y + 1 == first->y && r.start_coord.x == first->x && r.end_coord.x == last->x;
+        });
+        if (above != ranges_.end()) {
+            above->end_coord.y = first->y;
+        } else {
+            ranges_.emplace_back(*first, *last);
         }
-        cell = 1;
-    }
-
-    // Each row's runs extend the rectangle ending on the row above with the same x span (CoreRange::merge's
-    // vertical rule); any other run starts a new rectangle. `open` holds indices into ranges_ of the rectangles
-    // ending on the previous row, in increasing start x.
-    std::vector<size_t> open, next_open;
-    for (size_t y = 0; y < height; y++) {
-        const uint8_t* row = &grid[y * width];
-        next_open.clear();
-        size_t open_idx = 0;
-        size_t x = 0;
-        while (x < width) {
-            if (!row[x]) {
-                x++;
-                continue;
-            }
-            const size_t run_start = x;
-            while (x < width && row[x]) {
-                x++;
-            }
-            const CoreCoord start{min_x + run_start, min_y + y};
-            const CoreCoord end{min_x + x - 1, min_y + y};
-            while (open_idx < open.size() && ranges_[open[open_idx]].start_coord.x < start.x) {
-                open_idx++;
-            }
-            if (open_idx < open.size() && ranges_[open[open_idx]].start_coord.x == start.x &&
-                ranges_[open[open_idx]].end_coord.x == end.x) {
-                ranges_[open[open_idx]].end_coord.y = end.y;
-                next_open.push_back(open[open_idx]);
-            } else {
-                next_open.push_back(ranges_.size());
-                ranges_.emplace_back(start, end);
-            }
-        }
-        open.swap(next_open);
+        first = std::next(last);
     }
     std::sort(ranges_.begin(), ranges_.end());
 }

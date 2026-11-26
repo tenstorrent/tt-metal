@@ -7,6 +7,7 @@
 #include <limits>
 #include <random>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "core_coord_fixture.hpp"
@@ -97,16 +98,29 @@ TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetFromCoordsMatchesMergeRanges) {
             singles.emplace_back(core);
         }
         const auto expected = tt::tt_metal::CoreRangeSet(std::move(singles)).merge_ranges();
-        const auto actual = from_coords(coords);
-        ASSERT_EQ(actual.ranges(), expected.ranges()) << "trial " << trial;
+        ASSERT_EQ(from_coords(coords).ranges(), expected.ranges()) << "trial " << trial;
+        // Row-major input skips the sort.
+        std::sort(coords.begin(), coords.end(), [](const CoreCoord& a, const CoreCoord& b) {
+            return std::tie(a.y, a.x) < std::tie(b.y, b.x);
+        });
+        ASSERT_EQ(from_coords(coords).ranges(), expected.ranges()) << "row-major trial " << trial;
     }
 }
 
-TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetFromCoordsGridOverflowThrows) {
+TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetFromCoordsSameSpanAcrossEmptyRow) {
+    const auto set = from_coords({{1, 0}, {2, 0}, {1, 2}, {2, 2}});
+    const std::vector<tt::tt_metal::CoreRange> expected{
+        tt::tt_metal::CoreRange({1, 0}, {2, 0}), tt::tt_metal::CoreRange({1, 2}, {2, 2})};
+    EXPECT_EQ(set.ranges(), expected);
+}
+
+TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetFromCoordsLargeCoordinates) {
     constexpr size_t max = std::numeric_limits<size_t>::max();
-    EXPECT_ANY_THROW(from_coords({{0, 0}, {max, 0}}));
-    EXPECT_ANY_THROW(from_coords({{0, 0}, {0, max}}));
-    EXPECT_ANY_THROW(from_coords({{0, 0}, {max / 2, max / 2}, {0, 0}}));
+    const auto set = from_coords({{max, 0}, {0, 0}, {max, 1}});
+    const std::vector<tt::tt_metal::CoreRange> expected{
+        tt::tt_metal::CoreRange({0, 0}, {0, 0}), tt::tt_metal::CoreRange({max, 0}, {max, 1})};
+    EXPECT_EQ(set.ranges(), expected);
+    EXPECT_ANY_THROW(from_coords({{max, max}, {0, 0}, {max, max}}));
 }
 
 }  // namespace basic_tests::CoreRangeSet
