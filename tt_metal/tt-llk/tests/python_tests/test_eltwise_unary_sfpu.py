@@ -85,7 +85,7 @@ from helpers.test_variant_parameters import (
     DestSync,
 )
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
-from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS
+from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS, ulp_distance
 from helpers.utils import passed_test, result_tensor
 
 SUPPORTED_FAST_MODE_OPS = [
@@ -668,6 +668,44 @@ def test_sqrt_family_negative_zero_regression(
     assert torch.allclose(res[3:], torch.tensor(expected), rtol=1e-2, atol=0.0), (
         f"{op}(4.0) is no longer ~{expected} on the lanes around the probes "
         f"(max deviation {(res[3:] - expected).abs().max().item():.6g})."
+    )
+
+
+# The ULP sweep's Float32 inputs sit on the bf16 lattice (|x| <= 1 - 2**-8), so it never reaches
+# erfinv's fp32 tail polynomial (|x| > 0.99954). These fp32 inputs walk the whole tail.
+_ERFINV_TAIL_MAX_ULP = 256
+
+
+@wormhole_only
+def test_erfinv_fp32_tail_ulp():
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    input_dimensions = [64, 64]
+    # x = +/-(1 - k * 2**-24), k = 1, 5, ..., 8189: the neighbours of +/-1 up to the u = -7 break.
+    magnitude = 1.0 - torch.arange(1, 8192, 4, dtype=torch.float64) * 2.0**-24
+    src_A = torch.cat([magnitude, -magnitude]).to(torch.float32)
+
+    res = torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=DestAccumulation.Yes,
+            approx_mode=ApproximationMode.No,
+            mathop=MathOperation.Erfinv,
+            fast_mode=FastMode.No,
+            input_dimensions=input_dimensions,
+            src_A=src_A,
+            src_B=torch.zeros_like(src_A),
+            unpack_to_dest=True,
+            check_golden=False,
+        ),
+        dtype=torch.float32,
+    )
+
+    golden = torch.erfinv(src_A.to(torch.float64)).to(torch.float32)
+    steps = ulp_distance(golden, res)
+    worst = int(steps.argmax())
+    assert int(steps.max()) <= _ERFINV_TAIL_MAX_ULP, (
+        f"erfinv fp32 tail: max {int(steps.max())} ULP at x={src_A[worst].item()!r} "
+        f"(got {res[worst].item()!r}, expected {golden[worst].item()!r})"
     )
 
 

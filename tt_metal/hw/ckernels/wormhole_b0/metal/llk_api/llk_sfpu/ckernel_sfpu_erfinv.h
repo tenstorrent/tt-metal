@@ -14,32 +14,10 @@
 namespace ckernel {
 namespace sfpu {
 
-// erfinv(x) = x * p(u), u = ln(1 - x^2), after Giles, "Approximating the erfinv function" (GPU
-// Computing Gems, 2010): a polynomial in u with one break at u = -7, so the central polynomial
-// covers every bf16 and fp16 input (u >= -6.94) and the tail only fp32 inputs, where u reaches
-// -15.9. Both are evaluated for every lane and selected.
-//
-// Unlike Giles, the tail is a polynomial in u itself rather than in sqrt(-u) - 3, so no square
-// root is needed, and only the low-order coefficients are fp32 (an SFPLOADI pair each); the rest
-// are fp16a- or bf16-exact and issue as one SFPLOADI. The coefficients were fitted with that
-// rounding in the loop (round the top coefficient, refit the rest, repeat). Exact-arithmetic
-// relative error: 5.7e-6 on the central and 1.3e-5 on the tail polynomial. The ln(1 - x^2)
-// argument uses the log's fp32-accurate polynomial; with the bf16 one its 8.9e-4 absolute error
-// dominated at 2.3e-4 relative.
-//
-// Evaluated in u rather than -u: the negation is free (odd coefficients change sign) and the
-// log's result feeds the polynomial directly. x = +/-1 gives u = -inf and a -inf tail
-// polynomial, so r = t * x has the opposite sign of x; |x| > 1 gives a NaN log and a NaN result.
-// The caller multiplies by x and copies its sign, which restores the sign at x = +/-1, makes
-// erfinv(-0) = -0 (SFPMUL returns +0) and gives a NaN result the sign of x.
-//
-// Sets p and t to the central and tail p(u) = erfinv(x) / x, not erfinv(x); the caller selects t
-// where u_plus_7 < 0, after multiplying by x.
+// Sets p (central, u >= -7: every bf16/fp16 input) and t (fp32 tail, u down to -16) to erfinv(x) / x,
+// u = ln(1 - x^2) (Giles 2010); the caller multiplies by x, selects t where u_plus_7 < 0, copies x's sign.
 template <bool APPROXIMATION_MODE>
 sfpi_inline void calculate_erfinv_body(sfpi::vFloat x, sfpi::vFloat& p, sfpi::vFloat& t, sfpi::vFloat& u_plus_7) {
-    // INPUT_NORMALISED skips the log's -0.0/subnormal normalisation (a * 1 + 0): 1 - x^2 comes out of
-    // an SFPMAD, which flushes subnormals and returns +0.0 for the exact cancellation at x = +/-1, so
-    // the normalisation changes no lane.
     sfpi::vFloat u = calculate_log_body<false, false, true, false, true>(1.0f - x * x, 0);
 
     // Central polynomial, u in [-7, 0], degree 7.
