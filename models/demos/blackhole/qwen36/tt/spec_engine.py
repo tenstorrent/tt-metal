@@ -775,12 +775,11 @@ class MTPSpecEngine:
             )
             for _ in range(B)
         ]
-        big = getattr(self.model, "prefill_big_chunk_size", 0)  # absent on test fakes
         self._last_sel = {
             b: self._alloc_host_replicated(
                 torch.zeros(1, 1, 1, b, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
             )
-            for b in tuple(self.model._PREFILL_MASK_BUCKETS) + ((big,) if big else ())
+            for b in sorted({*self.model._PREFILL_MASK_BUCKETS, *_prefill_big_rows(self.model)})
         }
         self._mtp_pt = self._alloc_host_replicated(pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._mtp_pt_rows = [
@@ -1985,9 +1984,11 @@ class MTPBlockEngine(MTPSpecEngine):
             logits = model._prefill_for_spec_b1(prompt, pt[0:1], L, self.prefill_hook(0, prompt[0], pt[0:1], True))
             if not isinstance(logits, torch.Tensor):
                 ttnn.deallocate(logits)
-        # The prefill's big chunk trace hands prefill_hook outputs of its own row count (Qwen36Model.big_chunk_rows).
-        if getattr(model, "prefill_big_chunk_size", 0):
+        # The prefill's big chunk trace and masked big-bucket traces hand prefill_hook outputs of their own row counts
+        # (Qwen36Model.big_chunk_rows, masked_big_buckets).
+        if _prefill_big_rows(model):
             model.warm_big_chunk_output(lambda hidden: self._warm_big_chunk(hidden, pt[0:1]))
+            model.warm_masked_big_outputs(lambda hidden: self._warm_big_chunk(hidden, pt[0:1]))
         self.release(0)
         self.prefill_prepared = True
         logger.info(
@@ -1996,8 +1997,8 @@ class MTPBlockEngine(MTPSpecEngine):
         )
 
     def _warm_big_chunk(self, hidden, page_table_torch):
-        """Compile prefill_hook's drafter KV warm and last-row capture of a big prefill chunk on its output ``hidden``
-        (state slot 0, all rows real, as the warm prompts)."""
+        """Compile prefill_hook's drafter KV warm and last-row capture of a prefill forward past 2048 rows on its output
+        ``hidden`` (state slot 0, all rows real, as the warm prompts)."""
         rows = int(hidden.shape[-2])
         feed = self.model.spec_feed_rows(hidden)
         self._warm_mtp_chunk(feed, 0, rows, [1] * (rows + 2), page_table_torch)
@@ -2840,6 +2841,14 @@ def _with_start_blocks(mamba_state, m):
     if dataclasses.is_dataclass(mamba_state):
         return dataclasses.replace(mamba_state, groups=tuple(groups))
     return SimpleNamespace(**{**vars(mamba_state), "groups": tuple(groups)})
+
+
+def _prefill_big_rows(model):
+    """Row counts past the masked buckets of the prefill outputs that prefill_hook can get: the big chunk set's and the
+    masked big buckets' (none on a test fake)."""
+    masked = getattr(model, "masked_big_buckets", None)
+    rows = {getattr(model, "prefill_big_chunk_size", 0), *(masked() if masked is not None else ())}
+    return tuple(sorted(rows - {0}))
 
 
 def get_spec_engine(model, batch_size, draft_len, engine_cls=MTPSpecEngine):

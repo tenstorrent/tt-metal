@@ -474,14 +474,15 @@ def _drafter_kv(model, pages, n):
 @pytest.mark.timeout(3600)
 @_parametrize
 def test_a_big_chunk_prompt_matches_its_2048_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensure_gc):
-    """K = 3, mode "none", 1024-token blocks: a prompt of two whole 8192-row blocks and 300 tokens prefills in row 0
-    with the big chunk trace (Qwen36Model.big_chunk_rows) and in row 1 with the 2048-row chunk trace only, on both
-    classes, compiling no program. The MTP class's logits, the drafter's prompt KV and its last-row feed of the two rows
+    """K = 3, mode "none", 1024-token blocks: a prompt of two whole 8192-row blocks and 4000 tokens prefills in row 0
+    with the big chunk trace (Qwen36Model.big_chunk_rows) and the masked 4096-row trace for the 4000 rows after them
+    (_masked_big_plan), and in row 1 with the 2048-row chunk trace and masked tail only, on both classes, compiling no
+    program. The MTP class's logits, the drafter's prompt KV and its last-row feed of the two rows
     agree; then both rows verify against ordinary decode and draft after every step."""
     K, big = 3, Qwen36Model._PREFILL_BIG_CHUNK
     pair = Pair(mesh_device, monkeypatch, K, "none", block_size=1024, ctx=3 * big)
     assert pair.spec_model.big_chunk_rows() == big and pair.ref_model.big_chunk_rows() == big
-    T = 2 * big + 300
+    T = 2 * big + 4000
     prompt = _prompts(1, T, seed=41)[0].tolist()
     first, spec_logits = {}, {}
     orig_prefill = pair.spec.prefill_forward
@@ -496,7 +497,9 @@ def test_a_big_chunk_prompt_matches_its_2048_chunk_prefill(mesh_device, monkeypa
         if row == 1:
             for m in (pair.spec_model, pair.ref_model):
                 monkeypatch.setattr(m, "big_chunk_rows", lambda: 0)
+                monkeypatch.setattr(m, "_masked_big_plan", lambda n, depth: None)
         replays = pair.spec_model.prefill_big_chunk_replays
+        masked = getattr(pair.spec_model, "prefill_masked_big_replays", 0)
         ttnn.synchronize_device(mesh_device)
         before = mesh_device.num_program_cache_entries()
         mesh_device.set_program_cache_misses_allowed(False)
@@ -507,6 +510,7 @@ def test_a_big_chunk_prompt_matches_its_2048_chunk_prefill(mesh_device, monkeypa
             mesh_device.set_program_cache_misses_allowed(True)
         assert mesh_device.num_program_cache_entries() == before, f"row {row}: the prefill compiled a program"
         assert pair.spec_model.prefill_big_chunk_replays - replays == (2 if row == 0 else 0)
+        assert getattr(pair.spec_model, "prefill_masked_big_replays", 0) - masked == (1 if row == 0 else 0)
     assert first[0] == first[1] or Pair._near_tie(spec_logits[1]), "the two prefills predict different tokens"
     pcc = compute_pcc(spec_logits[0], spec_logits[1])
     assert pcc > 0.999, f"MTP class prefill logits PCC {pcc:.6f}, big chunk against 2048-row chunks"

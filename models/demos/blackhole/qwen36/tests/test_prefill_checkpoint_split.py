@@ -325,23 +325,76 @@ def test_big_chunk_rows_match_2048_chunk_rows(mesh_device, monkeypatch, reset_se
     assert not low
 
 
+# Rows whose checkpoint is on a 2048-row chunk boundary, so that their first segment has no checkpoint and the rows
+# after its whole big blocks run as one masked big replay (Qwen36Model._masked_big_plan): 4096 rows from 0 (masked
+# 4096), 6144 rows after one big block (masked 8192) and 4096 rows after two (masked 4096).
+MASKED_BIG_LENS = (4096 + 500, BIG + 6144 + 100, 2 * BIG + 4096 + 700)
+
+
+@torch.no_grad()
+@pytest.mark.timeout(7200)
+@_parametrize
+def test_masked_big_rows_match_2048_chunk_rows(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """MASKED_BIG_LENS in one prefill step from the captured traces after the plugin's warmup, twice into the same
+    blocks: with the big chunk trace and the masked big-bucket traces, then with the 2048-row chunk trace and masked
+    tails only. The first pass compiles no program and replays one masked big trace per row. The logits, attention K
+    and V and the GDN end and checkpoint states of the two passes agree (PCC 0.999, argmax of the logits equal unless
+    the top two are within 0.25)."""
+    rows = list(range(len(MASKED_BIG_LENS)))
+    t = Rows(mesh_device, monkeypatch, 8, len(rows), ctx=3 * BIG)
+    prompts = _prompts(len(rows), max(MASKED_BIG_LENS), seed=75)
+    t.warmup()
+    assert t.model.masked_big_buckets() == (4096, BIG)
+
+    ttnn.synchronize_device(mesh_device)
+    before = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        logits = t.prefill(MASKED_BIG_LENS, rows, prompts)
+        ttnn.synchronize_device(mesh_device)
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    assert mesh_device.num_program_cache_entries() == before, "the masked big prefill compiled a program"
+    assert t.model.prefill_masked_big_replays == len(rows)
+    got = t.snapshot(MASKED_BIG_LENS, rows, logits)
+
+    monkeypatch.setattr(t.model, "big_chunk_rows", lambda: 0)
+    monkeypatch.setattr(t.model, "_masked_big_plan", lambda n, depth: None)
+    want = t.snapshot(MASKED_BIG_LENS, rows, t.prefill(MASKED_BIG_LENS, rows, prompts))
+    assert t.model.prefill_masked_big_replays == len(rows)
+    for i, n_tok in enumerate(MASKED_BIG_LENS):
+        a, b = got[f"row {i} logits"][0], want[f"row {i} logits"][0]
+        top = b.topk(2).values
+        assert int(a.argmax()) == int(b.argmax()) or float(top[0] - top[1]) <= 0.25, f"row {i} ({n_tok}): argmax"
+    low, inexact = _near(got, want, 0.999)
+    for label, d, p in low[:20]:
+        logger.error(f"masked big vs 2048-row chunks: {label} device {d}: PCC {p:.6f}")
+    logger.info(
+        f"MASKED BIG PARITY: {len(want)} entries, {inexact} entry-devices not byte-equal, {len(low)} below 0.999"
+    )
+    assert not low
+
+
 @torch.no_grad()
 @pytest.mark.timeout(7200)
 @_parametrize
 def test_long_prefill_time(mesh_device, monkeypatch, reset_seeds, ensure_gc):
     """Wall time of a cold prefill (Qwen36ForCausalLM.prefill_forward from position 0, checkpoint on the last block
     boundary) of 22829 tokens (the vLLM model test's prefix-caching prompt) and of 131072 tokens on the full 64-layer
-    model from the captured traces, with the 2048-row chunk trace only and with the big chunk trace; the faster of two
-    runs per case (LONG PREFILL lines). Not a pass / fail gate."""
+    model from the captured traces, with the 2048-row chunk trace only, with the big chunk trace, and with the big chunk
+    trace and the masked big remainder; the faster of two runs per case (LONG PREFILL lines). Not a pass / fail gate."""
     lens = (22829, 16 * BIG)
     t = Rows(mesh_device, monkeypatch, 64, 1, ctx=16 * BIG + 1024)
     prompts = _prompts(1, max(lens), seed=74)
     t.warmup()
     assert t.model.big_chunk_rows() == BIG
-    big_rows = t.model.big_chunk_rows
+    big_rows, masked_plan = t.model.big_chunk_rows, t.model._masked_big_plan
     times = {}
-    for arm in ("2048-row chunks", "big chunks"):
-        monkeypatch.setattr(t.model, "big_chunk_rows", big_rows if arm == "big chunks" else lambda: 0)
+    for arm in ("2048-row chunks", "big chunks", "big chunks and masked big remainder"):
+        monkeypatch.setattr(t.model, "big_chunk_rows", big_rows if arm != "2048-row chunks" else lambda: 0)
+        monkeypatch.setattr(
+            t.model, "_masked_big_plan", masked_plan if arm.endswith("remainder") else lambda n, d: None
+        )
         for n_tok in lens:
             runs = []
             for _ in range(2):
@@ -354,7 +407,11 @@ def test_long_prefill_time(mesh_device, monkeypatch, reset_seeds, ensure_gc):
             logger.info(f"LONG PREFILL: {n_tok} tokens, {arm}: {min(runs):.3f} s (runs {[round(x, 3) for x in runs]})")
     for n_tok in lens:
         a, b = times["2048-row chunks", n_tok], times["big chunks", n_tok]
-        logger.info(f"LONG PREFILL: {n_tok} tokens: {a:.3f} s -> {b:.3f} s with big chunks ({(b - a) / a:+.1%})")
+        c = times["big chunks and masked big remainder", n_tok]
+        logger.info(
+            f"LONG PREFILL: {n_tok} tokens: {a:.3f} s -> {b:.3f} s with big chunks ({(b - a) / a:+.1%}), {c:.3f} s with "
+            f"the masked big remainder too ({(c - a) / a:+.1%})"
+        )
 
 
 @torch.no_grad()

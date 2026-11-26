@@ -17,6 +17,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import prefill_split
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.decode_allreduce import get_decode_allreduce
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
@@ -4045,7 +4046,11 @@ class Qwen36Model:
         _PREFILL_MASK_BUCKETS, and the GDN layers' trace buffers, and compile every program of the traced forward by
         running it eagerly on them. record_prefill_traces_masked captures the traces. TP, after
         prepare_prefill_trace_chunked (the traces use its page-table width and vision-splice buffers) and before any
-        trace capture, with the batch-1 GDN workspace bound as prefills run. Idempotent."""
+        trace capture, with the batch-1 GDN workspace bound as prefills run. Idempotent.
+
+        With a prepared big chunk set (prepare_prefill_trace_chunked_big, before this) also the buckets of
+        _PREFILL_MASK_BIG_BUCKETS, without a checkpoint variant, on the big set's vision-splice buffers: one of them
+        can run the rows after a segment's whole big blocks (_masked_big_plan)."""
         from models.demos.blackhole.qwen36.tt.gdn.tp import PrefillCheckpoint, PrefillMasks
 
         if self._masked_traces:
@@ -4056,11 +4061,13 @@ class Qwen36Model:
         block_size = get_block_size(self._paged_kv_caches)
         kconv = self.args.gdn_conv_kernel_size
         buf_blocks = int(self._chunk_full_page_table_buf.shape[-1])
-        buckets = sorted(self._PREFILL_MASK_BUCKETS)
+        small = sorted(self._PREFILL_MASK_BUCKETS)
+        big = [b for b in self._PREFILL_MASK_BIG_BUCKETS if b <= self.prefill_big_chunk_size]
+        buckets = small + big
         if self._vis_buf is None:
             self._alloc_vision_merge_buffers(device, self.prefill_chunk_size)
         for dn in self._gdn_layers():
-            dn.alloc_prefill_trace_buffers(checkpoint=buckets[-1] > block_size)
+            dn.alloc_prefill_trace_buffers(checkpoint=small[-1] > block_size)
         rep = ttnn.ReplicateTensorToMesh(device)
 
         def up(t, dtype, layout):
@@ -4077,7 +4084,7 @@ class Qwen36Model:
             tr.full_pt = up(torch.zeros(1, buf_blocks, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             tr.chunk_pt = up(torch.zeros(1, tr.blocks, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             tr.masks = PrefillMasks(device, b, kconv)
-            for length in range(block_size, b, block_size):  # vLLM's checkpoints are on block boundaries
+            for length in range(block_size, b if b in small else 0, block_size):  # vLLM's checkpoints are on blocks
                 tr.checkpoints[length] = PrefillCheckpoint.buffers(device, b, kconv, length)
             traces[b] = tr
         # The logits row selector has the hidden's dtype, as _masked_bucket_logits_tp builds it.
@@ -4092,12 +4099,13 @@ class Qwen36Model:
             dn.stage_prefill_init(carry=True)
             dn.stage_prefill_init(carry=False)
         for tr in traces.values():
-            for checkpoint in tr.variants():
-                for _ in range(2):
-                    hidden, logits = self._masked_trace_body(tr, checkpoint)
-                    ttnn.deallocate(ttnn.clone(logits))
-                    ttnn.deallocate(hidden)
-                    ttnn.deallocate(logits)
+            with self._masked_trace_chunk_set(tr):
+                for checkpoint in tr.variants():
+                    for _ in range(2):
+                        hidden, logits = self._masked_trace_body(tr, checkpoint)
+                        ttnn.deallocate(ttnn.clone(logits))
+                        ttnn.deallocate(hidden)
+                        ttnn.deallocate(logits)
         ttnn.synchronize_device(device)
         self._reset_gdn_state_for_new_sequence()
         self._masked_traces = traces
@@ -4117,11 +4125,12 @@ class Qwen36Model:
         device = self.device
         with trace_allocation_tracker.corruptible_allocation_scope(device):
             for tr in self._masked_traces.values():
-                for checkpoint in tr.variants():
-                    tid = ttnn.begin_trace_capture(device, cq_id=0)
-                    tr.outputs[checkpoint] = self._masked_trace_body(tr, checkpoint)
-                    ttnn.end_trace_capture(device, tid, cq_id=0)
-                    tr.trace_ids[checkpoint] = tid
+                with self._masked_trace_chunk_set(tr):
+                    for checkpoint in tr.variants():
+                        tid = ttnn.begin_trace_capture(device, cq_id=0)
+                        tr.outputs[checkpoint] = self._masked_trace_body(tr, checkpoint)
+                        ttnn.end_trace_capture(device, tid, cq_id=0)
+                        tr.trace_ids[checkpoint] = tid
         self._reset_gdn_state_for_new_sequence()
         self._masked_traces_recorded = True
         self._log_trace_region("the masked-bucket prefill traces")
@@ -4142,6 +4151,46 @@ class Qwen36Model:
         self._masked_traces = {}
         self._masked_traces_recorded = False
         self._masked_trace_gdn = None
+
+    # Masked buckets past the 2048-row chunk, for the rows after a prefill segment's whole big blocks (_masked_big_plan).
+    _PREFILL_MASK_BIG_BUCKETS = prefill_split.MASKED_BIG_BUCKETS
+
+    def _masked_trace_chunk_set(self, tr):
+        """The chunk-trace set whose vision-splice buffers the masked trace ``tr`` reads: the big set's for a bucket past
+        the 2048-row chunk, which the 2048-row set's buffers do not hold."""
+        return self._big_chunk_set() if tr.bucket > self.prefill_chunk_size else contextlib.nullcontext()
+
+    def masked_big_buckets(self):
+        """The buckets of _PREFILL_MASK_BIG_BUCKETS that prepare_prefill_traces_masked prepared."""
+        return tuple(b for b in self._PREFILL_MASK_BIG_BUCKETS if b in (getattr(self, "_masked_traces", None) or {}))
+
+    def warm_masked_big_outputs(self, fn):
+        """Run the forward of each prepared masked big-bucket trace once eagerly and hand its output, hidden
+        [1, 1, bucket, dim / tp], to ``fn`` before freeing it, as warm_big_chunk_output does for the big chunk. Before
+        any trace capture; the GDN workspace is zeroed afterwards."""
+        buckets = self.masked_big_buckets()
+        for b in buckets:
+            tr = self._masked_traces[b]
+            with self._masked_trace_chunk_set(tr):
+                hidden, logits = self._masked_trace_body(tr, 0)
+                fn(hidden)
+                ttnn.deallocate(hidden)
+                ttnn.deallocate(logits)
+        if buckets:
+            ttnn.synchronize_device(self.device)
+            self._reset_gdn_state_for_new_sequence()
+
+    def _masked_big_plan(self, rows, depth):
+        """The masked big bucket that runs the ``rows`` rows after a segment's whole big blocks, from position ``depth``,
+        in one replay, or None for the 2048-row chunks and the masked tail (prefill_split.plan_remainder). Only a
+        bucket with a captured trace for the current GDN workspace counts."""
+        if rows <= self.prefill_chunk_size:
+            return None
+        buckets = tuple(b for b in self.masked_big_buckets() if self._masked_prefill_trace(b, None) is not None)
+        if not buckets:
+            return None
+        plan, _ = prefill_split.plan_remainder(rows, depth, buckets)
+        return None if plan == "chunks" else int(plan[1:])
 
     def _masked_trace_body(self, tr, checkpoint):
         """The captured forward and logits of tr; returns (hidden, logits)."""
@@ -4577,7 +4626,8 @@ class Qwen36Model:
 
         With a captured big chunk trace (big_chunk_rows), the whole big blocks of the full chunks replay it first and
         the rest the 2048-row trace: the chunks cover the same rows, so the tail, its checkpoint and the GDN state it
-        continues from are those of the 2048-row plan."""
+        continues from are those of the 2048-row plan. Without a checkpoint, the rows after the whole big blocks run as
+        one masked 4096- or 8192-row replay instead when _masked_big_plan models that as faster."""
         block_size = get_block_size(self._paged_kv_caches)
         rep = ttnn.ReplicateTensorToMesh(self.device)
 
@@ -4604,10 +4654,11 @@ class Qwen36Model:
         rows = num_full * chunk_size
         big = self.big_chunk_rows()
         n_big = rows // big if big else 0
+        rest = start_pos + n_big * big  # the rows after the whole big blocks
+        masked_big = self._masked_big_plan(actual_len - rest, rest) if checkpoint_len is None else None
         plan = [(start_pos + i * big, big) for i in range(n_big)]
-        plan += [
-            (start_pos + n_big * big + c * chunk_size, chunk_size) for c in range((rows - n_big * big) // chunk_size)
-        ]
+        if masked_big is None:
+            plan += [(rest + c * chunk_size, chunk_size) for c in range((rows - n_big * big) // chunk_size)]
 
         # Replay trace per full chunk. Host input-prep (from_torch tilize of cos/sin + DMA copies) and
         # device trace exec share cq_id=0, so the queue already ORDERS each chunk's copies AFTER the
@@ -4658,6 +4709,10 @@ class Qwen36Model:
             ttnn.synchronize_device(self.device)
             _host_refs.clear()
 
+        if masked_big is not None:
+            return self._prefill_masked_big(
+                token_ids, page_table, actual_len, rest, masked_big, vision_tokens, on_chunk
+            )
         # Tail via masked bucket, or _masked_bucket_logits_tp if no tail (TP 4D hidden).
         if tail_real > 0:
             cs = start_pos + num_full * chunk_size
@@ -4685,6 +4740,28 @@ class Qwen36Model:
                 checkpoint_len=checkpoint_len,
             )
         return self._masked_bucket_logits_tp(last[0], last[1], last[1])
+
+    def _prefill_masked_big(self, token_ids, page_table, actual_len, cs, bucket, vision_tokens, on_chunk):
+        """The rows [cs, actual_len) as one replay of the masked big ``bucket``'s trace, on the big set's vision-splice
+        buffers, continuing from the GDN workspace past position 0; returns the logits at actual_len - 1."""
+        kw = dict(
+            actual_len=actual_len - cs,
+            chunk_start=cs,
+            bucket=bucket,
+            vision_tokens=vision_tokens,
+            vis_row_offset=self._vis_row_offset_for(token_ids, cs),
+            stage_rope=False,
+        )
+        self.prefill_masked_big_replays = getattr(self, "prefill_masked_big_replays", 0) + 1
+        with self._big_chunk_set():
+            if on_chunk is None:
+                return self.prefill_masked_bucket(token_ids[:, cs:actual_len], page_table, **kw)
+            logits, hidden = self.prefill_masked_bucket(
+                token_ids[:, cs:actual_len], page_table, return_hidden=True, **kw
+            )
+        on_chunk(hidden, cs, actual_len - cs)
+        self._release_prefill_hidden(hidden)
+        return logits
 
     def _replay_chunk(self, token_ids, page_table, cs, size, vision_tokens, host_refs):
         """Stage the inputs of the active chunk-trace set for the ``size``-row chunk from ``cs`` and replay its trace;
