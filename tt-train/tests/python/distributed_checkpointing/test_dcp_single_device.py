@@ -25,6 +25,7 @@ from tp_block import make_adamw, train_step
 import ttml
 import ttml.distributed_checkpointing as dcp
 from ttml.distributed_checkpointing import _load, _save
+from ttml.distributed_checkpointing._coordinator import Election, PlanPart, ResultPart
 from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(900)]
@@ -76,6 +77,17 @@ def test_float32_round_trip_records_the_device(tmp_path):
 
     fresh = _F32(seed=2)
     assert_some_differ(model_shards(fresh.parameters()), model_shards(model.parameters()))
+    dcp.load(path, model=fresh)
+    assert_same_shards(model_shards(fresh.parameters()), model_shards(model.parameters()))
+
+
+def test_a_directory_with_non_utf8_bytes_in_its_name_round_trips(tmp_path):
+    """On Linux a directory name may hold bytes that are not UTF-8, which os.fsdecode turns into lone surrogates: save
+    and load take such a path as they take any other."""
+    model = _F32(seed=1)
+    path = os.path.join(str(tmp_path), os.fsdecode(b"ckpt_\xff"), "step_0000001")
+    dcp.save(path, model=model)
+    fresh = _F32(seed=2)
     dcp.load(path, model=fresh)
     assert_same_shards(model_shards(fresh.parameters()), model_shards(model.parameters()))
 
@@ -264,11 +276,52 @@ def test_a_failed_write_stops_the_save(tmp_path, monkeypatch, expect_error):
 
     monkeypatch.setattr(_save, "pwrite_all", failing_second_write)
     open_fds = len(os.listdir("/proc/self/fd"))
-    with expect_error(OSError, "injected: no space left on device"):
+    with expect_error(dcp.CheckpointError, r"writing the shards failed: OSError: .*injected: no space left") as raised:
         dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt, max_inflight_bytes=1)
+    assert raised.value.__cause__.errno == errno.ENOSPC
     assert len(calls) == 2, f"{len(calls)} writes: nothing may be written after the failed one"
     assert len(os.listdir("/proc/self/fd")) == open_fds, "every descriptor the save opened is closed"
     assert os.listdir(tmp_path) == [], "no checkpoint and no staging directory left"
+
+
+def test_strict_refuses_a_momentum_free_optimizer_lacking_saved_params(tmp_path, expect_error):
+    """SGD without momentum keeps no per-parameter state, so its member lists are the only record of what it trains.
+    A strict load into one whose group lacks a param the saved group held is refused before anything is placed (that
+    param would stop being trained without a word); a non-strict load is allowed."""
+    cfg = ttml.optimizers.SGDConfig.make(lr=1e-2, momentum=0.0, dampening=0.0, weight_decay=0.0, nesterov=False)
+    model = _Pair(DIM)
+    opt = ttml.optimizers.SGD(model.parameters(), cfg)
+    train_step(model, opt, DIM)
+    path = str(tmp_path / "step_0000001")
+    dcp.save(path, model=model, optimizer=opt)
+    fresh = _Pair(DIM)
+    params = fresh.parameters()
+    without_b = {name: p for name, p in params.items() if "/b/" not in name}
+    assert len(without_b) == 1
+    before = model_shards(params)
+    with expect_error(dcp.CheckpointError, r"optimizer param group 0: the checkpoint's group holds params no rank's"):
+        dcp.load(path, model=fresh, optimizer=ttml.optimizers.SGD(without_b, cfg))
+    assert_same_shards(model_shards(params), before, "nothing was placed")
+    dcp.load(path, model=fresh, optimizer=ttml.optimizers.SGD(without_b, cfg), strict=False)
+    assert_same_shards(model_shards(params), model_shards(model.parameters()))
+
+
+def test_one_process_keeps_its_parts_as_objects(tmp_path, monkeypatch):
+    """The group of one has no peer to send its plan part, election or result part to, so it keeps them as objects:
+    encoding and decoding them would only cost time and a copy of every tensor's description."""
+    model, opt = _trained_pair()
+    for cls in (PlanPart, Election, ResultPart):
+        monkeypatch.setattr(
+            cls, "to_bytes", lambda self: pytest.fail(f"the group of one encoded a {type(self).__name__}")
+        )
+    path = str(tmp_path / "step_0000001")
+    stats = dcp.save(path, model=model, optimizer=opt).stats
+    monkeypatch.undo()
+    assert dcp.load(path, model=model, optimizer=opt).missing == []
+    # Each step records its own time, the planning and the merge included.
+    steps = ("collect_s", "election_s", "plan_s", "readback_s", "write_s", "finalize_s")
+    assert all(0 <= stats[s] <= stats["total_s"] for s in steps), stats
+    assert sum(stats[s] for s in steps if s != "readback_s") <= stats["total_s"], stats
 
 
 def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect_error):

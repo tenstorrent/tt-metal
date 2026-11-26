@@ -12,12 +12,14 @@ import struct
 from types import SimpleNamespace
 
 import numpy as np
-from dcp_oracle import R, S, FakeCheckpoint, arange, assert_shards_equal, expected_shards, world
+from dcp_oracle import R, S, FakeCheckpoint, arange, assert_shards_equal, expected_shards, info, world
 
 from ttml.distributed_checkpointing import _load
 from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpointError
+from ttml.distributed_checkpointing._coordinator import MESSAGE_LIMIT, failure_message
 from ttml.distributed_checkpointing._layouts import Identity
-from ttml.distributed_checkpointing._load import _read_chunk
+from ttml.distributed_checkpointing._load import _read_chunk, chunk_reads, elect_checkers
+from ttml.distributed_checkpointing._planner import create_load_plan
 from ttml.distributed_checkpointing._safetensors import ITEMSIZE, create_file
 
 TP2_COLS = world([R(), S(3)], (1, 2))  # a row-parallel weight: columns split over two devices
@@ -46,6 +48,60 @@ def _by_chunk(kplan):
     for read in kplan.reads:
         groups.setdefault(read.chunk, []).append(read)
     return groups
+
+
+def _rank_plans(ckpt, loaded, coords):
+    """One load plan per rank, each rank holding one of ``coords``, as a multi-rank load plans."""
+    return [create_load_plan(ckpt.index, [info("w", loaded, SHAPE, Identity())], local_coords={c}) for c in coords]
+
+
+def test_a_chunk_split_over_four_ranks_is_read_whole_and_checked_by_one_of_them(tmp_path, expect_error):
+    """Two column-half chunks loaded as four row quarters, one per rank: every rank needs a quarter of each chunk and
+    reads it in part, which the chunk's CRC32 cannot cover. One reader of each chunk is elected to read it whole and
+    check it, the two chunks going to different ranks; a flipped byte then fails that rank's read."""
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (arange(SHAPE), TP2_COLS, Identity())})
+    coords = [(r, 0) for r in range(4)]
+    plans = _rank_plans(ckpt, FSDP4_ROWS, coords)
+    reports = [chunk_reads(plan) for plan in plans]
+    assert all(r == ([["w", 0], ["w", 1]], []) for r in reports), "every rank reads both chunks in part"
+    checkers = elect_checkers(ckpt.index, reports)
+    assert sorted(pair for pairs in checkers for pair in pairs) == [["w", 0], ["w", 1]], "each chunk once"
+    assert sum(1 for pairs in checkers if pairs) == 2, "the two chunks go to two ranks"
+
+    record = ckpt.index.entries["w"].chunks[0]
+    ckpt.files[record.file][record.data_offset + record.nbytes - 1] ^= 0xFF
+    fds = {}
+    for index, buf in ckpt.files.items():
+        path = tmp_path / f"file{index}"
+        path.write_bytes(bytes(buf))
+        fds[index] = os.open(path, os.O_RDONLY)
+    try:
+        for rank, plan in enumerate(plans):
+            kplan = plan.keys["w"]
+            arrays = {group: np.zeros(box.sizes, np.float32) for group, box in kplan.boxes.items()}
+            for chunk, items in sorted(_by_chunk(kplan).items()):
+
+                def read(whole, items=items):
+                    _read_chunk(fds[items[0].file], 0, kplan, items, ITEMSIZE["F32"], np.float32, arrays, "file", whole)
+
+                if chunk == 0 and ["w", 0] in checkers[rank]:
+                    with expect_error(CheckpointError, "chunk 0 .* fails its CRC32 check"):
+                        read(True)
+                read(False)  # read in part, the flipped byte goes unnoticed: what the election is for
+    finally:
+        for fd in fds.values():
+            os.close(fd)
+
+
+def test_a_chunk_another_rank_reads_whole_gets_no_checker():
+    """A chunk split unevenly: a rank needing at least half of it reads it whole and checks it, so the ranks reading
+    it in part are not asked to read it again."""
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (arange(SHAPE), FSDP2_ROWS, Identity())})
+    reports = [([["w", 0]], []), ([["w", 0]], []), ([], [["w", 0]])]
+    assert elect_checkers(ckpt.index, reports) == [[], [], []]
+    assert elect_checkers(ckpt.index, reports[:2]) == [[["w", 0]], []]
 
 
 def test_whole_chunk_reads_and_per_run_reads_agree(tmp_path, monkeypatch):
@@ -242,3 +298,43 @@ def test_data_files_take_their_data_offset_from_the_header_length(tmp_path, expe
             data_files.open(str(tmp_path), index, plan(1))
     finally:
         data_files.close()
+
+
+def test_a_partly_restored_load_says_what_to_do(expect_error):
+    """Once a tensor was placed, a failed load says that the model is partly restored. On a mesh of one rank's own the
+    model can be loaded again; on a mesh several ranks share, ranks that stopped at different tensors no longer make
+    the same device allocations, so the job has to restart; a failure while placing the first tensor there replaced
+    nothing, so it says only that. A failure before any tensor passes as raised."""
+    err = RuntimeError("simulated read error")
+    with expect_error(
+        CheckpointError,
+        r"^the load failed at b after 1 of 2 tensors were placed \(the first: a\); the model and optimizer are partly "
+        r"restored: load again or discard them\. The error: RuntimeError: simulated read error$",
+    ):
+        _load._raise_partly_restored(err, "b", ["a"], 2)
+    with expect_error(
+        CheckpointError,
+        r"partly restored, and the ranks sharing this mesh may now hold different device allocations: end the job and "
+        r"restart it instead of loading again\. The error: RuntimeError: simulated read error$",
+    ):
+        _load._raise_partly_restored(err, "b", ["a"], 2, shared_mesh=True)
+    with expect_error(
+        CheckpointError,
+        r"^the load failed at a after 0 of 2 tensors were placed; the ranks sharing this mesh may now hold different "
+        r"device allocations: end the job and restart it instead of loading again\. The error: RuntimeError: "
+        r"simulated read error$",
+    ):
+        _load._raise_partly_restored(err, "a", [], 2, shared_mesh=True, placing=True)
+    with expect_error(RuntimeError, r"^simulated read error$"):
+        _load._raise_partly_restored(err, "a", [], 2, shared_mesh=True)
+
+
+def test_the_advice_survives_the_cap_on_a_ranks_message(expect_error):
+    """A rank's failure message reaches the other ranks capped at MESSAGE_LIMIT bytes, and a device error carries its
+    backtrace: the advice, which comes before the error's own text, is kept, and only that text is cut."""
+    long_error = RuntimeError("TT_THROW @ device.cpp:603: tt::exception\nbacktrace:\n" + " --- frame\n" * 2000)
+    with expect_error(CheckpointError, "end the job and restart it") as raised:
+        _load._raise_partly_restored(long_error, "b", ["a"], 2, shared_mesh=True)
+    sent = failure_message(1, raised.value).decode("utf-8")
+    assert len(sent.encode("utf-8")) == MESSAGE_LIMIT, "precondition: the message is cut"
+    assert "end the job and restart it instead of loading again" in sent
