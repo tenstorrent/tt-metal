@@ -21,8 +21,6 @@
 #include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
-#include "impl/dispatch/dispatch_mem_map.hpp"
-#include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
@@ -48,6 +46,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // get_fabric_node_id_from_physical_chip_id
 
@@ -94,7 +93,8 @@ ProcIdList compute_proc_ids_and_thread_count(
     return out;
 }
 
-// The kernel's chlkc_descriptors.h exactly as a silicon build generates it (Program::compile's prep_kernel).
+// The kernel's chlkc_descriptors.h as a silicon build generates it (Program::compile's prep_kernel), from its DFBs.
+// prep_kernel also applies set_cb_data_fmt_and_tile; a Quasar compute kernel has no legacy CBs, so that adds nothing.
 std::string generate_chlkc_descriptors(detail::ProgramImpl& impl, IDevice& device, Kernel& kernel) {
     const auto& env = MetalContext::instance(impl.get_context_id())
                           .build_env_manager()
@@ -111,12 +111,21 @@ std::string generate_chlkc_descriptors(detail::ProgramImpl& impl, IDevice& devic
         "emule: cannot create a scratch directory for kernel {}'s chlkc_descriptors.h: {}",
         kernel.name(),
         std::strerror(errno));
+    // Removes the directory however this returns, including when generation throws.
+    struct RemoveDir {
+        const std::string& dir;
+        ~RemoveDir() {
+            std::error_code ec;
+            std::filesystem::remove_all(dir, ec);
+            if (ec) {
+                log_warning(tt::LogMetal, "emule: cannot remove scratch directory {}: {}", dir, ec.message());
+            }
+        }
+    } remove_dir{dir};
     options.path = dir + "/";
     jit_build_genfiles_descriptors(env, options);
     std::ifstream in(options.path + "chlkc_descriptors.h");
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    std::error_code ec;
-    std::filesystem::remove_all(dir, ec);
     TT_FATAL(!text.empty(), "emule: no chlkc_descriptors.h generated for kernel {}", kernel.name());
     return text;
 }
@@ -227,7 +236,9 @@ static void fill_core_state(Program& program, EmuleProgramDescriptor& pd) {
                     continue;
                 }
                 CbDescriptor cd;
-                // A fast-dispatch compile precedes allocation; its launches read the rings from L1.
+                // 0 until the CB is allocated: a compile (fast dispatch, or slow dispatch's eager compile) builds the
+                // descriptor before allocation. No launch reads it then: slow-dispatch launches marshal again after
+                // allocation, and fast-dispatch launches read the rings from L1.
                 cd.address = cb->is_allocated() ? cb->address() : 0;
                 cd.total_size = cb->size();
                 cd.globally_allocated = cb->globally_allocated();

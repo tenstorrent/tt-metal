@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <array>
+#include <fstream>
 #include <map>
 #include <type_traits>
 
@@ -128,7 +130,10 @@ public:
     virtual void LoadImage() override;
     virtual void LoadSections() override {
         auto& hdr = GetHeader();
-        TT_ASSERT(hdr.e_type == ET_DYN, "{}: an emulated kernel's binary is a shared object", path_);
+        if (hdr.e_type != ET_DYN) {
+            TT_THROW(
+                "{}: an emulated kernel's binary must be a shared object, but its ELF type is {}", path_, hdr.e_type);
+        }
         if (!hdr.e_shoff || hdr.e_shentsize != sizeof(Shdr) ||
             (hdr.e_shoff + hdr.e_shnum * sizeof(Shdr) > GetContents().size()) || hdr.e_shstrndx >= hdr.e_shnum) {
             TT_THROW("{}: sections are missing or malformed", path_);
@@ -300,6 +305,30 @@ void ElfFile::ReadImage(const std::string& path) {
 void ElfFile::ReadSections(const std::string& path) {
     pimpl_ = Impl::Make(*this, path);
     pimpl_->LoadSections();
+}
+
+bool ElfFile::IsHostSharedObject(const std::string& path) {
+#if defined(__x86_64__)
+    constexpr uint16_t host_machine = EM_X86_64;
+#elif defined(__aarch64__)
+    constexpr uint16_t host_machine = EM_AARCH64;
+#else
+    constexpr uint16_t host_machine = EM_NONE;
+#endif
+    // e_ident, then e_type and e_machine, which are at the same offsets in ELF32 and ELF64.
+    std::array<unsigned char, EI_NIDENT + (2 * sizeof(uint16_t))> header{};
+    std::ifstream file(path, std::ios::binary);
+    if (!file.read(reinterpret_cast<char*>(header.data()), header.size())) {
+        return false;
+    }
+    if (header[EI_MAG0] != ELFMAG0 || header[EI_MAG1] != ELFMAG1 || header[EI_MAG2] != ELFMAG2 ||
+        header[EI_MAG3] != ELFMAG3 || header[EI_DATA] != ELFDATA2LSB) {
+        return false;
+    }
+    auto half = [&](std::size_t offset) {
+        return static_cast<uint16_t>(header[offset] | (static_cast<uint16_t>(header[offset + 1]) << 8));
+    };
+    return host_machine != EM_NONE && half(EI_NIDENT) == ET_DYN && half(EI_NIDENT + 2) == host_machine;
 }
 
 ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {

@@ -383,7 +383,9 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
     WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
 
 #ifdef TT_METAL_USE_EMULE
-    if (emulated_launch) {
+    // An emulated chip without dispatch firmware launches the program itself; PrepareProgram left its compile to it.
+    if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule &&
+        !metal_ctx.get_cluster().runs_dispatch_firmware()) {
         // Slow dispatch on an emulated chip executes synchronously: all kernels complete before this returns.
         emule::execute_program_emulated(&device, program);
         return;

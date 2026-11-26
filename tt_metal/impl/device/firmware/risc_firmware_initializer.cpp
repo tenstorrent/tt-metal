@@ -4,14 +4,13 @@
 
 #include "risc_firmware_initializer.hpp"
 
-#ifdef TT_METAL_USE_EMULE
-#include "emulated_program_runner.hpp"
-#endif
+#include "impl/emulation/emule_hooks.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <chrono>
 #include <future>
+#include <map>
 #include <set>
 #include <thread>
 
@@ -332,8 +331,13 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
 
 #ifdef TT_METAL_USE_EMULE
     if (cluster_.get_target_device_type() == tt::TargetDevice::Emule) {
-        // Resets the emulated cores, stopping the firmware boot_core_firmware started.
-        emule::reset_core_firmware(std::vector<int>(all_devices.begin(), all_devices.end()));
+        // Resets the emulated cores, stopping the firmware boot_core_firmware started. Teardown must not throw
+        // (see above): a run left parked on a wait nothing feeds makes the drain throw, so log and move on.
+        try {
+            emule::reset_core_firmware(std::vector<int>(all_devices.begin(), all_devices.end()));
+        } catch (const std::exception& e) {
+            log_warning(tt::LogMetal, "Skipping emulated core reset during teardown: {}", e.what());
+        }
     }
 #endif
 
@@ -1495,12 +1499,18 @@ void RiscFirmwareInitializer::initialize_firmware(
 }
 
 void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId device_id) {
-#ifdef TT_METAL_USE_EMULE
     // Each core's core_info message and the reset jump word at the firmware launch address, as
-    // initialize_and_launch_firmware writes them; the watcher and kernels read both.
-    auto write_core_state = [&](HalProgrammableCoreType core_type, const CoreCoord& logical_core,
+    // initialize_and_launch_firmware writes them; the watcher and kernels read both. As there, core_info is built
+    // once per core type and only the coordinates change per core.
+    std::map<HalProgrammableCoreType, dev_msgs::core_info_msg_t> core_infos;
+    auto write_core_state = [&](HalProgrammableCoreType core_type,
+                                const CoreCoord& logical_core,
                                 const CoreCoord& virtual_core) {
-        auto core_info = populate_core_info_msg(device_id, core_type);
+        auto it = core_infos.find(core_type);
+        if (it == core_infos.end()) {
+            it = core_infos.emplace(core_type, populate_core_info_msg(device_id, core_type)).first;
+        }
+        auto& core_info = it->second;
         core_info.view().absolute_logical_x() = logical_core.x;
         core_info.view().absolute_logical_y() = logical_core.y;
         cluster_.write_core_immediate(
@@ -1516,9 +1526,6 @@ void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId devi
             jit_build_config.fw_launch_addr);
     };
     emule::initialize_firmware_state(device_id, *descriptor_->metal_context().get_context_id(), write_core_state);
-#else
-    TT_THROW("Device {} is an emulated device, but tt-metal was built without TT_METAL_USE_EMULE", device_id);
-#endif
 }
 
 void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_id) {

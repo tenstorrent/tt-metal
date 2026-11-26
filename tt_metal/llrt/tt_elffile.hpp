@@ -71,6 +71,9 @@ public:
     void ReadImage(const std::string& path);
     // Read only an ELF's sections, for an emulated kernel's host binary, which no device loads.
     void ReadSections(const std::string& path);
+    // True for a shared object built for this host (an emulated kernel's binary). False for anything else,
+    // including a RISC-V device image and a file that cannot be read.
+    static bool IsHostSharedObject(const std::string& path);
 
     // Write the (now-processed) elf file.
     void WriteImage(const std::string& path);

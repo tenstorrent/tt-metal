@@ -126,7 +126,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
 #ifdef TT_METAL_USE_EMULE
-        if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+        // The emulator pairs each record with the next launch of the program, so it is taken before the enqueue
+        // (the emulated dispatcher can launch during the enqueue's host writes). A trace capture launches nothing
+        // and its replays have no enqueue behind them, so a capture records nothing.
+        if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule && !mesh_cq.trace_id().has_value()) {
             for (auto& [device_range, program] : programs) {
                 for (const auto& coord : device_range) {
                     if (auto* device = mesh_cq.device()->impl().get_device(coord)) {

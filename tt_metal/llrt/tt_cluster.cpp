@@ -269,6 +269,18 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     auto& cluster_desc = (*(this->driver_->get_cluster_description()));
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
 
+    // Emulated fast dispatch runs each chip's dispatch kernels on that chip, as on an MMIO chip: it has no ethernet
+    // tunnel or fabric to reach a remote chip's dispatch through, so a cluster with remote chips is not supported.
+    if (this->target_type_ == tt::TargetDevice::Emule && this->runs_dispatch_firmware_) {
+        for (ChipId chip_id : cluster_desc.get_all_chips()) {
+            TT_FATAL(
+                cluster_desc.is_chip_mmio_capable(chip_id),
+                "Emulated fast dispatch needs every chip to be MMIO-capable, but chip {} of the cluster descriptor is "
+                "remote. Use slow dispatch (TT_METAL_SLOW_DISPATCH_MODE=1) or a descriptor without remote chips.",
+                chip_id);
+        }
+    }
+
     if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule) {
         this->assert_risc_reset();
     }

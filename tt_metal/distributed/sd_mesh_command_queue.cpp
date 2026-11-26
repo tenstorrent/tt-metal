@@ -201,8 +201,8 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 void SDMeshCommandQueue::wait_for_cores_idle() {
     auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
     if (!logical_cores_for_previous_workload_.empty()) {
-        // In emulated mode this map is always empty (LaunchProgram is synchronous),
-        // so this block is effectively a no-op for emulated devices.
+        // Emulated devices keep this map empty (see enqueue_mesh_workload): tt-emule, not this wait, orders
+        // later work after a run, so this block is a no-op for them.
         for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
             tt::llrt::internal_::wait_for_idle(context, device_id, logical_cores);
         }
@@ -356,8 +356,9 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             return;
         }
         tt::tt_metal::emule::run_mesh_dispatch(this, blocking);  // one concurrent run across all programs/chips
-        // run_until_idle completed every program synchronously, so all cores are idle now; keep the
-        // "previous workload cores" map empty (the emule invariant wait_for_cores_idle relies on).
+        // A blocking run has completed every program. A non-blocking one may still be running; tt-emule drives it
+        // at the next dispatch onto it or at Finish (drain_device), so the silicon idle wait does not apply either
+        // way: keep the "previous workload cores" map empty (the emule invariant wait_for_cores_idle relies on).
         {
             std::lock_guard<std::mutex> guard(logical_cores_mutex_);
             logical_cores_for_previous_workload_.clear();

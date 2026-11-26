@@ -572,13 +572,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Dispatch follows TT_METAL_SLOW_DISPATCH_MODE as on silicon: set, slow dispatch; unset, fast dispatch, where
         // emulated devices run metal's fast-dispatch command queues and dispatch kernels.
         // Default: Disabled
-        // Note: If both EMULE_MODE and SIMULATOR are set, SIMULATOR takes precedence
+        // Note: If both EMULE_MODE and SIMULATOR are set, SIMULATOR takes precedence (resolved after every variable is
+        // read, so it does not depend on the order of EnvVarID)
         // Usage: export TT_METAL_EMULE_MODE=1
-        case EnvVarID::TT_METAL_EMULE_MODE:
-            if (this->simulator_path.empty()) {
-                this->runtime_target_device_ = tt::TargetDevice::Emule;
-            }
-            break;
+        case EnvVarID::TT_METAL_EMULE_MODE: this->emule_mode_requested = true; break;
 
         // TT_METAL_EMULE_SOC_DESC_PATH
         // SoC descriptor of the emulated chip, the counterpart of the soc_descriptor.yaml a simulator directory
@@ -2101,11 +2098,21 @@ void RunTimeOptions::InitializeFromEnvVars() {
         TT_FATAL(this->brisc_firmware_header.empty(), "TT_METAL_FW_HEADER_BRISC requires TT_METAL_FW_SRC_BRISC=blaze");
     }
 
+    // Emulated mode over mock (both read the cluster descriptor); the simulator over both
+    if (this->emule_mode_requested && this->simulator_path.empty()) {
+        this->runtime_target_device_ = tt::TargetDevice::Emule;
+    }
+
     // Validate emulated mode configuration
     if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
         TT_THROW("TT_METAL_EMULE_MODE=1 requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set");
     }
     if (this->runtime_target_device_ != tt::TargetDevice::Emule && !this->emule_soc_desc_path.empty()) {
+        if (this->emule_mode_requested) {
+            TT_THROW(
+                "TT_METAL_EMULE_SOC_DESC_PATH applies to an emulated device, but TT_METAL_SIMULATOR is set and takes "
+                "precedence over TT_METAL_EMULE_MODE");
+        }
         TT_THROW("TT_METAL_EMULE_SOC_DESC_PATH requires TT_METAL_EMULE_MODE=1");
     }
 

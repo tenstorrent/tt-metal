@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_DEVICE_SMOKE_SOURCES
     test_device_init_and_teardown.cpp
+    test_rtoptions_emule_mode.cpp
     test_rtoptions_fw_src_brisc.cpp
     test_rtoptions_qsr_s1_simulator.cpp
     test_rtoptions_simulator_dram_uncapped.cpp
