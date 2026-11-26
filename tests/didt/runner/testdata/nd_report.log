@@ -1,0 +1,18 @@
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_cores:98 - ND device 19 logical core (6,8) translated=(7,10): 96/1024 elements differ
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:147 - Chip map device 18: UBB4 ASIC3 /dev/tenstorrent/26 0000:83:00.0 board=0x47331831011
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:147 - Chip map device 19: UBB4 ASIC4 /dev/tenstorrent/27 0000:84:00.0 board=0x47331831011
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:147 - Chip map device 26: UBB3 ASIC3 /dev/tenstorrent/18 0000:c3:00.0 board=0x47331831022
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:150 - ND report: 2 of 32 devices non-deterministic (20 checks)
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:160 - ND summary device 19 [UBB4 ASIC4 /dev/tenstorrent/27 0000:84:00.0 board=0x47331831011]: 3/20 checks; pattern single core (6,8); failing checks per core: (6,8)x3
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:167 - ND summary device 19 core (6,8) translated=(7,10): failed 3/20 checks; face column lane 3 in 3/3 checks; 2-96 elements per check; bits 7:100%
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:160 - ND summary device 26 [UBB3 ASIC3 /dev/tenstorrent/18 0000:c3:00.0 board=0x47331831022]: 2/20 checks; pattern scattered (10 cores in 2 rows, 5 columns): (0,1) (1,1); failing checks per core: (0,1)x2 (1,1)x2 (2,1)x1 (3,1)x1 (4,1)x1 (0,2)x1 (1,2)x1 (2,2)x1 (3,2)x1 (4,2)x1
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:167 - ND summary device 26 core (0,1) translated=(1,3): failed 2/20 checks; no structure
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:167 - ND summary device 26 core (1,1) translated=(2,3): failed 2/20 checks; no structure
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:167 - ND summary device 26 core (2,1) translated=(3,3): failed 1/20 checks; no structure
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:167 - ND summary device 26 core (3,1) translated=(4,3): failed 1/20 checks; no structure
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:167 - ND summary device 26 core (4,1) translated=(5,3): failed 1/20 checks; no structure
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:167 - ND summary device 26 core (0,2) translated=(1,4): failed 1/20 checks; no structure
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:167 - ND summary device 26 core (1,2) translated=(2,4): failed 1/20 checks; no structure
+2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_baseog_nd_core_summary:167 - ND summary device 26 core (2,2) translated=(3,4): failed 1/20 checks; no structure
+FAILED tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy] - AssertionError: non-deterministic outputs
+========================= 1 failed in 391.26s (0:06:31) =========================

@@ -1,0 +1,15 @@
+
+dump_op_mesh.py:
+R\C,C0,C1,C2,C3
+0,T1:N1 (Device 0)\n(idle),T1:N5 (Device 4)\n(idle),T2:N5 (Device 12)\n(idle),T2:N1 (Device 8)\n(idle)
+1,T1:N2 (Device 1)\n(idle),T1:N6 (Device 5)\n(idle),T2:N6 (Device 13)\n(idle),T2:N2 (Device 9)\n(idle)
+2,T1:N3 (Device 2)\n(idle),T1:N7 (Device 6)\n(idle),T2:N7 (Device 14)\n(idle),T2:N3 (Device 10)\n(idle)
+3,T1:N4 (Device 3)\n(idle),T1:N8 (Device 7)\n(idle),T2:N8 (Device 15)\n(idle),T2:N4 (Device 11)\n(idle)
+4,T3:N4 (Device 27)\n30: MinimalMatmulDeviceOperation,T3:N8 (Device 31)\n(idle),T4:N8 (Device 23)\n(idle),T4:N4 (Device 19)\n(idle)
+5,T3:N3 (Device 26)\n(idle),T3:N7 (Device 30)\n(idle),T4:N7 (Device 22)\n(idle),T4:N3 (Device 18)\n(idle)
+6,T3:N2 (Device 25)\n(idle),T3:N6 (Device 29)\n(idle),T4:N6 (Device 21)\n(idle),T4:N2 (Device 17)\n(idle)
+7,T3:N1 (Device 24)\n(idle),T3:N5 (Device 28)\n(idle),T4:N5 (Device 20)\n(idle),T4:N1 (Device 16)\n(idle)
+
+dump_running_operations.py:
+Op Id,Op Name,Op Params,Prev Op Id,Prev Op Name,Prev Op Params,Device Cnt,Core Cnt,Devices,Cores
+30,MinimalMatmulDeviceOperation,"Tensor[0]\n  logical_shape: [16384, 16384]\n  dtype: BFLOAT16\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: INTERLEAVED\n  buffer_type: DRAM\n  shard_spec: none\n  nd_shard_spec: none\n  created_with_nd_shard_spec: 0\n  per_core_allocation: 0\n  range_lockstep_allocation: 0\n  alignment: [32, 32]\n\nTensor[1]\n  logical_shape: [16384, 16384]\n  dtype: BFLOAT16\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: INTERLEAVED\n  buffer_type: DRAM\n  shard_spec: none\n  nd_shard_spec: none\n  created_with_nd_shard_spec: 0\n  per_core_allocation: 0\n  range_lockstep_allocation: 0\n  alignment: [32, 32]",29,MinimalMatmulDeviceOperation,"Tensor[0]\n  logical_shape: [16384, 16384]\n  dtype: BFLOAT16\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: INTERLEAVED\n  buffer_type: DRAM\n  shard_spec: none\n  nd_shard_spec: none\n  created_with_nd_shard_spec: 0\n  per_core_allocation: 0\n  range_lockstep_allocation: 0\n  alignment: [32, 32]\n\nTensor[1]\n  logical_shape: [16384, 16384]\n  dtype: BFLOAT16\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: INTERLEAVED\n  buffer_type: DRAM\n  shard_spec: none\n  nd_shard_spec: none\n  created_with_nd_shard_spec: 0\n  per_core_allocation: 0\n  range_lockstep_allocation: 0\n  alignment: [32, 32]",1,120,27,"27:1-10 (0,8)\n27:1-11 (0,9)\n27:1-2 (0,0)\n27:1-3 (0,1)\n27:1-4 (0,2)\n..."
