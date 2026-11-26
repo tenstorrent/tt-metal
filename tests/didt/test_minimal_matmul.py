@@ -76,6 +76,10 @@ def test_minimal_matmul(
     grid_size,
 ):
     M, K, N = 16384, 16384, 16384
+    # Debug: DIDT_MINIMAL_M overrides M. M > N makes minimal_matmul transpose its core grid, so input A is
+    # multicast down columns instead of across rows.
+    if os.environ.get("DIDT_MINIMAL_M"):
+        M = int(os.environ["DIDT_MINIMAL_M"])
 
     compute_grid = get_mesh_grid_size(mesh_device)
     compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
