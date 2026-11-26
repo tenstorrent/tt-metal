@@ -27,6 +27,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "all_to_all_matmul_retile.hpp"
+#include "ttnn/cpp/ttnn/operations/all_to_all_matmul/device/kernels/all_to_all_matmul_args.hpp"
+
+using namespace all_to_all_matmul;
 
 #if defined(ABLATE_ZONES)
 #include "tools/profiler/kernel_profiler.hpp"
@@ -36,45 +39,46 @@
 #endif
 
 void kernel_main() {
-    constexpr uint32_t cb_a_landed = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_weight = get_compile_time_arg_val(1);
-    constexpr uint32_t Kt = get_compile_time_arg_val(2);
-    constexpr uint32_t Nt = get_compile_time_arg_val(3);
-    constexpr uint32_t block_n = get_compile_time_arg_val(4);
-    [[maybe_unused]] constexpr uint32_t num_n_blocks = get_compile_time_arg_val(5);
-    constexpr uint32_t B = get_compile_time_arg_val(6);
-    constexpr uint32_t Mq_t = get_compile_time_arg_val(7);
-    constexpr uint32_t St = get_compile_time_arg_val(8);
-    constexpr uint32_t Hl = get_compile_time_arg_val(9);
-    constexpr uint32_t in_tile_bytes = get_compile_time_arg_val(10);
-    constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(11);
-    constexpr uint32_t Mq = get_compile_time_arg_val(12);  // rows per device
-    constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_a_landed = get_compile_time_arg_val(reader_ct::CB_A_LANDED);
+    constexpr uint32_t cb_weight = get_compile_time_arg_val(reader_ct::CB_WEIGHT);
+    constexpr uint32_t Kt = get_compile_time_arg_val(reader_ct::KT);
+    constexpr uint32_t Nt = get_compile_time_arg_val(reader_ct::NT);
+    constexpr uint32_t block_n = get_compile_time_arg_val(reader_ct::BLOCK_N);
+    [[maybe_unused]] constexpr uint32_t num_n_blocks = get_compile_time_arg_val(reader_ct::NUM_N_BLOCKS);
+    constexpr uint32_t B = get_compile_time_arg_val(reader_ct::B);
+    constexpr uint32_t Mq_t = get_compile_time_arg_val(reader_ct::MQ_T);
+    constexpr uint32_t St = get_compile_time_arg_val(reader_ct::ST);
+    constexpr uint32_t Hl = get_compile_time_arg_val(reader_ct::HL);
+    constexpr uint32_t in_tile_bytes = get_compile_time_arg_val(reader_ct::IN_TILE_BYTES);
+    constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(reader_ct::W_TILE_BYTES);
+    constexpr uint32_t Mq = get_compile_time_arg_val(reader_ct::MQ);  // rows per device
+    constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(reader_ct::CB_RETILE_STAGE);
     // Weight reads in flight per core (OVERLAP, Refinement 3): one barrier per weight_chunk_tiles reads. 96 cores
     // each flooding the NoC with a whole 128 KiB block stretched the fabric exchange by ~20 us (Kimi); a few tiles in
     // flight per core keep DRAM busy without starving the landing / port traffic.
-    constexpr uint32_t weight_chunk_tiles = get_compile_time_arg_val(14);
+    constexpr uint32_t weight_chunk_tiles = get_compile_time_arg_val(reader_ct::WEIGHT_CHUNK_TILES);
     static_assert(weight_chunk_tiles >= 1, "weight_chunk_tiles >= 1");
     // Weight blocks of a slot read before its landing wait (<= cb_weight depth): the rest follow the landing.
-    constexpr uint32_t w_prefetch_blocks = get_compile_time_arg_val(15);
+    constexpr uint32_t w_prefetch_blocks = get_compile_time_arg_val(reader_ct::W_PREFETCH_BLOCKS);
     static_assert(w_prefetch_blocks >= 1, "w_prefetch_blocks >= 1");
     constexpr bool retile = (Mq % 32) != 0;
-    constexpr auto in_args = TensorAccessorArgs<16>();
+    constexpr auto in_args = TensorAccessorArgs<reader_ct::COUNT>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr uint32_t quarter_tiles = Mq_t * Kt;       // one batch's rows of one head quarter
     constexpr uint32_t slot_tiles = B * quarter_tiles;  // = block_m * Kt
     constexpr uint32_t weight_block_tiles = Kt * block_n;
 
-    const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
-    const uint32_t my_q = get_common_arg_val<uint32_t>(2);  // this chip's position in its group
-    constexpr uint32_t arrival_base = 3;                    // arrival counter address of slot s
+    const uint32_t in_addr = get_common_arg_val<uint32_t>(reader_common::IN_ADDR);
+    const uint32_t w_addr = get_common_arg_val<uint32_t>(reader_common::W_ADDR);
+    const uint32_t my_q = get_common_arg_val<uint32_t>(reader_common::MY_Q);  // this chip's position in its group
+    const uint32_t landing_addr = get_common_arg_val<uint32_t>(reader_common::LANDING_ADDR);
+    constexpr uint32_t arrival_base = reader_common::ARRIVAL_BASE;  // arrival counter address of slot s
     // Per slot: (h | wait << 16), (nb0 | nb1 << 16), forward, helper x, helper y, helper slot addr, helper arrival
     // addr, weight pace (cycles to wait before the slot's first weight read; 0 = none), weight blocks read before the
     // landing wait (tail M-split piece slots read all of theirs; else w_prefetch_blocks)
-    constexpr uint32_t SLOT_WORDS = 8;
+    constexpr uint32_t SLOT_WORDS = reader_slot::COUNT;
 
-    const uint32_t n_slots = get_arg_val<uint32_t>(0);
+    const uint32_t n_slots = get_arg_val<uint32_t>(reader_rt::N_SLOTS);
 
     const auto in = TensorAccessor(in_args, in_addr, in_tile_bytes);
     const auto w = TensorAccessor(w_args, w_addr, w_tile_bytes);
@@ -108,20 +112,22 @@ void kernel_main() {
     };
 
     for (uint32_t s = 0; s < n_slots; ++s) {
-        const uint32_t rec = 1 + s * SLOT_WORDS;
-        const uint32_t word = get_arg_val<uint32_t>(rec);
-        const uint32_t h = word & 0xFFFF;
-        const bool remote =
-            ((word >> 16) & 0xFF) != 0;  // remote head, or a helper slot (rows forwarded by the primary)
-        const uint32_t nbw = get_arg_val<uint32_t>(rec + 1);
-        const uint32_t nb0 = nbw & 0xFF, nb1 = (nbw >> 8) & 0xFF;  // this core's n-blocks of the head
-        const bool forward = get_arg_val<uint32_t>(rec + 2) != 0;
+        const uint32_t rec = reader_rt::SLOTS_BASE + s * SLOT_WORDS;
+        const uint32_t word = get_arg_val<uint32_t>(rec + reader_slot::WORD);
+        const uint32_t h = word & reader_slot::HEAD_MASK;
+        // remote head, or a helper slot (rows forwarded by the primary)
+        const bool remote = ((word >> reader_slot::WAIT_SHIFT) & reader_slot::WAIT_MASK) != 0;
+        const uint32_t nbw = get_arg_val<uint32_t>(rec + reader_slot::NBW);
+        // this core's n-blocks of the head
+        const uint32_t nb0 = (nbw >> nbw_bits::NB0_SHIFT) & nbw_bits::FIELD_MASK;
+        const uint32_t nb1 = (nbw >> nbw_bits::NB1_SHIFT) & nbw_bits::FIELD_MASK;
+        const bool forward = get_arg_val<uint32_t>(rec + reader_slot::FWD) != 0;
 
-        const uint32_t pace = get_arg_val<uint32_t>(rec + 7);
+        const uint32_t pace = get_arg_val<uint32_t>(rec + reader_slot::PACE);
         if (pace != 0) {
             riscv_wait(pace);  // paced weight start (spreads the cores' weight bursts over the exchange)
         }
-        const uint32_t pre = word >> 24;
+        const uint32_t pre = word >> reader_slot::PRE_SHIFT;
         const uint32_t nb_pre = (nb1 - nb0 < pre) ? nb1 : nb0 + pre;
         {
             A2AMM_ZONE("rd_w0");
@@ -169,10 +175,12 @@ void kernel_main() {
             // its helper slot (core-local NoC), then increment that slot's arrival counter. Read-only on this slot
             // while compute unpacks it; nothing rewrites the slot before the program ends.
             A2AMM_ZONE("rd_forward");
-            const uint32_t fx = get_arg_val<uint32_t>(rec + 3), fy = get_arg_val<uint32_t>(rec + 4);
-            noc_async_write(slot_l1, get_noc_addr(fx, fy, get_arg_val<uint32_t>(rec + 5)), slot_tiles * in_tile_bytes);
+            const uint32_t fx = get_arg_val<uint32_t>(rec + reader_slot::FWD_X);
+            const uint32_t fy = get_arg_val<uint32_t>(rec + reader_slot::FWD_Y);
+            const uint32_t fwd_slot = landing_addr + get_arg_val<uint32_t>(rec + reader_slot::FWD_SLOT_OFFSET);
+            noc_async_write(slot_l1, get_noc_addr(fx, fy, fwd_slot), slot_tiles * in_tile_bytes);
             noc_async_write_barrier();
-            noc_semaphore_inc(get_noc_addr(fx, fy, get_arg_val<uint32_t>(rec + 6)), 1);
+            noc_semaphore_inc(get_noc_addr(fx, fy, get_arg_val<uint32_t>(rec + reader_slot::FWD_ARRIVAL_ADDR)), 1);
         }
 
         for (uint32_t nb = nb_pre; nb < nb1; ++nb) {

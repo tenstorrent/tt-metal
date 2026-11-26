@@ -22,22 +22,25 @@
 #define A2AMM_ZONE(n)
 #endif
 
+#include "ttnn/cpp/ttnn/operations/all_to_all_matmul/device/kernels/all_to_all_matmul_args.hpp"
+
 using namespace compute_kernel_lib;
+using namespace all_to_all_matmul;
 
 void kernel_main() {
-    constexpr uint32_t cb_a_landed = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_weight = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(2);
-    constexpr uint32_t block_m = get_compile_time_arg_val(3);
-    constexpr uint32_t Kt = get_compile_time_arg_val(4);
-    constexpr uint32_t block_n = get_compile_time_arg_val(5);
-    [[maybe_unused]] constexpr uint32_t num_n_blocks = get_compile_time_arg_val(6);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(7);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_a_landed = get_compile_time_arg_val(compute_ct::CB_A_LANDED);
+    constexpr uint32_t cb_weight = get_compile_time_arg_val(compute_ct::CB_WEIGHT);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(compute_ct::CB_OUT);
+    constexpr uint32_t block_m = get_compile_time_arg_val(compute_ct::BLOCK_M);
+    constexpr uint32_t Kt = get_compile_time_arg_val(compute_ct::KT);
+    constexpr uint32_t block_n = get_compile_time_arg_val(compute_ct::BLOCK_N);
+    [[maybe_unused]] constexpr uint32_t num_n_blocks = get_compile_time_arg_val(compute_ct::NUM_N_BLOCKS);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(compute_ct::OUT_SUBBLOCK_H);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(compute_ct::OUT_SUBBLOCK_W);
     constexpr uint32_t slot_tiles = block_m * Kt;
     static_assert(block_m % out_subblock_h == 0 && block_n % out_subblock_w == 0, "subblocks must tile the block");
 
-    const uint32_t n_slots = get_arg_val<uint32_t>(0);
+    const uint32_t n_slots = get_arg_val<uint32_t>(compute_rt::N_SLOTS);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a_landed, cb_weight, cb_out);
     CircularBuffer a_buf(cb_a_landed), w_buf(cb_weight), out_buf(cb_out);
@@ -49,9 +52,13 @@ void kernel_main() {
     for (uint32_t s = 0; s < n_slots; ++s) {
         A2AMM_ZONE("cmp_head");
         // this core's n-blocks [nb0, nb1) and rows [m0, m1) of the slot's head, 8 bits each
-        const uint32_t nbw = get_arg_val<uint32_t>(1 + s);
-        shape.in0_num_subblocks = ((nbw >> 24) - ((nbw >> 16) & 0xFF)) / out_subblock_h;
-        for (uint32_t nb = nbw & 0xFF; nb < ((nbw >> 8) & 0xFF); ++nb) {
+        const uint32_t nbw = get_arg_val<uint32_t>(compute_rt::NBW_BASE + s);
+        const uint32_t m0 = (nbw >> nbw_bits::M0_SHIFT) & nbw_bits::FIELD_MASK;
+        const uint32_t m1 = (nbw >> nbw_bits::M1_SHIFT) & nbw_bits::FIELD_MASK;
+        const uint32_t nb0 = (nbw >> nbw_bits::NB0_SHIFT) & nbw_bits::FIELD_MASK;
+        const uint32_t nb1 = (nbw >> nbw_bits::NB1_SHIFT) & nbw_bits::FIELD_MASK;
+        shape.in0_num_subblocks = (m1 - m0) / out_subblock_h;
+        for (uint32_t nb = nb0; nb < nb1; ++nb) {
 #ifdef ABLATE_NOCOMPUTE
             cb_wait_front(cb_a_landed, slot_tiles);
             cb_wait_front(cb_weight, Kt * block_n);

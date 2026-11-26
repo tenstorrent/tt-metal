@@ -37,8 +37,10 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "all_to_all_matmul_stream.hpp"
+#include "ttnn/cpp/ttnn/operations/all_to_all_matmul/device/kernels/all_to_all_matmul_args.hpp"
 
 using namespace tt::tt_fabric;
+using namespace all_to_all_matmul;
 
 namespace {
 inline void route_to(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id) {
@@ -48,29 +50,29 @@ inline void route_to(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_i
 #error "all_to_all_matmul routes by destination node: a 2D fabric config is required"
 #endif
 }
-constexpr uint32_t READY_WORDS = 4;  // destination index, target port x, y, ready counter address
-constexpr uint32_t ENTRY_WORDS = 5;  // word 0: destination index | tiles of the sub-entry << 16
-constexpr uint32_t DEST_WORDS =
-    3;  // chip id, mesh id, ready counter address  // destination index, core x, y, slot address, arrival address
+constexpr uint32_t READY_WORDS = port_sender_ready::COUNT;  // destination index, target port x, y, ready address
+constexpr uint32_t ENTRY_WORDS = port_sender_sub::COUNT;    // destination index | tiles, x, y, slot offset, arrival
+constexpr uint32_t DEST_WORDS = port_sender_dest::COUNT;    // chip id, mesh id, ready counter address
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t packet_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t batch_chunks = get_compile_time_arg_val(3);
-    constexpr uint32_t slot_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t max_headers = get_compile_time_arg_val(5);
-    constexpr bool pack = get_compile_time_arg_val(6) != 0;
-    constexpr bool fence_per_dest = get_compile_time_arg_val(7) != 0;
+    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(port_sender_ct::CB_PORT_CHUNKS);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(port_sender_ct::TILE_BYTES);
+    constexpr uint32_t packet_tiles = get_compile_time_arg_val(port_sender_ct::PACKET_TILES);
+    constexpr uint32_t batch_chunks = get_compile_time_arg_val(port_sender_ct::BATCH_CHUNKS);
+    constexpr uint32_t slot_tiles = get_compile_time_arg_val(port_sender_ct::SLOT_TILES);
+    constexpr uint32_t max_headers = get_compile_time_arg_val(port_sender_ct::MAX_HEADERS);
+    constexpr bool pack = get_compile_time_arg_val(port_sender_ct::PACK) != 0;
+    constexpr bool fence_per_dest = get_compile_time_arg_val(port_sender_ct::FENCE_PER_DEST) != 0;
+    const uint32_t landing_addr = get_common_arg_val<uint32_t>(port_sender_common::LANDING_ADDR);
     static_assert(max_headers >= 1 && max_headers <= 12, "packet header pool: <= 12 headers per RISC");
     static_assert(!pack || packet_tiles <= slot_tiles, "packing needs packet_tiles <= slot_tiles");
     constexpr uint32_t packet_bytes = packet_tiles * tile_bytes;
 
-    size_t a = 0;
-    const bool has_conn = get_arg_val<uint32_t>(a++) != 0;
-    const uint32_t n_dest = get_arg_val<uint32_t>(a++);
-    const uint32_t hdrs_per_dest = get_arg_val<uint32_t>(a++);
+    const bool has_conn = get_arg_val<uint32_t>(port_sender_rt::HAS_CONN) != 0;
+    const uint32_t n_dest = get_arg_val<uint32_t>(port_sender_rt::N_DEST);
+    const uint32_t hdrs_per_dest = get_arg_val<uint32_t>(port_sender_rt::HDRS_PER_DEST);
+    size_t a = port_sender_rt::DESTS_BASE;
     const uint32_t dest_idx = a;  // per destination: chip id, mesh id, ready counter address (0: no data to it)
     a += DEST_WORDS * n_dest;
     const uint32_t n_ready_out = get_arg_val<uint32_t>(a++);
@@ -104,8 +106,9 @@ void kernel_main() {
         ASSERT(route_off % 4 == 0);
         const uint32_t w0 = route_off / 4;
         for (uint32_t d = 0; d < n_dest; ++d) {
-            const uint16_t chip = static_cast<uint16_t>(get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d));
-            const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d + 1));
+            const uint32_t drec = dest_idx + DEST_WORDS * d;
+            const uint16_t chip = static_cast<uint16_t>(get_arg_val<uint32_t>(drec + port_sender_dest::CHIP_ID));
+            const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(drec + port_sender_dest::MESH_ID));
             route_to(img_hdr, chip, mesh);
             for (uint32_t i = 0; i < hdrs_per_dest; ++i) {
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* h = PacketHeaderPool::allocate_header();
@@ -125,7 +128,7 @@ void kernel_main() {
     // ---- ready fence: send every ready; the waits are per destination group (below) ----
     uint32_t awaited = 0;  // bit d: destination d's ready consumed
     auto wait_ready = [&](uint32_t d) {
-        const uint32_t addr = get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d + 2);
+        const uint32_t addr = get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d + port_sender_dest::READY_ADDR);
         if (addr == 0 || (awaited >> d) & 1) {
             return;
         }
@@ -138,9 +141,13 @@ void kernel_main() {
         A2AMM_ZONE("psd_fence");
         for (uint32_t k = 0; k < n_ready_out; ++k) {
             const uint32_t t = ready_idx + k * READY_WORDS;
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[get_arg_val<uint32_t>(t) * hdrs_per_dest];
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr =
+                hdrs[get_arg_val<uint32_t>(t + port_sender_ready::DEST_INDEX) * hdrs_per_dest];
             hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-                get_noc_addr(get_arg_val<uint32_t>(t + 1), get_arg_val<uint32_t>(t + 2), get_arg_val<uint32_t>(t + 3)),
+                get_noc_addr(
+                    get_arg_val<uint32_t>(t + port_sender_ready::X),
+                    get_arg_val<uint32_t>(t + port_sender_ready::Y),
+                    get_arg_val<uint32_t>(t + port_sender_ready::ADDR)),
                 1,
                 true});
             conn.wait_for_empty_write_slot();
@@ -167,9 +174,11 @@ void kernel_main() {
     uint32_t pos = 0;
     for (uint32_t g0 = 0; g0 < n_entries;) {
         // group: entries [g0, g1) to one destination chip
-        const uint32_t d = get_arg_val<uint32_t>(entry_idx + g0 * ENTRY_WORDS) & 0xFFFF;
+        const uint32_t d =
+            get_arg_val<uint32_t>(entry_idx + g0 * ENTRY_WORDS + port_sender_sub::WORD0) & port_sender_sub::DEST_MASK;
         uint32_t g1 = g0 + 1;
-        while (g1 < n_entries && (get_arg_val<uint32_t>(entry_idx + g1 * ENTRY_WORDS) & 0xFFFF) == d) {
+        while (g1 < n_entries && (get_arg_val<uint32_t>(entry_idx + g1 * ENTRY_WORDS + port_sender_sub::WORD0) &
+                                  port_sender_sub::DEST_MASK) == d) {
             ++g1;
         }
         if constexpr (fence_per_dest) {
@@ -178,7 +187,10 @@ void kernel_main() {
         // Sub-entries: an entry, or a tail M-split piece of one (rows of the same entry delivered to another core,
         // own arrival counter). The tile stream of the group is the reader's (packing); without packing every
         // sub-entry is a whole entry (host rule), so the per-entry cut matches the reader's too.
-        auto tiles_of = [&](uint32_t e) { return get_arg_val<uint32_t>(entry_idx + e * ENTRY_WORDS) >> 16; };
+        auto tiles_of = [&](uint32_t e) {
+            return get_arg_val<uint32_t>(entry_idx + e * ENTRY_WORDS + port_sender_sub::WORD0) >>
+                   port_sender_sub::TILES_SHIFT;
+        };
         uint32_t group_tiles = 0, packets = 0;
         for (uint32_t e = g0; e < g1; ++e) {
             group_tiles += tiles_of(e);
@@ -203,7 +215,8 @@ void kernel_main() {
                     cb_wait_front(cb_port_chunks, i + 1);
                 }
                 const uint32_t rec = entry_idx + (g0 + w.e) * ENTRY_WORDS;
-                const uint32_t e_tiles = get_arg_val<uint32_t>(rec) >> 16;
+                const uint32_t e_tiles =
+                    get_arg_val<uint32_t>(rec + port_sender_sub::WORD0) >> port_sender_sub::TILES_SHIFT;
                 const uint32_t left_entry = e_tiles - w.off;
                 uint32_t n = packet_tiles;
                 if constexpr (pack) {
@@ -214,9 +227,13 @@ void kernel_main() {
                 const uint32_t n0 = left_entry < n ? left_entry : n;
                 const uint32_t n1 = n - n0;
                 left_group -= n;
-                const uint32_t x = get_arg_val<uint32_t>(rec + 1);
-                const uint32_t y = get_arg_val<uint32_t>(rec + 2);
-                const uint64_t dst = get_noc_addr(x, y, get_arg_val<uint32_t>(rec + 3) + w.off * tile_bytes);
+                const uint32_t x = get_arg_val<uint32_t>(rec + port_sender_sub::X);
+                const uint32_t y = get_arg_val<uint32_t>(rec + port_sender_sub::Y);
+                const uint32_t arrival_addr = get_arg_val<uint32_t>(rec + port_sender_sub::ARRIVAL_ADDR);
+                const uint64_t dst = get_noc_addr(
+                    x,
+                    y,
+                    landing_addr + get_arg_val<uint32_t>(rec + port_sender_sub::SLOT_OFFSET) + w.off * tile_bytes);
                 const bool ends_entry = w.off + n0 == e_tiles;
                 auto advance = [&]() {
                     w.off += n0 + n1;
@@ -237,7 +254,7 @@ void kernel_main() {
                     continue;
                 }
                 hdr->to_noc_unicast_atomic_inc(
-                    NocUnicastAtomicIncCommandHeader{get_noc_addr(x, y, get_arg_val<uint32_t>(rec + 4)), 1, true});
+                    NocUnicastAtomicIncCommandHeader{get_noc_addr(x, y, arrival_addr), 1, true});
                 conn.wait_for_empty_write_slot();
                 conn.send_payload_flush_blocking_from_address(
                     reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
@@ -245,13 +262,13 @@ void kernel_main() {
                 continue;
 #endif
                 if (ends_entry) {
-                    const uint64_t arrival_noc = get_noc_addr(x, y, get_arg_val<uint32_t>(rec + 4));
+                    const uint64_t arrival_noc = get_noc_addr(x, y, arrival_addr);
                     if (n1 > 0) {
                         const uint32_t rec1 = rec + ENTRY_WORDS;
                         const uint64_t dst1 = get_noc_addr(
-                            get_arg_val<uint32_t>(rec1 + 1),
-                            get_arg_val<uint32_t>(rec1 + 2),
-                            get_arg_val<uint32_t>(rec1 + 3));
+                            get_arg_val<uint32_t>(rec1 + port_sender_sub::X),
+                            get_arg_val<uint32_t>(rec1 + port_sender_sub::Y),
+                            landing_addr + get_arg_val<uint32_t>(rec1 + port_sender_sub::SLOT_OFFSET));
                         hdr->to_noc_fused_unicast_scatter_write_atomic_inc(
                             NocUnicastScatterAtomicIncFusedCommandHeader(
                                 {dst, dst1}, arrival_noc, {static_cast<uint16_t>(n0 * tile_bytes)}, 1, true),

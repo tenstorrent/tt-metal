@@ -18,6 +18,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "all_to_all_matmul_retile.hpp"
 #include "all_to_all_matmul_stream.hpp"
+#include "ttnn/cpp/ttnn/operations/all_to_all_matmul/device/kernels/all_to_all_matmul_args.hpp"
+
+using namespace all_to_all_matmul;
 
 #if defined(ABLATE_ZONES)
 #include "tools/profiler/kernel_profiler.hpp"
@@ -27,33 +30,33 @@
 #endif
 
 void kernel_main() {
-    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t packet_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t batch_chunks = get_compile_time_arg_val(3);
-    constexpr uint32_t B = get_compile_time_arg_val(4);
-    constexpr uint32_t Mq_t = get_compile_time_arg_val(5);
-    constexpr uint32_t Kt = get_compile_time_arg_val(6);
-    constexpr uint32_t St = get_compile_time_arg_val(7);
-    constexpr uint32_t Hl = get_compile_time_arg_val(8);
-    constexpr uint32_t Mq = get_compile_time_arg_val(9);  // rows per device
-    constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(port_reader_ct::CB_PORT_CHUNKS);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(port_reader_ct::TILE_BYTES);
+    constexpr uint32_t packet_tiles = get_compile_time_arg_val(port_reader_ct::PACKET_TILES);
+    constexpr uint32_t batch_chunks = get_compile_time_arg_val(port_reader_ct::BATCH_CHUNKS);
+    constexpr uint32_t B = get_compile_time_arg_val(port_reader_ct::B);
+    constexpr uint32_t Mq_t = get_compile_time_arg_val(port_reader_ct::MQ_T);
+    constexpr uint32_t Kt = get_compile_time_arg_val(port_reader_ct::KT);
+    constexpr uint32_t St = get_compile_time_arg_val(port_reader_ct::ST);
+    constexpr uint32_t Hl = get_compile_time_arg_val(port_reader_ct::HL);
+    constexpr uint32_t Mq = get_compile_time_arg_val(port_reader_ct::MQ);  // rows per device
+    constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(port_reader_ct::CB_RETILE_STAGE);
     constexpr bool retile = (Mq % 32) != 0;
-    constexpr bool pack = get_compile_time_arg_val(11) != 0;
+    constexpr bool pack = get_compile_time_arg_val(port_reader_ct::PACK) != 0;
     // Reads in flight: one packet = one read unit with its own NoC transaction id (1..window); up to `window` packets
     // have their DRAM reads outstanding and the oldest is pushed as soon as its own reads land, so the reads stay
     // queued at DRAM back to back instead of draining at a per-batch barrier (port_prefetch, Perf 2).
-    constexpr uint32_t window = get_compile_time_arg_val(12);
+    constexpr uint32_t window = get_compile_time_arg_val(port_reader_ct::WINDOW);
     static_assert(window >= 1 && window <= 15, "port reader: 1..15 packets in flight (trids 1..15)");
     constexpr uint32_t ring_pages = 2 * batch_chunks;  // cb_port_chunks
-    constexpr auto in_args = TensorAccessorArgs<13>();
+    constexpr auto in_args = TensorAccessorArgs<port_reader_ct::COUNT>();
     constexpr uint32_t quarter_tiles = Mq_t * Kt;
     constexpr uint32_t slot_tiles = B * quarter_tiles;
     using Walk = a2amm_stream::Walk<slot_tiles, packet_tiles, pack>;
     constexpr uint32_t packet_bytes = packet_tiles * tile_bytes;
 
-    const uint32_t in_addr = get_arg_val<uint32_t>(0);
-    const uint32_t n_entries = get_arg_val<uint32_t>(1);
+    const uint32_t in_addr = get_common_arg_val<uint32_t>(port_reader_common::IN_ADDR);
+    const uint32_t n_entries = get_arg_val<uint32_t>(port_reader_rt::N_ENTRIES);
     const auto in = TensorAccessor(in_args, in_addr, tile_bytes);
     uint32_t stage = 0;
     if constexpr (retile) {
@@ -65,9 +68,9 @@ void kernel_main() {
     uint32_t ce = 0, j = 0, b = 0, r = 0, base = 0;
     a2amm_retile::Quarter qr{};
     auto open_entry = [&](uint32_t e) {
-        const uint32_t word = get_arg_val<uint32_t>(2 + e);
-        j = word & 0xFFFF;
-        qr = a2amm_retile::quarter_of<Mq>(word >> 16);  // aligned: t0 = t * Mq_t, shift 0
+        const uint32_t word = get_arg_val<uint32_t>(port_reader_rt::ENTRIES_BASE + e);
+        j = word & port_reader_rt::ENTRY_HEAD_MASK;
+        qr = a2amm_retile::quarter_of<Mq>(word >> port_reader_rt::ENTRY_DEST_SHIFT);  // aligned: t0 = t * Mq_t, shift 0
         b = 0;
         r = 0;
         base = (j * St + qr.t0) * Kt;
@@ -87,9 +90,11 @@ void kernel_main() {
     };
     for (uint32_t g0 = 0; g0 < n_entries;) {
         // group: entries [g0, g1) to one destination chip
-        const uint32_t t_g = get_arg_val<uint32_t>(2 + g0) >> 16;
+        const uint32_t t_g =
+            get_arg_val<uint32_t>(port_reader_rt::ENTRIES_BASE + g0) >> port_reader_rt::ENTRY_DEST_SHIFT;
         uint32_t g1 = g0 + 1;
-        while (g1 < n_entries && (get_arg_val<uint32_t>(2 + g1) >> 16) == t_g) {
+        while (g1 < n_entries &&
+               (get_arg_val<uint32_t>(port_reader_rt::ENTRIES_BASE + g1) >> port_reader_rt::ENTRY_DEST_SHIFT) == t_g) {
             ++g1;
         }
         const uint32_t ng = g1 - g0;
