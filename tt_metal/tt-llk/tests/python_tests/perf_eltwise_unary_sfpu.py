@@ -247,6 +247,9 @@ _INT32_UNARY_OPS = [
     MathOperation.AbsInt32,
     MathOperation.ReluMin,
     MathOperation.BitwiseNot,
+    MathOperation.UnaryBitwiseAnd,
+    MathOperation.UnaryBitwiseOr,
+    MathOperation.UnaryBitwiseXor,
     MathOperation.LogicalNot,
     MathOperation.Fill,
 ]

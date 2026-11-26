@@ -95,7 +95,10 @@ ALWI void bitwise_xor_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
 // binary_bitwise_init programs.
 ALWI void binary_bitwise_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(bitwise_and, sfpu::binary_bitwise_init))); }
 #else
-ALWI void binary_bitwise_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+// One init serves and/or/xor: the three bitwise SfpuTypes select the same address-mod setup
+// (ADDR_MOD_6, dest += 2 on the store) in eltwise_binary_sfpu_configure_addrmod, which the
+// kernel's store-side increment depends on.
+ALWI void binary_bitwise_tile_init() { MATH((SFPU_BINARY_INIT(bitwise_and))); }
 #endif
 
 }  // namespace ckernel

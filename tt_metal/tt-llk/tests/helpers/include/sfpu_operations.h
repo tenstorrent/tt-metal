@@ -30,6 +30,7 @@
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_binary_remainder.h"
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
+#include "llk_sfpu/ckernel_sfpu_bitwise.h"
 #include "llk_sfpu/ckernel_sfpu_bitwise_not.h"
 #include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
@@ -160,6 +161,13 @@ namespace test_utils
 {
 using namespace ckernel;
 using namespace ckernel::sfpu;
+
+// Sets ADDR_MOD_6 to dest += 0 so state left by an earlier kernel cannot mask an init that
+// fails to program it: a store-side increment through ADDR_MOD_6 then rewrites one row.
+inline void clobber_addr_mod_6()
+{
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_6);
+}
 
 //
 // SFPU typecast dispatch.
@@ -438,6 +446,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
 {
     // Only the topk branches (_init_topk / _init_topk_fused_) need this; every other op's llk_math_eltwise_unary_sfpu_init sets it.
     llk_math_sfpu_init_once();
+
+    // The Wormhole bitwise kernels store through ADDR_MOD_6, which their init must program.
+    if constexpr (OPERATION == SfpuType::bitwise_and || OPERATION == SfpuType::bitwise_or || OPERATION == SfpuType::bitwise_xor)
+    {
+        clobber_addr_mod_6();
+    }
 
     if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
     {
@@ -1265,6 +1279,21 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_bitwise_not, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
+    else if constexpr (OPERATION == SfpuType::bitwise_and || OPERATION == SfpuType::bitwise_or || OPERATION == SfpuType::bitwise_xor)
+    {
+        // The scalar matches UNARY_BITWISE_SCALAR in sfpu_dispatch_constants.py.
+        constexpr auto BW = (OPERATION == SfpuType::bitwise_and)  ? UnaryBitwiseOp::AND
+                            : (OPERATION == SfpuType::bitwise_or) ? UnaryBitwiseOp::OR
+                                                                  : UnaryBitwiseOp::XOR;
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_unary_bitwise,
+            (APPROX_MODE, BW, DataFormat::Int32, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x70FF00F5u /* scalar */);
+    }
     else if constexpr (OPERATION == SfpuType::logical_not_unary)
     {
         // logical_not(x) = (x == 0) ? 1 : 0. Select the layout from the runtime input format,
@@ -1724,6 +1753,11 @@ constexpr bool is_quant_byte_binop(const BinaryOp op)
 template <bool APPROXIMATION_MODE, bool DST_ACCUM_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0, bool SIGN_MAGNITUDE_FORMAT = false>
 void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point = 0, [[maybe_unused]] std::uint32_t out_zero_point = 0)
 {
+    // The Wormhole bitwise kernels store through ADDR_MOD_6, which their init must program.
+    if constexpr (BINOP == BinaryOp::BITWISE_AND || BINOP == BinaryOp::BITWISE_OR || BINOP == BinaryOp::BITWISE_XOR)
+    {
+        clobber_addr_mod_6();
+    }
     static_assert(!(is_quant_byte_binop(BINOP) && SIGN_MAGNITUDE_FORMAT), "The 8-bit quant entry points run with SIGN_MAGNITUDE_FORMAT = false");
     if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
@@ -1946,6 +1980,20 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         // polynomial coefficients the Wormhole kernel keeps in vConstFloatPrgm0..2.
         SFPU_BINARY_INIT_FN(add1, logsigmoid_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::BITWISE_AND)
+    {
+        // The bitwise SfpuTypes select the ADDR_MOD_6 (dest += 2) setup the kernel's
+        // store-side increment depends on. Mirrors binary_bitwise_tile_init.
+        SFPU_BINARY_INIT(bitwise_and);
+    }
+    else if constexpr (BINOP == BinaryOp::BITWISE_OR)
+    {
+        SFPU_BINARY_INIT(bitwise_or);
+    }
+    else if constexpr (BINOP == BinaryOp::BITWISE_XOR)
+    {
+        SFPU_BINARY_INIT(bitwise_xor);
+    }
 #ifdef ARCH_BLACKHOLE
     else if constexpr (BINOP == BinaryOp::SILU_GLU)
     {
@@ -1955,8 +2003,8 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32 and MASK(_POSINF) land here: those kernels need
-        // no per-op init beyond the standard binary addrmod configuration.
+        // RSUB_INT32 and MASK(_POSINF) land here: those kernels need no per-op init beyond
+        // the standard binary addrmod configuration.
         SFPU_BINARY_INIT(add1);
     }
 }
