@@ -167,6 +167,7 @@ constexpr uint32_t sem_gather2 = get_named_compile_time_arg_val("sem_gather2");
 // backward and the reverse, each peer still getting every packet once: a link direction carries 1.5 slots a sub-round
 // instead of the line's 3 at its end links. (Line: forward to the chips after this one, backward to those before.)
 constexpr bool kRing = get_named_compile_time_arg_val("fabric_ring") != 0;
+constexpr bool kEarly = get_named_compile_time_arg_val("hub_early") != 0;  // (O-1g, RESIDENT_HUB_EARLY)
 // (the hop scheme of data packet p: with two link sets alternating on p & 1, on p >> 1 so each set carries both)
 FORCE_INLINE uint32_t alt_of(uint32_t p) { return links > 1 ? (p >> 1) & 1 : p & 1; }
 FORCE_INLINE uint8_t hops_of(uint32_t dir, uint32_t alt) {
@@ -626,7 +627,7 @@ void kernel_main() {
         }
         // (O-1g: the round's next sub-round, its peers' slots in already: to the compute before this one's multicast)
         auto early = [&]() {
-            if constexpr (published && kSlots > 2) {
+            if constexpr (published && kSlots > 2 && kEarly) {
                 if (s + 1 < (l + 1) * ag.n && handed == s + 1 && peers_in(s + 1)) {
                     hand_in(s + 1);
                 }

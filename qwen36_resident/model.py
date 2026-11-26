@@ -162,6 +162,8 @@ ATTN_STAGED = os.environ.get("RESIDENT_ATTN_STAGED", "1") == "1"
 # O-1f (experimental, default off): the hubs route over the chips' ring (FABRIC_1D_RING, mlp_hub.cpp kRing) — the
 # mesh must be opened with that fabric config (tests/e0_bringup.py open_mesh reads the same variable)
 FABRIC_RING = os.environ.get("RESIDENT_FABRIC_RING", "0") == "1"
+# O-1g (default on, four hub slots): the hub hands the next sub-round's slots to compute before this one's multicast
+HUB_EARLY = os.environ.get("RESIDENT_HUB_EARLY", "1") == "1"
 KV_ROW = (HD // TILE) * TILE_BYTES[K_DT]  # one position tile of a K cache page (bf8; bfp4 with K_BFP4)
 # Strata S0 step 1 (RESIDENT_KV_V_BFP4, default off): the V caches / pool in bfp4 tiles, K stays bf8 (V tolerates 4-bit
 # mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
@@ -1809,6 +1811,7 @@ class ResidentModel:
                 ("hub_res", int(self.hub_res)),  # (O-1c accuracy: the hub adds the residual, mlp_hub.cpp kHubRes)
                 ("hub_slots", self.hub_slots),  # (O-1d, mlp_hub.cpp kSlots)
                 ("fabric_ring", int(FABRIC_RING)),  # (O-1f, mlp_hub.cpp kRing)
+                ("hub_early", int(HUB_EARLY)),  # (O-1g, mlp_hub.cpp kEarly)
                 ("sem_gather2", SEM_GATHER2),
                 ("tok_x0", TOK_X0),
                 ("attn_pipe", int(self.attn_pipe)),  # (attn_common.hpp kAttnPipe, O-2)

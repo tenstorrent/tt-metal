@@ -155,7 +155,7 @@ serve_profiles:
       RESIDENT_HUB_BFP8: "1"
       RESIDENT_HUB_SLOTS: "4"
       # O-1f (2026-11-26): the hubs route the all-reduce over the chips' ring (with fabric_config FABRIC_1D_RING below):
-      # a link direction carries half the line's end-link load — 32-row step -0.5 ms
+      # a link direction carries half the line's end-link load — 32-row step -0.5 ms; served c32 561 -> 572 tok/s
       RESIDENT_FABRIC_RING: "1"
       RESIDENT_PREFILL_CHUNKS: "256,512,1024"
       # prefix caching in host memory (GB; 0 = off): a prompt's state at its last 1,024-token boundary (GDN states,
