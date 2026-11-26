@@ -2899,7 +2899,9 @@ def test_copy_docstring_blackhole_inputs(dtype, layout, input_buffer_type, outpu
 )
 def test_copy_docstring_dtype_conversions(input_dtype, output_dtype, device):
     """Copies between each pair of dtypes the ttnn.copy docstring lists for an ``input_b`` of another dtype, in TILE
-    layout, with values that both dtypes hold exactly and no NaN. Zeros are compared by value."""
+    layout, with values that both dtypes hold exactly and no NaN; a block-float ``input_a`` has blocks with different
+    shared exponents. ``input_b`` is in L1 and ``input_a`` in DRAM, and ``input_b`` must keep its dtype, layout and
+    memory configuration. Zeros are compared by value."""
     check_readable(input_dtype, output_dtype)
     shape = (2, 3, 50, 70)
     input_a = ttnn.from_torch(
@@ -2908,25 +2910,34 @@ def test_copy_docstring_dtype_conversions(input_dtype, output_dtype, device):
     expected = ttnn.to_torch(input_a)
     # Every value of input_b differs from input_a's, so the test sees each one overwritten.
     other_values = torch.where(expected == 1, 2, 1).to(torch.float32)
-    input_b = ttnn.from_torch(other_values, dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    memory_config = ttnn.L1_MEMORY_CONFIG
+    input_b = ttnn.from_torch(
+        other_values, dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
     output = ttnn.copy(input_a, input_b)
 
     assert output.buffer_address() == input_b.buffer_address()
     assert output.dtype == output_dtype
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.memory_config() == memory_config
     assert_exact(expected, ttnn.to_torch(input_b), signed_zeros=False)
 
 
 @pytest.mark.parametrize("input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.assign, "input", "output"))
 def test_assign_docstring_dtype_conversions(input_dtype, output_dtype, device):
     """Assigns into each output dtype the ttnn.assign docstring lists for an input of another dtype, in TILE layout,
-    with values that both dtypes hold exactly and no NaN. Zeros are compared by value."""
+    with values that both dtypes hold exactly and no NaN; a block-float input has blocks with different shared
+    exponents. The output goes to L1 from a DRAM input and must have the requested memory configuration. Zeros are
+    compared by value."""
     check_readable(input_dtype, output_dtype)
     shape = (2, 3, 50, 70)
     input_tensor = ttnn.from_torch(
         convertible_input(shape, input_dtype, output_dtype), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device
     )
-    output = ttnn.assign(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=output_dtype)
+    memory_config = ttnn.L1_MEMORY_CONFIG
+    output = ttnn.assign(input_tensor, memory_config=memory_config, dtype=output_dtype)
 
     assert output.dtype == output_dtype
     assert output.layout == ttnn.TILE_LAYOUT
+    assert output.memory_config() == memory_config
     assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=False)
