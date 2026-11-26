@@ -214,7 +214,11 @@ def warm_stage(build_only_fn, eager_fn, *, name: str = "stage"):
     programs it cached have real binaries, so the eager run reuses them.
     """
     t0 = time.perf_counter()
-    if build_only_fn is None or not warm_build_only_enabled() or not hasattr(ttnn._ttnn.device, "set_program_build_only"):
+    if (
+        build_only_fn is None
+        or not warm_build_only_enabled()
+        or not hasattr(ttnn._ttnn.device, "set_program_build_only")
+    ):
         out = eager_fn()
         logger.info(f"WARMSTAGE|{name}|eager|{time.perf_counter() - t0:.2f}s")
         return out
@@ -791,14 +795,35 @@ def _last_touched(path: Path) -> float:
     return newest
 
 
+def _reached_through_a_link(path: Path) -> bool:
+    """Whether a directory below the cache root is reached through a symlink in a path component.
+
+    Deleting through such a link deletes the target's contents, which another cache root owns.
+    A symlinked cache root itself is fine: only links below it count."""
+    root = _cache_root()
+    if root is None:
+        return True
+    try:
+        rel = Path(os.path.abspath(path)).relative_to(os.path.abspath(root))
+    except ValueError:
+        return True  # outside the cache root: not ours to delete
+    return Path(root).resolve() / rel != Path(path).resolve()
+
+
 def _reclaim_superseded(legacy_dir: Path | None, *, idle_hours: float = RECLAIM_IDLE_HOURS) -> None:
     """Drop the content-blind directory that a content key replaces, before rebuilding over it.
 
     Only with TT_DIT_CACHE_RECLAIM_SUPERSEDED=1 (`_reclaim_enabled`), and even then a leaf any
     process read or wrote within `idle_hours` stays: another tree on the box may still serve it.
     For the 22B transformer it is 37GB, so a disk-tight single-tree checkout frees it here.
+    A leaf reached through a symlink below the cache root (ltx-server links the base model's
+    shared VAE and encoder leaves into a variant's root) belongs to that other root, whose trees
+    still read it, so it is never deleted from here.
     """
     if legacy_dir is None or not legacy_dir.is_dir():
+        return
+    if _reached_through_a_link(legacy_dir):
+        logger.info(f"Keeping content-blind cache at '{legacy_dir}': it is linked in from another cache root.")
         return
     if time.time() - _last_touched(legacy_dir) < idle_hours * 3600:
         logger.info(f"Keeping content-blind cache at '{legacy_dir}': used within {idle_hours:g} h.")
@@ -869,6 +894,47 @@ def _leaf_lock(cache_dir: Path):
         os.close(fd)
 
 
+_RENAME_EXCHANGE = 2  # linux/fs.h
+
+
+def _swap_into_place(staging: Path, cache_dir: Path) -> None:
+    """Put `staging` at `cache_dir` in one step; whatever was at `cache_dir` ends at `staging`.
+
+    renameat2(RENAME_EXCHANGE) swaps two directories atomically, so `cache_dir` is never absent.
+    Where it is unavailable (not Linux, an old kernel or a filesystem without it), a plain
+    rename moves the old leaf aside first; `cache_dir` is then absent only between two renames.
+    """
+    if cache_dir.is_dir() and _rename_exchange(staging, cache_dir):
+        return
+    if cache_dir.exists() or cache_dir.is_symlink():
+        aside = staging.with_name(staging.name + ".old")
+        os.rename(cache_dir, aside)
+        os.rename(staging, cache_dir)
+        os.rename(aside, staging)
+    else:
+        os.rename(staging, cache_dir)
+
+
+def _rename_exchange(a: Path, b: Path) -> bool:
+    """Atomically swap two paths with renameat2(RENAME_EXCHANGE). False if unsupported here."""
+    import ctypes
+    import errno
+
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = libc.renameat2
+    except (OSError, AttributeError):
+        return False
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    at_fdcwd = -100
+    if renameat2(at_fdcwd, os.fsencode(a), at_fdcwd, os.fsencode(b), _RENAME_EXCHANGE) == 0:
+        return True
+    err = ctypes.get_errno()
+    if err in (errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP):
+        return False
+    raise OSError(err, os.strerror(err), str(b))
+
+
 def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> None:
     """Write the cache to a scratch directory and move it into place in one step.
 
@@ -918,9 +984,10 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
                 if _cache_is_complete(cache_dir, tt_model, key):
                     logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
                     return
-                if cache_dir.exists():
-                    shutil.rmtree(cache_dir)
-                os.replace(staging, cache_dir)
+                # One atomic swap, never delete-then-move: a worker killed (preempted, SIGTERM,
+                # reset) between the two would leave no leaf at all. The incomplete leaf ends at
+                # the staging path, which the finally below removes.
+                _swap_into_place(staging, cache_dir)
     except OSError:
         # A racing process may have published this exact key first. Its content key matches ours,
         # so its bytes are ours; adopt them rather than fight over the directory.

@@ -419,17 +419,17 @@ def test_two_builders_of_one_stale_leaf_never_delete_a_complete_one(checkpoint, 
 
     a_at_the_delete, b_published = threading.Event(), threading.Event()
     complete_when_deleted, errors = [], []
-    real_rmtree = cache.shutil.rmtree
+    real_swap = cache._swap_into_place
 
-    def rmtree(path, *args, **kwargs):
-        if Path(path) == cache_dir:
+    def swap(staging, target):
+        if Path(target) == cache_dir:
             if threading.current_thread().name == "A":
                 a_at_the_delete.set()
                 b_published.wait(1.0)  # B never gets here while A holds the leaf's lock
             complete_when_deleted.append(cache._cache_is_complete(cache_dir, module, key))
-        return real_rmtree(path, *args, **kwargs)
+        return real_swap(staging, target)
 
-    monkeypatch.setattr(cache.shutil, "rmtree", rmtree)
+    monkeypatch.setattr(cache, "_swap_into_place", swap)
 
     def build():
         try:
@@ -449,6 +449,120 @@ def test_two_builders_of_one_stale_leaf_never_delete_a_complete_one(checkpoint, 
     assert cache._cache_is_complete(cache_dir, module, key)
     assert not (cache_dir / "stale.tensorbin").exists(), "the stale leaf was not cleaned up"
     assert not list(cache_dir.parent.glob(".*staging-*")), "staging directory leaked"
+
+
+def _killed_publish(module, cache_dir, key, step):
+    """Run `_publish_cache` in a forked child that dies (os._exit, as SIGKILL would) at `step`."""
+    pid = os.fork()
+    if pid == 0:  # child: never returns into pytest
+        try:
+            if step == "save":
+                real_save = module.save
+
+                def save(directory, **kw):
+                    real_save(directory, **kw)
+                    os._exit(9)
+
+                module.save = save
+            real_swap = cache._swap_into_place
+
+            def swap(staging, target):
+                if step == "before_swap":
+                    os._exit(9)
+                real_swap(staging, target)
+                os._exit(9)  # after the swap, before the swapped-out leaf is removed
+
+            cache._swap_into_place = swap
+            cache._publish_cache(module, cache_dir, key)
+        finally:
+            os._exit(0)
+    _, status = os.waitpid(pid, 0)
+    return os.waitstatus_to_exitcode(status)
+
+
+@pytest.mark.parametrize("step", ["save", "before_swap", "after_swap"])
+def test_a_killed_publisher_never_removes_a_complete_leaf(step, checkpoint, monkeypatch, tmp_path):
+    """A worker preempted, SIGTERMed or reset anywhere in a publish leaves the complete leaf it
+    found exactly as it was (a reader may be loading it)."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    module, key = _module(), cache.content_key(_module(), [checkpoint])
+    cache_dir = _key(module, [checkpoint])
+    cache._publish_cache(_module(), cache_dir, key)
+    inode = (cache_dir / "weight.tensorbin").stat().st_ino
+
+    _killed_publish(_module(), cache_dir, key, step)
+
+    assert cache._cache_is_complete(cache_dir, module, key)
+    assert (cache_dir / "weight.tensorbin").stat().st_ino == inode, "the complete leaf was replaced"
+
+
+@pytest.mark.parametrize("step", ["save", "before_swap", "after_swap"])
+def test_a_publisher_killed_while_replacing_a_stale_leaf_never_leaves_none(step, checkpoint, monkeypatch, tmp_path):
+    """Replacing an incomplete leaf is one atomic swap: killed before it, the old leaf is still
+    there (and still misses); killed after it, the new complete leaf is. Never no leaf at all,
+    which a delete-then-move would leave between its two steps."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    module, key = _module(), cache.content_key(_module(), [checkpoint])
+    cache_dir = _key(module, [checkpoint])
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "stale.tensorbin").write_bytes(b"half a build")
+
+    assert _killed_publish(_module(), cache_dir, key, step) == 9, "the child did not die at the step"
+
+    assert cache_dir.is_dir(), "a killed publisher left no leaf"
+    if step == "after_swap":
+        assert cache._cache_is_complete(cache_dir, module, key)
+    else:
+        assert (cache_dir / "stale.tensorbin").exists()
+    # The next builder finishes the job and leaves nothing of the killed one behind.
+    cache._publish_cache(_module(), cache_dir, key)
+    assert cache._cache_is_complete(cache_dir, module, key)
+
+
+def test_swap_into_place_keeps_the_old_leaf_at_the_staging_path(tmp_path):
+    staging, leaf = tmp_path / ".leaf.staging-1-ab", tmp_path / "leaf"
+    staging.mkdir()
+    (staging / "new").touch()
+    leaf.mkdir()
+    (leaf / "old").touch()
+    cache._swap_into_place(staging, leaf)
+    assert (leaf / "new").exists() and (staging / "old").exists()
+
+
+def test_swap_into_place_without_rename_exchange(tmp_path, monkeypatch):
+    """Kernels or filesystems without RENAME_EXCHANGE get the rename-aside fallback."""
+    monkeypatch.setattr(cache, "_rename_exchange", lambda a, b: False)
+    test_swap_into_place_keeps_the_old_leaf_at_the_staging_path(tmp_path)
+    assert not list(tmp_path.glob("*.old")), "the aside dir leaked"
+
+
+def test_reclaim_never_deletes_through_a_linked_leaf(checkpoint, monkeypatch, tmp_path):
+    """ltx-server links the base H3 root's shared VAE-decoder leaf into the 10Eros root. A tree that
+    opts in to reclaim and misses its keyed leaf in the 10Eros root must not delete the base
+    root's content-blind leaf through that link: the served tree reads it (blx04, 11-26: three
+    10-minute cold loads after a test tree's reclaim emptied it)."""
+    shared = tmp_path / "shared"
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(shared))
+    served = _legacy_dir()
+    _module().save(served)
+    (served / cache.CACHE_DICT_FILE).touch()
+    old = time.time() - (cache.RECLAIM_IDLE_HOURS + 1) * 3600
+    for f in [*served.iterdir(), served]:
+        os.utime(f, (old, old))
+
+    variant = tmp_path / "variant"
+    linked = variant / served.parent.relative_to(shared)
+    linked.parent.mkdir(parents=True)
+    linked.symlink_to(served.parent, target_is_directory=True)
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(variant))
+    monkeypatch.setenv("TT_DIT_CACHE_RECLAIM_SUPERSEDED", "1")
+    assert _legacy_dir() == linked / served.name
+
+    module = _LoadableStub()
+    _fill(module, [checkpoint], monkeypatch)
+
+    assert module.loaded_from[0] == "torch", "the stub should have missed and built"
+    assert (served / cache.CACHE_DICT_FILE).exists(), "the linked-in leaf was deleted"
 
 
 def test_a_cache_with_no_manifest_misses(checkpoint, monkeypatch, tmp_path):
