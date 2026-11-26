@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The guards save and load run before touching a device or a file: JSON state, host shard sizes, optimizer param
-groups, the fused-name lint and the module walk. Device-free."""
+groups, the fused-name lint and the module walk; and what a rank other than 0 checks before it joins rank 0's staging
+directory. Device-free."""
 
 import os
 import warnings
@@ -16,12 +17,14 @@ from ttml.distributed_checkpointing._errors import CheckpointError, LayoutError,
 from ttml.distributed_checkpointing._index import Entry
 from ttml.distributed_checkpointing._layouts import Identity, fused_segments
 from ttml.distributed_checkpointing._planner import TensorInfo
-from ttml.distributed_checkpointing._save import _logical_bytes
+from ttml.distributed_checkpointing import _save
+from ttml.distributed_checkpointing._save import _logical_bytes, require_shared_staging
 from ttml.distributed_checkpointing._state_dict import (
     LiveTensor,
     _cpp_bound_params,
     _lint_fusion,
     _python_parameters,
+    check_member_union,
     check_param_groups,
     check_undeclared_fusion,
     reshard_fsdp_modules,
@@ -59,10 +62,31 @@ def test_param_groups_are_checked_before_anything_is_placed(expect_error):
         "optimizer/param_groups.1.params": "c",
     }
     check_param_groups(_StubOptimizer([["a", "b"], ["c"]]), saved, strict=True)
-    with expect_error(CheckpointError, "group 0 holds different params"):
+    # The checkpoint's members are the union over the saving ranks, so a live group may hold fewer of them...
+    check_param_groups(_StubOptimizer([["a"], ["c"]]), saved, strict=True)
+    # ...but not a param the checkpoint's group does not have: swapped groups would get each other's options.
+    with expect_error(CheckpointError, "group 0 holds params the checkpoint's group 0 does not"):
         check_param_groups(_StubOptimizer([["c"], ["a", "b"]]), saved, strict=True)
     with expect_error(CheckpointError, "2 optimizer param groups, the live optimizer 1"):
         check_param_groups(_StubOptimizer([["a", "b", "c"]]), saved, strict=True)
+
+
+def test_strict_needs_the_ranks_to_hold_every_member_between_them(expect_error):
+    """Under strict, the ranks' live members of each group, together, must be the checkpoint's: one rank may hold part
+    of a group, but a param no rank holds is refused, since an optimizer without per-parameter state (SGD without
+    momentum) would otherwise stop training it without a word."""
+    saved = {
+        "optimizer/num_param_groups": 2,
+        "optimizer/param_groups.0.params": "a\nb",
+        "optimizer/param_groups.1.params": "c",
+    }
+    check_member_union(saved, [{"0": ["a", "b"], "1": ["c"]}])  # one process holding everything
+    check_member_union(saved, [{"0": ["a"], "1": ["c"]}, {"0": ["b"], "1": []}])  # two ranks, each holding part
+    with expect_error(CheckpointError, r"^optimizer param group 0: the checkpoint's group holds params no rank's "):
+        check_member_union(saved, [{"0": ["a"], "1": ["c"]}])
+    with expect_error(CheckpointError, r"group 1: .* no rank's optimizer holds: \['c'\]"):
+        check_member_union(saved, [{"0": ["a"], "1": []}, {"0": ["b"], "1": []}])
+    check_member_union(saved, [{}])  # no live member lists: check_param_groups warned, nothing to compare
 
 
 def test_strict_load_needs_optimizer_state(expect_error):
@@ -252,18 +276,56 @@ def test_a_lazy_parameter_is_named_by_its_key(expect_error):
 
 
 def test_argument_errors_come_first(tmp_path, expect_error):
-    """Argument errors are TypeErrors and ValueErrors, raised before anything is touched."""
+    """Argument errors are raised before anything is touched, as CheckpointErrors naming the step that failed, with
+    the TypeError or ValueError as their cause, as they are on every rank of a multi-rank world."""
     path = str(tmp_path / "step_0000001")
-    with expect_error(TypeError, "save needs a model and/or an optimizer"):
-        dcp.save(path)
-    with expect_error(TypeError, "pass model= as well"):
-        dcp.load(path, optimizer=object())
-    with expect_error(TypeError, "header must be a dict, not list"):
-        dcp.save(path, model=object(), header=[1])
-    with expect_error(ValueError, "threads must be at least 1, got 0"):
-        dcp.save(path, model=object(), threads=0)
-    with expect_error(ValueError, "max_inflight_bytes must be positive, got 0"):
-        dcp.save(path, model=object(), max_inflight_bytes=0)
-    with expect_error(ValueError, "threads must be at least 1, got -1"):
-        dcp.load(path, model=object(), threads=-1)
+    cases = [
+        (lambda: dcp.save(path), TypeError, "save needs a model and/or an optimizer"),
+        (lambda: dcp.load(path, optimizer=object()), TypeError, r"optimizer state .*; pass model= as well"),
+        (lambda: dcp.save(path, model=object(), header=[1]), TypeError, "header must be a dict, not list"),
+        (lambda: dcp.save(path, model=object(), threads=0), ValueError, "threads must be at least 1, got 0"),
+        (lambda: dcp.save(path, model=object(), max_inflight_bytes=0), ValueError, "max_inflight_bytes must"),
+        (lambda: dcp.load(path, model=object(), threads=-1), ValueError, "threads must be at least 1, got -1"),
+    ]
+    for call, cause, message in cases:
+        with expect_error(
+            dcp.CheckpointError, rf"^checking the arguments failed: {cause.__name__}: {message}"
+        ) as raised:
+            call()
+        assert type(raised.value) is dcp.CheckpointError and type(raised.value.__cause__) is cause, message
     assert os.listdir(tmp_path) == []
+
+
+def test_a_rank_other_than_0_makes_the_parent_before_it_looks_for_the_staging_directory(tmp_path, monkeypatch):
+    """On NFS a lookup of the checkpoint's parent made before rank 0 created it (a find_latest that saw no checkpoint
+    yet) can be cached as "does not exist" for up to a minute; a mkdir of the parent, which the server answers, drops
+    that entry. The stale lookup is simulated: nothing under the parent is seen until a mkdir of it was tried."""
+    parent = tmp_path / "ckpts"
+    staging = parent / "step_0000001.staging-7"
+    staging.mkdir(parents=True)
+    tried = []
+    real_mkdir, real_isdir = os.mkdir, os.path.isdir
+
+    def mkdir(path, *args, **kwargs):
+        tried.append(str(path))
+        return real_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(_save.os, "mkdir", mkdir)
+    monkeypatch.setattr(_save.os.path, "isdir", lambda path: bool(tried) and real_isdir(path))
+    require_shared_staging(str(parent / "step_0000001"), str(staging), 1)
+    assert tried == [str(parent)]
+
+
+def test_a_rank_that_does_not_share_the_directory_leaves_its_own_disk_as_it_was(tmp_path, expect_error):
+    """A path on each host's own disk: the parent this rank makes, finding no staging directory under it, is removed
+    again before it refuses."""
+    own_disk = tmp_path / "own_disk"
+    own_disk.mkdir()
+    parent = own_disk / "ckpts"
+    with expect_error(
+        CheckpointError,
+        r"step_0000001\.staging-7, which rank 0 created, does not exist on rank 1: the checkpoint directory must be "
+        r"on a filesystem every rank shares",
+    ):
+        require_shared_staging(str(parent / "step_0000001"), str(parent / "step_0000001.staging-7"), 1)
+    assert os.listdir(own_disk) == [], "the parent this rank made is removed again"

@@ -34,6 +34,7 @@ from ttml.common.utils import (
     resolve_pad_token_id,
     round_up_to_tile,
     validate_clip_grad_norm,
+    validate_precision,
 )
 from ttml.modules import RunMode
 
@@ -250,8 +251,15 @@ class GRPOConfig:
     # ttt_remote_async: drop a batch generated with weights more than max_staleness optimizer steps older than
     # the policy. None means weight_sync_every.
     max_staleness: Optional[int] = None
+    # The YAML's training_config.precision block (master_dtype, reduce_dtype) as a dict; get_grpo_config reads it from
+    # there. The trainer applies it once, right after the model is built and before its weights or a trainer
+    # checkpoint load, so fp32 master weights resume unrounded and the optimizer state follows the stored dtype.
+    # None means no block, as in create_optimizer: the parameters keep their dtype and no reduce dtype is stored.
+    precision: Optional[dict] = None
 
     def __post_init__(self) -> None:
+        validate_precision(self.precision)  # a typo stops here, before a device opens and a model is built
+
         # num_generations is the GRPO group size: each prompt must produce at least
         # one completion to form a group (advantages are computed within a group,
         # and the loss normalizes by the completion count). A value <= 0 yields
@@ -399,7 +407,8 @@ def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
 
     Looks for ``training_config.grpo_config`` in ``yaml_config`` and constructs
     a :class:`GRPOConfig` from it. ``output_dir`` defaults to an empty string so
-    callers can fill it in once they have picked a run directory.
+    callers can fill it in once they have picked a run directory. The run's
+    ``training_config.precision`` block, if any, becomes ``GRPOConfig.precision``.
     """
     tc = yaml_config.get("training_config", {})
     grpo_section = tc.get("grpo_config")
@@ -407,6 +416,13 @@ def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
         raise ValueError("training_config must contain a 'grpo_config' section")
     fields = dict(grpo_section)
     fields.setdefault("output_dir", output_dir)
+
+    # The precision block has one place in the YAML, next to the optimizer it is applied with.
+    if "precision" in fields:
+        raise ValueError(
+            "grpo_config: 'precision' belongs under training_config.precision, next to training_config.optimizer."
+        )
+    fields["precision"] = tc.get("precision")
 
     # Backwards-compatibility shim for the transition period.
     # ``micro_batch_size`` was renamed to ``per_device_train_batch_size``. Accept
@@ -1108,6 +1124,9 @@ class GRPOTrainer:
                 with checkpoints.
             dataset_func: Zero-argument callable that returns the training
                 dataset. The trainer calls it once, in the constructor.
+            config: The run's :class:`GRPOConfig`. Its ``precision`` block is
+                applied once, right after the model is built and before its
+                weights or a trainer checkpoint load.
 
         The trainer opens the device and builds the policy model and tokenizer
         (``self.model`` / ``self.tokenizer``) with
@@ -1128,6 +1147,12 @@ class GRPOTrainer:
         """
         if optimizer_dict is None:
             raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
+        if not isinstance(optimizer_dict, dict) or "type" not in optimizer_dict:
+            raise ValueError(
+                "GRPOTrainer: 'optimizer_dict' must be the optimizer's own dict, with a 'type' key. A whole config "
+                "would apply its training_config.precision a second time, after the weights load; that block belongs "
+                "in GRPOConfig.precision."
+            )
         if not callable(dataset_func):
             raise TypeError("GRPOTrainer: 'dataset_func' must be a zero-argument callable returning the dataset.")
         _validate_remote_inputs(config, transformer_config, device_config, model_source)
@@ -1196,7 +1221,9 @@ class GRPOTrainer:
                 self.callbacks.append(GRPOMonitor(cfg))
 
         if cfg.backend.in_process:
-            self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
+            self.model, self.tokenizer = setup_ttml_model(
+                transformer_config, device_config, self.model_source, precision=self.config.precision
+            )
             self._batch_layout = resolve_batch_layout()
             self.rollout_sampler = build_rollout_sampler(
                 cfg.backend.sampler,
@@ -1214,7 +1241,11 @@ class GRPOTrainer:
                 autograd_ctx = ttml.autograd.AutoContext.get_instance()
                 autograd_ctx.initialize_distributed_context(*sys.argv)
                 self.model, self.tokenizer = setup_ttml_model(
-                    transformer_config, device_config, self.model_source, cfg.backend.num_command_queues
+                    transformer_config,
+                    device_config,
+                    self.model_source,
+                    cfg.backend.num_command_queues,
+                    precision=self.config.precision,
                 )
                 self._batch_layout = resolve_batch_layout()
                 self._rollout_client = self._build_rollout_client(autograd_ctx.get_device())

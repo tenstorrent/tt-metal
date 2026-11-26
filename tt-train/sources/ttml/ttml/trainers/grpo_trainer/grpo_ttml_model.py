@@ -47,7 +47,7 @@ import ttnn
 import ttml
 from ttml.checkpointing import load_checkpoint
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import build_mesh
+from ttml.common.utils import apply_precision, build_mesh
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, compute_swiglu_intermediate_size, load_from_safetensors
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
@@ -109,7 +109,12 @@ def load_hf_state_dict(model_source: str) -> dict:
 
 
 def setup_ttml_model(
-    transformer_config: TransformerConfig, device_config: DeviceConfig, model_source: str, num_command_queues: int = 1
+    transformer_config: TransformerConfig,
+    device_config: DeviceConfig,
+    model_source: str,
+    num_command_queues: int = 1,
+    *,
+    precision: Optional[dict] = None,
 ) -> Tuple[Any, Any]:
     """Open the device and build the ttml model and tokenizer.
 
@@ -117,6 +122,11 @@ def setup_ttml_model(
     ``"qwen3"``). Both take the architecture from the HF config of ``model_source``;
     ``transformer_config`` sets ``max_sequence_length``, ``runner_type`` and, for
     Llama, ``dropout_prob``.
+
+    ``precision``, the YAML's ``training_config.precision`` block as a dict, is
+    applied with ``apply_precision`` once the parameters exist and before the
+    weights or a trainer checkpoint load, so fp32 master weights get the loaded
+    values unrounded; ``None`` means no block.
 
     Returns:
         ``(model, tokenizer)``.
@@ -128,8 +138,8 @@ def setup_ttml_model(
     _reject_old_checkpoint_format(model_source)
     open_device(model_kind, device_config, num_command_queues)
     if model_kind == "llama":
-        return _build_llama(transformer_config, device_config, model_source)
-    return _build_qwen3(transformer_config, device_config, model_source)
+        return _build_llama(transformer_config, device_config, model_source, precision)
+    return _build_qwen3(transformer_config, device_config, model_source, precision)
 
 
 def open_device(model_kind: str, device_config: DeviceConfig, num_command_queues: int = 1) -> Any:
@@ -155,7 +165,9 @@ def open_device(model_kind: str, device_config: DeviceConfig, num_command_queues
     return ttml.autograd.AutoContext.get_instance().get_device()
 
 
-def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str) -> Tuple[Any, Any]:
+def _build_llama(
+    tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str, precision: Optional[dict]
+) -> Tuple[Any, Any]:
     from transformers import AutoTokenizer
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -173,6 +185,7 @@ def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, mode
         raise ValueError(f"the tokenizer has {len(tokenizer)} tokens but the checkpoint embeds {llama_cfg.vocab_size}")
 
     tt_model = Llama(llama_cfg)
+    apply_precision(tt_model, precision)  # before the weights or a trainer checkpoint load
 
     if device_config.enable_ddp:
         # NOTE: TP is intentionally disabled here. cross_entropy_loss assumes full-vocab logits.
@@ -189,7 +202,9 @@ def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, mode
     return tt_model, tokenizer
 
 
-def _build_qwen3(tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str) -> Tuple[Any, Any]:
+def _build_qwen3(
+    tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str, precision: Optional[dict]
+) -> Tuple[Any, Any]:
     from transformers import AutoConfig, AutoTokenizer
 
     fsdp_enabled = resolve_batch_layout().fsdp_enabled
@@ -206,18 +221,19 @@ def _build_qwen3(tf_config: TransformerConfig, device_config: DeviceConfig, mode
         "Building ttml Qwen3 model (hidden=%d, layers=%d)", qwen_config.hidden_size, qwen_config.num_hidden_layers
     )
 
+    # One order for every build: shard, apply the precision block, load. Under FSDP the block then converts the shards,
+    # so no device holds the whole model in fp32, and the weights or a trainer checkpoint load into the stored dtype.
     if fsdp_enabled and bool(device_config.lazy_parameter_init):
         with ttml.lazy_init():
             tt_model = Qwen3(qwen_config)
         _fully_shard(tt_model, device_config.fsdp_replicate_params)
         ttml.materialize_module(tt_model)
-        _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=True)
     else:
         tt_model = Qwen3(qwen_config)
-        _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=False)
-
         if fsdp_enabled:
             _fully_shard(tt_model, device_config.fsdp_replicate_params)
+    apply_precision(tt_model, precision)
+    _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=fsdp_enabled)
 
     return tt_model, tokenizer
 

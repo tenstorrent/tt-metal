@@ -214,13 +214,18 @@ ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOperation::tensor_return_val
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOperation;
     const bool is_fp32 = input.dtype() == DataType::FLOAT32;
+    const auto arch = input.device()->arch();
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto math_fidelity = (is_fp32 && arch == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
+                                                                          : tt::tt_metal::MathFidelity::HiFi4;
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     auto operation_attributes = OperationType::operation_attributes_t{
         dim,
         op,
         strategy,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(
-            input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, is_fp32)};
+        init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, true, is_fp32)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

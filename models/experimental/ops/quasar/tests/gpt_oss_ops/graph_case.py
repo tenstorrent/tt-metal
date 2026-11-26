@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from typing import Any
 
 import pytest
@@ -1317,7 +1318,7 @@ _MIN_CORES = (
 )
 
 
-def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
+def _run_case_impl(op, case, mesh_device, *, op_name=None, pcc=None):
     """Materialize one captured call, run it, and check the result.
 
     ``op`` is the callable (``ttnn.linear``, or a small lambda for operators like
@@ -1362,3 +1363,28 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
                     U.assert_pcc(one, tensors[i], pcc=floor, mesh_device=mesh_device)
 
     return out
+
+
+_L1_NEVER_FITS = re.compile(r"each bank needs to store (\d+) B, but bank size is (\d+) B")
+# The hybrid allocator words the same capacity failure differently (bank_manager.cpp, "after considering dependencies").
+_L1_NEVER_FITS_HYBRID = re.compile(r"\bL1 across \d+ banks \((\d+) B per bank\), bank size is (\d+) B")
+
+
+def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
+    """Run one captured call; skip it when a tensor cannot fit this part's L1 at all.
+
+    The captures come from parts with a larger L1 than some Quasar variants (3 MB per
+    compute node instead of 4 MB). An L1 allocation whose per-bank share exceeds the
+    whole bank can never succeed, so that is a capacity limit of the device, not an op
+    failure: SKIP. An L1 OOM that would fit an empty bank still fails.
+    """
+    try:
+        return _run_case_impl(op, case, mesh_device, op_name=op_name, pcc=pcc)
+    except RuntimeError as e:
+        msg = str(e)
+        m = _L1_NEVER_FITS.search(msg) if "L1 buffer across " in msg else None
+        if m is None:
+            m = _L1_NEVER_FITS_HYBRID.search(msg)
+        if "Out of Memory" in msg and m is not None and int(m.group(1)) > int(m.group(2)):
+            pytest.skip(f"needs {m.group(1)} B per L1 bank; this device's bank is {m.group(2)} B")
+        raise

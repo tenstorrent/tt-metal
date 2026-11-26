@@ -87,7 +87,9 @@ using namespace CMAKE_UNIQUE_NAMESPACE;
 ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
     const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
     // input_batch_index / gathered_dim_size alter only runtime page ranges and iterator strides;
-    // exclude their values so changing cache slot or prefix does not recompile the program.
+    // exclude their values so changing cache slot or prefix does not recompile the program. They (and
+    // batch_slot_num_layers / batch_slot_layer_idx below) are re-applied on every cache hit by
+    // HighBwAllGatherMeshWorkloadFactory::override_runtime_arguments.
     // Routing is fixed for the lifetime of a cached program. Clear the program cache before
     // reconfiguring fabric routing. Include placement so a mesh reshape cannot reuse old routes.
     auto* device = tensor_args.input_tensor.device();
@@ -474,7 +476,7 @@ HighBwAllGatherDeviceOperation::tensor_return_value_t HighBwAllGatherDeviceOpera
 
 HighBwAllGatherDeviceOperation::program_factory_t HighBwAllGatherDeviceOperation::select_program_factory(
     const HighBwAllGatherParams&, const HighBwAllGatherInputs&) {
-    return program_factory_t{HighBwAllGatherFabricFactory{}};
+    return program_factory_t{HighBwAllGatherMeshWorkloadFactory{}};
 }
 
 std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_build_operation_args(
