@@ -1,0 +1,5 @@
+Real logs the unit tests parse, cut to the lines they need. Runs live on /data/mbezulj.
+
+write_ack_duty_hang.log
+  galaxy-workload-deployment-test/LOG_2026_11_21_13_27_bh-glx-110-a06u02_734b76a2caa/matmul/mcast-ack-duty/log_01
+  (lines from __main__:scan_all_chips only)
