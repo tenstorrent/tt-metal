@@ -11,7 +11,6 @@
 #include "api/compute/tilize.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "flat_options.hpp"
-#include "zz_probes.hpp"
 
 constexpr uint32_t sbt = flat_options::super_block_tiles;  // K tiles per super-block
 
@@ -24,16 +23,13 @@ void kernel_main() {
     cb_pop_front(tt::CBIndex::c_6, 1);
     compute_kernel_hw_startup(rm_cb, sb_cb);
     fast_tilize_init(rm_cb, sbt, sb_cb);
-    ZZ_COUNTER(zz_in);
-    ZZ_COUNTER(zz_out);
-    [[maybe_unused]] const uint32_t zz_start = ZZ_NOW();
     for (uint32_t b = 0; b < num_sb; ++b) {
         {
-            ZZ_WAIT(zz_out, cb_reserve_back(sb_cb, mt * sbt));
+            cb_reserve_back(sb_cb, mt * sbt);
         }
         for (uint32_t m = 0; m < mt; ++m) {
             {
-                ZZ_WAIT(zz_in, cb_wait_front(rm_cb, 32));
+                cb_wait_front(rm_cb, 32);
             }
             {
                 fast_tilize_block(rm_cb, sbt, sb_cb, 0, m * sbt);
@@ -43,7 +39,4 @@ void kernel_main() {
         cb_push_back(sb_cb, mt * sbt);
     }
     fast_tilize_uninit(rm_cb, sb_cb, sbt);
-    UNPACK((ZZ_EMIT("ZZ-XT-INWAIT", zz_in)));
-    UNPACK((ZZ_EMIT("ZZ-XT-SPAN", ZZ_NOW() - zz_start)));
-    PACK((ZZ_EMIT("ZZ-XT-OUTWAIT", zz_out)));
 }

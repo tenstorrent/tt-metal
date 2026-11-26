@@ -23,7 +23,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "flat_options.hpp"
-#include "zz_probes.hpp"
 #include "expert_schedule.hpp"
 
 void kernel_main() {
@@ -57,30 +56,22 @@ void kernel_main() {
     const uint64_t prim2_data = get_noc_addr(p2xy >> 16, p2xy & 0xFFFF, get_semaphore(data_sem));
     volatile tt_l1_ptr uint32_t* credit2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(6));
     constexpr uint32_t nsb = flat_options::super_blocks_per_sub_block;
-    ZZ_COUNTER(zz_tiles);
-    ZZ_COUNTER(zz_credit);
-    ZZ_COUNTER(zz_wbar);
-    [[maybe_unused]] const uint32_t zz_start = ZZ_NOW();
     for (uint32_t b = 0; b < num_sb; ++b) {
-        ZZ_WAIT(zz_tiles, cb_wait_front(sb_cb, sb_tiles));
+        cb_wait_front(sb_cb, sb_tiles);
         if (b >= land_slots) {
-            ZZ_WAIT(zz_credit, noc_semaphore_wait_min(credit, b + 1 - land_slots);  // the slot's previous super-block
-                    noc_semaphore_wait_min(credit2, b + 1 - land_slots));
+            noc_semaphore_wait_min(credit, b + 1 - land_slots);  // the slot's previous super-block has been sent
+            noc_semaphore_wait_min(credit2, b + 1 - land_slots);
         }
         // (row tile major: a short last sub-block's rows are the super-block's first bytes - only those go)
         const uint32_t g = x2k + (place + b * round_) * x2s;
         const uint32_t bytes = sub_block_row_tiles(schedule, g / nsb) * sbt * tb;
         noc_async_write(get_read_ptr(sb_cb), prim_land + (b % land_slots) * sb_bytes, bytes);
         noc_async_write(get_read_ptr(sb_cb), prim2_land + (b % land_slots) * sb_bytes, bytes);
-        ZZ_WAIT(zz_wbar, noc_async_write_barrier());
+        noc_async_write_barrier();
         noc_semaphore_inc(prim_data, 1);
         noc_semaphore_inc(prim2_data, 1);
         cb_pop_front(sb_cb, sb_tiles);
     }
-    ZZ_EMIT("ZZ-XH-TILEWAIT", zz_tiles);
-    ZZ_EMIT("ZZ-XH-CREDIT", zz_credit);
-    ZZ_EMIT("ZZ-XH-WBAR", zz_wbar);
-    ZZ_EMIT("ZZ-XH-SPAN", ZZ_NOW() - zz_start);
     noc_async_atomic_barrier();
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
