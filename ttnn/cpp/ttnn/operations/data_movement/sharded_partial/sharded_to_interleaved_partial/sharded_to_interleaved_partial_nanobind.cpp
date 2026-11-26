@@ -28,7 +28,7 @@ void bind_sharded_to_interleaved_partial(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): the slice to write, of shape ``[1, 1, R, W]``, in TILE layout with 32x32 tiles, sharded in L1, see Memory Support.
-            cache_tensor (ttnn.Tensor): the interleaved tensor to write into, of shape ``[N, C, H, W]``, in TILE layout with 32x32 tiles, on the device of `input_tensor`. ``H`` and ``W`` must be multiples of 32. Its dtype must be that of `input_tensor` or one the slice is converted to: an input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN when the dtypes differ.
+            cache_tensor (ttnn.Tensor): the interleaved tensor to write into, of shape ``[N, C, H, W]``, in TILE layout with 32x32 tiles, on the device of `input_tensor`. ``H`` and ``W`` must be multiples of 32. Its dtype must be that of `input_tensor` or one the slice is converted to: an input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN or -0.0 when the dtypes differ.
             num_slices (int): number of slices to split the rows of `cache_tensor` into. Must be at least 1, and ``N*C*H / num_slices`` must be a multiple of 32.
             slice_index (int): index of the slice to write, from 0 to ``num_slices - 1``.
 

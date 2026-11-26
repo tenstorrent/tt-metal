@@ -91,24 +91,35 @@ def _convertible_input(shape, input_dtype, cache_dtype):
 _CACHE_SHAPE = (2, 3, 64, 128)
 _NUM_SLICES = 3
 _SLICE_SHARDS = {
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: ((32, 128), (2, 2)),
-    ttnn.TensorMemoryLayout.WIDTH_SHARDED: ((128, 64), (2, 1)),
-    ttnn.TensorMemoryLayout.BLOCK_SHARDED: ((64, 64), (2, 2)),
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: ((32, 128), {"ROW_MAJOR": (2, 2), "COL_MAJOR": (2, 2)}),
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED: ((128, 64), {"ROW_MAJOR": (2, 1), "COL_MAJOR": (1, 2)}),
+    # Shards of 64 x 32 on a non-square grid: 4 across the width in a ROW_MAJOR grid row, 4 down a COL_MAJOR column.
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED: ((64, 32), {"ROW_MAJOR": (4, 2), "COL_MAJOR": (2, 4)}),
 }
+_SHARD_ORIENTATIONS = [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR]
 
 
-def _write_every_slice(device, values, dtype, layout, memory_layout, buffer_type, cache_dtype, cache_buffer_type):
+def _write_every_slice(
+    device,
+    values,
+    dtype,
+    layout,
+    memory_layout,
+    buffer_type,
+    cache_dtype,
+    cache_buffer_type,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+):
     """Shards each slice of ``values`` (``_CACHE_SHAPE``) in ``dtype`` and writes it with
     ttnn.sharded_to_interleaved_partial into a cache tensor of ``cache_dtype`` whose values all differ from the slices'.
     After each write, the slice's rows must hold the slice and every other row must be unchanged. When the dtypes
     differ, zeros are compared by value."""
     width = _CACHE_SHAPE[-1]
     slice_height = values.numel() // width // _NUM_SLICES
-    shard_shape, (grid_x, grid_y) = _SLICE_SHARDS[memory_layout]
+    shard_shape, grids = _SLICE_SHARDS[memory_layout]
+    grid_x, grid_y = grids[orientation.name]
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
-    slice_memory_config = ttnn.MemoryConfig(
-        memory_layout, buffer_type, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    )
+    slice_memory_config = ttnn.MemoryConfig(memory_layout, buffer_type, ttnn.ShardSpec(grid, shard_shape, orientation))
     slices = [
         ttnn.from_torch(
             slice_values.reshape(1, 1, slice_height, width),
@@ -151,11 +162,13 @@ def _write_every_slice(device, values, dtype, layout, memory_layout, buffer_type
     "memory_layout, buffer_type", _docstring_sharded_input_params(ttnn.sharded_to_interleaved_partial)
 )
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.sharded_to_interleaved_partial))
+@pytest.mark.parametrize("orientation", _SHARD_ORIENTATIONS, ids=lambda o: o.name)
 def test_sharded_to_interleaved_partial_docstring_supported_inputs(
-    dtype, layout, memory_layout, buffer_type, cache_buffer_type, device
+    orientation, dtype, layout, memory_layout, buffer_type, cache_buffer_type, device
 ):
     """Writes every slice of a sharded input of each dtype, layout and shard layout the
-    ttnn.sharded_to_interleaved_partial docstring lists into a cache tensor in each interleaved buffer type it lists."""
+    ttnn.sharded_to_interleaved_partial docstring lists into a cache tensor in each interleaved buffer type it lists,
+    in both shard orientations."""
     check_readable(dtype, layout, memory_layout, buffer_type, cache_buffer_type)
     _write_every_slice(
         device,
@@ -166,6 +179,7 @@ def test_sharded_to_interleaved_partial_docstring_supported_inputs(
         buffer_type,
         dtype,
         cache_buffer_type,
+        orientation,
     )
 
 
@@ -222,3 +236,43 @@ def test_sharded_to_interleaved_partial_docstring_round_trip(memory_layout, buff
         ttnn.sharded_to_interleaved_partial(sharded_slice, cache_tensor, _NUM_SLICES, slice_index)
 
     assert_exact(expected, ttnn.to_torch(cache_tensor))
+
+
+def _height_sharded_slice(device, rows, dtype=ttnn.bfloat16):
+    """A [1, 1, rows, 64] TILE slice, HEIGHT_SHARDED on one L1 core."""
+    padded_rows = -(-rows // 32) * 32
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (padded_rows, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.from_torch(
+        torch.ones(1, 1, rows, 64), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+
+
+def _cache(device, rows, dtype=ttnn.bfloat16):
+    return ttnn.from_torch(torch.zeros(1, 1, rows, 64), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+def test_sharded_to_interleaved_partial_rejects_slices_of_partial_tile_rows(device, expect_error):
+    """A cache of 96 rows in 2 slices gives slices of 48 rows, against the docstring rule that a slice has a multiple
+    of 32 rows. The op raises instead of writing slice 1 from the middle of a tile row."""
+    with expect_error(RuntimeError, "multiple of 32 rows"):
+        ttnn.sharded_to_interleaved_partial(_height_sharded_slice(device, 32), _cache(device, 96), 2, 0)
+
+
+def test_sharded_to_interleaved_partial_rejects_a_slice_of_another_size(device, expect_error):
+    """A slice of 48 rows (2 tile rows) for a cache of 96 rows in 3 slices of 32 rows is not the ``[1, 1, R, W]`` slice
+    the docstring asks for. The op raises instead of writing past the slice, and past the cache for the last one."""
+    with expect_error(RuntimeError, "one slice of the cache tensor"):
+        ttnn.sharded_to_interleaved_partial(_height_sharded_slice(device, 48), _cache(device, 96), 3, 2)
+
+
+def test_sharded_to_interleaved_partial_rejects_another_output_dtype(device, expect_error):
+    """The docstring asks for an ``output_dtype`` of `None` or the cache tensor's dtype; another one raises."""
+    with expect_error(RuntimeError, "output_dtype must be None"):
+        ttnn.sharded_to_interleaved_partial(
+            _height_sharded_slice(device, 32), _cache(device, 64), 2, 0, output_dtype=ttnn.float32
+        )

@@ -21,6 +21,12 @@ ttnn::Tensor sharded_to_interleaved_partial(
 
     TT_FATAL(num_slices >= 0 && num_slices <= UINT32_MAX, "num_slices must be in range [0, UINT32_MAX]");
     TT_FATAL(slice_index >= 0 && slice_index <= UINT32_MAX, "slice_index must be in range [0, UINT32_MAX]");
+    // The slice is written in the cache tensor's dtype; any other output_dtype would be dropped.
+    TT_FATAL(
+        output_dtype.value_or(cache_tensor.dtype()) == cache_tensor.dtype(),
+        "output_dtype must be None or the cache tensor's dtype {}, got {}",
+        cache_tensor.dtype(),
+        output_dtype.value_or(cache_tensor.dtype()));
 
     ttnn::prim::sharded_to_interleaved_partial(
         input_tensor,
