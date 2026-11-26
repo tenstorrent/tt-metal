@@ -169,6 +169,11 @@ class _Qwen36Generator(Generator, SupportsMultiModal):
         optimizations=None,
         **kwargs,
     ):
+        from models.demos.blackhole.qwen36.tt.host_topp import install_plugin_topp_candidates
+
+        # The plugin samples each prefill's first token on the host; a top-p request with top_k disabled would sort
+        # the whole vocabulary there.
+        install_plugin_topp_candidates()
         # Weights dir: MODEL_WEIGHTS_DIR → HF_MODEL → hf_config._name_or_path; a hub id resolves to a local snapshot.
         name_or_path = os.environ.get("MODEL_WEIGHTS_DIR") or os.environ.get("HF_MODEL") or hf_config._name_or_path
         if name_or_path and not os.path.isdir(os.path.expanduser(name_or_path)):
