@@ -630,6 +630,42 @@ Tensor reduce(
             dt != DataType::INT32 && dt != DataType::UINT32, "ttnn.mean does not support integer inputs - got {}.", dt);
     }
 
+    // MX (Quasar) tiles run the H / W reduce kernels natively only for tile-aligned H and W, an H or W axis and
+    // keepdim=True (see the checks below); Min lowers through a bf16 scratch ring that packs zeros for MX. Anything
+    // else (a squeezing reshape, the fill kernel for implicit tile padding, transpose / permute for N / C axes) is not
+    // wired for MX tiles, so reduce those in bfloat16, where all of it exists, and pack the result back to MX.
+    if (tt::tt_metal::is_mx(input_tensor_arg.dtype()) && input_tensor_arg.layout() == TILE_LAYOUT) {
+        const auto& mx_shape = input_tensor_arg.logical_shape();
+        const int mx_rank = static_cast<int>(mx_shape.rank());
+        const auto mx_dims = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
+        const bool mx_hw_axes_only = std::all_of(mx_dims.begin(), mx_dims.end(), [&](int d) {
+            const int axis = d < 0 ? d + mx_rank : d;
+            return axis == mx_rank - 1 || axis == mx_rank - 2;
+        });
+        const bool mx_native =
+            keepdim && mx_rank >= 2 && mx_hw_axes_only && mx_shape[-2] % tt::constants::TILE_HEIGHT == 0 &&
+            mx_shape[-1] % tt::constants::TILE_WIDTH == 0 && reduce_type != reduction_common::ReduceType::Min;
+        if (!mx_native) {
+            const DataType mx_dtype = input_tensor_arg.dtype();
+            Tensor as_bf16 =
+                ttnn::typecast(input_tensor_arg, DataType::BFLOAT16, std::nullopt, std::nullopt, sub_core_grids);
+            Tensor result = reduce<reduce_type>(
+                as_bf16,
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout);
+            if (result.layout() != TILE_LAYOUT) {
+                return result;
+            }
+            return ttnn::typecast(result, mx_dtype, std::nullopt, std::nullopt, sub_core_grids);
+        }
+    }
+
     // A BFLOAT8_B tile shares one exponent per 16-lane block of a row. The -inf / +inf Max / Min pad written into the
     // tile padding below ends up in blocks that also hold real lanes (the last block of each input row when the width
     // is not a multiple of 16, and the Min-over-W results of a partial tile row), sets their exponent, and the real
