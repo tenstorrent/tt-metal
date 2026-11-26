@@ -78,6 +78,25 @@ so the next sub-block's x can only come in behind it and then has to arrive at p
 FLAT_GU_FULL_SYNC=1 / FLAT_NO_ROW_PASSES=1 (one pass): 1164.7 / 1202.6 (worse). Next: x blocks of a pass's rows
 (x_row_tiles), each pass reading and freeing its own (WIP commit after this one, untested).
 
+## x path split per row pass (x_row_tiles)
+
+With row passes the x of a sub-block now travels as one x sub-block a pass (2 row tiles), and each gate/up pass
+frees its own x blocks, so the next x streams in through the whole sub-block. First device runs took the host down
+twice: the helper relay measured the x schedule in 128-row sub-blocks (a ~4 GB landing write for an expert's last x
+sub-block) - fixed, and the schedule now carries its rows a sub-block; then the host placed helper 1's landing ring in
+MT-row super-blocks (every odd super-block read from the wrong place) - fixed. Pieces: a row tile a piece (4 pieces a
+2-row block halved the bytes in flight: M 320 1192 vs 1055).
+
+GLM 4x4 with custom_mm, split vs not: M 80 796 / 802, 160 888 / 902, 240 965 / 979, 320 1055 / 1067, 480 1374 / 1389
+(about -1%). x wait barely moved (122 vs 129 us at M 320): the 40-core west snake is now the x limit (its primary
+waits 213 us on slots; the east primary 304 us on data, its helpers held by the west's landing credits). Tried, not
+kept: FLAT_X_FWD_DEPTH=7, FLAT_EVEN_RECTS=1 (M 320 1059 / 1075). FLAT_ISO=1 (no gate/up weight reads) 943 at M 320:
+the weight traffic (DRAM + its NoC contention with the snake) is what is left there. FLAT_X_NOC1=1: 1357.
+
+Full matrix (watcher + NoC sanitizer: 28 accuracy + 28 determinism pass), vs before custom_mm: GLM 4x4 M 320 1093 ->
+1055 (-3.5%), M 480 1498 -> 1376 (-8.2%), zipf -4.5%; GLM 8x4 hot -10.1%, DSV4.1-Flash hot -10.6%; worst +1.6%
+(DSV4.1-Flash 5120 uniform), +0.7% GLM-5.3-Flash.
+
 ## DRAM timeline (zz_hist.hpp: bytes landed a reader in 12 us bins, FLAT_ZZ_PROBES=1)
 
 Per bin: gate/up weights by bank, down weights, x reads (helpers), y writes (bfp8 tiles, down_core_writer). Bytes a

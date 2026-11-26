@@ -209,6 +209,11 @@ FlatProgramHandles add_flat_routed_expert_program(
     // BRISC) on NOC1.
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
     uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
+    // (split x path: a row tile a piece, the pieces' size before the split - GLM-5.3 4x4 M 320 with the split, 4 / 2
+    // pieces a block of 2 row tiles: 1192.4 / 1055.4 us; the forwarder's pieces in flight carry half the bytes at 4)
+    if (XR < MT && aligned(XR)) {
+        x_pieces = XR;
+    }
     if (const char* e = std::getenv("FLAT_X_PIECES"); e != nullptr && aligned(std::atoi(e))) {  // (MEASUREMENT ONLY)
         x_pieces = std::atoi(e);
     }
