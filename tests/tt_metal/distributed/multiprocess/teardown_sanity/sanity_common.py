@@ -27,7 +27,9 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("TT_METAL_HOME", HERE.parents[4]))
-PROBE: Path | None = None  # the Python rank program; set by the suite that owns it (test_teardown_sanity.py)
+PROBE: Path | None = (
+    None  # the rank program (a .py file or a built binary); each suite sets it (rows_common.probe_fixture)
+)
 # A mock Blackhole dual galaxy: two ranks, no device (CPU only). The suite targets Blackhole, so it uses a
 # blackhole mock everywhere; the same descriptor + mapping pairing is already validated by the BH dual-galaxy rows
 # of the fabric CPU-only lane. This is a mock topology for the control plane to parse — the teardown behaviour it
@@ -182,9 +184,17 @@ def legacy_cmd(mpi_extra: str = "", mapping: Path = MAPPING, ttrun_extra: tuple 
         str(mapping),
         "--mpi-args",
         ("--allow-run-as-root --oversubscribe " + mpi_extra).strip(),
-        PYTHON,
-        str(PROBE),
+        *probe_program(),
     ]
+
+
+def probe_program() -> list:
+    """The rank program the suite set: a Python probe under PYTHON, a built C++ probe by itself (skip if not built)."""
+    if str(PROBE).endswith(".py"):
+        return [PYTHON, str(PROBE)]
+    if not os.access(PROBE, os.X_OK):
+        pytest.skip(f"{PROBE} is not built (BUILD_TESTS)")
+    return [str(PROBE)]
 
 
 MPI_PREFIX = os.environ.get("TT_SANITY_MPI_PREFIX", "")

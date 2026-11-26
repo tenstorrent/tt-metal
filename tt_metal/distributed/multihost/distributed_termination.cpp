@@ -36,6 +36,7 @@ std::atomic<bool> g_terminating{false};
 std::atomic<bool> g_stop_signal{false};  // set by the SIGTERM handler only
 std::atomic<bool> g_failed{false};
 std::atomic<int> g_exit_code{0};  // 0: not set; this rank's own code once it failed
+std::string g_reason;             // this rank's own failure, the first one; read by teardown
 std::atomic<bool> g_peer_exited{false};
 struct sigaction g_previous_sigterm{};
 struct sigaction g_previous_sigusr1{};
@@ -130,6 +131,7 @@ bool DistributedContext::fail_rank(int exit_code, const std::string& reason) {
     const int code = exit_code != 0 ? exit_code : 1;
     int unset = 0;
     g_exit_code.compare_exchange_strong(unset, code);
+    g_reason = one_line(reason);
     g_terminating.store(true);
     if (const int fd = env_fd("TT_RUN_RANK_FD"); fd >= 0) {
         const std::string line = "failed " + std::to_string(code) + " " + one_line(reason) + "\n";
@@ -145,7 +147,8 @@ void DistributedContext::teardown(const std::string& reason) {
         who += " " + std::to_string(*get_current_world()->rank());
     }
     const int code = g_exit_code.load() != 0 ? g_exit_code.load() : 128 + SIGTERM;
-    std::fprintf(stderr, "[%s] teardown initiated: %s; exiting with code %d\n", who.c_str(), reason.c_str(), code);
+    const std::string& why = g_reason.empty() ? reason : g_reason;  // a rank that failed keeps its first reason
+    std::fprintf(stderr, "[%s] teardown initiated: %s; exiting with code %d\n", who.c_str(), why.c_str(), code);
     leave_job();
 }
 

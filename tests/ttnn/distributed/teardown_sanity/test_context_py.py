@@ -1,25 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Teardown sanity: does a distributed tt-metal job end, end cleanly, and report it, after one failure?
+"""Teardown sanity, level 1, Python: the DistributedContext alone, no device.
 
-CPU only, on the mock dual galaxy (two ranks of 8x4, no device), launched by tt-run like every real job. Every
-test is one fault with one assertion, taken from the teardown plan of tt-metal #56902 (tt-blaze
-tools/teardown_probe, lane L4): the rank program is ``sanity_probe.py`` next to this file; the harness is in
-tests/tt_metal/distributed/multiprocess/teardown_sanity. The faults are the
-two kinds a real job meets: the code failing on one rank (an exception, a shape the descriptor cannot hold, a
-descriptor that disagrees, a collective with a wrong or dead peer) and the user (a signal at tt-run).
+Two ttnn ranks under tt-run on the CPU (the mock cluster descriptor is set but no mesh is opened), one injected
+fault per row: a signal, a failure, a dead peer, a timeout. What must hold: the rank's own teardown line
+(``[rank R] teardown initiated: <reason>; exiting with code C``), the wrapper's stop line with the reason,
+tt-run's code and origin, and nothing left on the host. The rank program is ``context_probe.py``; the mesh rows
+are ``test_mesh_py.py``; the raw-MPI and tt-run rows are tests/tt_metal/distributed/multiprocess/teardown_sanity.
 
-Requirements, as in the plan: a failure never becomes a hang (R1), a hang ends by itself and leaves nothing
-(R2), nobody kills processes by hand (R3), the exit code reports the failure (R4).
-
-Modes. A row that passes today is a gate. A row that fails today is marked ``@known("P..: ...")`` with the
-plan's error id and fix: it fails, so the job is red until the fix lands, and its failure message names the
-error; when the fix lands the row passes and the marker is dropped. Each row has a deadline; a job that is still running at the
-deadline is killed by its process group and counted as a hang.
-
-Run: pytest tests/ttnn/distributed/teardown_sanity -v   (from the repository root, with a
-built tree and the python environment; the fabric CPU lane runs it as group ``teardown-sanity`` of
-tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh).
+Run: pytest tests/ttnn/distributed/teardown_sanity/test_context_py.py -v (a built tree, the python environment).
 """
 
 from __future__ import annotations
@@ -33,76 +22,13 @@ from pathlib import Path
 
 import pytest
 
-# The harness (sanity_common) is shared with the raw-MPI rows in tests/tt_metal/distributed/multiprocess/teardown_sanity.
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests/tt_metal/distributed/multiprocess/teardown_sanity"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # sanity_rank_rows, this suite's own helpers
-import sanity_common  # noqa: E402
+from rows_common import *  # noqa: E402,F401,F403 - the harness, the checks and the helpers
+from rows_common import _both_ranks_were_in_the_collective, _session_dirs, _singleton, probe_fixture  # noqa: E402
 
-sanity_common.PROBE = Path(__file__).resolve().parent / "sanity_probe.py"
-from sanity_common import (
-    _session_dirs,
-    DEADLINE_END,
-    DEADLINE_HANG,
-    clean,
-    ended,
-    fault_delivered,
-    legacy_cmd,
-    mpirun_path,
-    nonzero,
-    run_case,
-    PYTHON,
-    ROOT,
-)
-from sanity_rank_rows import CONFLICT_DESC, MGD_QUAD, conflict_mapping, rc_contains, solve_cmd  # noqa: E402
+_probe = probe_fixture(Path(__file__).resolve().parent / "context_probe.py")
 
 
-def reached(r, rank: int, marker: str) -> None:
-    """The row got as far as it means to test: the rank reached the marker. Raised as a harness error, not an
-    AssertionError, so a strict xfail (raises=AssertionError) fails loudly instead of passing as the known gap."""
-    if not any(f"[probe r={rank} " in line and marker in line for line in r.log.splitlines()):
-        raise RuntimeError(f"harness: rank {rank} never reached {marker!r}; the row tested nothing\n{r.log[-3000:]}")
-
-
-def closed(r, ranks=(0, 1)) -> None:
-    """Every listed rank closed its mesh on the way out (the close_done marker): a graceful end, not a kill."""
-    for rank in ranks:
-        assert any(
-            f"[probe r={rank} " in line and "close_done" in line for line in r.log.splitlines()
-        ), f"rank {rank} did not close its mesh; it ended at {r.reached.get(rank)!r}\n{r.log[-3000:]}"
-
-
-def tore_down(r, ranks=(0, 1), reason: str = "SIGTERM") -> None:
-    """Every listed rank went through teardown on the way out (the rank's own line): for now it says so and exits
-    without closing its mesh; the close comes with the later teardown step."""
-    for rank in ranks:
-        m = re.search(rf"\[rank {rank}\] teardown initiated: (.*?); exiting with code (\d+)", r.log)
-        assert m, f"rank {rank} did not go through teardown; it ended at {r.reached.get(rank)!r}\n{r.log[-3000:]}"
-        assert reason in m.group(1), f"rank {rank} tore down for {m.group(1)!r}, expected {reason!r}"
-
-
-def stopped_by(r, rank: int, reason: str, code: int) -> None:
-    """Rank ``rank`` stopped the job for ``reason``: its wrapper printed the stop line, every other rank was sent SIGTERM
-    and exited within the grace (nothing forced), and tt-run names the rank and returns its code."""
-    m = re.search(rf"\[rank {rank}\] (.*?) \(on \S+, pid \d+\); stopping the job \(exit {code}\)", r.log)
-    assert m, f"no stop line from rank {rank} with exit {code}\n{r.log[-3000:]}"
-    assert reason in m.group(1), f"rank {rank} stopped the job for {m.group(1)!r}, expected {reason!r}"
-    assert r.exit == code, f"tt-run returned {r.exit}, expected the stopping rank's {code}: {r}"
-    assert "the other ranks were sent SIGTERM and exited" in r.log, r.log[-3000:]
-    assert f"origin=rank {rank} on" in r.log and "outcome=failed" in r.log, r.log[-3000:]
-    assert "job forced down" not in r.log, f"the stop was forced, not graceful\n{r.log[-3000:]}"
-
-
-def stopped_at_ttrun(r, sig: int) -> None:
-    """A stop at tt-run: every rank was sent SIGTERM, closed its mesh and exited within the grace; 128 + the signal."""
-    assert r.exit == 128 + sig, f"expected {128 + sig}: {r}"
-    assert "sent SIGTERM to all ranks" in r.log and f"outcome=stopped exit={128 + sig}" in r.log, r.log[-3000:]
-    assert "job forced down" not in r.log, r.log[-3000:]
-    tore_down(r)
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# rows that pass today (gates)
-# ---------------------------------------------------------------------------------------------------------------
 def test_clean():
     """Control: both ranks open the mock galaxy, one barrier, close, exit 0, nothing left."""
     r = run_case("clean", {}, DEADLINE_END)
@@ -127,14 +53,6 @@ def test_dead_peer_recv():
     ended(r)
     stopped_by(r, 1, "was killed by signal 9 (SIGKILL)", 137)
     tore_down(r, ranks=(0,))
-    clean(r)
-
-
-def test_fabric_mismatch():
-    """One rank sets FABRIC_2D before open and the other does not: TT_FATAL on one rank, the job ends non-zero."""
-    r = run_case("fabric_mismatch", {"PROBE_FABRIC_RANK": "1"}, DEADLINE_END)
-    ended(r)
-    nonzero(r)
     clean(r)
 
 
@@ -175,16 +93,6 @@ def test_prte_timeout():
     clean(r)
 
 
-def _both_ranks_were_in_the_collective(r) -> None:
-    """Positive evidence that the wall clock ended the intended deadlock, not a slow start-up: both ranks entered the
-    collective section (a ``coll_*`` marker), past open. The last marker is not the collective itself: the SIGTERM
-    makes the collective return and the rank close its device (``close_done``) on the way out."""
-    for rank in (0, 1):
-        assert f"[probe r={rank} " in r.log and any(
-            f"[probe r={rank} " in line and "] coll_" in line for line in r.log.splitlines()
-        ), f"rank {rank} had not reached the collective when the wall clock fired: {r}"
-
-
 def test_exit_nofinalize():
     """Rank 1 calls os._exit(1) with the mesh open (no atexit, no hook): its wrapper stops the job, rank 0 closes."""
     r = run_case(
@@ -204,82 +112,12 @@ def test_invalid_rank():
     clean(r)
 
 
-def test_invalid_rank_uncaught_stops_the_job():
-    """The same receive from a rank that does not exist, but nothing catches it: the RuntimeError unwinds into the
-    mesh close, the close stops the job, rank 1 leaves the barrier it was in on the SIGTERM and closes, and tt-run
-    returns 1 naming rank 0 and the MPI error."""
-    r = run_case("recv_bad_rank_uncaught", {"PROBE_COLL": "recv_bad_rank_peer_barrier"}, DEADLINE_END)
-    ended(r)
-    stopped_by(r, 0, "Python exception RuntimeError: MPI_Irecv", 1)
-    assert "MPI_ERR_RANK" in r.log, r.log[-3000:]
-    tore_down(r, ranks=(1,))
-    tore_down(r, ranks=(0,), reason="Python exception RuntimeError")
-    clean(r)
-
-
-def test_raise_while_peer_in_split():
-    """Rank 1 raises while rank 0 is inside a communicator split (the one context call with no non-blocking form,
-    used by every mesh open and by the control plane): rank 0 must still leave it on the SIGTERM, close its mesh and
-    exit, so the job ends with 1 naming rank 1 instead of rank 0 sitting in MPI_Comm_split until the force."""
-    r = run_case("raise_while_peer_in_split", {"PROBE_COLL": "split_peer_raises"}, DEADLINE_END)
-    ended(r)
-    stopped_by(r, 1, "Python exception RuntimeError: injected failure while the peers are in split", 1)
-    reached(r, 0, "coll_split_enter")
-    tore_down(r, ranks=(0,))
-    tore_down(r, ranks=(1,), reason="Python exception")
-    clean(r)
-
-
 def test_use_before_init():
     """A collective before init_distributed_context raises 'not initialized' instead of crashing or hanging."""
     r = run_case("use_before_init", {"PROBE_SCENARIO": "use_before_init", "PROBE_ON_ERROR": "continue"}, DEADLINE_END)
     ended(r)
     rc_contains(r, 1, "not initialized")
     assert r.exit == 0, str(r)
-    clean(r)
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# rows that fail today. Each marker names the error of the plan and its fix; drop the marker with the fix.
-# ---------------------------------------------------------------------------------------------------------------
-def test_raise_after_open():
-    """Rank 1 raises after open: on the way out its finally closes the mesh, and that close stops the job first (the
-    exception is in flight), so rank 0 leaves its barrier on the SIGTERM and closes too, instead of rank 1's close
-    waiting on rank 0. tt-run returns 1 naming rank 1 and the exception."""
-    r = run_case("raise_after_open", {"PROBE_SCENARIO": "raise", "PROBE_PHASE": "after_open"}, DEADLINE_END)
-    ended(r)
-    stopped_by(r, 1, "Python exception RuntimeError: injected failure at after_open", 1)
-    tore_down(r, ranks=(0,))
-    tore_down(r, ranks=(1,), reason="Python exception")
-    clean(r)
-
-
-def test_bad_shape():
-    """Rank 1 asks for a mesh the descriptor cannot hold: the shape check in open is a TT_FATAL (a C++ exception,
-    raised in Python as RuntimeError, its message several lines long) on every rank. The job is stopped with code 1,
-    and tt-run reads the wrapper's one-line stop line and names the rank, not prterun's banner."""
-    r = run_case("bad_shape_rank1", {"PROBE_MESH_SHAPE_VICTIM": "9x9"}, DEADLINE_END)
-    ended(r)
-    m = re.search(
-        r"\[rank (\d+)\] Python exception RuntimeError: TT_FATAL.*"
-        r"ranks disagree on the requested mesh shape.* \(on \S+, pid \d+\); stopping the job \(exit 1\)",
-        r.log,
-    )
-    assert m, f"no one-line stop line for the TT_FATAL\n{r.log[-3000:]}"
-    assert r.exit == 1 and f"origin=rank {m.group(1)} on" in r.log and "outcome=failed exit=1" in r.log, str(r)
-    assert "the launcher then killed the other ranks" not in r.log and "job forced down" not in r.log, r.log[-3000:]
-    clean(r)
-
-
-def test_bad_descriptor(tmp_path):
-    r = run_case(
-        "conflicting_descriptor",
-        {"PROBE_SCENARIO": "mesh_open"},
-        DEADLINE_HANG,
-        cmd=legacy_cmd(mapping=conflict_mapping(tmp_path)),
-    )
-    ended(r)
-    nonzero(r)
     clean(r)
 
 
@@ -312,25 +150,6 @@ def test_sigkill_before_init():
     ended(r)
     assert r.exit == 137 and "[rank 1] " in r.log, str(r)
     clean(r)
-
-
-def test_dead_peer_in_open():
-    # A peer dies *inside* open_mesh_device (the control plane's distributed init). The kill is sent by the parent
-    # harness, gated on the victim's ``open_enter`` marker, because open holds the GIL — a Python timer set in the
-    # rank could not fire inside open. The job must end non-zero with nothing left.
-    import signal
-
-    r = run_case(
-        "sigkill_in_open",
-        {"PROBE_SCENARIO": "clean", "PROBE_VICTIM": "1"},
-        DEADLINE_END,
-        rank_signal=(1, signal.SIGKILL, 0.2),
-        signal_on_marker="open_enter",
-    )
-    ended(r)
-    clean(r)
-    nonzero(r)
-    assert "FAULT NOT DELIVERED" not in r.signal_sent, r  # the victim really was killed inside open
 
 
 def test_ctrl_c_in_deadlock():
@@ -395,65 +214,6 @@ def test_solve_rank_killed():
     clean(r)
 
 
-# ---------------------------------------------------------------------------------------------------------------
-# the rest of the plan's open errors that one host can show
-# ---------------------------------------------------------------------------------------------------------------
-def rank_saw(r, rank: int, marker: str) -> None:
-    """The rank printed this marker at some point (not necessarily its last one)."""
-    assert any(
-        f"[probe r={rank} " in line and marker in line for line in r.log.splitlines()
-    ), f"rank {rank} never printed {marker!r}; it ended at {r.reached.get(rank)!r}\n{r.log[-3000:]}"
-
-
-def test_survivor_tears_down_ulfm():
-    """Opt-in ULFM so the death is delivered as an error; rank 1 killed with the mesh open. Rank 0's wait sees the
-    error, gives the dead rank's wrapper's SIGTERM its few ms to arrive and leaves as a stopped rank: through
-    teardown, not as a second failure. (The survivor's own close is the later teardown step.)"""
-    r = run_case(
-        "survivor_close_ulfm",
-        # Under ULFM recovery the launcher does not end the job when ranks exit, so the dead rank's wrapper stands in
-        # for the whole stop grace + 10 s before it leaves; a short grace keeps the row inside its deadline.
-        {
-            "PROBE_SCENARIO": "sigkill",
-            "PROBE_PHASE": "after_open",
-            "PROBE_ON_ERROR": "continue",
-            "TT_RUN_STOP_GRACE_S": "6",
-        },
-        DEADLINE_HANG,
-        cmd=legacy_cmd("--with-ft ulfm"),
-    )
-    tore_down(r, ranks=(0,))
-    ended(r)
-    clean(r)
-
-
-def test_abort_core_dump():
-    """P8's shape: rank 1 aborts (SIGABRT) with the mesh open and the core limit raised, so the kernel writes a core
-    that can take tens of seconds. The job must still end within 20 s with a non-zero code — it must not wait for the
-    dying rank's core to finish. The fix is two-fold: the DistributedContext's own error path ends with ``_Exit``
-    rather than ``std::abort`` (no core on that path), and the survivor's per-collective operation timeout tears the
-    whole job down (``MPI_Abort`` → the launcher SIGKILLs the still-dumping rank), so teardown no longer waits on the
-    core write however long it takes."""
-    r = run_case(
-        "abort_with_core",
-        {
-            "PROBE_SCENARIO": "abort",
-            "PROBE_PHASE": "after_open",
-            "PROBE_CORE_UNLIMITED": "1",
-            "TT_METAL_OPERATION_TIMEOUT_SECONDS": "4",
-        },
-        DEADLINE_END,
-    )
-    ended(r)
-    nonzero(r)
-    # tt-run's own job time (launch to the end of the job), not the harness wall clock, which also counts tt-run's and
-    # the ranks' start-up on a loaded runner.
-    m = re.search(r"job end: .* elapsed=([0-9.]+)s", r.log)
-    assert m, r.log[-2000:]
-    assert float(m.group(1)) < 20, f"P8: the aborting rank's core dump held the job for {m.group(1)} s\n{r.log[-2000:]}"
-    clean(r)
-
-
 def test_unsat_mgd():
     """A quad-galaxy descriptor asked of the dual-galaxy mock: phase 1 cannot place it and must end non-zero."""
     r = run_case(
@@ -486,13 +246,6 @@ def test_late_rank():
     assert (
         float(m.group(1)) < 18
     ), f"rank 0 waited {m.group(1)} s for the late rank with the init timeout at 3 s\n{r.log[-2000:]}"
-    clean(r)
-
-
-def test_shape_mismatch():
-    r = run_case("shape_mismatch", {"PROBE_MESH_SHAPE_VICTIM": "4x4"}, DEADLINE_END)
-    ended(r)
-    nonzero(r)
     clean(r)
 
 
@@ -560,15 +313,6 @@ def test_singleton_shm(tmp_path):
     assert not session_dirs, f"a tt-metal singleton left an Open MPI session directory {session_dirs} (#63870)"
 
 
-def _singleton(name: str, code: str, tmp_path, deadline=DEADLINE_END, env=None):
-    """Run one unlaunched tt-metal process with TMPDIR scoped to the row; return the result and what it left there."""
-    sess = tmp_path / "mpi"
-    sess.mkdir()
-    r = run_case(name, {"TMPDIR": str(sess), **(env or {})}, deadline, cmd=[PYTHON, "-c", code])
-    left = sorted(p.name for p in sess.iterdir() if p.name.startswith(("tt_mpi_singleton", "ompi.")))
-    return r, left
-
-
 def test_singleton_open_close_leaves_nothing(tmp_path):
     """The full path a one-host pytest takes without a launcher: init, open a 1x1 mesh on the mock, close, exit.
     Nothing may be left: no segment, no session directory (the #63870 shape, the P11 fix on the clean path)."""
@@ -621,22 +365,6 @@ def test_singleton_killed_leaves_nothing(tmp_path):
     assert r2.exit == 0, str(r2)
     left_after = sorted(p.name for p in sess.iterdir() if p.name.startswith(("tt_mpi_singleton", "ompi.")))
     assert not left_after, f"the next singleton init did not sweep the killed singleton's directory: {left_after} (P32)"
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# gaps the launcher covers today that the DistributedContext should own (plan P23-P25). Each row fails today and is a
-# strict xfail naming the error it exposes, so the suite stays green and the row turns red (XPASS) the day the fix
-# lands, which is the signal to drop the marker. The TODO at the line that should own the fix names the row.
-# ---------------------------------------------------------------------------------------------------------------
-def test_sigint_one_rank():
-    """SIGINT reaches rank 1 only (a user interrupts one pid): KeyboardInterrupt. P23: it stops the job with 130 (from
-    the mesh close it unwinds through), so the peer leaves its collective and closes."""
-    r = run_case("sigint_one_rank", {"PROBE_SCENARIO": "sigint", "PROBE_PHASE": "after_open"}, DEADLINE_END)
-    ended(r)
-    stopped_by(r, 1, "Python exception KeyboardInterrupt", 130)
-    tore_down(r, ranks=(0,))
-    tore_down(r, ranks=(1,), reason="Python exception")
-    clean(r)
 
 
 def test_helper_outlives_rank():
@@ -717,9 +445,6 @@ def test_launcher_killed_no_session_dir():
     clean(r)
 
 
-# ---------------------------------------------------------------------------------------------------------------
-# the remaining gaps only the DistributedContext can close (plan P26-P30): one strict xfail each, a TODO at the owner
-# ---------------------------------------------------------------------------------------------------------------
 def test_context_sweeps_stale_launcher_dir(tmp_path):
     """P25, the fail-safe inside the rank: tt-run's sweep (#65121) reaches the launch host only. A launcher killed on a
     remote host leaves its session directory where only the next job's ranks can see it, so a launched rank's context
@@ -753,18 +478,6 @@ def test_context_sweeps_stale_launcher_dir(tmp_path):
     assert r.exit == 0, str(r)
     assert "CTX_OK" in r.log, str(r)
     assert not stale.exists(), f"the stale launcher directory survived the next job's init: {stale}"
-    clean(r)
-
-
-def test_exit1_stops_the_job():
-    """Rank 1 calls sys.exit(1) after open, the way click or a script's error return does. P26: sys.exit stops the job
-    at the call (SIGTERM to every rank), then the SystemExit unwinds through the finally that closes the mesh. Every
-    rank closes and leaves together; tt-run returns 1 naming rank 1."""
-    r = run_case("exit1_after_open", {"PROBE_SCENARIO": "exit1", "PROBE_PHASE": "after_open"}, DEADLINE_END)
-    ended(r)
-    stopped_by(r, 1, "Python exception SystemExit: 1", 1)
-    tore_down(r, ranks=(0,))
-    tore_down(r, ranks=(1,), reason="Python exception")
     clean(r)
 
 
@@ -812,31 +525,6 @@ def test_bare_launch_dead_rank_leaves_no_shm():
     r = run_case("bare_dead_rank", {"PROBE_SCENARIO": "sigkill", "PROBE_PHASE": "after_open"}, DEADLINE_END, cmd=cmd)
     ended(r)
     nonzero(r)
-    clean(r)
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# the job-stop table: every way a job ends, each a graceful close of every rank that is still alive
-# ---------------------------------------------------------------------------------------------------------------
-def test_segfault_stops_the_job():
-    """Rank 1 segfaults with the mesh open: its wrapper stops the job, rank 0 leaves its barrier and closes; 139."""
-    r = run_case("segv_after_open", {"PROBE_SCENARIO": "segv", "PROBE_PHASE": "after_open"}, DEADLINE_END)
-    ended(r)
-    stopped_by(r, 1, "was killed by signal 11 (SIGSEGV)", 139)
-    tore_down(r, ranks=(0,))
-    clean(r)
-
-
-def test_sigkill_with_mesh_open_stops_the_job():
-    """Rank 1 is SIGKILLed with the mesh open (OOM, kill -9): its wrapper stops the job, rank 0 closes; 137."""
-    r = run_case(
-        "sigkill_after_open",
-        {"PROBE_SCENARIO": "sigkill", "PROBE_PHASE": "after_open"},
-        DEADLINE_END,
-    )
-    ended(r)
-    stopped_by(r, 1, "was killed by signal 9 (SIGKILL)", 137)
-    tore_down(r, ranks=(0,))
     clean(r)
 
 
@@ -898,9 +586,6 @@ def test_hang_without_any_timeout():
     clean(r)
 
 
-# ---------------------------------------------------------------------------------------------------------------
-# from #65121's rows for this suite (xfail there until the rank side landed; gates here)
-# ---------------------------------------------------------------------------------------------------------------
 def test_uncaught_cxx_exception_stops_the_job():
     """An uncaught C++ exception on rank 1 (a std::runtime_error with no handler, the way a TT_FATAL escapes C++
     code): the terminate handler stops the job instead of aborting, rank 0 leaves its barrier on the SIGTERM and closes

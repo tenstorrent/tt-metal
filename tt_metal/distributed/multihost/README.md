@@ -45,7 +45,8 @@ wrapper. Under tt-run a second Ctrl-C forces the job at once.
 
 ## Tests
 
-`tests/ttnn/distributed/teardown_sanity/test_teardown_sanity.py` (two ttnn ranks on the mock galaxy, one fault per row,
-every ending), `tests/scripts/multihost/run_teardown_multihost_context_tests.sh` (the same endings with the failing
+the teardown sanity in `tests/tt_metal/distributed/multiprocess/teardown_sanity` and
+`tests/ttnn/distributed/teardown_sanity` (two ranks under tt-run on the CPU, one fault per row, every ending; level 1 on the
+context alone, level 2 around a mock mesh, each from C++ and from Python), `tests/scripts/multihost/run_teardown_multihost_context_tests.sh` (the same endings with the failing
 rank on a remote host, SC4), and the raw-MPI gate `test_mpi_delivers_proc_failed_ulfm`. The table of endings is in
 `tests/tt_metal/distributed/multiprocess/teardown_sanity/README.md` ("How a job stops").

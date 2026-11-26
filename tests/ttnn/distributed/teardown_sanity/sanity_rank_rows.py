@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Helpers the tt-metal rank rows (test_teardown_sanity.py) need beyond the shared harness in
+"""Helpers the tt-metal rank rows (test_context_py.py, test_mesh_py.py) need beyond the shared harness in
 tests/tt_metal/distributed/multiprocess/teardown_sanity/sanity_common.py: the new-mode launch line (a solve first), a
 one-galaxy descriptor to make two ranks disagree, and a per-rank error-line check."""
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import sanity_common
-from sanity_common import MAPPING, MGD, PYTHON, ROOT, TTRUN, Result
+from sanity_common import MAPPING, MGD, ROOT, TTRUN, Result
 
 # a one-galaxy Blackhole descriptor: as rank 1's descriptor it disagrees with rank 0's; alone it is a mock with no device
 CONFLICT_DESC = (
@@ -47,6 +47,5 @@ def solve_cmd(mpi_extra: str = "", mgd: Path = MGD) -> list:
         "--mpi-args",
         ("--allow-run-as-root --oversubscribe " + mpi_extra).strip(),
         "--force-rediscovery",
-        PYTHON,
-        str(sanity_common.PROBE),  # set by the suite before any row runs
+        *sanity_common.probe_program(),  # the suite's rank program
     ]

@@ -1227,11 +1227,17 @@ TT_FABRIC_TEST_TIMEOUT=300s run_test python3 -m pytest tests/ttnn/distributed/te
 fi # teardown-sanity-mpi
 
 ######################################
-# Teardown sanity, tt-metal (#56902): how a job of tt-metal ranks stops (the DistributedContext job stop)
+# Teardown sanity, tt-metal (#56902): how a tt-metal rank leaves a job that stops, in two levels (the context alone,
+# a mock mesh), each from C++ and from Python. tests/tt_metal/distributed/multiprocess/teardown_sanity/README.md.
 ######################################
 if run_group "teardown-sanity-ttmetal"; then
 
-TT_FABRIC_TEST_TIMEOUT=2000s run_test python3 -m pytest tests/ttnn/distributed/teardown_sanity/test_teardown_sanity.py -v -p no:cacheprovider -p no:benchmark
+# Level 1, the DistributedContext alone (no device): the rank program in C++ (teardown_context_probe) and in Python.
+TT_FABRIC_TEST_TIMEOUT=900s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_sanity/test_context_cpp.py -v -p no:cacheprovider -p no:benchmark
+TT_FABRIC_TEST_TIMEOUT=1500s run_test python3 -m pytest tests/ttnn/distributed/teardown_sanity/test_context_py.py -v -p no:cacheprovider -p no:benchmark
+# Level 2, a mock MeshDevice open on the dual galaxy: from tt-metalium (teardown_mesh_probe) and from ttnn.
+TT_FABRIC_TEST_TIMEOUT=900s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_sanity/test_mesh_cpp.py -v -p no:cacheprovider -p no:benchmark
+TT_FABRIC_TEST_TIMEOUT=900s run_test python3 -m pytest tests/ttnn/distributed/teardown_sanity/test_mesh_py.py -v -p no:cacheprovider -p no:benchmark
 
 fi # teardown-sanity-ttmetal
 

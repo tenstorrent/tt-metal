@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""The rank program of the teardown sanity: one tt-metal rank on a mock cluster, with one injected fault.
+"""The rank program of the teardown sanity, shared by the two Python probes: context_probe.py (level 1: the
+DistributedContext alone, no device) and mesh_probe.py (level 2: a mock MeshDevice open around the collectives).
 
 Walks what a real rank walks after tt-run starts it: import ttnn, initialize the distributed context,
-open a MeshDevice on the mock cluster when the row is about the mesh (needs_mesh(): the control plane's
-distributed init, 5-10 s a rank), one section of collectives on the distributed context, close, exit. Exactly one thing goes wrong, chosen by the environment, on the victim rank or in the
+open a MeshDevice on the mock cluster in the mesh probe (the control plane's distributed init, the firmware
+build environment, no kernels; 5-10 s a rank), one section of collectives on the distributed context, close, exit. Exactly one thing goes wrong, chosen by the environment, on the victim rank or in the
 collectives section. Timestamped markers on stdout let the test see how far each rank got and what each
 call returned.
 
@@ -191,151 +192,138 @@ def timed(label: str, fn) -> None:
             raise
 
 
-atexit.register(lambda: mark("py_atexit"))
+def run(mesh: bool) -> None:
+    """The rank's whole life: context init, (the mesh open), the fault and the collectives, (the close), exit."""
+    global RANK, SIZE
+    MESH = mesh
+    atexit.register(lambda: mark("py_atexit"))
 
-mark(f"start scenario={SCENARIO} victim={VICTIM} phase={PHASE} coll={COLL} on_error={ON_ERROR} ppid={os.getppid()}")
-_sd = float(env("PROBE_START_DELAY_S", "0"))
-if _sd > 0 and RANK == int(env("PROBE_START_DELAY_RANK", "1")):
-    mark(f"start_delay {_sd}s")
-    time.sleep(_sd)
-import ttnn  # noqa: E402
+    mark(f"start scenario={SCENARIO} victim={VICTIM} phase={PHASE} coll={COLL} on_error={ON_ERROR} ppid={os.getppid()}")
+    _sd = float(env("PROBE_START_DELAY_S", "0"))
+    if _sd > 0 and RANK == int(env("PROBE_START_DELAY_RANK", "1")):
+        mark(f"start_delay {_sd}s")
+        time.sleep(_sd)
+    import ttnn  # noqa: E402
 
-mark("import_done")
-_touch("import_done")  # the parent can gate a signal on the rank being up (e.g. before a rank that waits in init)
-maybe_fault("before_init")
-if SCENARIO == "use_before_init" and is_victim():
-    timed("barrier_before_init", ttnn.distributed_context_barrier)
-ttnn.init_distributed_context()
-RANK = int(ttnn.distributed_context_get_rank())
-SIZE = int(ttnn.distributed_context_get_size())
-mark(f"ctx_init rank={RANK} size={SIZE}")
-timed("barrier_init", ttnn.distributed_context_barrier)
-maybe_fault("after_init")
+    mark("import_done")
+    _touch("import_done")  # the parent can gate a signal on the rank being up (e.g. before a rank that waits in init)
+    maybe_fault("before_init")
+    if SCENARIO == "use_before_init" and is_victim():
+        timed("barrier_before_init", ttnn.distributed_context_barrier)
+    ttnn.init_distributed_context()
+    RANK = int(ttnn.distributed_context_get_rank())
+    SIZE = int(ttnn.distributed_context_get_size())
+    mark(f"ctx_init rank={RANK} size={SIZE}")
+    timed("barrier_init", ttnn.distributed_context_barrier)
+    maybe_fault("after_init")
 
-
-# ---- open: the control plane's distributed init ----
-# Only the rows about the mesh itself open one (a mock MeshDevice: the control plane's collectives, the firmware
-# build environment, no kernels; 5-10 s a rank in a launched job). Every other row tests the DistributedContext
-# alone. The open/close markers are emitted either way, so the rows' gating is the same.
-def needs_mesh() -> bool:
-    return (
-        SCENARIO == "mesh_open"  # a clean run whose subject is the open (a descriptor conflict)
-        or PHASE == "in_open"  # a fault inside open_mesh_device
-        or bool(env("PROBE_MESH_SHAPE_VICTIM", ""))  # ranks disagree on the mesh shape
-        or FABRIC_RANK != "-1"  # ranks disagree on the fabric config
-        or COLL in ("recv_bad_rank_peer_barrier", "split_peer_raises")  # a Python failure unwinding into the close
-        or (SCENARIO in ("raise", "sigint", "exit1") and PHASE == "after_open")  # the same
-        or (SCENARIO in ("sigkill", "segv", "abort") and PHASE == "after_open")  # a rank dies with the mesh open
-    )
-
-
-MESH = needs_mesh()
-fabric_on = MESH and FABRIC_RANK != "-1" and RANK == int(FABRIC_RANK)
-if fabric_on:
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
-    mark("fabric_config_set FABRIC_2D")
-rows, cols = int(env("PROBE_MESH_ROWS", "8")), int(env("PROBE_MESH_COLS", "4"))
-if is_victim() and env("PROBE_MESH_SHAPE_VICTIM", ""):
-    rows, cols = (int(x) for x in env("PROBE_MESH_SHAPE_VICTIM", "").split("x"))
-# A signal fault at in_open (sigkill/sigterm) is sent by the parent harness, gated on the open_enter marker below:
-# open_mesh_device holds the GIL, so an in-process timer cannot fire inside it. Only the in-process faults (a Python
-# raise, an abort, a no-finalize exit) still self-inject here, DELAY_MS after open_enter.
-if SCENARIO in ("raise", "abort", "exit_nofinalize") and is_victim() and PHASE == "in_open":
-    threading.Timer(0.0, do_fault).start()
-t = time.time()
-mark(f"open_enter shape={rows}x{cols}" + ("" if MESH else " (no mesh)"))
-_touch("open_enter")  # the parent waits on this to signal a rank precisely while it is inside open
-mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols)) if MESH else None
-mark(f"open_done dt={time.time() - t:.3f}")
-timed("barrier_open", ttnn.distributed_context_barrier)
-
-# ---- the collectives section ----
-# The fault and the collectives run inside try/finally so the mesh is closed on every way out, the failing rank's
-# included and a SIGTERM's: ttnn turns SIGTERM into SystemExit (P28), and the finally is what a real rank program's
-# `with` block does.
-try:
-    maybe_fault("after_open")
-    _touch("coll_ready")  # past open; the parent can now signal while the ranks enter the deadlocking collective
-    if SCENARIO == "ignore_sigterm" and is_victim():
-        mark("stuck: sleeping 600 s with SIGTERM ignored")
-        time.sleep(600)
-    if COLL == "barrier":
-        timed("coll_barrier", ttnn.distributed_context_barrier)
-    elif COLL == "barrier_skip":
-        if is_victim():
-            mark("coll_skip: victim skips the barrier, sleeps 3 s")
-            time.sleep(3)
-        else:
-            timed("coll_barrier", ttnn.distributed_context_barrier)
-    elif COLL == "send_no_recv":
-        if is_victim():
-            timed("coll_send_1MB_to_0", lambda: ttnn.distributed_context_send_bytes(b"x" * 1_000_000, 0, 7))
-        else:
-            timed("coll_barrier", ttnn.distributed_context_barrier)
-    elif COLL == "recv_dead_peer":
-        if is_victim():
-            mark("victim acting: sigkill before the peer's recv")
-            os.kill(os.getpid(), signal.SIGKILL)
-        elif RANK == 0:
-            time.sleep(0.5)
-            timed(f"coll_recv_16B_from_{VICTIM}", lambda: ttnn.distributed_context_recv_bytes(16, VICTIM, 7))
-    elif COLL == "barrier_dead_peer":
-        if is_victim():
-            mark("victim acting: sigkill before the peers' barrier")
-            os.kill(os.getpid(), signal.SIGKILL)
-        else:
-            time.sleep(0.5)
-            timed("coll_barrier", ttnn.distributed_context_barrier)
-    elif COLL == "recv_bad_rank":
-        if RANK == 0:
-            timed("coll_recv_8B_from_rank5_nonexistent", lambda: ttnn.distributed_context_recv_bytes(8, 5, 7))
-    elif COLL == "recv_bad_rank_peer_barrier":
-        # rank 0's receive from a rank that does not exist raises at once; with PROBE_ON_ERROR=exit nothing catches
-        # it, so the exception unwinds into the finally's close while every other rank waits in a barrier
-        if RANK == 0:
-            timed("coll_recv_8B_from_rank5_nonexistent", lambda: ttnn.distributed_context_recv_bytes(8, 5, 7))
-        else:
-            timed("coll_barrier", ttnn.distributed_context_barrier)
-    elif COLL == "split_peer_raises":
-        # the victim raises while every other rank is inside a communicator split (MPI_Comm_split, a blocking
-        # collective with no non-blocking form): the split must still be left on the stop
-        if is_victim():
-            time.sleep(1)
-            mark("victim acting: raise while the peers are in split")
-            raise RuntimeError("injected failure while the peers are in split")
-        timed("coll_split", lambda: ttnn.distributed_context_split(0, RANK))
-    elif COLL == "allgather_skip":
-        if is_victim():
-            mark("coll_skip: victim skips the all_gather, sleeps 30 s")
-            time.sleep(30)
-        else:
-            timed("coll_allgather_int", lambda: ttnn.distributed_context_allgather_int(RANK))
-    elif COLL == "barrier_slow":
-        if is_victim():
-            slow = float(env("PROBE_SLOW_S", "4"))
-            mark(f"coll_slow: victim joins the barrier {slow} s late (a legitimately slow peer, not a hang)")
-            time.sleep(slow)
-        timed("coll_barrier", ttnn.distributed_context_barrier)
-    elif COLL == "recv_no_send":
-        if RANK == 0:
-            timed(f"coll_recv_16B_from_{VICTIM}", lambda: ttnn.distributed_context_recv_bytes(16, VICTIM, 7))
-        elif is_victim():
-            mark("coll_recv_no_send: victim never sends, goes to close")
-
-finally:
+    # ---- open: the control plane's distributed init (the mesh probe only) ----
+    fabric_on = MESH and FABRIC_RANK != "-1" and RANK == int(FABRIC_RANK)
+    if fabric_on:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
+        mark("fabric_config_set FABRIC_2D")
+    rows, cols = int(env("PROBE_MESH_ROWS", "8")), int(env("PROBE_MESH_COLS", "4"))
+    if is_victim() and env("PROBE_MESH_SHAPE_VICTIM", ""):
+        rows, cols = (int(x) for x in env("PROBE_MESH_SHAPE_VICTIM", "").split("x"))
+    # A signal fault at in_open (sigkill/sigterm) is sent by the parent harness, gated on the open_enter marker below:
+    # open_mesh_device holds the GIL, so an in-process timer cannot fire inside it. Only the in-process faults (a Python
+    # raise, an abort, a no-finalize exit) still self-inject here, DELAY_MS after open_enter.
+    if SCENARIO in ("raise", "abort", "exit_nofinalize") and is_victim() and PHASE == "in_open":
+        threading.Timer(0.0, do_fault).start()
     t = time.time()
-    mark("close_enter")
-    if MESH:
-        ttnn.close_mesh_device(mesh)
-    mark(f"close_done dt={time.time() - t:.3f}")
-if fabric_on:
-    ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-timed("barrier_close", ttnn.distributed_context_barrier)
-if SCENARIO == "slow_exit" and is_victim():
-    # A rank that is still busy after the others have finished and exited 0 (a slow driver teardown, a log flush):
-    # nothing may stop or kill the job meanwhile.
-    slow = float(env("PROBE_SLOW_S", "15"))
-    mark(f"slow_exit: still working {slow} s after the others finished")
-    time.sleep(slow)
-mark("main_exit")
-sys.exit(0)
+    mark(f"open_enter shape={rows}x{cols}" + ("" if MESH else " (no mesh)"))
+    _touch("open_enter")  # the parent waits on this to signal a rank precisely while it is inside open
+    mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols)) if MESH else None
+    mark(f"open_done dt={time.time() - t:.3f}")
+    timed("barrier_open", ttnn.distributed_context_barrier)
+
+    # ---- the collectives section ----
+    # The fault and the collectives run inside try/finally so the mesh is closed on every way out, the failing rank's
+    # included and a SIGTERM's: ttnn turns SIGTERM into SystemExit (P28), and the finally is what a real rank program's
+    # `with` block does.
+    try:
+        maybe_fault("after_open")
+        _touch("coll_ready")  # past open; the parent can now signal while the ranks enter the deadlocking collective
+        if SCENARIO == "ignore_sigterm" and is_victim():
+            mark("stuck: sleeping 600 s with SIGTERM ignored")
+            time.sleep(600)
+        if COLL == "barrier":
+            timed("coll_barrier", ttnn.distributed_context_barrier)
+        elif COLL == "barrier_skip":
+            if is_victim():
+                mark("coll_skip: victim skips the barrier, sleeps 3 s")
+                time.sleep(3)
+            else:
+                timed("coll_barrier", ttnn.distributed_context_barrier)
+        elif COLL == "send_no_recv":
+            if is_victim():
+                timed("coll_send_1MB_to_0", lambda: ttnn.distributed_context_send_bytes(b"x" * 1_000_000, 0, 7))
+            else:
+                timed("coll_barrier", ttnn.distributed_context_barrier)
+        elif COLL == "recv_dead_peer":
+            if is_victim():
+                mark("victim acting: sigkill before the peer's recv")
+                os.kill(os.getpid(), signal.SIGKILL)
+            elif RANK == 0:
+                time.sleep(0.5)
+                timed(f"coll_recv_16B_from_{VICTIM}", lambda: ttnn.distributed_context_recv_bytes(16, VICTIM, 7))
+        elif COLL == "barrier_dead_peer":
+            if is_victim():
+                mark("victim acting: sigkill before the peers' barrier")
+                os.kill(os.getpid(), signal.SIGKILL)
+            else:
+                time.sleep(0.5)
+                timed("coll_barrier", ttnn.distributed_context_barrier)
+        elif COLL == "recv_bad_rank":
+            if RANK == 0:
+                timed("coll_recv_8B_from_rank5_nonexistent", lambda: ttnn.distributed_context_recv_bytes(8, 5, 7))
+        elif COLL == "recv_bad_rank_peer_barrier":
+            # rank 0's receive from a rank that does not exist raises at once; with PROBE_ON_ERROR=exit nothing catches
+            # it, so the exception unwinds into the finally's close while every other rank waits in a barrier
+            if RANK == 0:
+                timed("coll_recv_8B_from_rank5_nonexistent", lambda: ttnn.distributed_context_recv_bytes(8, 5, 7))
+            else:
+                timed("coll_barrier", ttnn.distributed_context_barrier)
+        elif COLL == "split_peer_raises":
+            # the victim raises while every other rank is inside a communicator split (MPI_Comm_split, a blocking
+            # collective with no non-blocking form): the split must still be left on the stop
+            if is_victim():
+                time.sleep(1)
+                mark("victim acting: raise while the peers are in split")
+                raise RuntimeError("injected failure while the peers are in split")
+            timed("coll_split", lambda: ttnn.distributed_context_split(0, RANK))
+        elif COLL == "allgather_skip":
+            if is_victim():
+                mark("coll_skip: victim skips the all_gather, sleeps 30 s")
+                time.sleep(30)
+            else:
+                timed("coll_allgather_int", lambda: ttnn.distributed_context_allgather_int(RANK))
+        elif COLL == "barrier_slow":
+            if is_victim():
+                slow = float(env("PROBE_SLOW_S", "4"))
+                mark(f"coll_slow: victim joins the barrier {slow} s late (a legitimately slow peer, not a hang)")
+                time.sleep(slow)
+            timed("coll_barrier", ttnn.distributed_context_barrier)
+        elif COLL == "recv_no_send":
+            if RANK == 0:
+                timed(f"coll_recv_16B_from_{VICTIM}", lambda: ttnn.distributed_context_recv_bytes(16, VICTIM, 7))
+            elif is_victim():
+                mark("coll_recv_no_send: victim never sends, goes to close")
+
+    finally:
+        t = time.time()
+        mark("close_enter")
+        if MESH:
+            ttnn.close_mesh_device(mesh)
+        mark(f"close_done dt={time.time() - t:.3f}")
+    if fabric_on:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    timed("barrier_close", ttnn.distributed_context_barrier)
+    if SCENARIO == "slow_exit" and is_victim():
+        # A rank that is still busy after the others have finished and exited 0 (a slow driver teardown, a log flush):
+        # nothing may stop or kill the job meanwhile.
+        slow = float(env("PROBE_SLOW_S", "15"))
+        mark(f"slow_exit: still working {slow} s after the others finished")
+        time.sleep(slow)
+    mark("main_exit")
+    sys.exit(0)

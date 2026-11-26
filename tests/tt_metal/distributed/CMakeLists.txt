@@ -41,6 +41,26 @@ if(ENABLE_DISTRIBUTED)
             RUNTIME_OUTPUT_DIRECTORY
                 ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
     )
+
+    # The C++ rank program of the teardown sanity (multiprocess/teardown_sanity/rank_probe.cpp), built twice: on the
+    # DistributedContext alone (level 1) and around a mock MeshDevice (level 2).
+    foreach(probe teardown_context_probe teardown_mesh_probe)
+        add_executable(${probe} multiprocess/teardown_sanity/rank_probe.cpp)
+        target_link_libraries(
+            ${probe}
+            PRIVATE
+                tt_metal
+                OpenMPI::MPI
+        )
+        target_include_directories(${probe} PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
+        set_target_properties(
+            ${probe}
+            PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY
+                    ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+        )
+    endforeach()
+    target_compile_definitions(teardown_mesh_probe PRIVATE PROBE_MESH=1)
 endif()
 
 add_executable(distributed_benchmarks)

@@ -2,7 +2,7 @@
 # Teardown sanity, multi-host — how a tt-metal job stops when the fault is on a REMOTE host (plan tt-metal #56902).
 #
 # run_teardown_multihost_tests.sh covers the launcher with a raw MPI probe. This one runs the tt-metal rank program
-# (sanity_probe.py: ttnn, the DistributedContext, a mesh on the mock dual galaxy, no device) through tt-run, rank 0
+# (mesh_probe.py: ttnn, the DistributedContext, a mesh on the mock dual galaxy, no device) through tt-run, rank 0
 # on the first host and rank 1 on the second, and checks every way a job ends (the table in
 # tests/tt_metal/distributed/multiprocess/teardown_sanity/README.md): the job's exit code, the rank tt-run names,
 # that every rank still alive went through teardown (its "teardown initiated" line), and that nothing is left on any host.
@@ -24,7 +24,7 @@ done
 ROOT="${TT_METAL_HOME:-$(pwd)}"
 TTRUN="$(command -v tt-run || echo tt-run)"
 PY="${TT_SANITY_PYTHON:-python3}"
-PROBE="$ROOT/tests/ttnn/distributed/teardown_sanity/sanity_probe.py"
+PROBE="$ROOT/tests/ttnn/distributed/teardown_sanity/mesh_probe.py"
 BINDING="$ROOT/tests/tt_metal/distributed/config/dual_bh_galaxy_rank_binding.yaml"
 MAPPING="$ROOT/tt_metal/third_party/tt-cluster-descriptors/blackhole/dual_glx_2.5d_torus/dual_glx_2.5d_torus_cluster_desc_mapping.yaml"
 

@@ -23,27 +23,27 @@ rank has exited. The orderly device close is the next step (`tt_metal/distribute
 
 | ending | what happens | tt-run returns | rows |
 |---|---|---|---|
-| Ctrl-C / SIGTERM at tt-run | SIGTERM to every rank through job control; every rank detects it | 130 / 143 | `test_ttrun_stop[ctrl_c, sigterm]`, `test_teardown_sanity.py::test_ctrl_c_in_deadlock`, `test_sigterm_at_ttrun` |
+| Ctrl-C / SIGTERM at tt-run | SIGTERM to every rank through job control; every rank detects it | 130 / 143 | `test_ttrun_stop[ctrl_c, sigterm]`, `test_context_py.py::test_ctrl_c_in_deadlock`, `test_sigterm_at_ttrun` |
 | no `tt-run-rank` (not in the build tree, not on PATH) | a warning at the start; the job runs unwrapped and unguarded, a stop is forced through the launcher with the device warning, and SIGUSR1/2, SIGALRM, SIGTSTP and SIGCONT still reach the ranks through prterun (SIGQUIT and SIGWINCH cannot). (Built, `tt-run-rank` takes PMIx from the ULFM install, else the Open MPI tt-metal finds, else the distribution's libpmix; with none it still wraps and guards, and stops are forced the same way.) | 130 | `test_ttrun_stop[ctrl_c_no_helper]`, `test_ttrun.py::test_run_launcher_passes_signals_through_the_launcher_without_a_signal_tool` |
 | a rank killed, aborting or exiting non-zero | its wrapper stops the job; tt-run names the rank and returns its code | 128 + signal / the code | `test_ttrun_dead_rank`, `test_ttrun_abort_ends` |
 | the daemon on a host dies (a killed `prted`, a lost node) | each rank's wrapper there sees its daemon gone and stops its rank (SIGTERM, SIGKILL 10 s later); prterun ends the job but exits 0, so tt-run fails it, naming the host | 1 | `multihost_remote_daemon_death` (SC4), `test_ttrun.py::test_rank_wrapper_stops_its_rank_when_its_daemon_dies` |
-| the job reaches tt-run's `--job-timeout N` (off by default) | SIGTERM to every rank at N s, as for Ctrl-C | 241 | `test_ttrun_hang_timeout`, `test_teardown_sanity.py::test_job_timeout` |
-| `--mpi-args "--timeout N"` | PRRTE's own clock, passed to it unchanged: tt-run warns at the start; at N s PRRTE kills every rank at once, tt-run says the job was forced; with tt-metal ranks the SIGTERM still lets each rank close its mesh inside PRRTE's 250 ms | 241 | `test_ttrun_mpi_args_timeout_is_prrtes_own`, `test_teardown_sanity.py::test_prte_timeout` |
+| the job reaches tt-run's `--job-timeout N` (off by default) | SIGTERM to every rank at N s, as for Ctrl-C | 241 | `test_ttrun_hang_timeout`, `test_context_py.py::test_job_timeout` |
+| `--mpi-args "--timeout N"` | PRRTE's own clock, passed to it unchanged: tt-run warns at the start; at N s PRRTE kills every rank at once, tt-run says the job was forced; with tt-metal ranks the SIGTERM still lets each rank close its mesh inside PRRTE's 250 ms | 241 | `test_ttrun_mpi_args_timeout_is_prrtes_own`, `test_context_py.py::test_prte_timeout` |
 | Ctrl-C (or SIGTERM) a second time | forces at once: SIGINT to the launcher (prterun runs with SIGTERM blocked), which kills every rank still running (SIGTERM, then SIGKILL 250 ms later), with a warning to run `tt-smi -r` | 128 + the first signal | `test_ttrun.py::test_run_launcher_stops_the_ranks_with_sigterm[second_signal]` |
 | ranks still running when the stop grace runs out | forced the same way, with the same warning | 128 + the signal | `test_ttrun.py::test_run_launcher_stops_the_ranks_with_sigterm[grace_expired]` |
-| tt-run itself killed (SIGKILL, an abort, a crash) | tt-run cannot act; its guard (`tt-run-rank --guard`, started next to the launcher in a session of its own) sees tt-run gone and stops the job as tt-run would: SIGTERM to every rank, the grace, then the force; with tt-metal ranks, every rank closes its mesh (`test_teardown_sanity.py::test_ttrun_killed_ranks_tear_down`) | (tt-run is gone) | `test_ttrun_killed_stops_the_ranks`, `test_ttrun.py::test_rank_wrapper_guard_stops_the_job_when_tt_run_dies`, `test_teardown_sanity.py::test_ttrun_killed_ranks_tear_down` (strict xfail until #64546) |
+| tt-run itself killed (SIGKILL, an abort, a crash) | tt-run cannot act; its guard (`tt-run-rank --guard`, started next to the launcher in a session of its own) sees tt-run gone and stops the job as tt-run would: SIGTERM to every rank, the grace, then the force; with tt-metal ranks, every rank closes its mesh (`test_context_py.py::test_ttrun_killed_ranks_tear_down`) | (tt-run is gone) | `test_ttrun_killed_stops_the_ranks`, `test_ttrun.py::test_rank_wrapper_guard_stops_the_job_when_tt_run_dies`, `test_context_py.py::test_ttrun_killed_ranks_tear_down` (strict xfail until #64546) |
 | SIGQUIT, SIGUSR1, SIGUSR2, SIGALRM, SIGWINCH, SIGCONT at tt-run | passed on to every rank unchanged (job control, then each rank's wrapper); the job goes on. A rank with no handler for it dies of it, and its wrapper stops the job as for any killed rank: SIGUSR1, SIGUSR2 and SIGALRM end a Python rank by default, so Slurm's `--signal=USR1@60` warning ends a job whose ranks do not handle SIGUSR1. A burst (a window being resized) goes once, and a stop that arrives meanwhile is acted on first | the job's own | `test_ttrun_passes_signals_on[SIGUSR1, SIGQUIT]`, `test_ttrun.py::test_run_launcher_passes_other_signals_on_to_the_ranks` (every signal) |
-| Ctrl-Z (SIGTSTP) at tt-run | passed on to every rank, which pauses; then tt-run pauses itself. `fg` / `bg` resumes tt-run, which passes the SIGCONT on and the ranks resume | the job's own | `test_ttrun_ctrl_z_pauses_and_resumes_the_ranks`, `test_teardown_sanity.py::test_ctrl_z_pauses_and_resumes_the_job` |
+| Ctrl-Z (SIGTSTP) at tt-run | passed on to every rank, which pauses; then tt-run pauses itself. `fg` / `bg` resumes tt-run, which passes the SIGCONT on and the ranks resume | the job's own | `test_ttrun_ctrl_z_pauses_and_resumes_the_ranks`, `test_context_py.py::test_ctrl_z_pauses_and_resumes_the_job` |
 | SIGHUP at tt-run (its terminal closed, an ssh session dropped) | ignored for tt-run's whole run (before Phase 1, between the phases, at the end too): the job keeps running under tt-run, which logs `SIGHUP received … stop it with kill -INT <pid>`; tmux or screen keep the output too | the job's own | `test_ttrun_hangup_keeps_the_job`, `test_ttrun.py::test_run_launcher_keeps_the_job_on_a_hangup` |
-| an uncaught C++ exception in a rank | `std::terminate` leaves as a failed rank (`fail_rank`, exit 1) instead of aborting, and its wrapper stops the job: the other ranks leave their waits on the SIGTERM and close their mesh; tt-run names the rank | 1 | `test_teardown_sanity.py::test_uncaught_cxx_exception_stops_the_job` |
-| a Python exception, `sys.exit(n)`, a TT_FATAL raised in Python, `abort(n)` in a rank | the failing rank marks itself failed in the mesh close the exception unwinds through (or in the excepthook, if nothing closes) and goes through teardown; its wrapper stops the job and every other rank tears down on the SIGTERM | the rank's code, rank named | `test_teardown_sanity.py` (`test_exit1_stops_the_job`, `test_raise_after_open`, `test_bad_shape`, `test_sigint_one_rank`, `test_unsat_mgd`) |
-| a receive from a rank that does not exist, uncaught | `MPI_ERR_RANK` is raised at once (an argument error, nothing on the wire); the exception unwinds into the mesh close, which fails the rank; the peer leaves its barrier on the SIGTERM | 1, rank named | `test_teardown_sanity.py::test_invalid_rank_uncaught_stops_the_job` (caught: `test_invalid_rank`) |
-| a rank raises while its peer is inside `split` or `create_sub_context` | the two blocking communicator calls (no non-blocking form in MPI) run on a helper thread and are polled like every other wait, so the peer leaves them on the SIGTERM | 1, rank named | `test_teardown_sanity.py::test_raise_while_peer_in_split` |
-| SIGTERM to one rank (kill, scancel of one task) | that rank tears down (exit 143) and its wrapper stops the job; every rank tears down | 143, rank named | `test_teardown_sanity.py::test_sigterm_runs_close` |
-| a rank hung in a collective, then Ctrl-C | its polled wait leaves on the SIGTERM; it tears down like the others | 130 | `test_teardown_sanity.py::test_ctrl_c_in_deadlock` |
-| a rank that does not react to the SIGTERM (a device wait) | the others tear down; tt-run forces on a second Ctrl-C or after the stop grace, with the `tt-smi -r` warning | 130 | `test_teardown_sanity.py::test_stuck_rank_is_forced[*]` |
-| a tt-metal rank SIGKILLed or segfaulting | its wrapper stops the job in its place and stays up while the others tear down | 128 + signal, rank named | `test_teardown_sanity.py` (`test_sigkill_with_mesh_open_stops_the_job`, `test_segfault_stops_the_job`, `test_dead_peer_*`) |
-| clean, one rank exits 0 while another still works | nothing: an exit 0 starts no stop; the job waits for the others | 0 | `test_teardown_sanity.py::test_clean_exit_waits_for_a_slow_rank` |
+| an uncaught C++ exception in a rank | `std::terminate` leaves as a failed rank (`fail_rank`, exit 1) instead of aborting, and its wrapper stops the job: the other ranks leave their waits on the SIGTERM and close their mesh; tt-run names the rank | 1 | `test_context_py.py::test_uncaught_cxx_exception_stops_the_job` |
+| a Python exception, `sys.exit(n)`, a TT_FATAL raised in Python, `abort(n)` in a rank | the failing rank marks itself failed in the mesh close the exception unwinds through (or in the excepthook, if nothing closes) and goes through teardown; its wrapper stops the job and every other rank tears down on the SIGTERM | the rank's code, rank named | `test_mesh_py.py` (`test_exit1_stops_the_job`, `test_raise_after_open`, `test_bad_shape`, `test_sigint_one_rank`, `test_unsat_mgd`) |
+| a receive from a rank that does not exist, uncaught | `MPI_ERR_RANK` is raised at once (an argument error, nothing on the wire); the exception unwinds into the mesh close, which fails the rank; the peer leaves its barrier on the SIGTERM | 1, rank named | `test_mesh_py.py::test_invalid_rank_uncaught_stops_the_job` (caught: `test_invalid_rank`) |
+| a rank raises while its peer is inside `split` or `create_sub_context` | the two blocking communicator calls (no non-blocking form in MPI) run on a helper thread and are polled like every other wait, so the peer leaves them on the SIGTERM | 1, rank named | `test_mesh_py.py::test_raise_while_peer_in_split` |
+| SIGTERM to one rank (kill, scancel of one task) | that rank tears down (exit 143) and its wrapper stops the job; every rank tears down | 143, rank named | `test_context_py.py::test_sigterm_runs_close` |
+| a rank hung in a collective, then Ctrl-C | its polled wait leaves on the SIGTERM; it tears down like the others | 130 | `test_context_py.py::test_ctrl_c_in_deadlock` |
+| a rank that does not react to the SIGTERM (a device wait) | the others tear down; tt-run forces on a second Ctrl-C or after the stop grace, with the `tt-smi -r` warning | 130 | `test_context_py.py::test_stuck_rank_is_forced[*]` |
+| a tt-metal rank SIGKILLed or segfaulting | its wrapper stops the job in its place and stays up while the others tear down | 128 + signal, rank named | `test_mesh_py.py` (`test_sigkill_with_mesh_open_stops_the_job`, `test_segfault_stops_the_job`, `test_dead_peer_*`) |
+| clean, one rank exits 0 while another still works | nothing: an exit 0 starts no stop; the job waits for the others | 0 | `test_context_py.py::test_clean_exit_waits_for_a_slow_rank` |
 | a process still exiting after the launcher returned | waited for up to the grace after a clean finish (not at all after a stop: it already had the grace), then SIGTERM, then SIGKILL 10 s later; a zombie counts as ended. Only a stop (Ctrl-C, SIGTERM) ends the wait early: any other signal at tt-run meanwhile is passed on to it (Ctrl-Z pauses it with SIGSTOP, its process group being orphaned) and the wait goes on | 0 if it exits in time | `test_ttrun.py` (`TestJobOwnership`) |
 | clean | normal finalize | 0 | `test_ttrun_clean` |
 
@@ -65,7 +65,7 @@ tt-run passes `--mca mpi_ft_enable 1` with the wrapper: without it Open MPI abor
 closes before the stop reaches it. A raw MPI program (no tt-metal context) that exits non-zero while still inside
 `MPI_Finalize` cannot be seen by the wrapper (`test_ttrun_error_exit_fails_fast_not_hang`, a strict xfail).
 
-TODO([#64546](https://github.com/tenstorrent/tt-metal/pull/64546)): left to the rank side, each a strict xfail in the tt-metal rank suite (`test_teardown_sanity.py`)
+TODO([#64546](https://github.com/tenstorrent/tt-metal/pull/64546)): left to the rank side, each a strict xfail in the tt-metal rank suite (`test_context_py.py`)
 that turns red (XPASS) when it is fixed:
 - a failing rank stops the job itself (a Python exception, `sys.exit(1)`, a worker thread's exception, a TT_FATAL
   raised in Python, an uncaught C++ exception), and every other rank tears down on the SIGTERM;
@@ -141,27 +141,28 @@ Honours `TT_SANITY_MPI_PREFIX`, so a second install can be checked with the same
 
 ---
 
-## Part 2 — tt-metal, the DistributedContext
+## Part 2 — tt-metal, the rank side, in two levels
 
-*Does tt-metal's own distributed stack tear down?*
+*Does a tt-metal rank leave a job that stops, and does a rank that fails end the job?* Each level tests one layer,
+from C++ and from Python separately, so a red row says which layer broke. A row never reaches past its level.
 
-### Group F — DistributedContext rows (`test_teardown_sanity.py`, `sanity_probe.py`, with the Python distributed tests)
-Two tt-metal ranks on the mock Blackhole dual galaxy (CPU only, no device), launched by tt-run; one fault at each
-stage of a real distributed job, grouped by the piece that fails:
-- **the per-collective timeout** — a barrier / send / all_gather / recv that waits on a peer that is gone or wedged
-  gives up at its deadline and tears the whole job down, instead of hanging forever; plus its false-positive guard
-  (a slow-but-arriving peer must *not* trip the timeout);
-- **the control plane's init** — ranks that disagree on the mesh shape, or on the fabric config, when the device is opened;
-- **the solver and descriptor loading** — a rank killed during the solve, an unsatisfiable mesh, a descriptor that
-  describes a different machine;
-- **the user's signals** — Ctrl-C / SIGTERM at tt-run while the job is in a collective or in init.
+| level | what it is | C++ suite (probe) | Python suite (probe) |
+|---|---|---|---|
+| 1, context | `DistributedContext` alone, no device: a signal is seen, the wait in flight throws, a failure writes the failed word, every way out reaches `teardown()` with the right code, a peer's death or exit is delivered, the clocks | `test_context_cpp.py` (`rank_probe.cpp` as `teardown_context_probe`) | `tests/ttnn/distributed/teardown_sanity/test_context_py.py` (`context_probe.py`) |
+| 2, mesh | a mock `MeshDevice` open on the dual galaxy (the control plane's collectives inside open, the close path, shape / fabric / descriptor conflicts): the teardown is initiated from inside tt-metal and from ttnn | `test_mesh_cpp.py` (`rank_probe.cpp` as `teardown_mesh_probe`) | `tests/ttnn/distributed/teardown_sanity/test_mesh_py.py` (`mesh_probe.py`) |
+
+The two probes of a language take the same knobs (`PROBE_SCENARIO`, `PROBE_COLL`, `PROBE_PHASE`, ...) and print the
+same markers, so the harness (`sanity_common.py`) and the checks (`rows_common.py`: the teardown line, the wrapper's
+stop line, the markers) serve all four suites. Placing a row: if it needs a mesh to mean anything it is level 2; if
+it is about tt-run, prterun or the wrapper rather than the rank it is Part 1; everything else is level 1. The C++
+probes are built with the tests (`BUILD_TESTS`) into `build/test/tt_metal/distributed/`; their rows skip without them.
 
 ### Group G — raw-MPI expectation gate
 `test_mpi_delivers_proc_failed_ulfm` (in `test_teardown_sanity_mpi.py`): under ULFM a dead rank is delivered to the
 survivors as a process failure, which the rank side's polled waits rely on.
 
 ### Group H — multi-host job stop (SC4)
-`run_teardown_multihost_context_tests.sh` runs the Python rank program with rank 1 on a remote host and checks every
+`run_teardown_multihost_context_tests.sh` runs the Python mesh probe with rank 1 on a remote host and checks every
 row of the table above across hosts. `TEARDOWN_REMOTE=srun` runs both multi-host scripts inside a Slurm allocation.
 
 ---

@@ -117,7 +117,7 @@ def test_ttrun_mpi_args_timeout_is_prrtes_own():
     reason="P1 for a raw MPI program: a rank that calls exit(1) runs its own atexit MPI_Finalize, which is collective "
     "and waits on the peers in their barrier, so the job rides the --timeout wall clock (241). Neither tt-run nor its "
     "rank wrapper can end a rank that is still alive; tt-metal ranks stop the job from their exit instead "
-    "(tests/ttnn/distributed/teardown_sanity/test_teardown_sanity.py::test_exit1_stops_the_job).",
+    "(tests/ttnn/distributed/teardown_sanity/test_mesh_py.py::test_exit1_stops_the_job).",
     strict=True,
 )
 def test_ttrun_error_exit_fails_fast_not_hang():
