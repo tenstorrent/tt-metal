@@ -98,6 +98,29 @@ constexpr bool matmul_kernel_lofi_mix(const std::uint8_t (&formats)[N])
     return (a == DataFormat::Float32 && fast(b)) || (b == DataFormat::Float32 && fast(a));
 }
 
+// A LoFi half sync custom matmul kernel (compute/experimental/matmul_custom.h) of Float16_b operands in CBs 0 and 1 whose other CBs are
+// Bfp8_b (formats: every CB format of the kernel) runs main's unpack: the keyed unpack read up to 1.4 % slower than main on its blocks.
+template <std::size_t N>
+constexpr bool matmul_custom_main_unpack_kernel(const MathFidelity fidelity, const bool half_sync, const std::uint8_t (&formats)[N])
+{
+    if (fidelity != MathFidelity::LoFi || !half_sync || N < 3 || static_cast<DataFormat>(formats[0]) != DataFormat::Float16_b ||
+        static_cast<DataFormat>(formats[1]) != DataFormat::Float16_b)
+    {
+        return false;
+    }
+    bool out = false;
+    for (std::size_t i = 2; i < N; i++)
+    {
+        const DataFormat f = static_cast<DataFormat>(formats[i]);
+        if (f != DataFormat::Invalid && f != DataFormat::Bfp8_b)
+        {
+            return false;
+        }
+        out = out || f == DataFormat::Bfp8_b;
+    }
+    return out;
+}
+
 // The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): LoFi at half sync, and above LoFi except the
 // classes where a production block measured slower under ttsync (G2 census, 660 keys): HiFi4 at full sync with a 32-bit DEST, half sync
 // without a 32-bit DEST in a kernel holding Bfp8_b, and with a 32-bit DEST and a 32-bit format HiFi2 at either sync and HiFi3 at full
@@ -3152,6 +3175,24 @@ constexpr bool matmul_lofi_row8_row_mop_off(
     return fidelity == MathFidelity::LoFi && half_sync && !fp32_dest && throttle == 0 && kt == 1 && rt == 1 && ct == 8 && narrow_in1 && out_8_16;
 }
 
+// HiFi4 half sync 32-bit DEST single tiles over 4 K tiles of Float16_b or Bfp8_b into Float32: the row MOP's ADDR_MOD_6 write and restore
+// around each call read 3.7 cycles per block behind the tile MOP
+constexpr bool matmul_hifi4_tile_k4_row_mop_off(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_dest,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle)
+{
+    return fidelity == MathFidelity::HiFi4 && half_sync && fp32_dest && throttle == 0 && kt == 4 && rt == 1 && ct == 1 && out == DataFormat::Float32 &&
+           in0 == in1 && (in1 == DataFormat::Float16_b || in1 == DataFormat::Bfp8_b);
+}
+
 // HiFi2 half sync 32-bit DEST blocks of one K tile into Float32 where the row MOP reads 0.6 to 2.3 cycles per block behind the tile MOP
 struct matmul_row_mop_off_cell
 {
@@ -3185,7 +3226,8 @@ constexpr bool matmul_row_mop_off(
     const std::uint32_t kt,
     const std::uint32_t throttle)
 {
-    if (matmul_lofi_row8_row_mop_off(fidelity, half_sync, fp32_dest, in1, out, rt, ct, kt, throttle))
+    if (matmul_lofi_row8_row_mop_off(fidelity, half_sync, fp32_dest, in1, out, rt, ct, kt, throttle) ||
+        matmul_hifi4_tile_k4_row_mop_off(fidelity, half_sync, fp32_dest, in1, in0, out, rt, ct, kt, throttle))
     {
         return true;
     }

@@ -397,6 +397,50 @@ class MATMUL_CUSTOM_PACK32(TemplateParameter):
         )
 
 
+class MATMUL_CUSTOM_CB_FORMATS(TemplateParameter):
+    """matmul_custom_test: the kernel's CB formats (in0, in1, output) at compile time, as the JIT's unpack_src_format gives a
+    ttnn kernel, and production's main-unpack rule on them (matmul_prod_keys.custom_main_unpack, checked against
+    matmul_custom_main_unpack_kernel at compile time). Picked from the formats the test already reports, so it adds no column.
+    """
+
+    def __init__(
+        self,
+        math_fidelity,
+        dest_sync,
+        in0: DataFormat,
+        in1: DataFormat,
+        out: DataFormat,
+    ):
+        from helpers.matmul_prod_keys import custom_main_unpack
+
+        self.cb_formats = (in0, in1, out)
+        self.main_unpack = custom_main_unpack(
+            math_fidelity, dest_sync == DestSync.Half, in0, in1, out
+        )
+
+    def __repr__(self) -> str:
+        return f"MATMUL_CUSTOM_CB_FORMATS{tuple(f.name for f in self.cb_formats)}"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, MATMUL_CUSTOM_CB_FORMATS)
+            and other.cb_formats == self.cb_formats
+            and other.main_unpack == self.main_unpack
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.cb_formats, self.main_unpack))
+
+    def convert_to_cpp(self) -> str:
+        fmts = ", ".join(
+            f"static_cast<std::uint8_t>(DataFormat::{f.name})" for f in self.cb_formats
+        )
+        return (
+            f"constexpr std::uint8_t matmul_custom_cb_formats[] = {{{fmts}}};\n"
+            f"#define MATMUL_CUSTOM_MAIN_UNPACK {int(self.main_unpack)}"
+        )
+
+
 @dataclass
 class MATMUL_FUNC_BLOCKS(TemplateParameter):
     """Blackhole matmul functional run of several output blocks (LOOP_FACTOR of them) on the real buffers, each block packed to the next result tiles."""

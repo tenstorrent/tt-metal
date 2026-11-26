@@ -10,6 +10,9 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_unpack_AB_matmul_main.h"
+#endif
 #endif
 PACK_MATMUL_API(3)
 
@@ -19,6 +22,43 @@ PACK_MATMUL_API(3)
 #endif
 
 namespace ckernel {
+
+#ifdef TRISC_UNPACK
+// A LoFi half sync kernel of Float16_b operands whose other CBs are Bfp8_b runs main's unpack on Blackhole
+// (llk_matmul_forms.h matmul_custom_main_unpack_kernel); the JIT's unpack_src_format holds every CB format of the
+// kernel.
+template <MathFidelity math_fidelity>
+ALWI void mm_no_mop_unpack_init(
+    uint32_t in0_cb_id, uint32_t in1_cb_id, const bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
+#ifdef ARCH_BLACKHOLE
+    if constexpr (matmul_custom_main_unpack_kernel(
+                      math_fidelity, DST_SYNC_MODE == DstSync::SyncHalf, unpack_src_format)) {
+        mm_main::llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+        return;
+    }
+#endif
+    llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+}
+
+template <MathFidelity math_fidelity>
+ALWI void mm_no_mop_unpack(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t in0_tile_index,
+    uint32_t in1_tile_index,
+    uint32_t ct_dim,
+    uint32_t rt_dim,
+    uint32_t kt_dim) {
+#ifdef ARCH_BLACKHOLE
+    if constexpr (matmul_custom_main_unpack_kernel(
+                      math_fidelity, DST_SYNC_MODE == DstSync::SyncHalf, unpack_src_format)) {
+        mm_main::llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim);
+        return;
+    }
+#endif
+    llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim);
+}
+#endif
 
 /**
  * Set the distance, in tiles, between streamed columns of matmul's second input.
@@ -57,7 +97,7 @@ ALWI void mm_no_mop_init_short(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    UNPACK((mm_no_mop_unpack_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     PACK_MATH_CONTEXT(true);
 }
@@ -93,7 +133,8 @@ ALWI void matmul_block_no_mop(
     uint32_t ct_dim,
     uint32_t rt_dim,
     uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+    UNPACK((
+        mm_no_mop_unpack<MATH_FIDELITY>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Pass the operand cb ids so the math execute can re-derive the tile geometry and replay the
     // geometry-correct length (16x32 tiny tiles use a shorter replay than full 32x32 tiles).
     MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, idst, ct_dim, rt_dim)));
@@ -116,7 +157,7 @@ ALWI void mm_no_mop_reinit_short(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
     PACK_MATH_CONTEXT(true);
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    UNPACK((mm_no_mop_unpack_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     // Both arches now re-derive operand tile geometry in reinit so 16x32 tiny-tile addrmods are
     // restored (previously the Blackhole branch dropped the cb ids and reset to full-32x32 addrmods).
     MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
@@ -132,7 +173,7 @@ ALWI void mm_no_mop_init_short_fidelity(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    UNPACK((mm_no_mop_unpack_init<math_fidelity>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     PACK_MATH_CONTEXT(true);
 }
@@ -148,7 +189,8 @@ ALWI void matmul_block_no_mop_fidelity(
     uint32_t ct_dim,
     uint32_t rt_dim,
     uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+    UNPACK((
+        mm_no_mop_unpack<math_fidelity>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, idst, ct_dim, rt_dim)));
 }
 
@@ -161,7 +203,7 @@ ALWI void mm_no_mop_reinit_short_fidelity(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
     PACK_MATH_CONTEXT(true);
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    UNPACK((mm_no_mop_unpack_init<math_fidelity>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_reinit_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 }
 
