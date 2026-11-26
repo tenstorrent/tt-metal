@@ -594,20 +594,50 @@ void kernel_main() {
             expected[par] += (num_chips - 1) * packets_per_vector;
         }
     };
-    auto finish_sub = [&](uint32_t s) {
-        const uint32_t l = s / ag.n, g = ag.g[s % ag.n];
+    // O-1g (four slots, published): a sub-round's slots go to the compute as soon as the peers' are in — the next one's
+    // before this one's multicast when they already are, so the compute sums sub-round s + 1 while x of s goes out
+    // (the hub's sum and multicast ran back to back per group, ~10 us)
+    uint32_t handed = 0;  // (sub-rounds handed to the compute so far)
+    auto hand_in = [&](uint32_t s) {
         const uint32_t par = s % kSlots;
-        const uint32_t base = slots + par * num_chips * slot_bytes;
         if constexpr (num_chips > 1) {
             noc_semaphore_wait_min(ccl_sem[par], expected[par]);
         }
         mark(s, 2);
-        // published: the compute sums the slots into x
-        uint32_t src = base, bytes = num_chips * slot_bytes;
         if constexpr (published) {
             cb_reserve_back(0, num_chips * slot_pages);
             cb_push_back(0, num_chips * slot_pages);
+        }
+        handed = s + 1;
+    };
+    auto peers_in = [&](uint32_t s) -> bool {
+        if constexpr (num_chips == 1) {
+            return true;
+        }
+        invalidate_l1_cache();
+        return *ccl_sem[s % kSlots] >= expected[s % kSlots];
+    };
+    auto finish_sub = [&](uint32_t s) {
+        const uint32_t l = s / ag.n, g = ag.g[s % ag.n];
+        const uint32_t par = s % kSlots;
+        const uint32_t base = slots + par * num_chips * slot_bytes;
+        if (handed <= s) {
+            hand_in(s);
+        }
+        // (O-1g: the round's next sub-round, its peers' slots in already: to the compute before this one's multicast)
+        auto early = [&]() {
+            if constexpr (published && kSlots > 2) {
+                if (s + 1 < (l + 1) * ag.n && handed == s + 1 && peers_in(s + 1)) {
+                    hand_in(s + 1);
+                }
+            }
+        };
+        early();
+        // published: the compute sums the slots into x
+        uint32_t src = base, bytes = num_chips * slot_bytes;
+        if constexpr (published) {
             cb_wait_front(2, x_pages);
+            early();
             mark(s, 3);
             if constexpr (groups > 1 && num_chips > 1) {
                 // the slots of parity par are summed: tell the peers (their pipelined send of s + 2 waits for it).
