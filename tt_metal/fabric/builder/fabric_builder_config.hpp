@@ -97,7 +97,9 @@ static constexpr std::size_t num_downstream_edms_2d_vc1_wide =
     4;  // widest VC1 fanout: 3 mesh + Z (Z-intermesh boundary or express)
 static constexpr std::size_t num_downstream_edms_1d = num_downstream_edms_vc0;
 static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_2d_vc1;
-static constexpr std::size_t max_downstream_edms = 8;
+static constexpr std::size_t max_downstream_edms_without_vc2_forwarding = 8;
+// VC0, VC1 and a forwarding VC2, three each
+static constexpr std::size_t max_downstream_edms = 9;
 
 // 2D mesh directions (N, E, S, W)
 static constexpr uint32_t num_mesh_directions_2d = 4;
@@ -152,7 +154,7 @@ uint32_t get_num_used_sender_channel_count(Topology topology);
 
 uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::FabricTensixConfig fabric_tensix_config);
 
-uint32_t get_downstream_edm_count(bool is_2D_routing);
+uint32_t get_downstream_edm_count(bool is_2D_routing, bool vc2_forwards = false);
 
 uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled = false);
 

@@ -283,7 +283,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     // Allocate L1 addresses for global max sender channels so layout is stable across all configs
     uint32_t num_sender_channels =
         is_2D_routing ? builder_config::num_max_sender_channels : builder_config::get_sender_channel_count(false);
-    uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
+    // VC2 forwards exactly when inter-domain is on (FabricBuilderContext)
+    uint32_t num_downstream_edms =
+        builder_config::get_downstream_edm_count(is_2D_routing, rtoptions.get_fabric_inter_domain());
     // Global
     size_t next_l1_addr = erisc_l1_unreserved_base;
 
@@ -1925,7 +1927,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     } else {
         const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
-        uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
+        uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(
+            is_2D_routing, fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards);
 
         for (uint32_t i = 0; i < num_downstream_edms; i++) {
             receiver_channels_downstream_flow_control_semaphore_id[i] = 0;
