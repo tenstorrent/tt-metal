@@ -13,12 +13,11 @@ come back untouched.
 Operands stay non-negative and small, so the Int32 sign-magnitude encoding in Dest is the plain
 value and no sum can overflow.
 
-The operand-tile bound of the compute API wrapper (idst + dst_offset must stay inside the active
-Dest half) is checked by test_sfpu_int_sum_add_operand_out_of_bounds_asserts, which expects the
-LLK_ASSERT in the driver to fire. That assert is a copy of the wrapper's in sfpu_int_sum.h (the
-tt-llk harness cannot include the compute API), so keep the two in step.
+The operand-tile bound is checked by test_sfpu_int_sum_add_operand_out_of_bounds_asserts against the
+driver's copy of the assert in sfpu_int_sum.h; keep the two in step.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -146,10 +145,7 @@ def test_sfpu_int_sum_add(dst_index, dst_offset):
         ), f"{call} writes tile {dst_index} only; tile {k} changed"
 
 
-# (dst_index, dst_offset) whose operand tile dst_index + dst_offset is outside the TILE_CNT-tile Dest
-# half. The first three sit exactly on the bound (operand tile TILE_CNT), the valid neighbour of each
-# being covered by test_sfpu_int_sum_add; the last one wraps a 32-bit idst + dst_offset around to a
-# small in-range value, so only a sum widened to 64 bits still rejects it.
+# Operand tile out of bounds: three exactly on the bound, and one whose 32-bit sum wraps (needs the uint64 widening).
 OUT_OF_BOUNDS_CASES = [
     (0, TILE_CNT),
     (1, TILE_CNT - 1),
@@ -158,11 +154,12 @@ OUT_OF_BOUNDS_CASES = [
 ]
 
 
-# Wormhole only: on Blackhole a tripped LLK_ASSERT leaves the board wedged. The assert cases themselves
-# pass, but every kernel that runs afterwards (even in a new pytest process) times out until `tt-smi -r`,
-# and re-booting BRISC and clearing the harness's cached state does not recover it. On Wormhole the
-# recovery in the `finally` below is enough for the valid tests that follow to pass.
+# Wormhole only: on Blackhole a tripped LLK_ASSERT hangs the board.
 @skip_for_blackhole
+@pytest.mark.skipif(
+    os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1",
+    reason="LLK_ASSERT is compiled out (TT_LLK_DISABLE_ASSERTS=1), so nothing can trip",
+)
 @pytest.mark.parametrize("dst_index, dst_offset", OUT_OF_BOUNDS_CASES)
 def test_sfpu_int_sum_add_operand_out_of_bounds_asserts(dst_index, dst_offset):
     """An operand tile past the active Dest half must trip the LLK_ASSERT, not be read silently."""
@@ -173,9 +170,7 @@ def test_sfpu_int_sum_add_operand_out_of_bounds_asserts(dst_index, dst_offset):
         ):
             _run(dst_index, dst_offset)
     finally:
-        # The assert leaves the math TRISC parked on ebreak. Make the next test bring BRISC up afresh
-        # and reload the TRISC ELFs instead of trusting the harness's cached boot state; a re-booted
-        # BRISC counts commands from zero again, so the host-side command counter has to restart too.
+        # Assert leaves math TRISC on ebreak: force a fresh BRISC boot and ELF reload, and restart the command counter.
         TestConfig.BRISC_ELF_LOADED = False
         TestConfig.LAST_LOADED_ELFS = Path()
         device_module.common_counter = 0
