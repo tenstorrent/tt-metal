@@ -313,6 +313,9 @@ DB_SCHEMA = [
     Column("scores_include_bias", "bool", True, "configuration"),
     Column("spread_biased_scores", "bool", True, "configuration"),
     Column("zero_tail", "bool", True, "configuration"),
+    Column("fast_approx", "bool", True, "configuration"),
+    Column("input_scale_bits", "int64", True, "configuration"),
+    Column("typed_bf16_store", "bool", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──
