@@ -421,42 +421,6 @@
   budget_type: demo
   sp_config: sc1
 
-- name: "(Kimi-K3-2.8T) KDA perf 5k + MLA chunked perf 55k@5k + AttnRes layer perf 5k + K3.1 sparse MLA perf warm/long"
-  fabric_profile: torus_xy
-  cmd: |
-    export TT_METAL_SHM_TRACKING_DISABLED=1
-    export LOGURU_LEVEL=ERROR
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      set -e
-      export OMP_NUM_THREADS=$(nproc)
-      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      # K3.1 sparse MLA host-time gate: warm and long, each untraced (fastest of 10 after 10 warm-up) and traced (one replay). Runs first,
-      # as in the GLM job, so a perf miss in the other tests (this block stops at the first failure) cannot hide it.
-      # 8x4, then one 4x4 stage (top tray half, 2.5k chunks).
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1 -vvv --tb=short
-      models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1 -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
-      models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP4xTP4-torus-x-4x4" -vvv --tb=short
-      models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_chunk_scan.py::test_relay_chunk_scan_kimi_k3_perf -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP8xTP4" -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_op_perf.py::test_attn_res_op_perf -k "SP8xTP4" -vvv --tb=short
-    '
-  test_type: k3_mla_perf
-  test_tags: [kimi_k3, kda, mla, k3_kda_perf, sparse_mla, k31_sparse_mla_perf]
-  test_group: module
-  skus:
-    bh_sc1_high_power:
-      timeout: 12
-      tier: 2
-      release_ready: false
-  owner_id: U085GDCAZTN # Pavle Josipovic
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
 - name: "(Kimi-K3-2.8T) MoE accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
@@ -494,16 +458,20 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       T=models/demos/deepseek_v3_d_p/tests
+      # [CI-only branch, do not merge] every step runs even after a failed gate (the PR stack reports all four), the leg
+      # fails at the end if any did
+      rc=0
       gated() {
         "$@" 2>&1 | tee /tmp/k3_moe_perf.out
         local status=${PIPESTATUS[0]}
-        [ "$status" -eq 0 ] || exit "$status"
-        grep -qE "[0-9]+ passed" /tmp/k3_moe_perf.out || { echo "::error::k3_moe_perf: no test passed (skipped?): $*"; exit 1; }
+        [ "$status" -eq 0 ] || rc=$status
+        grep -qE "[0-9]+ (passed|failed)" /tmp/k3_moe_perf.out || { echo "::error::k3_moe_perf: no test ran (skipped?): $*"; rc=1; }
       }
       gated python3 -m pytest $T/perf/test_moe_block_host_perf.py -k "kimi_k3-8x4-5120" -vvv --tb=short
       gated python3 -m pytest $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3-8x4-5120 and not weka and not real" -vvv --tb=short
       gated $T/run_4x4_stage_tests.sh --half top -- $T/perf/test_moe_block_host_perf.py -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
       gated $T/run_4x4_stage_tests.sh --half top -- $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
+      exit $rc
     '
   test_type: k3_moe_perf
   test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf]
@@ -995,27 +963,18 @@
     export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      # GLM-5.3 sparse MLA host-time gate, full-indexer and shared (no indexer) layers: warm and long, each untraced
-      # (fastest of 10 after 10 warm-up) and traced (one replay), on 8x4 and on one 4x4 stage (top tray half, 2.5k
-      # chunks). Before DS_PREFILL_REUSE_MODEL, as its targets were taken.
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
-      models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
-      # CCL perf gates of the 4x4 [RING, RING] carve (a 16-chip sub-torus of this Galaxy): the whole-mesh high_bw_all_gather
-      # bandwidth floors, and the sparse KV push plan, table gather and push ceilings at the 1M cache of a stage. Their
-      # numbers depend on the power rating of the host, so they run here and not in the 8 kW GLM components leg.
-      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 1 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k perf || exit $?
-      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 3 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k perf || exit $?
+      # [CI-only branch, do not merge] this leg trimmed to its GLM-5.3 MoE block perf gate (#67334) for the
+      # rebased early-out branch: no sparse MLA / carve CCL perf steps, no 55k chunked prefill.
       # MoE block perf: host time of one layer on 8x4 @5120, then host time and per-op device time on the carve
       # in forwards of one, two and four packed 2,560-token chunks, in one process (one seeded weight build for the six
       # cases). ~5 min.
       # (the 8x4 step fails when its one test does not pass: a skip, say; the carve wrapper checks its own six)
+      # [CI-only branch, do not merge] the carve runs even after a failed 8x4 gate; the leg fails at the end if either did
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k "glm53-8x4-5120" -vvv --tb=short 2>&1 | tee /tmp/glm_moe_host_perf.out
-      status=${PIPESTATUS[0]}
-      [ "$status" -eq 0 ] || exit "$status"
-      grep -qE "[0-9]+ passed" /tmp/glm_moe_host_perf.out && ! grep -qE "[0-9]+ skipped" /tmp/glm_moe_host_perf.out || { echo "::error::glm_moe_host_perf: glm53-8x4-5120 did not pass (skipped?)"; exit 1; }
-      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 6 models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py::test_moe_block_perf -k "glm53" || exit $?
-      export DS_PREFILL_REUSE_MODEL=1
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
+      rc=${PIPESTATUS[0]}
+      grep -qE "[0-9]+ (passed|failed)" /tmp/glm_moe_host_perf.out || { echo "::error::glm_moe_host_perf: glm53-8x4-5120 did not run (skipped?)"; rc=1; }
+      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 6 models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py::test_moe_block_perf -k "glm53" || rc=$?
+      exit $rc
     '
   test_type: glm_chunked_perf_suite
   test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf, sparse_mla, glm_sparse_mla_perf, moe, glm_moe]
@@ -1024,7 +983,7 @@
     bh_sc1_high_power:
       # The slowest of the last 5 completed runs of this job is 51 min; the carve's CCL perf gates add about 3 min and the
       # MoE block perf gates about 5, so the bound only caps a hang.
-      timeout: 166
+      timeout: 45
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
