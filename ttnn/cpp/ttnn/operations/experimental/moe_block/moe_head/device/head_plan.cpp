@@ -492,6 +492,10 @@ struct HeadCost {
     double chain_us_per_expert_tile_k = 0.1852;
     double router_barrier_us = 5.0;  // (a router iteration's barrier across the TP ring: estimated, not calibrated)
     double x_multicast_gbs = 43.98;
+    // a fabric packet's cost past its bytes (link_gbs is full packets'): a K step that is not a multiple of the
+    // payload's tiles leaves a partial packet each step (GLM-5.3 4x4 carve, x gather at 6 / 3 / 2 / 1 tiles a packet:
+    // ~0.18 us a packet; 10k at K step 8 (6 + 2 tile packets) 726 us vs K step 6 690 us)
+    double packet_us = 0.18;
 };
 
 std::pair<double, Parts> head_cost(
@@ -538,7 +542,15 @@ std::pair<double, Parts> head_cost(
             latent_us = double(latent_bytes) / rate;
         }
     }
-    const double reduce_scatter_us = x_us;
+    const double reduce_scatter_us = x_us;  // (its packets: sub-blocks, not K steps)
+    {  // the x gather's partial packets: ceil(K step / tiles a packet) packets a row tile's K step
+        const double tiles_per_packet = double(
+            std::max<int64_t>(1, std::min<int64_t>(layout.k_step_tiles, int64_t(shape.payload) / kBf16TileBytes)));
+        const double packets_per_step = std::ceil(double(layout.k_step_tiles) / tiles_per_packet);
+        const double step_units = x_us * rate / (double(layout.k_step_tiles) * kBf16TileBytes);  // (row tile x K step)
+        x_us += step_units * (packets_per_step - double(layout.k_step_tiles) / tiles_per_packet) * cost.packet_us /
+                double(shape.links);
+    }
     const int64_t w_bytes = sizing.dram_w_bytes();
     const double w_us = double(w_bytes * (sizing.w_ring_slots ? row_chunks : 1)) / (cost.dram_gbs * 1e3);
     const double w_noc_us = double(row_chunks * w_bytes) / double(layout.engine_columns) / (cost.noc_gbs * 1e3);
