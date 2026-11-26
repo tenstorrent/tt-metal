@@ -34,6 +34,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
+#include "api/compute/experimental/custom_mm.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "flat_options.hpp"
@@ -84,8 +85,13 @@ FORCE_INLINE uint32_t h_tile_dest(uint32_t h_tile) { return h_tile == 0 ? 0 : 2 
 
 uint32_t matmul_rows = row_tiles;  // the row tiles the matmul is set up for
 
+// custom_mm with a full [32, 32] in0 tile (flat_options gate_up_custom_mm): x [rows, K] tiles row-major at x_index,
+// the weight block's K rows of row_width tiles, output tile (r, c) at DST r * row_width + c - matmul_block_k's
+// layout, bit-identical results; the init does not depend on the row count
+constexpr bool custom_mm = get_named_compile_time_arg_val("gate_up_custom_mm") != 0;
+
 FORCE_INLINE void matmul_rows_init(uint32_t rows) {
-    if (rows != matmul_rows) {
+    if (!custom_mm && rows != matmul_rows) {
         matmul_block_init(x_cb, weight_cb, false, row_width, rows, x_block_k_tiles);
         matmul_rows = rows;
     }
@@ -128,7 +134,9 @@ FORCE_INLINE void free_weight_block() {
 // (MEASUREMENT ONLY: gate_up_k_steps 0 - the per-step matmul_block loop, the A/B)
 constexpr bool k_steps_call = get_named_compile_time_arg_val("gate_up_k_steps") != 0;
 __attribute__((noinline)) void matmul_x_block_short(uint32_t x_index, uint32_t w_index, uint32_t rows) {
-    if constexpr (k_steps_call) {
+    if constexpr (custom_mm) {
+        custom_mm_block(x_cb, weight_cb, x_index, w_index, 0, x_block_k_tiles, row_width, rows);
+    } else if constexpr (k_steps_call) {
         matmul_block_k(
             x_cb, weight_cb, x_index, w_index, 0, false, row_width, rows, x_block_k_tiles, x_block_k_tiles, row_width);
     } else {
@@ -142,7 +150,9 @@ __attribute__((noinline)) void matmul_x_block_short(uint32_t x_index, uint32_t w
 template <uint32_t FULL>
 FORCE_INLINE void matmul_x_block(uint32_t x_index, uint32_t w_index, uint32_t rows) {
     if (rows == FULL) [[likely]] {
-        if constexpr (k_steps_call) {
+        if constexpr (custom_mm) {
+            custom_mm_block(x_cb, weight_cb, x_index, w_index, 0, x_block_k_tiles, row_width, FULL);
+        } else if constexpr (k_steps_call) {
             matmul_block_k(
                 x_cb,
                 weight_cb,
@@ -318,7 +328,11 @@ void kernel_main() {
         first_unit_offset = get_arg_val<uint32_t>(0);
     }
     compute_kernel_hw_startup<SrcOrder::Reverse>(x_cb, weight_cb, out_cb);
-    matmul_block_init(x_cb, weight_cb, false, row_width, row_tiles, x_block_k_tiles);
+    if constexpr (custom_mm) {
+        custom_mm_block_init(x_cb, weight_cb, out_cb, row_width);
+    } else {
+        matmul_block_init(x_cb, weight_cb, false, row_width, row_tiles, x_block_k_tiles);
+    }
     if constexpr (half_width) {  // (every face-wise activation uses SiTU's sigmoid: its init)
         PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
     } else {
@@ -335,24 +349,26 @@ void kernel_main() {
         const uint32_t first_block = schedule_page::load_word_load(load_word) * blocks_per_load;
         const uint32_t first_slot = schedule_page::load_word_ring_region(load_word) * blocks_per_load;
         const bool last_use = schedule_page::load_word_last_use(load_word);
+        [[maybe_unused]] const uint32_t zz_x0 = zz_x_wait;
+        [[maybe_unused]] const uint32_t zz_w0 = zz_w_wait;
+        [[maybe_unused]] const uint32_t zz_t0 = ZZ_NOW();
         for (uint32_t sub_block = 0; sub_block < sub_blocks; ++sub_block) {
             const bool last_sub_block = sub_block + 1 == sub_blocks;
             // row tiles holding tokens (none: one row tile of garbage, the down cores never write it out)
             const uint32_t token_rows = last_sub_block ? last_row_tiles : row_tiles;
             const uint32_t rows = token_rows ? (token_rows < row_tiles ? token_rows : row_tiles) : 1;
             const bool frees_weights = last_use && last_sub_block;
-            [[maybe_unused]] const uint32_t zz_x0 = zz_x_wait;
-            [[maybe_unused]] const uint32_t zz_w0 = zz_w_wait;
             if constexpr (row_passes) {
                 compute_sub_block_in_row_passes(first_block, first_slot, frees_weights, rows);
             } else {
                 compute_sub_block(first_block, first_slot, frees_weights, rows);
             }
-            // (per sub-block: entry << 24 | sub-block << 16 | x wait (us), and the weight wait)
-            if (entry < 3) {  // (the first experts only: the profiler buffer)
-                UNPACK((ZZ_EMIT("ZZ-GU-SBX", (entry << 24) | (sub_block << 16) | ((zz_x_wait - zz_x0) / 1350))));
-                UNPACK((ZZ_EMIT("ZZ-GU-SBW", (entry << 24) | (sub_block << 16) | ((zz_w_wait - zz_w0) / 1350))));
-            }
+        }
+        // (per entry: entry << 24 | x wait, the weight wait, the entry's span, in 0.1 us)
+        if (entry < 24) {  // (the profiler buffer)
+            UNPACK((ZZ_EMIT("ZZ-GU-EX", (entry << 24) | ((zz_x_wait - zz_x0) / 135))));
+            UNPACK((ZZ_EMIT("ZZ-GU-EW", (entry << 24) | ((zz_w_wait - zz_w0) / 135))));
+            UNPACK((ZZ_EMIT("ZZ-GU-ET", (entry << 24) | ((ZZ_NOW() - zz_t0) / 135))));
         }
     }
     cb_pop_front(schedule_cb, 1);
