@@ -16,7 +16,7 @@ namespace ttnn::operations::data_movement {
 void bind_roll(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Rolls the elements of `input_tensor` along the given dimensions, as ``torch.roll`` does: each element moves
+        Rolls the elements of `input_tensor` along the given dimensions: each element moves
         `shifts` places along its dimension, and the elements that pass the end of the dimension come back at its start.
 
         `shifts` and `dim` are both ints, or both lists of the same length that pair each shift with a dimension. A
@@ -56,7 +56,7 @@ void bind_roll(nb::module_& mod) {
 
             ``UINT8`` tensors need `dim`.
 
-            ``BFLOAT16`` input values must not be NaN when `dim` is omitted or includes one of the last two dimensions.
+            ``BFLOAT16`` input values must not be NaN or -0.0 when `dim` is omitted or includes one of the last two dimensions.
 
         Memory Support:
             - Interleaved: DRAM and L1
