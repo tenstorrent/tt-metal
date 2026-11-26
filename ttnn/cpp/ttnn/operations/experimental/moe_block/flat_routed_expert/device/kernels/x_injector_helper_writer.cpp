@@ -22,13 +22,14 @@
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "flat_options.hpp"
 #include "expert_schedule.hpp"
 
 void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
     constexpr uint32_t sb_cb = get_named_compile_time_arg_val("x_super_block_cb");
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t mt = flat_options::x_row_tiles;
     constexpr uint32_t tb = flat_options::x_tile_bytes;
     constexpr uint32_t land_slots = get_named_compile_time_arg_val("x_landing_slots");
     constexpr uint32_t data_sem = get_named_compile_time_arg_val("x_primary_data_sem");
@@ -41,6 +42,7 @@ void kernel_main() {
     ExpertSchedule schedule;
     // RT 3 / 4: the primary's round (1 + helpers) and this helper's place in it (its super-blocks b % round == place)
     load_schedule<flat_options::local_experts>(schedule, 5, schedule_scratch(ScratchOwner::Ncrisc));
+    to_x_schedule(schedule);
     const uint32_t tot_all = schedule.total_sub_blocks * flat_options::super_blocks_per_sub_block,
                    x2s = moe_block_args::arg(5 + kScheduleArgs), x2k = moe_block_args::arg(6 + kScheduleArgs);
     const uint32_t tot_sb = tot_all > x2k ? (tot_all - x2k + x2s - 1) / x2s : 0;
@@ -65,6 +67,7 @@ void kernel_main() {
         // (row tile major: a short last sub-block's rows are the super-block's first bytes - only those go)
         const uint32_t g = x2k + (place + b * round_) * x2s;
         const uint32_t bytes = sub_block_row_tiles(schedule, g / nsb) * sbt * tb;
+        ASSERT(bytes <= sb_bytes);  // (within its landing slot: the schedule and mt are both the x path's)
         noc_async_write(get_read_ptr(sb_cb), prim_land + (b % land_slots) * sb_bytes, bytes);
         noc_async_write(get_read_ptr(sb_cb), prim2_land + (b % land_slots) * sb_bytes, bytes);
         noc_async_write_barrier();

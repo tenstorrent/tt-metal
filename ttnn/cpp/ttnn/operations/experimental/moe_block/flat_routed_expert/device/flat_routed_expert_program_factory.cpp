@@ -148,7 +148,17 @@ FlatProgramHandles add_flat_routed_expert_program(
         banks);
     // x after the tilize and h after gate/up: bfp8 tiles, or bf16 with layout.x_bf16 / h_bf16 (the plan's sizes)
     const uint32_t x_tile = p.x_tile_bytes, h_tile = p.h_tile_bytes;
-    const uint32_t x_blk = MT * kKBlk, x_bytes = x_blk * x_tile;
+    // gate/up row passes (DST holds fewer than a sub-block's gate/up tiles): row tiles a pass (4 DST tiles' worth, at
+    // most the sub-block's), else 0
+    const bool gu_rp = p.gate_up_row_passes && !p.gate_up_full_sync;
+    const uint32_t RP = gu_rp ? std::min(MT, std::max(1u, 4 / p.gate_up_weight_tiles_per_row)) : 0;
+    // the x path's blocks: a row pass's rows with row passes (each pass then reads and frees its own x blocks, so the
+    // next sub-block's x streams in through the whole sub-block, not only behind its last pass), else a sub-block's.
+    // The ring keeps its bytes: x_ring_blocks of MT rows hold MT / XR times as many x blocks.
+    const uint32_t XR = gu_rp ? RP : MT;
+    TT_FATAL(MT % XR == 0, "flat_routed_expert: x rows {} do not divide the sub-block's {}", XR, MT);
+    const uint32_t x_blk = MT * kKBlk, x_ring_bytes = p.x_ring_blocks * x_blk * x_tile;
+    const uint32_t x_bytes = XR * kKBlk * x_tile;  // an x block
     const uint32_t PIN = cfg.pin;
     TT_FATAL(NR == 2, "flat_routed_expert: two gate/up rectangles");
 
@@ -174,7 +184,9 @@ FlatProgramHandles add_flat_routed_expert_program(
     // (gate_up_x_forwarder.cpp) on NOC0 with 3 or 6 pieces in flight (below), the receiver (gate_up_core_reader.cpp,
     // BRISC) on NOC1.
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
-    const uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
+    // (a row tile a piece with the x path split by row pass - the pieces' size before the split: GLM-5.3 4x4 M 320, 4 /
+    // 2 pieces a block of 2 row tiles 1192.4 / 1055.4 us; the forwarder's pieces in flight carry half the bytes at 4)
+    const uint32_t x_pieces = XR < MT && aligned(XR) ? XR : (aligned(4) ? 4 : (aligned(2) ? 2 : 1));
     // The forwarder keeps X_FWD_DEPTH pieces in flight while it forwards an expert of at least X_FWD_DEEP_ROW_TILES row
     // tiles, X_FWD_SHALLOW below. Against 3 everywhere (P150): GLM-5.3 4x4 10240 uniform -5.1% / zipf -2.7%, 8x4 10240
     // -3.1%, DSV4.1-Flash 8x4 5120 hot -12.1% / 10240 -6.3%, K3 8x4 5120 hot -2.8%; no case +0.3% or more. 6 everywhere
@@ -241,7 +253,6 @@ FlatProgramHandles add_flat_routed_expert_program(
         dn_reg = static_cast<uint32_t>(std::nearbyint(p.down_weight_ring_experts * k_blocks)) == nreg_gu * k_blocks;
     }
     // gate/up row passes: DST holds fewer row tiles of gate/up tiles than a sub-block has (4 fp32 tiles, half sync)
-    const bool gu_rp = p.gate_up_row_passes && !p.gate_up_full_sync;
     // The program's options; a kernel's own (marked) are set per kernel below. Every kernel builds the schedule from
     // the same schedule options, so every core builds the same schedule.
     Options options;
@@ -304,8 +315,9 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["half_width_gate_up"] = p.half_width_gate_up ? 1 : 0;
     options["gate_up_units"] = p.units_per_core;
     options["gate_up_units_h_tiles"] = p.units_per_core ? p.h_tiles_per_core : 0;
-    options["row_pass_rows"] = gu_rp ? std::max(1u, 4 / p.gate_up_weight_tiles_per_row) : 0;
-    options["x_ring_blocks"] = p.x_ring_blocks;
+    options["row_pass_rows"] = RP;
+    options["x_ring_blocks"] = p.x_ring_blocks * (MT / XR);
+    options["x_row_tiles"] = XR;
     options["y_row_major"] = cfg.y_row_major ? 1 : 0;
     options["y_row_major_rows"] = 0;  // (the down kernels': their column width's)
     options["down_core_count"] = ND;
@@ -491,7 +503,9 @@ FlatProgramHandles add_flat_routed_expert_program(
                         {"x_primary_data_sem", k ? 7u : 4u},
                         {"x_helper_credit_sem", 5}})));
         }
-        const uint32_t sbb = MT * p.super_block_tiles * x_tile;
+        // (a super-block as the x path ships it: XR row tiles - the primary places helper k's ring at k landing rings
+        // of these, x_injector_writer.cpp)
+        const uint32_t sbb = XR * p.super_block_tiles * x_tile;
         for (uint32_t idx = 0; idx < p.relay_cores.size(); ++idx) {
             const CoreCoord rl = p.relay_cores[idx];
             const uint32_t k = idx % NR;
@@ -745,7 +759,7 @@ FlatProgramHandles add_flat_routed_expert_program(
     arena_cb(0, 0, kRmChunks * 32 * p.row_segment_bytes, helper_relays, tt::DataFormat::Float16_b, p.row_segment_bytes);
     arena_cb(1, p.super_block_offset, kSbSlots * MT * p.super_block_tiles * x_tile, helper_relays, xf, x_tile);
     arena_cb(1, 0, p.gate_up_weight_ring_blocks * p.weight_block_tiles * w_tile, p.gate_up_cores, wf, w_tile);
-    arena_cb(0, p.x_ring_offset, p.x_ring_blocks * x_bytes, p.gate_up_cores, xf, x_tile);
+    arena_cb(0, p.x_ring_offset, x_ring_bytes, p.gate_up_cores, xf, x_tile);
     arena_cb(3, p.h_local_offset, p.down_h_buffers * MT * p.h_tiles_per_core * h_tile, p.gate_up_cores, hf, h_tile);
     arena_cb(16, p.pack_cb_offset, 2048, p.gate_up_cores, tt::DataFormat::Float16_b, 2048);
     arena_cb(2, p.down_h_offset, p.down_h_buffers * p.down_h_buffer_tiles * h_tile, p.down_cores, hf, h_tile);

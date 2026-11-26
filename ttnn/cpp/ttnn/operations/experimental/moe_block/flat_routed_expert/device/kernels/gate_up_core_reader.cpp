@@ -45,7 +45,9 @@ void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
     constexpr uint32_t x_cb = get_named_compile_time_arg_val("x_cb");
     constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
-    constexpr uint32_t x_blk = mt * flat_options::x_block_k_tiles;
+    // (x blocks: flat_options::x_row_tiles row tiles - a row pass's with row passes, to_x_schedule)
+    constexpr uint32_t xmt = flat_options::x_row_tiles;
+    constexpr uint32_t x_blk = xmt * flat_options::x_block_k_tiles;
     constexpr uint32_t in1_cb = get_named_compile_time_arg_val("weight_cb");
     constexpr uint32_t slot = flat_options::gate_up_block_tiles;
     constexpr uint32_t nk_gu = flat_options::gate_up_blocks_per_expert;
@@ -93,6 +95,7 @@ void kernel_main() {
     publish_schedule(schedule, tt::CBIndex::c_6);
     const uint32_t total_w = schedule.loads * nk_gu;  // gate/up loads
     const uint32_t num_v = schedule.total_sub_blocks;
+    uint32_t x_num_v = 0;  // (the x path's sub-blocks, below)
     volatile tt_l1_ptr uint32_t* data_sem = sem(data_sem_id);
     volatile tt_l1_ptr uint32_t* go_sem = sem(go_sem_id);
     volatile tt_l1_ptr uint32_t* xarr_sem = sem(xarr_sem_id);
@@ -106,11 +109,15 @@ void kernel_main() {
         for (uint32_t l = 0; l < schedule.loads; ++l) {
             mb[1 + l] = schedule.load_expert[l] | (uint32_t(schedule.load_region[l]) << 8);
         }
-        // then the x forwarder's: the entries' sub-blocks and their last one's row tiles holding tokens
+        // then the x forwarder's: the entries' x sub-blocks (to_x_schedule) and their last one's row tiles holding
+        // tokens
         volatile tt_l1_ptr uint32_t* xe = mb + 1 + schedule.loads;
         xe[0] = schedule.entries;
         for (uint32_t a = 0; a < schedule.entries; ++a) {
-            xe[1 + a] = schedule.sub_blocks[a] | (last_sub_block_row_tiles(schedule, a) << 16);
+            constexpr uint32_t xr = flat_options::x_rows_per_sub_block;
+            const uint32_t xs = (schedule.tokens[a] + xr - 1) / xr;
+            x_num_v += xs;
+            xe[1 + a] = xs | (((schedule.tokens[a] - (xs - 1) * xr + kTileRows - 1) / kTileRows) << 16);
         }
         *sem(flat_options::gate_up_mailbox_sem) = 1;
     }
@@ -210,7 +217,7 @@ void kernel_main() {
     // x_cons follows compute at most a block a loop pass, so the loop can end (all h sent) with it short of the call's
     // blocks; the end count must be the total (the forwarder ends at fwd == (end - 1) x pieces: a short count left it
     // spinning past it - a 1-in-13k whole-model hang - or would end it before the successor has every block)
-    for (const uint32_t x_total = num_v * nk_gu; x_cons < x_total;) {
+    for (const uint32_t x_total = x_num_v * nk_gu; x_cons < x_total;) {
         invalidate_l1_cache();
         if (cb_pages_reservable_at_back(x_cb, (x_slots - (x_pub - x_cons) + 1) * x_blk)) {
             ++x_cons;
