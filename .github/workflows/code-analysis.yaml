@@ -316,12 +316,44 @@ jobs:
       - name: 🧪 Unit tests for the include-cleaner script
         run: python3 .github/scripts/utils/test_run_api_header_include_cleaner.py
 
-      - name: 📦 Restore CPM source cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: .cpmcache.tar.zst
-          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
-          restore-keys: cpm-z22-
+      - name: 📦 Compute CPM cache key
+        id: cpm-key
+        run: |
+          # Same key as build-artifact.yaml (tracy on, tt-train on). Keep the two in sync.
+          echo "key=cpm-z9l-tracy-on-tttrain-on-${{ hashFiles(
+            'cmake/CPM.cmake',
+            'third_party/CMakeLists.txt',
+            'third_party/*.patch',
+            'tt_metal/third_party/CMakeLists.txt',
+            'tt_metal/third_party/tracy/cmake/CPM.cmake',
+            'tt_metal/third_party/tracy/cmake/vendor.cmake',
+            'tt_metal/third_party/umd/cmake/CPM.cmake',
+            'tt_metal/third_party/umd/third_party/CMakeLists.txt',
+            'tt-train/cmake/CPM.cmake',
+            'tt-train/cmake/dependencies.cmake',
+            'tt-train/sources/examples/mnist_mlp/CMakeLists.txt') }}" >> "$GITHUB_OUTPUT"
+
+      - name: 📦 Restore CPM source cache (Garage S3)
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        env:
+          CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
+          AWS_ACCESS_KEY_ID: ${{ vars.GARAGE_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
+        run: |
+          set -u
+          # Restore only: the iwyu preset fetches fewer packages than the shared key holds.
+          URL="http://garage.garage.svc.cluster.local:3900/cpm/cpm/tt-metal/${CACHE_KEY}.tar.zst"
+          echo "Restoring CPM cache from: ${URL}"
+          rc=0
+          http_code=$(curl -sS --noproxy '*' --retry 5 --retry-delay 2 --retry-connrefused --max-time 120 \
+               --aws-sigv4 "aws:amz:garage:s3" --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+               -w '%{http_code}' -o .cpmcache.tar.zst "${URL}") || rc=$?
+          if [ "${rc}" -eq 0 ] && [ "${http_code}" = "200" ]; then
+            echo "CPM cache HIT (key=${CACHE_KEY})"
+          else
+            echo "CPM cache not restored (curl exit=${rc}, HTTP ${http_code:-none}); configure fetches sources"
+            rm -f .cpmcache.tar.zst
+          fi
 
       - name: Unpack CPM cache
         run: |
