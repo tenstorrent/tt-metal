@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 
+#include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
@@ -35,6 +36,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 
 namespace tt::tt_fabric::inter_domain_test {
 namespace {
@@ -287,6 +289,29 @@ void run(bool all_at_once) {
             connect_inter_domain(cable.port, *domain, cable.peer.md);
             EXPECT_EQ(get_inter_domain_state(cable.port), InterDomainState::SERVICE_TRAFFIC);
         }
+        // a cable router's worker credits and first stream registers (its receivers', then credits): idle now, and
+        // again once its traffic has drained
+        const auto at_rest = [&](const InterDomainPort& port) {
+            const auto& cluster = MetalContext::instance().get_cluster();
+            const auto it =
+                std::find_if(node_of.begin(), node_of.end(), [&](const auto& kv) { return kv.second == port.node; });
+            const auto chip = device_of.at(it->first)->id();
+            std::vector<uint32_t> counts;
+            for (uint32_t stream :
+                 {tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id, 4u, 5u, 6u}) {
+                uint32_t value = 0;
+                cluster.read_reg(
+                    &value,
+                    tt_cxy_pair(chip, cluster.get_virtual_eth_core_from_channel(chip, port.eth_chan)),
+                    0xFFB40000 + 0x1000 * stream + 4 * 297);
+                counts.push_back(value & ((1u << 17) - 1));
+            }
+            return counts;
+        };
+        std::map<std::pair<uint64_t, uint64_t>, std::vector<uint32_t>> idle;
+        for (const auto& [key, cable] : cables) {
+            idle[key] = at_rest(cable.port);
+        }
         const auto before = check_routes ? packets_sent(*mesh, node_of) : decltype(packets_sent(*mesh, node_of)){};
         step("connected");
 
@@ -391,7 +416,7 @@ void run(bool all_at_once) {
                 distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, true);
             }
         }
-        if (all_at_once) {
+        if (all_at_once && !programs.empty()) {
             distributed::MeshWorkload workload;
             for (auto& [asic, program] : programs) {
                 workload.add_program(distributed::MeshCoordinateRange(coord_of.at(asic)), std::move(program));
@@ -532,6 +557,18 @@ void run(bool all_at_once) {
             distributed::Finish(mesh->mesh_command_queue());
         }
         step("received");
+
+        // no error handling yet: each cable's router drains, its worker credited back and nothing left to land, first
+        for (const auto& [key, cable] : cables) {
+            while (at_rest(cable.port) != idle.at(key)) {
+                ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+                    << "cable " << cable.port.node << " never drained: ["
+                    << fmt::format("{}", fmt::join(at_rest(cable.port), ",")) << "], at rest ["
+                    << fmt::format("{}", fmt::join(idle.at(key), ",")) << "]";
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        step("drained");
 
         for (const auto& [_, cable] : cables) {
             disconnect_inter_domain(cable.port);
