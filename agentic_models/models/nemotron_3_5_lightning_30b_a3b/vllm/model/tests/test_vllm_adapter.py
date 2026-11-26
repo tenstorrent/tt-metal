@@ -88,8 +88,7 @@ def mesh(shape=(1, 4)):
 
 
 def test_initialize_geometry_and_precision(monkeypatch):
-    for key in ('NEMOTRON_VLLM_HOST_COMPAT', 'NEMOTRON_VLLM_SERIAL_PREFILL', 'NEMOTRON_DECODE_BUCKETS',
-                'NEMOTRON_VLLM_LAYERS', 'NEMOTRON_VLLM_EVENTS', 'NEMOTRON_PRECISION_CONFIG'):
+    for key in ('NEMOTRON_VLLM_HOST_COMPAT', 'NEMOTRON_VLLM_SERIAL_PREFILL', 'NEMOTRON_DECODE_BUCKETS'):
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(ValueError, match='1x4'):
         NemotronForCausalLM.initialize_vllm_model(None, mesh((1, 8)), 32)
@@ -142,8 +141,6 @@ def test_initialize_restores_checkpoint_layer_names(monkeypatch):
 
 
 def test_generator_uses_vendored_modules():
-    readiness = importlib.import_module(f'{PKG}.readiness_contract')
-    assert issubclass(generator_module.NemotronGenerator, readiness.Generator)
     assert generator_module.TT_CCL is tt_ccl_module.TT_CCL
 
 

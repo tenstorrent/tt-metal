@@ -194,26 +194,6 @@ def _validated_pages(generator, page_table, page_tables_per_layer, rows, active,
     return normalized
 
 
-import os as _os
-import time as _time
-
-_DECODE_TIMING = _os.environ.get("QWEN_DECODE_TIMING", "0") == "1"
-
-
-def _timed(name, fn, marks):
-    if not _DECODE_TIMING:
-        return fn
-
-    def wrapped(*a, **k):
-        t = _time.perf_counter()
-        try:
-            return fn(*a, **k)
-        finally:
-            marks.append((name, _time.perf_counter() - t))
-
-    return wrapped
-
-
 def decode_with_commands(
     generator,
     tokens,
@@ -241,7 +221,6 @@ def decode_with_commands(
     the host-logit caller owns those operations. No host sampling occurs here.
     """
     commands = ReloadCommands(reload_inputs, reload_page_table, reload_sampling_params, reset_sampling_state)
-    _t0, _marks = _time.perf_counter(), []
     if type(read_from_device) is not bool or type(enable_trace) is not bool:
         raise TypeError("Decode read/trace selectors must be booleans")
     if not enable_trace:
@@ -314,9 +293,6 @@ def decode_with_commands(
         if commands.reload_page_table and pages is None:
             raise ValueError("Page-only reload requires explicit page tables")
 
-    if _DECODE_TIMING:
-        _marks.append(("validate_inputs+pages", _time.perf_counter() - _t0))
-        _t1 = _time.perf_counter()
     if commands.reload_inputs and any("page_table" in group[0] for group in generator.cache):
         from .cache_contract import validate_page_ownership
 
@@ -396,13 +372,8 @@ def decode_with_commands(
         or commands.reload_sampling_params
         or commands.reset_sampling_state
     )
-    if _DECODE_TIMING:
-        _marks.append(("ownership+sampling_validate+history", _time.perf_counter() - _t1))
-        _t1 = _time.perf_counter()
     if changing:
         generator.output_pool.require_drained()
-    if _DECODE_TIMING:
-        _marks.append(("require_drained", _time.perf_counter() - _t1))
     if all(lease is not None for lease in generator.output_pool.leases):
         raise RuntimeError("Consume a pending decode output before submitting another")
 
@@ -465,25 +436,15 @@ def decode_with_commands(
         generator.serving_device_sampling = device_sampling
         return handle
 
-    _t1 = _time.perf_counter()
     result = generator.reload_executor.execute(
         commands,
         slot_remap=order,
-        reload_forward=_timed("reload_forward", reload_forward, _marks),
-        reload_pages=_timed("reload_pages", reload_pages, _marks),
-        reload_parameters=_timed("reload_parameters", lambda: configure(False), _marks),
-        reset_sampling=_timed("reset_sampling", reset_sampling, _marks),
-        forward=_timed("submit", submit, _marks),
+        reload_forward=reload_forward,
+        reload_pages=reload_pages,
+        reload_parameters=lambda: configure(False),
+        reset_sampling=reset_sampling,
+        forward=submit,
     )
-    if _DECODE_TIMING:
-        _total = _time.perf_counter() - _t0
-        _marks.append(("execute_total", _time.perf_counter() - _t1))
-        if _total > 0.02:
-            print(
-                "QWEN_DECODE_TIMING total=%.1fms cmds=%s %s"
-                % (1000 * _total, commands, " ".join("%s=%.1f" % (n, 1000 * v) for n, v in _marks)),
-                flush=True,
-            )
     if not read_from_device:
         return result
     try:

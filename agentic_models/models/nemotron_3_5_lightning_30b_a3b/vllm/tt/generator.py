@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Readiness and external-cache driver for the TP4 Nemotron-H model.
+"""External-cache driver for the TP4 Nemotron-H model, behind the vLLM adapter.
 
 The model and sampling traces communicate through preallocated logits and token
 buffers. Host logits are an explicit diagnostic/compatibility API boundary.
@@ -17,7 +17,6 @@ from dataclasses import dataclass, fields, replace
 from types import SimpleNamespace
 
 import torch
-from transformers import AutoTokenizer, GenerationConfig
 
 import ttnn
 from agentic_models.models.nemotron_3_5_lightning_30b_a3b.vllm.tt import capacity
@@ -30,7 +29,6 @@ from models.common.sampling.generator import (
     format_sampling_params,
 )
 
-from .readiness_contract import Generator
 from .tt_ccl import TT_CCL
 
 UNBOUNDED_TOP_K = int(os.environ.get("NEMOTRON_UNBOUNDED_TOP_K", "64"))
@@ -44,7 +42,7 @@ class DecodeOutput:
     is_tokens: bool = True
 
 
-class NemotronGenerator(Generator):
+class NemotronGenerator:
     @classmethod
     def get_max_tokens_all_users(
         cls, *, model_name=None, num_devices=4, tt_data_parallel=1, max_model_len=262144, max_num_seqs=1
@@ -58,35 +56,11 @@ class NemotronGenerator(Generator):
             max_num_seqs=max_num_seqs,
         )
 
-    @classmethod
-    def cache_capacity_plan(cls, **kwargs):
-        """Resolve an explicit bounded pool plan without allocating a device."""
-        return capacity.cache_capacity_plan(**kwargs)
-
-    def cache_capacity(self):
-        """Report actual bound pools; shared tensor indices are not double-counted."""
-        pools = {}
-        for spec in self.cache.attention_specs:
-            pool = pools.setdefault(
-                spec.tensor_idx,
-                {"shape": list(spec.shape), "dtype": str(spec.dtype), "attention_layers": []},
-            )
-            pool["attention_layers"].append(spec.layer_index)
-        return {
-            "logical_context_per_request": self.cache.context_length,
-            "num_slots": self.cache.num_slots,
-            "block_size": self.cache.block_size,
-            "pools": pools,
-            "physical_blocks_per_attention_layer": dict(self.cache.physical_blocks),
-            "page_ownership": "Caller supplies nonoverlapping live page ranges and enforces aggregate admission.",
-        }
-
     def __init__(
         self,
         mesh_device,
         *,
         checkpoint=None,
-        layer_indices=None,
         max_seq_len=262144,
         max_batch_size=1,
         greedy_strategy="split",
@@ -97,18 +71,13 @@ class NemotronGenerator(Generator):
         batched_prefill=False,
     ):
         self.mesh = mesh_device
-        self.event_sink = None
         self.model = NemotronModel(
             mesh_device,
             checkpoint=checkpoint,
-            layer_indices=layer_indices,
             optimized_terminal=optimized_terminal,
             precision_config=precision_config,
             batched_prefill=batched_prefill,
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model.checkpoint)
-        eos = GenerationConfig.from_pretrained(self.model.checkpoint).eos_token_id
-        self.eos_token_ids = frozenset([] if eos is None else [eos] if isinstance(eos, int) else eos)
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
         if greedy_strategy not in ("split", "argmax"):
@@ -166,7 +135,6 @@ class NemotronGenerator(Generator):
         self.decode_traces = {}
         self.sampling_traces = {}
         self.counters = Counter()
-        self.last_metrics = {}
         self._prepared = False
         self.fixed_slots = tuple(range(max_batch_size))
         # perf/multiuser: decode traces per bucket (first B slots). The plugin condenses
@@ -200,14 +168,11 @@ class NemotronGenerator(Generator):
 
     def _event(self, kind, **data):
         if kind == "trace_capture":
-            # The load-readiness probe verifies captures independently of the
-            # optional per-request event file. This runs only after capture.
+            # Logged after each capture.
             print(
                 f"NEMOTRON capture {data['family']} trace id={data['trace_id']} " f"seconds={data['capture_s']:.6f}",
                 flush=True,
             )
-        if self.event_sink is not None:
-            self.event_sink(kind, **data)
 
     def _integer(self, value, dtype=ttnn.int32):
         return self.model.tensor(value, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -440,19 +405,6 @@ class NemotronGenerator(Generator):
                 zip(selected, self.layer_page_host[index], self.layer_page_tables[index], strict=True)
             ):
                 if not torch.equal(row, old):
-                    if self.event_sink is not None:
-                        changed = torch.nonzero(row != old).flatten()
-                        sample = changed if changed.numel() <= 64 else torch.cat((changed[:32], changed[-32:]))
-                        self._event(
-                            "page_table_update",
-                            layer=index,
-                            slot=slot,
-                            changed_count=changed.numel(),
-                            columns_complete=changed.numel() <= 64,
-                            columns=sample.tolist(),
-                            old=old[sample].tolist(),
-                            new=row[sample].tolist(),
-                        )
                     self._refresh(dst, row[None], "page_table_refreshes")
             self.layer_page_host[index] = selected.clone()
         self.page_host = value.clone()
@@ -743,7 +695,6 @@ class NemotronGenerator(Generator):
                 self.counters["prefix_hits"] += 1
                 self.counters["prefix_hit_tokens"] += start
                 self.counters["prefix_restored_tokens"] += restored
-                self._event("prefix_hit", slot=slot, vllm_start=int(start), restored=int(restored))
                 starts[i] = restored
         for slot, end in zip(slots, prompt_lens):
             self.prompt_ends[slot] = int(end)
@@ -772,13 +723,6 @@ class NemotronGenerator(Generator):
             indices = [i for i, plan in enumerate(plans) if step < len(plan)]
             spans = [plans[i][step] for i in indices]
             selected_slots = [slots[i] for i in indices]
-            self._event(
-                "prefill_span",
-                slots=selected_slots,
-                starts=[a for a, b in spans],
-                lengths=[b - a for a, b in spans],
-                active_decode_slots=torch.nonzero(self.active_host).flatten().tolist(),
-            )
             rows = [self._integer(tokens[i, a:b][None].int(), ttnn.uint32) for i, (a, b) in zip(indices, spans)]
             metadata = self.model.refresh_prefill_metadata(
                 cache=cache, slots=selected_slots, starts=[a for a, _ in spans], page_host=self.layer_page_host
@@ -904,7 +848,7 @@ class NemotronGenerator(Generator):
                 per_layer_specs=[spec.as_tuple() for spec in self.cache.attention_specs],
             )
             self.model.allocate_prefill_metadata(cache, layer_indices=self.layer_page_tables)
-        self.warmup_report = self.model.prepare_prefill(
+        self.model.prepare_prefill(
             cache=cache, page_tables=self.layer_page_tables, page_host=self.layer_page_host
         )
         self._prepare_state_moves(cache)
@@ -1156,20 +1100,6 @@ class NemotronGenerator(Generator):
         snapshot = tensor.cpu(blocking=False)
         return DecodeOutput(snapshot, ttnn.record_event(self.mesh, 0), tuple(slots), is_tokens)
 
-    def decode_forward_async(self, tokens, start_pos, *, page_table, kv_cache, **kwargs):
-        """Submit device sampling and a nonblocking snapshot on the same queue.
-
-        A subsequent trace may overwrite device tokens, but not this host-owned
-        snapshot. Reading the handle is observational and never advances state.
-        """
-        kwargs.pop("read_tokens", None)
-        kwargs.pop("read_from_device", None)
-        device_output = self.decode_forward(
-            tokens, start_pos, page_table=page_table, kv_cache=kv_cache, read_from_device=False, **kwargs
-        )
-        handle, _ = self.read_decode_output(device_output, async_read=True)
-        return handle
-
     def read_decode_output(self, handle, *, async_read=False):
         if not isinstance(handle, DecodeOutput):
             slots = self._device_output_slots.get(id(handle), self.fixed_slots)
@@ -1208,133 +1138,9 @@ class NemotronGenerator(Generator):
             raise ValueError("Invalid committed slot movement")
         self.counters["slot_move_notifications"] += 1
 
-    def prefill_logits(self, prompt_token_ids):
-        self.reset()
-        return self.prefill_forward(
-            torch.tensor([prompt_token_ids]),
-            page_table=self.page_host,
-            kv_cache=self.cache,
-            prompt_lens=[len(prompt_token_ids)],
-            return_all_logits=True,
-        )
-
-    def prefill_logits_continuation(self, prompt_token_ids, start, *, positions=None, prefill_prefix=True):
-        self.reset()
-        if start and prefill_prefix:
-            self.prefill_forward(
-                torch.tensor([prompt_token_ids]), page_table=self.page_host, kv_cache=self.cache, prompt_lens=[start]
-            )
-        output = self.prefill_forward(
-            torch.tensor([prompt_token_ids]),
-            page_table=self.page_host,
-            kv_cache=self.cache,
-            prompt_lens=[len(prompt_token_ids)],
-            start_pos=[start],
-            return_all_logits=True,
-            output_positions=None if positions is None else [positions],
-        )
-        return output
-
-    def generate(
-        self,
-        prompt_token_ids,
-        max_new_tokens,
-        *,
-        next_input=None,
-        enable_trace=True,
-        host_sampling=False,
-        stop_on_eos=True,
-        sampling_params=None,
-        **kwargs,
-    ):
-        if not enable_trace:
-            raise ValueError("Use the model probe for eager debugging; generation requires traces")
-        if max_new_tokens < 1:
-            return []
-        n = len(prompt_token_ids)
-        if n + max_new_tokens - 1 > self.max_seq_len:
-            raise ValueError("Prompt plus decode input positions exceed configured context")
-        self._set_sampling(sampling_params or self._sampler_params)
-
-        def prefill():
-            self.reset()
-            return self.prefill_forward(
-                torch.tensor([prompt_token_ids]),
-                page_table=self.page_host,
-                kv_cache=self.cache,
-                prompt_lens=[n],
-                on_device_sampling=True,
-            )[0]
-
-        if not self._prepared:
-            out = prefill()
-            del out
-            self.prepare_decode()
-        ttnn.synchronize_device(self.mesh)
-        begin = time.perf_counter()
-        out = prefill()
-        if host_sampling:
-            prediction = int(self.model.read_logits(out).reshape(-1).argmax())
-            del out
-            self._refresh(self.positions[0], torch.tensor([n], dtype=torch.int32), "position_refreshes")
-            self.active_host[0] = 1
-            self._refresh(self.active, self.active_host.reshape(1, 32), "active_refreshes")
-        else:
-            prediction = int(self.sample_prefill([out], slots=[0], prompt_lens=[n])[0])
-            del out
-        ttft = time.perf_counter() - begin
-        generated = [prediction]
-        baseline = self.counters.copy()
-        begin = time.perf_counter()
-        for step in range(max_new_tokens - 1):
-            if next_input is None and stop_on_eos and prediction in self.eos_token_ids:
-                break
-            if next_input is not None or host_sampling:
-                token = next_input(step, prediction) if next_input else prediction
-                packed = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
-                packed[0, 0, 0, 0] = token
-                self._refresh(self.token_input, packed, "token_refreshes")
-            result = self.decode_forward(
-                None,
-                None,
-                page_table=self.page_host,
-                kv_cache=self.cache,
-                slots=(0,),
-                refresh_inputs=False,
-                on_device_sampling=not host_sampling,
-            )
-            prediction = int(result[0].argmax()) if host_sampling else int(result[0])
-            generated.append(prediction)
-        elapsed = time.perf_counter() - begin
-        self.last_metrics = {
-            "prompt_tokens": n,
-            "generated_tokens": len(generated),
-            "ttft_seconds": ttft,
-            "decode_seconds": elapsed,
-            "decode_tokens_per_second": (len(generated) - 1) / elapsed if elapsed else 0.0,
-            "stop_on_eos": stop_on_eos,
-            "stop_reason": (
-                "eos" if next_input is None and stop_on_eos and prediction in self.eos_token_ids else "length"
-            ),
-            "teacher_forcing": next_input is not None,
-            "host_sampling": host_sampling,
-            "counters": dict(self.counters - baseline),
-        }
-        if next_input is not None:
-            next_input(max_new_tokens - 1, prediction)
-        return generated
-
     def close(self):
         for tid in (*self.decode_traces.values(), *self.sampling_traces.values()):
-            self._event("trace_release", trace_id=tid, reason="shutdown")
             ttnn.release_trace(self.mesh, tid)
         self.decode_traces.clear()
         self.sampling_traces.clear()
         self._prepared = False
-
-    teardown = close
-    release_persistent_capture = close
-
-
-def build_generator(model_dir, mesh_device, **kwargs):
-    return NemotronGenerator(mesh_device, **kwargs)

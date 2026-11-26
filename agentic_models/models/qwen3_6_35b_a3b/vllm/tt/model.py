@@ -150,12 +150,9 @@ class QwenModel:
         self.census("before_weights")
         self.layers = []
         self.immutable_tensors = {}
-        from .weight_cache import weight_cache
-
         for index in self.layer_indices:
             sd = self.checkpoint.select(f"model.language_model.layers.{index}.")
-            with weight_cache(f"layer{index}"):
-                layer = self._build_layer(sd, index)
+            layer = self._build_layer(sd, index)
             # The selected TP4 router uses MeshFP32TopK/native topk exclusively.
             # Its parent constructors also allocate legacy single-chip router
             # inputs/outputs and an InlineSelector that this override never
@@ -188,8 +185,7 @@ class QwenModel:
             if self.fast:
                 from .fast_generator import attach_fast_layers
 
-                with weight_cache(f"fast{index}"):
-                    attach_fast_layers(self, layer, sd)
+                attach_fast_layers(self, layer, sd)
             self.layers.append(layer)
             del sd
             self.census(f"layer_{index}")

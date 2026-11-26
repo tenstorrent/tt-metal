@@ -28,25 +28,21 @@
     "benchmark_*.py",
     "README.md",
     "doc/ except the files above",
-    "tt/fused_decoder.py and tt/functional_decoder.py (not imported at runtime)"
+    "tt/fused_decoder.py and tt/functional_decoder.py (not imported at runtime)",
+    "tt/readiness_contract.py (the readiness-check Generator ABC; serving does not use it)"
   ],
   "modified_sha256": {
-    "tt/generator.py": "60ac612c1a8df73308cbc5ac17d588fb4adb1cf9e28ba4c28e6e3e97619aa9f9",
-    "tt/generator_vllm.py": "a04a1007ffc70b0939347147362b7ad27064c96e38d3768008bfed11d6067f52",
-    "tt/model.py": "b8ff57f5c8423e19f30839c9bba29275dcc0cea3d971779ae1d7103aa20920e4",
-    "tt/multichip_decoder.py": "2ad537d8ae052c76dea8e3ab5864f18791a6ab40d26ba4899e2c9daa8627b989",
-    "tt/optimized_decoder.py": "30c77313f7edfd51105444f33e63ba23e40fec3015aca5c0fb9ab1bbc8036af3",
-    "tt/readiness_contract.py": "6603e75c8a2d7fddb52b675949f9b96a8fbdd95356e57e1e6b95f8a4df328297",
-    "tt/tt_ccl.py": "1805fb9aa5907004c239ed685f5432125db005d6845d9a808b2af2e63fcf0430"
+    "tt/capacity.py": "5b1600a44e44b244a48528e48e8568e27f0a2d0cb0480efd238c18cba279271e",
+    "tt/generator.py": "b423e572c9f0a42977a321c342cdfc6224e6de7b5c832490a6825e8631160a95",
+    "tt/generator_vllm.py": "462a668ad469a7caea21299ffb1b4a7b347b2e1574784b238fe0ee06f94a882b",
+    "tt/model.py": "74e03afa34f5bc83bc26461dfc6772801aa39c50a2e28e6ce21bc2d68552e546",
+    "tt/multichip_decoder.py": "e3284f31dfef028bcc3ae8375c1d558b22ed7ffc7d99c276d7db850b42abc82c",
+    "tt/optimized_decoder.py": "c118264c2cf9daf2602cd530450f43a1c698f45c21011109c51897216b09141c",
+    "tt/precision.py": "0b3158d489e88d49bf35c43ff4a36bb9e5d86e42eaad88aa80ecf3d603c47b4b",
+    "tt/tt_ccl.py": "1805fb9aa5907004c239ed685f5432125db005d6845d9a808b2af2e63fcf0430",
+    "tt/wide_sampling.py": "cbc94a41a70df76f5f83bfe65d9d80a097f1dd723086a1fd417840d4ac4be3b2"
   },
   "additional_sources": {
-    "tt/readiness_contract.py": {
-      "source": "tt-model-bringup runtime/readiness_check/contract.py",
-      "host_path": "m6:/home/vkovacevic/nemotron35-lightning/skills-v24/plugins/tt-model-bringup/runtime/readiness_check/contract.py",
-      "revision": "tenstorrent skills b177a81b47a15eec4d226f21dafaa756aea0a9d8 (the bring-up runtime, 0.1.24 install; plugin.json at that commit reads 0.1.25)",
-      "upstream_sha256": "42417eab48a87b6e9c31dee15ef68bac5c67970e487a295f78ee7f968ef93358",
-      "edit": "docstring example model_dir path rewritten to models/<bring-up dir>/<model_name>"
-    },
     "tt/tt_ccl.py": {
       "source": "subclass of models.common.tt_ccl.TT_CCL at the tt_metal pin 58afa857 (file identical at 8c48b4e4) adding the bring-up eager=False lazy semaphores (m6 tt-metal 62cee5d6)",
       "host_path": "m6:/home/vkovacevic/nemotron35-lightning/tt-metal models/common/tt_ccl.py",
@@ -60,5 +56,21 @@
     "tt/model.py": "Checkpoint path: prefer the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else the previous $HF_HOME resolution; config and tokenizer load from the same directory",
     "tt/multichip_decoder.py": "Layer kinds through optimized_decoder.layer_kinds(), which maps the transformers 5.16 NemotronH names (linear_attention, full_attention) back to the checkpoint names (mamba, attention) the port keys on; 2-4 row indexed MoE decode flattens the routed expert ids as UINT32 then casts to UINT16, because the pin reshape rejects UINT16 tensors; the MoE decode combine matmul (NEMOTRON_MOE_COMBINE_MATMUL) zeroes non-finite routing weights first (unused rows of a partly filled 32-row decode bucket carried NaN weights and the 0 * NaN products in the selection matrix corrupted every live row: 17-31 concurrent requests decoded garbage)",
     "tt/optimized_decoder.py": "Layer kinds through optimized_decoder.layer_kinds(), which maps the transformers 5.16 NemotronH names (linear_attention, full_attention) back to the checkpoint names (mamba, attention) the port keys on (new helper)"
+  },
+  "trim": {
+    "note": "trimmed to the serving closure: the import closure of TT_MODEL_CLASS_OVERRIDES (tt/generator_vllm.py:NemotronForCausalLM) and model/entry.py, plus the data file it reads (doc/datatype_sweep/selected_precision_config.json). Removed code is unreachable from the production TTI spec (tt-inference-server workflows/model_specs/dev/llm.yaml, impl nemotron35_lightning_qb2) or sits behind an env var/policy field that the spec never sets and that defaults off. Paths behind default-on knobs and every batch bucket, prefill length, prefix-cache and guard path are kept.",
+    "removed_files": [
+      "tt/readiness_contract.py"
+    ],
+    "removed_code": {
+      "tt/generator_vllm.py": "NEMOTRON_VLLM_EVENTS JSONL telemetry (event() and its calls), NEMOTRON_VLLM_LAYERS layer-subset diagnostic",
+      "tt/generator.py": "readiness Generator base class and its host API (prefill_logits, prefill_logits_continuation, generate, build_generator), decode_forward_async, cache_capacity, cache_capacity_plan, the event sink (the trace-capture log line is kept), tokenizer/GenerationConfig loads used only by generate(), teardown/release_persistent_capture aliases, layer_indices plumbing",
+      "tt/model.py": "precision_summary and memory_view (telemetry), _copy_state_row (unreferenced), layer_indices parameter",
+      "tt/multichip_decoder.py": "MeshPolicy.input_fusion (default False, never set) and its setup/norm/projection code, NEMOTRON_DT_CLAMP (default off), projection dispatch counters, unread fast_compute/fused_compute/grouped_down, the list-input branch of prefill_forward (no caller passes a list)",
+      "tt/optimized_decoder.py": "every OptimizedDecoder method that MultichipDecoder overrides without calling super() (from_state_dict, allocate_state, _linear, _norm, _attention_decode, _moe, _mamba_decode, _mamba_prefill_chunk, decode_forward, _attention_prefill_chunk, prefill_forward) and the helpers only they used (_sparse_config, _grouped_moe, _moe_prefill_requests); kept: layer_kinds, DecoderState, _norm_unsharded, _router_logits (called via super()), _route",
+      "tt/capacity.py": "cache_capacity_plan (unreferenced) and its constants",
+      "tt/precision.py": "NEMOTRON_PRECISION_CONFIG override",
+      "tt/wide_sampling.py": "mix32 (host reference of the device mixer, unreferenced)"
+    }
   }
 }

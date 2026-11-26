@@ -15,7 +15,6 @@ import pytest
 
 from agentic_models.models.nemotron_3_5_lightning_30b_a3b.vllm.tt import model
 
-TT = Path(__file__).resolve().parents[2] / "tt"
 HUB_DIR = "hub/models--nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16/snapshots"
 
 
@@ -83,10 +82,3 @@ def test_mounted_snapshot_must_be_the_pinned_revision(env):
     with pytest.raises(ValueError, match=model.HF_REVISION):
         model.checkpoint_path()
 
-
-def test_tokenizer_and_generation_config_load_from_the_checkpoint_directory():
-    # model.checkpoint is Checkpoint(...).path (tt/model.py), so tokenizer, config and weights share one directory.
-    assert "self.checkpoint = weights.path" in (TT / "model.py").read_text()
-    generator = (TT / "generator.py").read_text()
-    assert "AutoTokenizer.from_pretrained(self.model.checkpoint)" in generator
-    assert "GenerationConfig.from_pretrained(self.model.checkpoint)" in generator

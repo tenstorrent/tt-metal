@@ -20,7 +20,7 @@ edit does. This phase sits next to the Galaxy `reload` phase of the same model a
 | `tt/generator_vllm.py` | vLLM adapter `QwenVLLM`: capabilities, the KV-cache spec (block 32, full-attention layers only), prefill/decode, MTP verify and propose, async decode readback |
 | `tt/generator.py` | `QwenGenerator`: traced decode buckets, chunked prefill, on-device sampling and penalties, slot-owned GDN state, prefix-cache snapshots, MTP |
 | `tt/model.py`, `tt/multichip_decoder.py`, `tt/optimized_decoder.py` | Model, checkpoint loading (HF revision pinned in `tt/model.py`), TP4 decoder layers |
-| `tt/*_candidate.py`, `tt/flat_prefill.py`, `tt/bounded_prefill.py`, ... | The kernels and programs the decoder selects (the import closure of `generator_vllm`). Bring-up modules outside that closure are not vendored |
+| `tt/*_candidate.py`, `tt/flat_prefill.py`, `tt/bounded_prefill.py`, ... | The kernels and programs the decoder selects under the serving policy. The package is trimmed to what the TTI spec can reach: bring-up variants behind policy keys or env vars the spec never sets, self-tests and benchmark hooks are removed (`provenance/upstream.json` `trim`) |
 | `tt/precision.py`, `doc/datatype_sweep/selected_precision_config.json` | Precision policy. The shipped config is the bring-up's config P, `bfp8_baseline` |
 | `tt/sampling/` | `models.common.sampling` `generator.py` / `tt_sampling.py` from the tt-metal pin, with the bring-up's `max_top_k` changes. The model builds both samplers with width 32 |
 | `tt/kernels/qkv_causal_conv1d_silu.cpp` | The tt-metal pin's kda conv compute kernel source. `tt/tiled_prefill_conv_candidate.py` rewrites it into a generic-op kernel |

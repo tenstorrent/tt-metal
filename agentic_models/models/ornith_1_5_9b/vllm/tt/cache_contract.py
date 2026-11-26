@@ -17,11 +17,9 @@ The public token budget requires an independently validated physical block count
 from dataclasses import dataclass, replace
 from math import ceil, prod
 from numbers import Integral
-from types import MappingProxyType
 
 FULL_LAYERS = tuple(range(3, 32, 4))
 BLOCK_SIZE = 32
-PERSISTENT_CATEGORIES = frozenset(("weights", "existing_cache", "trace", "staging", "sampler", "ccl", "recurrent"))
 
 
 def _integer(value, name, minimum=0):
@@ -124,76 +122,6 @@ def get_kv_cache_spec(model=None, *, cache=None):
             raise ValueError("Cache precision differs from the constructed model policy")
         specs[index] = LayerCacheSpec(index, key_dtype=key_dtype, value_dtype=value_dtype)
     return specs
-
-
-@dataclass(frozen=True)
-class PoolLimit:
-    num_blocks_upper_bound: int
-    bytes_per_block_per_device: int
-    usable_bytes_per_device: tuple
-    measurement_artifact: str
-    reserve_bytes_per_device: int
-    allocation_verified: bool = False
-
-
-@dataclass(frozen=True)
-class DramBudget:
-    """Four per-device FREE-byte measurements after explicitly named allocations.
-
-    Every required category must appear exactly once in included_categories or
-    pending_bytes_per_device. Pending values include peak setup/runtime overhead
-    not present at measurement time; zero means explicitly known zero, not unknown.
-    Add other named pending allocations (e.g. warmup snapshots) as needed. Reserve
-    covers allocator/fragmentation and unaccounted peak margin; it is mandatory.
-    By default the target NEW pool is not yet allocated at measurement time.
-    For measurement AFTER setup, existing_target_pool_bytes_per_device must be
-    actual validated target K/V bytes already included in existing_cache. This
-    computes total capacity INCLUDING that retained target pool, not free space
-    for a second allocation. Other existing caches are never credited.
-    """
-
-    measured_free_bytes_per_device: tuple
-    measurement_artifact: str
-    included_categories: tuple
-    pending_bytes_per_device: object
-    reserve_bytes_per_device: int
-    existing_target_pool_bytes_per_device: tuple = ()
-
-    def __post_init__(self):
-        free = tuple(_integer(v, "measured free bytes") for v in self.measured_free_bytes_per_device)
-        if len(free) != 4 or not self.measurement_artifact.strip():
-            raise ValueError("Require four device measurements and their evidence artifact")
-        included = tuple(self.included_categories)
-        pending = dict(self.pending_bytes_per_device)
-        if len(set(included)) != len(included) or set(included) & set(pending):
-            raise ValueError("Allocations must be accounted exactly once")
-        if PERSISTENT_CATEGORIES - (set(included) | set(pending)):
-            raise ValueError("Every persistent allocation category must be accounted explicitly")
-        pending = {name: _integer(value, f"pending {name}") for name, value in pending.items()}
-        target = tuple(_integer(v, "existing target pool bytes") for v in self.existing_target_pool_bytes_per_device)
-        if target and (len(target) != 4 or "existing_cache" not in included):
-            raise ValueError(
-                "Existing target pool credit requires four actual sizes already included in the measurement"
-            )
-        object.__setattr__(self, "existing_target_pool_bytes_per_device", target or (0, 0, 0, 0))
-        object.__setattr__(self, "measured_free_bytes_per_device", free)
-        object.__setattr__(self, "included_categories", included)
-        object.__setattr__(self, "pending_bytes_per_device", MappingProxyType(pending))
-        object.__setattr__(self, "reserve_bytes_per_device", _integer(self.reserve_bytes_per_device, "reserve", 1))
-
-    def pool_limit(self, specs=None):
-        specs = get_kv_cache_spec() if specs is None else specs
-        if tuple(sorted(specs)) != FULL_LAYERS:
-            raise ValueError("Budget must include all eight full-attention layers")
-        page_bytes = sum(spec.bytes_per_block for spec in specs.values())
-        pending = sum(self.pending_bytes_per_device.values()) + self.reserve_bytes_per_device
-        usable = tuple(
-            max(0, free + target - pending)
-            for free, target in zip(self.measured_free_bytes_per_device, self.existing_target_pool_bytes_per_device)
-        )
-        return PoolLimit(
-            min(usable) // page_bytes, page_bytes, usable, self.measurement_artifact, self.reserve_bytes_per_device
-        )
 
 
 # Serving KV pool (vLLM's get_max_tokens_all_users): ONE pool of 32-token pages shared by all slots. TT does not

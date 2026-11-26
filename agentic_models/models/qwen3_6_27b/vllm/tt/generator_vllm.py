@@ -8,7 +8,6 @@ state and all forward/sampling traces, including device token feedback.
 
 import json
 import os
-import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -16,7 +15,6 @@ import torch
 
 import ttnn
 
-from .benchmark_timing import PhaseTiming, tensor_inventory
 from .generator import QwenGenerator
 from .model import Model
 
@@ -26,7 +24,6 @@ class DecodeOutput:
     tensor: object
     is_tokens: bool
     rows: int | None = None
-    phase_event: object = None
 
 
 class QwenVLLM:
@@ -153,8 +150,6 @@ class QwenVLLM:
         self._precision_reported = False
         self.telemetry = os.environ.get("QWEN_VLLM_TELEMETRY", "1") != "0"
         self.host_compatibility = os.environ.get("QWEN_VLLM_HOST_COMPATIBILITY") == "1"
-        phase_path = os.environ.get("QWEN_BENCHMARK_PHASE_LOG")
-        self.phase_timing = PhaseTiming(phase_path, max_batch_size, ttnn.event_query) if phase_path else None
 
     def allocate_kv_cache(self, shape, dtype, num_layers):
         if self.generator is not None:
@@ -202,25 +197,6 @@ class QwenVLLM:
                 flush=True,
             )
             self._precision_reported = True
-            if self.phase_timing:
-                self.phase_timing.ready(
-                    dict(
-                        imported_module=__name__,
-                        imported_file=os.path.realpath(__file__),
-                        layer_count=len(self.model.layers),
-                        layers=self.model.layer_indices,
-                        precision=self.model.precision,
-                        model_config=self.model.config.to_dict(),
-                        weights=tensor_inventory(self.model, ttnn),
-                        devices=list(self.mesh.get_device_ids()),
-                        mesh_shape=list(self.mesh.shape),
-                        compute_grid=[
-                            self.mesh.compute_with_storage_grid_size().x,
-                            self.mesh.compute_with_storage_grid_size().y,
-                        ],
-                        max_model_len=self.max_seq_len,
-                    )
-                )
 
     def warmup_model_decode(self, *, kv_cache, **kwargs):
         self._check_cache(kv_cache)
@@ -241,7 +217,6 @@ class QwenVLLM:
             raise ValueError("Host sampling requires explicit QWEN_VLLM_HOST_COMPATIBILITY=1")
 
     def prefill_forward(self, tokens, *, page_table, kv_cache, sampling_params=None, **kwargs):
-        phase_started = time.perf_counter() if self.phase_timing else None
         # Plugin P2 passes prefill_sampling_mask (True = final row) on device and host routes. The
         # generator's sampling_mask applies to device sampling only; the host route returns every row's
         # logits and the plugin discards intermediate ones, as before.
@@ -249,16 +224,6 @@ class QwenVLLM:
         if prefill_sampling_mask is not None and sampling_params is not None:
             kwargs["sampling_mask"] = list(prefill_sampling_mask)
         self._check_cache(kv_cache)
-        if self.phase_timing:
-            phase_event = self.phase_timing.prefill(
-                list(map(int, kwargs["start_pos"])),
-                list(map(int, kwargs["prompt_lens"])),
-                list(map(int, kwargs.get("empty_slots", range(len(tokens))))),
-                list(map(int, kwargs.get("original_prompt_lens", kwargs["prompt_lens"]))),
-                kwargs.get("sampling_mask", [True] * len(tokens)),
-                torch.as_tensor(tokens)[:, :64].tolist(),
-                phase_started,
-            )
         self._sampling_mode("prefill", sampling_params)
         print(
             "QWEN_VLLM_PREFILL "
@@ -286,8 +251,6 @@ class QwenVLLM:
         )
         if sampling_params is not None and bool(((output < 0) | (output >= self.model.config.vocab_size)).any()):
             raise RuntimeError(f"Device sampler emitted out-of-vocabulary IDs: {output.tolist()}")
-        if self.phase_timing:
-            self.phase_timing.complete_prefill(phase_event, ttnn.record_event(self.mesh, 0))
         # The checkpoint retains mRoPE metadata in text-only serving. Every
         # axis then has the ordinary text position, so its request delta is0.
         return (output, torch.zeros(len(tokens), dtype=torch.int64)) if self.request_specific_rope else output
@@ -303,19 +266,8 @@ class QwenVLLM:
         read_from_device=True,
         **kwargs,
     ):
-        phase_started = time.perf_counter() if self.phase_timing else None
-        phase_event = None
         self._check_cache(kv_cache)
         self._sampling_mode("decode", sampling_params)
-        if self.phase_timing:
-            remap = kwargs.get("slot_remap")
-            phase_event = self.phase_timing.decode(
-                torch.as_tensor(start_pos).flatten().tolist() if kwargs.get("reload_inputs", True) else [],
-                None if remap is None else list(map(int, remap)),
-                kwargs.get("reload_inputs", True),
-                len(tokens),
-                phase_started,
-            )
         submitted_batch = len(tokens)
         if submitted_batch not in self.tt_supported_decode_batch_sizes:
             raise ValueError("The plugin submitted an unprepared decode bucket")
@@ -414,7 +366,7 @@ class QwenVLLM:
             logical_batch=submitted_batch,
             **kwargs,
         )
-        result = DecodeOutput(output, sampling_params is not None, submitted_batch, phase_event)
+        result = DecodeOutput(output, sampling_params is not None, submitted_batch)
         if read_from_device:
             return self.process_decode_output_host(self.read_decode_output(result), is_tokens=result.is_tokens)
         return result
@@ -498,16 +450,13 @@ class QwenVLLM:
         # Queue the transfer before another trace can overwrite the output.
         # Each cpu() owns separate host storage until its read event completes.
         tensor = ttnn.get_device_tensors(output.tensor)[0] if output.is_tokens else output.tensor
-        host = DecodeOutput(tensor.cpu(blocking=not async_read), output.is_tokens, output.rows, output.phase_event)
+        host = DecodeOutput(tensor.cpu(blocking=not async_read), output.is_tokens, output.rows)
         event = ttnn.record_event(self.mesh, 0) if async_read else None
-        if self.phase_timing:
-            self.phase_timing.read_decode(output.phase_event, event)
         return (host, [event]) if async_read else host
 
     def process_decode_output_host(self, output, is_tokens=False):
         if isinstance(output, torch.Tensor):
             return output
-        phase_host_started = time.perf_counter() if self.phase_timing else None
         if output.is_tokens != is_tokens:
             raise ValueError("Submission/readback sampling mode mismatch")
         # The non-overlapped plugin finalizes device output directly. The
@@ -523,16 +472,12 @@ class QwenVLLM:
             values = ttnn.to_torch(output.tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=-1))[
                 0, 0, :rows, None, :
             ].float()
-        if self.phase_timing:
-            self.phase_timing.complete_decode(output.phase_event, phase_host_started)
         return values
 
     def release_request(self, slot):
         self.generator.release_request(slot)
         if getattr(self.generator, "mtp_pending_pos", None):
             self.generator.mtp_pending_pos.pop(slot, None)
-        if self.phase_timing:
-            self.phase_timing.release(slot)
 
     def release_persistent_capture(self):
         if self.generator is not None:

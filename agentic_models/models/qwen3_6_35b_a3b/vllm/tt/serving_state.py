@@ -35,14 +35,6 @@ class ReloadCommands:
         if self.reset_sampling_state and not self.reload_inputs:
             raise ValueError("Sampling-state reset requires authoritative forward inputs")
 
-    @classmethod
-    def from_kwargs(cls, kwargs):
-        if "reset_batch" in kwargs:
-            raise TypeError("Contract v1 rejects legacy reset_batch")
-        if "decode_layout_changed" in kwargs:
-            raise TypeError("decode_layout_changed is runner-private, not a v1 command")
-        return cls(**{key: kwargs[key] for key in cls.__dataclass_fields__ if key in kwargs})
-
 
 class _ValidatedRemap(tuple):
     """Immutable model-internal permutation, validated once at its boundary."""
@@ -500,11 +492,6 @@ class DecodeOutputPool:
             raise ValueError("Output handle belongs to another generator")
         if self.leases[handle.lease] is not handle or handle.phase not in phases:
             raise RuntimeError("Output handle was consumed, cancelled or used in the wrong phase")
-
-    def cancel_unsubmitted(self, handle):
-        self._check(handle, ("reserved",))
-        self.leases[handle.lease] = None
-        handle.phase = "cancelled"
 
     def publish(self, handle, output):
         self._check(handle, ("reserved",))

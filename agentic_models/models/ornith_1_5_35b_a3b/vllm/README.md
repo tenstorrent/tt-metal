@@ -6,7 +6,8 @@ top-8 plus a shared expert, ~3B active parameters) for the QB2 1x4 Blackhole mes
 through vLLM with the [vllm-tt-plugin](https://github.com/tenstorrent/vllm-tt-plugin). Text only: the vision encoder
 and the MTP head are not served. Logical context 262,144 tokens per request, 32 fixed request slots.
 Produced by the tt-model-bringup agentic pipeline on a QB2 bring-up host; `provenance/upstream.json` records the
-source checkout, commit and every file changed since.
+source checkout, commit and every file changed since. The package is trimmed to the serving closure of
+`OrnithForCausalLM`: the bring-up's opt-in telemetry, reduced-layer debug path and base capacity evidence are not carried.
 
 ## Layout
 
@@ -17,9 +18,8 @@ source checkout, commit and every file changed since.
 | `tt/optimized_decoder.py` | Single-chip layer programs, policies and constants the TP4/EP4 layer builds on |
 | `tt/generator.py` | Traced decode over 32 fixed slots, chunked prefill, on-device sampling and penalties, recurrent-state slots |
 | `tt/generator_vllm.py` | vLLM adapter (`OrnithForCausalLM`), vLLM-owned paged KV cache, decode-input reload contract v1 |
-| `tt/serving_observer.py`, `tt/benchmark_timing.py` | Opt-in host telemetry (`ORNITH_VLLM_TRACE_EVENTS=1`, `ORNITH_BENCHMARK_TIMING_DIR`) |
 | `tt/precision.py`, `doc/datatype_sweep/selected_precision_config.json` | Selected precision (below) |
-| `doc/full_model/kv_capacity.json`, `doc/optimized_vllm/native_tail_capacity/` | Measured KV pool size and the evidence files the gate requires |
+| `doc/full_model/kv_capacity.json` | Measured KV pool size (pin measurement) and the source hashes the gate checks |
 | `tt/readiness_contract.py` | The `Generator` base class, vendored from the tt-model-bringup 0.1.24 runtime |
 | `vllm_metadata.json` | The architecture (`Qwen3_5MoeForConditionalGeneration`) and the adapter class |
 | `model/entry.py` | `register()`: registers the adapter for `TTQwen3_5MoeForConditionalGeneration`, replacing any earlier entry |
@@ -58,7 +58,7 @@ Qwen3.5 demo, so this adapter is selected with the plugin's class override, not 
 
 ```bash
 export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5MoeForConditionalGeneration=agentic_models.models.ornith_1_5_35b_a3b.vllm.tt.generator_vllm:OrnithForCausalLM
-export MESH_DEVICE=P300x2 VLLM_RPC_TIMEOUT=1800000 ORNITH_VLLM_TRACE_EVENTS=0
+export MESH_DEVICE=P300x2 VLLM_RPC_TIMEOUT=1800000
 python -m vllm.entrypoints.openai.api_server --model ornith-ai/Ornith-1.5-35B-A3B \
   --revision 10fbf86fed7ecee4a061f8b499a618f46001cac1 --tokenizer-revision 10fbf86fed7ecee4a061f8b499a618f46001cac1 \
   --served-model-name ornith-ai/Ornith-1.5-35B-A3B ornith \

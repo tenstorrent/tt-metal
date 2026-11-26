@@ -1911,9 +1911,6 @@ class MultichipDecoder(LinearTP4Mixin, OptimizedDecoder):
             raise ValueError("decode row does not match residual contract")
         return self._forward(hidden_states, state=state, decode=True, positions=positions)
 
-    def prepare_decode_batch(self, batch):
-        self.prepare_moe(batch)
-
     def decode_batch(
         self,
         hidden_states,

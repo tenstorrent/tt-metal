@@ -530,9 +530,6 @@ class PrefillRuntime:
                 bound["layers"][index]["history"]["boundary"] = None
             source, destination = destination, source
         bound["end"], bound["total_length"] = end, total_length
-        hook = getattr(self, "segment_hook", None)
-        if hook is not None:  # MTP drafter prompt KV (tt/mtp_spec.py): final hidden rows are in `source`
-            hook(source=source, slot=slot, ids=ids, start=start, end=end, mapping=mapping)
         self.events.append(
             {
                 "slot": slot,

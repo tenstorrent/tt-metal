@@ -232,11 +232,6 @@ class OrnithModel:
                 compute_kernel_config=self.norm_compute,
                 memory_config=self.collectives.ar_mem,
             )
-            sink = getattr(self, "hidden_sink", None)
-            if sink is not None:
-                # MTP speculative decoding (tt/mtp_spec.py): keep each row's normed hidden for the drafter
-                rows = ttnn.to_layout(ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG), ttnn.ROW_MAJOR_LAYOUT)
-                ttnn.experimental.slice_write(rows, sink, (0, 0, 0, 0), (1, 1, rows.shape[2], 4096), (1, 1, 1, 1))
             if self.decode_head is not None:
                 return self.decode_head(hidden)
             hidden = ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)

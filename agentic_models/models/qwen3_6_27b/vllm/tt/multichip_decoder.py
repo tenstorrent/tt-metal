@@ -170,15 +170,6 @@ class MultichipDecoder(OptimizedDecoder):
             **(policy or {}),
         }
         assert self.policy["residual_layout"] in ("sharded", "replicated")
-        if self.policy.get("direct_prefill_qkv", False):
-            assert self.kind == "full_attention" and self.policy.get(
-                "packed_qkvg", False
-            ), "Direct prefill QKV requires full attention with packed QKVG weights"
-            assert type(self.policy.get("direct_prefill_qkv_cores", 110)) is int
-            assert self.policy.get("direct_prefill_qkv_cores", 110) in (48, 110)
-        assert self.policy.get("attention_gate_mode", "off") in ("off", "dram", "l1")
-        assert self.policy.get("attention_gate_scope", "decode") in ("decode", "compact")
-        assert self.policy.get("attention_gate_cores", 48) in (8, 48)
         if self.kind == "linear_attention" and (
             self.policy.get("recurrent_column_grain", 0) or self.policy.get("recurrent_prediction_registers", False)
         ):
@@ -373,9 +364,6 @@ class MultichipDecoder(OptimizedDecoder):
             from .packed_correction_candidate import install
 
             install(self, **dict(self.policy["packed_correction_options"]))
-        from .fused_decode_norm import install as install_decode_norm
-
-        install_decode_norm(self, layer_idx=self.layer_idx)
         return self
 
     def _upload(self, value, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
@@ -399,14 +387,6 @@ class MultichipDecoder(OptimizedDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=-1),
         )
-
-    def upload_residual(self, value):
-        return self._upload_shards(list(value.chunk(4, -1))) if self.hidden_width == 1280 else self._upload(value)
-
-    def upload_decode_residual(self, value):
-        """Setup-only compact decode input; every layer preserves [1,B,H/TP]."""
-        assert value.shape[1] == 1
-        return self.upload_residual(value.reshape(1, value.shape[0], value.shape[-1]))
 
     def _combine_correction(self, primary, correction, key):
         if self.narrow_gdn_correction and key == "packed_gdn":
@@ -641,9 +621,6 @@ class MultichipDecoder(OptimizedDecoder):
     def _norm(self, x, key, *, decode=False, logical_batch=None):
         if x.shape[-1] != 1280:
             return super()._norm(x, key)
-        if decode and self.policy.get("distributed_decode_norm", "off") != "off":
-            assert self._fused_decode_norm is not None
-            return self._fused_decode_norm.normalize(self, x, key)
         gather = self.policy.get("gather_norm", False)
         if gather == "decode":
             gather = decode
@@ -653,16 +630,6 @@ class MultichipDecoder(OptimizedDecoder):
             gather = (x.shape[0] * x.shape[1] == 1) if decode else (logical_batch or x.shape[0]) == 1
         if gather:
             gathered = self._collective(x)
-            if decode and self.policy.get("fused_hidden_norm", False):
-                from .hidden_norm_fused_candidate import hidden_norm_fused
-
-                assert self.policy.get("sfpu_hidden_norm") and self.policy.get("exact_tree_hidden_norm")
-                return hidden_norm_fused(
-                    ttnn.to_memory_config(gathered, ttnn.DRAM_MEMORY_CONFIG),
-                    self.weights[key],
-                    epsilon=self.config.rms_norm_eps,
-                    admission=self.policy.get("hidden_norm_admission", "software"),
-                )
             return super()._norm(gathered, key)
         shape = tuple(x.shape)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -702,55 +669,6 @@ class MultichipDecoder(OptimizedDecoder):
         dtype = getattr(ttnn, self.policy.get("mlp_activation_dtype", "bfloat16"))
         return value if value.dtype == dtype else ttnn.typecast(value, dtype)
 
-    def _prefill_swiglu_with_options(self, h):
-        """Opt-in bulk-only geometry/placement family; paired weights and compute config unchanged."""
-        options = self.policy["prefill_swiglu_options"]
-        assert isinstance(options, dict) and set(options) <= {"k_block", "chunk_rows", "input_l1"}
-        kb = options.get("k_block", 4)
-        cap = options.get("chunk_rows", 0)
-        input_l1 = options.get("input_l1", False)
-        assert type(kb) is int and kb in (4, 8)
-        assert type(cap) is int and (cap == 0 or cap >= 32 and cap % 32 == 0)
-        assert type(input_l1) is bool and (not input_l1 or 32 <= cap <= 2048)
-        batch, seq, width = tuple(h.shape)
-        rows = batch * seq
-        assert width == 5120 and rows > 512 and self.swiglu_weight is not None
-        assert h.dtype == ttnn.bfloat16
-        flat = ttnn.reshape(ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG), (1, rows, width))
-        padded = (rows + 31) // 32 * 32
-        if padded != rows:
-            flat = ttnn.pad(flat, ((0, 0), (0, padded - rows), (0, 0)), value=0.0)
-        cap = cap or padded
-        config = ttnn.MinimalMatmulConfig(
-            M_block_size=4,
-            K_block_size=kb,
-            N_block_size=16,
-            subblock_h=1,
-            subblock_w=4,
-            compute_with_storage_grid_size=(11, 10),
-        )
-
-        def project_piece(start, stop):
-            # Local lifetime avoids retaining a previous L1 piece while admitting the next.
-            piece = flat if start == 0 and stop == padded else flat[:, start:stop, :]
-            if input_l1:
-                piece = ttnn.to_memory_config(piece, ttnn.L1_MEMORY_CONFIG)
-            return ttnn.experimental.minimal_matmul(
-                self._mlp_input(piece),
-                self.swiglu_weight,
-                config=config,
-                fuse_swiglu=True,
-                compute_kernel_config=self.matmul_configs.get("mlp_gate_up", self.matmul_configs["mlp"]),
-                dtype=getattr(ttnn, self.policy.get("activation_dtype", "bfloat16")),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-        pieces = [project_piece(start, min(start + cap, padded)) for start in range(0, padded, cap)]
-        act = pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=1)
-        if padded != rows:
-            act = act[:, :rows, :]
-        return ttnn.reshape(act, (batch, seq, 4352))
-
     def _finish(self, x, attention, prefill=False, *, decode=False):
         original_shape = tuple(x.shape)
         flat = prefill and self.policy.get("flat_finish", False) and x.shape[0] > 1 and x.shape[1] > 1
@@ -775,29 +693,26 @@ class MultichipDecoder(OptimizedDecoder):
             and (prefill or self.policy.get("minimal_swiglu") is True)
             and not tail_packed
         ):
-            if prefill and swiglu_rows > 512 and self.policy.get("prefill_swiglu_options"):
-                act = self._prefill_swiglu_with_options(h)
-            else:
-                batch, seq, _ = h.shape
-                flat = ttnn.reshape(ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG), (1, batch * seq, 5120))
-                small = 32 < batch * seq <= 512
-                act = ttnn.experimental.minimal_matmul(
-                    self._mlp_input(flat),
-                    self.swiglu_weight,
-                    config=ttnn.MinimalMatmulConfig(
-                        M_block_size=2 if small else 4,
-                        K_block_size=8 if small else 4,
-                        N_block_size=26 if small else 16,
-                        subblock_h=1,
-                        subblock_w=2 if small else 4,
-                        compute_with_storage_grid_size=(11, 8) if small else (11, 10),
-                    ),
-                    fuse_swiglu=True,
-                    compute_kernel_config=self.matmul_configs.get("mlp_gate_up", self.matmul_configs["mlp"]),
-                    dtype=getattr(ttnn, self.policy.get("activation_dtype", "bfloat16")),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                act = ttnn.reshape(act, (batch, seq, 4352))
+            batch, seq, _ = h.shape
+            flat = ttnn.reshape(ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG), (1, batch * seq, 5120))
+            small = 32 < batch * seq <= 512
+            act = ttnn.experimental.minimal_matmul(
+                self._mlp_input(flat),
+                self.swiglu_weight,
+                config=ttnn.MinimalMatmulConfig(
+                    M_block_size=2 if small else 4,
+                    K_block_size=8 if small else 4,
+                    N_block_size=26 if small else 16,
+                    subblock_h=1,
+                    subblock_w=2 if small else 4,
+                    compute_with_storage_grid_size=(11, 8) if small else (11, 10),
+                ),
+                fuse_swiglu=True,
+                compute_kernel_config=self.matmul_configs.get("mlp_gate_up", self.matmul_configs["mlp"]),
+                dtype=getattr(ttnn, self.policy.get("activation_dtype", "bfloat16")),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            act = ttnn.reshape(act, (batch, seq, 4352))
         else:
             fused_epilogue = (
                 (not prefill or tail_packed)
@@ -887,22 +802,6 @@ class MultichipDecoder(OptimizedDecoder):
         # B1 and one-token tails retain the inherited ordered implementation.
         return super()._attention_prefill(x, self._attention_state_view(state), start_pos=start_pos, rope=rope)
 
-    def replace_paged_table_from_host(self, state, page_table):
-        """Setup only, before warmup/capture: upload a fresh private table lease.
-
-        Existing traces must be released/recaptured after changing buffer addresses.
-        This cannot certify an already-exposed device tensor in place.
-        """
-        import torch
-
-        assert isinstance(state, CertifiedPagedState)
-        assert not ttnn.is_trace_capture_active(self.mesh)
-        assert tuple(page_table.shape) == state.page_table_shape
-        assert int(page_table.min()) >= -1 and int(page_table.max()) < state.key.shape[0]
-        private_host = page_table.to(torch.int32).contiguous().clone()
-        table = self._upload(private_host, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        state._replace_with_fresh_private_table(table, certified=certify_host_page_rows(private_host.tolist()))
-
     def _prefill_cache_fill(self, state, key, value, *, start_pos):
         batch = key.shape[0]
         table = self._attention_page_table(state)
@@ -944,32 +843,13 @@ class MultichipDecoder(OptimizedDecoder):
         )
         if compact:
             projected = ttnn.reshape(projected, (batch, 1, 3584 if packed_gate else 2048))
-        direct_prefill = (
-            prefill
-            and self.policy.get("direct_prefill_qkv", False)
-            and not compact
-            and (logical_shape is not None or x.shape[0] == 1)
+        gate = projected[:, :, 2048:] if packed_gate else None
+        projected = projected[:, :, :2048] if packed_gate else projected
+        if logical_shape is not None:
+            projected = ttnn.reshape(projected, (*logical_shape, 2048))
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+            projected, num_heads=6, num_kv_heads=1, transpose_key=False
         )
-        if direct_prefill:
-            from .prefill_qkv_candidate import prefill_qkv
-
-            assert packed_gate, "Direct prefill QKV requires the packed QKVG projection"
-            logical_batch, logical_seq = logical_shape if logical_shape is not None else tuple(x.shape)[:2]
-            assert logical_shape is not None or logical_batch == 1, "Direct prefill requires compact rows"
-            q, k, v, gate = prefill_qkv(
-                ttnn.to_memory_config(projected, ttnn.DRAM_MEMORY_CONFIG),
-                batch=logical_batch,
-                seq=logical_seq,
-                cores=self.policy.get("direct_prefill_qkv_cores", 110),
-            )
-        else:
-            gate = projected[:, :, 2048:] if packed_gate else None
-            projected = projected[:, :, :2048] if packed_gate else projected
-            if logical_shape is not None:
-                projected = ttnn.reshape(projected, (*logical_shape, 2048))
-            q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-                projected, num_heads=6, num_kv_heads=1, transpose_key=False
-            )
         if compact:
             q = ttnn.reshape(
                 self._norm(ttnn.reshape(q, (1, 1, batch * 6, 256)), "self_attn.q_norm.weight"), (batch, 6, 1, 256)
@@ -989,12 +869,15 @@ class MultichipDecoder(OptimizedDecoder):
         packed_gate = self.policy.get("packed_qkvg", False)
         projected = self._linear(xf, "packed_qkvg" if packed_gate else "packed_qkv")
         heads_mem = self._compact_height_mem(self._compact_cores(batch), 32, 256)
-        if self.policy.get("packed_compact_qk_rope", False):
-            from .packed_qk_rope_candidate import packed_qk_rope
+        gate = projected[:, :, 2048:] if packed_gate else None
+        projected = projected[:, :, :2048] if packed_gate else projected
+        q, k, v = _local_qkv_split(ttnn.reshape(projected, (1, 1, batch, 2048)), memory_config=heads_mem)
+        if self.policy.get("fused_compact_qk_rope", False):
+            from .parallel_qk_rope_candidate import compact_qk_rope
 
-            assert packed_gate, "Packed QK/RoPE requires packed QKVG projection"
-            q, k, v, gate = packed_qk_rope(
-                projected,
+            q, k = compact_qk_rope(
+                q,
+                k,
                 self.weights["self_attn.q_norm.weight"],
                 self.weights["self_attn.k_norm.weight"],
                 *rope,
@@ -1002,56 +885,29 @@ class MultichipDecoder(OptimizedDecoder):
             )
             k_update = k
         else:
-            gate = projected[:, :, 2048:] if packed_gate else None
-            projected = projected[:, :, :2048] if packed_gate else projected
-            q, k, v = _local_qkv_split(ttnn.reshape(projected, (1, 1, batch, 2048)), memory_config=heads_mem)
-            if self.policy.get("fused_compact_qk_rope", False):
-                from .parallel_qk_rope_candidate import compact_qk_rope
-
-                q, k = compact_qk_rope(
-                    q,
-                    k,
-                    self.weights["self_attn.q_norm.weight"],
-                    self.weights["self_attn.k_norm.weight"],
-                    *rope,
+            q, k = (
+                ttnn.rms_norm(
+                    ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG),
+                    weight=self.weights[name],
                     epsilon=self.config.rms_norm_eps,
+                    compute_kernel_config=self.ckc,
                 )
-                k_update = k
-            else:
-                if self.policy.get("fused_compact_qk_norm", False):
-                    from .parallel_qk_norm_candidate import compact_qk_norm
+                for t, name in ((q, "self_attn.q_norm.weight"), (k, "self_attn.k_norm.weight"))
+            )
+            rot_mem = self._compact_rope_mem(batch, self.mesh.compute_with_storage_grid_size())
+            trig = tuple(ttnn.to_memory_config(ttnn.permute(t, (2, 0, 1, 3)), rot_mem) for t in rope)
 
-                    q, k = compact_qk_norm(
-                        q,
-                        k,
-                        self.weights["self_attn.q_norm.weight"],
-                        self.weights["self_attn.k_norm.weight"],
-                        epsilon=self.config.rms_norm_eps,
-                    )
-                else:
-                    q, k = (
-                        ttnn.rms_norm(
-                            ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG),
-                            weight=self.weights[name],
-                            epsilon=self.config.rms_norm_eps,
-                            compute_kernel_config=self.ckc,
-                        )
-                        for t, name in ((q, "self_attn.q_norm.weight"), (k, "self_attn.k_norm.weight"))
-                    )
-                rot_mem = self._compact_rope_mem(batch, self.mesh.compute_with_storage_grid_size())
-                trig = tuple(ttnn.to_memory_config(ttnn.permute(t, (2, 0, 1, 3)), rot_mem) for t in rope)
-
-                def rotate(t):
-                    prefix = ttnn.to_memory_config(t[..., :64], rot_mem)
-                    prefix = ttnn.experimental.rotary_embedding_hf(
-                        prefix, *trig, is_decode_mode=True, memory_config=rot_mem, compute_kernel_config=self.ckc
-                    )
-                    return ttnn.concat([ttnn.to_memory_config(prefix, ttnn.DRAM_MEMORY_CONFIG), t[..., 64:]], dim=-1)
-
-                q, k = rotate(q), rotate(k)
-                k_update = ttnn.to_memory_config(
-                    k, self._compact_height_mem(self._compact_cores(batch, offset=32), 32, 256)
+            def rotate(t):
+                prefix = ttnn.to_memory_config(t[..., :64], rot_mem)
+                prefix = ttnn.experimental.rotary_embedding_hf(
+                    prefix, *trig, is_decode_mode=True, memory_config=rot_mem, compute_kernel_config=self.ckc
                 )
+                return ttnn.concat([ttnn.to_memory_config(prefix, ttnn.DRAM_MEMORY_CONFIG), t[..., 64:]], dim=-1)
+
+            q, k = rotate(q), rotate(k)
+            k_update = ttnn.to_memory_config(
+                k, self._compact_height_mem(self._compact_cores(batch, offset=32), 32, 256)
+            )
         # perf/spec: virtual rows of one request share KV pages; the tile update is a
         # read-modify-write, so a W-token verify updates one token column per call
         # (other columns carry position -1 and are skipped).
@@ -1080,41 +936,19 @@ class MultichipDecoder(OptimizedDecoder):
             ),
             compute_kernel_config=self.ckc,
         )
-        gate_mode = self.policy.get("attention_gate_mode", "off")
-        if gate_mode != "off" and (decode or self.policy.get("attention_gate_scope", "decode") == "compact"):
-            from .attention_gate_candidate import attention_gate, canonical_output_memory
-
-            destination = ttnn.DRAM_MEMORY_CONFIG
-            if gate_mode == "l1":
-                key = "self_attn.o_proj.weight"
-                assert key not in self.weight_corrections
-                assert self.policy.get("attention_activation_dtype", "bfloat16") == "bfloat16"
-                fused_rows = self.policy.get("mmrs_min_rows", 512) < batch <= self.policy.get(
-                    "mmrs_max_rows", 8192
-                ) or (batch <= 32 and self.policy.get("fused_mmrs_decode", False))
-                assert not fused_rows, "Direct L1 gate requires the separate DRAM-sharded projection"
-                destination = self.projection_info[key]["input_mem"]
-                assert destination == canonical_output_memory(self.mesh)
-            out = attention_gate(
-                out,
-                gate if packed_gate else self._linear(xf, "gate"),
-                memory_config=destination,
-                cores=self.policy.get("attention_gate_cores", 48),
-            )
-        else:
-            out = ttnn.to_memory_config(out, heads_mem)
-            grid = self.mesh.compute_with_storage_grid_size()
-            full_grid = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
-            )
-            out = ttnn.experimental.nlp_concat_heads_decode(out, num_heads=6, sub_core_grids=full_grid)
-            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-            out = ttnn.reshape(out[:, :, :batch, :], (1, batch, 1536))
-            out = ttnn.multiply(
-                gate if packed_gate else self._linear(xf, "gate"),
-                out,
-                input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID],
-            )
+        out = ttnn.to_memory_config(out, heads_mem)
+        grid = self.mesh.compute_with_storage_grid_size()
+        full_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+        )
+        out = ttnn.experimental.nlp_concat_heads_decode(out, num_heads=6, sub_core_grids=full_grid)
+        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.reshape(out[:, :, :batch, :], (1, batch, 1536))
+        out = ttnn.multiply(
+            gate if packed_gate else self._linear(xf, "gate"),
+            out,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID],
+        )
         out = self._linear(out, "self_attn.o_proj.weight")
         if decode and self.policy.get("flat_decode", False):
             return out
@@ -1171,12 +1005,6 @@ class MultichipDecoder(OptimizedDecoder):
             compute_kernel_config=self.ckc,
         )
         out = ttnn.permute(out[:, :, :6, :], (1, 2, 0, 3))
-        if self.policy.get("flat_attention", False):
-            flat = ttnn.reshape(x, (1, b, 5120))
-            out = ttnn.reshape(ttnn.transformer.concatenate_heads(out), (1, b, 1536))
-            out = ttnn.multiply(self._linear(flat, "gate"), out, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
-            out = self._linear(out, "self_attn.o_proj.weight")
-            return out if decode and self.policy.get("flat_decode", False) else ttnn.reshape(out, (b, 1, out.shape[-1]))
         return self._attention_out(x, out, gate)
 
     def _local_batched_conv(self, qkv, history, *, logical_batch=None, live=None):
@@ -1246,10 +1074,6 @@ class MultichipDecoder(OptimizedDecoder):
                 seq=s,
                 block_ct=self.policy.get("prefill_conv_block_ct", 8),
             )
-        elif s > 1 and self.policy.get("batched_prefill_conv", False):
-            from .prefill_conv_candidate import batched_prefill_conv
-
-            q, k, v = batched_prefill_conv(qkv, state.conv, self.taps_rm)
         elif use_batched_conv:
             # One logical row per user avoids B padded convolution launches.
             q = k = v = self._local_batched_conv(qkv, state.conv, logical_batch=b, live=live)
@@ -1300,25 +1124,6 @@ class MultichipDecoder(OptimizedDecoder):
                 recurrent_kwargs["logical_batch"] = b
                 if live is not None:
                     recurrent_kwargs["live"] = live
-            if self.policy.get("recurrent_prediction_registers", False):
-                from .recurrent_prediction_candidate import prediction_sources
-                from .recurrent_variants import sources
-
-                assert use_batched_conv and self.policy.get("recurrent_variant") == "cumulative_exp_scalar"
-                pair = prediction_sources(
-                    *sources(
-                        _LOCAL12_READER,
-                        _fused_delta_row_GDN_COMPACT_COMPUTE,
-                        "cumulative_exp_scalar",
-                        grouped=b >= 3,
-                    )
-                )
-                if self.policy.get("recurrent_column_grain", 0):
-                    from .column_recurrent_runtime import column_sources
-
-                    recurrent_kwargs["source_overrides"] = column_sources(*pair, _fused_delta_row_GDN_COMPACT_WRITER)
-                else:
-                    recurrent_kwargs["source_overrides"] = pair
             out = recurrent(
                 q,
                 k,
@@ -1332,17 +1137,6 @@ class MultichipDecoder(OptimizedDecoder):
                 variant=self.policy.get("recurrent_variant", "baseline") if use_batched_conv else "baseline",
                 **recurrent_kwargs,
             )
-            if decode_batch is not None and self.policy.get("local_norm_gate", False):
-                from .local_norm_gate_candidate import local_norm_gate
-
-                out = local_norm_gate(
-                    out,
-                    self.weights["linear_attn.norm.weight"],
-                    packed,
-                    epsilon=self.config.rms_norm_eps,
-                    ownership=self.policy["local_norm_gate"],
-                )
-                return self._linear(out, "linear_attn.out_proj.weight")
             out = ttnn.rms_norm(
                 ttnn.typecast(out, ttnn.bfloat16), epsilon=self.config.rms_norm_eps, compute_kernel_config=self.ckc
             )

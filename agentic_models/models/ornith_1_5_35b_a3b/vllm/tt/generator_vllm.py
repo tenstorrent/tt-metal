@@ -11,7 +11,6 @@ import torch
 from .generator import OrnithGenerator
 from .model import OrnithModel
 from .precision import load_precision
-from .serving_observer import ObservedOrnithGenerator
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -23,16 +22,9 @@ if not logger.handlers:
 class OrnithForCausalLM:
     model_capabilities = dict(OrnithGenerator.model_capabilities, preserve_prefill_state_slots=True)
     decode_input_update_contract = 1
-    trace_events = False
 
     @classmethod
     def get_max_tokens_all_users(cls, model_name, num_devices, tt_data_parallel, max_model_len, max_num_seqs):
-        if os.environ.get("ORNITH_VLLM_PROBE_LAYERS"):
-            # Explicit conservative pool for reduced-layer debugging; acceptance
-            # always uses the guarded full-stack measurement below.
-            if num_devices != 4 or tt_data_parallel != 1:
-                raise ValueError("Ornith requires TP4")
-            return min(1048576, int(max_model_len) * int(max_num_seqs))
         return OrnithGenerator.get_max_tokens_all_users(
             model_name, num_devices, tt_data_parallel, max_model_len, max_num_seqs
         )
@@ -62,11 +54,7 @@ class OrnithForCausalLM:
         if tt_data_parallel != 1:
             raise ValueError("Ornith uses one TP4/EP4 mesh")
         self = cls()
-        self.trace_events = os.environ.get("ORNITH_VLLM_TRACE_EVENTS") == "1"
-        # Adapter-local reduced target for contract debugging, never acceptance.
-        reduced = os.environ.get("ORNITH_VLLM_PROBE_LAYERS")
-        indices = None if reduced is None else [int(i) for i in reduced.split(",")]
-        self.model = OrnithModel.from_pretrained(mesh_device, layer_indices=indices, rope_context=max_seq_len)
+        self.model = OrnithModel.from_pretrained(mesh_device, rope_context=max_seq_len)
         self.batch_size, self.context = int(max_batch_size), int(max_seq_len)
         self.generator = None
         self.tt_supported_decode_batch_sizes = [self.batch_size]
@@ -96,23 +84,9 @@ class OrnithForCausalLM:
         state = self.model.create_state(
             context=self.context, batch_size=self.batch_size, shared_cache=True, num_blocks=shape[0]
         )
-        generator_class = ObservedOrnithGenerator if self.trace_events else OrnithGenerator
-        self.generator = generator_class(
+        self.generator = OrnithGenerator(
             self.model, batch_size=self.batch_size, max_seq_len=self.context, cache_state=state, num_blocks=shape[0]
         )
-        self.benchmark_timing = None
-        if os.environ.get("ORNITH_BENCHMARK_TIMING_DIR"):
-            from .benchmark_timing import HostPhaseRecorder
-
-            self.benchmark_timing = HostPhaseRecorder(self, __name__, __file__)
-            original_prefill = self.generator._prefill
-
-            def observed_prefill(n, slot):
-                self.benchmark_timing.chunk(n, slot)
-                return original_prefill(n, slot)
-
-            self.generator._prefill = observed_prefill
-            logger.info("ORNITH_BENCHMARK_IDENTITY %s", json.dumps(self.benchmark_timing.identity))
         logger.info("ORNITH_KV external=true shape=%s layers=%s", shape, self.model.layer_indices)
         return state
 
@@ -136,18 +110,6 @@ class OrnithForCausalLM:
         return result
 
     def prefill_forward(self, tokens, *, page_table, kv_cache, prompt_lens, empty_slots=None, **kwargs):
-        timing = self.benchmark_timing
-        event = None
-        if timing is not None:
-            starts = kwargs.get("start_pos")
-            emit = kwargs.get("prefill_sampling_mask")
-            event = timing.begin_prefill(
-                tokens,
-                [0] * len(prompt_lens) if starts is None else list(map(int, starts)),
-                list(map(int, prompt_lens)),
-                list(range(len(prompt_lens))) if empty_slots is None else list(empty_slots),
-                [True] * len(prompt_lens) if emit is None else list(map(bool, emit)),
-            )
         # vLLM forwards empty multimodal metadata even for text-only requests.
         for name in (
             "pixel_values",
@@ -169,32 +131,10 @@ class OrnithForCausalLM:
             if kwargs.get("sampling_params") is not None
             else "host"
         )
-        if self.trace_events:
-            start = kwargs.get("start_pos")
-            logger.info(
-                "sampling_mode=%s ORNITH_STEP %s",
-                sampling_mode,
-                json.dumps(
-                    dict(
-                        phase="prefill",
-                        starts=None if start is None else list(map(int, start)),
-                        ends=list(map(int, prompt_lens)),
-                        slots=slots,
-                        prefill_sampling_mask=None
-                        if kwargs.get("prefill_sampling_mask") is None
-                        else list(map(bool, kwargs["prefill_sampling_mask"])),
-                        sampling=sampling_mode,
-                        active_positions=[self.generator._position(i) for i in range(self.batch_size)],
-                    )
-                ),
-            )
-        else:
-            logger.info("sampling_mode=%s phase=prefill", sampling_mode)
+        logger.info("sampling_mode=%s phase=prefill", sampling_mode)
         output = self.generator.prefill_forward(
             tokens, page_table=pages, kv_cache=kv_cache, prompt_lens=prompt_lens, empty_slots=slots, **kwargs
         )
-        if timing is not None:
-            timing.end_prefill(event, any(row["emit"] for row in event["rows"]))
 
         # Text-only Qwen3.5 mRoPE has zero delta, as in the HF implementation.
         return output, torch.zeros(len(prompt_lens), dtype=torch.long)
@@ -202,38 +142,16 @@ class OrnithForCausalLM:
     def decode_forward(
         self, tokens, start_pos, *, page_table, kv_cache, sampling_params=None, rope_deltas_all_users=None, **kwargs
     ):
-        timing = self.benchmark_timing
-        started = timing.begin_decode() if timing is not None else None
         if rope_deltas_all_users is not None and any(int(x) != 0 for x in rope_deltas_all_users):
             raise ValueError("Text-only Ornith requires zero RoPE deltas")
-        if self.trace_events:
-            logger.info(
-                "sampling_mode=%s ORNITH_STEP %s",
-                "device" if sampling_params is not None else "host",
-                json.dumps(
-                    dict(
-                        phase="decode",
-                        sampling="device" if sampling_params is not None else "host",
-                        reload_inputs=kwargs.get("reload_inputs", True),
-                        reload_page_table=kwargs.get("reload_page_table", False),
-                        positions=[self.generator._position(i) for i in range(self.batch_size)],
-                    )
-                ),
-            )
-        else:
-            # Retain the required fallback audit without detailed trace telemetry.
-            logger.info("sampling_mode=%s phase=decode", "device" if sampling_params is not None else "host")
+        # Retain the required fallback audit without detailed trace telemetry.
+        logger.info("sampling_mode=%s phase=decode", "device" if sampling_params is not None else "host")
         # No table reconstruction or token/position access on resident steps.
         if kwargs.get("reload_inputs", True) or kwargs.get("reload_page_table", False):
             page_table = self._pages(page_table)
         output = self.generator.decode_forward(
             tokens, start_pos, page_table=page_table, kv_cache=kv_cache, sampling_params=sampling_params, **kwargs
         )
-        if timing is not None:
-            if not hasattr(output, "serial"):
-                raise RuntimeError("Benchmark timing requires the Stage 10 asynchronous output handle")
-            remap = kwargs.get("slot_remap")
-            timing.submitted_decode(output, started, range(self.batch_size) if remap is None else remap)
         return output
 
     def process_decode_output_host(self, output, *, is_tokens=False, **kwargs):
@@ -244,8 +162,6 @@ class OrnithForCausalLM:
         result = self.generator.process_decode_output_host(output, is_tokens=is_tokens, **kwargs)
         if is_tokens and ((result < 0).any() or (result >= self.model.config.vocab_size).any()):
             raise RuntimeError("Device sampler returned an out-of-vocabulary token")
-        if self.benchmark_timing is not None:
-            self.benchmark_timing.completed_decode(output)
         return result
 
     def warmup_model_prefill(self, **kwargs):

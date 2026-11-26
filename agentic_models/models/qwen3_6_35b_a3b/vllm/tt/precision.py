@@ -4,7 +4,6 @@
 
 import copy
 import json
-import os
 from pathlib import Path
 
 SELECTED_PATH = Path(__file__).resolve().parents[1] / "doc/datatype_sweep/selected_precision_config.json"
@@ -127,22 +126,6 @@ def layer_precision(policy, index):
             result["weight_groups"].update(exception["weight_groups"])
             result["compute_fidelities"].update(exception["compute_fidelities"])
     result["layer_exceptions"] = []
-    # Experiment hook (perf/accuracy round 2): QWEN_FIDELITY_OVERRIDE="expert_ep=HiFi2:fp32,expert_gu=HiFi2" changes
-    # the compute fidelity (and fp32 dest accumulation with ":fp32") of the named groups for every layer.
-    override = os.environ.get("QWEN_FIDELITY_OVERRIDE", "")
-    for item in filter(None, override.split(",")):
-        group, _, spec = item.partition("=")
-        fidelity, _, acc = spec.partition(":")
-        assert group in GROUPS and fidelity in ("LoFi", "HiFi2", "HiFi3", "HiFi4"), item
-        result["compute_fidelities"][group] = _compute(
-            fidelity, acc == "fp32" or result["compute_fidelities"][group]["fp32_dest_acc_en"]
-        )
-    # Experiment hook (round 3): QWEN_WEIGHT_OVERRIDE="attention_input=bf16,attention_output=bf16" changes the stored
-    # weight dtype of the named decoder-layer groups for every layer.
-    for item in filter(None, os.environ.get("QWEN_WEIGHT_OVERRIDE", "").split(",")):
-        group, _, dtype = item.partition("=")
-        assert group in GROUPS and group != "lm_head" and dtype in ("bf16", "bfp8", "bfp4"), item
-        result["weight_groups"][group] = dtype
     return result
 
 

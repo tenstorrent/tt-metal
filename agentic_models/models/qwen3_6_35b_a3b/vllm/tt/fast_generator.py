@@ -74,13 +74,6 @@ def fast_norm(layer, x, key, sharded=False):
     )
 
 
-def _dbg(mesh, what):
-    if os.environ.get("QWEN_FAST_DEBUG_SYNC", "0") == "1":
-        print("DBG before-sync", what, flush=True)
-        ttnn.synchronize_device(mesh)
-        print("DBG ok", what, flush=True)
-
-
 class FastBoundedPrefill(BoundedPrefill):
     GDN_CHUNK = 2048
 
@@ -126,8 +119,6 @@ class FastBoundedPrefill(BoundedPrefill):
                 f"Prefill chunk of {length} tokens exceeds the {self.capacity}-row workspace (QWEN_PREFILL_ROWS)"
             )
         self._busy = True
-        if os.environ.get("QWEN_FAST_PREFILL_SYNC", "0") == "1":
-            ttnn.synchronize_device(self.mesh)
         try:
             source, attended, destination = self.residual
             for offset in range(0, length, self.TOKEN_CHUNK):
@@ -138,18 +129,15 @@ class FastBoundedPrefill(BoundedPrefill):
                 embedded = ttnn.reshape(self.model.embed(self.tokens), (1, self.TOKEN_CHUNK, 2048))
                 self._write(embedded, source, offset, n)
                 del embedded
-            _dbg(self.mesh, "embed")
             for index, (layer, states) in enumerate(zip(self.model.layers, cache)):
                 if layer.kind == "linear_attention":
                     self._gdn(layer, index, source, attended, slot, start, length)
-                    _dbg(self.mesh, f"gdn{index}")
                 else:
                     state = states[slot]
                     for offset, n, absolute in attention_chunks(layer.kind, length, start):
                         result = self._attention(layer, state, source, offset, n, absolute, length)
                         self._write(result, attended, offset, n)
                         del result
-                        _dbg(self.mesh, f"attn{index} chunk {offset}+{n}")
                 for offset in range(0, length, layer.policy.moe_chunk):
                     n = min(layer.policy.moe_chunk, length - offset)
                     physical = 1 if n == 1 else ((n + 31) // 32) * 32
@@ -157,9 +145,6 @@ class FastBoundedPrefill(BoundedPrefill):
                     result = self._moe(layer, x)
                     self._write(result, destination, offset, n)
                     del result, x
-                    _dbg(self.mesh, f"moe{index}")
-                if getattr(self, "layer_probe", None) is not None:  # accuracy tooling only (per-layer residuals)
-                    self.layer_probe(index, destination, length)
                 source, destination = destination, source
             if getattr(self.generator, "mtp", None) is not None:
                 self.generator.mtp.prefill(self, source, token_ids, slot, start, length)
@@ -201,7 +186,7 @@ class FastBoundedPrefill(BoundedPrefill):
             # replay (observed as a device hang on the next prefill). Lengths: 1 and every multiple of 32 up
             # to the GDN chunk (covers all GDN/MoE/attention chunk shapes), plus one continuation (start > 0).
             self.prepared = True
-            limit = min(self.GDN_CHUNK, self.model.max_seq_len, int(os.environ.get("QWEN_FAST_WARM_LIMIT", "1000000")))
+            limit = min(self.GDN_CHUNK, self.model.max_seq_len)
             lengths = [1] + list(range(32, limit + 1, 32))
             started = time.monotonic()
             for i, n in enumerate(lengths):

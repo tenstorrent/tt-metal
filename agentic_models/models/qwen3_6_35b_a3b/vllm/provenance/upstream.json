@@ -10,7 +10,6 @@
   },
   "source_sha256": {
     "doc/datatype_sweep/selected_precision_config.json": "828782feb0110fa1678d9e3bec5379effa3e19c652b097fbb96d43feafadd8ec",
-    "tt/benchmark_phases.py": "0bfa11efe6e977bbf15edc950b28b25e983f44b30d3bc06174cef22fb2cfb408",
     "tt/cache_contract.py": "f51c7783c0982a671643b53c0f33c8a1c87229059a76eeb87e600000f7842c3e",
     "tt/fast_attn.py": "4009c20a32bd80df4ea2c8ac6677a8bc441b36c24afd054f83101cfead530a0c",
     "tt/fast_gdn.py": "74dbc4c0db46101a9f9654332fb055c28dea20b11687d83b3926cacabed7c2ab",
@@ -43,8 +42,7 @@
     "tt/serving.py": "21609e68ae17ce0ce4fd388ab6c972d6eb6b79932d83571706b2afafe4ef4fa8",
     "tt/serving_capabilities.py": "22f0258d29482954389d45b2709342ac58d3d0283b889c63d59abf2140c7c4d6",
     "tt/serving_state.py": "2ed86cc2db02d45695261691f30a2c1c0682b11d05cc7b4a3b6a6db9588fdbcf",
-    "tt/slot_state.py": "8265153a603c37ff6705e315a4e3efc60942f81930d0da1fd5d2d9db2f135350",
-    "tt/weight_cache.py": "3bdd888f955e3901796bc45d8883558992e7deb5c5eea5169fdc8d762fe8cb7d"
+    "tt/slot_state.py": "8265153a603c37ff6705e315a4e3efc60942f81930d0da1fd5d2d9db2f135350"
   },
   "other_sources": {
     "tt/readiness_contract.py": {
@@ -66,26 +64,31 @@
     "tt/functional_decoder.py and tt/*_probe.py (not reached from tt/generator_vllm.py)"
   ],
   "modified_sha256": {
-    "tt/fast_gdn.py": "bf3ce995947847edbc1e01c70d6f668aabe675c1aa357d8e30f433cc31a49501",
-    "tt/fast_generator.py": "300cceb38a9bbb20442df01c59b97f2ac1091189775ea004648d4e0f1af18632",
+    "tt/fast_gdn.py": "e725045340b862b839fc4fd0e385c7e08ffcfe903ee43cb9b3f21735972f9933",
+    "tt/fast_generator.py": "3709cfb7078a2ee8027984894e2049a33d80fef096a9c3d24445cd83223cb335",
     "tt/fast_mtp.py": "cd62ff9152caef62b0539c818436659a8444620baa1e77739a50d429b44c5c4f",
+    "tt/fused_decoder.py": "5f232c588d6cbbe0a75d38d909b1282e720f9afe94fa862fa2843850ac18dd25",
     "tt/generator.py": "7970bdf133abb61e15750520c44d15bc3d23aa0fea1916a50e3ae040ef3f1b67",
-    "tt/generator_vllm.py": "f02a11a6dd6c73848f7bf5a7215a05bc518602d1ca605fda3179c6cb21573487",
-    "tt/model.py": "a5a6bd0b4b225c68498f79f5edd57b9f9504ba8d6b1c53627814f89287ac35ee",
-    "tt/multichip_decoder.py": "74504930610adab87e823c76085a68dc6e7c19de4e47f8ca100123a6123918c9",
+    "tt/generator_vllm.py": "b5747c08ff68fbdb25ff0c97a98e2f3d8a223d239ff9f515369640b759709e1a",
+    "tt/model.py": "a639a83d9b3ba82180e54e457772e09757e293b2d501125e101aa0956297600a",
+    "tt/multichip_decoder.py": "201a89540ab90eaaafb9aaaa826667e2ed0aed1f2add6aa1bb14b8c26a8ec1ec",
+    "tt/optimized_decoder.py": "4f35a603c9d7c29a84afc0d942d5d13019c0a47fd640646e1100d7cfee11e218",
+    "tt/precision.py": "d892fbd51e696e605101d5a19d48a53f197d16a3dcb4b7963a0d2f8b9d23ac18",
     "tt/readiness_contract.py": "271560d25df6ef64ffeefbf316d1cf74a0ffa79b42fef907dfa091c7154c53c3",
-    "tt/serving.py": "a17aae8505e7f19c410b14cfe1c769ecd9f1aa0fe2e4502972f374872b8bb771",
-    "tt/serving_capabilities.py": "17137aaa00f39edfc4a1f90efd4b4596b4d50017d074099d927086f4d9f4c69c",
-    "tt/serving_state.py": "4597d8d10048eba42f957a4067366022c5c9182afa639991114b9626f180636f"
+    "tt/serving.py": "9f7e74ff1c66d87e21c6f736675f91c25b53197eefe8b9aa3d82613dc80310cb",
+    "tt/serving_capabilities.py": "9c95e8abed04ec2cde5955db70449f6d291f1ed85c3493d59cf21cdcddc3cb3b",
+    "tt/serving_state.py": "ba51f3a10254095f661969509a1bb21db0c22a72cb18c3d97832fdb935182f8a"
   },
   "edits": {
     "tt/fast_gdn.py": [
       "fused_recurrent_gated_delta_rule(exact_state=True), segmented decode",
       "fused_recurrent_gated_delta_rule(exact_state=True), narrow/spec decode",
-      "chunk_gated_delta_rule(exact_state=True), prefill"
+      "chunk_gated_delta_rule(exact_state=True), prefill",
+      "trimmed: unused QWEN_FAST_DEBUG_SYNC helper"
     ],
     "tt/fast_generator.py": [
-      "do not capture the sampling_64 / sampling_64_pen traces"
+      "do not capture the sampling_64 / sampling_64_pen traces",
+      "trimmed: QWEN_FAST_DEBUG_SYNC / QWEN_FAST_PREFILL_SYNC synchronizations, the layer_probe accuracy hook (never set) and the QWEN_FAST_WARM_LIMIT knob (default 1000000 never binds: the limit is min(GDN_CHUNK, max_seq_len))"
     ],
     "tt/fast_mtp.py": [
       "__import__ of the bring-up package path -> relative import"
@@ -96,14 +99,17 @@
     ],
     "tt/generator_vllm.py": [
       "declare preserve_prefill_state_slots (plugin patch P1)",
-      "speculative verify with a live row in a slot the verify graph does not serve (>= 8; plugin f6fe76b keeps proposals across a prefill step): drop the drafts, ordinary decode of column 0, narrow [B, 1] argmax_ids answer"
+      "speculative verify with a live row in a slot the verify graph does not serve (>= 8; plugin f6fe76b keeps proposals across a prefill step): drop the drafts, ordinary decode of column 0, narrow [B, 1] argmax_ids answer",
+      "trimmed: QWEN_BENCHMARK_PHASE_DIR phase recorder hooks, QWEN_VLLM_AUDIT audit events/page-change audit, QWEN_VLLM_REDUCED reduced-layer switch (none set by the TTI spec; all default off)"
     ],
     "tt/model.py": [
-      "Checkpoint path: prefer the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else the previous $HF_HOME resolution; config and tokenizer load from the same directory"
+      "Checkpoint path: prefer the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else the previous $HF_HOME resolution; config and tokenizer load from the same directory",
+      "trimmed: QWEN_WEIGHT_CACHE on-disk weight cache wrapper (default off; tt/weight_cache.py removed)"
     ],
     "tt/multichip_decoder.py": [
       "call the ttnn.bringup.moe_fused_swiglu fork (8c48b4e4 op + stochastic_rounding + reader drain)",
-      "call the ttnn.bringup.post_combine_reduce fork (8c48b4e4 op + valid_token_rows)"
+      "call the ttnn.bringup.post_combine_reduce fork (8c48b4e4 op + valid_token_rows)",
+      "trimmed: unreferenced MultichipDecoder.prepare_decode_batch"
     ],
     "tt/readiness_contract.py": [
       "provenance header (K2 precedent)",
@@ -111,14 +117,33 @@
     ],
     "tt/serving.py": [
       "decode: require only the 32-wide sampling trace (sampling_64 is no longer captured)",
-      "prefill: require only the 32-wide sampling trace (sampling_64 is no longer captured)"
+      "prefill: require only the 32-wide sampling trace (sampling_64 is no longer captured)",
+      "trimmed: QWEN_DECODE_TIMING decode timing instrumentation (default off)"
     ],
     "tt/serving_capabilities.py": [
       "advertise max_device_top_k 32 to the plugin",
-      "serving limit matches the 32-wide sampler"
+      "serving limit matches the 32-wide sampler",
+      "trimmed: documentation-only recommended_trace_region_size, pending/verified_serving_capabilities and serving_limits (not read at runtime; they cited bring-up evidence files not shipped)"
     ],
     "tt/serving_state.py": [
-      "slot-state registration skips sampling._scale_logprobs when the pinned TTSampling has no such tensor (it postdates tt-metal 58afa857)"
+      "slot-state registration skips sampling._scale_logprobs when the pinned TTSampling has no such tensor (it postdates tt-metal 58afa857)",
+      "trimmed: unreferenced ReloadCommands.from_kwargs and DecodeOutputPool.cancel_unsubmitted"
+    ],
+    "tt/precision.py": [
+      "trimmed: QWEN_FIDELITY_OVERRIDE / QWEN_WEIGHT_OVERRIDE experiment hooks (default empty = no-op)"
+    ],
+    "tt/fused_decoder.py": [
+      "trimmed: FusedDecoder methods that MultichipDecoder (the only instantiated decoder) overrides and never reaches through super(): new_recurrent_state, _recurrent_sum, _recurrent_step, _linear_attention, _moe, new_kv_state, _full_attention, _forward, prefill_forward, prefill_batch, decode_forward, decode_batch; unreferenced TerminalProjectionScan + TERMINAL_SCAN_* kernels, Chunk64StateGraph.triangular_sum/sum_order, ROW_SNAPSHOTS"
+    ],
+    "tt/optimized_decoder.py": [
+      "trimmed: _ExpertDecoder._moe and OptimizedDecoder._forward (overridden by MultichipDecoder, no super() call reaches them); unused reshape import"
     ]
+  },
+  "trim": {
+    "note": "trimmed to the serving closure: files outside the import closure of the TT_MODEL_CLASS_OVERRIDES class (tt/generator_vllm.py:QwenForCausalLM) and model/entry.py removed; in-file code removed only where provably unreferenced or behind env switches the TTI spec (tenstorrent/tt-inference-server vkovacevic/agm-qb2-five 2099a50b, workflows/model_specs/dev/llm.yaml, impl qwen36_35b_a3b_qb2) never sets and whose default is off. Production-path behaviour unchanged.",
+    "removed_files": {
+      "tt/benchmark_phases.py": "0bfa11efe6e977bbf15edc950b28b25e983f44b30d3bc06174cef22fb2cfb408",
+      "tt/weight_cache.py": "3bdd888f955e3901796bc45d8883558992e7deb5c5eea5169fdc8d762fe8cb7d"
+    }
   }
 }

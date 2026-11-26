@@ -94,11 +94,6 @@ class PrefillSegment:
         return self.profile_tag.physical_bucket
 
     @property
-    def logical_valid(self):
-        """New logical rows emitted by this segment, excluding cached overlap."""
-        return self.logical_end - self.logical_start
-
-    @property
     def initial_overlap(self):
         return self.logical_start - self.absolute_aligned_start
 

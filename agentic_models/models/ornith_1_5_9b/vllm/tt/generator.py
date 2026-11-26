@@ -16,7 +16,6 @@ from agentic_models.models.ornith_1_5_9b.vllm.tt.batch_state import BatchState
 from agentic_models.models.ornith_1_5_9b.vllm.tt.cache_contract import CacheOwnershipRegistry, validate_host_page_table
 from agentic_models.models.ornith_1_5_9b.vllm.tt.decode_contract import DecodeCommands, DecodeSubmission
 from agentic_models.models.ornith_1_5_9b.vllm.tt.generator_contract import Generator
-from agentic_models.models.ornith_1_5_9b.vllm.tt.model import OrnithModel
 from agentic_models.models.ornith_1_5_9b.vllm.tt.prefill_contract import PrefillContract
 from agentic_models.models.ornith_1_5_9b.vllm.tt.sampling_state import (
     SamplingSlotState,
@@ -592,28 +591,6 @@ class OrnithGenerator(Generator):
         for row, slot in zip(result.input_rows, slots):
             output[row, 0] = sampled[slot]
         return output
-
-    def bind_serving_cache(self, kv_cache, *, page_table):
-        """Bind setup-owned serving storage for one-argument release callbacks.
-
-        Constructor injection avoids a second model cache allocation. A later
-        binding retains standalone storage; it never frees/replaces live tensors.
-        All runtime signatures still require preparation before the first trace.
-        """
-        if self.closed:
-            raise RuntimeError("Generator is closed")
-        if self.submissions or any(
-            state.model_trace is not None or state.sample_trace is not None for state in self.states.values()
-        ):
-            raise RuntimeError("Bind serving cache before capture and with no pending submissions")
-        binding = self.cache_ownership.register_inferred(kv_cache, context=self.max_seq_len)
-        if binding.slot_capacity != self.max_batch_size:
-            raise ValueError("Serving cache slot capacity must match configured max_batch_size")
-        validate_host_page_table(page_table, binding)
-        table = page_table.clone()
-        self.cache_ownership.bind_serving(kv_cache)
-        self.serving_page_table = table
-        return binding
 
     def get_kv_cache_spec(self):
         """Pure-host full-model specs; reduced diagnostic stacks cannot advertise them."""
@@ -1228,33 +1205,6 @@ class OrnithGenerator(Generator):
             if last // 32 >= state.mapped_prefix_pages[slot]:
                 raise ValueError("Every active causal page through the resident decode window must be mapped")
 
-    def decode_resident(self, steps, *, kv_cache=None):
-        """Queue fixed-step sampled decode without host transfers or synchronization.
-
-        Admission, explicit scheduler changes and prefill remain caller-owned.
-        Continue the state initialized by generate or decode_forward, retaining
-        fixed slots, inactive rows and the current sampling parameters. The
-        returned device token tensor is borrowed: its value is the final step's
-        token and the next decode overwrites it. This API does not retain the
-        intermediate generated sequence. Streaming callers use decode_forward.
-        """
-        if self.closed:
-            raise RuntimeError("Generator is closed")
-        if isinstance(steps, bool) or not isinstance(steps, Integral) or steps < 1:
-            raise ValueError("steps must be a positive integer")
-        cache = self.cache if kv_cache is None else kv_cache
-        state = self.states.get((id(cache), tuple(range(len(cache[0])))))
-        if not getattr(state, "page_tables_valid", True):
-            raise RuntimeError("Decode page-table state is unusable after a failed refresh; recreate the generator")
-        if state is None or not state.model_traces or not state.host_positions or not state.resident_ready:
-            raise ValueError("Initialize resident decode inputs before queuing steps")
-        if any(h.completion is None for h, _, _ in self.submissions.values()):
-            raise ValueError("Drain outstanding submissions before resident decode")
-        self._validate_resident_window(state, steps)
-        for _ in range(steps):
-            self._execute(state, host_sampling=False)
-        return state.tokens
-
     def _submit_read(self, state, *, host_sampling):
         # Return a device-backed submission without a read or synchronization.
         # The caller must enqueue its deferred read before the next replay can
@@ -1501,19 +1451,3 @@ class OrnithGenerator(Generator):
     teardown = close
 
 
-def build_generator(model_dir, mesh_device, **kwargs):
-    model = OrnithModel(
-        mesh_device,
-        checkpoint=kwargs.get("checkpoint"),
-        layer_indices=kwargs.get("layer_indices"),
-        decode_head=kwargs.get("decode_head", "dram"),
-        selective_inactive_restore=kwargs.get("selective_inactive_restore", True),
-        precision_config=kwargs.get("precision_config"),
-    )
-    return OrnithGenerator(
-        model,
-        max_batch_size=kwargs.get("max_batch_size", 1),
-        max_seq_len=kwargs.get("max_seq_len"),
-        kv_cache=kwargs.get("kv_cache"),
-        page_table=kwargs.get("page_table"),
-    )

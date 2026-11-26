@@ -8,7 +8,9 @@ layers and 8 full-attention layers (16 query / 4 KV heads of 256, every fourth l
 
 Produced by the tt-model-bringup agentic pipeline on a QB2 host. The code is vendored from the bring-up checkout
 (tt-metal branch `metrics/gpqa-gap` at b43970c8d, directory `ornith_ai_ornith_1_5_9b`), which is not published.
-`provenance/upstream.json` records the source, the hash of every vendored file and the files edited since.
+`provenance/upstream.json` records the source, the hash of every vendored file and the files edited since. The
+package is trimmed to the serving closure of `OrnithForCausalLM`: the bring-up's opt-in MTP adapter, benchmark
+timing, debug adapter and unreferenced helpers are not carried (`provenance/upstream.json` `trim`).
 
 ## Layout
 
@@ -18,7 +20,7 @@ Produced by the tt-model-bringup agentic pipeline on a QB2 host. The code is ven
 | `tt/conv_gates.py`, `tt/flat_ordered_conv_gates.py`, `tt/partial_norm_rope.py`, `tt/history_row_write.py`, `tt/inactive_state_copy.py`, `tt/kernels/` | Model-owned `ttnn.generic_op` programs and their kernels (compiled at run time against the pinned tt-metal headers) |
 | `tt/prefill_*.py` | Chunked prefill planning, staging and operators |
 | `tt/generator.py`, `tt/batch_state.py`, `tt/sampling_state.py`, `tt/decode_contract.py`, `tt/cache_contract.py`, `tt/generator_contract.py` | Traced decode, fixed 32 slots, slot-owned recurrent state, on-device sampling and penalties, KV pool sizing |
-| `tt/generator_vllm.py` | vLLM adapter `OrnithForCausalLM` (and the opt-in MTP variant `OrnithMTPForCausalLM`, `tt/mtp_spec.py`, `tt/spec_chain.py`) |
+| `tt/generator_vllm.py` | vLLM adapter `OrnithForCausalLM` |
 | `tt/prefix_snapshots.py` | GDN state snapshots at prompt ends that make vLLM prefix caching exact for this hybrid model |
 | `tt/precision.py`, `doc/datatype_sweep/selected_precision_config.json` | Selected precision `bfp8_all_hifi2`: BFP8 weights with HiFi2 matmuls everywhere, BFP8 KV cache, FP32 recurrent state. `ORNITH_PRECISION_CONFIG=<path>` loads another config |
 | `tt/sampling/` | `models/common/sampling` `generator.py` and `tt_sampling.py` from the pinned tt-metal, plus the bring-up's `max_top_k` plumbing. Vendored because the model uses the sampler's internals, and so tt-metal patches to the shared sampler cannot change this model |
@@ -38,8 +40,7 @@ Produced by the tt-model-bringup agentic pipeline on a QB2 host. The code is ven
     chunked prefill keeps its recurrent-state slot. Without it, concurrent chunked prefills (prompts above
     `--max-num-batched-tokens` arriving together) can move a request to another slot and silently corrupt its GDN
     state.
-- No model-specific tt-metal patch. `ttnn.experimental.matmul_reduce_scatter_prefill` is called only by the
-  `fused_prefill` path of `tt/multichip_decoder.py`, which nothing enables.
+- No model-specific tt-metal patch.
 - HF weights at the manifest revision in `$HF_HOME` (`snapshot_download(local_files_only=True)`), or
   `ORNITH_CHECKPOINT=<dir>`.
 - Install this repository into the same Python environment (`pip install -e .`).
@@ -118,8 +119,8 @@ Validation at the pinned versions is **pending** (`manifest.json`). Bring-up ref
 - **Decode-only traces, 32-token pages.** `trace_mode=all` and other block sizes are rejected. At most 32 sequences.
 - **One shared KV pool.** 1,048,576 tokens (about 3.5 GiB per chip) for all slots; 2M does not fit. Many long
   concurrent requests queue.
-- **MTP is opt-in and unvalidated here.** `OrnithMTPForCausalLM` (select it in `TT_MODEL_CLASS_OVERRIDES`,
-  `ORNITH_MTP=K`, at most 16 sequences, no async scheduling) was not part of the production configuration.
+- **No speculative decoding.** The bring-up's opt-in MTP adapter was never part of the production configuration
+  and is not carried.
 - Serving longer than about 10 h hit a SIGBUS in the tt-metal realtime profiler during the bring-up; split very long
   eval runs.
 

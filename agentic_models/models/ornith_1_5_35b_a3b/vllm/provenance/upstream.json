@@ -19,19 +19,12 @@
   "source_sha256": {
     "doc/datatype_sweep/selected_precision_config.json": "2b8ad6322f428de6d7475e60c3da0646f95c8179a80a7598e0f4b1796182358f",
     "doc/full_model/kv_capacity.json": "3206c287e122c7549d78f049b0c975e8ac8754553ae508cf7f013fabcfd61efa",
-    "doc/optimized_vllm/native_tail_capacity/prediction_v3.json": "ee76a08725a8fdb6221eeafe7ba5f3a3cbc7e3691d876563452487b1a24b3b36",
-    "doc/optimized_vllm/native_tail_capacity/promotion_review.json": "b497db5aab136b4c8ec93badfa32fa97c399659ec6f65080ab7b43b95a1cc85f",
-    "doc/optimized_vllm/native_tail_capacity/summaries_v3/60620.summary.json": "f7b9661866c2457d51d43b3bd93629285728550149b0774a99cfc7ed1a6e2749",
-    "doc/optimized_vllm/native_tail_capacity/summaries_v3/60621.summary.json": "deca9355d4b21d78de31aaeac89112fcf21fb8b06ae4d65649a984406931ec1b",
-    "doc/optimized_vllm/native_tail_capacity/summaries_v3/baseline_v3.summary.json": "852485e039b75401dd96b23ab9bf9db3c5988b55e87df0ec44139b3ce5f0d848",
-    "tt/benchmark_timing.py": "27976bfd543ac02594f392889dafde414f2c96f0303dc5a00394c61d4c1d881a",
     "tt/generator.py": "0ff7b850e04f0211ebd2fb50b997e158ecc489a375f72734eaf4428936e2fb36",
     "tt/generator_vllm.py": "8cafd233446f0b2948ba109eaa11f92a39a110ee03460870279dce79a30c2518",
     "tt/model.py": "38eefe7173a1b9a8aae3893001c538c650def2c4cd6089a8ae84c87246d1926f",
     "tt/multichip_decoder.py": "9f47ea0f205ac6560df5377955e526cb0120ae96b62de60e53dc48b471f6dd7e",
     "tt/optimized_decoder.py": "63045b5ed35fb996595aebb5f3c5d3be5e268727207375e8421209c48d4f5c47",
-    "tt/precision.py": "609bc75ab9dfb151032da03c2bd5dcb8ad9e5c01ff935b5cd39ae382eaa3bcb2",
-    "tt/serving_observer.py": "97e3ee57097e09761ad9aca582176e5e0408bb30816ab51893e894c0740514f9"
+    "tt/precision.py": "609bc75ab9dfb151032da03c2bd5dcb8ad9e5c01ff935b5cd39ae382eaa3bcb2"
   },
   "excluded": [
     "tests/",
@@ -42,7 +35,7 @@
     "README.md",
     "tt/fused_decoder.py",
     "tt/functional_decoder.py",
-    "doc/ (except the precision config, kv_capacity.json and its 5 evidence files)"
+    "doc/ (except the precision config and kv_capacity.json)"
   ],
   "vendored_modules": {
     "tt/readiness_contract.py": {
@@ -56,9 +49,9 @@
     }
   },
   "modified_sha256": {
-    "doc/full_model/kv_capacity.json": "cad5510bc770a1d431fc6f4c31db645e5a1461516c32aebe65a80730c2bc0da6",
+    "doc/full_model/kv_capacity.json": "4c0d9245049c5a12f9f049258bb708e6686eb15aa78297d5ad57658720bcf508",
     "tt/generator.py": "d1f2069b41436fc9ac20aee1888388303317d89dfe467b841596ce350269b27b",
-    "tt/generator_vllm.py": "68ed43ab531d47ce2cc2213b773f0562c539eb9d3985cd650c685cd32cec805f",
+    "tt/generator_vllm.py": "495f2f6069f8532854e9a4e1afb13680afe4626cf995f730501efe98cb3d53a6",
     "tt/model.py": "71f52290aaa6a36c8243346372ca9485ee9e4e518d5a933019220f8db2619d76",
     "tt/multichip_decoder.py": "27cb1b98911a37af4aba6c332550f950fc66b2a75f70685a4a3019d2a8f32187",
     "tt/optimized_decoder.py": "16220009139b860340026c02567e9bccb794cfb26137196a68198b43e26307bb"
@@ -72,6 +65,9 @@
     "tt/model.py: resolve_checkpoint() prefers the snapshot tt-inference-server mounts and exports as MODEL_WEIGHTS_DIR (or HF_MODEL) when it holds config.json and the safetensors (mounted_snapshot(); a hub snapshot directory must be the pinned revision), else $HF_HOME as before; kv_capacity.json source_sha256 tracks the edited file.",
     "tt/multichip_decoder.py, tt/optimized_decoder.py: the masked_bincount expert histogram pads its token rows to a multiple of 64 (expert id 256, which the op skips) because the pinned op splits rows over a fixed 64-core grid; the bring-up base op needed a multiple of 8 (tt-metal ddc05756f49). Counts are unchanged; kv_capacity.json source_sha256 tracks both files.",
     "tt/generator.py: _remap_penalties reshapes the penalty buffers in TILE layout instead of row-major, because the pinned row-major reshape sizes its circular buffers by the 1 MiB row page and exceeds L1 for the replicated 262144-wide buffer (the bring-up base uses the codegen row-major reshape, tt-metal d7f23025721). Same rows are moved (checked exact on device for all four buffers); kv_capacity.json source_sha256 tracks the file.",
-    "doc/full_model/kv_capacity.json: pool re-measured at the pins (60587 pass / 60588 OOM, was 60620 / 60621 at the base); physical_num_blocks, physical_token_capacity, max_tokens_all_users and the pass/fail pair updated, method and probes recorded under pin_measurement."
+    "doc/full_model/kv_capacity.json: pool re-measured at the pins (60587 pass / 60588 OOM, was 60620 / 60621 at the base); physical_num_blocks, physical_token_capacity, max_tokens_all_users and the pass/fail pair updated, method and probes recorded under pin_measurement.",
+    "Trimmed to the serving closure of OrnithForCausalLM (host-side dead-code removal; the five capacity-gated sources are untouched): removed tt/serving_observer.py (ObservedOrnithGenerator, ORNITH_VLLM_TRACE_EVENTS=1 only; the spec sets 0) and tt/benchmark_timing.py (ORNITH_BENCHMARK_TIMING_DIR, unset), and the bring-up base capacity evidence doc/optimized_vllm/native_tail_capacity/ (prediction_v3.json, promotion_review.json, summaries_v3/), which the loader only checked for existence.",
+    "tt/generator_vllm.py: the trace-event, benchmark-timing and ORNITH_VLLM_PROBE_LAYERS (reduced-layer debug) branches are removed; the default-off paths only.",
+    "doc/full_model/kv_capacity.json: reduced to the fields measured_kv_capacity() and the generator read plus pin_measurement; evidence names the record itself; source_sha256 and every gated value unchanged."
   ]
 }

@@ -6,7 +6,8 @@ layers with 32 query / 2 KV heads of 128; hidden 2688, 131K vocabulary, 30B tota
 1x4 Blackhole mesh (TP4), served through vLLM with the [vllm-tt-plugin](https://github.com/tenstorrent/vllm-tt-plugin).
 Native 262,144-token context. Produced by the tt-model-bringup agentic pipeline. The bring-up repository is not public;
 `provenance/upstream.json` records the source (host, path, commit `f1dd78ee`, branch `perf/multiuser`), the hash of
-every vendored file and the files changed since.
+every vendored file and the files changed since. The package is trimmed to what serving reaches (`trim` in
+`provenance/upstream.json`).
 
 ## Layout
 
@@ -14,18 +15,18 @@ every vendored file and the files changed since.
 |---|---|
 | `tt/model.py` | 52-layer model: embedding, decoder stack, final norm, LM head; checkpoint loading; slot-major Mamba state, prefix snapshots |
 | `tt/multichip_decoder.py` | TP4 attention, Mamba-2 and MoE layers (grouped-matmul experts, `per_expert_lanes` decode) |
-| `tt/optimized_decoder.py` | Single-chip layer programs, policies and constants the TP4 layer builds on |
+| `tt/optimized_decoder.py` | Base of the TP4 layer: layer kinds, state record, FP32 MoE norm and router/top-k |
 | `tt/generator.py` | Traced bucketed decode (1, 2, 4, 8, 16, 32 rows), chunked prefill, on-device sampling, prefix-cache restore |
 | `tt/generator_vllm.py` | vLLM adapter (`NemotronForCausalLM`), vLLM-owned paged KV cache for the 6 attention layers, decode-input reload contract v1 |
 | `tt/wide_sampling.py` | Model-owned traced 64-candidate sampler for requests with top_k unset or above 32 |
 | `tt/capacity.py`, `tt/prefill_plan.py` | KV pool sizing (`NEMOTRON_KV_POOL_TOKENS`) and prefill chunk plan |
-| `tt/precision.py`, `doc/datatype_sweep/selected_precision_config.json` | Selected precision (below). `NEMOTRON_PRECISION_CONFIG=<path>` loads another config |
-| `tt/readiness_contract.py` | The `Generator` base class, vendored from the tt-model-bringup runtime |
+| `tt/precision.py`, `doc/datatype_sweep/selected_precision_config.json` | Selected precision (below), read at start-up |
 | `tt/tt_ccl.py` | `models.common.tt_ccl.TT_CCL` with lazy semaphores (`eager=False`) for the sampler, as a subclass of the pinned class |
 | `vllm_metadata.json` | The checkpoint architecture and the adapter class |
 | `model/entry.py` | `register()`: registers `TTNemotronHForCausalLM` with vLLM, overwriting any earlier entry (used by `agentic-models check`) |
 | `model/tests/test_package.py` | CPU: vendored files match `provenance/upstream.json`; no bring-up paths remain; the metadata names the adapter; `register()` overwrites |
 | `model/tests/test_vllm_adapter.py` | CPU: capabilities, the plugin's call shapes, serving geometry and precision loading, KV cache spec, the vendored `TT_CCL` |
+| `model/tests/test_checkpoint_source.py` | CPU: the checkpoint directory (`MODEL_WEIGHTS_DIR` / `HF_MODEL` / pinned HF snapshot) |
 
 ## Precision
 
@@ -55,7 +56,7 @@ at 2K / 0.0035 at 8K / 0.0018 at 32K, decode 0.0036 at 8K.
     with `--enable-prefix-caching`, vLLM caches attention blocks only (`mamba_cache_mode` none), and prefix hits are
     clipped to the Mamba snapshots the model holds. Needed only with prefix caching.
 - Shared modules used unchanged from the pinned tt-metal: `models.common.lightweightmodule`, `models.common.sampling`,
-  `models.common.tt_ccl` (base class and `get_tt_ccl`).
+  `models.common.tt_ccl` (base class).
 - Install this repository into the same Python environment (`pip install -e .`).
 - The checkpoint at revision `a9904d24bcc1d289a1950fa9d2b978c47cf903b9`: `MODEL_WEIGHTS_DIR` (or `HF_MODEL`) when it
   is a local checkpoint directory (tt-inference-server exports it), else the HF cache (`local_files_only=True`).
@@ -94,16 +95,16 @@ samples those requests on the host.
 
 ## Results
 
-Validation at the repository pins is pending (`manifest.json` `validation.status`). Bring-up references, on the
-bring-up tt-metal (a later base than the pin, plus the bring-up's changes) and vllm-tt-plugin 042a9486 with local
-commits (vLLM 0.31):
+Validation at the repository pins is pending (`manifest.json` `validation.status`). Measured at the pins before the
+trim (QB2, the TTI spec, `vllm bench serve`, random data): 128/128 1 user 69.5 tok/s/user (TTFT 97 ms), 1K/1K 16 users
+25.6 tok/s/user (386 tok/s total), 4K/512 8 users 27.4 tok/s/user. Bring-up references (tt-metal later than the pin
+plus the bring-up's changes, vllm-tt-plugin 042a9486 with local commits, vLLM 0.31):
 
 - GPQA Diamond (198 questions, thinking on, T 1.0 / top-p 0.95 / top-k unset, budget 262,144 minus prompt): 77.27,
-  75.76, 75.25 over three runs (mean 76.09; card 75.44), no truncations. These runs used tt-metal fd950cc8 / df3b4414;
-  the final perf code (f1dd78ee) was re-checked with the KL gates and a prefix-cache restore check only.
-- SWE-bench Verified, 5 tasks: 2/5. Terminal-Bench 2, 5 tasks: 2/5.
-- Per-user decode (TTFT): 128/128 1 user 70.3 tok/s (0.10 s), 16 users 29.8; 1K/1K 1 user 70.0 (0.25 s), 16 users 29.8
-  (444 tok/s total); 4K/512 1 user 69.6 (0.57 s), 16 users 22.0; 32K/512 1 user 68.4 (TTFT 4.99 s).
+  75.76, 75.25 over three runs (mean 76.09; card 75.44), no truncations (tt-metal fd950cc8 / df3b4414; the final perf
+  code f1dd78ee was re-checked with the KL gates and a prefix-cache restore check).
+- Per-user decode: 128/128 1 user 70.3 tok/s, 16 users 29.8; 1K/1K 16 users 29.8 (444 tok/s total); 32K/512 1 user
+  68.4 (TTFT 4.99 s).
 
 ## Known limitations
 

@@ -167,7 +167,6 @@ class NemotronModel:
         mesh_device,
         *,
         checkpoint=None,
-        layer_indices=None,
         optimized_terminal=True,
         precision_config=None,
         batched_prefill=False,
@@ -179,7 +178,7 @@ class NemotronModel:
         weights = Checkpoint(checkpoint)
         self.config = weights.config
         self.checkpoint = weights.path
-        self.layer_indices = tuple(range(self.config.num_hidden_layers) if layer_indices is None else layer_indices)
+        self.layer_indices = tuple(range(self.config.num_hidden_layers))
         self.precision = load_precision(precision_config)
         self.policy = MeshPolicy(ccl_dtype=self.precision["ccl_dtype"])
         self.layers = []
@@ -279,60 +278,8 @@ class NemotronModel:
                 activation_dtype="bfloat16",
                 output_dtype="bfloat16",
             )
-        self.memory_after_weights = self.memory_view()
         self.prefill_metadata = {}
         self._prefill_prepared = set()
-
-    def precision_summary(self):
-        """Read actual loaded operands and compute configs, not just the input JSON."""
-
-        def compute(config):
-            return {
-                "math_fidelity": str(config.math_fidelity),
-                "fp32_dest_acc_en": config.fp32_dest_acc_en,
-                "math_approx_mode": config.math_approx_mode,
-                "dst_full_sync_en": config.dst_full_sync_en,
-                "packer_l1_acc": getattr(config, "packer_l1_acc", None),
-            }
-
-        return {
-            "config": self.precision,
-            "head": {"dtype": str(self.head.dtype), "compute": compute(self.head_compute)},
-            "decode_head_dtype": str(self.decode_head.dtype) if self.optimized_terminal else None,
-            "terminal_norm_dtype": str(self.norm.dtype),
-            "layers": [
-                {
-                    "index": layer.layer_idx,
-                    "kind": layer.kind,
-                    "prefill_chunk": layer.prefill_chunk,
-                    "projection_dispatch_counts": dict(layer.projection_dispatch_counts),
-                    "weights": {
-                        role: str(getattr(layer, role).dtype)
-                        for role in layer.precision["weight_groups"]
-                        if hasattr(layer, role)
-                    },
-                    "grouped_up": [str(w.dtype) for w in getattr(layer, "grouped_up", [])],
-                    "grouped_down": str(layer.grouped_down.dtype) if hasattr(layer, "grouped_down") else None,
-                    "grouped_down_parts": [
-                        {"dtype": str(w.dtype), "shape": list(w.shape)}
-                        for w in getattr(layer, "grouped_down_parts", [])
-                    ],
-                    "compute": {k: compute(v) for k, v in layer.projection_compute.items()},
-                    "fused_compute": {k: compute(v) for k, v in layer.projection_fused_compute.items()},
-                    "ccl_dtype": layer.policy.ccl_dtype,
-                    "sensitive_operands": {
-                        name: str(getattr(layer, name).dtype)
-                        for name in ("norm", "router_rows", "route_score_mask", "A", "D", "dt_bias")
-                        if hasattr(layer, name)
-                    },
-                }
-                for layer in self.layers
-            ],
-            "fixed_representations": {
-                key: self.precision[key]
-                for key in ("logits_dtype", "sampling_dtype", "norm_dtype", "router_dtype", "recurrent_dtype")
-            },
-        }
 
     def _residual_transfer(self, tensors):
         if self.precision["residual_dtype"] == "bfloat16":
@@ -349,19 +296,6 @@ class NemotronModel:
         return ttnn.from_torch(
             value.contiguous(), dtype=dtype, layout=layout, device=self.mesh, memory_config=DRAM, mesh_mapper=mapper
         )
-
-    def memory_view(self):
-        view = ttnn.get_memory_view(self.mesh, ttnn.BufferType.DRAM)
-        return {
-            key: getattr(view, key)
-            for key in (
-                "num_banks",
-                "total_bytes_per_bank",
-                "total_bytes_allocated_per_bank",
-                "total_bytes_free_per_bank",
-                "largest_contiguous_bytes_free_per_bank",
-            )
-        }
 
     def cache_specs(self, *, context_length=262144, num_slots=1, per_layer_specs=None):
         """Describe/validate pools without allocating or importing vLLM.
@@ -615,14 +549,6 @@ class NemotronModel:
                     else:
                         ttnn.fill_cache(dst, rows[s], d)
                 del rows
-
-    @staticmethod
-    def _copy_state_row(src, s, dst, d):
-        for a, b in zip([*src.conv, src.recurrent], [*dst.conv, dst.recurrent], strict=True):
-            shape = list(a.shape)
-            row = ttnn.slice(a, [s, 0, 0, 0], [s + 1, shape[1], shape[2], shape[3]])
-            ttnn.fill_cache(b, row, d)
-            del row
 
     def mamba_snapshot(self, cache, slot, row):
         """Save every Mamba layer's state of `slot` into snapshot row `row` (prefix cache; pool is slot-major)."""

@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pinned standalone TT-plugin translation for the Nemotron-H generator."""
 
-import json
 import os
-import time
 from pathlib import Path
 
 import torch
@@ -72,21 +70,6 @@ class NemotronForCausalLM:
         # prompts at mixed 8+2 admission. Keep it opt-in for diagnostics only.
         obj.batched_prefill = os.environ.get("NEMOTRON_VLLM_SERIAL_PREFILL", "1") != "1"
         obj.host_compat = os.environ.get("NEMOTRON_VLLM_HOST_COMPAT", "0") == "1"
-        obj.event_path = os.environ.get("NEMOTRON_VLLM_EVENTS")
-        # Inner-loop diagnostic only; preserve original HF config and all cache specs.
-        layers = os.environ.get("NEMOTRON_VLLM_LAYERS")
-        obj.layer_indices = None if layers is None else tuple(json.loads(layers))
-        obj.event(
-            "initialize",
-            adapter=f"{cls.__module__}:{cls.__name__}",
-            module_file=__file__,
-            max_model_len=max_seq_len,
-            max_num_seqs=max_batch_size,
-            precision=obj.precision,
-            layer_indices=obj.layer_indices,
-            host_compat=obj.host_compat,
-            batched_prefill=obj.batched_prefill,
-        )
         return obj
 
     @classmethod
@@ -112,13 +95,6 @@ class NemotronForCausalLM:
             for i in range(layer_kinds(config).count("attention"))
         }
 
-    def event(self, kind, **fields):
-        if self.event_path:
-            with open(self.event_path, "a") as stream:
-                stream.write(
-                    json.dumps(dict(event=kind, time=time.time(), pid=os.getpid(), **fields), default=str) + "\n"
-                )
-
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         if self.generator is not None:
             raise RuntimeError("The serving cache is allocated exactly once")
@@ -129,19 +105,16 @@ class NemotronForCausalLM:
         for index, (shape, dtype, tensor_idx) in zip(indices, per_layer_specs):
             if dtype != torch.bfloat16 or tuple(shape[1:]) != (1, 32, 128):
                 raise ValueError(f"Unexpected plugin cache geometry/dtype: {shape}, {dtype}")
-            if self.layer_indices is None or index in self.layer_indices:
-                specs.append((shape, getattr(ttnn, self.precision["kv_cache_dtype"]), tensor_idx))
+            specs.append((shape, getattr(ttnn, self.precision["kv_cache_dtype"]), tensor_idx))
         self.generator = NemotronGenerator(
             self.mesh,
             checkpoint=(self.hf_config._name_or_path if Path(self.hf_config._name_or_path).is_dir() else None),
-            layer_indices=self.layer_indices,
             max_seq_len=self.max_seq_len,
             max_batch_size=self.max_batch_size,
             per_layer_specs=specs,
             precision_config=self.precision,
             batched_prefill=self.batched_prefill,
         )
-        self.generator.event_sink = self.event
         if os.environ.get("NEMOTRON_PREFIX_CACHE", "0") == "1" and os.environ.get("NEMOTRON_PREFIX_CLIP", "1") == "1":
             try:  # perf/patches plugin patch: the scheduler clips prefix hits to restorable Mamba snapshots
                 import vllm_tt_plugin
@@ -149,15 +122,7 @@ class NemotronForCausalLM:
                 vllm_tt_plugin.prefix_hit_clip = self.generator.snap_hit_len
             except ImportError:
                 pass
-        cache = self.generator.allocate_kv_cache_per_layer(specs)
-        self.event(
-            "allocate_cache",
-            plugin_specs=per_layer_specs,
-            actual_specs=specs,
-            capacity=self.generator.cache_capacity(),
-            precision=self.generator.model.precision_summary(),
-        )
-        return cache
+        return self.generator.allocate_kv_cache_per_layer(specs)
 
     def _bound(self, kv_cache):
         if self.generator is None or kv_cache is not self.generator.cache:
@@ -167,17 +132,7 @@ class NemotronForCausalLM:
     def _prepare(self, kv_cache):
         generator = self._bound(kv_cache)
         if not generator._prepared:
-            start = time.monotonic()
             generator.prepare_decode(cache=kv_cache)
-            self.event(
-                "prepared",
-                elapsed_s=time.monotonic() - start,
-                decode_traces={str(k): v for k, v in generator.decode_traces.items()},
-                sampling_traces=generator.sampling_traces,
-                counters=dict(generator.counters),
-                warmup=generator.warmup_report,
-                cache=generator.cache_capacity(),
-            )
 
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device):
         self._prepare(kv_cache)
@@ -216,16 +171,6 @@ class NemotronForCausalLM:
         generator = self._bound(kv_cache)
         if return_output:
             self._mode("prefill", sampling_params)
-        starts = [0] * len(prompt_lens) if start_pos is None else [int(x) for x in start_pos]
-        self.event(
-            "prefill",
-            starts=starts,
-            ends=[int(x) for x in prompt_lens],
-            lengths=[int(n) - a for a, n in zip(starts, prompt_lens)],
-            slots=empty_slots,
-            active_decode_slots=torch.nonzero(generator.active_host).flatten().tolist(),
-            return_output=return_output,
-        )
         result = generator.prefill_forward(
             tokens,
             page_table=page_table,
@@ -245,7 +190,6 @@ class NemotronForCausalLM:
     def _check_tokens(self, result):
         if torch.any(result < 0) or torch.any(result >= self.hf_config.vocab_size):
             raise RuntimeError("Device sampler emitted an out-of-vocabulary token")
-        self.event("token_check", count=result.numel(), out_of_vocabulary=0)
 
     def decode_forward(
         self,
@@ -286,15 +230,6 @@ class NemotronForCausalLM:
             reload_page_table=reload_page_table,
             reload_sampling_params=reload_sampling_params,
             reset_sampling_state=reset_sampling_state,
-        )
-        self.event(
-            "decode",
-            reload_inputs=reload_inputs,
-            reload_page_table=reload_page_table,
-            reload_sampling_params=reload_sampling_params,
-            reset_sampling_state=reset_sampling_state,
-            slot_remap=slot_remap,
-            counters=dict(generator.counters),
         )
         if isinstance(result, torch.Tensor):
             return result.reshape(-1, 1) if device else result.reshape(rows, 1, -1)
@@ -338,5 +273,4 @@ class NemotronForCausalLM:
 
     def release_persistent_capture(self):
         if self.generator is not None:
-            self.event("shutdown_release", counters=dict(self.generator.counters))
             self.generator.close()

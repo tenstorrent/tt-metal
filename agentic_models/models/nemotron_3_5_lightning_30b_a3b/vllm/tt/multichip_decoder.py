@@ -20,7 +20,7 @@ L1 = ttnn.L1_MEMORY_CONFIG
 # perf/multiuser accuracy fix: dt = softplus(dt + dt_bias) with NO lower clamp, matching the
 # CUDA/Triton kernels used in training and by vLLM (dt_limit=(0, inf)). The HF torch fallback
 # clamps at time_step_min=0.001; on real text ~12% of (token, head) dt values fall below it,
-# which shortens long-memory heads. NEMOTRON_DT_CLAMP=1 restores the bring-up behaviour.
+# which shortens long-memory heads.
 import os as _os
 
 DT_ACTIVATIONS = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)]
@@ -74,8 +74,6 @@ MOE_LANES = _os.environ.get("NEMOTRON_MOE_LANES", "1") == "1"
 MOE_INDEXED_MAX = int(
     _os.environ.get("NEMOTRON_MOE_INDEXED_MAX", "4")
 )  # measured crossover: B=4 26.5 vs 31.3 ms, B=8 41.3 vs 36.4 ms
-if _os.environ.get("NEMOTRON_DT_CLAMP", "0") == "1":
-    DT_ACTIVATIONS.append(ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU_MIN, 0.001))
 
 
 @dataclass(frozen=True)
@@ -89,8 +87,6 @@ class MeshPolicy:
     persistent_ccl: bool = True
     ep_filter_remote: bool = True
     dram_readers: int = 1
-    input_fusion: bool = False
-    input_fusion_k: int = 7
     reduction: str = "scatter"
     packed_norm: bool = True
     sharded_norm: bool = True
@@ -167,8 +163,6 @@ class MultichipDecoder(OptimizedDecoder):
             self.policy.residual_layout != "replicated" or self.policy.row_fusion
         ):
             raise ValueError("all_reduce requires replicated residual and separate row projection")
-        if self.policy.input_fusion and self.policy.residual_layout != "sharded":
-            raise ValueError("Input fusion requires sharded residuals")
         if self.policy.sparse_up_n not in (1, 3) or self.policy.sparse_up_block not in (7, 21):
             raise ValueError("Unsupported indexed sparse geometry")
         if self.policy.dram_readers not in (1, 2) or not 1 <= self.policy.prefill_chunk <= 8192:
@@ -179,7 +173,6 @@ class MultichipDecoder(OptimizedDecoder):
         # Keep the scan partition stable across tile-aligned prefix-cache hits.
         # Larger Mamba chunks change recurrence rounding at a 32-token resume.
         self.prefill_chunk = 32 if self.kind == "mamba" else self.policy.prefill_chunk
-        self.projection_dispatch_counts = {}
         self.decode_batch_chunk = 32
         self.router_chunk = 256
         self.compute = ttnn.init_device_compute_kernel_config(
@@ -189,14 +182,6 @@ class MultichipDecoder(OptimizedDecoder):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.fast_compute = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        self.fused_compute = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi)
         self.router_compute = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -388,7 +373,6 @@ class MultichipDecoder(OptimizedDecoder):
                 )
                 for begin, end in down_ranges
             ]
-            self.grouped_down = self.grouped_down_parts[0]
             self.combine_zero = tensor(torch.zeros(1, 1, 1, 2816))
             self.zero_expert_row = tensor(torch.zeros(1, 1, 1, 2816), layout=ttnn.ROW_MAJOR_LAYOUT)
             self.zero_expert_rows32 = tensor(torch.zeros(1, 1, 32, 2816), layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -515,21 +499,6 @@ class MultichipDecoder(OptimizedDecoder):
                     self.ccl_outputs[role, rows] = tensor(
                         torch.zeros(1, 1, rows, width), getattr(ttnn, self.policy.ccl_dtype)
                     )
-        if self.policy.input_fusion and self.kind != "moe":
-            from models.common.tt_ccl import get_tt_ccl
-
-            self.ccl_manager = get_tt_ccl(mesh_device)
-            self.input_semaphores = self.ccl_manager.get_and_cycle_ag_semaphore_handles(cluster_axis=1)
-            self.input_barrier = self.ccl_manager.get_and_cycle_barrier_semaphore_handle(cluster_axis=1)
-            self.input_gather_buffer = tensor(torch.zeros(1, 1, 32, 2688))
-            self.input_program = ttnn.MinimalMatmulConfig(
-                M_block_size=1,
-                K_block_size=self.policy.input_fusion_k,
-                N_block_size=4,
-                subblock_h=1,
-                subblock_w=4,
-                compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
-            )
         return self
 
     def allocate_state(self, *, context_length=262144, block_size=32, num_slots=1):
@@ -607,26 +576,6 @@ class MultichipDecoder(OptimizedDecoder):
             # Keep one physical row tile through the input projection. Unpacking
             # an L1 norm output here would expand B logical rows into B tiles.
             return self._norm(ttnn.reshape(x, (1, 1, batch, width)))
-        if (
-            self.policy.input_fusion
-            and self.policy.residual_layout == "sharded"
-            and self.kind != "moe"
-            and not self._inside_prefill
-        ):
-            batch = x.shape[0]
-            if batch > 1:
-                x = ttnn.reshape(x, (1, 1, batch, 672))
-            stats = ttnn.rms_norm_pre_all_gather(x, compute_kernel_config=self.compute, dtype=ttnn.float32)
-            stats = ttnn.all_gather(stats, dim=3, cluster_axis=1, memory_config=DRAM)
-            x = ttnn.rms_norm_post_all_gather(
-                x,
-                stats,
-                epsilon=self.config.layer_norm_epsilon,
-                compute_kernel_config=self.compute,
-                dtype=ttnn.bfloat16,
-                memory_config=DRAM,
-            )
-            return ttnn.reshape(x, (batch, 1, 1, 672)) if batch > 1 else x
         if self.policy.residual_layout == "sharded":
             x = ttnn.typecast(self._gather(x), ttnn.bfloat16)
         if (
@@ -656,33 +605,11 @@ class MultichipDecoder(OptimizedDecoder):
         packed_batch = role is not None and batch > 1
         if packed_batch:
             x = ttnn.reshape(x, (1, 1, batch, x.shape[-1]))
-        if self.policy.input_fusion and role in ("qkv", "in_proj") and x.shape[-1] == 672:
-            dispatch = "fused_input"
-            out = ttnn.experimental.all_gather_minimal_matmul_async(
-                x,
-                w,
-                config=self.input_program,
-                multi_device_global_semaphore=self.input_semaphores,
-                barrier_semaphore=self.input_barrier,
-                topology=ttnn.Topology.Linear,
-                cluster_axis=1,
-                num_links=1,
-                num_workers_per_link=3,
-                num_buffers_per_channel=2,
-                persistent_output_buffer=self.input_gather_buffer,
-                memory_config=DRAM,
-                dtype=dtype,
-                compute_kernel_config=self.projection_compute[role],
-                force_transpose=False,
-                transpose_core_grid=False,
-            )[0]
-            out = out[:, :, : x.shape[-2], :]
         # On this fixed mesh, larger resident fused plans may assign reader
         # traffic to the writer's NoC in dedicated-accounting mode. Keep the
         # validated <=128 physical-row envelope; larger prefills use linear
         # below and _finish performs their reduce-scatter (AUTODEBUG_watcher).
-        elif not self._inside_prefill and self.policy.row_fusion and role in ("o", "out_proj") and x.shape[-2] <= 128:
-            dispatch = "fused_row"
+        if not self._inside_prefill and self.policy.row_fusion and role in ("o", "out_proj") and x.shape[-2] <= 128:
             out = ttnn.experimental.matmul_reduce_scatter_prefill(
                 (
                     ttnn.pad(
@@ -700,7 +627,6 @@ class MultichipDecoder(OptimizedDecoder):
             )
             out = out[:, :, : x.shape[-2], :]
         elif not self._inside_prefill and role in self.dram_weights and x.shape[-2] <= 32:
-            dispatch = "dram"
             out = ttnn.linear(
                 ttnn.to_memory_config(x, self.dram_inputs[role]),
                 self.dram_weights[role],
@@ -712,14 +638,12 @@ class MultichipDecoder(OptimizedDecoder):
         else:
             # A short resumed prefill must use the same projection algorithm as
             # its rows in a longer fresh prefill. Decode keeps its tuned plans.
-            dispatch = "generic"
             if (
                 not self._inside_prefill
                 and self.policy.projection_mode != "generic"
                 and role in self.dense_programs
                 and x.shape[-2] <= 32
             ):
-                dispatch = "tuned_dense"
                 kwargs.setdefault("program_config", self.dense_programs[role])
             out = ttnn.linear(
                 ttnn.to_memory_config(x, DRAM),
@@ -728,8 +652,6 @@ class MultichipDecoder(OptimizedDecoder):
                 compute_kernel_config=self.compute if role is None else self.projection_compute[role],
                 **kwargs,
             )
-        key = f"{'prefill' if self._inside_prefill else 'decode'}:{role}:{dispatch}"
-        self.projection_dispatch_counts[key] = self.projection_dispatch_counts.get(key, 0) + 1
         out = ttnn.to_memory_config(out, requested)
         if packed_batch:
             out = ttnn.reshape(out, (batch, 1, 1, out.shape[-1]))
@@ -1707,15 +1629,6 @@ class MultichipDecoder(OptimizedDecoder):
         return self._finish(self._moe(x), hidden_states)
 
     def prefill_forward(self, hidden_states, *, state, page_table=None, start_pos=0, positions=None):
-        if isinstance(hidden_states, (tuple, list)):
-            if self.kind == "moe":
-                return self._moe_prefill_requests(
-                    hidden_states, state=state, page_table=page_table, start_pos=start_pos, positions=positions
-                )
-            return [
-                self.prefill_forward(x, state=st, page_table=p, start_pos=a, positions=positions)
-                for x, st, p, a in zip(hidden_states, state, page_table, start_pos, strict=True)
-            ]
         length = hidden_states.shape[2]
         if not 0 <= start_pos < start_pos + length <= self.config.max_position_embeddings:
             raise ValueError("Prefill span must lie within advertised context")

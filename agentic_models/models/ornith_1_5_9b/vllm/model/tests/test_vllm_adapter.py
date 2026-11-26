@@ -19,15 +19,12 @@ from agentic_models.models.ornith_1_5_9b.vllm.model import entry
 from agentic_models.models.ornith_1_5_9b.vllm.tt import cache_contract
 from agentic_models.models.ornith_1_5_9b.vllm.tt import generator as canonical
 from agentic_models.models.ornith_1_5_9b.vllm.tt import prefix_snapshots as PS
-from agentic_models.models.ornith_1_5_9b.vllm.tt.generator_vllm import OrnithForCausalLM, OrnithMTPForCausalLM
+from agentic_models.models.ornith_1_5_9b.vllm.tt.generator_vllm import OrnithForCausalLM
 from agentic_models.models.ornith_1_5_9b.vllm.tt.sampling import generator as sampling
 from agentic_models.models.ornith_1_5_9b.vllm.tt.sampling import tt_sampling
 
-ADAPTERS = [OrnithForCausalLM, OrnithMTPForCausalLM]
-
-
-@pytest.mark.parametrize("cls", ADAPTERS)
-def test_capabilities(cls):
+def test_capabilities():
+    cls = OrnithForCausalLM
     caps = cls.model_capabilities
     # vllm-tt-plugin patches: P1 keeps a continuing chunked prefill in its state slot, P3 passes original_prompt_lens.
     assert caps["preserve_prefill_state_slots"] is True
@@ -39,10 +36,9 @@ def test_capabilities(cls):
     assert cls.decode_input_update_contract == 1
 
 
-@pytest.mark.parametrize("cls", ADAPTERS)
-def test_device_top_k_is_32(cls):
+def test_device_top_k_is_32():
     # The plugin samples a request on device only when its top_k <= max_device_top_k; above 32 goes to the host.
-    assert cls.model_capabilities["max_device_top_k"] == canonical.DEVICE_SAMPLING_MAX_TOP_K == 32
+    assert OrnithForCausalLM.model_capabilities["max_device_top_k"] == canonical.DEVICE_SAMPLING_MAX_TOP_K == 32
 
 
 def test_generator_uses_the_vendored_sampling_modules():
@@ -137,13 +133,6 @@ def test_selected_precision_is_shipped():
 
     assert DEFAULT_PATH.exists()
     assert load_policy()["id"] == "bfp8_all_hifi2"
-
-
-def test_mtp_spec_plan_limits():
-    from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
-
-    assert isinstance(OrnithMTPForCausalLM.spec_plan(None, 16, 3), SpecPlan)
-    assert isinstance(OrnithMTPForCausalLM.spec_plan(None, 32, 3), SpecReject)
 
 
 def test_register_replaces_the_builtin_registration(monkeypatch):

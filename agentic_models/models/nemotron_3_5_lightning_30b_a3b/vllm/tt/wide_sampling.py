@@ -14,19 +14,6 @@ import torch
 import ttnn
 
 
-def mix32(value: int) -> int:
-    """Specified lowbias32 integer permutation, modulo 2**32 at each multiply.
-
-    This is Chris Wellons' lowbias32 mixer (0x7feb352d, 0x846ca68b).
-    Zero maps to zero. Uniform draws use its high 24 bits / 2**24, so are
-    exactly representable FP32 numbers in [0,1), including seed zero.
-    """
-    value &= 0xFFFFFFFF
-    value = ((value ^ (value >> 16)) * 0x7FEB352D) & 0xFFFFFFFF
-    value = ((value ^ (value >> 15)) * 0x846CA68B) & 0xFFFFFFFF
-    return value ^ (value >> 16)
-
-
 class WideSampling:
     width = 64
     rows = 32
@@ -90,7 +77,10 @@ class WideSampling:
         self._write(self.wide_mask, (k > 32).float().reshape(1, 32))
 
     def uniform(self, seeds):
-        """Read persistent 32-row UINT32 seeds without updating them."""
+        """Read persistent 32-row UINT32 seeds without updating them.
+
+        lowbias32 mixer (0x7feb352d, 0x846ca68b); the uniform draw is its high 24 bits / 2**24.
+        """
         x = ttnn.reshape(seeds, (1, 1, 32, 1))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.mul(ttnn.bitwise_xor(x, ttnn.bitwise_right_shift(x, 16)), self.multiplier1)

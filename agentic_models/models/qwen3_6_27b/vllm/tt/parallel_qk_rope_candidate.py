@@ -307,28 +307,3 @@ def compact_qk_rope(q, k, q_weight, k_weight, cos, sin, *, epsilon, outputs=None
         [q, k, q_weight, k_weight, cos, sin, *outputs], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[])
     )
     return outputs
-
-
-def cpu_check():
-    import json
-    import sys
-
-    for batch in range(1, 33):
-        workers = list(range(batch)) + list(range(32, 32 + batch))
-        assert len(set(workers)) == 2 * batch
-        assert all(0 <= c < 64 for c in workers)
-        for user in range(batch):
-            assert user != 32 + user
-            assert {user * 2, user * 2 + 1}.issubset(set(range(2 * batch)))
-            assert [user * 8 + t for t in range(8)] == list(range(user * 8, (user + 1) * 8))
-    assert "ttnn" not in sys.modules and "torch" not in sys.modules
-    assert "typecast_tile<" in COMPUTE and "ckl::BinaryFpuOp::Mul" in COMPUTE
-    assert "ckl::add<" in COMPUTE and "prefix.pop_front(2);norm.pop_front(8)" in WRITER
-    print(json.dumps({"status": "pass", "scope": "CPU geometry/source only; hardware unverified", "batches": 32}))
-
-
-if __name__ == "__main__":
-    import sys
-
-    assert sys.argv[1:] == ["--cpu-check"]
-    cpu_check()

@@ -105,7 +105,6 @@ def adapter():
     a.generator = FakeGenerator()
     a.model = SimpleNamespace(config=SimpleNamespace(vocab_size=248320))
     a.mesh = SimpleNamespace(num_program_cache_entries=lambda: 0)
-    a.phase_timing = None
     a.host_compatibility = True
     a.request_specific_rope = False
     a.active_decode_rows = 0

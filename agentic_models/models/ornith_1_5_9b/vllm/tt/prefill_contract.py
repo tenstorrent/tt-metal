@@ -38,11 +38,6 @@ class PrefillBatch:
     request_lens: tuple[int, ...]
     row_slots: tuple[int, ...]
 
-    @property
-    def active_mask(self):
-        return tuple(slot in self.active_slots for slot in range(32))
-
-
 class PrefillContract:
     @classmethod
     def prepare(cls, gen, *, runtime=None, bindings=None, sampling_state=None):

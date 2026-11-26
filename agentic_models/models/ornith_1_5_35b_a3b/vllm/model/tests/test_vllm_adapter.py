@@ -89,7 +89,7 @@ class RecordingGenerator:
 
 def adapter(batch_size=4):
     a = object.__new__(OrnithForCausalLM)
-    a.batch_size, a.context, a.benchmark_timing = batch_size, 1024, None
+    a.batch_size, a.context = batch_size, 1024
     a.generator = RecordingGenerator(batch_size)
     return a
 

@@ -135,11 +135,6 @@ class OrnithForCausalLM:
             page_table=table,
         )
         self.generator.trace_observer = self._event
-        self.benchmark_timing = None
-        if os.environ.get("ORNITH_BENCHMARK_TIMING"):
-            from agentic_models.models.ornith_1_5_9b.vllm.tt.benchmark_timing import PhaseRecorder
-
-            self.benchmark_timing = PhaseRecorder(self, os.environ["ORNITH_BENCHMARK_TIMING"])
         self._event("cache", blocks=plan.num_blocks, slots=self.max_batch_size, context=self.max_seq_len)
         return cache
 
@@ -211,8 +206,6 @@ class OrnithForCausalLM:
         original_prompt_lens=None,
         **kwargs,
     ):
-        timing = getattr(self, "benchmark_timing", None)
-        phase = timing.begin("prefill") if timing else None
         self._check_cache(kv_cache)
         if original_prompt_lens is None:
             raise ValueError("Serving prefill requires authoritative original_prompt_lens")
@@ -282,15 +275,11 @@ class OrnithForCausalLM:
             self._prefills += 1
             if self._prefills % 50 == 0:
                 self._event("prefix_cache", prefills=self._prefills, stats=dict(PS.REGISTRY.stats))
-        if timing:
-            timing.prefill_end(phase, starts, ends, original_prompt_lens, empty_slots, discard_logits)
         # Canonical prefill already returns host [B,1,V] or sampled [B,1].
         # Text positions coincide on all three M-RoPE channels.
         return (result, torch.zeros((len(ends), 1), dtype=torch.int64)) if self.uses_mrope else result
 
     def decode_forward(self, tokens, start_pos, page_table, kv_cache, **kwargs):
-        timing = getattr(self, "benchmark_timing", None)
-        phase = timing.begin("decode") if timing else None
         self._check_cache(kv_cache)
         deltas = kwargs.pop("rope_deltas_all_users", None)
         if deltas is not None and any(delta != 0 for delta in deltas):
@@ -306,8 +295,6 @@ class OrnithForCausalLM:
             enable_trace=kwargs.get("enable_trace", True),
         )
         result = self.generator.decode_forward(tokens, start_pos, page_table=page_table, kv_cache=kv_cache, **kwargs)
-        if timing:
-            timing.decode_submitted(phase, result, self.generator)
         return result
 
     def read_decode_output(self, output, async_read=False):
@@ -318,9 +305,6 @@ class OrnithForCausalLM:
         result = self.generator.process_decode_output_host(output, is_tokens=is_tokens)
         if is_tokens and torch.any(result >= self.model.vocab_size):
             raise RuntimeError("Out-of-vocabulary device sample")
-        timing = getattr(self, "benchmark_timing", None)
-        if timing:
-            timing.decode_complete(output)
         return result
 
     def release_request(self, slot):
@@ -408,153 +392,3 @@ class OrnithForCausalLM:
         if self.generator is not None:
             self._event("shutdown", counters=self.generator.counters)
             self.generator.close()
-
-
-class OrnithMTPForCausalLM(OrnithForCausalLM):
-    """Opt-in MTP speculative decoding (tt/mtp_spec.py) through the plugin's model-owned drafter contract:
-    --speculative-config '{"method":"custom_class","model":"vllm_tt_plugin.model_owned_drafter",
-    "num_speculative_tokens":K}' --no-async-scheduling. Greedy (argmax_ids) verification; requests the
-    runner cannot certify by argmax decode plainly (narrow decode)."""
-
-    model_capabilities = {
-        **OrnithForCausalLM.model_capabilities,
-        "supports_async_decode": False,  # every decode reloads its inputs (verify steps bypass the resident decode)
-        "supports_async_spec_decode": False,
-        "supports_spec_decode": True,
-        "spec_requirements": ("device_propose",),
-        "spec_hidden_handoff": ("on_device",),
-        "output_tokens_per_step": 1,
-        # a sampled row's verify columns are independent device draws under its own temperature / top-k / top-p,
-        # so the runner's draft == draw walk is lossless for sampled requests too
-        "spec_ids_are_sampled": True,
-    }
-
-    @classmethod
-    def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
-        from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
-
-        k = min(int(requested_k), 3)
-        if max_num_seqs > 16 or k < 1:
-            return SpecReject("Ornith MTP verify supports K in 1..3 and at most 16 concurrent requests", (1, 2, 3))
-        # a verify holds users x (1 + K) rows of the 32-row decode tile
-        k_by_rows = () if max_num_seqs * (k + 1) <= 32 else ((32 // (k + 1), k), (16, 1))
-        return SpecPlan(
-            effective_k=k,
-            lanes_per_request=1,
-            extra_bytes_per_seq=0,
-            extra_bytes_per_token=0,
-            accept_modes=("argmax_ids",),
-            drafter_state="internal",
-            supports_narrow_decode=True,
-            k_by_rows=k_by_rows,
-        )
-
-    def _spec_buckets(self):
-        from agentic_models.models.ornith_1_5_9b.vllm.tt.mtp_spec import BUCKETS, bucket_of
-
-        k = self.spec.K
-        out = []
-        for b in BUCKETS:
-            if b > bucket_of(self.max_batch_size):
-                break
-            kk = k if b * (k + 1) <= 32 else 1
-            out.append((b, kk + 1))
-        return out
-
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device):
-        if getattr(self, "spec", None) is None and getattr(self.model, "hidden_sink", None) is None:
-            # the decode programs (warmed by prepare_decode) must already write the drafter's hidden sink
-            self.model.hidden_sink = ttnn.from_torch(
-                torch.zeros(1, 1, 32, 4096),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.model.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.model.device),
-            )
-        super().warmup_model_prefill(kv_cache, enable_trace, can_sample_on_device)
-        if getattr(self, "spec", None) is None:
-            from agentic_models.models.ornith_1_5_9b.vllm.tt.mtp_spec import SpecEngine
-
-            state = self.generator.prepare_decode(
-                kv_cache=kv_cache, page_table=self.generator.page_table, slots=tuple(range(self.max_batch_size))
-            )
-            self.spec = SpecEngine(
-                self.generator, state, self.cache_kwargs, int(os.environ.get("ORNITH_MTP", "3")), self.model.hidden_sink
-            )
-            self.generator.prefill_runtime.segment_hook = self._prefill_segment
-            self._event("mtp", K=self.spec.K)
-
-    def warmup_model_decode(self, kv_cache, enable_trace, max_batch_size, num_blocks, can_sample_on_device):
-        super().warmup_model_decode(kv_cache, enable_trace, max_batch_size, num_blocks, can_sample_on_device)
-        started = time.perf_counter()
-        self.spec.warm(self._spec_buckets(), capture=enable_trace)
-        self._event(
-            "mtp_warm", capture=enable_trace, buckets=self._spec_buckets(), seconds=time.perf_counter() - started
-        )
-
-    def _prefill_segment(self, *, source, slot, ids, start, end, mapping):
-        self.spec.after_prefill_segment(None, source, slot, ids, start, end, mapping)
-
-    def decode_forward(self, tokens, start_pos, page_table, kv_cache, **kwargs):
-        spec_mode = kwargs.pop("spec_mode", None)
-        num_valid = kwargs.pop("num_valid_drafts", None)
-        kwargs.pop("accepted_counts", None)  # the commit happens in propose_draft_tokens
-        kwargs.pop("draft_token_ids", None)
-        if spec_mode is None:
-            self.spec.note_plain_inputs(tokens, start_pos)
-            return super().decode_forward(tokens, start_pos, page_table, kv_cache, **kwargs)
-        if spec_mode != "argmax_ids":
-            raise ValueError(f"Ornith MTP serves the argmax_ids accept mode only, got {spec_mode}")
-        from vllm_tt_plugin.spec_decode import VerifyOutput
-
-        self._check_cache(kv_cache)
-        gen = self.generator
-        state = gen.states[(id(kv_cache), tuple(range(self.max_batch_size)))]
-        remap = kwargs.get("slot_remap")
-        if remap is not None:
-            remap = [int(x) for x in (remap.tolist() if callable(getattr(remap, "tolist", None)) else remap)]
-        if remap is not None and remap != list(range(len(remap))):
-            capacity = len(kv_cache[0])
-            state.batch_state.permute_slots(remap)
-            gen.sampling_state.apply_slot_remap(tuple(remap) + tuple(range(capacity, 32)))
-            gen.prefill_runtime.remap_slots(kv_cache, remap)
-            gen._remap_forward_inputs(state, remap)
-            self.spec.remap(remap)
-        if kwargs.get("reload_sampling_params") and kwargs.get("sampling_params") is not None:
-            gen.configure_sampling(self._sampling_params(kwargs["sampling_params"]))
-            state.sampling_params_initialized = True
-        state.forward_initialized = False  # the resident plain-decode inputs are stale after a verify
-        ids = self.spec.verify(
-            torch.as_tensor(tokens),
-            torch.as_tensor(start_pos),
-            torch.as_tensor(page_table),
-            self._sampling_params(kwargs.get("sampling_params")),
-            None if num_valid is None else torch.as_tensor(num_valid),
-        )
-        return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
-
-    def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
-        from vllm_tt_plugin.spec_decode import DraftOutput
-
-        drafts, num_valid = self.spec.propose(
-            int(num_drafts),
-            torch.as_tensor(committed_tokens),
-            torch.as_tensor(committed_positions),
-            torch.as_tensor(accepted_counts),
-            int(num_drafts) + 1,
-        )
-        if self.spec.stats["proposals"] % 200 == 0:
-            self._event("mtp_stats", **self.spec.stats)
-        return DraftOutput(draft_token_ids=drafts, num_valid=num_valid)
-
-    def release_request(self, slot):
-        if getattr(self, "spec", None) is not None:
-            self.spec.release(slot)
-        return super().release_request(slot)
-
-
-class OrnithServingDiagnostic(OrnithForCausalLM):
-    """Two real layer kinds for integration debugging, never quality/perf evidence."""
-
-    layer_indices = (0, 3)

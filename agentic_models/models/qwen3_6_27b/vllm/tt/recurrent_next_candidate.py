@@ -1,97 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""CPU-only source transformations/plans; no TTNN import or default wiring.
-
-Pass the already-selected cumulative_exp_scalar reader/compute sources to
-stream_state_sources. The caller must use all three returned sources together.
-This changes publication order, not recurrence arithmetic or state geometry.
-"""
+"""Local fused GDN decode convolution: source transformations plus the program launch (no TTNN import at load)."""
 
 
 def _replace(source, before, after):
     assert source.count(before) == 1, (before, source.count(before))
     return source.replace(before, after, 1)
-
-
-def stream_state_sources(reader, compute, writer):
-    """Stream four BF16/FP32 state tiles per value-column to the writer.
-
-    CB11 retains its existing capacity/format. Four matching reserve/push and
-    wait/pop groups replace one head group. CB12 readout publication stays
-    head-granular. Every state transfer completes before its CB slots retire.
-    """
-    compute = _replace(
-        compute,
-        """        updated.reserve_back(16); out.reserve_back(4);
-        for(uint32_t n=0;n<4;n++) {
-            tile_regs_acquire();""",
-        """        out.reserve_back(4);
-        for(uint32_t n=0;n<4;n++) {
-            updated.reserve_back(4);
-            tile_regs_acquire();""",
-    )
-    compute = _replace(
-        compute,
-        "for(uint32_t m=0;m<4;m++) pack_tile<true>(m,11,m*4+n);",
-        "for(uint32_t m=0;m<4;m++) pack_tile<true>(m,11,m);",
-    )
-    compute = _replace(
-        compute,
-        """            tile_regs_release();
-        }
-        updated.push_back(16); out.push_back(4);""",
-        """            tile_regs_release();
-            updated.push_back(4);
-        }
-        out.push_back(4);""",
-    )
-    writer = _replace(
-        writer,
-        """        updated.wait_front(16); out.wait_front(4);
-        // Waiting for output guarantees compute finished reading updated CB.
-        for(uint32_t i=0;i<16;i++)
-            noc.async_write(use<CircularBuffer::AddrSelector::READ_PTR>(updated),s,STATE_BYTES,{.offset_bytes=i*STATE_BYTES},{.page_id=h*16+i});""",
-        """        // Compute retains live state in DST, never rereads CB11. Each
-        // published column is complete; input CB5 already holds the old head.
-        for(uint32_t n=0;n<4;n++) {
-            updated.wait_front(4);
-            for(uint32_t m=0;m<4;m++)
-                noc.async_write(use<CircularBuffer::AddrSelector::READ_PTR>(updated),s,STATE_BYTES,
-                    {.offset_bytes=m*STATE_BYTES},{.page_id=h*16+m*4+n});
-            noc.async_write_barrier();
-            updated.pop_front(4);
-        }
-        out.wait_front(4);""",
-    )
-    writer = _replace(
-        writer,
-        "noc.async_write_barrier(); updated.pop_front(16); out.pop_front(4);",
-        "noc.async_write_barrier(); out.pop_front(4);",
-    )
-    return reader, compute, writer
-
-
-def value_column_partition(batch, available_cores=110):
-    """Plan only: contiguous independent (head,n) ranges, no device wiring.
-
-    Returns (first_head, head_count, first_n, last_n_exclusive). The first and
-    last masks apply only to their respective boundary heads. Every interior
-    head owns all four value columns. No K-row split or cross-core reduction.
-    """
-    assert 1 <= batch <= 32 and available_cores >= 1
-    work = batch * 12 * 4
-    owners = min(work, available_cores)
-    result = []
-    start = 0
-    for core in range(owners):
-        count = work // owners + (core < work % owners)
-        end = start + count
-        first_head, first_n = divmod(start, 4)
-        last_head = (end - 1) // 4
-        result.append((first_head, last_head - first_head + 1, first_n, (end - 1) % 4 + 1))
-        start = end
-    assert start == work
-    return result
 
 
 def local_conv_sources(reader, compute, writer, *, poison_dead_padding=False):

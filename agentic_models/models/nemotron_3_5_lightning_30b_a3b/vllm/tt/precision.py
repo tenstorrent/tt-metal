@@ -33,11 +33,7 @@ def baseline():
 
 def load_precision(config=None):
     if config is None:
-        import os
-
-        # perf/multiuser: optional override for precision experiments (default: the selected config).
-        override = os.environ.get("NEMOTRON_PRECISION_CONFIG")
-        config = override if override else (SELECTED if SELECTED.exists() else baseline())
+        config = SELECTED if SELECTED.exists() else baseline()
     if isinstance(config, (str, Path)):
         path = Path(config)
         if not path.exists():

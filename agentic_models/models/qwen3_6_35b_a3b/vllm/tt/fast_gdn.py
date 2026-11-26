@@ -22,15 +22,6 @@ import ttnn
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
-def _dbg(mesh, what):
-    import os
-
-    if os.environ.get("QWEN_FAST_DEBUG_SYNC", "0") == "1":
-        print("DBG before-sync", what, flush=True)
-        ttnn.synchronize_device(mesh)
-        print("DBG ok", what, flush=True)
-
-
 SEG = 8
 SEGMENTS = 4
 OPT = __import__("os").environ.get("QWEN_FAST_OPT", "1") == "1"

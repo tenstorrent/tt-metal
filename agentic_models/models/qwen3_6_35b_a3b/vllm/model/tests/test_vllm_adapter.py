@@ -81,7 +81,6 @@ def test_sampling_limits_are_32_wide():
     from agentic_models.models.qwen3_6_35b_a3b.vllm.tt.serving_capabilities import QwenServingCapabilities as S
 
     assert S.serving_capabilities["max_device_top_k"] == 32
-    assert S.serving_limits["stochastic_device_top_k"] == (1, 32)
     # The sampler is built with max_top_k 32 and no 64-wide draw (ttnn.sampling at the pin takes k <= 32).
     calls = [
         n
@@ -183,7 +182,6 @@ class FakeGenerator:
 def bare_adapter(generator=None):
     adapter = object.__new__(adapter_class())
     adapter.generator = generator
-    adapter.audit_enabled = False
     adapter.decode_route_counts = {"device": 0, "host_logits": 0}
     return adapter
 

@@ -152,7 +152,6 @@ class MultichipDecoder(LightweightModule):
         chunk_size=None,
         residual_layout="replicated",
         collective="direct",
-        fused_prefill=False,
         native_local=True,
         movement_optimized=True,
         collectives=None,
@@ -189,7 +188,7 @@ class MultichipDecoder(LightweightModule):
         if chunk_size is None:
             chunk_size = (
                 (32768 if c.layer_types[layer_idx] == "linear_attention" else 16384)
-                if residual_layout == "replicated" and not fused_prefill
+                if residual_layout == "replicated"
                 else 1024
             )
         assert chunk_size > 0 and chunk_size % 32 == 0
@@ -199,13 +198,6 @@ class MultichipDecoder(LightweightModule):
         self.residual_layout = residual_layout
         self.hidden_width = 1024 if residual_layout == "sharded" else 4096
         self.collective = collective
-        self.fused_prefill = fused_prefill
-        if fused_prefill:
-            # The resident fused kernel uses both NoCs under dedicated ownership.
-            # A 64-KiB plan excludes residency for local K>=1024 and keeps reads
-            # on NoC0. This optional safe fusion is slower than the default path.
-            bank = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1).total_bytes_per_bank
-            self.prefill_headroom = bank - 64 * 1024
         self.native_local = native_local and collective == "direct" and residual_layout == "replicated"
         self.movement_optimized = movement_optimized and self.native_local
         assert collective in ("direct", "separate")
@@ -628,34 +620,10 @@ class MultichipDecoder(LightweightModule):
         )
 
     def linear(self, x, name):
-        if (
-            self.fused_prefill
-            and x.shape[2] > 1
-            and name in ("linear_attn.out_proj", "self_attn.o_proj", "mlp.down_proj")
-        ):
-            n = x.shape[2]
-            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-            if n % 32:
-                x = ttnn.pad(x, [(0, 0), (0, 0), (0, 32 - n % 32), (0, 0)], 0.0)
-            return ttnn.experimental.matmul_reduce_scatter_prefill(
-                x,
-                self.weights[name + ".weight"],
-                cluster_axis=1,
-                scatter_dim=-1,
-                topology=self.ccl.topology,
-                num_links=1,
-                compute_kernel_config=ttnn.ComputeConfigDescriptor(
-                    math_fidelity=self.mlp_fidelity if name.startswith("mlp.") else self.attention_fidelity
-                ),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                l1_headroom=self.prefill_headroom,
-            )[:, :, :n, :]
-
         if x.shape[2] == 1:
             return self.decode_linear(x, name)
         if (
             self.residual_layout == "replicated"
-            and not self.fused_prefill
             and 512 <= x.shape[2] <= 1024
             and name in ("packed_input", "linear_attn.out_proj", "self_attn.o_proj", "mlp.down_proj")
         ):
@@ -686,9 +654,7 @@ class MultichipDecoder(LightweightModule):
             )
         input_memory = (
             ttnn.DRAM_MEMORY_CONFIG
-            if self.residual_layout == "replicated"
-            and not self.fused_prefill
-            and prefill_uses_dram(x.shape[2], self.prefill_l1_limit)
+            if self.residual_layout == "replicated" and prefill_uses_dram(x.shape[2], self.prefill_l1_limit)
             else ttnn.L1_MEMORY_CONFIG
         )
         return ttnn.experimental.minimal_matmul(
@@ -738,7 +704,6 @@ class MultichipDecoder(LightweightModule):
             return self.gather(result)
         if (
             self.residual_layout == "replicated"
-            and not self.fused_prefill
             and x.shape[2] > 4096
             and name in ("input_layernorm", "post_attention_layernorm")
         ):
@@ -1126,14 +1091,6 @@ class MultichipDecoder(LightweightModule):
             offset += count
         return outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)
 
-    def prefill_batch(self, rows, *, states, start_positions, page_tables):
-        """Ragged batch: independent device rows, starts and page maps."""
-        assert len(rows) == len(states) == len(start_positions) == len(page_tables)
-        return [
-            self.prefill_forward(x, state=st, start_position=start, page_table=pt)
-            for x, st, start, pt in zip(rows, states, start_positions, page_tables)
-        ]
-
     def pooled_linear_attention_decode_batch(self, packed, states):
         """Complete ordered pool: convolution/gates, recurrent scan and postnorm."""
         n = len(states)
@@ -1216,8 +1173,6 @@ class MultichipDecoder(LightweightModule):
         page_tables,
         *,
         masked=False,
-        cache_update_positions=None,
-        kv_only=False,
     ):
         """Native batch SDPA; ordered shared pools alias KV, mixed pools pack and scatter."""
         n = len(states)
@@ -1344,18 +1299,7 @@ class MultichipDecoder(LightweightModule):
                     )
                     attention_rows.append(ttnn.add(padded, offset) if offset else padded)
                 attention_table = ttnn.concat(attention_rows, dim=0)
-        if cache_update_positions is None:
-            ttnn.experimental.paged_fused_update_cache(key, k, value, v, update_idxs_tensor=positions, page_table=table)
-        else:
-            # Speculative verify: several rows of ONE request write neighbouring positions of the same KV tile. One
-            # fused update would read-modify-write that tile from several cores at once (rows lost), so write the rows
-            # one at a time: each tensor holds one row's position and -1 (skip) for every other row.
-            for row_positions in cache_update_positions:
-                ttnn.experimental.paged_fused_update_cache(
-                    key, k, value, v, update_idxs_tensor=row_positions, page_table=table
-                )
-        if kv_only:  # write this step's K/V only (MTP drafter prompt rows); no attention output
-            return None
+        ttnn.experimental.paged_fused_update_cache(key, k, value, v, update_idxs_tensor=positions, page_table=table)
         extra = {}
         if n > 1:
             assert 2 <= n <= 32 and self.device.compute_with_storage_grid_size().x >= 11
@@ -1473,18 +1417,3 @@ class MultichipDecoder(LightweightModule):
             local = ttnn.concat(local, dim=2) if n > 1 else local[0]
         name = "linear_attn.out_proj" if self.kind == "linear_attention" else "self_attn.o_proj"
         return self.decode_finish(x, self.decode_reduce(self.decode_linear(local, name)))
-
-    def decode_batch(self, rows, *, states, current_positions, page_tables):
-        """List compatibility wrapper; stacked decoders use decode_batch_packed."""
-        assert len(rows) == len(states) == len(current_positions) == len(page_tables)
-        if self.native_local and 1 <= len(rows) <= 32:
-            packed = ttnn.concat([ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG) for x in rows], dim=2)
-            out = self.decode_batch_packed(
-                packed, states=states, current_positions=current_positions, page_tables=page_tables
-            )
-            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-            return [out[:, :, i : i + 1, :] for i in range(len(rows))]
-        return [
-            self.decode_forward(x, state=st, current_position=pos, page_table=pt)
-            for x, st, pos, pt in zip(rows, states, current_positions, page_tables)
-        ]

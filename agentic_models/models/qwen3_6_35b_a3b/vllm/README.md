@@ -6,7 +6,9 @@ linear-attention layers and 10 full-attention layers; MoE with 256 routed expert
 text-only through vLLM with the [vllm-tt-plugin](https://github.com/tenstorrent/vllm-tt-plugin). Produced by the
 tt-model-bringup agentic pipeline on a QB2 host; the bring-up repository is not public, so
 `provenance/upstream.json` records its host path, commit (`32f487a9`, branch `perf/multiuser`), the hash of every
-vendored file and the files changed here.
+vendored file, the files changed here, and what was trimmed: the package holds only the serving import closure of the
+adapter (bring-up benchmark/audit/timing/weight-cache helpers, experiment switches and unreachable decoder methods
+were removed without changing the served path).
 
 ## Layout
 
@@ -24,6 +26,7 @@ vendored file and the files changed here.
 | `model/entry.py` | `register()`: registers the architecture with vLLM, overwriting any earlier entry (used by `agentic-models check`) |
 | `model/tests/test_package.py` | CPU: vendored files match `provenance/upstream.json`; no bring-up package path left; metadata and registration |
 | `model/tests/test_vllm_adapter.py` | CPU: capabilities, plugin hook keywords, config-time hooks, and the vendored edits listed below |
+| `model/tests/test_checkpoint_source.py` | CPU: checkpoint directory resolution (`MODEL_WEIGHTS_DIR` / `HF_MODEL` / `$HF_HOME`) |
 
 ## Precision
 
@@ -87,8 +90,12 @@ python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.6-35B-A3B \
 
 ## Results
 
-Not yet validated at the pinned versions (`manifest.json` validation `pending`). Bring-up references (tt-metal
-8c48b4e4, vllm-tt-plugin 042a9486 with its local patches, vLLM 0.31), which are not the bar at the pins:
+At the pins (QB2, served by tt-inference-server with the spec above, 2026-11-25; `vllm bench serve`, random):
+128/128 1 user 41.8 tok/s, TTFT 0.21 s; 1024/1024 16 users 285 tok/s total (TPOT 53 ms); 4096/512 8 users 141 tok/s
+total. `manifest.json` validation stays `pending` until the full accuracy run at the pins.
+
+Bring-up references (tt-metal 8c48b4e4, vllm-tt-plugin 042a9486 with its local patches, vLLM 0.31), which are not the
+bar at the pins:
 
 - GPQA Diamond (198, thinking on, card sampling T 1.0 / top-p 0.95 / top-k 20 / presence penalty 1.5, full-context
   budget): 168/198 = 84.8 (card 86.0).

@@ -51,16 +51,6 @@ def _slot_tuple(value, name):
 
 
 @dataclass(frozen=True)
-class ForwardInputs:
-    """Selected opaque inputs; selecting resident inputs never inspects stale hosts."""
-
-    tokens: Any
-    positions: Any
-    rope: Any
-    page_table: Any
-
-
-@dataclass(frozen=True)
 class DecodeCommands:
     reload_inputs: bool = True
     reload_page_table: bool = False
@@ -94,36 +84,6 @@ class DecodeCommands:
         if unknown:
             raise TypeError("Unknown decode command keyword(s): " + ", ".join(sorted(unknown)))
         return cls(**kwargs)
-
-    @property
-    def forward_input_source(self):
-        return "host" if self.reload_inputs else "resident"
-
-    @property
-    def page_table_source(self):
-        return "host" if self.reload_inputs or self.reload_page_table else "resident"
-
-    @property
-    def required_action_order(self):
-        """Metadata schedule; caller executes each requested action exactly once."""
-        actions = []
-        if self.slot_remap is not None:
-            actions.append("remap_all_slot_state")
-        if self.reload_inputs:
-            actions.append("reload_all_forward_inputs")
-        elif self.reload_page_table:
-            actions.append("reload_page_table_only")
-        if self.reload_sampling_params:
-            actions.append("reload_sampling_params")
-        if self.reset_sampling_state:
-            actions.append("reset_sampling_state")
-        return tuple(actions)
-
-    def select_forward_inputs(self, *, host: ForwardInputs, resident: ForwardInputs):
-        """Pure reference selection, not a device upload or a fallback decision."""
-        source = host if self.reload_inputs else resident
-        pages = host if self.reload_inputs or self.reload_page_table else resident
-        return ForwardInputs(source.tokens, source.positions, source.rope, pages.page_table)
 
     def validate_context(
         self,
