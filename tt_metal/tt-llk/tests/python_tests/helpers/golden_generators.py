@@ -2284,6 +2284,7 @@ class UnarySFPUGolden:
             MathOperation.Log,
             MathOperation.Log1p,
             MathOperation.LogWithBase,
+            MathOperation.Log10,
             MathOperation.Reciprocal,
             MathOperation.Rsqrt,
             MathOperation.Sin,
@@ -2385,6 +2386,7 @@ class UnarySFPUGolden:
             MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.GeluDerivative: self._gelu_derivative,
             MathOperation.LogWithBase: self._log_with_base,
+            MathOperation.Log10: self._log10,
             MathOperation.ExpWithBase: self._exp_with_base,
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
@@ -3095,6 +3097,9 @@ class UnarySFPUGolden:
     # 1/ln(2), i.e. log2 with an exact exponent term, so torch.log2 is the golden.
     def _log_with_base(self, x):
         return self._torch_unary(x, torch.log2)
+
+    def _log10(self, x):
+        return self._torch_unary(x, torch.log10)
 
     def _log1p(self, x):
         return self._torch_unary(x, torch.log1p)
@@ -5630,6 +5635,15 @@ class UntilizeGolden:
         from helpers.tilize_untilize import untilize_block
 
         operand = quantize_input_to_unpack_format(operand, input_format)
+
+        # untilize_block's cast wraps where the packer clamps to sign-magnitude, so a modelled pack
+        # saturates first; a caller that omits input_format is reshaping a device result, not packing.
+        if (
+            input_format is not None
+            and input_format.is_integer()
+            and data_format.is_integer()
+        ):
+            operand = saturate_integer(operand, data_format)
 
         result = untilize_block(
             operand,

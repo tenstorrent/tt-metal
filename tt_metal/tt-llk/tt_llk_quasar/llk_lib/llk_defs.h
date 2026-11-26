@@ -186,6 +186,7 @@ enum class SfpuType : std::uint32_t
     power,
     power_iterative,
     log,
+    log10,
     logsigmoid,
     digamma,
     erf,
@@ -262,6 +263,9 @@ enum class SfpuType : std::uint32_t
     unary_max_int32,
     unary_min_int32,
     dropout,
+    quant_int32,
+    requant_int32,
+    dequant_int32,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its

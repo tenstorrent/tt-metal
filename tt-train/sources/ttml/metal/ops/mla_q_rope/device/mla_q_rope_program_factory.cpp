@@ -6,10 +6,10 @@
 
 #include <cstdint>
 #include <optional>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
 #include "mla_q_rope_device_operation.hpp"

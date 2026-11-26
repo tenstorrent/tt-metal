@@ -1145,9 +1145,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
     ),
     (MathOperation.Rpow, None, None, None, None): (
         "2**x for |x| above ~8e31: 1 where the answer is inf on a 16-bit Dest, whose "
-        "power body has no overflow guard (#52675), and inf where it is 0 on a 32-bit "
-        "Dest, whose Veltkamp split overflows (#55129); NaN on a Float16 output is the "
-        "store's inf (#57215)"
+        "power body has no overflow guard (#52675)"
     ),
 }
 
@@ -1226,10 +1224,10 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     ): 2,
     (MathOperation.Expm1Cw, None, None, None, None): 15,
     (MathOperation.I0, None, None, None, None): 10,
-    (MathOperation.I1, None, None, None, None): 10,
+    (MathOperation.I1, None, None, None, None): 16,
     (MathOperation.Lgamma, None, None, None, None): 1,
     (MathOperation.Polygamma, None, None, None, None): 11,
-    (MathOperation.Rpow, None, None, None, None): 10,
+    (MathOperation.Rpow, None, None, None, None): 4,
 }
 
 # The same pins where another architecture's table parks a different number of cells

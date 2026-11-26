@@ -101,6 +101,8 @@ class MathOperation(Enum):
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
     # log_base(x); dispatched with base_scale = fp16a(1/ln 2) -> log2(x).
     LogWithBase = OpSpec("log_with_base", MathOpType.SFPU_UNARY)
+    # log_with_base with the log10 scale; Quasar only.
+    Log10 = OpSpec("log10", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
     Logsigmoid = OpSpec("logsigmoid", MathOpType.SFPU_UNARY)
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)

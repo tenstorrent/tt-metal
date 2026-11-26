@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <utility>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 

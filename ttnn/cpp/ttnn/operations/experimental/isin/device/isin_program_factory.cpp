@@ -6,9 +6,9 @@
 
 #include "../isin_common.hpp"
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::experimental::prim {

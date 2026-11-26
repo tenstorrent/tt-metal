@@ -55,6 +55,11 @@ class ttMLA:
         "wkv_b2",
         "o_proj",
     ]
+    # The KV branch, all a kv_only layer loads (_convert_and_cache_weights), pinned to the dtype and layout it loads at.
+    KV_WEIGHT_GLOBS = {
+        "kv_a_layernorm": "_dtype_BFLOAT16_layout_ROW_MAJOR",
+        "kv_a_proj_with_mqa": "_dtype_BFLOAT8_B_layout_TILE",
+    }
 
     @staticmethod
     def weight_names(has_output_gate: bool = False) -> list[str]:
@@ -100,7 +105,12 @@ class ttMLA:
 
     @staticmethod
     def check_cache_complete(
-        cache_path: Path, cache_name_prefix: str, has_indexer: bool = False, has_output_gate: bool = False
+        cache_path: Path,
+        cache_name_prefix: str,
+        has_indexer: bool = False,
+        has_output_gate: bool = False,
+        kv_only: bool = False,
+        indexer_key_only: bool = False,
     ) -> bool:
         """Check that the dense MLA weight cache files exist, plus the indexer tensorbins when sparse.
 
@@ -108,14 +118,20 @@ class ttMLA:
         (``{prefix}.indexer_*``) must also be complete — a disjoint prefix space from the dense MLA
         names, so the dense loop here never matches indexer files and vice versa
         (see ``TtIndexer.check_cache_complete``). ``has_output_gate=True`` additionally requires
-        ``g_proj`` (Kimi-K3)."""
+        ``g_proj`` (Kimi-K3). ``kv_only`` checks only the KV branch a kv_only build loads; ``indexer_key_only`` checks
+        only the indexer's key side (a layer built with ``indexer_key_only``)."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
-        for name in ttMLA.weight_names(has_output_gate):
-            if not pattern_exists(f"{cache_name_prefix}.{name}*.tensorbin", "MLA"):
-                logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}")
+        globs = (
+            {name: pin + ".tensorbin" for name, pin in ttMLA.KV_WEIGHT_GLOBS.items()}
+            if kv_only
+            else {name: "*.tensorbin" for name in ttMLA.weight_names(has_output_gate)}
+        )
+        for name, suffix in globs.items():
+            if not pattern_exists(f"{cache_name_prefix}.{name}{suffix}", "MLA"):
+                logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}{suffix}")
                 return False
-        if has_indexer and not TtIndexer.check_cache_complete(cache_path, cache_name_prefix):
+        if has_indexer and not TtIndexer.check_cache_complete(cache_path, cache_name_prefix, key_only=indexer_key_only):
             return False
         return True
 
@@ -428,6 +444,7 @@ class ttMLA:
         layer_num: int = 61,
         kv_only: bool = False,
         next_kv_only: bool = False,
+        indexer_key_only: bool = False,
         has_indexer: bool | None = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         active_seq_len: Optional[int] = None,
@@ -452,6 +469,7 @@ class ttMLA:
         self.layer_idx = layer_idx
         self._first_layer_idx = first_layer_idx or 0  # this pipeline stage's first layer
         self.kv_only = kv_only
+        assert not indexer_key_only or kv_only, "indexer_key_only needs a kv_only layer (only write_k runs)"
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
         self.is_chunked = is_chunked
@@ -889,6 +907,8 @@ class ttMLA:
                     layer_num=self.layer_num,
                     first_layer_idx=first_layer_idx,
                     output_tp_sequence_sharded=self._needs_head_to_seq_reshard,
+                    # Opt-in for a kv_only layer, which only writes index keys (_forward_kv_only -> write_k).
+                    key_only=indexer_key_only,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -2088,6 +2108,8 @@ class ttMLA:
             v_out = ttnn.multiply(v_out, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(g)
         if self.tp_factor > 1:
+            # CCL ports in the last grid column: the matmul keeps every row (GLM-5.3: 10x10 = 100 cores instead of
+            # 10x8 = 80, 12 -> 10 output tiles per core).
             return ttnn.experimental.matmul_reduce_scatter_prefill(
                 v_out,
                 self.o_proj_weight,
@@ -2095,6 +2117,7 @@ class ttMLA:
                 scatter_dim=-1,
                 topology=self.tp_ccl_topology,
                 num_links=self.ccl_num_links,
+                use_column_major_ccl=True,
             )
         return ttnn.linear(
             v_out,

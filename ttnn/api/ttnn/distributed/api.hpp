@@ -7,7 +7,7 @@
 #include <map>
 #include <memory>
 
-#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/distributed/types.hpp"

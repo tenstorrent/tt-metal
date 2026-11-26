@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/run_args/validation_mode.hpp>
@@ -1331,7 +1331,7 @@ public:
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
 
-        // The framework's cache-hit dispatcher (handle_mesh_adapter_cache_hit in
+        // The framework's cache-hit dispatcher (use_cached_mesh_workload in
         // device_operation.hpp) prefers a method named `apply_descriptor` over
         // `override_runtime_arguments` when both exist. We adopt the name to
         // slot into that hook directly — the "descriptor" word here is the

@@ -19,10 +19,8 @@ ttnn::Tensor log_softmax(const ttnn::Tensor& t, int dim);
 ttnn::Tensor softmax(const ttnn::Tensor& t, int dim);
 ttnn::Tensor divide(const ttnn::Tensor& a, const ttnn::Tensor& b);
 
-ttnn::Tensor mean_moreh(const ttnn::Tensor& t, int dim, bool keep_dim);
 ttnn::Tensor mean_ttnn(const ttnn::Tensor& t, int dim, bool keep_dim);
 
-ttnn::Tensor sum_moreh(const ttnn::Tensor& t, int dim, bool keep_dim);
 ttnn::Tensor sum_ttnn(const ttnn::Tensor& t, int dim, bool keep_dim);
 
 // `seed_axes` (optional) lists the mesh axes across which the logits hold DISTINCT data and must

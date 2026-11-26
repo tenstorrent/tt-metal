@@ -122,8 +122,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         histories itself and returns the replacement carry. Every rank must call
         it.
 
-        ``exchange_buffer`` is a persistent ``[1, 12, Q+K+V]`` ROW_MAJOR BFLOAT16
-        DRAM tensor and ``exchange_semaphores`` three persistent global semaphores
+        ``exchange_buffer`` is a persistent ``[1, 15, Q+K+V]`` ROW_MAJOR BFLOAT16
+        DRAM tensor and ``exchange_semaphores`` four persistent global semaphores
         on ``qkv_causal_conv1d_silu_exchange_core``, zero before the first call. Each segment
         that does not start the logical sequence reads the preceding rank's last
         three rows, which arrive over the fabric. The fourth output is the
@@ -133,7 +133,12 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         With ``slab_index`` (replicated UINT32 scalar, read on device),
         ``history`` is a slab of carries: entry ``slab_index * slab_index_scale +
         slab_index_offset`` is read (zeros when ``actual_start`` reads 0) and
-        replaced in place; the fourth output is the slab.
+        replaced in place; the fourth output is the slab. The slab is SP-sharded,
+        ``[entries, (Q+K+V) / (P * SP), 3P]``: SP rank ``r`` holds, per Q/K/V
+        branch in order, the branch's channels ``[r * W / SP, (r + 1) * W / SP)``.
+        The ranks send their channels of the old tail to the chronologically
+        first rank over the fabric, and each rank writes back only its own
+        channels of the replacement.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: ``q``, ``k``,

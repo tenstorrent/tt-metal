@@ -350,7 +350,12 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {
-        hardshrink_init();
+        // The Compute API's hardshrink_tile_init / threshold_tile_init expressions, so the bare init's dispatch is what runs.
+        SFPU_UNARY_INIT(hardshrink);
+    }
+    else if constexpr (OPERATION == SfpuType::threshold)
+    {
+        SFPU_UNARY_INIT(threshold);
     }
     else if constexpr (OPERATION == SfpuType::hardtanh)
     {
@@ -425,9 +430,10 @@ void init_unary_sfpu_operation_quasar()
     {
         power_init();
     }
-    else if constexpr (OPERATION == SfpuType::log)
+    else if constexpr (OPERATION == SfpuType::log || OPERATION == SfpuType::log_with_base || OPERATION == SfpuType::log10)
     {
-        log_init<APPROX, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
+        // The test's approximation mode selects log's FAST_APPROX path.
+        log_init<APPROX, APPROX /* FAST_APPROX */, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::digamma)
     {
@@ -1110,7 +1116,14 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {
         SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_hardshrink, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* lambda = 0.5f */);
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_hardshrink,
+            (APPROX, ITERATIONS, is_fp32_dest_acc_en),
+            dst_index,
+            vector_mode,
+            0x3f000000u /* lambda = 0.5f */);
     }
     else if constexpr (OPERATION == SfpuType::hardtanh)
     {
@@ -1239,10 +1252,36 @@ void call_unary_sfpu_operation_quasar(
             is_fp32_dest_acc_en,
             TILE_SHAPE,
             calculate_log,
-            (APPROX, false /* FAST_APPROX */, false /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS),
+            (APPROX, APPROX /* FAST_APPROX */, false /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
             0u /* log_base_scale_factor (unused: HAS_BASE_SCALING = false) */);
+    }
+    else if constexpr (OPERATION == SfpuType::log_with_base)
+    {
+        // log2 through the exact base-two path, as ttnn.log2 calls it; the golden is torch.log2.
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_log,
+            (APPROX, APPROX /* FAST_APPROX */, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS, true /* IS_BASE_TWO */),
+            dst_index,
+            vector_mode,
+            0x3fb8aa3bu /* 1 / ln(2) */);
+    }
+    else if constexpr (OPERATION == SfpuType::log10)
+    {
+        // log10 as ttnn.log10 calls it: the generic base-scaling path; the golden is torch.log10.
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_log,
+            (APPROX, APPROX /* FAST_APPROX */, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x3ede5bd9u /* 1 / ln(10) */);
     }
     // Special-function family.
     else if constexpr (OPERATION == SfpuType::digamma)
