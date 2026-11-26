@@ -1,19 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""Targeted GDDR6 ACTIVATE-word stress: reads chosen per-bank addresses so that every read forces a row activation
-whose command/address word has a chosen shape, and checks each read for silent wrong-address data.
+"""GDDR6 ACT-word stress: per-bank reads chosen so each forces a row ACT with a chosen CA word, every read checked
+for wrong-address data. The whole-DRAM sweep is mostly row hits, so it sends few ACTs and none of a chosen shape.
 
-The whole-DRAM sweep issues mostly row hits, so it sends few ACT words and none of a chosen shape. Here each RISC
-reads a short list of (controller, per-bank address) entries in a loop. With a barrier after every read and two rows
-of one GDDR bank in the list (ping-pong), the controller must close and reopen a row on each read, so the target row's
-ACT word is sent at the read rate. Without the barrier (hammer, storm) many reads are in flight at once.
-
-Per-bank address decode: col = addr[12:6], GDDR bank = addr[16:13], row = addr[31:17]. The ACT falling edge carries
-CA9..CA0 = R13..R4, so row bit R(i+4) drives pin CA i. The rising edge carries CA9 = L (opcode), CA8 = R14,
-CA7..CA4 = BA3..BA0, CA3..CA0 = R3..R0 (GDDR6 command truth table), assuming GDDR bank = BA. A read is checked word by word against a per-address hash; a
-miscompared read is classified as stale (previous launch's data), alias of bit k (every wrong byte equals the data at
-A ^ (1 << k), read back from DRAM), or other.
+Ping-pong (two rows of one bank, barrier per read) sends the target's ACT at the read rate; hammer/storm drop the
+barrier. Decode: col = addr[12:6], bank = addr[16:13], row = addr[31:17]. ACT falling edge: CA9..CA0 = R13..R4.
+Rising edge: CA9 = L, CA8 = R14, CA7..CA4 = BA3..BA0, CA3..CA0 = R3..R0. A miscompare is stale (previous launch),
+alias of bit k (data matches A ^ (1 << k)), or other.
 """
 
 import importlib.util
@@ -92,9 +86,8 @@ def act_addr(rise, fall, col):
 
 
 def ca_full_targets(t0, col0, space, ca_pins):
-    """The original hit t0 (bank 1, BA1=0), the same row in bank 3 (BA1=1), whose rising CA5 matches the falling
-    R9, then every ACT pin toggling in both directions against opposite-toggling neighbours (CA9 only 0 -> 1: its
-    rising edge is the opcode). A target is None when it has no placement in the buffer."""
+    """orig hit t0 (bank 1), orig_bank3 (bank 3: rising CA5 = falling R9), then each CA pin toggling both ways
+    against opposite-toggling neighbours (CA9 only 0 -> 1). None = no placement in the buffer."""
     targets = [("orig", t0), ("orig_bank3", t0 | 2 << GBANK_SHIFT)]
     for i in ca_pins:
         for up in (True, False) if i < 9 else (True,):
@@ -102,11 +95,8 @@ def ca_full_targets(t0, col0, space, ca_pins):
     return targets
 
 
-# Many CA pins switching in one ACT, as (rising, falling) CA9..CA0 words. Every word keeps at least five ones, so
-# CABI leaves it as is and the wire carries the same pattern with CABI on or off (alt_ev_up holds CA0 high for that).
-# The vic_* and sw5 words copy the shape of the orig_bank3 hit: a victim pin holds its level while its neighbours
-# switch to the opposite one. sw5 is that shape on CA5 alone; with CABI on both of its words invert, so on the wire
-# the victim holds L and the neighbours rise, the mirror of the same shape.
+# Multi-pin ACT words, (rising, falling) CA9..CA0. >= 5 ones each, so CABI never inverts them.
+# vic_* / sw5 mimic the orig_bank3 hit: victim pin holds, neighbours switch the opposite way.
 MULTI_PIN = {
     "alt_ev_dn": (0x155, 0x2AA),  # every pin toggles: even pins 1 -> 0, odd pins 0 -> 1
     "alt_ev_up": (0x0AB, 0x155),  # even pins 0 -> 1, odd 1 -> 0, CA0 holds H, CA9 holds L
@@ -127,10 +117,8 @@ def multi_pin_targets(col, space):
 
 
 def toggle_target(i, up, col, space):
-    """Pin CA i toggles between the ACT edges (up: 0 -> 1, else 1 -> 0) and its neighbours toggle the other way;
-    every other pin is 0 on both edges. Rows below the buffer get CA8 high on the rising edge (R14), the pin
-    farthest from CA0/CA1, the only targets that need it. With CABI both one/two-hot edges invert together, so the
-    up/down pair still covers both directions."""
+    """CA i toggles across the ACT edges (up: 0 -> 1), neighbours the other way, all else 0. Rows below the buffer
+    get R14 (rising CA8). CABI inverts both edges together, so up/down still covers both directions."""
     pin = 1 << i
     nb = sum(1 << j for j in (i - 1, i + 1) if 0 <= j < 10)
     rise, fall = (nb, pin) if up else (pin, nb)
@@ -215,12 +203,8 @@ def storm(row, col, ctrls, space, slots):
 
 
 def sdpa(t, ctrls, space, slots, ratio, all_banks=False, one_bank=False):
-    """Shared K-block streaming at t, private ping-pong rows in t's GDDR bank, and writers on other rows of it.
-
-    all_banks spreads the shared stream over t's row in all 16 GDDR banks (16 reads each), so one run
-    compares banks under the same load. one_bank wraps the stream around t's 8 KB of its row instead of running
-    on into the next banks, so every stream ACT drives t's own rising-edge word.
-    """
+    """SDPA mimic: shared K-block stream at t, private ping-pong rows and writers in t's bank.
+    all_banks: stream t's row in all 16 banks. one_bank: wrap within t's 8 KB, so every ACT is t's rising word."""
     row0, gb, _ = decode(t)
     low = (space.lo >> ROW_SHIFT) + 1
     # Q and W rows (low .. low+223) must not include t's row, or its reads stop needing their own ACT.
@@ -255,9 +239,8 @@ def sdpa(t, ctrls, space, slots, ratio, all_banks=False, one_bank=False):
 
 
 def with_writes(specs, every):
-    """Every `every`-th slot rewrites its first 16 entries, one barrier each, instead of reading them. The data written
-    is the fill data, so readers of the same rows stay correct, while the bus sees write ACTs and read/write
-    turnarounds on exactly the rows the pattern reads."""
+    """Every `every`-th slot writes the fill data to its first 16 entries: write ACTs and turnarounds on the
+    pattern's own rows, readers stay correct."""
     if not every:
         return specs
     return [(WRITE, 1, ents[:16]) if s % every == every - 1 else (m, b, ents) for s, (m, b, ents) in enumerate(specs)]
@@ -285,9 +268,8 @@ MISDIRECT_BIT = 26
 
 
 def wmis_target(t, space):
-    """t, or t moved up by R12 then R14, so that t and t ^ 64 MB both lie in the buffer. A write misdirected by the
-    CA5 alias lands 64 MB below t, and that cell must be ours to write and to check. R12 adds falling-edge CA8 and
-    R14 rising-edge CA8, both away from CA5, so CA5 stays isolated on the falling edge."""
+    """t, moved up by R12 / R14 if needed so t and t ^ 64 MB are both in the buffer (a misdirected write must
+    land on our cells). R12/R14 only add CA8, keeping CA5 isolated."""
     if t is None or not t >> MISDIRECT_BIT & 1:
         return None
     for extra in (0, 1 << 29, 1 << 31):
@@ -298,10 +280,8 @@ def wmis_target(t, space):
 
 
 def wmis(t, ctrls, space, slots):
-    """Write misdirect: two of three RISCs write t's gold, alternating with a partner row of t's bank so every write
-    needs its own ACT. The rest read t and every single-bit partner t ^ (1 << k) inside the buffer. FILL gave each
-    partner its own gold, so a write of t's data that lands on a partner reads back as alias bit k there, and stays
-    wrong until the next launch refills it."""
+    """Write misdirect: 2/3 RISCs write t's gold (alternating rows, one ACT per write), the rest read t and each
+    partner t ^ (1 << k). A misdirected write reads back as alias bit k on the partner."""
     hot = hot_pin(decode(t)[0])
     partners = [t ^ 1 << k for k in range(COL_SHIFT, 32) if space.ok(t ^ 1 << k)]
     assert t ^ 1 << MISDIRECT_BIT in partners, f"{t:#x}: 64 MB partner outside the buffer"
@@ -316,9 +296,8 @@ def wmis(t, ctrls, space, slots):
 
 
 def random_specs(rng, ctrls, space, slots):
-    """One random draw: each RISC gets a random shape (stream, ping-pong, scatter or write burst) at random rows,
-    columns and controllers. Half the draws start every slot in one random GDDR bank (long streams run on into the
-    next banks), the load that concentrates ACTs the way sdpa does; the other half spread over all 16."""
+    """Random shape per RISC (stream, ping-pong, scatter, write burst) at random rows/cols/ctrls. Half the draws
+    start in one bank (sdpa-like ACT concentration), half spread over all 16."""
     lo_row, hi_row = (space.lo >> ROW_SHIFT) + 1, (space.hi >> ROW_SHIFT) - 1
     step = space.rb >> COL_SHIFT
     hot = rng.randrange(16) if rng.random() < 0.5 else None
@@ -397,11 +376,8 @@ def read_fru():
 
 
 def chip_identities(chips):
-    """({device id: physical ASIC}, host line). Never raises: identity is reporting only.
-
-    Device ids are renumbered when links or chips change between boots. The ASIC ID is unique per die and the
-    tray serial per UBB tray, so those two name the hardware for syseng.
-    """
+    """({device id: physical ASIC}, host line). Never raises. Device ids renumber across boots; ASIC ID + tray
+    serial name the die for syseng."""
     import yaml
 
     host = socket.gethostname()
@@ -506,8 +482,7 @@ class ActRun:
                 s = 2 * i + risc
                 mode, barrier_each, ents = specs[s]
                 inj_e, inj_bit, inj_mask = inj
-                # Equal arg counts per core for equal nmax: the program cache keys on CB sizes (nmax) but
-                # not on per-core arg counts, and a cache hit copies new args into the cached arg slots.
+                # Program cache keys on nmax, not arg count: keep arg counts equal per nmax.
                 rt[x][y] = [
                     self.tt_out.buffer_address(),
                     s,
@@ -639,21 +614,17 @@ class Driver:
                 self.iters = min(self.iters * 2, 1 << 30)
             elif dt > target * 2:
                 self.iters = max(1, self.iters // 2)
-        # On the matmul arm compute should outlast the reads slightly, so the matmul runs for the whole
-        # launch. A slow-read pattern leaves done == iters with compute already long, so growth is also
-        # bounded by wall time; unbounded growth trips the dispatch timeout. A long on_launch_s stretches
-        # compute past the reads on purpose, since the readers keep looping until compute finishes.
+        # Matmul should just outlast the reads. Growth is wall-time bounded, else it trips the dispatch timeout.
         t_on = self.on_launch_s
         for r, out in zip(self.runs, outs):
             done = int(out[:, 1].min())
             if arm != "on":
                 continue
-            # Compute-bound launches scale linearly with blocks, so one proportional step lands near t_on instead
-            # of doubling past it. A read-bound launch under-reports the step, which only slows the approach.
+            # Compute-bound: time is linear in blocks, so one step lands near t_on.
             if self.ramp == "proportional":
                 r.blocks = min(max(1, int(r.blocks * min(8.0, max(0.25, t_on / dt)))), 1 << 30)
                 continue
-            # Shrink below the 300 s dispatch timeout, and never double a launch that already overran.
+            # Stay under the 300 s dispatch timeout.
             if dt > t_on * 2:
                 r.blocks = max(1, int(r.blocks * t_on / dt))
             elif done <= self.iters and dt < t_on:
@@ -693,8 +664,7 @@ class Driver:
                             f"chip {r.chip} ({ident_str(r.ident)}) {pattern}/{name} arm {arm}: "
                             f"{s} first {first[r.chip]}"
                         )
-                # Under the proportional ramp, stop once less than half a launch remains: one more would overrun
-                # t_end by more than it fills.
+                # One more launch would overrun t_end by more than it fills.
                 left = t_end - time.monotonic()
                 if left <= 0 or (self.ramp == "proportional" and left < dt / 2):
                     break
@@ -721,9 +691,7 @@ class Driver:
             tgts = [r.space.fit(0x8000000 + s * r.space.rb) for s in range(r.slots)]
             srcs = [a ^ 1 << 26 for a in tgts]
             assert all(r.space.ok(a) for a in srcs), f"chip {r.chip} self-test sources {srcs[0]:#x}.. outside buffer"
-            # The decode names the lowest bit whose partner matches, and the planted bytes also sit at tgt ^ 64
-            # (the next part of the same slot). A source with no unique pattern, e.g. constant DRAM, then decodes
-            # as bit 6, so the sources get a pattern of their own first.
+            # Sources need a unique pattern, else the decode matches tgt ^ 64 and names bit 6.
             r.run([(READ, 1, [(a, c)]) for a in srcs], FILL, self.seed, 1)
             r.read(self.seed)
             specs = [(READ, 1, [(a, c)]) for a in tgts]
@@ -770,11 +738,7 @@ def run_patterns(drv, cfg):
         t_on = cfg["long_launch_s"] if label.endswith("_long") else cfg["launch_s"]
         if pattern == "v2":
             t_on = cfg["v2_launch_s"]
-        # Compute carried into a new pattern runs at that pattern's read contention: storm -> sdpa and
-        # sdpa -> sdpa16 each double the launch (120 s -> 240 s), close to the dispatch timeout. Start every
-        # pattern at a quarter of the carried compute, scaled down to a lower target; the bounded per-launch
-        # rule regrows it. Scaling up by the target ratio overshoots whenever the last launch ran past its
-        # target (4 s x 60 = 300 s).
+        # A new pattern's read contention can double launch time (near the dispatch timeout): restart at 1/4 and regrow.
         if pattern != "v2":
             for r in drv.runs:
                 r.blocks = max(1, int(r.blocks * min(1.0, t_on / drv.on_launch_s) / 4))
@@ -806,8 +770,7 @@ def run_patterns(drv, cfg):
                 a = addr_of(row0, gb, col0)
                 drv.target(label, f"gbank{gb}", lambda r, a=a: pingpong(fitted(r, a), ctrls, r.space, slots), tgt_s)
         elif pattern == "sdpa16_ca":
-            # One row per CA pin: R(i+4) alone drives CA i opposite to both neighbours on the ACT falling edge,
-            # the shape that aliases R9 on CA5. The SDPA16 load is the only shape that caught that alias.
+            # One row per CA pin: R(i+4) drives CA i opposite both neighbours (the shape that aliased R9 on CA5).
             for i in cfg["ca_pins"]:
                 t = drv.runs[0].space.fit(addr_of(1 << (4 + i), gb0, col0))
                 if t is None:
@@ -821,7 +784,7 @@ def run_patterns(drv, cfg):
                     long_s,
                 )
         elif pattern == "ca_full":
-            # Each target under every form in ACT_CA_FORMS; the default is the two loads that caught the CA5 alias.
+            # Default forms = the two loads that caught the CA5 alias.
             for name, t in ca_full_targets(t0, col0, drv.runs[0].space, cfg["ca_pins"]):
                 if t is None or not drv.runs[0].space.ok(t):
                     logger.warning(f"ca_full {name}: no placement in the buffer, skipped")
@@ -838,8 +801,7 @@ def run_patterns(drv, cfg):
         elif pattern == "wmis":
             if drv.write_every:
                 raise ValueError("wmis has its own writers; _w would turn its readers into writers")
-            # Every ca_full target whose falling edge drives R9 (the aliasing pin), placed so its 64 MB partner is
-            # in the buffer.
+            # ca_full targets driving R9, placed so the 64 MB partner is in the buffer.
             for name, t in ca_full_targets(t0, col0, drv.runs[0].space, cfg["ca_pins"]):
                 m = wmis_target(t, drv.runs[0].space)
                 if m is None:
@@ -852,14 +814,14 @@ def run_patterns(drv, cfg):
             targets = dict(ca_full_targets(t0, col0, space, range(10)) + multi_pin_targets(col0, space))
             for c, name, form in cfg["v2_plan"]:
                 t = targets.get(name)
-                # "r<row>b<gbank>" names any (row, GDDR bank) at the hit's column, to drive one bank's ACT word.
+                # "r<row>b<gbank>": any (row, bank) at the hit's column.
                 if (m := re.fullmatch(r"r(0x[0-9a-f]+)b(\d+)", name)) and t is None:
                     t = addr_of(int(m.group(1), 16), int(m.group(2)), col0)
                 if t is None or not space.ok(t):
                     raise ValueError(f"v2 target {name} is not a ca_full, MULTI_PIN or r<row>b<gbank> target in the buffer")
                 row, gb, _ = decode(t)
                 logger.info(f"v2 {name}: {t:#x} rising {rising(row, gb):010b} falling {falling(row):010b}")
-                # Controller "all" spreads the form's slots over the 8 controllers, the same address on each.
+                # "all": same address on all 8 controllers.
                 cs = list(range(CTRLS)) if c == "all" else [c]
                 tag = f"{'all_ctrls' if c == 'all' else f'c{c}'}_{name}_row{row:#x}_gb{gb}_{form}"
                 drv.target(
@@ -872,8 +834,7 @@ def run_patterns(drv, cfg):
                     logger.error(f"v2: {tag} hit, the rest of the plan is skipped")
                     break
         elif pattern == "random":
-            # Each draw's seed is logged and its RNG built per chip, so every chip runs the same draw and a hit
-            # can be replayed with ACT_RANDOM_SEED.
+            # Same draw on every chip; replay a hit with ACT_RANDOM_SEED.
             for d in range(cfg["random_draws"]):
                 seed = cfg["random_seed"] + d
                 drv.target(
@@ -977,7 +938,6 @@ def run_act(chips, cfg):
         try:
             run_patterns(drv, cfg)
         finally:
-            # The health-check runner names the file in DIAG_RESULT_JSON and reads back its summary.
             out = os.environ.get("DIAG_RESULT_JSON") or (
                 OUT_DIR / f"act_{os.environ.get('SLURM_JOB_ID', 'local')}_{int(time.time())}.json"
             )
@@ -1013,13 +973,8 @@ def test_dram_act_patterns():
     run_act(*act_config())
 
 
-# Fixed config for the health check: defaults with no env knobs read, so a shell's ACT_* / STRESS_* settings
-# cannot change what it screens. The SDPA-mimic read stream (sdpa form) on controller 3, row 0x200, GDDR bank 3,
-# for 300 s with the matmul arm on: the load that exposes the lane-3 64 MB (bit 26) alias. Then the same form for
-# 300 s on all 8 controllers at once, to reach an alias outside controller 3; each controller gets only an eighth of
-# the stream there, so it does not replace the controller 3 pass. The sdpa16 form never caught a boot this one
-# missed. On a faulty die the alias shows on some boots and not others, and a weak bad boot took up to about
-# 4 minutes to hit, so one run screens one boot. The first hit fails the test without running the rest.
+# Health-check screen, env knobs ignored. sdpa form at orig_bank3, matmul on: ctrl 3, then all 8 ctrls, 300 s each.
+# Catches the lane-3 64 MB (bit 26) alias. Boot-dependent; weak bad boots hit within ~4 min. A hit skips the rest.
 SCREEN_CFG = {
     "ctrls": [3],
     "patterns": ["v2"],
@@ -1040,8 +995,7 @@ def test_dram_act_c3_screen():
     run_act(chips, cfg)
 
 
-# The same screen widened further: the sdpa form for 300 s on all 8 controllers at once, then alone on each
-# controller faults have been seen on (3, 1, 7, 0, in that order), so 1, 7 and 0 also get the full stream.
+# Superset: all 8 ctrls, then 3, 1, 7, 0 alone (ctrls with seen faults), 300 s each.
 SCREEN_ALL_ORDER = ("all", 3, 1, 7, 0)
 SCREEN_ALL_CFG = {
     **SCREEN_CFG,

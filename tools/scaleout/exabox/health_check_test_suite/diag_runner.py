@@ -359,8 +359,7 @@ def run_diag(
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
 
-    # Phase 3b: retest. test -> reset -> test for the tier's retest tests, so a
-    # fault that shows on some boots and not others gets a second boot.
+    # Phase 3b: retest (test -> reset -> test) for boot-dependent faults.
     if plan.retest:
         retest_phase = Phase(name="retest")
         t0 = time.time()

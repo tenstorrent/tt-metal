@@ -159,40 +159,23 @@ filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
 on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
 or fabric mesh mapping fails.
 
-`weekly` also runs `gddr_act_c3`, a pytest-based GDDR read stress test: an
-SDPA-like read stream against DRAM controller 3 (row 0x200, GDDR bank 3) on
-every chip, with a matmul load on the compute cores, for 300 s, then the same
-stream on all 8 controllers at once for 300 s. The first hit fails the test
-without running the rest. Every read is checked against its expected data, and a wrong read
-is classified by the address bit it aliases. It targets a lane-3 64 MB alias
-(address bit 26) that the DramDeployment patterns do not reach. On an affected
-die the alias shows on some boots and not others, so a clean run clears that
-boot only. A self-test plants the alias on every chip first, so a decode
-regression fails the check rather than passing it.
+GDDR ACT screen (pytest, `tests/tt_metal/tt_metal/deployment/dram/test_dram_act_patterns.py`):
 
-A hit names the die for syseng. The check's `details` end with
-`hits: chip <id> (UBB<n> ASIC<n> tray <serial> <bdf> ASIC ID <id>) <n> bad reads on <target>`,
-and `data.summary.hits` in `diag_report.json` has the same per chip plus the
-alias bits and the first bad read. The full per-target results are in
-`logs/<check>.json`: the runner passes that path to every pytest as
-`DIAG_RESULT_JSON`, and the ACT tests write their results there.
+- Targets the lane-3 64 MB alias (address bit 26) that the DramDeployment patterns miss.
+- SDPA-like read stream (row 0x200, GDDR bank 3) on every chip, matmul load on, 300 s per pass.
+- `gddr_act_c3` (`weekly`): controller 3, then all 8 controllers at once.
+- `gddr_act_all` (`full`): all 8 at once, then 3, 1, 7, 0 alone. Superset of `gddr_act_c3`.
+- A hit skips the remaining passes. A self-test plants the alias first, so a decode bug fails.
+- The alias is boot-dependent: a pass clears one boot. So a passing ACT test gets a `retest`:
+  `tt-smi -r`, snapshot validation, rerun as `<check>_after_reset`. The retest snapshot is the
+  last `snapshot_after_*`, so the verdict uses it. `--skip-reset` / `--skip-tests` skip it;
+  `Tier.retest` / `Tier.retest_reset` set the tests and the reset.
 
-That is why the ACT tests run twice: when they pass, the `retest` phase resets
-the unit with `tt-smi -r`, takes and validates a snapshot as the pre-test reset
-loop does, and runs them again on the new boot (`gddr_act_c3_after_reset` in
-`weekly`, `gddr_act_all_after_reset` in `full`). A first run that fails skips the retest, since the
-unit has already failed. The retest snapshot is the last `snapshot_after_*`
-phase, so the run's final state is judged on it. `--skip-reset` and
-`--skip-tests` skip the retest; `retest` / `retest_reset` in `tiers.py` say
-which tests and which reset.
+Output, per hit:
 
-`full` runs `gddr_act_all` in place of `gddr_act_c3`: the 300 s sdpa form on
-all 8 controllers at once, then alone on controllers 3, 1, 7 and 0 (the ones
-faults have been seen on), 300 s each, so it covers both of `gddr_act_c3`'s
-passes. The all-controller pass covers the other four, but each controller gets
-only an eighth of the stream there, which missed weak boots that controller 3
-alone caught, so the common ones also get the whole stream. The first hit fails
-the test without running the rest, so a bad unit fails in minutes.
+- `details`: `hits: chip <id> (UBB<n> ASIC<n> tray <serial> <bdf> ASIC ID <id>) <n> bad reads on <target>`
+- `diag_report.json` `data.summary.hits`: same, plus alias bits and the first bad read.
+- `logs/<check>.json`: full per-target results (the runner sets `DIAG_RESULT_JSON` for every pytest).
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
 pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.

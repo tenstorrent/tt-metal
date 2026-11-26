@@ -1,21 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""Whole-DRAM, all-bank read/write screen for silent wrong-address reads, with an optional co-located matmul load.
+"""Whole-DRAM, all-bank read/write screen for silent wrong-address reads, optional co-located matmul load.
 
-Every 4 B word holds a hash of its own bank, bank-local byte address and a per-launch seed, so the data is unique per
-address and differs from launch to launch. A read that returns another row's data, stale data from an earlier
-launch, or flipped bits all miscompare, and no fixed-period pattern can hide an alias the way walking-1s or
-checkerboard does. A miscompared page is classified once: stale (every wrong byte equals the previous launch's data),
-alias of bit k (every wrong byte equals the data of the page at A ^ (1 << k); for a source below the buffer, the data
-read back from there), or other. A command/address fault shows
-up as one hot bit in the alias histogram plus one hot (bank, byte lane) cell; random corruption lands in "other".
+Each 4 B word = hash(bank, bank-local address, per-launch seed): unique per address and launch, so no fixed-period
+pattern hides an alias. A miscompared page is stale (previous launch), alias of bit k (matches the page at
+A ^ (1 << k)), or other. A CA fault = one hot alias bit + one hot (bank, byte lane) cell.
 
-Each launch is a fill program followed by a check program on every selected chip at once; launch boundaries are the
-only global barrier. An optional final "retention" launch leaves the chips idle between its fill and its check, so
-every word is read back that long after it was written. Arms alternate per launch inside one device open, so "on" (matmul on the TRISCs of every reading core) and "off" share the
-same training. GDDR self-refresh is entered only while no process holds the device, and CA is retrained on its exit,
-so sweeping trainings means running this test as separate processes with an idle gap between them.
+Launch = fill + check on all chips at once. Optional "retention" launch idles between fill and check. Arms ("on" =
+matmul on every reading core's TRISCs, "off") alternate per launch in one device open, so they share a training.
+CA retrains only after self-refresh with no process holding the device: sweep trainings as separate processes.
 """
 
 import json

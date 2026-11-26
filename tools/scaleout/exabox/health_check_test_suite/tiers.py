@@ -52,12 +52,8 @@ class Tier:
     # Device tests, in order: names from TESTS / PYTESTS.
     tests: tuple[str, ...] = ()
 
-    # Tests from `tests` run a second time, after a retest_reset and a fresh
-    # snapshot, revalidated: test -> reset -> test. The GDDR ACT alias the
-    # gddr_act_* tests look for shows on some boots of a faulty die and not on
-    # others, so one run screens one boot. Runs only when every one of them
-    # passed the first time; a unit that already failed needs no second boot.
-    # Skipped by --skip-reset and --skip-tests (diag/retest.py).
+    # Rerun after retest_reset + snapshot (GDDR ACT alias is boot-dependent).
+    # Only if all passed the first time. --skip-reset / --skip-tests skip it.
     retest: tuple[str, ...] = ()
     retest_reset: str = "-r"
 
@@ -124,9 +120,8 @@ TIERS: dict[str, Tier] = {
     ),
     # daily, with every test and the full GDDR pattern set.
     "weekly": _WEEKLY,
-    # weekly with gddr_act_all in place of gddr_act_c3 (it runs both of its
-    # passes), plus the sys-triage bundle: everything, for a unit with an issue,
-    # so the run's logs can go straight on its DIIM ticket.
+    # weekly with gddr_act_all (superset of gddr_act_c3) + sys-triage, for a unit
+    # with an issue: its logs go straight on the DIIM ticket.
     "full": replace(
         _WEEKLY,
         tests=tuple("gddr_act_all" if t == "gddr_act_c3" else t for t in _WEEKLY.tests),

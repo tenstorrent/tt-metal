@@ -90,21 +90,13 @@ PYTESTS = {
             "1200",
         ],
     },
-    # gddr_act_c3: SDPA-mimic GDDR read stream on DRAM controller 3 with the matmul
-    # load on, 300 s on every chip, then on all 8 controllers at once for 300 s
-    # (~10.3 min with bring-up). Catches the lane-3 64 MB address alias (bit 26)
-    # that the DramDeployment patterns miss. The first hit fails the test without
-    # running the rest. The alias shows on some boots and not others, so a clean
-    # run clears one boot; tiers rerun it after a reset (Tier.retest). Its 1200 s
-    # timeout is a marker on the test.
+    # SDPA K-read mimic: ctrl 3, then all 8 ctrls, 300 s each (~10.3 min). Catches the 64 MB alias
+    # (bit 26) DramDeployment misses. A hit skips the remaining passes. Timeout is a marker on the test.
     "gddr_act_c3": {
         "target": "tests/tt_metal/tt_metal/deployment/dram/test_dram_act_patterns.py::test_dram_act_c3_screen",
         "args": ["-s"],
     },
-    # gddr_act_all: gddr_act_c3's stream on all 8 DRAM controllers at once, then alone on controllers 3, 1, 7
-    # and 0, 300 s each (~25.5 min with bring-up), so 1, 7 and 0 also get the whole stream. Covers both of
-    # gddr_act_c3's passes. The first hit fails the test without running the rest. Its 3600 s timeout is a
-    # marker on the test.
+    # Superset of gddr_act_c3: all 8 ctrls, then 3, 1, 7, 0 alone, 300 s each (~25.5 min).
     "gddr_act_all": {
         "target": "tests/tt_metal/tt_metal/deployment/dram/test_dram_act_patterns.py::test_dram_act_all_ctrls_screen",
         "args": ["-s"],
@@ -177,8 +169,7 @@ def run_pytest_test(
     test_env = env.copy()
     test_env.setdefault("PYTHONPATH", str(tt_metal))
     log_path = logs_dir / f"{name}.log"
-    # A test that honors DIAG_RESULT_JSON writes its results there. The container keeps only the output dir, so
-    # anything written under the repo is lost when it exits.
+    # Only the output dir survives the container.
     result_path = logs_dir / f"{name}.json"
     test_env["DIAG_RESULT_JSON"] = str(result_path)
     # shlex.join keeps args with spaces (-k "galaxy and bf16_HiFi2") copy-pasteable
@@ -264,8 +255,7 @@ def run_pytest_test(
 
 
 def read_result_summary(path: Path) -> dict | None:
-    """The ``summary`` object of a test's result JSON, or None. An unreadable file
-    never changes the verdict: pass/fail comes from pytest."""
+    """``summary`` from a test's result JSON, or None. Never affects pass/fail."""
     try:
         summary = json.loads(path.read_text()).get("summary")
     except (OSError, ValueError, AttributeError):
@@ -276,8 +266,7 @@ def read_result_summary(path: Path) -> dict | None:
 def run_tests(
     tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool, logs_dir: Path, name_suffix: str = ""
 ) -> None:
-    """Run the named TESTS / PYTESTS entries, in order. ``name_suffix`` goes on each
-    check and log name, so a rerun does not overwrite the first run's."""
+    """Run the named TESTS / PYTESTS entries, in order. ``name_suffix`` keeps a rerun's checks and logs apart."""
     binary = next(
         (tt_metal / c for c in DEPLOYMENT_BIN_CANDIDATES if (tt_metal / c).is_file()),
         None,

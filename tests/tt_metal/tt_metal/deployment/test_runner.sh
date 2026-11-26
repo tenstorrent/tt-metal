@@ -283,7 +283,7 @@ run_tests() {
 	run_test 'DRAM tests' $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py &&
 		last_dram_ok=1 || last_dram_ok=0
 
-	# The lane-3 64 MB alias it screens for shows on some boots and not others, so it runs every iteration.
+	# Boot-dependent fault: run every iteration.
 	run_test 'DRAM ACT test' $PYTHON -m pytest tests/tt_metal/tt_metal/deployment/dram/test_dram_act_patterns.py::test_dram_act_c3_screen -s -q -p no:randomly &&
 		last_dram_act_ok=1 || last_dram_act_ok=0
 

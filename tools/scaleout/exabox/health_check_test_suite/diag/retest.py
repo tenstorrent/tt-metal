@@ -2,13 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Retest phase: test -> reset -> test, for the tier's retest tests.
-
-The GDDR ACT alias shows on some boots of a faulty die and not on others, so one
-clean run of a gddr_act_* test clears one boot. When every retest test passed
-the first time, reset the unit, take and validate a fresh snapshot the way the
-pre-test reset loop does, and run them again on the new boot.
-"""
+"""Retest phase: test -> reset -> snapshot -> test. The GDDR ACT alias is boot-dependent."""
 from __future__ import annotations
 
 import time
@@ -38,12 +32,8 @@ def run_retest(
     logs_dir: Path,
     snapshot_out: Path | None,
 ) -> Phase | None:
-    """Run the retest into ``phase``. Returns the post-reset snapshot phase for the
-    caller to store in the report, or None when no snapshot was taken.
-
-    The snapshot is named snapshot_after_*, so normalize_health_report() judges
-    the run on it when it is the last one, as it is on the pre-test loop's.
-    """
+    """Returns the post-reset snapshot phase, or None. Named snapshot_after_* so
+    normalize_health_report() judges the run on it."""
     first = {c.name: c.status for c in first_run.checks}
     not_passed = [n for n in names if first.get(n) != PASS]
     if not_passed:
@@ -58,10 +48,9 @@ def run_retest(
         return None
 
     tt_smi = resolve_tt_smi(tt_smi_path)
-    # A subdirectory, so its reset_1_* log does not overwrite the pre-test loop's.
+    # Own dir: keeps the pre-test reset_1_* log.
     reset_loop(tt_smi, (reset_flag,), phase, dry_run, logs_dir=logs_dir / "retest")
-    # reset_loop's reset_* checks stay out of the verdict (report.is_reset_op_check);
-    # restate the outcome under a name that counts, as run_post_test_reset does.
+    # reset_* checks don't count toward the verdict; restate under a name that does.
     broke = [c.name for c in phase.checks if c.status == FAIL]
     phase.add(
         Check(
