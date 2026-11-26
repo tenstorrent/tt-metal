@@ -43,7 +43,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     constexpr bool TRANSPOSE_EN             = false;
     constexpr bool IS_32B_DEST_EN           = false;
-    constexpr std::uint32_t unp_sel_phase2  = (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+    // The reuse MOP picks the engine itself; llk_unpack_A_init passes UNP_A and programs the BFD that MOP reads.
+    constexpr std::uint8_t bfd_phase2 =
+        (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? ckernel::trisc::BFD_ID_UNP1 : ckernel::trisc::BFD_ID_UNP0;
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces);
 
     {
@@ -51,8 +53,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Setup data valid scheme
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
@@ -79,6 +79,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Phase 1 and phase 2 share unpack's bank0 instruction
                 // buffer, so select the phase 1 MOP before executing it.
+                // Each init programs its BFD first, as llk_unpack_A_init does.
+                ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32B_DEST_EN>(
                     ckernel::trisc::BFD_ID_UNP0, tensor_shape, 1 /*num_tiles_per_unpack*/);
                 for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
@@ -87,13 +89,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 // Select the reuse-dest phase 2 MOP after phase 1 completes.
-                _llk_unpack_unary_operand_init_<unp_sel_phase2, TRANSPOSE_EN, IS_32B_DEST_EN, REUSE_DEST_TYPE>(
-                    (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ? ckernel::trisc::BFD_ID_UNP0 : ckernel::trisc::BFD_ID_UNP1,
-                    tensor_shape,
-                    1 /*num_tiles_per_unpack*/);
+                if constexpr (bfd_phase2 == ckernel::trisc::BFD_ID_UNP1)
+                {
+                    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+                }
+                else
+                {
+                    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+                }
+                _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32B_DEST_EN, REUSE_DEST_TYPE>(
+                    bfd_phase2, tensor_shape, 1 /*num_tiles_per_unpack*/);
                 for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
                 {
-                    _llk_unpack_unary_operand_<unp_sel_phase2, REUSE_DEST_TYPE>(i, tensor_shape);
+                    _llk_unpack_unary_operand_<p_unpacr::UNP_A, REUSE_DEST_TYPE>(i, tensor_shape);
                 }
             }
         }
