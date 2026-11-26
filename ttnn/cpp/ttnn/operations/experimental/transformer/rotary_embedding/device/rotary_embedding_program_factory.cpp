@@ -5,13 +5,13 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation.hpp"
 
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
@@ -927,8 +927,8 @@ void RotaryEmbeddingProgramFactory::override_runtime_arguments(
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
     const auto src_addr = static_cast<uint32_t>(src_buffer->address());
-    const auto cos_addr = static_cast<uint32_t>(tensor_args.cos.buffer()->address());
-    const auto sin_addr = static_cast<uint32_t>(tensor_args.sin.buffer()->address());
+    const auto cos_addr = static_cast<uint32_t>(tensor_args.cos.mesh_buffer().address());
+    const auto sin_addr = static_cast<uint32_t>(tensor_args.sin.mesh_buffer().address());
     const auto dst_addr = static_cast<uint32_t>(dst_buffer->address());
     const uint32_t reader_cos_sin_start_id_arg_idx = work.in_sharded ? 4 : 6;
 

@@ -67,7 +67,7 @@ def test_encode_prompt_vision_ring_shares_kv_pair(mesh_device):
     assert len(by_patches) >= 2, f"need two SP-aligned keyframe canvases at alignment {alignment}"
     canvases = [by_patches[patches] for patches in sorted(by_patches)[:2]]
 
-    manager = pipeline.encoder_ccl_manager
+    manager = pipeline.vae_ccl_manager
 
     def tower_pairs():
         # The tower is built on the first encode, so read its head dim only once an encode has run.
@@ -76,7 +76,7 @@ def test_encode_prompt_vision_ring_shares_kv_pair(mesh_device):
 
     # The pair is keyed by the tower's gather shape, not by the canvas, so both encodes reuse the one pair.
     # `encode_prompt` frees its pairs on return, so run the encode body under one scope of our own to look.
-    with manager.transient_ping_pong_buffers():
+    with manager.transient_ping_pong_buffers(), pipeline.encoder_ccl_manager.transient_ping_pong_buffers():
         for height, width in canvases:
             pipeline._encode_prompt_device(PROMPT, keyframes=[Image.new("RGB", (width, height), (127, 127, 127))])
         assert (

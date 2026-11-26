@@ -12,8 +12,8 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/pow_int_device_operation.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -27,7 +27,7 @@
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include <variant>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 
 namespace ttnn {
 
@@ -1302,7 +1302,7 @@ static bool situ_glu_intermediates_fit_l1(const Tensor& gate) {
     const auto& allocator = gate.device()->allocator();
     const uint64_t l1_total = static_cast<uint64_t>(allocator->get_bank_size(tt::tt_metal::BufferType::L1)) *
                               allocator->get_num_banks(tt::tt_metal::BufferType::L1);
-    const uint64_t peak = SITU_GLU_L1_PEAK_INTERMEDIATES * gate.buffer()->size();
+    const uint64_t peak = SITU_GLU_L1_PEAK_INTERMEDIATES * gate.mesh_buffer().device_local_size();
     return peak * SITU_GLU_L1_BUDGET_DEN <= l1_total * SITU_GLU_L1_BUDGET_NUM;
 }
 

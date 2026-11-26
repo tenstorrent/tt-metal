@@ -18,11 +18,30 @@ import ttnn
 from models.experimental.ops.quasar.tests.vad_variant_ops import op_utils as U
 
 
+def _binary(name):
+    """ttnn.<name>, or its Quasar port on Quasar (mainline binary_ng builds legacy kernels)."""
+    return getattr(ttnn.experimental.quasar if U.is_quasar() else ttnn, name)
+
+
 @U.with_default_mesh()
 @pytest.mark.parametrize("a_shape", [pytest.param((1, U.NUM_QUERY, 4, 2), id="B17-maximum-913100")])
 def test_maximum(ttnn_mesh_device, reset_seeds, a_shape):
+    if U.is_quasar():
+        # The tiled tensor pads [.., 4, 2] to 32x32 tiles: 10000 queries = 20.5 MB per tensor, more than the
+        # emulator's two L1 banks (~3.9 MB each) hold. A smaller query count keeps the same op and layout.
+        a_shape = (1, 1000, 4, 2)
     U.run_binary(
-        ttnn_mesh_device, ttnn.maximum, torch.maximum, a_shape, a_shape, "bf16", "bf16", "l1", "l1", "l1", pcc=0.9999
+        ttnn_mesh_device,
+        _binary("maximum"),
+        torch.maximum,
+        a_shape,
+        a_shape,
+        "bf16",
+        "bf16",
+        "l1",
+        "l1",
+        "l1",
+        pcc=0.9999,
     )
 
 
@@ -30,5 +49,5 @@ def test_maximum(ttnn_mesh_device, reset_seeds, a_shape):
 @pytest.mark.parametrize("a_shape", [pytest.param((1, 300, 1), id="B22-atan2-fp32-151084")])
 def test_atan2(ttnn_mesh_device, reset_seeds, a_shape):
     U.run_binary(
-        ttnn_mesh_device, ttnn.atan2, torch.atan2, a_shape, a_shape, "fp32", "fp32", "l1", "l1", "l1", pcc=0.999
+        ttnn_mesh_device, _binary("atan2"), torch.atan2, a_shape, a_shape, "fp32", "fp32", "l1", "l1", "l1", pcc=0.999
     )

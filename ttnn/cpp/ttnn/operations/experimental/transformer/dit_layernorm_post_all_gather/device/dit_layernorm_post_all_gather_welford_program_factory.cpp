@@ -4,13 +4,13 @@
 
 #include "dit_layernorm_post_all_gather_welford_program_factory.hpp"
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
@@ -172,6 +172,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
     reader_compile_time_args.push_back((std::uint32_t)gamma_batch_stride_tiles);
     reader_compile_time_args.push_back((std::uint32_t)beta_batch_stride_tiles);
     reader_compile_time_args.push_back((std::uint32_t)Ht);
+    reader_compile_time_args.push_back((std::uint32_t)a.padded_shape()[-3]);
 
     TensorAccessorArgs(a_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(stats_buffer).append_to(reader_compile_time_args);

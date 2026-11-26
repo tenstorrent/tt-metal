@@ -14,7 +14,7 @@ from models.demos.vision.segmentation.vgg_unet.common.ttnn.model_preprocessing i
     get_mesh_mappers,
 )
 from models.demos.vision.segmentation.vgg_unet.common.ttnn.ttnn_vgg_unet import Tt_vgg_unet
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 class VGG_UnetTestInfra:

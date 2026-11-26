@@ -12,6 +12,8 @@
 #include <map>
 #include <string>
 
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -19,7 +21,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 
 using namespace tt;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 
@@ -95,6 +97,20 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             TensorParameter{.unique_id = BIAS_TENSOR, .spec = bias_tensor->mesh_tensor().tensor_spec()});
     }
 
+    // ---- Prefetcher pipes of B: one parameter per pipe, which the reader binds under one accessor ----
+    Group<tt::tt_metal::experimental::PrefetcherPipeParameter> B_pipe_parameters;
+    Group<tt::tt_metal::experimental::PrefetcherPipeParamName> B_pipe_names;
+    for (size_t p = 0; p < operation_attributes.prefetcher_pipes.size(); ++p) {
+        const tt::tt_metal::experimental::PrefetcherPipe& pipe = *operation_attributes.prefetcher_pipes[p];
+        B_pipe_names.push_back(tt::tt_metal::experimental::PrefetcherPipeParamName{fmt::format("B_pipe_{}", p)});
+        B_pipe_parameters.push_back(tt::tt_metal::experimental::PrefetcherPipeParameter{
+            .unique_id = B_pipe_names.back(),
+            .receivers = pipe.receiver_cores(),
+            .ring_size = pipe.ring_size(),
+            .entry_size = plan.B_pipe_entry_bytes,
+        });
+    }
+
     // ---- Dataflow buffers ----
     const tt::tt_metal::Tile C_tile = C.tensor_spec().tile();
     log_debug(
@@ -154,6 +170,9 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         };
         if (plan.borrow_B) {
             B_slice_dfb.borrowed_from = B_TENSOR;  // the resident B shard is the DFB
+        }
+        if (plan.B_from_pipes) {
+            B_slice_dfb.advanced_options.prefetcher_pipe_relays = B_pipe_names;  // the pipes' memory is the DFB
         }
         DataflowBufferSpec C_slice_dfb{
             .unique_id = C_SLICE_DFB,
@@ -283,6 +302,14 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
+    // The single-threaded reader (a relay paged finer than a pipe entry needs one) publishes B from the pipes, and acks
+    // on NOC 0, the NoC a Tensor prefetcher sender takes atomics on.
+    if (plan.B_from_pipes) {
+        reader.compiler_options.defines["B_FROM_PREFETCHER_PIPES"] = "1";
+        reader.advanced_options.prefetcher_pipe_bindings = {
+            {.pipe_parameter_names = B_pipe_names, .accessor_name = "B"}};
+    }
+
     // FUSE_BIAS is a define, as in the other matmul kernels: the bias DFB and tensor exist only with a bias.
     if (plan.has_bias) {
         reader.compiler_options.defines["FUSE_BIAS"] = "1";
@@ -316,14 +343,19 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     if (plan.fp32_dest_acc_en) {
         // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode. The partials are
         // reloaded with a data copy into DST, so unpack them straight to DST and keep fp32 precision;
-        // fp32 operands feed the FPU and go through SrcA/SrcB.
+        // fp32 operands feed the FPU and go through SrcA/SrcB. Not on Quasar: there a to-dest entry turns on
+        // unpack-to-dest for the whole kernel, and its matmul sections deadlock without a Dest section hand-off
+        // (#62102). Quasar reloads the partials through SrcA (TF32) instead.
         auto is_32bit = [](tt::DataFormat format) {
             return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32 ||
                    format == tt::DataFormat::UInt32;
         };
         ComputeHardwareConfig::ComputeUnpackModes& modes = compute_hw_config.unpack_modes;
         if (is_32bit(plan.C_partials_format)) {
-            modes.emplace(C_PARTIALS_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
+            modes.emplace(
+                C_PARTIALS_DFB,
+                device.arch() == tt::ARCH::QUASAR ? tt::tt_metal::UnpackMode::UnpackToSrc
+                                                  : tt::tt_metal::UnpackMode::UnpackToDest);
         }
         if (is_32bit(plan.A_format)) {
             modes.emplace(A_SLICE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
@@ -461,6 +493,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .semaphores = std::move(semaphores),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
+        .advanced_options = {.prefetcher_pipe_parameters = std::move(B_pipe_parameters)},
     };
     ProgramRunArgs run_args{
         .kernel_run_args = {std::move(reader_run_args), std::move(compute_run_args), std::move(writer_run_args)},
@@ -468,6 +501,11 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     };
     if (plan.has_bias) {
         run_args.tensor_args.emplace(BIAS_TENSOR, std::cref(bias_tensor->mesh_tensor()));
+    }
+    for (size_t p = 0; p < operation_attributes.prefetcher_pipes.size(); ++p) {
+        run_args.advanced_options.prefetcher_pipe_args.emplace(
+            B_pipe_names[p],
+            tt::tt_metal::experimental::PrefetcherPipeArgument{*operation_attributes.prefetcher_pipes[p]});
     }
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }

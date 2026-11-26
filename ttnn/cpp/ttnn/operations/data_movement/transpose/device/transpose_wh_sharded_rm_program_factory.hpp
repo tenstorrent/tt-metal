@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include <optional>
 
@@ -18,7 +18,7 @@ struct TransposeWHShardedRMProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor);
 
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const TransposeParams& operation_attributes,
         const TransposeInputs& tensor_args,
         Tensor& output_tensor,

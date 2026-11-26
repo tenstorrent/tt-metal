@@ -7,7 +7,7 @@
 #include "data_format.hpp"
 #include <algorithm>
 #include <cstdint>
-#include <tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -230,6 +230,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         std::optional<LLKMetadata> metadata;
         uint8_t pap;
         uint8_t cap;
+        std::vector<NodeRange> watcher_node_ranges;
     };
     vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
@@ -240,9 +241,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             uint8_t prefetcher_pipe_id,
             const std::optional<LLKMetadata>& metadata,
             uint8_t pap,
-            uint8_t cap) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap});
-        });
+            uint8_t cap) { dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap, {}}); });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
@@ -253,6 +252,23 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             sem_entries.push_back({name, id, scope, total_binder_harts});
         });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+
+    // Watcher: the nodes each DFB and semaphore exists on, emitted next to its token for checking multicasts into it.
+    const auto attach_node_ranges =
+        [](auto& entries, const std::string& name, const std::vector<NodeRange>& node_ranges) {
+            if (auto it = std::find_if(
+                    entries.begin(), entries.end(), [&name](const auto& entry) { return entry.name == name; });
+                it != entries.end()) {
+                it->watcher_node_ranges = node_ranges;
+            }
+        };
+    settings.process_watcher_node_ranges(
+        [&](const std::string& name, const std::vector<NodeRange>& node_ranges) {
+            attach_node_ranges(dfb_entries, name, node_ranges);
+        },
+        [&](const std::string& name, const std::vector<NodeRange>& node_ranges) {
+            attach_node_ranges(sem_entries, name, node_ranges);
+        });
 
     // Get the tensor binding handles from the settings callback
     // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
@@ -292,6 +308,29 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                                                     const std::optional<LLKMetadata>& metadata) {
         scratch_entries.push_back({name, size_bytes, addr_crta_word, metadata});
     });
+
+    // GlobalSemaphore bindings: like scratchpads, in user-specified order (matches Kernel::compute_hash).
+    struct GlobalSemEntry {
+        string name;
+        uint32_t addr_crta_word;
+    };
+    vector<GlobalSemEntry> global_sem_entries;
+    settings.process_global_semaphore_binding_handles(
+        [&global_sem_entries](const string& name, uint32_t addr_crta_word) {
+            global_sem_entries.push_back({name, addr_crta_word});
+        });
+
+    // Fabric connection bindings: in user-specified order (matches Kernel::compute_hash).
+    struct FabricConnectionEntry {
+        string name;
+        uint32_t rta_word;
+        uint32_t num_targets;
+    };
+    vector<FabricConnectionEntry> fabric_connection_entries;
+    settings.process_fabric_connection_binding_handles(
+        [&fabric_connection_entries](const string& name, uint32_t rta_word, uint32_t num_targets) {
+            fabric_connection_entries.push_back({name, rta_word, num_targets});
+        });
 
     // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
     // hashes them in binding order; both orders carry the same set, so the cache key is stable).
@@ -364,6 +403,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "#include \"api/scratchpad.h\"\n";
     }
 
+    if (!global_sem_entries.empty()) {
+        // The kernel includes api/dataflow/global_semaphore.h itself.
+        content << "#include \"api/dataflow/global_semaphore_binding_token.h\"\n";
+    }
+
+    // Included unconditionally for the `get_token_if_present()` helper of the fabric namespace. The kernel includes the
+    // fabric connection headers itself.
+    content << "#include \"api/dataflow/fabric_connection_binding_token.h\"\n";
+
     if (!tensor_binding_sequence_entries.empty()) {
         content << "#include <tuple>\n";
     }
@@ -397,13 +445,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     }
 
     // Emit DFB bindings
+    tt::tt_metal::emit_watcher_node_ranges(content, "dfb", dfb_entries);
     content << "namespace dfb {\n";
     for (const auto& entry : dfb_entries) {
         if (entry.is_relay) {
             // PrefetcherPipe relays bake the persistent slot into the token so the TRISC
             // constructor can O(1)-align to the durable checkpoint; CrossNode relays
             // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
-            content << "constexpr RelayDFBBindingToken " << entry.name << "{" << entry.id;
+            // Both sides' access patterns ride on the token for compile-time specialization.
+            content << "constexpr RelayDFBBindingToken<" << dfb_access_name(entry.pap) << ", "
+                    << dfb_access_name(entry.cap) << "> " << entry.name << "{" << entry.id;
             if (entry.prefetcher_pipe_id != 0xFF) {
                 content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
@@ -411,14 +462,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         } else {
             // Both sides' access patterns ride on the token so the device DataflowBuffer can
             // specialize on the pattern pair at compile time; LLK metadata, when the host set it,
-            // rides as the second constructor argument.
+            // rides as the second constructor argument, and Watcher node ranges after it.
+            const string node_ranges =
+                tt::tt_metal::watcher_node_ranges_args("dfb", entry.name, entry.watcher_node_ranges);
             content << "constexpr DFBBindingToken<" << dfb_access_name(entry.pap) << ", " << dfb_access_name(entry.cap)
                     << "> " << entry.name << "{" << entry.id;
             if (entry.metadata.has_value()) {
                 content << ", ";
-                content << serialize_llk_metadata(*entry.metadata);
+                content << serialize_llk_metadata(*entry.metadata, arch);
             }
-            content << "};\n";
+            content << node_ranges << "};\n";
         }
     }
     emit_programmatic_binding_token_getter(
@@ -456,7 +509,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "using " << entry.name << "_t = ::tensor_accessor::" << token_type << "<" << entry.cta_offset
                 << "u, " << entry.addr_offset << "u>;\n";
         content << "constexpr " << entry.name << "_t " << entry.name << "{";
-        content << serialize_llk_metadata(entry.metadata);
+        content << serialize_llk_metadata(entry.metadata, arch);
         content << "};\n";
     }
 
@@ -485,7 +538,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         if (entry.metadata.has_value()) {
             content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
                     << entry.size_bytes << "u, ";
-            content << serialize_llk_metadata(*entry.metadata);
+            content << serialize_llk_metadata(*entry.metadata, arch);
             content << "};\n";
         } else {
             content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
@@ -496,6 +549,22 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     emit_programmatic_binding_token_getter(content, scratch_entries, "ScratchpadBindingToken");
 
     content << "}  // namespace scratch\n";
+
+    if (!global_sem_entries.empty()) {
+        content << "namespace global_sem {\n";
+        for (const auto& entry : global_sem_entries) {
+            content << "constexpr GlobalSemaphoreBindingToken " << entry.name << "{" << entry.addr_crta_word << "u};\n";
+        }
+        content << "}  // namespace global_sem\n";
+    }
+
+    content << "namespace fabric {\n";
+    for (const auto& entry : fabric_connection_entries) {
+        content << "constexpr FabricConnectionBindingToken " << entry.name << "{" << entry.rta_word << "u, "
+                << entry.num_targets << "u};\n";
+    }
+    emit_programmatic_binding_token_getter(content, fabric_connection_entries, "FabricConnectionBindingToken");
+    content << "}  // namespace fabric\n";
 
     write_file(path, content.str());
 }
@@ -609,8 +678,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // around get_arg_val / get_common_arg_val.
     // CRTA-side note: the vararg section starts at crta_layout.vararg_section_offset,
     // which already accounts for both the user-named CRTAs and the TensorBinding section.
-    // RTA-side note: likewise, rta_layout.vararg_section_offset accounts for the user-named RTAs
-    // and the per-node TensorBinding section.
+    // RTA-side note: likewise, rta_layout.vararg_section_offset accounts for the user-named RTAs,
+    // the per-node TensorBinding section and the fabric connection section.
     content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>("
             << rta_layout.vararg_section_offset << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
@@ -922,8 +991,9 @@ void emit_formats_array(
     std::string_view array_type,
     std::string_view array_name,
     int array_size,
-    const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) -> hw_format_t { return host_data_format_to_hw(f); };
+    const std::vector<DataFormat>& formats,
+    tt::ARCH arch) {
+    auto as_int = [arch](DataFormat f) -> hw_format_t { return host_data_format_to_hw(f, arch); };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 
@@ -952,12 +1022,13 @@ void emit_unpack_data_formats(
     std::ostream& out,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
-    uint32_t max_dfbs) {
+    uint32_t max_dfbs,
+    tt::ARCH arch) {
     // DataFormat values fit in a byte (Invalid==255); emit as uint8_t to save 3B/entry of LDM (the
     // .data region shares the TRISC's 2KB local memory with the stack). Matches pack_src/dst_format
     // and the unpack tile-dim arrays, which are already uint8_t. All consumers read+promote to uint32.
-    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_dfbs, dst_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, src_formats_all_cbs, arch);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_dfbs, dst_formats_all_cbs, arch);
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
@@ -1005,9 +1076,10 @@ void emit_pack_data_formats(
     std::ostream& out,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
-    uint32_t max_dfbs) {
-    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_dfbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_dfbs, dst_formats_all_cbs);
+    uint32_t max_dfbs,
+    tt::ARCH arch) {
+    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_dfbs, src_formats_all_cbs, arch);
+    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_dfbs, dst_formats_all_cbs, arch);
 }
 
 void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataFormat>& v2) {
@@ -1229,17 +1301,17 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_PACK)\n";
-    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_dfbs);
+    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_dfbs, env.get_arch());
     emit_unpack_tile_dims(out, desc, max_dfbs);
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
-    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_dfbs);
+    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_dfbs, env.get_arch());
     emit_pack_tile_dims(out, desc, max_dfbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     out << "#if defined(UCK_CHLKC_PACK)\n";
-    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, fmts.unpack_src);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, fmts.unpack_src, env.get_arch());
     out << "#endif\n";    // if pack
     out << "#endif\n\n";  // if not math and not unpack
 

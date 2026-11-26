@@ -94,6 +94,8 @@ _MGD_DIR = os.path.join(_TTML_ROOT, "configs", "mgd")
 _BUNDLED_MGD = {
     ("blackhole", (1, 2)): "bh_1_2_line_line.textproto",
     ("blackhole", (2, 2)): "bh_2_2_line_line.textproto",
+    # A ring in X: the (1, 4) fabric the 4-chip QuietBox runs a reduce-scatter on.
+    ("blackhole", (1, 4)): "bh_1_4_line_ring.textproto",
     # The galaxy fabric is a torus in X; a LINE/LINE descriptor faults with SIGBUS.
     ("blackhole", (8, 4)): "bh_galaxy_8_4_torus_x.textproto",
 }
@@ -192,6 +194,28 @@ def _fresh_device_mesh(
 
 
 @pytest.fixture(scope="session")
+def skip_if_host_too_small():
+    """``skip_if_host_too_small(shape, what)`` -- see ``_skip_if_host_too_small``."""
+    return _skip_if_host_too_small
+
+
+@pytest.fixture(scope="session")
+def mgd_path():
+    """``mgd_path(name)``: the bundled mesh graph descriptor ``name`` under ``tt-train/configs/mgd``."""
+    return lambda name: os.path.join(_MGD_DIR, name)
+
+
+@pytest.fixture(scope="session")
+def release_metal_env():
+    """``release_metal_env()`` closes this process's device mesh and releases its ``MetalEnv`` if it holds them (see
+    ``_release_metal_env``), for a test whose child processes open the chips.
+
+    Session-scoped so fixtures of any scope can request it.
+    """
+    return _release_metal_env_quietly
+
+
+@pytest.fixture(scope="session")
 def fresh_device_mesh():
     """``with fresh_device_mesh(shape, axis_names, what=...) as mesh:`` -- see ``_fresh_device_mesh``.
 
@@ -259,6 +283,21 @@ def fsdp_mesh(fresh_device_mesh):
         yield mesh
 
 
+@pytest.fixture(scope="module")
+def dp_tp_mesh(fresh_device_mesh):
+    """A ``[2, 2]`` mesh with axes ``("dp", "tp")``, per requesting module; it needs the bundled 2x2 descriptor."""
+    with fresh_device_mesh((2, 2), ("dp", "tp"), what="dp x tp", require_mgd=True) as mesh:
+        yield mesh
+
+
+@pytest.fixture(scope="module")
+def hsdp_mesh(fresh_device_mesh):
+    """A ``[2, 2]`` mesh with axes ``("dp", "fsdp")``, the HSDP mesh ``train.py`` builds, per requesting module; it needs
+    the bundled 2x2 descriptor."""
+    with fresh_device_mesh((2, 2), ("dp", "fsdp"), what="dp x fsdp (HSDP)", require_mgd=True) as mesh:
+        yield mesh
+
+
 # ---------------------------------------------------------------------------
 # Strict CCL topology
 # ---------------------------------------------------------------------------
@@ -275,3 +314,17 @@ def strict_ccl_topology():
         yield
     finally:
         ttnn.CONFIG.strict_ccl_topology = previous
+
+
+# ---------------------------------------------------------------------------
+# Gradient sync default
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def gradient_reduce_default():
+    """Sets the context's gradient sync default (what ``create_optimizer`` stores from ``precision.reduce_dtype``) for
+    one test, and clears it afterwards."""
+    context = ttml.autograd.AutoContext.get_instance()
+    yield context.set_gradient_reduce_dtype
+    context.set_gradient_reduce_dtype(None)

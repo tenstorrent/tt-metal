@@ -36,22 +36,22 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 // log_debug and log_warning. Included explicitly: this target is a unity build, so a missing include
 // here still compiles.
 #include <tt-logger/tt-logger.hpp>
@@ -59,7 +59,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 namespace ttnn::operations::experimental::quasar::binary_ng {
 
@@ -251,7 +251,8 @@ std::optional<BorrowAnchor> shard_anchor(
         !memory_config.shard_spec().has_value()) {
         return std::nullopt;
     }
-    const std::optional<BufferDistributionSpec>& distribution = holder.buffer()->buffer_distribution_spec();
+    const std::optional<BufferDistributionSpec>& distribution =
+        holder.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
     if (!distribution.has_value() || distribution->max_num_shards_per_core() != 1) {
         return std::nullopt;
     }
@@ -392,7 +393,8 @@ bool legacy_borrows_output_shard(const Tensor& a, const Tensor* b, const Tensor&
 // per tile is about the same borrowed or over the NoC, so a program on fewer clusters takes longer.
 uint32_t legacy_cluster_count(const Tensor& a, const Tensor* b, const Tensor& c, const CoreRangeSet& worker_grid) {
     if (legacy_borrows_output_shard(a, b, c)) {
-        const std::optional<BufferDistributionSpec>& distribution = c.buffer()->buffer_distribution_spec();
+        const std::optional<BufferDistributionSpec>& distribution =
+            c.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
         TT_FATAL(distribution.has_value(), "binary_ng Quasar-native: an L1-sharded output has no distribution spec");
         return static_cast<uint32_t>(distribution->cores_with_data().size());
     }
@@ -528,9 +530,9 @@ ProgramArtifacts create_native_artifacts(
     const DataType input_dtype = op.input_dtype;
     const auto op_type = op.binary_op_type;
 
-    Buffer* a_buffer = a.buffer();
+    const auto* a_buffer = &a.mesh_buffer();
     Buffer* b_buffer = is_scalar ? nullptr : b_opt->buffer();
-    Buffer* c_buffer = c.buffer();
+    const auto* c_buffer = &c.mesh_buffer();
     TT_FATAL(
         a_buffer != nullptr && (is_scalar || b_buffer != nullptr) && c_buffer != nullptr,
         "binary_ng Quasar-native requires allocated device buffers");
@@ -602,7 +604,10 @@ ProgramArtifacts create_native_artifacts(
 
         const bool is_integer_division =
             (op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 && b_dtype == DataType::INT32);
-        if (binary::utils::is_typecast(a_dtype, c_dtype) && !is_integer_division) {
+        // The unpacker and the packer convert MX, never a fused TYPECAST: its define carries host DataFormat values,
+        // and the device numbers MxInt8, MxInt4 and MxInt2 differently.
+        const bool involves_mx = is_mx(a_dtype) || is_mx(c_dtype);
+        if (binary::utils::is_typecast(a_dtype, c_dtype) && !is_integer_division && !involves_mx) {
             post_activations.push_back({
                 unary::UnaryOpType::TYPECAST,
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
@@ -821,8 +826,8 @@ ProgramArtifacts create_native_artifacts(
     // --- DataflowBuffers (mirrors the descriptor factory's CB block). A BORROWED operand backs the DFB
     // with its resident L1 shard or slice (num_entries == its borrowed part, borrowed_from set); any
     // NoC-read operand is a derived-depth ring filled over the NoC.
-    // post_lhs/post_rhs exist only when that operand has activations; their format is the op_has_exp
-    // Float16_b intermediate on the FPU path, else the operand's own format. ---
+    // post_lhs/post_rhs exist only when that operand has activations; their format is Float16_b for an MX operand
+    // and for the op_has_exp intermediate on the FPU path, else the operand's own format. ---
     // capacity = num_entries / max(producers, consumers) is what reaches the credit register, so the
     // knob is PER-THREAD and num_entries is derived. A global depth is meaningless: depth 2 is illegal
     // at R=4 (must divide by max(R,C)) and depth 4 at R=C=4 gives capacity 1, i.e. no double buffering.
@@ -883,8 +888,9 @@ ProgramArtifacts create_native_artifacts(
         dfbs.push_back(make_dfb(OUT_TAIL, c_tile_bytes, compute_threads, c_df, c_tile, std::nullopt));
     }
 
-    const tt::DataFormat a_inter_df = is_sfpu ? a_df : (op_has_exp ? tt::DataFormat::Float16_b : a_df);
-    const tt::DataFormat b_inter_df = is_sfpu ? b_df : (op_has_exp ? tt::DataFormat::Float16_b : b_df);
+    // An MX intermediate would quantize again between the activation and the binary op, so keep it in Float16_b.
+    const tt::DataFormat a_inter_df = (is_mx(a_dtype) || (!is_sfpu && op_has_exp)) ? tt::DataFormat::Float16_b : a_df;
+    const tt::DataFormat b_inter_df = (is_mx(b_dtype) || (!is_sfpu && op_has_exp)) ? tt::DataFormat::Float16_b : b_df;
     // post_lhs/post_rhs intermediate rings (c_3/c_4), allocated only when that operand has an activation chain.
     // Each compute thread produces (PREPROCESS) and consumes (binary op) its own tile counter of the ring, in
     // program order, so the ring holds one batch per compute thread.

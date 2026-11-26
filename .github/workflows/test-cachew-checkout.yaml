@@ -3,17 +3,8 @@
 name: Test cachew checkout
 
 on:
-  pull_request:
-    paths:
-      - '.github/actions/**'
-      - '.github/workflows/**'
-      - '.github/scripts/utils/cachew_checkout.py'
-  push:
-    branches: [main]
-    paths:
-      - '.github/actions/**'
-      - '.github/workflows/**'
-      - '.github/scripts/utils/cachew_checkout.py'
+  # Manual runs only. This was a temporary validation workflow; its automatic
+  # pull_request and push triggers have been retired.
   workflow_dispatch:
     inputs:
       live-smoke:

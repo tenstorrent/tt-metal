@@ -20,7 +20,6 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils import cache as cache_module
 from ....utils.fuse_loras import LoraSpec, fuse_loras_into
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
@@ -1144,7 +1143,7 @@ class LTXTransformerCheckpoint:
     Mirrors ``WanCheckpoint`` but for the single-file LTX safetensors layout. The pipeline-level
     flags that vary per instance (``has_audio`` / ``image_conditioning``) are passed into ``build``
     explicitly — the checkpoint never reads pipeline state. LoRA specs vary per variant, so they
-    are threaded through ``state_dict`` / ``cache_name`` / ``load`` rather than stored.
+    are threaded through ``state_dict`` / ``cache_name`` rather than stored.
     """
 
     def __init__(self, checkpoint_path: str, *, inner_dim: int) -> None:
@@ -1162,7 +1161,7 @@ class LTXTransformerCheckpoint:
 
     def state_dict(self, lora_specs: list[LoraSpec]) -> dict[str, torch.Tensor]:
         """Load + LoRA-fuse the transformer state dict from safetensors. Only
-        invoked on cache miss by ``cache_module.load_model``."""
+        invoked on cache miss by ``cache.load_model``."""
         logger.info(f"Transformer cache miss — loading safetensors: {self._checkpoint_path}")
         raw = load_file(self._checkpoint_path)
         prefix = "model.diffusion_model."
@@ -1172,7 +1171,7 @@ class LTXTransformerCheckpoint:
         return sd
 
     def cache_name(self, lora_specs: list[LoraSpec], quant_tag: str | None = None) -> str:
-        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and base weights don't
+        """Cache key for ``cache.load_model``. LoRA-tagged so fused and base weights don't
         alias in ``TT_DIT_CACHE_DIR``; quant-tagged because cached tensorbins carry their dtype, so
         a bf8 preset run and the bf16 baseline must live in separate dirs."""
         base = os.path.basename(self._checkpoint_path).removesuffix(".safetensors")
@@ -1224,26 +1223,4 @@ class LTXTransformerCheckpoint:
             image_conditioning=image_conditioning,
             quant_config=quant_config,
             lora_enabled=lora_enabled,
-        )
-
-    def load(
-        self,
-        model: LTXTransformerModel,
-        *,
-        parallel_config: DiTParallelConfig,
-        mesh_shape: tuple[int, ...],
-        is_fsdp: bool,
-        lora_specs: list[LoraSpec],
-        quant_tag: str | None = None,
-    ) -> None:
-        """Load (or reload) weights for a previously-built transformer."""
-        cache_module.load_model(
-            model,
-            model_name=self.cache_name(lora_specs, quant_tag),
-            subfolder=model.weight_cache_subfolder(),
-            parallel_config=parallel_config,
-            mesh_shape=mesh_shape,
-            mesh_device=model.mesh_device,
-            is_fsdp=is_fsdp,
-            get_torch_state_dict=lambda: self.state_dict(lora_specs),
         )

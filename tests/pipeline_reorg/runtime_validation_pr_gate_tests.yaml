@@ -21,7 +21,7 @@
   # TT_METAL_MOCK_CLUSTER_DESC_PATH keeps any implicit MetalContext creation on the
   # device-less runner in mock mode instead of aborting on silicon discovery
   # (tests that call configure_mock_mode() themselves still take precedence).
-  cmd: TT_METAL_MOCK_CLUSTER_DESC_PATH=/usr/libexec/tt-metalium/tt_metal/third_party/umd/tests/cluster_descriptor_examples/wormhole_N150.yaml /usr/bin/tt-metalium-validation-smoke --gtest_filter='*CPU_*'
+  cmd: TT_METAL_MOCK_CLUSTER_DESC_PATH=/usr/libexec/tt-metalium/tt_metal/third_party/umd/descriptors/cluster_descriptor_examples/wormhole_N150.yaml /usr/bin/tt-metalium-validation-smoke --gtest_filter='*CPU_*'
   skus:
     github_hosted_cpu:
       timeout: 10
@@ -36,7 +36,7 @@
 #   # Host SIMD coverage needs a stable CPU capability. Keep this in PR gate, where
 #   # it runs with ASan; the merge-gate TSan runtime aborts on Loudbox before test
 #   # startup because the runner denies TSan's personality(ADDR_NO_RANDOMIZE) call.
-#   cmd: TT_METAL_TEST_REQUIRE_AVX512=1 TT_METAL_MOCK_CLUSTER_DESC_PATH=/usr/libexec/tt-metalium/tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_P150.yaml /usr/bin/tt-metalium-validation-smoke --gtest_filter='*BfpSimdRows*/3:*BfpSimdTiles*:*BfpTaskLifetime*'
+#   cmd: TT_METAL_TEST_REQUIRE_AVX512=1 TT_METAL_MOCK_CLUSTER_DESC_PATH=/usr/libexec/tt-metalium/tt_metal/third_party/umd/descriptors/cluster_descriptor_examples/blackhole_P150.yaml /usr/bin/tt-metalium-validation-smoke --gtest_filter='*BfpSimdRows*/3:*BfpSimdTiles*:*BfpTaskLifetime*'
 #   skus:
 #     bh_loudbox:
 #       timeout: 5

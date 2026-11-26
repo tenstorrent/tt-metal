@@ -8,20 +8,20 @@
 #include <cstdlib>
 #include <string>
 #include <string_view>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "llrt/core_descriptor.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "internal/tt-2xx/quasar/noc/att/att_address.h"

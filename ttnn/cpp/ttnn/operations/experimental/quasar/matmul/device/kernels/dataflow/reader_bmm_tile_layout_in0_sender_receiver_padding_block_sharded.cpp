@@ -236,18 +236,16 @@ void kernel_main() {
                                 // Skip if there are no other cores since this core already has the data.
                                 // Note: noc_async_write_multicast[_loopback_src] may hang if called with 0 cores.
                                 if constexpr (in0_mcast_num_cores > 1) {
-                                    MulticastEndpoint mcast_dst;
                                     noc.async_write_multicast(
                                         CoreLocalMem<uint32_t>(in0_tensor_read_addr),
-                                        mcast_dst,
+                                        cb_in0,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores - 1,
                                         {},
                                         {.noc_x_start = in0_mcast_dest_noc_start_x,
                                          .noc_y_start = in0_mcast_dest_noc_start_y,
                                          .noc_x_end = in0_mcast_dest_noc_end_x,
-                                         .noc_y_end = in0_mcast_dest_noc_end_y,
-                                         .addr = in0_tensor_local_l1_write_addr},
+                                         .noc_y_end = in0_mcast_dest_noc_end_y},
                                         true);
                                 }
                             }
@@ -266,18 +264,16 @@ void kernel_main() {
                                          .addr = in0_tensor_local_l1_write_addr});
                                 } else {
                                     // multicast to every core in receiver grid
-                                    MulticastEndpoint mcast_dst;
                                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                                         CoreLocalMem<uint32_t>(in0_tensor_read_addr),
-                                        mcast_dst,
+                                        cb_in0,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores,
                                         {},
                                         {.noc_x_start = in0_mcast_dest_noc_start_x,
                                          .noc_y_start = in0_mcast_dest_noc_start_y,
                                          .noc_x_end = in0_mcast_dest_noc_end_x,
-                                         .noc_y_end = in0_mcast_dest_noc_end_y,
-                                         .addr = in0_tensor_local_l1_write_addr},
+                                         .noc_y_end = in0_mcast_dest_noc_end_y},
                                         true);
                                 }
                             }
@@ -296,18 +292,16 @@ void kernel_main() {
                         } else {
                             // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all
                             // cores in receiver grid
-                            MulticastEndpoint mcast_dst;
                             noc.async_write_multicast(
                                 CoreLocalMem<uint32_t>(in0_tensor_read_addr),
-                                mcast_dst,
+                                cb_in0,
                                 in0_block_size_bytes,
                                 in0_mcast_num_cores,
                                 {},
                                 {.noc_x_start = in0_mcast_dest_noc_start_x,
                                  .noc_y_start = in0_mcast_dest_noc_start_y,
                                  .noc_x_end = in0_mcast_dest_noc_end_x,
-                                 .noc_y_end = in0_mcast_dest_noc_end_y,
-                                 .addr = in0_tensor_local_l1_write_addr},
+                                 .noc_y_end = in0_mcast_dest_noc_end_y},
                                 true);
 
                             // We should also multicast the flag to destinations
@@ -320,17 +314,21 @@ void kernel_main() {
                                 in0_mcast_dest_noc_end_y,
                                 in0_mcast_num_cores);
                         }
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
-                        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
-                        // statically (using NOC_CMD_STATIC_VC).
-
-                        // Flush is required because the semaphore multicast reads receiver_sem's L1
-                        // address as the source value. Without a flush, the CPU can proceed to the next
-                        // iteration and overwrite receiver_sem to INVALID before the NoC has read the
-                        // VALID value from L1, causing receivers to see INVALID and hang.
-                        // In single-core receiver-grid configurations, semaphore multicast may be compiled out;
-                        // in that case, skip the flush to avoid an unnecessary stall.
-                        if constexpr (!(core_in_in0_receiver_mcast_grid && (in0_mcast_num_cores == 1))) {
+                        // Ordering and completion of the in0 block + VALID multicasts:
+                        //  - The data multicast and the semaphore multicast are issued on the same noc id and the
+                        //    same vc (VCs are static, NOC_CMD_STATIC_VC), even though the cmd bufs differ. So remote
+                        //    receivers see the block land before they see VALID, with no barrier between the two.
+                        //  - The semaphore multicast reads receiver_sem's L1 value as its source. The sender must not
+                        //    overwrite receiver_sem (INVALID on the next block) before the NoC has read VALID, or
+                        //    receivers would see INVALID and hang. A flush (requests have left this core) is enough
+                        //    to protect that source value.
+                        //  - If this sender is also in the receiver grid, it consumes its own looped-back copies of
+                        //    the block and of VALID. A flush does not show those have landed, so a late VALID could
+                        //    overwrite the next block's INVALID, or push_back could expose an unwritten block.
+                        //    Only write acks prove the landing, so a write barrier is required in that case.
+                        if constexpr (core_in_in0_receiver_mcast_grid) {
+                            noc.async_write_barrier();
+                        } else {
                             noc.async_writes_flushed();
                         }
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {

@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <vector>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -113,12 +113,12 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     uint32_t progress_addr = 0;
     if (caller_progress) {
         TT_FATAL(tensor_args.mm_progress_counters->is_allocated(), "mm_progress_counters must have a buffer");
-        progress_addr = static_cast<uint32_t>(tensor_args.mm_progress_counters->buffer()->address());
+        progress_addr = static_cast<uint32_t>(tensor_args.mm_progress_counters->mesh_buffer().address());
     }
     uint32_t credit_addr = 0;
     if (caller_credit) {
         TT_FATAL(tensor_args.mm_credit_counters->is_allocated(), "mm_credit_counters must have a buffer");
-        credit_addr = static_cast<uint32_t>(tensor_args.mm_credit_counters->buffer()->address());
+        credit_addr = static_cast<uint32_t>(tensor_args.mm_credit_counters->mesh_buffer().address());
     }
     uint32_t reader_progress_arg = kReaderArgPrefix;
     if (output_tensor[1].is_sharded()) {

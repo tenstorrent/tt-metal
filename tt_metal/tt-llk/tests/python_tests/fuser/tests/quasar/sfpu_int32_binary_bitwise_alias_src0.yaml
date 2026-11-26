@@ -1,0 +1,32 @@
+# Int32 binary bitwise and / or / xor writing over its first operand: a and b are Dest tiles 0 and 1
+# and the result goes to tile 0.
+# Int32 must be unpacked straight to Dest and needs a 32-bit Dest; only non-negative values are
+# checked (see sfpu_int32_binary_bitwise_fmod_remainder.yaml).
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 64]
+    format: [Int32]
+    stimuli:
+      include:
+        - [0.0, 6.0]
+        - [1000.0, 1006.0]
+        - [123456.0, 123462.0]
+        - [2147483641.0, 2147483647.0]
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Int32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 64]}
+      - type: "BinarySfpu"
+        operation: [SfpuBitwiseAnd, SfpuBitwiseOr, SfpuBitwiseXor]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 0}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 0, out: 0}}

@@ -30,7 +30,7 @@
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_DM) || \
     (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC != 1))
 
-__attribute__((noinline)) void debug_dump_cb(uint32_t cb_id, uint32_t num_words = 0) {
+DEVICE_PRINT_FORCE_NOINLINE void debug_dump_cb(uint32_t cb_id, uint32_t num_words = 0) {
     auto& iface = get_local_cb_interface(cb_id);
 
     DPRINT(
@@ -69,35 +69,67 @@ __attribute__((noinline)) void debug_dump_cb([[maybe_unused]] uint32_t cb_id, [[
 // ---------------------------------------------------------------------------
 #include "api/debug/dprint_tile.h"
 
-#if (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 0)) || (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 2))
-// Unpack (TRISC0) or Pack (TRISC2) thread
-__attribute__((noinline)) void debug_dump_cb_typed(uint32_t cb_id, uint32_t tile_idx = 0, bool untilize = true) {
+#if (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 0)) ||                                \
+    (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 2)) || defined(COMPILE_FOR_NCRISC) || \
+    defined(COMPILE_FOR_BRISC)
+// One out-of-line dump serves every CB: a CB known at compile time has its descriptors looked up at the call site,
+// where they fold into constants; any other CB once, in debug_dump_cb_typed_rt().
+DEVICE_PRINT_FORCE_NOINLINE void debug_dump_cb_typed_words(
+    uint32_t cb_id, uint32_t tile_idx, uint32_t tile_offset, uint32_t flags, uint32_t descriptors, uint32_t num_faces) {
     DPRINT("CB{} tile {} (typed):\n", cb_id, tile_idx);
     for (uint16_t r = 0; r < 32; ++r) {
         auto slice = TileSlice(
+            dprint_tile_slice_words_t{},
             cb_id,
-            tile_idx,
+            tile_offset,
             SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-            true,
-            untilize);
+            flags,
+            descriptors,
+            num_faces);
         DPRINT("{}\n", slice);
+    }
+}
+
+__attribute__((always_inline)) inline void debug_dump_cb_typed_info(
+    uint32_t cb_id, uint32_t tile_idx, bool untilize, bool ptr_type, const tile_info_t& info) {
+    debug_dump_cb_typed_words(
+        cb_id,
+        tile_idx,
+        static_cast<int>(tile_idx) * info.tile_size,
+        dprint_tile_slice_flags(true, untilize, ptr_type),
+        dprint_tile_slice_descriptors(info),
+        info.num_faces);
+}
+#endif
+
+#if (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 0)) || (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 2))
+// Unpack (TRISC0) or Pack (TRISC2) thread
+DEVICE_PRINT_FORCE_NOINLINE void debug_dump_cb_typed_rt(uint32_t cb_id, uint32_t tile_idx, bool untilize) {
+    debug_dump_cb_typed_info(cb_id, tile_idx, untilize, false, get_tile_info(cb_id));
+}
+
+__attribute__((always_inline)) inline void debug_dump_cb_typed(
+    uint32_t cb_id, uint32_t tile_idx = 0, bool untilize = true) {
+    if (__builtin_constant_p(cb_id)) {
+        debug_dump_cb_typed_info(cb_id, tile_idx, untilize, false, get_tile_info(cb_id));
+    } else {
+        debug_dump_cb_typed_rt(cb_id, tile_idx, untilize);
     }
 }
 #elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 // Dataflow threads: need explicit cb_type (input or output)
-__attribute__((noinline)) void debug_dump_cb_typed(
+DEVICE_PRINT_FORCE_NOINLINE void debug_dump_cb_typed_rt(
+    uint32_t cb_id, uint32_t tile_idx, dprint_tslice_cb_t cb_type, bool untilize) {
+    debug_dump_cb_typed_info(cb_id, tile_idx, untilize, TSLICE_RD_PTR, get_tile_info(cb_id, cb_type, TSLICE_RD_PTR));
+}
+
+__attribute__((always_inline)) inline void debug_dump_cb_typed(
     uint32_t cb_id, uint32_t tile_idx = 0, dprint_tslice_cb_t cb_type = TSLICE_INPUT_CB, bool untilize = true) {
-    DPRINT("CB{} tile {} (typed):\n", cb_id, tile_idx);
-    for (uint16_t r = 0; r < 32; ++r) {
-        auto slice = TileSlice(
-            cb_id,
-            tile_idx,
-            SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-            cb_type,
-            TSLICE_RD_PTR,
-            true,
-            untilize);
-        DPRINT("{}\n", slice);
+    if (__builtin_constant_p(cb_id) && __builtin_constant_p(cb_type)) {
+        debug_dump_cb_typed_info(
+            cb_id, tile_idx, untilize, TSLICE_RD_PTR, get_tile_info(cb_id, cb_type, TSLICE_RD_PTR));
+    } else {
+        debug_dump_cb_typed_rt(cb_id, tile_idx, cb_type, untilize);
     }
 }
 #else
@@ -112,7 +144,7 @@ __attribute__((noinline)) void debug_dump_cb_typed(
 // debug_dump_l1: Hex-dump arbitrary L1 memory.
 // Available from all RISCs.
 // ---------------------------------------------------------------------------
-__attribute__((noinline)) void debug_dump_l1(uint32_t addr, uint32_t num_words) {
+DEVICE_PRINT_FORCE_NOINLINE void debug_dump_l1(uint32_t addr, uint32_t num_words) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
 
     DPRINT("L1[{:#x}] {} words:\n", addr, num_words);

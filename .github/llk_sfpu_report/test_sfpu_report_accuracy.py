@@ -23,7 +23,10 @@ from pathlib import Path
 
 import pytest
 import torch
-from helpers.data_format_inference import is_format_combination_outlier
+from helpers.data_format_inference import (
+    is_format_combination_outlier,
+    unpacks_to_dest,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -32,28 +35,15 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
-    DestSync,
     FastMode,
     MathOperation,
     format_dict,
 )
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block
-from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    CLAMP_NEGATIVE,
-    FAST_MODE,
-    MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
-    TILE_COUNT,
-    generate_input_dim,
-)
 from helpers.ulp_sweep import fp16_dest_unusable, golden_input, sweep_spec
+from test_eltwise_unary_sfpu import build_eltwise_unary_sfpu_config
 
 pytestmark = pytest.mark.accuracy
 
@@ -134,41 +124,22 @@ def _run(mathop, formats, approx_mode, dest_acc, src_A, tile_cnt, dimensions):
         formats.input_format,
         dimensions,
     )
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+    # The functional driver's own builder, as the nightly ULP sweep calls it: the
+    # templates and runtimes the shared kernel source reads are the harness's to list.
+    # A copy of that list here stopped compiling when the source gained parameters.
+    configuration = build_eltwise_unary_sfpu_config(
+        formats,
         dest_acc,
-        formats,
+        approx_mode,
+        mathop,
         dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(dimensions, dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=(formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes),
+        src_A,
+        src_B,
+        tile_cnt,
+        tile_cnt,
+        fast_mode=FastMode.No,
+        clamp_negative=True,
+        unpack_to_dest=unpacks_to_dest(formats.input_format, dest_acc),
     )
     result = configuration.run().result
     return golden, torch.tensor(result, dtype=format_dict[formats.output_format])

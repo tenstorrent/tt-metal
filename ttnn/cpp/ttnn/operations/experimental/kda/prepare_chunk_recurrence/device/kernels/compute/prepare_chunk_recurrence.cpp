@@ -35,6 +35,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/chronology_receive.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/engine_state.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/prepare_chunk_recurrence/device/kernels/work_batches.hpp"

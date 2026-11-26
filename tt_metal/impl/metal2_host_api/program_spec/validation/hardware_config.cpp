@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <string_view>
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
@@ -10,7 +12,7 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/validate_spec.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -57,7 +59,8 @@ void ValidateGen1DataMovementConfig(const KernelSpec& kernel, tt::ARCH arch) {
 // bypassing SrcA/B. Its legality depends on the Dest width (enable_32_bit_dest), the DFB's
 // element width, the binding role, and the generation:
 //
-//   UnpackToSrc                          → always accepted (the default path).
+//   UnpackToSrc                          → accepted, except a consumed Int16 DFB on Quasar with
+//                                          enable_32_bit_dest (see below).
 //   UnpackToDest, producer-only binding  → inert (the DFB is never unpacked): tolerated.
 //   UnpackToDest, consumer, enable=true  → accepted (Dest is 32-bit; the choice is coherent).
 //   UnpackToDest, consumer, enable=false, 32-bit format (Float32/Int32/UInt32/RawUInt32)
@@ -71,6 +74,9 @@ void ValidateGen1DataMovementConfig(const KernelSpec& kernel, tt::ARCH arch) {
 //
 // Separately, where the Src-vs-Dest choice is REAL an explicit entry is REQUIRED rather than
 // silently defaulting to UnpackToSrc: a consumed Float32 DFB with enable_32_bit_dest=true.
+// On Quasar, a consumed Int16 DFB with enable_32_bit_dest=true requires UnpackToDest. The FPU
+// cannot datacopy Int16 into a 32-bit Dest. UnpackToDest is the SFPU typecast path, which
+// overwrites Dest; an FPU datacopy of that DFB is not supported.
 //
 // INTENTIONAL INTERMEDIATE GAP — do not "fix" without the follow-up. The require-an-explicit-
 // entry rule is Float32-only. The choice is just as real for a consumed Int32/UInt32 DFB with
@@ -89,6 +95,12 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
     const bool enable_32_bit_dest = compute_config.enable_32_bit_dest;
     const bool is_gen2 = is_gen2_arch(arch);
 
+    // On Quasar, skip a DFB the kernel gives to the SFPU pipeline, the Unpack stage never unpacks it.
+    auto unpacked = [&](const DFBBinding& binding) {
+        return binding.endpoint_type == DFBEndpointType::CONSUMER &&
+               !(is_gen2 && ComputeKernelUsesSfpuPipeline(kernel, binding.dfb_spec_name, DFBEndpointType::CONSUMER));
+    };
+
     // Index the kernel's DFB bindings: which it binds at all, and which it CONSUMES. A self-loop
     // DFB appears as two separate bindings (one PRODUCER, one CONSUMER — there is no BOTH endpoint
     // type); indexing by name into a set dedups them, and membership in consumed_dfbs makes the
@@ -97,7 +109,7 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
     std::unordered_set<DFBSpecName> consumed_dfbs;
     for (const auto& binding : kernel.dfb_bindings) {
         bound_dfbs.insert(binding.dfb_spec_name);
-        if (binding.endpoint_type == DFBEndpointType::CONSUMER) {
+        if (unpacked(binding)) {
             consumed_dfbs.insert(binding.dfb_spec_name);
         }
     }
@@ -120,6 +132,13 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
         //////////////////////////
         // mode == UnpackToDest
         //////////////////////////
+        TT_FATAL(
+            !(is_gen2 && ComputeKernelUsesSfpuPipeline(kernel, dfb_name, DFBEndpointType::CONSUMER)),
+            "Kernel '{}' unpack_modes gives DFB '{}' UnpackToDest, but the DFB is in "
+            "config_2xx->sfpu_pipeline_consumed_dfbs: the Unpack stage never unpacks it, and UnpackToDest would "
+            "switch the whole kernel to unpack-to-Dest",
+            kernel.unique_id,
+            dfb_name);
         if (!consumed_dfbs.contains(dfb_name)) {
             continue;  // Compute kernel is bound as the DFB Producer: inert, tolerated.
         }
@@ -168,7 +187,7 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
     //       This check should be extended to int32/uint32. (TODO: Issue #49936)
     if (enable_32_bit_dest) {
         for (const auto& binding : kernel.dfb_bindings) {
-            if (binding.endpoint_type != DFBEndpointType::CONSUMER) {
+            if (!unpacked(binding)) {
                 continue;
             }
             const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
@@ -185,6 +204,32 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
                 "Compute kernel '{}' consumes FP32 DFB '{}' with enable_32_bit_dest=true, but provides no "
                 "unpack_modes entry for this DFB. This configuration requires an explicit choice "
                 "between UnpackMode::UnpackToSrc and UnpackMode::UnpackToDest.",
+                kernel.unique_id,
+                binding.dfb_spec_name);
+        }
+    }
+
+    // Quasar Int16 is MOV-only on the FPU and is not a 32-bit Dest source (llk_math_common.h).
+    // get_single_pack_src_format accepts Int16 under fp32 dest so an Int16 output can pack, and
+    // that function cannot tell an input from an output. UnpackToSrc datacopies the input as
+    // ELWADD. UnpackToDest is the SFPU typecast path: the SFPU overwrites Dest, so the narrow
+    // bits never have to survive as a 32-bit FPU datum.
+    if (enable_32_bit_dest && arch == tt::ARCH::QUASAR) {
+        for (const auto& binding : kernel.dfb_bindings) {
+            if (!unpacked(binding)) {
+                continue;
+            }
+            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
+            if (!dfb_spec->data_format_metadata.has_value() ||
+                dfb_spec->data_format_metadata.value() != tt::DataFormat::Int16) {
+                continue;
+            }
+            const auto mode = unpack_modes.find(binding.dfb_spec_name);
+            TT_FATAL(
+                mode != unpack_modes.end() && mode->second == UnpackMode::UnpackToDest,
+                "Compute kernel '{}' consumes Int16 DFB '{}' with enable_32_bit_dest=true. On Quasar the FPU "
+                "cannot datacopy Int16 in a 32-bit Dest. Set unpack_modes to UnpackToDest for SFPU typecast, "
+                "which overwrites Dest. An FPU datacopy of this DFB is not supported.",
                 kernel.unique_id,
                 binding.dfb_spec_name);
         }
@@ -222,12 +267,48 @@ void ValidateImplicitSyncOptOuts(const KernelSpec& kernel) {
     }
 }
 
+// Check the kernel's two SFPU lists: no DFB is listed twice, and each is a DFB the kernel binds on that side.
+void ValidateSfpuPipelineDfbs(const KernelSpec& kernel) {
+    if (!kernel.is_compute_kernel()) {
+        return;
+    }
+    const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
+    if (!compute_config.config_2xx.has_value()) {
+        return;
+    }
+    auto check_side = [&](const Group<DFBSpecName>& listed, DFBEndpointType side, std::string_view field) {
+        std::unordered_set<DFBSpecName> seen;
+        for (const auto& dfb_name : listed) {
+            TT_FATAL(
+                seen.insert(dfb_name).second,
+                "Kernel '{}' {} lists DFB '{}' more than once",
+                kernel.unique_id,
+                field,
+                dfb_name);
+            const bool bound_on_side = std::ranges::any_of(kernel.dfb_bindings, [&](const DFBBinding& binding) {
+                return binding.dfb_spec_name == dfb_name && binding.endpoint_type == side;
+            });
+            TT_FATAL(
+                bound_on_side,
+                "Kernel '{}' {} entry references DFB '{}', which the kernel does not bind as a {}",
+                kernel.unique_id,
+                field,
+                dfb_name,
+                side == DFBEndpointType::CONSUMER ? "consumer" : "producer");
+        }
+    };
+    const auto& config_2xx = *compute_config.config_2xx;
+    check_side(config_2xx.sfpu_pipeline_consumed_dfbs, DFBEndpointType::CONSUMER, "sfpu_pipeline_consumed_dfbs");
+    check_side(config_2xx.sfpu_pipeline_produced_dfbs, DFBEndpointType::PRODUCER, "sfpu_pipeline_produced_dfbs");
+}
+
 }  // namespace
 
 void ValidateKernelHardwareConfig(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch) {
     ValidateGen1DataMovementConfig(kernel, arch);
     ValidateUnpackModes(kernel, ctx.collected, arch);
     ValidateImplicitSyncOptOuts(kernel);
+    ValidateSfpuPipelineDfbs(kernel);
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

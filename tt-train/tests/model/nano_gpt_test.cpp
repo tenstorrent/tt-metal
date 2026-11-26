@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
@@ -20,7 +20,8 @@
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "tokenizers/char_tokenizer.hpp"
-#include "tt-metalium/host_api.hpp"
+#include "tt-metalium/discovery/cluster.hpp"
+#include "tt-metalium/workload/legacy/host_api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "utils/memory_utils.hpp"
 namespace {

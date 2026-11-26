@@ -25,18 +25,7 @@ def _get_unary_golden_table():
 
     def torch_hardmish(x):
         x_f32 = x.to(torch.float32)
-        result_f32 = x_f32 * torch.clamp(x_f32 * 0.5 + 1.0, min=0.0, max=1.0)
-
-        if x.dtype == torch.bfloat16:
-            # Simulate SFPSTORE truncating
-            result_int32 = result_f32.view(torch.int32)
-            shifted_int32 = torch.bitwise_right_shift(result_int32, 16)
-            truncated_int16 = shifted_int32.to(torch.int16)
-            final_result = truncated_int16.view(torch.bfloat16)
-        else:
-            final_result = result_f32
-
-        return final_result
+        return (x_f32 * torch.clamp(x_f32 * 0.5 + 1.0, min=0.0, max=1.0)).to(x.dtype)
 
     def torch_logical_not(x):
         if integer_golden.is_unsigned_dtype(x.dtype):
@@ -761,15 +750,6 @@ def _golden_function_rsub(input_tensor_a, value, *args, **kwargs):
 
 # Binary registration owns rsub's scalar/BF8 comparison contract and activation semantics.
 # Do not replace it here with the legacy unary helper after operation modules are loaded.
-
-
-def _golden_function_rdiv(input_tensor_a, value, *args, **kwargs):
-    import torch
-
-    return torch.div(torch.tensor(value, dtype=input_tensor_a.dtype), input_tensor_a)
-
-
-ttnn.attach_golden_function(ttnn.rdiv, golden_function=_golden_function_rdiv)
 
 
 def _golden_function_bitwise_left_shift(input_tensor, shift_amt, *args, **kwargs):

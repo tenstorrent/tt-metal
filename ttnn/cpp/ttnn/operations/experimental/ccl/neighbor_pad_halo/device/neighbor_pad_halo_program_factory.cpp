@@ -13,20 +13,20 @@
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>  // FabricMuxConfig, get_tt_fabric_channel_buffer_size_bytes
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <algorithm>
 #include <map>
 #include <string>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 #include <optional>
 #include <ranges>
@@ -113,7 +113,7 @@ NpHaloScatterSetup setup_interior_scatter(
         return setup;
     }
 
-    Buffer* padded_buf = tensor_args.padded_output.value().buffer();
+    const auto* padded_buf = &tensor_args.padded_output.value().mesh_buffer();
     const uint32_t Hd_i = geom.input_halo_dim_size;      // interior H (input is unpadded in repack mode)
     const uint32_t Wd_i = geom.num_sticks_per_halo_dim;  // interior W
     const uint32_t Hp_i = Hd_i + 2 * op.np_padding_h;
@@ -734,7 +734,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     (void)tensor_return_value;  // output IS the pre-allocated tensor_args.halo_buffer
     auto* mesh_device = tensor_args.input_tensor.device();
 
-    Program program{};
+    Program program = CreateProgram(*mesh_device);
 
     // Padded-output fused mode: mux worker/mux core ranges
     CoreRangeSet occ_hw_workers, occ_hmux, occ_w_workers, occ_wmux;
@@ -1540,8 +1540,8 @@ void NpHaloMeshWorkloadFactory::override_runtime_arguments(
     const NpHaloParams& op,
     const NpHaloInputs& tensor_args,
     Tensor& tensor_return_value) {
-    const uint32_t input_addr = tensor_args.input_tensor.buffer()->address();
-    const uint32_t halo_buffer_addr = tensor_args.halo_buffer.buffer()->address();
+    const uint32_t input_addr = tensor_args.input_tensor.mesh_buffer().address();
+    const uint32_t halo_buffer_addr = tensor_args.halo_buffer.mesh_buffer().address();
     (void)tensor_return_value;  // output IS the halo_buffer
     const uint32_t h_sem_addr = op.h_neighbor_semaphore.address();
     const uint32_t barrier_sem_addr = op.barrier_semaphore.address();
@@ -1598,7 +1598,7 @@ void NpHaloMeshWorkloadFactory::override_runtime_arguments(
 
         // --- Padded-output fused interior-copy scatter kernel: refresh per-core [input, compact, padded]. ---
         if (shared_vars.np_artifacts.has_scatter && tensor_args.padded_output.has_value()) {
-            const uint32_t padded_addr = tensor_args.padded_output.value().buffer()->address();
+            const uint32_t padded_addr = tensor_args.padded_output.value().mesh_buffer().address();
             auto& sc_args_by_core = GetRuntimeArgs(program, shared_vars.np_artifacts.scatter_kernel_id);
             for (const auto& cr : shared_vars.np_artifacts.scatter_core_range.ranges()) {
                 for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {

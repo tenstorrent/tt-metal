@@ -13,12 +13,12 @@
 #include <cmath>
 #include <string>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include "ttnn/operations/math.hpp"
@@ -709,6 +709,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (args.program_config.has_value() && args.program_config->min_blocked_pack_tiles.has_value()) {
+        defines["SDPA_MIN_BLOCKED_PACK_TILES"] = std::to_string(*args.program_config->min_blocked_pack_tiles);
+    }
 
     // NOTE: KernelDescriptor construction is deferred until after chain construction
     // so that the mcast_enabled compile-time arg can be determined first.
@@ -1542,7 +1545,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     fabric_mux_connection_ct_args(num_mux_clients_per_group, mux_kernel_config, writer_fabric_compile_time_args);
 
     // All-gather CT args for the fabric writer (integrated K/V all-gather on MUX client columns)
-    const uint32_t ag_page_size = input_tensor_k.buffer()->page_size();
+    const uint32_t ag_page_size = input_tensor_k.mesh_buffer().page_size();
     const size_t ag_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     constexpr uint32_t max_scatter_addresses = 4;
     const uint32_t ag_packet_size_in_pages =
@@ -1575,6 +1578,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
 
