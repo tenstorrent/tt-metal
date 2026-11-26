@@ -9,6 +9,24 @@ Read before changing `tests/didt/didt_runner.py`, `tests/didt/didt_runner_config
 - `status.json` is the only result. People and the sweep page read it.
 - Its job: name the failing chip, then the core, by hardware identity.
 
+## Component map
+
+```
+didt_runner.py               CLI: args, chip snapshot, run dir, exit code
+ -> runner/config.py         strict loader of didt_runner_config.json; all errors at once, before device work
+ -> runner/steps.py          run loop: collect gate, reset, attempt, tt-smi, fallbacks (throttle, pin_core)
+     -> runner/checks.py     log parsers and verdicts (Status), GDDR errors from tt-smi, loop time
+     -> runner/devices.py    failing devices[] of one attempt, identity joined from chips on `dev`
+     -> runner/chips.py      sysfs snapshot `dev bdf tray asic asic_id kmd`; opens no device
+     -> runner/status.py     status.json writer, atomic
+```
+
+Read by the tests the runner launches, never imported by `runner/`:
+
+- `tests/didt/didt_chip.py`: `pick_submesh`, `DIDT_DEVICE_ID` picks a per-chip test's submesh by device id.
+- `tt_py_test_utils_common/op_test_base.py`: writes the `Chip map`, `ND summary` and iteration lines the parsers read.
+- `tt_py_test_utils_common/nd_core_map.py`: per-core ND attribution (cores, pattern) inside those lines.
+
 ## Invariants (never break)
 
 | rule | why |
