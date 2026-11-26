@@ -48,9 +48,8 @@ jobs:
             - mkdir -p "$HOME"
             - cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
       - id: hardware-free
-        # GitHub's cap (llk_hardware_free_tests.yaml: 10 min).
-        timeout-ms: 600000
         kind: shell
         shell:
           run:
-            - cd tt_metal/tt-llk && ./tests/run_hardware_free.sh
+            # GitHub's step cap (llk_hardware_free_tests.yaml: 10 min); steps have no timeout key yet.
+            - cd tt_metal/tt-llk && timeout 10m ./tests/run_hardware_free.sh

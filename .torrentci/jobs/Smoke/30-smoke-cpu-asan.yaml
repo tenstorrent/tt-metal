@@ -53,11 +53,11 @@ jobs:
         value: suppressions=/usr/share/tt-metalium/lsan.supp
     steps:
       - id: smoke-cpu
-        timeout-ms: 600000
         kind: shell
         shell:
           run:
             - mkdir -p test-reports
+            # GitHub's step cap (runtime_validation_pr_gate_tests.yaml: 10 min); steps have no timeout key yet.
             - >-
               TT_METAL_MOCK_CLUSTER_DESC_PATH=/usr/libexec/tt-metalium/tt_metal/third_party/umd/descriptors/cluster_descriptor_examples/wormhole_N150.yaml
-              /usr/bin/tt-metalium-validation-smoke --gtest_filter='*CPU_*' --gtest_output=xml:test-reports/
+              timeout 10m /usr/bin/tt-metalium-validation-smoke --gtest_filter='*CPU_*' --gtest_output=xml:test-reports/
