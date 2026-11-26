@@ -65,8 +65,9 @@ class GroupedQueryAttention(AbstractModuleBase):
         # Fused Q+K+V: on one device the rows are [Q | K | V]. Under TP, device d takes a contiguous
         # slice and reads it as [Q_d | K_d | V_d], so the full weight is
         # [Q_0 | K_0 | V_0 | Q_1 | K_1 | V_1 | ...] and its row order changes with the TP size.
-        # Checkpoints re-shard it without knowing this order:
-        # https://github.com/tenstorrent/tt-metal/issues/60900
+        # ttml.checkpointing re-shards it without knowing this order
+        # (https://github.com/tenstorrent/tt-metal/issues/60900); ttml.distributed_checkpointing knows it from the
+        # fused_segments declared below.
         qkv_dim = (num_heads + 2 * num_groups) * head_dim  # == embedding_size + 2 * num_groups * head_dim
 
         # Head/group counts stored here are LOCAL (per-device) so that splitting
@@ -92,6 +93,8 @@ class GroupedQueryAttention(AbstractModuleBase):
                 gather_output=False,
                 sequence_parallel=sequence_parallel,
                 axis_name="tp",
+                # Global segment sizes of the fused [Q | K | V] weight, so checkpoints can reshard it across TP sizes.
+                fused_segments=(num_heads * head_dim, num_groups * head_dim, num_groups * head_dim),
             )
             self.out_linear = RowParallelLinear(
                 embedding_size,
