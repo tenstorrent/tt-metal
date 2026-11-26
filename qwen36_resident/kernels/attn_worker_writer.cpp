@@ -126,6 +126,28 @@ void kernel_main() {
     };
     // per iteration: the row max (and the S0-8 hop), then the partial and the tail's write-back; O-2 sends the next
     // user's row max before this user's partial (the compute takes them in that order)
+    // (O-2's plain write-back: the tail tiles go out over the other NOC — the tail reader issues no writes, so this
+    // writer owns that NOC's write counters — and their completion (barrier, pops, sem_tail) waits for the next user's
+    // write-back of the same layer instead of stalling this one; the layer's last user completes at once, so nothing
+    // pending crosses a layer, where the reader waits for the copies' earlier write-backs. cb_flush / cb_flushv hold
+    // two users' tiles then.)
+    constexpr bool kDeferWb = kAttnPipe;
+    constexpr uint8_t wb_noc = kDeferWb ? 1 - noc_index : noc_index;
+    if (kDeferWb && role >= 2) {
+        noc_local_state_init(wb_noc);
+    }
+    uint32_t wb_pending = 0;  // (i + 1 of the write-back in flight, 0: none)
+    bool wb_owner = false;
+    auto finish_wb = [&]() {
+        noc_async_write_barrier(wb_noc);
+        cb_pop_front(cb_flush, Dt);
+        cb_pop_front(cb_flushv, Dt);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = wb_pending;
+        if (wb_owner) {
+            noc_semaphore_inc(owner_sem, 1);
+        }
+        wb_pending = 0;
+    };
     auto head = [&](uint32_t i) {
         const uint32_t l = i / n_act, u = act.row[i % n_act];
         const bool has_chunk = chunk_of_user[u];
@@ -247,12 +269,32 @@ void kernel_main() {
         }
         if (!packed && role >= 2 && !has_chunk) {
             // (kTails: the other tail's user, nothing to write back)
+            if (kDeferWb && wb_pending) {
+                finish_wb();
+            }
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = i + 1;
         }
         if (!packed && role >= 2 && has_chunk) {
             const uint32_t copy_stride = get_arg_val<uint32_t>(tail_args + 2);
+            if (kDeferWb && wb_pending) {
+                finish_wb();  // (the previous user's tiles: their slots are reused next)
+            }
             cb_wait_front(cb_flush, Dt);
             cb_wait_front(cb_flushv, Dt);
+            // k from cb_flush in K's rows, v from cb_flushv in V's rows (kVRow), each right after its re-encoding
+            auto write_kv = [&](uint32_t kv) {
+                const uint32_t row = kv == 0 ? kKvRow : kVRow;
+                const uint32_t copy_off = ((verify ? 0 : u) * copies + l % copies) * copy_stride + tail_row[u] * row;
+                const uint32_t addr = get_arg_val<uint32_t>(tail_args + kv) + copy_off;
+                uint64_t dst;
+                if constexpr (kv_paged) {
+                    const uint32_t page = (l % copies) * kv_copy_pages + page_list(u)[0];
+                    dst = page_noc_addr(get_arg_val<uint32_t>(tail_args + kv), page, wb_noc, row);
+                } else {
+                    dst = get_noc_addr_from_bank_id<true>(tail_bank[u], addr, wb_noc);
+                }
+                noc_async_write(get_read_ptr(kv == 0 ? cb_flush : cb_flushv), dst, row, wb_noc);
+            };
             if constexpr (kKRtn && kKPatch && !verify) {
                 // (S0-8: the new k row re-encoded to nearest in the packed tail tile, from the unrounded copy — off
                 // the critical path, the step's attention used the unrounded row; the packer / compute wrote both, so
@@ -264,36 +306,19 @@ void kernel_main() {
                         flush + d * kKvTile, tail_pos[u], knr + d * kTile, kTailBatched ? u : 0, kKPatch == 1);
                 }
             }
+            write_kv(0);
             if constexpr (kVBfp2 && !verify) {
-                // (S0-9: the new v row re-encoded to nearest in the packed Bfp2_b tail tile from the reader's bf16
-                // copy — the step's attention used it unrounded)
-                cb_wait_front(cb_vnr, Dt);
+                // (S0-9: the new v row, encoded to nearest by the reader, into the packed Bfp2_b tail tile — the
+                // step's attention used it unrounded)
+                cb_wait_front(cb_venc, 1);
                 invalidate_l1_cache();
-                const uint32_t vnr = get_read_ptr(cb_vnr), flushv = get_read_ptr(cb_flushv);
-                for (uint32_t d = 0; d < Dt; d++) {
-                    patch_bfp2_row(flushv + d * kVTile, tail_pos[u], vnr + d * kTile, kTailBatched ? u : 0);
-                }
+                bfp2_place_row(get_read_ptr(cb_venc), get_read_ptr(cb_flushv), tail_pos[u]);
             }
-            for (uint32_t kv = 0; kv < 2; kv++) {
-                // (k from cb_flush in bf8 rows, v from cb_flushv in V's rows: kVRow)
-                const uint32_t row = kv == 0 ? kKvRow : kVRow;
-                const uint32_t copy_off = ((verify ? 0 : u) * copies + l % copies) * copy_stride + tail_row[u] * row;
-                const uint32_t addr = get_arg_val<uint32_t>(tail_args + kv) + copy_off;
-                uint64_t dst;
-                if constexpr (kv_paged) {
-                    const uint32_t page = (l % copies) * kv_copy_pages + page_list(u)[0];
-                    dst = page_noc_addr(get_arg_val<uint32_t>(tail_args + kv), page, noc_index, row);
-                } else {
-                    dst = get_noc_addr_from_bank_id<true>(tail_bank[u], addr);
-                }
-                noc_async_write(get_read_ptr(kv == 0 ? cb_flush : cb_flushv), dst, row);
-            }
-            noc_async_write_barrier();
-            cb_pop_front(cb_flush, Dt);
-            cb_pop_front(cb_flushv, Dt);
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = i + 1;
-            if (owner_sem && u == last) {
-                noc_semaphore_inc(owner_sem, 1);
+            write_kv(1);
+            wb_pending = i + 1;
+            wb_owner = owner_sem && u == last;
+            if (!kDeferWb || i % n_act + 1 == n_act) {
+                finish_wb();
             }
         }
         if constexpr (kKRtn && !packed && !verify) {
@@ -303,10 +328,10 @@ void kernel_main() {
             }
         }
         if constexpr (kVBfp2 && !packed && !verify) {
-            // (S0-9: the reader's bf16 v copy, the same lifetime)
-            if (role >= 2 && (kTailBatched ? i % n_act == n_act - 1 : true)) {
-                cb_wait_front(cb_vnr, Dt);
-                cb_pop_front(cb_vnr, Dt);
+            // (S0-9: the reader's encoded row, one a user)
+            if (role >= 2) {
+                cb_wait_front(cb_venc, 1);
+                cb_pop_front(cb_venc, 1);
             }
         }
     };
@@ -333,6 +358,9 @@ void kernel_main() {
             head(i);
             rest(i);
         }
+    }
+    if (wb_pending) {
+        finish_wb();
     }
     noc_async_atomic_barrier();
 }

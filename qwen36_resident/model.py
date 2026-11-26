@@ -1700,8 +1700,8 @@ class ResidentModel:
                 *(
                     [cb(45, tail_grid, 2 * Dt)] if K_BFP4 and K_RTN else []
                 ),  # (S0-8: the tail's rotated k before the writer rounds it)
-                # (S0-9 plain rows: the new v rows in bf16 for the writer's Bfp2_b re-encoding, attn_common.hpp cb_vnr)
-                *([cb(47, tail_grid, Dt)] if V_BFP2 and not self.vrows else []),
+                # (S0-9 plain rows: users' encoded new v rows, reader -> writer, attn_common.hpp cb_venc)
+                *([cb(47, tail_grid, 4, page=128)] if V_BFP2 and not self.vrows else []),
                 # (row groups: + the tail core's per-row rope tiles, attn_common.hpp kTailBatched)
                 cb(
                     17,
@@ -1749,10 +1749,11 @@ class ResidentModel:
                 cb(21, tail_grid, Dt),
                 cb(22, tail_grid, 2 * attn_users * groups if packed else LR),
                 # the tail's k (bf8) and v (V's format) as read (31 / 32) and as written back (28 / 33)
-                cb(28, tail_grid, (2 if packed else 1) * Dt, K_DT, TILE_BYTES[K_DT]),
+                # (O-2: the write-back's completion deferred to the next user's, two users' tiles, attn_worker_writer)
+                cb(28, tail_grid, (2 if packed or self.attn_pipe else 1) * Dt, K_DT, TILE_BYTES[K_DT]),
                 cb(31, tail_grid, (2 if packed else 1) * Dt, K_DT, TILE_BYTES[K_DT]),
                 cb(32, tail_grid, (2 if packed else 1) * Dt, V_DT, TILE_BYTES[V_DT]),
-                cb(33, tail_grid, (2 if packed else 1) * Dt, V_DT, TILE_BYTES[V_DT]),
+                cb(33, tail_grid, (2 if packed or self.attn_pipe else 1) * Dt, V_DT, TILE_BYTES[V_DT]),
             ]
             if self.kv_paged:
                 # page lists of the workers' tiles, then a page-table window (attn_paged.hpp cb_pages)

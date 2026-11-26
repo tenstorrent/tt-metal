@@ -306,6 +306,7 @@ void kernel_main() {
     const uint32_t n_act = act.n;
     // stage 1 of iteration i: its tail / KV reads and q (role 1: its KV blocks after q); stage 2: M and the children's
     // partials. O-2 runs stage 1 of the layer's next user before stage 2 of this one (the compute's order)
+    uint32_t vraw_base = 0;  // (S0-9 plain rows: the tail's cb_vraw tile set of the user / layer, for bfp2_encode_row)
     auto stage1 = [&](uint32_t i, bool rest) {
         if (rest) {
             // (role 1: the user's remaining KV blocks — under O-2 after the previous user's M, as the compute may
@@ -458,14 +459,7 @@ void kernel_main() {
                         }
                     }
                     noc_async_read_barrier();
-                    if constexpr (kVBfp2) {
-                        // (S0-9 plain rows: the layer's new v rows, unrounded, for the writer's re-encoding at the
-                        // write-backs — one local copy of the tile set)
-                        cb_reserve_back(cb_vnr, Dt);
-                        noc_async_read(get_noc_addr(v), get_write_ptr(cb_vnr), Dt * kTile);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_vnr, Dt);
-                    }
+                    vraw_base = v;
                     cb_push_back(cb_kraw, Dt);
                     cb_push_back(cb_vraw, Dt);
                 }
@@ -480,13 +474,8 @@ void kernel_main() {
                     place_row0(grows + (v0 + d) * kRowTile + user_offset(u % batch), v + d * kTile);
                 }
                 noc_async_read_barrier();
-                if constexpr (kVBfp2 && !verify) {
-                    // (S0-9 plain rows: the new v row, unrounded, for the writer's re-encoding at the write-back)
-                    cb_reserve_back(cb_vnr, Dt);
-                    noc_async_read(get_noc_addr(v), get_write_ptr(cb_vnr), Dt * kTile);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_vnr, Dt);
-                } else if constexpr (kVBfp2) {
+                vraw_base = v;
+                if constexpr (kVBfp2 && verify) {
                     invalidate_l1_cache();
                     for (uint32_t d = 0; d < Dt; d++) {
                         rtn_bfp2_tile_row(v + d * kTile, 0);
@@ -494,6 +483,16 @@ void kernel_main() {
                 }
                 cb_push_back(cb_kraw, Dt);
                 cb_push_back(cb_vraw, Dt);
+            }
+        }
+        if constexpr (kVBfp2 && !packed && !verify) {
+            if (role >= 2) {
+                // (S0-9 plain rows: the user's new v row encoded for the writer's write-back, before the wait for q;
+                // the row stays in cb_vraw until this reader's next reservation; NOC-written, the cache invalidated)
+                cb_reserve_back(cb_venc, 1);
+                invalidate_l1_cache();
+                bfp2_encode_row(vraw_base, kTailBatched ? u : 0, get_write_ptr(cb_venc));
+                cb_push_back(cb_venc, 1);
             }
         }
         mark(l, 0);

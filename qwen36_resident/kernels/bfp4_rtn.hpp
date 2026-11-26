@@ -25,20 +25,39 @@ FORCE_INLINE uint32_t rtn_bfp4_nibble(uint32_t b, uint32_t emax, bool rnd = true
     return m == 0 ? 0 : sign | (m > 7 ? 7 : m);
 }
 
-// row `row` of the packed tile at t from row src_row of the bf16 tile at s
+// row `row` of the packed tile at t from row src_row of the bf16 tile at s. The face row's 8 source words are loaded
+// once (two bf16 a word) and each value takes the exponent distance d = emax - e: d 0 .. 3 give m (128 + mantissa +
+// 2^(d + 4)) >> (d + 5) in 4..7 (capped), 2..4, 1..2, 1 — never 0 — and d > 3 (or a zero / denormal) gives 0 (the
+// same values as rtn_bfp4_nibble; the 32-row step's tail writer re-encodes a K and a V row each user, S0-9)
+FORCE_INLINE uint32_t rtn_bfp4_fast(uint32_t b, uint32_t emax, bool rnd) {
+    const uint32_t e = (b >> 7) & 0xFF, d = emax - e;
+    if (e == 0 || d > 3) {
+        return 0;
+    }
+    const uint32_t sh = d + 5;
+    const uint32_t m = (128 + (b & 0x7F) + (rnd ? (1u << (sh - 1)) : 0u)) >> sh;
+    return m == 0 ? 0 : ((b >> 12) & 0x8) | (m > 7 ? 7 : m);  // (m 0 only truncating, kv_k_patch 2: +0, never 0x8)
+}
 FORCE_INLINE void patch_bfp4_row(uint32_t t, uint32_t row, uint32_t s, uint32_t src_row, bool rnd = true) {
     volatile tt_l1_ptr uint8_t* ex = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(t);
     volatile tt_l1_ptr uint32_t* man = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(t + 64);
-    volatile tt_l1_ptr uint16_t* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(s);
+    volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s);
     for (uint32_t h = 0; h < 2; h++) {
         const uint32_t f = (row < 16 ? 0 : 2) + h, r = row & 15;
         const uint32_t sf = (src_row < 16 ? 0 : 2) + h, sr = src_row & 15;
         const uint32_t emax = ex[f * 16 + r];
-        volatile tt_l1_ptr uint16_t* b = src + sf * 256 + sr * 16;
+        uint32_t w[8];
+        for (uint32_t i = 0; i < 8; i++) {
+            w[i] = src[sf * 128 + sr * 8 + i];
+        }
         uint32_t w0 = 0, w1 = 0;
-        for (uint32_t j = 0; j < 8; j++) {
-            w0 |= rtn_bfp4_nibble(b[j], emax, rnd) << (4 * j);
-            w1 |= rtn_bfp4_nibble(b[8 + j], emax, rnd) << (4 * j);
+        if (emax >= 3) {
+            for (uint32_t i = 0; i < 4; i++) {
+                w0 |= (rtn_bfp4_fast(w[i] & 0xFFFF, emax, rnd) | (rtn_bfp4_fast(w[i] >> 16, emax, rnd) << 4))
+                      << (8 * i);
+                w1 |= (rtn_bfp4_fast(w[4 + i] & 0xFFFF, emax, rnd) | (rtn_bfp4_fast(w[4 + i] >> 16, emax, rnd) << 4))
+                      << (8 * i);
+            }
         }
         man[f * 32 + r * 2] = w0;
         man[f * 32 + r * 2 + 1] = w1;
