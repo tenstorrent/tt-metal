@@ -7,6 +7,7 @@ import re
 import struct
 import subprocess
 from itertools import product
+from pathlib import Path
 
 import pytest
 import torch
@@ -1519,15 +1520,25 @@ def _assert_replay_below_fpu_slots(configuration):
     WH_REPLAY_BUF_OFFSET. sfpi places unrolled loop bodies in the replay buffer from slot 0
     on its own, so only the built ELF shows how far they reach."""
     configuration.generate_variant_hash()
+    artefacts = Path(TestConfig.ARTEFACTS_DIR).resolve()
     elf = (
-        TestConfig.ARTEFACTS_DIR
+        artefacts
         / configuration.test_name
         / configuration.variant_id
         / "elf"
         / "math.elf"
-    )
+    ).resolve()
+    objdump = Path(TestConfig.OBJDUMP).resolve()
+    # Both paths come from the harness; refuse anything outside the artefacts tree or not an objdump binary.
+    assert (
+        elf.is_relative_to(artefacts) and elf.is_file()
+    ), f"unexpected math ELF path {elf}"
+    assert objdump.is_file() and objdump.name.endswith(
+        "objdump"
+    ), f"unexpected objdump {objdump}"
     dump = subprocess.run(
-        [TestConfig.OBJDUMP, "-d", "--no-show-raw-insn", str(elf)],
+        [str(objdump), "-d", "--no-show-raw-insn", "--", str(elf)],
+        shell=False,
         capture_output=True,
         text=True,
         check=True,
