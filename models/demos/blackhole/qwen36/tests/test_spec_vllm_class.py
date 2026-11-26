@@ -458,7 +458,8 @@ def test_spec_vllm_class_masked_verify(mesh_device, monkeypatch):
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     probe = PluginLayout.for_model(model, num_blocks=1)
     width = math.ceil(MAX_MODEL_LEN / probe.block_size)
-    layout = PluginLayout.for_model(model, num_blocks=width + probe.num_groups * (K + 1) + 8)
+    # Two extra GDN window sets per group: the reference verifies' scratch windows and the chained verify's own.
+    layout = PluginLayout.for_model(model, num_blocks=width + 3 * probe.num_groups * (K + 1) + 8)
     kv = cls.allocate_kv_cache_per_layer(layout.per_layer_specs)
     for enable_trace in (False, True):
         cls.warmup_model_prefill(enable_trace=enable_trace, kv_cache=kv, can_sample_on_device=True)
@@ -554,6 +555,89 @@ def test_spec_vllm_class_masked_verify(mesh_device, monkeypatch):
             proposal = [int(t) for t in d.draft_token_ids[0, : int(d.num_valid[0])]]
         logger.info(f"[vllm_class] masked verifies: {masked_steps} of 24, {len(out)} tokens, engine {eng.masked_steps}")
         assert eng.masked_steps == masked_steps > 0
+
+        # A token-masked chained verify (supports_chained_spec_verify with supports_spec_device_mask): verify A of the
+        # request's next block, left unread; verify B chained over it with deferred sampling (placeholders, the
+        # positions of a full acceptance, every count's start block); A's propose fills B's block, and B's ids under a
+        # random mask must equal the masked argmax of a logits verify of that block, run over scratch windows.
+        chained0, pos0, n = eng.chained_steps, P + len(out) - 1, len(proposal)
+        tok = torch.full((1, 1 + K), PAD, dtype=torch.int32)
+        pos = torch.full((1, 1 + K), PAD, dtype=torch.int32)
+        tok[0, : 1 + n] = torch.tensor([out[-1]] + proposal, dtype=torch.int32)
+        pos[0, : 1 + n] = torch.arange(pos0, pos0 + 1 + n, dtype=torch.int32)
+        block_a = dict(
+            tokens=tok,
+            start_pos=pos,
+            page_table=runner._table(pos0 + 1 + K),
+            num_valid_drafts=torch.tensor([n], dtype=torch.int32),
+            accepted_counts=torch.tensor([acc], dtype=torch.int32),
+            mamba_state=runner.state.state({0: runner.state.decode(0, pos0, 1 + n)}, 1),
+            page_tables_per_layer=[runner._table(pos0 + 1 + K)] * len(model.layer_indices),
+            **common,
+        )
+        payload = cls.decode_forward(
+            spec_mode="argmax_ids", read_from_device=False, defer_device_sampling=True, **block_a
+        )
+        res_a = cls.sample_deferred_decode(payload, sampling_params=greedy, num_valid_drafts=torch.tensor([n]))
+        upper = pos0 + 1 + K
+        # B writes its states into blocks of its own, so the blocks of A's window, the start blocks of every count B
+        # can continue from, keep A's states for the reference below.
+        by_count = [list(w) for w in runner.state.last[0]]
+        windows = [[runner.free.pop() for _ in range(K + 1)] for _ in range(layout.num_groups)]
+        payload = cls.decode_forward(
+            tokens=torch.full((1, 1 + K), PAD, dtype=torch.int32),
+            start_pos=torch.arange(upper, upper + 1 + K, dtype=torch.int32).reshape(1, -1),
+            page_table=runner._table(upper),
+            num_valid_drafts=torch.tensor([K], dtype=torch.int32),
+            accepted_counts=torch.ones(1, dtype=torch.int32),
+            mamba_state=runner.state.state({0: (windows, None)}, 1, by_count={0: by_count}),
+            page_tables_per_layer=[runner._table(upper)] * len(model.layer_indices),
+            spec_mode="argmax_ids",
+            read_from_device=False,
+            defer_device_sampling=True,
+            sampling_params=greedy,
+            spec_predecessor=res_a,
+            **common,
+        )
+        assert eng.chained_steps == chained0 + 1, "the chain program built the token-masked chained verify"
+        ids = cls.read_decode_output(res_a.argmax_ids)[0].tolist()
+        j = 0
+        while j < n and proposal[j] == ids[j]:
+            j += 1
+        new = proposal[:j] + [ids[j]]
+        acc = len(new)
+        committed = torch.full((1, 1 + K), PAD, dtype=torch.int32)
+        cpos = torch.full((1, 1 + K), PAD, dtype=torch.int32)
+        committed[0, :acc] = torch.tensor(new, dtype=torch.int32)
+        cpos[0, :acc] = torch.arange(pos0 + 1, pos0 + 1 + acc, dtype=torch.int32)
+        cls.propose_draft_tokens(K, committed, cpos, torch.tensor([acc], dtype=torch.int32), hidden=None)
+        succ = res_a.argmax_ids.successor
+        nb, p0b = int(succ.num_valid[0]), int(succ.p0[0])
+        assert p0b == pos0 + acc
+        allowed = torch.rand(1 + K, vocab, generator=gen) < 0.3
+        allowed[nb + 1 :] = True
+        bits = allowed.reshape(1 + K, vocab // 32, 32).to(torch.int64) << torch.arange(32)
+        packed = bits.sum(-1)
+        mask = torch.where(packed >= 2**31, packed - 2**32, packed).to(torch.int32).reshape(1, 1 + K, -1)
+        res_b = cls.sample_deferred_decode(
+            payload, sampling_params=greedy, grammar_bitmask=mask, num_valid_drafts=torch.tensor([nb])
+        )
+        ids_b = cls.read_decode_output(res_b.argmax_ids)[0].tolist()
+        ref = cls.decode_forward(
+            tokens=succ.tokens.to(torch.int32).masked_fill(torch.arange(1 + K) > nb, PAD),
+            start_pos=torch.where(torch.arange(1 + K) <= nb, p0b + torch.arange(1 + K), -1).reshape(1, -1).int(),
+            page_table=runner._table(upper),
+            num_valid_drafts=torch.tensor([nb], dtype=torch.int32),
+            accepted_counts=torch.tensor([acc], dtype=torch.int32),
+            mamba_state=runner.state.state({0: (scratch, [by_count[g][acc - 1] for g in range(len(by_count))])}, 1),
+            page_tables_per_layer=[runner._table(upper)] * len(model.layer_indices),
+            spec_mode="logits",
+            read_from_device=True,
+            **common,
+        )
+        col = ref.logits[0, :, :vocab].float()
+        want = torch.where(allowed, col, torch.tensor(float("-inf"))).argmax(dim=1)
+        assert ids_b[: nb + 1] == want[: nb + 1].tolist(), f"chained masked ids {ids_b} vs masked argmax {want}"
         cls.release_request(0)
         runner.state.release(0)
     finally:
