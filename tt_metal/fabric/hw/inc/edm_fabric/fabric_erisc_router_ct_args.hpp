@@ -627,6 +627,7 @@ constexpr std::array<uint8_t, 16> vc2_domain_routers = [] {
 constexpr size_t MESH_Y_SIZE = 0;
 constexpr size_t MESH_X_SIZE = 0;
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_is_intermesh_ingress = {false, false, false};
+constexpr bool vc2_domain = false;
 #endif
 
 // ============================================================================

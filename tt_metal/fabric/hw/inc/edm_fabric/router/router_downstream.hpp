@@ -56,7 +56,10 @@ template <size_t VC>
 constexpr uint32_t live_downstreams() {
     if constexpr (is_2d) {
         return Routing2DCodec::live_downstreams<static_cast<eth_chan_directions>(my_direction)>(
-            DOWNSTREAM_EDM_COUNT_BY_VC[VC], is_intermesh_router, is_intramesh_router_on_edge);
+            DOWNSTREAM_EDM_COUNT_BY_VC[VC],
+            is_intermesh_router,
+            // VC2 over the domain's mesh turns by the domain's axes, which this router's facing doesn't give
+            is_intramesh_router_on_edge || (VC == 2 && vc2_domain));
     } else {
         // In 1d, we either have one downstream or none
         return DOWNSTREAM_EDM_COUNT_BY_VC[VC] > 0 ? 1u : 0u;
