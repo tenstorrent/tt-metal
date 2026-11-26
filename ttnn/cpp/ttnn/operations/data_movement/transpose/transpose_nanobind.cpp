@@ -37,7 +37,7 @@ void bind_transpose(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor
 
             Note:
-                MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2; Quasar only) are TILE layout only. The N<->C swap
+                MX tensors (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``; Quasar only) are TILE layout only. The N<->C swap
                 moves whole tiles and runs natively. Every other transpose is done in BFLOAT16 (staged in DRAM) and the
                 result is converted back to the input's MX format.
         )doc";

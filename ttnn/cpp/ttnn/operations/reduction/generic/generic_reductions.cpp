@@ -53,11 +53,12 @@ static Tensor convert_output_layout(const Tensor& tensor, const std::optional<La
     if (!output_layout.has_value() || tensor.layout() == *output_layout) {
         return tensor;
     }
-    // Untilizing a block-float result would widen it to BFLOAT16; reject rather than silently
+    // Untilizing a block-float or MX result would widen it to BFLOAT16; reject rather than silently
     // returning a dtype the caller did not ask for.
     TT_FATAL(
-        *output_layout != Layout::ROW_MAJOR || !tt::tt_metal::is_block_float(tensor.dtype()),
-        "output_layout=ROW_MAJOR is not supported for a {} result: block-float formats only exist in "
+        *output_layout != Layout::ROW_MAJOR ||
+            (!tt::tt_metal::is_block_float(tensor.dtype()) && !tt::tt_metal::is_mx(tensor.dtype())),
+        "output_layout=ROW_MAJOR is not supported for a {} result: block-float and MX formats only exist in "
         "TILE layout, so honoring the request would silently widen the dtype to BFLOAT16. Reduce to "
         "TILE and typecast explicitly if a row-major result is needed.",
         tensor.dtype());
@@ -635,6 +636,13 @@ Tensor reduce(
     // else (a squeezing reshape, the fill kernel for implicit tile padding, transpose / permute for N / C axes) is not
     // wired for MX tiles, so reduce those in bfloat16, where all of it exists, and pack the result back to MX.
     if (tt::tt_metal::is_mx(input_tensor_arg.dtype()) && input_tensor_arg.layout() == TILE_LAYOUT) {
+        // MX exists in TILE layout only: a ROW_MAJOR result would come back as BFLOAT16, so reject it up front.
+        TT_FATAL(
+            !output_layout.has_value() || *output_layout != Layout::ROW_MAJOR,
+            "output_layout=ROW_MAJOR is not supported for an MX input ({}): MX formats only exist in TILE layout, so "
+            "the result would silently be BFLOAT16. Reduce to TILE and typecast explicitly if a row-major result is "
+            "needed.",
+            input_tensor_arg.dtype());
         const auto& mx_shape = input_tensor_arg.logical_shape();
         const int mx_rank = static_cast<int>(mx_shape.rank());
         const auto mx_dims = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
@@ -659,9 +667,7 @@ Tensor reduce(
                 sub_core_grids,
                 fast_and_approximate_mode,
                 output_layout);
-            if (result.layout() != TILE_LAYOUT) {
-                return result;
-            }
+            // The ROW_MAJOR request is rejected above, so the result is TILE and converts back to the input's MX dtype.
             return ttnn::typecast(result, mx_dtype, std::nullopt, std::nullopt, sub_core_grids);
         }
     }

@@ -161,11 +161,21 @@ def test_reduce_mx_keepdim_false(device, dtype, dim):
 
 @pytest.mark.parametrize("dtype", TWO_DTYPES)
 def test_reduce_mx_full_reduce(device, dtype):
-    # dim=None reduces every axis, N and C included. Compare the values: the squeezed shape of a full reduction
-    # is not what this test is about.
+    # dim=None reduces every axis, N and C included. The result is a single value, so PCC (a correlation of one point)
+    # says nothing: compare with allclose. The tolerance covers the MX output quantization (the device sums in
+    # bfloat16, so the value can land one MX step from the float32 sum) and the bfloat16 accumulation.
     torch.manual_seed(8)
     x = torch.randn(1, 2, 32, 32)
     out = ttnn.sum(to_device(device, x, dtype))
     assert out.dtype == dtype, f"output dtype {out.dtype}, expected {dtype}"
     golden = _fallback_golden(x, dtype, lambda t: t.sum(dim=(0, 1, 2, 3), keepdim=True)).reshape(-1)
-    check(golden, ttnn.to_torch(out).reshape(-1)[: golden.numel()], pcc_floor(dtype))
+    actual = ttnn.to_torch(out).to(torch.float32).reshape(-1)[: golden.numel()]
+    assert torch.isfinite(actual).all(), "non-finite value in the device output"
+    torch.testing.assert_close(actual, golden.to(torch.float32), rtol=0.15, atol=0.1)
+
+
+def test_reduce_mx_rejects_row_major_output(device, expect_error):
+    # MX exists in TILE layout only: a ROW_MAJOR result would silently come back as BFLOAT16.
+    x = to_device(device, torch.randn(1, 1, 32, 32), ttnn.mxint8)
+    with expect_error(RuntimeError, "output_layout=ROW_MAJOR is not supported"):
+        ttnn.sum(x, dim=-1, keepdim=True, output_layout=ttnn.ROW_MAJOR_LAYOUT)

@@ -43,7 +43,7 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
                  - Layouts
                * - BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32, UINT16, UINT8, INT8
                  - TILE
-               * - MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2 (Quasar only)
+               * - ``ttnn.MX_DTYPES`` (Quasar only)
                  - TILE
 
             ``BFLOAT16`` input values must not be NaN.

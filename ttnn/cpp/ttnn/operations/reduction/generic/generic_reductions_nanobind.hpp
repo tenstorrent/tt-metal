@@ -44,7 +44,7 @@ inline std::string get_generic_reduction_doc(
     // not: Welford already reduces on the SFPU at full fp32, so there is no FPU path to select.
     // ttnn.sum and ttnn.mean both expose output_layout.
     const char* output_layout_kwarg = has_output_layout ? R"doc(
-            output_layout (ttnn.Layout, optional): layout of the output tensor. Defaults to `None`, which keeps the layout the chosen path produces naturally (see the Note below). `ttnn.TILE_LAYOUT` or `ttnn.ROW_MAJOR_LAYOUT` is always honored: it is produced directly by the kernel for a -2 reduce of a ROW_MAJOR input, and converted after reducing otherwise. `ttnn.ROW_MAJOR_LAYOUT` is rejected for block-float results (BFLOAT8_B, BFLOAT4_B), which only exist in TILE layout; typecast explicitly if a row-major result is needed.)doc"
+            output_layout (ttnn.Layout, optional): layout of the output tensor. Defaults to `None`, which keeps the layout the chosen path produces naturally (see the Note below). `ttnn.TILE_LAYOUT` or `ttnn.ROW_MAJOR_LAYOUT` is always honored: it is produced directly by the kernel for a -2 reduce of a ROW_MAJOR input, and converted after reducing otherwise. `ttnn.ROW_MAJOR_LAYOUT` is rejected for block-float results (BFLOAT8_B, BFLOAT4_B) and MX results, which only exist in TILE layout; typecast explicitly if a row-major result is needed.)doc"
                                                         : "";
     const char* fast_approx_kwarg = !has_fast_approximate_mode           ? ""
                                     : std::string_view(op_name) == "min" ? R"doc(
@@ -87,7 +87,7 @@ inline std::string get_generic_reduction_doc(
                   - ROW_MAJOR, TILE
                 * - BFLOAT8_B
                   - TILE{2}
-                * - MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2 (Quasar only)
+                * - ``ttnn.MX_DTYPES`` (Quasar only)
                   - TILE
 
             The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`.
