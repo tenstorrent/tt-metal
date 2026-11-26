@@ -441,6 +441,86 @@ def test_ternary_scalar_mixed_dtypes(device, op, a_dtype, t_dtype, t_shape):
     _assert_ternary_close(expected, ttnn.to_torch(output), a_dtype)
 
 
+_INT_FLOAT_TTNN = {"i32": ttnn.int32, "u32": ttnn.uint32, "f32": ttnn.float32, "bf16": ttnn.bfloat16}
+_INT_FLOAT_TORCH = {"i32": torch.int32, "u32": torch.int32, "f32": torch.float32, "bf16": torch.bfloat16}
+
+
+def _int_float_operand(device, name, seed, low=1.0):
+    # Small positive integers survive every float dtype exactly, so the promoted golden is exact.
+    torch.manual_seed(seed)
+    if name in ("i32", "u32"):
+        t = torch.randint(1, 20, (1, 1, 32, 64), dtype=torch.int32)
+    else:
+        t = (torch.rand((1, 1, 32, 64)) * 4 + low).to(_INT_FLOAT_TORCH[name])
+    return t, ttnn.from_torch(t, dtype=_INT_FLOAT_TTNN[name], layout=ttnn.TILE_LAYOUT, device=device)
+
+
+@pytest.mark.parametrize(
+    "dtypes",
+    [
+        "i32-f32-f32",
+        "f32-i32-f32",
+        "f32-f32-i32",
+        "i32-i32-f32",
+        "u32-f32-f32",
+        "bf16-i32-bf16",
+        "i32-bf16-bf16",
+        "f32-f32-f32",
+    ],
+)
+def test_addcdiv_integer_and_float_operands(device, dtypes):
+    # An integer operand mixed with float ones used to be read as float bits; torch promotes it.
+    names = dtypes.split("-")
+    (a, tt_a), (b, tt_b), (c, tt_c) = (_int_float_operand(device, n, s, 0.5) for n, s in zip(names, (1, 2, 3)))
+    expected = torch.addcdiv(a, b, c, value=0.5)
+
+    output = ttnn.addcdiv(tt_a, tt_b, tt_c, value=0.5)
+
+    out_dtype = ttnn.bfloat16 if expected.dtype == torch.bfloat16 else ttnn.float32
+    assert output.dtype == out_dtype
+    result = ttnn.to_torch(output)
+    if out_dtype == ttnn.float32:
+        assert torch.allclose(result, expected, rtol=1e-5, atol=1e-5)
+    else:
+        assert_with_pcc(expected, result, 0.999)
+
+
+@pytest.mark.parametrize("dtypes", ["f32-i32-f32", "f32-f32-i32", "i32-i32-f32", "bf16-i32-bf16", "bf16-i32-i32"])
+def test_where_integer_and_float_values(device, dtypes):
+    # where(cond, int, float) selects the float-promoted value, as torch does; int/int stays int32.
+    pred_name, true_name, false_name = dtypes.split("-")
+    torch.manual_seed(0)
+    cond = torch.rand((1, 1, 32, 64)) > 0.5
+    tt_cond = ttnn.from_torch(
+        cond.to(_INT_FLOAT_TORCH[pred_name]),
+        dtype=_INT_FLOAT_TTNN[pred_name],
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    (t, tt_t), (f, tt_f) = _int_float_operand(device, true_name, 2), _int_float_operand(device, false_name, 3)
+    expected = torch.where(cond, t, f)
+
+    output = ttnn.where(tt_cond, tt_t, tt_f)
+
+    expected_dtype = {torch.int32: ttnn.int32, torch.float32: ttnn.float32, torch.bfloat16: ttnn.bfloat16}[
+        expected.dtype
+    ]
+    assert output.dtype == expected_dtype
+    assert torch.equal(ttnn.to_torch(output).to(expected.dtype), expected)
+
+
+@pytest.mark.parametrize("dtypes", ["i32-f32", "f32-i32", "bf16-i32", "f32-f32-i32", "i32-f32-f32"])
+def test_lerp_rejects_integer_and_float_mix(device, expect_error, dtypes):
+    # torch.lerp rejects an integer operand; the kernel would read its bits as a float.
+    names = dtypes.split("-")
+    tensors = [_int_float_operand(device, n, s)[1] for n, s in zip(names, (1, 2, 3))]
+    with expect_error(RuntimeError, "lerp cannot mix integer and floating-point tensors"):
+        if len(tensors) == 2:
+            ttnn.lerp(tensors[0], tensors[1], 0.25)
+        else:
+            ttnn.lerp(*tensors)
+
+
 def test_ternary_scalar_distinguishes_cache_entries(device):
     """Regression guard for the ternary scalar static/dynamic contract.
 
