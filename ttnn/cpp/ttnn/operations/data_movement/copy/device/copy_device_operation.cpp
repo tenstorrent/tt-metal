@@ -7,8 +7,8 @@
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {

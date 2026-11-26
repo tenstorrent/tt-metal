@@ -6,13 +6,12 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
 
 // Replay slot and length shared by mac_init() (which records) and calculate_mac()
-// (which replays).  lltt::record() captures exactly `length` instructions, so the two
+// (which replays).  TTI_REPLAY(, 0, 0, 0, 1) captures exactly `length` instructions, so the two
 // must agree: an under-count leaves the tail of the body out of the buffer, an
 // over-count swallows whatever the caller emits next - here that would be the
 // STALL_SFPU/MATH TTI_STALLWAIT from _llk_math_eltwise_ternary_sfpu_start_, which is
@@ -59,7 +58,7 @@ inline void mac_init() {
     // is what we want; only the store overrides it, with the auto-advancing mod set above.
     constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
 
-    lltt::record<lltt::NoExec>(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
+    TTI_REPLAY(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>, 0, 0, 0, 1);
     sfpi::vFloat a = sfpi::dst_reg[0].mode<dst_fmt>();
     sfpi::vFloat b = sfpi::dst_reg[32].mode<dst_fmt>();
     sfpi::vFloat c = sfpi::dst_reg[64].mode<dst_fmt>();
@@ -101,7 +100,7 @@ inline void calculate_mac(
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        lltt::replay(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
+        TTI_REPLAY(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>, 0, 0, 0, 0);
     }
 }
 

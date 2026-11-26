@@ -32,6 +32,14 @@ from ..rollout_batch_source import pad_logprobs, validate_rollout_batch
 OptimizationsFn = Callable[[int, str], Any]
 
 
+def _register_hub_config(model_source: str) -> None:
+    """Register the Hub config.json of ``model_source`` in ``LOCAL_HF_PARAMS``; the dummy-weight boot reads only it."""
+    model_name = model_source.strip("/").split("/")[-1]
+    if model_name not in ModelArgs.LOCAL_HF_PARAMS:
+        # Patch for SFT models: LOCAL_HF_PARAMS bundles configs only for the models that tt-transformers supports.
+        ModelArgs.LOCAL_HF_PARAMS[model_name] = snapshot_download(repo_id=model_source, allow_patterns=["config.json"])
+
+
 class TTTRolloutSampler(RolloutSampler):
     """tt-transformers rollout sampler; its log-probs come from tt-transformers' on-device sampling.
 
@@ -79,7 +87,9 @@ class TTTRolloutSampler(RolloutSampler):
         self._slots_per_call: int = self._max_batch_size_per_dp * self._data_parallel
 
         os.environ["HF_MODEL"] = model_source  # ModelArgs reads HF_MODEL from env
-        if not dummy_weights and not os.path.isdir(model_source):
+        if dummy_weights:
+            _register_hub_config(model_source)
+        elif not os.path.isdir(model_source):
             # ModelArgs reads the HF config with local_files_only=True under CI. CI does not have
             # every model available locally, so download it as needed.
             print(f"[TTTRolloutSampler] Downloading HuggingFace snapshot for {model_source}")

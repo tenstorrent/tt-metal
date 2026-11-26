@@ -9,8 +9,8 @@
 #include <mutex>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch_core_manager.hpp"

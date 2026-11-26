@@ -9,8 +9,8 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/runtime_args_data.hpp>
 
 #include <functional>
 #include <optional>
