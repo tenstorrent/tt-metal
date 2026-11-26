@@ -58,6 +58,12 @@ TEST_F(NocCountersOptionTest, MaskIsInCompileHash) {
     EXPECT_NE(a.find("_noc1"), std::string::npos);
 }
 
+TEST_F(NocCountersOptionTest, TraceOnlyProfilingRejected) {
+    setenv("TT_METAL_TRACE_PROFILER", "1", 1);
+    EXPECT_ANY_THROW(with("3"));
+    unsetenv("TT_METAL_TRACE_PROFILER");
+}
+
 TEST_F(NocCountersOptionTest, InvalidValuesRejected) {
     EXPECT_ANY_THROW(with("banana"));
     EXPECT_ANY_THROW(with("8"));

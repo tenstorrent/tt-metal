@@ -74,8 +74,7 @@ uint32_t _start() {
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
-    // The NIU counters belong to the tile, so the window opens before the go message releases every core.
-    NocCountersBegin();
+    NocCountersReserve();
     wait_for_go_message();
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");

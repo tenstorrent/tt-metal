@@ -492,6 +492,7 @@ extern "C" uint32_t _start1() {
                 StartPerfCounters();
                 RiscvPmcBegin();
                 NocCountersBegin();
+                NocCountersReserve();
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;

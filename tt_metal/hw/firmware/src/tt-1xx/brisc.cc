@@ -20,6 +20,7 @@
 #include "internal/firmware_common.h"
 #include "api/debug/kernel_profiler.hpp"
 #include "internal/profiler/perf_counters.hpp"
+#include "internal/profiler/noc_counters.hpp"
 #include "hostdev/dev_msgs.h"
 #include "hostdev/l1_ecc_halt_constants.h"
 #include "internal/risc_attribs.h"
@@ -617,6 +618,8 @@ int main() {
 #ifdef DEBUG_CHECKPOINT_ENABLED
                 debug_checkpoint_init(enables);
 #endif
+                // The tile's NoC counter window opens before any core of the launch can issue a request.
+                NocCountersBegin();
                 run_triscs(enables);
 
                 noc_index = launch_msg_address->kernel_config.brisc_noc_id;

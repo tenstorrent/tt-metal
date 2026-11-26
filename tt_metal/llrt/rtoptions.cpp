@@ -448,6 +448,10 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         !(get_profiler_riscv_pmc_enabled() && get_streaming_profiler_enabled()),
         "TT_METAL_PROFILE_RISCV_PMC writes into the device profiler buffers and cannot be combined with "
         "TT_METAL_STREAMING_PROFILER.");
+    TT_FATAL(
+        !(get_profiler_noc_counters_enabled() && get_streaming_profiler_enabled()),
+        "TT_METAL_PROFILE_NOC_COUNTERS writes into the device profiler buffers and cannot be combined with "
+        "TT_METAL_STREAMING_PROFILER.");
     // The DRAM (TT_METAL_DEVICE_PROFILER) and streaming (TT_METAL_STREAMING_PROFILER) device profilers are
     // mutually exclusive modes: their device producers overlay the same L1 profiler region with different
     // layouts, and their hosts would both drive it. Refuse here, at MetalContext construction, before any
@@ -469,6 +473,9 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_profiler_riscv_pmc_enabled() && get_profiler_trace_only()),
         "TT_METAL_PROFILE_RISCV_PMC cannot be combined with TT_METAL_TRACE_PROFILER.");
+    TT_FATAL(
+        !(get_profiler_noc_counters_enabled() && get_profiler_trace_only()),
+        "TT_METAL_PROFILE_NOC_COUNTERS cannot be combined with TT_METAL_TRACE_PROFILER.");
 }
 
 const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
@@ -1351,14 +1358,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Per-launch deltas of the NoC interface (NIU) event counters of each Tensix tile: requests and data words,
         // both NoCs, captured by one core per tile. Value is a group mask, hex or decimal: 1 master (issued
         // requests and data words), 2 slave (served ones), 4 atomics; "on" selects master and slave. See
-        // tt_metal/tt-llk/docs/performance_counters/noc_counters.md. Default: disabled
+        // tt_metal/tt-llk/docs/performance_counters/noc_counters.md. Hardware counter totals per launch, unlike
+        // TT_METAL_DEVICE_PROFILER_NOC_EVENTS, which records each NoC call a kernel makes. Default: disabled
         // Usage: export TT_METAL_PROFILE_NOC_COUNTERS=3
         case EnvVarID::TT_METAL_PROFILE_NOC_COUNTERS: {
-            unsigned long mask = 3;
+            uint32_t mask = 3;
             if (std::strcmp(value, "on") != 0) {
-                char* end = nullptr;
-                mask = std::strtoul(value, &end, 0);
-                if (end == value || *end != '\0' || mask > 7) {
+                mask = parse_u32_list("TT_METAL_PROFILE_NOC_COUNTERS", value, 1)[0];
+                if (mask > 7) {
                     TT_THROW(
                         "TT_METAL_PROFILE_NOC_COUNTERS=\"{}\" is not a group mask. Expected \"on\" or an integer "
                         "of 1 (master), 2 (slave) and 4 (atomics) bits, e.g. 3.",
@@ -1366,7 +1373,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 }
             }
             if (mask != 0) {
-                this->profiler_noc_counters_groups = static_cast<uint32_t>(mask);
+                this->profiler_noc_counters_groups = mask;
                 this->profiler_enabled = true;
             }
             break;
