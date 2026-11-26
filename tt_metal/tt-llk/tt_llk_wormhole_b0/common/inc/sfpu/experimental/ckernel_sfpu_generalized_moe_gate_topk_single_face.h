@@ -36,6 +36,38 @@ inline void _gmg_enable_index_tracking()
     TTI_SFPCONFIG(0x4 /*imm16_math*/, 0xF /*config_dest*/, 1 /*instr_mod1*/);
 }
 
+// SFPCONFIG copies LREG0 into a programmable-constant register, so the 32-bit seed goes through LREG0 in two halves.
+template <std::uint32_t prgm_lreg, std::uint32_t bits>
+inline void _gmg_set_prgm_from_lreg0()
+{
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, bits & 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, bits >> 16);
+    TTI_SFPCONFIG(0, prgm_lreg, 0);
+}
+
+// Normalization-tail prologue: sums the top-8 scores into LREG0 (bf16-truncated) and programs the reciprocal seeds.
+// LaneConfig is cleared first because ENABLE_DEST_INDEX makes SFPADD writes to LREG4-7 unsupported (TEN-2932).
+inline void _gmg_tail_sum_to_lreg0_set_recip_seeds()
+{
+    constexpr auto seed_k0_bits = __builtin_bit_cast(std::uint32_t, RECIPROCAL_SEED_K0);
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    _init_sfpu_config_reg();
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG6, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, seed_k0_bits & 0xFFFF);
+    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG4, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, seed_k0_bits >> 16);
+    // The 16-bit Dst store truncates the sum to bf16; the normalization's results depend on it.
+    TTI_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_3, interm_offset + 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    _gmg_set_prgm_from_lreg0<p_sfpu::LREG13, __builtin_bit_cast(std::uint32_t, RECIPROCAL_SEED_K1)>();
+    _gmg_set_prgm_from_lreg0<p_sfpu::LREG14, __builtin_bit_cast(std::uint32_t, RECIPROCAL_SEED_K2)>();
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
+}
+
 template <bool is_fp32_dest_acc_en, std::uint32_t offset = 0>
 inline void bitonic_topk_load16_concat_indices_single_face()
 {
@@ -385,27 +417,9 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, s
     _gmg_merge4_runs_raw<is_fp32_dest_acc_en, 0>();
 
     // ---- normalization tail: 1/(sum+eps)*scale, broadcast-multiply the top-8 scores ----
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
-
-    // Reduce the top8 values to 1 value
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
+    _gmg_tail_sum_to_lreg0_set_recip_seeds();
 
     // Calculate 1 / (sum + eps) * scale
-    // Store the value in lreg0 and reload later since the following instructions overwrite it
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    // Technically we only need to reprogram a single constant here, instead of all 3 used by reciprocal init
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    _init_sfpu_config_reg();
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpi::vFloat l0          = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value   = Converter::as_float(eps);
     l0                       = l0 + eps_value;
@@ -764,21 +778,7 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
     }
 
     // ---- normalization tail (same as _generalized_moe_gate_top8) ----
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    _init_sfpu_config_reg();
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
+    _gmg_tail_sum_to_lreg0_set_recip_seeds();
     sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value          = Converter::as_float(eps);
     l0                              = l0 + eps_value;

@@ -734,6 +734,69 @@ def test_generalized_moe_gate_normalization(norm, softmax, *, perf=None):
         ), f"weights sum to {float(got_weights.sum())}, not {scale}"
 
 
+def _bf16_truncate(values):
+    """Round float32 values toward zero to bf16, as a 16-bit DEST store does."""
+    bits = values.to(torch.float32).contiguous().view(torch.int32) & -65536
+    return bits.view(torch.float32)
+
+
+# Bit-exact weights: seeds make the sum carry bits below bf16 (so skipping the interm round trip is
+# visible) and keep every weight well inside its bf16 interval (so reciprocal error cannot flip it).
+@parametrize(
+    case=[(False, 8, 4), (False, 6, 45), (True, 8, 8)],  # (grouped, topk, seed)
+)
+def test_generalized_moe_gate_normalization_bit_exact(case):
+    grouped, topk, seed = _one(case)
+    payload, bias, keys = _gate_stimuli(seed=seed)
+    ids = _ids_face()
+
+    faces = _run(
+        _config(
+            GENERALIZED_MOE_GATE(
+                mode=MODE_GATE,
+                grouped=grouped,
+                topk=topk,
+                eps=fp32_bits(EPS),
+                scale=fp32_bits(SCALE),
+            ),
+            _gate_tiles(payload, ids),
+            src_b=bias,
+        )
+    )
+
+    golden = get_golden_generator(GeneralizedMoeGateGolden)(
+        keys, payload, ids, topk=topk, eps=EPS, scale=SCALE, grouped=grouped
+    )
+    want_ids = golden[1][:topk].to(torch.int64)
+    kept = payload.reshape(-1).to(torch.float32)[want_ids]
+    exact_sum = kept.sum()
+    stored_sum = _bf16_truncate(exact_sum)
+    quotient = kept.double() * SCALE / (stored_sum.double() + EPS)
+    want = _bf16_truncate(quotient.to(torch.float32))
+
+    # Stimulus checks: the round trip matters, and no weight is near a bf16 boundary.
+    assert stored_sum != exact_sum, "sum is bf16-exact, so the round trip is untested"
+    untruncated = _bf16_truncate(
+        (kept.double() * SCALE / (exact_sum.double() + EPS)).float()
+    )
+    assert not torch.equal(
+        untruncated, want
+    ), "skipping the round trip changes no weight"
+    upper = (want.view(torch.int32) + 65536).view(torch.float32).double()
+    margin = torch.minimum(quotient - want.double(), upper - quotient) / quotient
+    assert (
+        margin.min() > 2.0**-20
+    ), f"a weight is within {margin.min():.2e} of a bf16 boundary"
+
+    got_weights, got_ids = _gate_output(faces)
+    got = dict(zip(got_ids[:topk].tolist(), got_weights[:topk].tolist()))
+    assert sorted(got) == sorted(want_ids.tolist()), f"wrong experts: {sorted(got)}"
+    got_ordered = torch.tensor([got[i] for i in want_ids.tolist()])
+    assert torch.equal(
+        got_ordered, want
+    ), f"weights {got_ordered.tolist()} are not bit-exact {want.tolist()}"
+
+
 # The softmax path subtracts rank 0's score before the exp, and finalize_ungrouped's own comment says
 # why that is required rather than cosmetic: score_func="softmax" feeds the op raw router logits,
 # which are unbounded, and exp of a large logit saturates bf16 to inf -> reciprocal 0 -> NaN weights.
