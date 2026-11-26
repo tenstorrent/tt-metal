@@ -9,8 +9,14 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
+#include "ttnn/operations/experimental/quasar/binary/binary.hpp"
+#include "ttnn/operations/experimental/quasar/binary_ng/device/binary_ng_utils.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <optional>
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
 
@@ -25,6 +31,102 @@ bool is_supported_mixed_float_dtype(DataType dtype) {
         case DataType::BFLOAT8_B: return true;
         default: return false;
     }
+}
+
+bool is_dram_interleaved(const MemoryConfig& memory_config) {
+    return memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+           memory_config.buffer_type() == BufferType::DRAM;
+}
+
+// Tiles per core from which sin / cos / tan run on the native binary program (four Neos a core) instead of the
+// unary program (one Neo): the smallest measured count (32, 48, 64, 96) with >= 1.1x on ttsim-perf, >= 1.2x for
+// fp32, where craq-sim gives no second measurement. 0 means never: fp32 sin and cos are DRAM-bound.
+std::uint32_t quasar_native_trig_min_tiles_per_core(unary::UnaryOpType op, DataType dtype) {
+    if (dtype == DataType::BFLOAT16) {
+        switch (op) {
+            case unary::UnaryOpType::SIN: return 96;
+            case unary::UnaryOpType::COS:
+            case unary::UnaryOpType::TAN: return 64;
+            default: return 0;
+        }
+    }
+    if (dtype == DataType::FLOAT32 && op == unary::UnaryOpType::TAN) {
+        return 64;
+    }
+    return 0;
+}
+
+// The cutoffs hold for the native factory's default configuration. Any other setting, valid or not, in the
+// environment or in the settings the factory read once per process, keeps the call on the unary program.
+bool quasar_native_binary_at_default() {
+    namespace qbng = ttnn::operations::experimental::quasar::binary_ng;
+    // The environment first: native_tuning() throws on a value it rejects, and at the default it cannot.
+    if (!qbng::native_env_at_default()) {
+        return false;
+    }
+    const auto& tuning = qbng::native_tuning();
+    return tuning.enabled && !tuning.any_knob_set();
+}
+
+// Per-core L1 that the native program's rings take at its default configuration, measured on the Quasar simulator
+// (8 and 16 KiB for the unary program). Keep in sync with the native factory's default ring depths.
+std::uint64_t quasar_native_trig_ring_bytes(DataType dtype) {
+    if (dtype == DataType::BFLOAT16) {
+        return 264 * 1024;
+    }
+    if (dtype == DataType::FLOAT32) {
+        return 144 * 1024;
+    }
+    TT_THROW("Unreachable");
+}
+
+// Headroom over the measured ring bytes, in case the native factory's default depths outgrow them.
+constexpr std::uint64_t quasar_native_trig_l1_headroom = 2;
+
+// On Quasar, a lone sin / cos / tan on a large DRAM-interleaved tensor of 32x32 tiles runs as add(x, -0.0) with the
+// op as a post activation. x + -0.0 == x for every x, NaN and -0.0 included, so the result matches the unary
+// program bit for bit. Returns nothing when the unary program should run.
+std::optional<Tensor> quasar_native_trig(
+    const Tensor& input_tensor,
+    const std::vector<unary::EltwiseUnaryWithParam>& op_chain,
+    DataType output_dtype,
+    const MemoryConfig& output_memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (op_chain.size() != 1) {
+        return std::nullopt;
+    }
+    const DataType dtype = input_tensor.dtype();
+    const std::uint32_t min_tiles_per_core = quasar_native_trig_min_tiles_per_core(op_chain.front().type(), dtype);
+    if (min_tiles_per_core == 0) {
+        return std::nullopt;
+    }
+    const bool plain_call = !optional_output_tensor.has_value() && !sub_core_grids.has_value() && output_dtype == dtype;
+    if (!plain_call || !is_device_tensor(input_tensor) || input_tensor.device()->arch() != tt::ARCH::QUASAR) {
+        return std::nullopt;
+    }
+    const auto& tile = input_tensor.tensor_spec().tile();
+    const bool dram_tiles = input_tensor.layout() == Layout::TILE && tile.get_height() == tt::constants::TILE_HEIGHT &&
+                            tile.get_width() == tt::constants::TILE_WIDTH &&
+                            is_dram_interleaved(input_tensor.memory_config()) &&
+                            is_dram_interleaved(output_memory_config);
+    if (!dram_tiles) {
+        return std::nullopt;
+    }
+    const auto grid = input_tensor.device()->compute_with_storage_grid_size();
+    const std::uint64_t cores = static_cast<std::uint64_t>(grid.x) * grid.y;
+    const std::uint64_t tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
+    if (cores == 0 || (tiles + cores - 1) / cores < min_tiles_per_core || !quasar_native_binary_at_default()) {
+        return std::nullopt;
+    }
+    // Route only with the rings' L1 free, with headroom; otherwise the unary program runs.
+    if (ttnn::operations::core::usable_program_l1_capacity(input_tensor.device()) <
+        quasar_native_trig_l1_headroom * quasar_native_trig_ring_bytes(dtype)) {
+        return std::nullopt;
+    }
+    const std::array<unary::EltwiseUnaryWithParam, 1> post_activation = {op_chain.front()};
+    return ttnn::operations::experimental::quasar::binary::add(
+        input_tensor, -0.0f, output_dtype, output_memory_config, std::nullopt, post_activation);
 }
 }  // namespace
 
@@ -101,6 +203,10 @@ Tensor unary_impl(
             std::nullopt,
             sub_core_grids);
         return ttnn::typecast(result, output_dtype, output_memory_config, optional_output_tensor, sub_core_grids);
+    }
+    if (auto native = quasar_native_trig(
+            input_tensor, op_chain, output_dtype, output_memory_config, optional_output_tensor, sub_core_grids)) {
+        return *native;
     }
 
     return prim::unary(

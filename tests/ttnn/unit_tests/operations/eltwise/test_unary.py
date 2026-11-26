@@ -14,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_w
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range_dtype,
 )
-from tt_py_test_utils_common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+from tt_py_test_utils_common.utility_functions import torch_random, is_wormhole_b0, is_blackhole, is_quasar
 
 
 def create_full_range_tensor(input_shapes, dtype):
@@ -581,6 +581,30 @@ def test_unary_log_subnormal_fast_mode(device, log_function):
 @pytest.mark.parametrize("w", [1])
 def test_01_volume_sin(device, h, w):
     run_unary_test(device, h, w, ttnn.sin)
+
+
+@pytest.mark.skipif(is_quasar(), reason="Quasar runs large sin / cos / tan on the native binary program")
+@pytest.mark.parametrize("op, dtype", [("sin", ttnn.bfloat16), ("tan", ttnn.float32)])
+def test_trig_large_tensor_stays_unary(device, op, dtype):
+    # Off Quasar, sin / cos / tan on a large DRAM tensor keep running the unary program.
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    torch_input = torch.rand(1, 1, 32, 32 * 100 * grid.x * grid.y) * 2 - 1
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    output_tensor = getattr(ttnn, op)(input_tensor)
+    graph = ttnn.graph.end_graph_capture()
+    ops = {
+        node["params"]["name"]
+        for node in graph
+        if node.get("node_type") == "function_start"
+        and node.get("params", {}).get("name", "").endswith("DeviceOperation")
+    }
+    assert ops == {"UnaryDeviceOperation"}, f"{op} {dtype} ran {ops}"
+    expected = getattr(torch, op)(ttnn.to_torch(input_tensor).float())
+    assert_with_pcc(expected, ttnn.to_torch(output_tensor).float(), 0.999)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])

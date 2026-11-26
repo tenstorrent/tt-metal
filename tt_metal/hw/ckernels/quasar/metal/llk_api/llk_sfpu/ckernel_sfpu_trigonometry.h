@@ -18,6 +18,9 @@
 
 namespace ckernel::sfpu {
 
+// Whether sin_tile, cos_tile and tan_tile run as one SFPU call over the whole tile.
+inline constexpr bool trig_whole_tile = true;
+
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
     sfpi::vFloat y = sfpi::approx_recip(x);
@@ -146,39 +149,32 @@ sfpi_inline sfpi::vFloat sfpu_tan_bf16(sfpi::vFloat a, sfpi::vInt i, C2 c2, C1 c
     return r;
 }
 
-// Row loop of calculate_tangent. rb is the 1.5*2^23 rounding bias and c... the polynomial coefficients of
-// sfpu_tan_fp32 / sfpu_tan_bf16; each is an sfpi::vFloat the caller bound before the loop (LReg-resident)
-// or a literal, which materialises at its use.
-template <bool is_fp32_dest_acc_en, int ITERATIONS, typename RB, typename... C>
-inline void _calculate_tangent_rows_(RB rb, C... c) {
+// Row loop of calculate_tangent. p0 and c... are either LRegs loaded before the loop or literals.
+template <bool is_fp32_dest_acc_en, int ITERATIONS, typename P0T, typename... C>
+inline void _calculate_tangent_rows_(P0T p0, C... c) {
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
-    const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vInt i;
 
-        sfpi::vFloat inv_pio2 = sfpi::vConstFloatPrgm2;
-
-        // j = round(v / (PI/2))
-        // j = v * (2/PI) + 1.5*2**23 shifts the mantissa bits to give round-to-nearest.
-        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
-        sfpi::vFloat rounding_bias = rb;
+        // j = round(v * 2/PI): adding the bias 1.5*2^23 (Prgm3) rounds to an integer. The builtin keeps it one SFPMAD.
+        sfpi::vFloat scale = sfpi::vConstFloatPrgm2;
+        sfpi::vFloat rounding_bias = sfpi::vConstFloatPrgm3;
         sfpi::vFloat j =
-            __builtin_rvtt_sfpmad(v.get(), inv_pio2.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+            __builtin_rvtt_sfpmad(v.get(), scale.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // We need the LSB of the integer later, to determine the sign of the result.
         i = sfpi::as<sfpi::vInt>(j);
 
         // Shift mantissa bits back; j is now round(v / (PI/2)) in fp32.
-        j += -rounding_bias;
+        j = j - rounding_bias;
 
         i <<= 31;
 
         // Four-stage Cody-Waite reduction; a = v - j * (PI/2).
-        // P0 representable as bf16, P1 as fp16: a single SFPLOADI each.
-        sfpi::vFloat a = v + j * P0;
+        sfpi::vFloat a = v + j * p0;
         a = a + j * P1;
         a = a + j * sfpi::vConstFloatPrgm0;
         a = a + j * sfpi::vConstFloatPrgm1;
@@ -189,30 +185,28 @@ inline void _calculate_tangent_rows_(RB rb, C... c) {
             a = sfpu_tan_bf16(a, i, c...);
             a = sfpi::convert<sfpi::vFloat16b>(a, sfpi::RoundMode::Nearest);
         }
-        sfpi::dst_reg[0] = a;
-        sfpi::dst_reg++;
+        // ADDR_MOD_6 advances Dest by one row on the store.
+        sfpi::dst_reg[0].mode<>(ADDR_MOD_6) = a;
     }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tangent() {
-    // Loop-invariant constants loaded once per call instead of per row (see TanPoly): the row leaves
-    // three LRegs free on an fp32 dest (three fp32 coefficients, an SFPLOADI pair each) and four on a
-    // 16-bit dest (all three coefficients and the rounding bias). One more hoisted value fails to compile
-    // ("too few lregs"); sfpi never spills.
-    const auto rounding_bias = sfpi::sFloat16b(0x1.8p23f);
+    // Constants loaded once per call. A row leaves 3 LRegs free on fp32 Dest and 4 on
+    // 16-bit Dest; one more does not compile ("too few lregs").
+    const float P0 = -0x1.92p+0f;
     if constexpr (is_fp32_dest_acc_en) {
         const sfpi::vFloat c6 = TanPoly::FP32_C6;
         const sfpi::vFloat c5 = TanPoly::FP32_C5;
         const sfpi::vFloat c4 = TanPoly::FP32_C4;
         _calculate_tangent_rows_<true, ITERATIONS>(
-            rounding_bias, c6, c5, c4, TanPoly::FP32_C3, TanPoly::FP32_C2, TanPoly::FP32_C1, TanPoly::FP32_C0);
+            P0, c6, c5, c4, TanPoly::FP32_C3, TanPoly::FP32_C2, TanPoly::FP32_C1, TanPoly::FP32_C0);
     } else {
-        const sfpi::vFloat rb = rounding_bias;
+        const sfpi::vFloat p0 = sfpi::sFloat16b(P0);
         const sfpi::vFloat c2 = TanPoly::BF16_C2;
         const sfpi::vFloat c1 = TanPoly::BF16_C1;
         const sfpi::vFloat c0 = TanPoly::BF16_C0;
-        _calculate_tangent_rows_<false, ITERATIONS>(rb, c2, c1, c0);
+        _calculate_tangent_rows_<false, ITERATIONS>(p0, c2, c1, c0);
     }
 }
 
@@ -227,6 +221,11 @@ inline void calculate_sine() {
     const float P1 = -0x1.fbp-11f;  // representable as fp16
 
     sfpi::vFloat C3, C2, C1, C0;
+    // 16-bit Dest has an LReg free to hold P0; fp32 Dest uses it for C3.
+    [[maybe_unused]] sfpi::vFloat p0;
+    if constexpr (!is_fp32_dest_acc_en) {
+        p0 = sfpi::sFloat16b(P0);
+    }
 
     // Coefficients are chosen per destination precision target for sin(a) on [0, PI/2].
     if (is_fp32_dest_acc_en) {
@@ -243,14 +242,11 @@ inline void calculate_sine() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
-        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
-        sfpi::vFloat rounding_bias = sfpi::sFloat16b(0x1.8p23f);
-        sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
-
-        // Compute j = round(v / PI).
-        // First, j = v * (1 / PI) + 1.5*2^23 shifts the mantissa bits to give round-to-nearest.
+        // j = round(v / PI): adding the bias 1.5*2^23 (Prgm3) rounds to an integer. The builtin keeps it one SFPMAD.
+        sfpi::vFloat scale = sfpi::vConstFloatPrgm2;
+        sfpi::vFloat rounding_bias = sfpi::vConstFloatPrgm3;
         sfpi::vFloat j =
-            __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+            __builtin_rvtt_sfpmad(v.get(), scale.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // At this point, the mantissa bits of j contain the integer.
         // Store for later; the LSB determines the sign of the result.
@@ -259,8 +255,12 @@ inline void calculate_sine() {
         j = j - rounding_bias;
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI.
-        // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
-        sfpi::vFloat a = v + j * P0;
+        sfpi::vFloat a;
+        if constexpr (is_fp32_dest_acc_en) {
+            a = v + j * P0;
+        } else {
+            a = v + j * p0;
+        }
         // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
         a = a + j * P1;
         a = a + j * sfpi::vConstFloatPrgm0;
@@ -284,8 +284,8 @@ inline void calculate_sine() {
             r = r * c + a;
             r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
-        sfpi::dst_reg[0] = r;
-        sfpi::dst_reg++;
+        // ADDR_MOD_6 advances Dest by one row on the store.
+        sfpi::dst_reg[0].mode<>(ADDR_MOD_6) = r;
     }
 }
 
@@ -299,10 +299,12 @@ inline void calculate_cosine() {
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
 
-    sfpi::vFloat C2, C1, C0;
-    float C3;  // Cannot keep this in a register in 7.73.0, which
-               // removes -1.0f constant. After sfpi 7.73.0
-               // lands we'll have vConstFloatPrgm3 to hold this value
+    sfpi::vFloat C3, C2, C1, C0;
+    // 16-bit Dest has an LReg free to hold P0; fp32 Dest uses it for C3.
+    [[maybe_unused]] sfpi::vFloat p0;
+    if constexpr (!is_fp32_dest_acc_en) {
+        p0 = sfpi::sFloat16b(P0);
+    }
 
     if constexpr (is_fp32_dest_acc_en) {
         // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, PI/2].
@@ -319,29 +321,26 @@ inline void calculate_cosine() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
-        // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
-        sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
-        sfpi::vFloat j = v * inv_pi + 0.5f;
+        // Odd quadrant index k = 2j - 1, j = round(v / PI + 0.5): adding 1.5*2^24 (Prgm3, ulp 2) to
+        // v * 2/PI + 1 rounds it to the even 2j, and the mantissa LSB keeps j's parity.
+        sfpi::vFloat scale = sfpi::vConstFloatPrgm2;
+        sfpi::vFloat t =
+            __builtin_rvtt_sfpmad(v.get(), scale.get(), sfpi::vFloat(1.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        t = t + sfpi::vConstFloatPrgm3;
 
-        // rounding_bias shifts mantissa bits to perform round-to-nearest.
         // #55065: sfpi::round should offer no int debiasing
-        sfpi::vFloat rounding_bias = 12582912.0f;
-        j = j + rounding_bias;
+        sfpi::vInt q = sfpi::as<sfpi::vInt>(t);
 
-        // At this point, the mantissa bits of j contain the rounded integer.
-        // Store for later; the LSB tracks quadrant parity for sign selection.
-        // #55065: sfpi::round should offer no int debiasing
-        sfpi::vInt q = sfpi::as<sfpi::vInt>(j);
-
-        j = j - rounding_bias;
-
-        // #55060: Compiler optimizes to imul/iadd
-        j = __builtin_rvtt_sfpmad(
-            j.get(), sfpi::vFloat(2.0f).get(), sfpi::vFloat(-1.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        t = t - sfpi::vConstFloatPrgm3;
+        sfpi::vFloat j = t + -1.0f;
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI / 2.
-        // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
-        sfpi::vFloat a = v + j * P0;
+        sfpi::vFloat a;
+        if constexpr (is_fp32_dest_acc_en) {
+            a = v + j * P0;
+        } else {
+            a = v + j * p0;
+        }
         // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
         a = a + j * P1;
         a = a + j * sfpi::vConstFloatPrgm0;
@@ -365,8 +364,8 @@ inline void calculate_cosine() {
             r = r * c + a;
             r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
-        sfpi::dst_reg[0] = r;
-        sfpi::dst_reg++;
+        // ADDR_MOD_6 advances Dest by one row on the store.
+        sfpi::dst_reg[0].mode<>(ADDR_MOD_6) = r;
     }
 }
 
@@ -763,34 +762,51 @@ inline void calculate_sinh() {
     }
 }
 
+// sin / cos / tan advance Dest by one row on each row's store, through ADDR_MOD_6.
+inline void _trig_row_addrmod_() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
+}
+
 template <bool APPROXIMATION_MODE>
 void sine_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
+    _trig_row_addrmod_();
     // P2 and P3 of four-part Cody-Waite reduction by PI.
     sfpi::vConstFloatPrgm0 = -0x1.51p-21f;
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;
 
     sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+    // Rounding bias. Prgm3 is LREG11, sfpi's -1.0: every SFPU init restores it, and the
+    // compiled row loops read it only as this bias.
+    sfpi::vConstFloatPrgm3 = 0x1.8p23f;
 }
 
 template <bool APPROXIMATION_MODE>
 void cosine_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
-    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
-    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
-    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
-
-    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
-}
-
-template <bool APPROXIMATION_MODE>
-void tangent_init() {
-    math::_reset_counters_<p_setrwc::SET_ABD_F>();
+    _trig_row_addrmod_();
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.
     sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
 
     sfpi::vConstFloatPrgm2 = FRAC_2_PI;
+    // Rounding bias (ulp 2). Prgm3 is LREG11, sfpi's -1.0: every SFPU init restores it, and the
+    // compiled row loops read it only as this bias.
+    sfpi::vConstFloatPrgm3 = 0x1.8p24f;
+}
+
+template <bool APPROXIMATION_MODE>
+void tangent_init() {
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
+    _trig_row_addrmod_();
+    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
+
+    sfpi::vConstFloatPrgm2 = FRAC_2_PI;
+    // Rounding bias. Prgm3 is LREG11, sfpi's -1.0: every SFPU init restores it, and the
+    // compiled row loops read it only as this bias.
+    sfpi::vConstFloatPrgm3 = 0x1.8p23f;
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>

@@ -933,6 +933,20 @@ std::string describe_native_value(const NativeKnob& knob, uint32_t value) {
     return fmt::format("{} ({})", value, knob.env.has_value() ? knob.name : "rule");
 }
 
+bool native_env_at_default() {
+    const auto is_set = [](const char* name) {
+        const char* v = std::getenv(name);
+        return v != nullptr && v[0] != '\0';
+    };
+    const char* native = std::getenv("TTNN_QSR_NATIVE");
+    if (is_set("TTNN_QSR_NATIVE") && std::string_view(native) != "1") {
+        return false;
+    }
+    const NativeTuning names;
+    return !is_set("TTNN_QSR_IMPLICIT_SYNC") &&
+           std::ranges::none_of(names.knobs(), [&](const NativeKnob* knob) { return is_set(knob->name); });
+}
+
 const NativeTuning& native_tuning() {
     // Lambdas, not file-scope helpers: this is a unity build, so `env_bool`/`read_knob` at file scope
     // would collide with any sibling in the same blob (an anonymous namespace does not help).
@@ -989,11 +1003,7 @@ const NativeTuning& native_tuning() {
         // Only when enabled: with the native path off nothing reads these, so an unconditional throw
         // would have no protective value and would kill the fallback reference arm.
         if (!t.enabled) {
-            const bool any_knob_set = t.implicit_sync || t.reader_threads.env.has_value() ||
-                                      t.compute_threads.env.has_value() || t.writer_threads.env.has_value() ||
-                                      t.entries_per_thread.env.has_value() || t.dm_batch.env.has_value() ||
-                                      t.tiles_per_cycle.env.has_value();
-            if (any_knob_set) {
+            if (t.any_knob_set()) {
                 log_warning(
                     tt::LogOp,
                     "TTNN_QSR_* tuning knobs are set but TTNN_QSR_NATIVE=0 turns the native factory off, so they "

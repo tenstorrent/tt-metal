@@ -8,6 +8,8 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/types.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <algorithm>
+#include <array>
 #include <optional>
 #include <string>
 
@@ -141,7 +143,21 @@ struct NativeTuning {
     // and consumer transact at different granularities.
     NativeKnob dm_batch{"TTNN_QSR_DM_BATCH"};
     NativeKnob tiles_per_cycle{"TTNN_QSR_TILES_PER_CYCLE"};  // tiles per tile_regs_acquire in the compute
+
+    std::array<const NativeKnob*, 6> knobs() const {
+        return {&reader_threads, &compute_threads, &writer_threads, &entries_per_thread, &dm_batch, &tiles_per_cycle};
+    }
+    // True when any knob above, or TTNN_QSR_IMPLICIT_SYNC, is set.
+    bool any_knob_set() const {
+        return implicit_sync ||
+               std::ranges::any_of(knobs(), [](const NativeKnob* knob) { return knob->env.has_value(); });
+    }
 };
+
+// True when the environment leaves the native factory on at its default configuration: TTNN_QSR_NATIVE unset,
+// empty or "1", and no TTNN_QSR_IMPLICIT_SYNC or knob set. Reads the variables without validating them, so it
+// never throws where native_tuning() would.
+bool native_env_at_default();
 
 // The user DM cores of a Quasar cluster, which the reader and the writer threads share.
 inline constexpr uint32_t kNativeUserDmCores = 6;
