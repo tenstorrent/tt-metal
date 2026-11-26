@@ -210,6 +210,14 @@ class EN_DEST_REUSE(TemplateParameter):
 
 
 @dataclass
+class INP_FLOAT32(TemplateParameter):
+    """ttnn's float32-input tag: kernels that branch on it (erf, gelu, ...) build their float32 arm."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define INP_FLOAT32 1"
+
+
+@dataclass
 class SFPU_INT_OP(TemplateParameter):
     """Emit a #define to select the integer SFPU operation in a shared C++ test source.
 
