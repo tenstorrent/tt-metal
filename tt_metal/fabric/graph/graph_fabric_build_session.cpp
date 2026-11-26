@@ -127,7 +127,19 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
                     tt::LogFabric, "fabric graph: no inter-domain router on Z yet: {} chan {}", p.node, p.eth_chan);
             }
         }
-        const auto open_ports = ports_from_perimeter(perimeter_);
+        // a landing feeds its own plane's routers: none on a plane where the chip has no other router
+        std::map<FabricNodeId, std::set<uint32_t>> planes;
+        for (const auto& p : ports) {
+            planes[p.node].insert(p.plane);
+        }
+        const auto routed = [&](const PerimeterPort& p) {
+            const auto it = planes.find(p.node);
+            return p.link_trained && *p.direction != RoutingDirection::Z && it != planes.end() &&
+                   it->second.contains(p.plane);
+        };
+        std::vector<PerimeterPort> with_routers;
+        std::copy_if(perimeter_.begin(), perimeter_.end(), std::back_inserter(with_routers), routed);
+        const auto open_ports = ports_from_perimeter(with_routers);
         ports.insert(ports.end(), open_ports.begin(), open_ports.end());
         std::vector<internal::InterDomainPort> api_ports;
         api_ports.reserve(perimeter_.size());
@@ -138,7 +150,7 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
                 .direction = *p.direction,
                 .plane = p.plane,
                 .link_trained = p.link_trained,
-                .has_router = p.link_trained && *p.direction != RoutingDirection::Z,
+                .has_router = routed(p),
                 .peer_asic = p.peer_asic,
                 .peer_chan = p.peer_chan});
         }
