@@ -153,6 +153,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
@@ -166,11 +171,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // the INIT zone before the measured TILE_LOOP.
         _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            _llk_math_pack_sync_init_<dest_sync>();
-        }
-        else
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             // CFG wait masks persist across run types. MATH_ISOLATE runs without
             // a pack consumer; UNPACK_ISOLATE only mocks Src
@@ -262,6 +263,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res           = params.buffer_Res;
 #endif
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
@@ -271,11 +277,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*only the SFPU result tile*/);
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
-        }
-        else
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             // PACK_ISOLATE packs independently. UNPACK_ISOLATE /
             // MATH_ISOLATE do not pack. None may inherit the L1_TO_L1 wait mask.
