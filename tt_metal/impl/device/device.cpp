@@ -379,21 +379,21 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 }
 
 void Device::init_command_queue_host() {
-    // SystemMemoryManager now has internal stubs for mock/emulated devices
+    // SystemMemoryManager has internal stubs for devices without dispatch firmware (mock, emulated slow dispatch)
     sysmem_manager_ =
         std::make_unique<SystemMemoryManager>(MetalEnvAccessor(*env_).impl(), *context_, this->id_, this->num_hw_cqs());
 
     // Devices without dispatch firmware get no HWCommandQueues
     auto& env_impl = MetalEnvAccessor(*env_).impl();
     if (!env_impl.get_cluster().runs_dispatch_firmware()) {
-        if (env_impl.get_cluster().get_target_device_type() == tt::TargetDevice::Emule &&
-            env_impl.get_rtoptions().get_fast_dispatch()) {
-            log_warning(
-                tt::LogMetal,
-                "Device {}: fast dispatch was enabled after the emulated cluster opened in slow dispatch; it keeps "
-                "running in slow dispatch. Unset TT_METAL_SLOW_DISPATCH_MODE before startup for fast dispatch.",
-                this->id_);
-        }
+        // The fast-dispatch paths read the live option; with no dispatch firmware behind them they would accept
+        // workloads and never run them, so a dispatch mode changed after the cluster opened is an error.
+        TT_FATAL(
+            env_impl.get_cluster().get_target_device_type() == tt::TargetDevice::Mock ||
+                !env_impl.get_rtoptions().get_fast_dispatch(),
+            "Device {}: fast dispatch was enabled after the emulated cluster opened in slow dispatch. Unset "
+            "TT_METAL_SLOW_DISPATCH_MODE before startup for fast dispatch.",
+            this->id_);
         return;
     }
 

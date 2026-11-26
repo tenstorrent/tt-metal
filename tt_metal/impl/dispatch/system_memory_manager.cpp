@@ -122,7 +122,7 @@ void loop_and_wait_with_timeout(
 SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs) :
     env_(env),
     ctx_(ctx),
-    is_mock_device_(!env.get_cluster().runs_dispatch_firmware()),
+    no_dispatch_firmware_(!env.get_cluster().runs_dispatch_firmware()),
     is_dram_backed_(env.get_rtoptions().get_dram_backed_cq()),
     cq_alignment_(env.get_hal().get_alignment(is_dram_backed_ ? HalMemType::DRAM : HalMemType::HOST)),
     device_id(device_id),
@@ -136,7 +136,7 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
     this->prefetch_q_windows.reserve(num_hw_cqs);
     this->completion_q_windows.reserve(num_hw_cqs);
 
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         this->cq_size = 65536;
         this->cq_sysmem_start = nullptr;
         this->channel_offset = 0;
@@ -144,7 +144,7 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             this->cq_interfaces.emplace_back(0, cq_id, this->cq_size, 0, alignment);
         }
-        log_debug(tt::LogMetal, "SystemMemoryManager: Initialized with stubs for mock device");
+        log_debug(tt::LogMetal, "SystemMemoryManager: Initialized with stubs for a device without dispatch firmware");
         return;
     }
 
@@ -328,7 +328,7 @@ void SystemMemoryManager::reset_events(const uint8_t cq_id, const uint32_t event
 }
 
 void SystemMemoryManager::reset(const uint8_t cq_id) {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return;
     }
 
@@ -340,42 +340,42 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
 }
 
 uint32_t SystemMemoryManager::get_issue_queue_size(const uint8_t cq_id) const {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return 65536;
     }
     return this->cq_interfaces[cq_id].issue_fifo_size << 4;
 }
 
 uint32_t SystemMemoryManager::get_issue_queue_limit(const uint8_t cq_id) const {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return 65536;
     }
     return this->cq_interfaces[cq_id].issue_fifo_limit << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_size(const uint8_t cq_id) const {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return 65536;
     }
     return this->cq_interfaces[cq_id].completion_fifo_size << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_limit(const uint8_t cq_id) const {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return 65536;
     }
     return this->cq_interfaces[cq_id].completion_fifo_limit << 4;
 }
 
 uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) const {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return 0;
     }
     return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id) const {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return 0;
     }
     return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
@@ -405,14 +405,14 @@ void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_id) const {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return 0;
     }
     return this->cq_interfaces[cq_id].completion_fifo_rd_toggle;
 }
 
 uint32_t SystemMemoryManager::get_cq_size() const {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return 65536;
     }
     return this->cq_size;
@@ -423,7 +423,7 @@ ChipId SystemMemoryManager::get_device_id() const { return this->device_id; }
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
 void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         thread_local std::array<char, 65536> dummy_buffer{};
         return dummy_buffer.data();
     }
@@ -457,7 +457,7 @@ void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_
 }
 
 void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return;
     }
 
@@ -483,7 +483,7 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
 
 // TODO: RENAME issue_queue_stride ?
 void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return;
     }
 
@@ -535,7 +535,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
 }
 
 void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) const {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return;
     }
 
@@ -569,7 +569,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
 }
 
 void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return;
     }
 
@@ -638,7 +638,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
 uint32_t SystemMemoryManager::completion_queue_wait_front(
     const uint8_t cq_id, std::atomic<bool>& exit_condition) const {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return 0;
     }
 
@@ -690,7 +690,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 }
 
 void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return;
     }
 
@@ -700,7 +700,7 @@ void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
 }
 
 void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, const uint8_t cq_id) {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return;
     }
 
@@ -719,7 +719,7 @@ void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, co
 }
 
 void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher) {
-    if (is_mock_device()) {
+    if (no_dispatch_firmware()) {
         return;
     }
 

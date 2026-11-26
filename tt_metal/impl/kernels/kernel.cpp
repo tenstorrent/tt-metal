@@ -206,7 +206,8 @@ Kernel::Kernel(
 void Kernel::register_kernel_with_watcher() {
     auto& watcher = MetalContext::instance(context_id_).watcher_server();
     if (!watcher) {
-        // Null for mock and emulated targets (no watcher created); nothing to register.
+        // The watcher exists on every target while the context is initialized. Outside that (only a mock or
+        // emulated program is built without an initialized device) there is nothing to register.
         TT_FATAL(
             MetalContext::instance(context_id_).get_cluster().is_mock_or_emulated(),
             "Watcher server is unavailable, and the target is not a mock or emulated device");

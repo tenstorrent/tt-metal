@@ -233,8 +233,8 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
         // Destroyed mid-capture: the trace is dropped, so this CQ no longer blocks the others.
         cq_shared_state_->num_cqs_capturing_trace.fetch_sub(1, std::memory_order_relaxed);
     }
-    // Mock/emulated devices don't have actual completion queues, skip validation
-    bool is_mock = !this->runs_dispatch_firmware();
+    // Devices without dispatch firmware (mock, emulated slow dispatch) have no completion queues, skip validation
+    const bool no_dispatch_firmware = !this->runs_dispatch_firmware();
 
     // After an L1 ECC halt the dispatcher waits forever on the halted worker, so this would never complete.
     if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire) &&
@@ -251,7 +251,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     // Log warnings instead of aborting - destructors should never throw or abort.
     // Only observe reader-owned state here: the completion reader thread may still
     // pop completion_queue_reads_ and update num_outstanding_reads_ until join().
-    if (!is_mock) {
+    if (!no_dispatch_firmware) {
         if (!completion_queue_reads_.empty()) {
             log_warning(
                 LogMetal,

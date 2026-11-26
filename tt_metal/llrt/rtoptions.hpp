@@ -410,6 +410,8 @@ class RunTimeOptions {
 
     // SoC descriptor of the emulated chip; empty means the architecture's default descriptor
     std::string emule_soc_desc_path;
+    // TT_METAL_EMULE_MODE is set; the target is Emule unless TT_METAL_SIMULATOR is set too
+    bool emule_mode_requested = false;
 
     // Cluster id handed to UMD topology discovery; unset means UMD uses the OS hostname
     std::optional<std::string> cluster_id;
@@ -442,7 +444,8 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
-    // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
+    // Serve simulation devices over sockets for a debug tool to attach; enable with
+    // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
     bool simulator_serve_over_sockets = false;
 
     // Use the DRAM size the soc descriptor declares on the emulator models that back less

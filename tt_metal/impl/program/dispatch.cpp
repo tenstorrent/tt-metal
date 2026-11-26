@@ -79,9 +79,7 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdev/rta_constants.h"
 #include "hostdev/remote_dfb_constants.h"
-#ifdef TT_METAL_USE_EMULE
-#include "emulated_program_runner.hpp"  // emule::kernel_text_slot
-#endif
+#include "impl/emulation/emule_hooks.hpp"  // emule::kernel_text_slot
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -628,8 +626,7 @@ uint32_t finalize_kernel_bins(
     if (target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
-        // As below: a core type with no kernel group ends at offset 0, so it reserves no config buffer.
-        return kernel_groups.empty() ? 0 : base_offset;
+        return base_offset;
     }
     // Emule runs host code, not RISC-V binaries. Each binary still gets a text slot, which tt-emule fills with
     // the kernel's identity, so a kernel-config block names its kernels wherever it is copied, as silicon's does.
@@ -657,7 +654,6 @@ uint32_t finalize_kernel_bins(
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
             const bool stored_in_config_buffer = hal.get_core_kernel_stored_in_config_buffer(programmable_core_type);
             if (is_emule) {
-#ifdef TT_METAL_USE_EMULE
                 for (uint32_t i = 0; i < num_binaries; i++) {
                     const auto slot = emule::kernel_text_slot(
                         programmable_core_type,
@@ -670,9 +666,6 @@ uint32_t finalize_kernel_bins(
                         kernel_config.kernel_text_size()[processor_index] = slot.size;
                     }
                 }
-#else
-                TT_THROW("An emulated device's program, but tt-metal was built without TT_METAL_USE_EMULE");
-#endif
                 continue;
             }
             const auto& binaries = kernel->binaries(build_key);

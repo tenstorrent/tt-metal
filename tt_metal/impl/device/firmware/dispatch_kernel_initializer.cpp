@@ -66,9 +66,9 @@ void DispatchKernelInitializer::init(
 
     devices_ = devices;
 
-    // Mock devices run no dispatch firmware
+    // Mock devices and emulated chips in slow dispatch run no dispatch firmware
     if (!cluster_.runs_dispatch_firmware()) {
-        log_info(tt::LogMetal, "Skipping dispatch firmware initialization for mock devices");
+        log_info(tt::LogMetal, "Skipping dispatch firmware initialization: the devices run no dispatch firmware");
         return;
     }
 

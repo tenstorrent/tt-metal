@@ -293,10 +293,10 @@ void DispatchContext::initialize_fast_dispatch(
     auto& metal_env = mesh_device_impl.metal_env();
     const auto& cluster = metal_env.get_cluster();
 
-    // Mock/emulated devices skip firmware/dispatch entirely, so there is no real hardware to
-    // toggle between Slow and Fast Dispatch. Treat the transition as a no-op to avoid touching
-    // dispatch cores/command queues that are never created for these targets (init_command_queue_host
-    // leaves command_queues_ empty on mock/emulated), which otherwise segfaults on teardown.
+    // Devices without dispatch firmware (mock, emulated slow dispatch) have no dispatch to toggle between Slow
+    // and Fast Dispatch. Treat the transition as a no-op to avoid touching dispatch cores/command queues that are
+    // never created for them (init_command_queue_host leaves command_queues_ empty), which otherwise segfaults on
+    // teardown.
     // See https://github.com/tenstorrent/tt-metal/issues/50634.
     if (!cluster.runs_dispatch_firmware()) {
         return;
@@ -407,7 +407,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     auto& metal_context = mesh_device_impl.metal_context();
     const auto& cluster = mesh_device_impl.metal_env().get_cluster();
 
-    // Mirror initialize_fast_dispatch: the FD/SD toggle is a no-op on mock/emulated targets, so
+    // Mirror initialize_fast_dispatch: the FD/SD toggle is a no-op on devices without dispatch firmware, so
     // there is nothing to tear down. See https://github.com/tenstorrent/tt-metal/issues/50634.
     if (!cluster.runs_dispatch_firmware()) {
         return;
