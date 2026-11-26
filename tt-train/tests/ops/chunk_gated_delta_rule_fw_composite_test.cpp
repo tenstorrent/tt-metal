@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
