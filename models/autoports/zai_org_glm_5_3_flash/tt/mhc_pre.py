@@ -102,6 +102,7 @@ def rms_early_defines(rms_early: bool, extra: list) -> list:
 
 
 _MS1_LOGGED: list = []
+_MSG_TRIM_LOGGED: list = []
 
 
 def ms1_on(t: int, debug: bool = False) -> bool:
@@ -477,6 +478,13 @@ class MhcPre:
             # before their S2 / round-2 work — the leaders' hn no longer waits for the round-2 group sums
             if os.environ.get("GLM53_MHC_HN_FIRST") == "1":
                 extra = extra + [("MHC_HN_FIRST", "1")]
+        # GLM53_MHC_MSG_TRIM=1 (kernels/mhc_pre/sync.cpp MHC_MSG_TRIM): the round-1 pre message as 4 x T words (rows of
+        # T), no zero fill of the 128-word mailbox; the same values (every reader reads t < T)
+        if os.environ.get("GLM53_MHC_MSG_TRIM") == "1":
+            extra = extra + [("MHC_MSG_TRIM", "1")]
+            if not _MSG_TRIM_LOGGED:
+                _MSG_TRIM_LOGGED.append(True)
+                print("GLM53_MHC_MSG_TRIM active (the round-1 pre message as 4 x T words)", flush=True)
         ms1 = ms1_on(t, debug)
         if ms1:  # GLM53_MHC_MS1: the combined round-1 tile (mhc_pre_common.hpp MHC_MS1)
             extra = extra + [("MHC_MS1", "1")]
