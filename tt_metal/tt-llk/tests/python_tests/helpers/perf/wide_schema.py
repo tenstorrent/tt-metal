@@ -162,6 +162,8 @@ DB_SCHEMA = [
     Column("reduce_block_ct_dim", "int64", True, "configuration"),
     Column("reduce_pool", "string", True, "configuration"),
     Column("reinit_mode", "int64", True, "configuration"),
+    Column("relu_clamp_threshold", "int64", True, "configuration"),
+    Column("relu_clamp_variant", "int64", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
     Column("relu_type", "string", True, "configuration"),
     Column("respect_trigger", "bool", True, "configuration"),

@@ -44,28 +44,28 @@ RELU_MIN_INT, RELU_MAX_INT, RELU_MIN_UINT, RELU_MAX_UINT = range(4)
 
 @dataclass
 class RELU_CLAMP_VARIANT(TemplateParameter):
-    variant: int = RELU_MIN_INT
+    relu_clamp_variant: int = RELU_MIN_INT
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int RELU_CLAMP_VARIANT = {self.variant};"
+        return f"constexpr int RELU_CLAMP_VARIANT = {self.relu_clamp_variant};"
 
 
 @dataclass
 class RELU_CLAMP_THRESHOLD(TemplateParameter):
     """The threshold as its raw 32-bit word (two's complement for Int32)."""
 
-    threshold: int = 0
+    relu_clamp_threshold: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t RELU_CLAMP_THRESHOLD = {self.threshold & UINT32_MASK:#x}u;"
+        return f"constexpr std::uint32_t RELU_CLAMP_THRESHOLD = {self.relu_clamp_threshold & UINT32_MASK:#x}u;"
 
 
 @dataclass
 class RELU_CLAMP_MM_THROTTLE(TemplateParameter):
-    level: int = 0
+    mm_throttle: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"#define MM_THROTTLE {self.level}"
+        return f"#define MM_THROTTLE {self.mm_throttle}"
 
 
 def _stimuli(threshold: int, unsigned: bool, count: int) -> torch.Tensor:
