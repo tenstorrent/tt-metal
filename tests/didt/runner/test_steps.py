@@ -13,7 +13,7 @@ from pathlib import Path
 from tests.didt.didt_runner import main
 from tests.didt.runner.chips import Chip
 from tests.didt.runner.config import load
-from tests.didt.runner.steps import run, sh
+from tests.didt.runner.steps import double_iterations, run, sh
 
 TESTDATA = Path(__file__).parent / "testdata"
 SHIPPED = Path(__file__).parents[1] / "didt_runner_config.json"
@@ -51,7 +51,7 @@ class FakeShell:
                 return 4
             log.write_text("\n".join(ids) + f"\n\n{len(ids)} tests collected in 1.0s\n")
             return 0
-        if "glx_reset" in cmd:
+        if "glx_reset" in cmd or cmd.startswith("tt-smi -r"):
             log.write_text("reset\n")
             return 1 if rel in self.reset_fail else 0
         if cmd.startswith("tt-smi -s"):
@@ -89,8 +89,21 @@ class FakeShell:
         if outcome == "fail":
             log.write_text((TESTDATA / "nd_report.log").read_text())
             return 1
+        if outcome == "r2r":
+            log.write_text(
+                "shard 3 (device id 21), logical core (6, 8) -> physical (7,10): run-to-run NOT deterministic, 4 elements\n"
+                "=== 1 failed in 9.00s ===\n"
+            )
+            return 1
         log.write_text("skipped windows: 0 -> []\n=== 1 passed in 9.00s ===\n")
         return 0
+
+    def reset_cmds(self, rel):
+        return [
+            c["cmd"]
+            for c in self.calls
+            if str(c["log"].parent.relative_to(self.run_dir)) == rel and "reset" in c["log"].name
+        ]
 
     def workload_calls(self, rel):
         return [
@@ -111,7 +124,11 @@ def test_fail_runs_every_fallback_status_stays_first(tmp_path):
     rc, steps, _, shell, _ = _run(tmp_path, only=["nd:minimal"], outcomes={"nd/minimal": "fail"})
     s = steps["nd:minimal"]
     assert rc == 1 and s["status"] == "FAIL"
-    assert [(f["name"], f["status"]) for f in s["fallbacks"]] == [("throttle", "PASS")]
+    assert [(f["name"], f["status"]) for f in s["fallbacks"]] == [
+        ("throttle", "PASS"),
+        ("pin_core", "WARN"),
+        ("pin_core", "WARN"),
+    ]
     assert s["fallbacks"][0]["env"] == {"TT_MM_THROTTLE_PERF": "5"} and s["fallbacks"][0]["devices"] == []
     assert shell.workload_calls("nd/minimal_throttle")[0]["env"]["TT_MM_THROTTLE_PERF"] == "5"
     assert "TT_MM_THROTTLE_PERF" not in shell.workload_calls("nd/minimal")[0]["env"]
@@ -401,3 +418,106 @@ def test_triage_hook_is_time_bounded(tmp_path):
     _, _, _, shell, _ = _run(tmp_path, only=["nd:minimal"])
     hook = shell.workload_calls("nd/minimal")[0]["env"]["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"]
     assert re.match(r"timeout \d+ \S+/python \S+/tools/tt-triage.py ", hook) and hook.endswith("; kill -9 $PPID")
+
+
+PIN_MINIMAL = (
+    "tests/didt/test_minimal_matmul.py::test_specific_chip_minimal_matmul[blackhole-bf16_HiFi2-galaxy-galaxy_chip_0]"
+)
+
+
+def _pins(steps, key):
+    return [f for f in steps[key]["fallbacks"] if f["name"] == "pin_core"]
+
+
+def test_pin_core_nd_reruns_every_failing_device(tmp_path):
+    rc, steps, _, shell, run_dir = _run(tmp_path, only=["nd:minimal"], outcomes={"nd/minimal": "fail"})
+    assert rc == 1 and steps["nd:minimal"]["status"] == "FAIL"
+    pins = _pins(steps, "nd:minimal")
+    assert [p["target"]["dev"] for p in pins] == [19, 26]
+    p = pins[0]
+    assert p["target"] == CHIPS[19].as_dict() and p["trigger"] == "nd"
+    assert p["status"] == "WARN" and p["reason"] == "not reproduced on chip alone"
+    assert p["env"] == {"DIDT_DEVICE_ID": "19"}
+    assert p["opts"] == ["--didt-workload-iterations=2000", "--determinism-check-interval=50", "--timeout=0"]
+    assert p["iterations"] == {"--didt-workload-iterations": 2000}
+    assert p["cores"]["first"][0]["x"] == 6 and p["cores"]["first"][0]["y"] == 8 and p["cores"]["rerun"] == []
+    assert p["log"] == str(run_dir / "nd/minimal_pin_core_dev19/log")
+    (call,) = shell.workload_calls("nd/minimal_pin_core_dev19")
+    assert call["cmd"].startswith("pytest " + shlex.quote(PIN_MINIMAL) + " --didt-workload-iterations=2000")
+    assert call["env"]["DIDT_DEVICE_ID"] == "19" and "TT_MM_THROTTLE_PERF" not in call["env"]
+    assert shell.reset_cmds("nd/minimal_pin_core_dev19") == ["tt-smi -glx_reset_auto"]
+
+
+def test_pin_core_reproduced_nd_is_fail_with_rerun_cores(tmp_path):
+    _, steps, _, _, _ = _run(
+        tmp_path, only=["nd:minimal"], outcomes={"nd/minimal": "fail", "nd/minimal_pin_core_dev19": "fail"}
+    )
+    p = _pins(steps, "nd:minimal")[0]
+    assert p["status"] == "FAIL" and p["reason"].startswith("ND reproduced on chip alone")
+    assert [d["dev"] for d in p["devices"]] == [19]
+    assert p["cores"]["rerun"][0]["x"] == 6 and p["cores"]["rerun"][0]["failed_checks"] == 3
+
+
+def test_pin_core_after_hang_resets_with_tt_smi_r(tmp_path):
+    _, steps, _, shell, _ = _run(
+        tmp_path, only=["nd:minimal"], outcomes={"nd/minimal": "hang", "nd/minimal_pin_core_dev27": "hang"}
+    )
+    (p,) = _pins(steps, "nd:minimal")
+    assert p["trigger"] == "hang" and p["target"]["dev"] == 27 and p["status"] == "HANG"
+    assert p["cores"]["first"][0] == {"x": 0, "y": 8, "translated": [1, 10]}
+    assert shell.reset_cmds("nd/minimal_pin_core_dev27") == ["tt-smi -r"]
+
+
+def test_pin_core_reset_failure_aborts_the_run(tmp_path):
+    rc, steps, doc, shell, _ = _run(
+        tmp_path,
+        only=["nd:minimal", "nd:ff1"],
+        outcomes={"nd/minimal": "hang"},
+        reset_fail={"nd/minimal_pin_core_dev27"},
+    )
+    (p,) = _pins(steps, "nd:minimal")
+    assert p["status"] == "FAIL" and "run aborted" in p["reason"] and "tt-smi -r" in p["reason"]
+    assert steps["nd:ff1"]["status"] == "SKIP" and steps["nd:ff1"]["reason"].startswith("run aborted")
+    assert not shell.workload_calls("nd/ff1") and rc == 1 and doc["current"] is None
+
+
+def test_pin_core_unsupported_step_warns(tmp_path):
+    _, steps, _, _, _ = _run(tmp_path, only=["nd:run-to-run"], outcomes={"nd/run-to-run": "r2r"})
+    (p,) = _pins(steps, "nd:run-to-run")
+    assert p["status"] == "SKIP" and p["reason"] == "unsupported fallback: nd:run-to-run (no per-chip test)"
+    assert p["details"] == ["WARNING unsupported fallback: nd:run-to-run (no per-chip test)"]
+    assert p["target"]["dev"] == 21 and p["trigger"] == "nd"
+
+
+def test_pin_core_without_named_device_records_why(tmp_path):
+    _, steps, _, shell, _ = _run(tmp_path, only=["nd:mcast-ack"], outcomes={"nd/mcast-ack": "timeout"})
+    (p,) = _pins(steps, "nd:mcast-ack")
+    assert p["status"] == "SKIP" and p["reason"] == "no failing device named by the first attempt"
+
+
+def test_pin_id_that_does_not_collect_skips_only_the_pin(tmp_path):
+    _, steps, _, _, _ = _run(tmp_path, only=["nd:minimal"], outcomes={"nd/minimal": "fail"}, missing={PIN_MINIMAL})
+    assert steps["nd:minimal"]["reason"] == "AssertionError: non-deterministic outputs"
+    pins = _pins(steps, "nd:minimal")
+    assert {p["status"] for p in pins} == {"SKIP"}
+    assert pins[0]["reason"] == f"unsupported fallback: nd:minimal (pin id does not collect: {PIN_MINIMAL})"
+
+
+def test_pin_core_passing_step_runs_no_pin(tmp_path):
+    _, steps, _, _, _ = _run(tmp_path, only=["nd:minimal"])
+    assert steps["nd:minimal"]["fallbacks"] == []
+
+
+def test_double_iterations():
+    opts, env, used = double_iterations(
+        ["--didt-workload-iterations=10", "--determinism-check-interval=1", "--timeout", "1800"], {"X": "1"}
+    )
+    assert opts == ["--didt-workload-iterations=20", "--determinism-check-interval=1", "--timeout", "1800"]
+    assert env == {} and used == {"--didt-workload-iterations": 20}
+    opts, env, used = double_iterations(
+        ["--didt-workload-iterations", "7"], {"TT_DET_SWEEP_ITERS": "10", "MATMUL_ITERS": "2"}
+    )
+    assert opts == ["--didt-workload-iterations", "14"]
+    assert env == {"TT_DET_SWEEP_ITERS": "20", "MATMUL_ITERS": "4"}
+    assert used == {"--didt-workload-iterations": 14, "TT_DET_SWEEP_ITERS": 20, "MATMUL_ITERS": 4}
+    assert double_iterations(["--timeout=0"], {}) == (["--timeout=0"], {}, {})

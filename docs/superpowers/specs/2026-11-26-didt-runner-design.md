@@ -70,7 +70,7 @@ User picked A.
 
 Settings from the gwdt sweeps unless marked. THROTTLE = env `TT_MM_THROTTLE_PERF=5`.
 
-- Fallbacks: THROTTLE only (user). gwdt's CORE_CAP (`--grid-size 11x10` on minimal) is dropped on purpose.
+- Fallbacks: THROTTLE, then PIN_CORE (see "pin_core fallback"), on every step (user). gwdt's CORE_CAP (`--grid-size 11x10` on minimal) is dropped on purpose.
 
 | key | runner | target | iters / compare | env / opts | timeout | check | fallbacks |
 |---|---|---|---|---|---|---|---|
@@ -124,9 +124,12 @@ Settings from the gwdt sweeps unless marked. THROTTLE = env `TT_MM_THROTTLE_PERF
 | `fallbacks` | names from top-level `fallbacks`; run in list order |
 | `timeout` | seconds or null; wall limit on the whole attempt |
 | `note` | free text; replaces code comments |
+| `pin_id` | optional; exact node id of the step's per-chip test (`test_specific_chip_*`, `galaxy_chip_0` variant); collected by the gate, a stale one only disables pin_core for that step |
+
+Fallback kinds (`fallbacks{}` entry): `{"env": {...}, "opts": [...]}` (kind `env`, default), or `{"kind": "pin_core", "hang_reset": {"cmd": "tt-smi -r", "timeout": 600}}`.
 
 Validation, before any device work; all errors printed, then exit 2:
-- unknown or missing fields; duplicate keys; unknown `check`, `runner`, fallback name.
+- unknown or missing fields; duplicate keys; unknown `check`, `runner`, fallback name, fallback `kind`; `pin_id` without `::`.
 - `-k` or `-m` in `opts`; `ids` without `::`.
 - `env` values must be strings.
 
@@ -289,9 +292,22 @@ HANG, any check: devices from the triage CSV, written by tt-triage while the wor
 - Fallback loop: FAIL runs all fallbacks; PASS runs none; step status stays first attempt's.
 - status.json: renders with `build-gwdt-sweep` `sweep.py render`.
 
+## pin_core fallback
+
+Reruns the step's per-chip test on each failing device of the first attempt, alone. Trigger: first attempt FAIL with ND data on a device (`failed_checks`, `elements` or `cores`; a build error or killed child does not count) -> `trigger: nd`; first attempt HANG -> its hung devices (triage CSV, mcast `HUNG chip` lines) -> `trigger: hang`.
+
+- Every failing device, one rerun each, no cap. Folder `<dir>_pin_core_dev<N>`.
+- Chip selection: env `DIDT_DEVICE_ID=<dev>`; `tests/didt/didt_chip.py` `pick_submesh` picks the 1x1 submesh whose device id is `dev` (the submesh index `galaxy_chip_N` follows the mesh layout, not the device id). The rerun's own ND lines name the real device id, so it joins on the snapshot like any attempt.
+- Iterations doubled: `--didt-workload-iterations`, and env `TT_DET_SWEEP_ITERS`, `TT_SWEEP_ITERS`, `MATMUL_ITERS` where set; check interval and other opts kept; no throttle. No knob -> details `WARNING iterations not doubled`.
+- Reset: ND trigger -> the normal `reset`; hang trigger -> `hang_reset` (`tt-smi -r`, user's choice), one try. A failed reset in this fallback aborts the run: remaining steps SKIP `run aborted: ...` (user).
+- Result: target ND reproduced -> FAIL `ND reproduced on chip alone: k/c checks`; hang -> HANG; neither -> WARN `not reproduced on chip alone`; other failures keep their reason.
+- Cores: no `--grid-size` pinning; bad cores come from the tests' ND-core attribution (`nd_core_block`), first attempt and rerun both recorded. ND without core lines -> `WARNING unsupported fallback: <step> (no ND-core attribution in <test>)`.
+- No `pin_id` (run-to-run, core-sweep, mcast-ack*) or a stale one -> entry SKIP `unsupported fallback: <step> (<what is missing>)` with a WARNING detail; the run continues. No device named -> SKIP `no failing device named by the first attempt`.
+- Extra keys on its `fallbacks[]` entry, between `opts` and `status`: `target` (dev/bdf/tray/asic/asic_id/kmd), `trigger` (`nd`|`hang`), `cores` (`{"first": [...], "rerun": [...]}`), `iterations` (knob -> value used). `env` holds `DIDT_DEVICE_ID` and doubled env knobs; `opts` the doubled opts.
+
 ## Step two (placeholder only)
 
-- New fallback kinds: `per_chip` (failing devices -> per-chip ids or `TT_VISIBLE_DEVICES`), `per_core` (core sweep on that chip), `vf_sweep` (voltage/frequency; no knob found yet).
+- New fallback kinds: `per_chip` (done as `pin_core`, above), `per_core` (core sweep on that chip), `vf_sweep` (voltage/frequency; no knob found yet).
 - `devices[]` is the input to those: it already names chip and cores.
 
 ## Left to the builder

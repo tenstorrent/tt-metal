@@ -47,6 +47,10 @@ HANG_TRIAGE = (
     "--run=dump_op_mesh --run=dump_running_operations --run=dump_op_window --op-window=20 "
     "--run=check_dram_health --run=dump_callstacks --run=check_noc_status --run=check_arc --run=check_eth_status"
 )
+ITER_OPT = "--didt-workload-iterations"
+ITER_ENV = ("TT_DET_SWEEP_ITERS", "TT_SWEEP_ITERS", "MATMUL_ITERS")
+DEVICE_ID_ENV = "DIDT_DEVICE_ID"
+IDENTITY = ("dev", "bdf", "tray", "asic", "asic_id", "kmd")
 # Triage on a wedged chip can hang too; the bound keeps the hook's `kill -9 $PPID` reachable so the step ends.
 TRIAGE_SECS = 1200
 
@@ -120,6 +124,27 @@ def triage_env(cfg: Config, csv: Path, repo: Path = REPO) -> dict[str, str]:
     }
 
 
+def double_iterations(opts: list[str], env: dict[str, str]) -> tuple[list[str], dict[str, str], dict[str, int]]:
+    """A pinned rerun soaks twice as long as the attempt it follows. Returns the new opts, the env overrides, and
+    every knob that was doubled with its new value."""
+    out, used, i = [], {}, 0
+    while i < len(opts):
+        o = opts[i]
+        if o.startswith(ITER_OPT + "="):
+            used[ITER_OPT] = 2 * int(o.split("=", 1)[1])
+            out.append(f"{ITER_OPT}={used[ITER_OPT]}")
+        elif o == ITER_OPT and i + 1 < len(opts):
+            used[ITER_OPT] = 2 * int(opts[i + 1])
+            out += [o, str(used[ITER_OPT])]
+            i += 1
+        else:
+            out.append(o)
+        i += 1
+    env_out = {k: str(2 * int(env[k])) for k in ITER_ENV if k in env}
+    used |= {k: int(v) for k, v in env_out.items()}
+    return out, env_out, used
+
+
 def _quote(args: list[str]) -> str:
     return " ".join(shlex.quote(a) for a in args)
 
@@ -156,6 +181,9 @@ class Runner:
         }
         self.states: list[StepState] = []
         self.current: str | None = None
+        self.pin_missing: set[str] = set()
+        self.aborted: str | None = None
+        self.reset_failed = False
 
     def save(self) -> None:
         write(self.run_dir / "status.json", self.header, self.states, self.current)
@@ -169,7 +197,7 @@ class Runner:
     def collect(self, steps: list[StepCfg]) -> dict[str, list[str]]:
         """One pytest --collect-only for every id. pytest prints no listing at all once any id is missing, so then
         each step whose ids were not listed is collected alone, and only a genuinely stale step fails."""
-        wanted = [i for s in steps for i in s.ids]
+        wanted = [i for s in steps for i in s.ids] + [s.pin_id for s in steps if s.pin_id]
         found = set(self._collect(wanted, self.run_dir / "collect" / "collect.log"))
         missing = {}
         for s in steps:
@@ -178,6 +206,12 @@ class Runner:
             log = self.run_dir / "collect" / f"{s.key.replace(':', '_')}.log"
             if gone := missing_node_ids(s.ids, self._collect(s.ids, log)):
                 missing[s.key] = gone
+        # A stale pin id only disables that step's pin-core fallback; the step itself still runs.
+        for s in steps:
+            if s.pin_id and s.pin_id not in found:
+                log = self.run_dir / "collect" / f"{s.key.replace(':', '_')}_pin.log"
+                if missing_node_ids([s.pin_id], self._collect([s.pin_id], log)):
+                    self.pin_missing.add(s.pin_id)
         return missing
 
     def _collect(self, ids: list[str], log: Path) -> list[str]:
@@ -185,49 +219,61 @@ class Runner:
         self.shell(f"{c['cmd']} {_quote(ids)}", log, base_env(), REPO, c["timeout"])
         return collected_node_ids(read_tail(log)) if log.is_file() else []
 
-    def reset(self, d: Path) -> str | None:
+    def reset(self, d: Path, r: dict) -> str | None:
         """None when a reset succeeded, else the log of the last try."""
-        r = self.cfg.reset
-        for n in range(1, r["tries"] + 1):
+        for n in range(1, r.get("tries", 1) + 1):
             log = d / ("reset.log" if n == 1 else f"reset.retry{n}.log")
             if self.shell(r["cmd"], log, base_env(), REPO, r["timeout"]) == 0:
                 return None
         return str(log)
 
-    def attempt(self, step: StepCfg, fb: Fallback | None, a: Attempt) -> None:
-        d = self.run_dir / (step.key.replace(":", "/") + (f"_{fb.name}" if fb else ""))
+    def attempt(
+        self,
+        step: StepCfg,
+        a: Attempt,
+        d: Path,
+        label: str,
+        ids: list[str] | None = None,
+        env: dict | None = None,
+        opts: list[str] | None = None,
+        reset: dict | None = None,
+    ) -> None:
         a.status, a.start = Status.RUN, time.time()
+        self.reset_failed = False
         self.save()
-        self.note(f"{step.key} {fb.name if fb else 'first'} start -> {d}")
+        self.note(f"{step.key} {label} start -> {d}")
         try:
-            self._attempt(step, fb, a, d)
+            self._attempt(step, a, d, ids or step.ids, env or {}, step.opts if opts is None else opts, reset)
         except Exception as e:
             a.status, a.reason, a.details, a.devices = Status.FAIL, f"{type(e).__name__}: {e}", [], []
         except BaseException:
             a.status, a.reason, a.end = Status.FAIL, "interrupted", time.time()
-            self.note(f"{step.key} {fb.name if fb else 'first'} interrupted")
+            self.note(f"{step.key} {label} interrupted")
             raise
         a.end = time.time()
-        self.note(f"{step.key} {fb.name if fb else 'first'} {a.status.value} {a.reason}")
+        self.note(f"{step.key} {label} {a.status.value} {a.reason}")
         self.save()
 
-    def _attempt(self, step: StepCfg, fb: Fallback | None, a: Attempt, d: Path) -> None:
+    def _attempt(
+        self, step: StepCfg, a: Attempt, d: Path, ids: list[str], extra_env: dict, opts: list[str], reset: dict | None
+    ) -> None:
         d.mkdir(parents=True, exist_ok=True)
-        if failed_log := self.reset(d):
-            a.status, a.log = Status.FAIL, failed_log
-            a.reason = f"reset failed {self.cfg.reset['tries']}x: {self.cfg.reset['cmd']}, see {d / 'reset.log'}"
+        r = reset or self.cfg.reset
+        if failed_log := self.reset(d, r):
+            a.status, a.log, self.reset_failed = Status.FAIL, failed_log, True
+            a.reason = f"reset failed {r.get('tries', 1)}x: {r['cmd']}, see {d / 'reset.log'}"
             return
         chips, chip_warnings = self.chips_after_reset()
         log, csv, chips_dir = d / "log", d / "crash_triage.csv", d / "chips"
         a.log = str(log)
-        extra_env, extra_opts = (fb.env, fb.opts) if fb else ({}, [])
         env = {**base_env(), **step.env, **extra_env}
         if step.runner == "pytest":
-            cmd = "pytest " + _quote(step.ids + step.opts + extra_opts)
+            cmd = "pytest " + _quote(ids + opts)
             env |= triage_env(self.cfg, csv)
         else:
             # The script deletes its work and cache dirs at start, so both are dedicated, never the attempt dir.
             # Kernel caches go to local disk: 32 concurrent JIT builds into one NFS tree fail.
+            extra_opts = opts[len(step.opts) :]
             cmd = step.cmd + (" " + _quote(extra_opts) if extra_opts else "")
             cache_dir = self.local_root() / d.relative_to(self.run_dir)
             env |= {"MCAST_ACK_WORK_DIR": str(chips_dir), "MCAST_ACK_CACHE_DIR": str(cache_dir)}
@@ -239,7 +285,7 @@ class Runner:
         snap = d / "tt-smi.json"
         self.shell(self.cfg.smi["cmd"], snap, base_env(), REPO, self.cfg.smi["timeout"])
 
-        r, devices, warnings, whys = self.classify(step, rc, log, csv, chips_dir, chips)
+        r, devices, warnings, whys = self.classify(step, rc, log, csv, chips_dir, chips, len(ids))
         details = [_device_line(x, whys.get(x["dev"])) for x in devices] + warnings + (r.details if not devices else [])
         details += chip_warnings
         r = gddr_result(Result(r.status, r.reason, details), self.gddr(snap), {c.bdf: c.dev for c in chips.values()})
@@ -261,7 +307,9 @@ class Runner:
         change += f"; new {', '.join(sorted(after - before))}" if after - before else ""
         return by_dev(now), [change]
 
-    def classify(self, step: StepCfg, rc: int, log: Path, csv: Path, chips_dir: Path, chips: dict[int, Chip]):
+    def classify(
+        self, step: StepCfg, rc: int, log: Path, csv: Path, chips_dir: Path, chips: dict[int, Chip], n_ids: int
+    ):
         if csv.is_file() and csv.stat().st_size > 0:
             devices, warnings = triage_hang_devices(csv.read_text(errors="replace"), chips)
             return Result(Status.HANG, f"triage {csv}"), devices, warnings, {}
@@ -277,7 +325,7 @@ class Runner:
             }
             devices, warnings = write_ack_devices(failed, logs, chips)
             return r, devices, warnings, failed
-        r = classify_pytest(text, len(step.ids))
+        r = classify_pytest(text, n_ids)
         if step.check == "core_sweep" and r.status == Status.PASS:
             skipped = sweep_skipped_windows(text)
             if skipped != 0:
@@ -290,6 +338,92 @@ class Runner:
         if step.check == "run_to_run":
             return r, run_to_run_devices(text, chips), [], {}
         return r, core_sweep_devices(text, chips), [], {}
+
+    def pin_core(self, step: StepCfg, fb: Fallback, state: StepState) -> None:
+        """Rerun the step's per-chip test on each device the first attempt named, alone, at twice the iterations.
+        A hang target gets the fallback's own reset first; a reset that fails here aborts the run."""
+        first = state.first
+        trigger = "hang" if first.status == Status.HANG else "nd"
+        if trigger == "hang":
+            targets = [d for d in first.devices if d.get("hung")]
+        else:
+            # ND data on the device, not only a name: a build error or a killed child is no reason to pin
+            targets = [
+                d for d in first.devices if not d.get("hung") and ({"failed_checks", "elements", "cores"} & set(d))
+            ]
+        if not targets:
+            self._skip_pin(state, fb, "no failing device named by the first attempt", {"trigger": trigger})
+            return
+        unsupported = None
+        if not step.pin_id:
+            unsupported = "no per-chip test"
+        elif step.pin_id in self.pin_missing:
+            unsupported = f"pin id does not collect: {step.pin_id}"
+        test = step.pin_id.split("::")[-1].split("[")[0] if step.pin_id else ""
+        for t in targets:
+            extra = {
+                "target": {k: t[k] for k in IDENTITY if k in t},
+                "trigger": trigger,
+                "cores": {"first": list(t.get("cores", [])), "rerun": []},
+            }
+            if unsupported:
+                self._skip_pin(state, fb, f"unsupported fallback: {step.key} ({unsupported})", extra, warn=True)
+                continue
+            opts, env_iters, used = double_iterations(step.opts, step.env)
+            extra["iterations"] = used
+            a = Attempt(
+                fb.name,
+                {**env_iters, DEVICE_ID_ENV: str(t["dev"])},
+                opts,
+                Status.PENDING,
+                "",
+                [],
+                [],
+                "",
+                None,
+                None,
+                extra,
+            )
+            state.fallbacks.append(a)
+            reset = fb.hang_reset if trigger == "hang" else None
+            d = self.run_dir / f"{step.key.replace(':', '/')}_{fb.name}_dev{t['dev']}"
+            self.attempt(step, a, d, f"{fb.name} dev {t['dev']}", [step.pin_id], a.env, opts, reset)
+            if self.reset_failed:
+                a.reason += "; run aborted"
+                self.aborted = f"reset failed before the {fb.name} rerun of {step.key} on device {t['dev']}"
+                self.note(f"ABORT {self.aborted}")
+                self.save()
+                return
+            self._pin_result(step, a, t, test, used)
+            self.save()
+
+    def _pin_result(self, step: StepCfg, a: Attempt, t: dict, test: str, used: dict) -> None:
+        rerun = [d for d in a.devices if d["dev"] == t["dev"]]
+        others = [d["dev"] for d in a.devices if d["dev"] != t["dev"]]
+        a.devices = rerun
+        a.extra["cores"]["rerun"] = list(rerun[0].get("cores", [])) if rerun else []
+        notes = [f"WARNING failure on device {d}, outside the pinned chip" for d in others]
+        if a.status == Status.HANG:
+            pass
+        elif rerun:
+            nd = rerun[0]
+            a.status = Status.FAIL
+            a.reason = "ND reproduced on chip alone" + (
+                f": {nd['failed_checks']}/{nd['checks']} checks" if "failed_checks" in nd else ""
+            )
+            if "failed_checks" in nd and not nd.get("cores"):
+                notes.append(f"WARNING unsupported fallback: {step.key} (no ND-core attribution in {test})")
+        elif a.status in (Status.PASS, Status.WARN):
+            a.status, a.reason = Status.WARN, "not reproduced on chip alone"
+        if not used:
+            notes.append(f"WARNING iterations not doubled: no iteration knob for {step.key}")
+        a.details = a.details + notes
+
+    def _skip_pin(self, state: StepState, fb: Fallback, why: str, extra: dict, warn: bool = False) -> None:
+        details = [f"WARNING {why}"] if warn else []
+        state.fallbacks.append(Attempt(fb.name, {}, [], Status.SKIP, why, details, [], "", None, None, extra))
+        self.note(("WARNING " if warn else "") + why)
+        self.save()
 
     def gddr(self, snap: Path) -> list:
         try:
@@ -341,12 +475,24 @@ def run(
                 continue
             r.current = s.key
             state = states[s.key]
-            r.attempt(s, None, state.first)
+            d = run_dir / s.key.replace(":", "/")
+            r.attempt(s, state.first, d, "first")
             if state.first.status in (Status.FAIL, Status.HANG):
                 for fb in s.fallbacks:
-                    f = Attempt(fb.name, dict(fb.env), list(fb.opts), Status.PENDING, "", [], [], "", None, None)
-                    state.fallbacks.append(f)
-                    r.attempt(s, fb, f)
+                    if fb.kind == "pin_core":
+                        r.pin_core(s, fb, state)
+                    else:
+                        f = Attempt(fb.name, dict(fb.env), list(fb.opts), Status.PENDING, "", [], [], "", None, None)
+                        state.fallbacks.append(f)
+                        r.attempt(s, f, d.with_name(f"{d.name}_{fb.name}"), fb.name, env=fb.env, opts=s.opts + fb.opts)
+                    if r.aborted:
+                        break
+            if r.aborted:
+                for rest in selected[selected.index(s) + 1 :]:
+                    if states[rest.key].first.status == Status.PENDING:
+                        states[rest.key].first.status = Status.SKIP
+                        states[rest.key].first.reason = f"run aborted: {r.aborted}"
+                break
     finally:
         r.current = None
         r.save()
