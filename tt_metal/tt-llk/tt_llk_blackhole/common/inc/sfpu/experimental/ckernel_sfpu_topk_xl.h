@@ -70,10 +70,11 @@
 // The kernel programs several ADDR_MODs at init time so that SFPSTORE can
 // advance Dst by configurable strides without a separate INCRWC issue:
 //
-//   ADDR_MOD_7 : zero advance (used by SFPLOAD/SFPSTORE that don't move Dst).
-//                On MATH it arrives via `_llk_math_eltwise_unary_sfpu_init_`,
-//                and PACK gets it through `_topk_xl_remove_msb_values_init_`.
-//   ADDR_MOD_6 : +32 (two faces)
+//   ADDR_MOD_7 : zero advance (its SFPU-wide invariant, set by hw_configure).
+//                Used by SFPLOAD/SFPSTORE that don't move Dst.
+//   ADDR_MOD_6 : +32 (two faces) — the execute-scoped stride: each execute
+//                that stores through it sets it at entry and restores the
+//                dest += 2 invariant on exit.
 //   ADDR_MOD_5 : +16 (one face)
 //   ADDR_MOD_4 : +8     (unfused) / +16 (add_lsb_indices reuses this slot)
 //   ADDR_MOD_3 : +40 = 32 + 8     (folds trailing +8 into the last store)
@@ -2439,9 +2440,6 @@ inline void _topk_xl_init_()
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
 
-    // ADDR_MOD_6 — +32 (two faces).
-    detail::set_dst_addr_mode<ADDR_MOD_6, TWO_FACE_INC>();
-
     // ADDR_MOD_5 — +16 (one face).
     detail::set_dst_addr_mode<ADDR_MOD_5, FACE_INC>();
 
@@ -2504,6 +2502,9 @@ inline void _topk_xl_init_()
 template <std::uint32_t K, bool early_exit_K64 = false>
 inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bool ascending)
 {
+    // The sort's alternate stores advance dest through ADDR_MOD_6 by two faces (+32).
+    detail::set_dst_addr_mode<ADDR_MOD_6, TWO_FACE_INC>();
+
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     // The length-64 build lives in the K >= 1024 block, so a K=512 instantiation would return before it runs.
     static_assert(!early_exit_K64 || K >= 1024, "early_exit_K64 requires K >= 1024: the length-64 build phase lives in the K >= 1024 block");
@@ -2525,6 +2526,8 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     [[maybe_unused]] const bool dir = detail::local_sort_head<K, use_loadmacro, early_exit>(tile_offset, ascending);
     if constexpr (early_exit_K64)
     {
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        detail::set_dst_addr_mode<ADDR_MOD_6, EIGHTH_FACE_INC>();
         return;
     }
     else
@@ -2550,6 +2553,9 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
 
         // Clear SrcA and SrcB valids — the next caller might issue a DST transpose, which requires them invalid.
         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        detail::set_dst_addr_mode<ADDR_MOD_6, EIGHTH_FACE_INC>();
     }
 }
 
@@ -2722,6 +2728,9 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
 template <std::uint32_t K, bool fused>
 inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascending)
 {
+    // The rebuild's alternate stores advance dest through ADDR_MOD_6 by two faces (+32).
+    detail::set_dst_addr_mode<ADDR_MOD_6, TWO_FACE_INC>();
+
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     bool dir                             = ascending;
     constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
@@ -2841,6 +2850,9 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
 
     // Clear SrcA / SrcB valids — the next caller might issue a DST transpose, which requires both to be invalid.
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    detail::set_dst_addr_mode<ADDR_MOD_6, EIGHTH_FACE_INC>();
 }
 
 /**
@@ -2852,6 +2864,8 @@ template <std::uint32_t K>
 inline void _topk_xl_rebuild_columns_(const std::uint32_t dst_index, const bool ascending)
 {
     static_assert(K == 1024, "K must be 1024: the column rebuild sorts the 64 row columns of one tile");
+    // The sort's alternate stores advance dest through ADDR_MOD_6 by two faces (+32).
+    detail::set_dst_addr_mode<ADDR_MOD_6, TWO_FACE_INC>();
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
     for (int col = 0; col < 2; col++)
@@ -2859,6 +2873,9 @@ inline void _topk_xl_rebuild_columns_(const std::uint32_t dst_index, const bool 
         canonical_big_block_with_replay<2>(ascending);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    detail::set_dst_addr_mode<ADDR_MOD_6, EIGHTH_FACE_INC>();
 }
 
 // =============================================================================
@@ -2873,14 +2890,11 @@ inline void _topk_xl_rebuild_columns_(const std::uint32_t dst_index, const bool 
 //                           end, leaving only the index in each DST word so
 //                           the caller can pack the indices to output.
 
-// Programs the ADDR_MODs used by `_topk_xl_add_lsb_indices_`. Reuses
-// ADDR_MOD_4 for a +16 advance — the other ADDR_MOD_4 user is the unfused
+// Programs the ADDR_MOD_4 used by `_topk_xl_add_lsb_indices_` (the execute sets and restores its own ADDR_MOD_6).
+// Reuses ADDR_MOD_4 for a +16 advance — the other ADDR_MOD_4 user is the unfused
 // topk path, but `distributed_topk` runs fused, so the reuse is safe.
 inline void _topk_xl_add_lsb_indices_init_()
 {
-    // ADDR_MOD_6 — +4 (a quarter face).
-    detail::set_dst_addr_mode<ADDR_MOD_6, QUARTER_FACE_INC>();
-
     // ADDR_MOD_4 — +16 (one face).
     // Completes the advance to the next face pair after the inner loop.
     // Replaces two +8 no-op SFPLOADs with one +16 issue.
@@ -3022,6 +3036,8 @@ template <std::uint32_t K, std::uint32_t core_id, bool row_major = false>
 inline void _topk_xl_add_lsb_indices_()
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    // The index stores advance dest through ADDR_MOD_6 by a quarter face (+4).
+    detail::set_dst_addr_mode<ADDR_MOD_6, QUARTER_FACE_INC>();
 
     if constexpr (row_major)
     {
@@ -3067,11 +3083,16 @@ inline void _topk_xl_add_lsb_indices_()
                 TTI_REPLAY(0, 16, 0, 0);
             }
         }
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        detail::set_dst_addr_mode<ADDR_MOD_6, EIGHTH_FACE_INC>();
         return;
     }
 
     detail::add_lsb_indices_column_major<K, ADDR_MOD_6, topk_xl_blaze_compat ? p_sfpu::LREG4 : p_sfpu::LCONST_0>(
         [] { TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, core_id); });
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    detail::set_dst_addr_mode<ADDR_MOD_6, EIGHTH_FACE_INC>();
 }
 
 // Runtime-chunk-id variant of `_topk_xl_add_lsb_indices_`: the 5-bit id in bits [15:11] comes from a runtime argument
@@ -3081,10 +3102,20 @@ template <std::uint32_t K, std::uint8_t advance_mod = ADDR_MOD_6>
 inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    if constexpr (advance_mod == ADDR_MOD_6)
+    {
+        // The index stores advance dest through ADDR_MOD_6 by a quarter face (+4).
+        detail::set_dst_addr_mode<ADDR_MOD_6, QUARTER_FACE_INC>();
+    }
     // The id is masked to the 5-bit field at composition: an out-of-contract id can only wrap within the index field,
     // never spill into the BF16 value half (RISC-side arithmetic on the composed immediate, zero SFPU cost).
     detail::add_lsb_indices_column_major<K, advance_mod, p_sfpu::LCONST_0>([chunk_id]
                                                                            { TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, chunk_id & 0x1Fu); });
+    if constexpr (advance_mod == ADDR_MOD_6)
+    {
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        detail::set_dst_addr_mode<ADDR_MOD_6, EIGHTH_FACE_INC>();
+    }
 }
 
 // =============================================================================
@@ -3103,19 +3134,13 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 
 // Program ADDR_MOD_0 with a +2 increment: the two Dest rows of an SFPU
 // load/store. Used by both `remove_msb_values` and `separate_indices`,
-// which both walk the K-element region 32 datums at a time. Also sets
-// ADDR_MOD_7 (zero advance) for the load part of the sequence.
+// which both walk the K-element region 32 datums at a time. The load part of
+// the sequence uses ADDR_MOD_7 at its zero-advance invariant.
 inline void _topk_xl_remove_msb_values_init_()
 {
     // ADDR_MOD_0 — +2 (one 32-lane group, an eighth of a face).
     // Not programmed by _topk_xl_init_; independent of ADDR_MOD_2's +24 fold.
     detail::set_dst_addr_mode<ADDR_MOD_0, EIGHTH_FACE_INC>();
-
-    if constexpr (!topk_xl_blaze_compat)
-    {
-        // ADDR_MOD_7 — no advance, used by SFPLOAD.
-        detail::set_dst_addr_mode<ADDR_MOD_7, 0 /* Increment */>();
-    }
 }
 
 // Store zero into the hi16 half of every DST word in the K-sized region.
@@ -3477,7 +3502,7 @@ constexpr int split_row_scale = K == 512    ? 1
 template <std::uint32_t K>
 constexpr int split_n_iters = 2 * split_row_scale<K>;
 
-// PACK, once per row: ADDR_MOD_3 takes the stamp's +4 so ADDR_MOD_6 keeps the sort's +32; ADDR_MOD_4 is the K >= 1024
+// PACK, once per row: ADDR_MOD_3 takes the stamp's +4 (pack_row sets ADDR_MOD_6 to the sort's +32); ADDR_MOD_4 is the K >= 1024
 // stamp's face skip. With `macros` (default K >= 1024) the row's segments share one fused macro configuration,
 // programmed here. The column-pair len 8 and len 16 passes program their own swap layer and put the step-group one
 // back; MATH must issue no SFPLOADMACRO while theirs is installed.
@@ -3486,13 +3511,9 @@ inline void _topk_xl_split_sfpu_init_()
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024 or 2048");
     _init_sfpu_config_reg();
-
-    detail::set_dst_addr_mode<ADDR_MOD_7, 0>();
-    detail::set_dst_addr_mode<ADDR_MOD_6, TWO_FACE_INC>();
     detail::set_dst_addr_mode<ADDR_MOD_5, FACE_INC>();
     detail::set_dst_addr_mode<ADDR_MOD_1, THREE_FACE_INC>();
     detail::set_dst_addr_mode<ADDR_MOD_3, QUARTER_FACE_INC>();
-
     if constexpr (K >= 1024)
     {
         detail::set_dst_addr_mode<ADDR_MOD_4, FACE_INC>();
@@ -3695,13 +3716,11 @@ inline void _topk_xl_split_transpose_(const std::uint32_t tile_offset)
 
 // The first fused chunk in each row runs the full TopK init. Later chunks can
 // use this hot-path reinit because copy init only clobbers ADDR_MOD_0/3 and the
-// MOP, while index stamping additionally changes ADDR_MOD_6 from +32 to +4.
-// Fused sort/merge never consumes ADDR_MOD_0/3/4; ADDR_MOD_1/5 and the other
-// TopK state remain live. Restoring +32 and the fused MOP therefore avoids the
-// two redundant ADDR_MOD writes in every subsequent chunk's full init.
+// MOP. Fused sort/merge never consumes ADDR_MOD_0/3/4, sets ADDR_MOD_6 itself,
+// and ADDR_MOD_1/5 and the other TopK state remain live. Restoring the fused MOP
+// therefore avoids the redundant ADDR_MOD writes in every subsequent chunk's full init.
 inline void _topk_large_indices_reinit_fused_after_stamp_()
 {
-    detail::set_dst_addr_mode<ADDR_MOD_6, TWO_FACE_INC>();
     topk_mop_config<true>();
 }
 

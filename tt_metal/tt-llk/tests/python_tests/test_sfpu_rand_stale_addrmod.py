@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression test: rand stores the whole tile even when another op's init (topk) last programmed
-the dest address-mode slot it stores under; with a 16-bit Dest only the top half of each face's rows
-carry draws (32-bit stores over a 16-bit Dest), so the checks cover those rows."""
+"""Regression test: rand stores the whole tile even when a preceding op's execute (square) last
+owned the dest address-mode slot it stores under; square restores the slot's dest += 2 invariant at
+exit, so the draws land on every row only if that restore held -- a stale stride leaves rows holding
+the squared sentinel, outside the draw interval. With a 16-bit Dest only the top half of each face's
+rows carry draws (32-bit stores over a 16-bit Dest), so the checks cover those rows."""
 
 import struct
 
@@ -45,6 +47,7 @@ PRNG_SEED = 7919
 DRAW_LOW = struct.unpack("<f", struct.pack("<I", RAND_FROM_BITS))[0]
 DRAW_HIGH = DRAW_LOW + struct.unpack("<f", struct.pack("<I", RAND_SCALE_BITS))[0]
 SENTINEL = 2.0  # exact in every format; outside the draw interval
+SQUARED_SENTINEL = 4.0  # what the square polluter leaves; outside the draw interval
 assert not (
     DRAW_LOW <= SENTINEL <= DRAW_HIGH
 ), "the sentinel must lie outside the draw interval"
@@ -119,13 +122,12 @@ def test_sfpu_rand_stale_addrmod(formats, dest_acc):
     draw_elements = draw_rows.nonzero().flatten()
     draws = tile[draw_rows]
 
-    sentinel_count = int((draws == SENTINEL).sum().item())
-    survivors = draw_elements[
-        (draws == SENTINEL).nonzero().flatten()[:SURVIVORS_SHOWN]
-    ].tolist()
-    assert sentinel_count == 0, (
-        f"{sentinel_count} of {draws.numel()} draw elements still hold the sentinel after rand: rand "
-        f"stored under the address mode the topk init left (first survivors at elements {survivors})"
+    missed = (draws == SENTINEL) | (draws == SQUARED_SENTINEL)
+    missed_count = int(missed.sum().item())
+    survivors = draw_elements[missed.nonzero().flatten()[:SURVIVORS_SHOWN]].tolist()
+    assert missed_count == 0, (
+        f"{missed_count} of {draws.numel()} draw elements still hold the (squared) sentinel after rand: "
+        f"rand stored under the address mode the square execute left (first survivors at elements {survivors})"
     )
     in_range = (draws >= DRAW_LOW) & (draws <= DRAW_HIGH)  # False for NaN as well
     out_of_range = draws[~in_range]

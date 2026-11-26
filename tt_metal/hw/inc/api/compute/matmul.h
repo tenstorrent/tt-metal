@@ -1088,8 +1088,8 @@ ALWI void matmul_block_main_row_mop(
  * tracked in #46769.
  *
  * Template parameter row_mop (ignored outside Blackhole): one math MOP per reuse row, the same value in matmul_block.
- * It sets the math ADDR_MOD_3, 5 and 6 (ADDR_MOD_7 stays the SFPU invariant {0,0,0}): the SFPU ops whose init sets ADDR_MOD_6 (reciprocal, typecast,
- * unary min and max, the comparisons with zero, topk local sort) need their init redone after this one, and this init after them.
+ * It sets the math ADDR_MOD_3 and 5; matmul_block writes ADDR_MOD_6 for the call and restores the SFPU invariants (ADDR_MOD_6 dest += 2,
+ * ADDR_MOD_7 {0,0,0}) before it returns, so SFPU ops may run between this init and matmul_block.
  *
  * Template parameter unpack_auto_ttsync (ignored outside Blackhole): row base addresses under Auto TTSync instead of polling
  * for a free context, the same value in matmul_block; the firmware turns Auto TTSync off after the kernel.

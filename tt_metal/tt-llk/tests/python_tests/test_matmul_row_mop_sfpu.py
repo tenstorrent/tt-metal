@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Golden of a matmul form that writes address mods beyond main's set followed by an SFPU op in one kernel: the form must leave the SFPU contract (ADDR_MOD_7 = {0,0,0}, set once at the start of the kernel)
-alone. The body is test_matmul_grid2_tiny (math matmul test) with the opt-in row MOP forced on and a relu on every tile of the block after the matmul, at both syncs and
-every fidelity; the golden is the matmul golden through relu."""
+"""Golden of a matmul form that writes address mods beyond main's set followed by an SFPU op in one kernel: the form must leave the SFPU invariants (ADDR_MOD_7 = {0,0,0},
+ADDR_MOD_6 = dest += 2, set by hw_configure) as it found them. The body is test_matmul_grid2_tiny (math matmul test) with the form forced and a negation of every tile of
+the block after the matmul, loading through ADDR_MOD_7 and stepping DEST through ADDR_MOD_6, at both syncs and every fidelity; the golden is the negated matmul golden.
+"""
 
 import pytest
 import test_matmul_grid2_tiny as _t
-import torch
 from conftest import skip_for_wormhole
 from helpers.llk_params import MathFidelity
 from helpers.test_variant_parameters import TemplateParameter
@@ -26,7 +26,7 @@ class _Raw(TemplateParameter):
         return self.text
 
 
-# the forms that write address mods beyond main's set (0, 1, 2, 4, 5): the opt-in row MOP (3, 5, 6), the hoisted rows forms (3, 5), the row end fold (3, 6), the default form of the cell
+# the forms that write address mods beyond main's set (0, 1, 2, 4, 5): the opt-in row MOP (3, 5, 6 in the call), the hoisted rows forms (3, 5), the row end fold (3, 6 in the call), the default form of the cell
 _FORMS = {
     "rowmop": "#define MATMUL_ROW_MOP",
     "rowsR": "#define MATMUL_FORCE_FORM_CHAR 'R'",
@@ -87,7 +87,7 @@ def test_matmul_row_mop_sfpu(case, monkeypatch):
         gen = real_golden(cls)
         if cls is not _t.MatmulGolden:
             return gen
-        return lambda *a, **k: torch.clamp(gen(*a, **k), min=0)
+        return lambda *a, **k: -gen(*a, **k)
 
     monkeypatch.setattr(_t, "TestConfig", config)
     monkeypatch.setattr(_t, "get_golden_generator", golden)
