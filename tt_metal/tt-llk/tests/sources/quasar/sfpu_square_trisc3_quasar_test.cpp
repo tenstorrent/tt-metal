@@ -141,6 +141,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu_common.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -168,6 +169,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
+
+    _llk_sfpu_hw_configure_<is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_sfpu_init_();
     init_square();

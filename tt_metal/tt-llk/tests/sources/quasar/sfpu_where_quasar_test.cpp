@@ -140,6 +140,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
+#include "llk_sfpu_common.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -165,6 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
+        _llk_sfpu_hw_configure_<is_fp32_dest_acc_en>();
 
         if constexpr (!unpack_to_dest)
         {

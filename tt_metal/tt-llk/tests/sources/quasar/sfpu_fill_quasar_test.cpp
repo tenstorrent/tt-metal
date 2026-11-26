@@ -89,6 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "experimental/ckernel_sfpu_fill.h"
 #include "llk_math_common.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu_common.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -111,6 +112,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat math_format = static_cast<DataFormat>(formats.math);
     const bool is_int_fill = is_int_fill_format(static_cast<DataFormat>(formats.unpack_A_src));
     _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+    _llk_sfpu_hw_configure_<is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_sfpu_init_();
 
