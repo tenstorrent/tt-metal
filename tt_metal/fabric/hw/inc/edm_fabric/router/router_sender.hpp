@@ -727,6 +727,79 @@ FORCE_INLINE void visit_channel_with_work(
     keep_in_memory(state);
 }
 
+// An inter-domain router's VC1 channels (from another mesh, into the peer's VC2), one copy for all: their constants are
+// data. Inlined per channel, as the other channels are, they did not fit the router's kernel space.
+struct ForwardingChannelConstants {
+    uint32_t first_slot_addr;
+    uint32_t last_slot_addr;
+    uint32_t completion_counter_addr;
+    uint32_t free_slots_stream;
+    uint32_t ch;
+};
+template <size_t CH>
+constexpr ForwardingChannelConstants forwarding_channel_constants() {
+    static_assert(
+        !SenderChannel<CH>::worker && !SenderChannel<CH>::first_level_ack &&
+        SenderChannel<CH>::remote_free_slots_to_send == 1);
+    return {
+        SenderChannel<CH>::first_slot_addr,
+        SenderChannel<CH>::last_slot_addr,
+        SenderChannel<CH>::completion_counter_addr,
+        SenderChannel<CH>::free_slots_stream,
+        CH};
+}
+
+// visit_channel_with_work's, for a forwarding channel given by its constants
+template <typename Remote>
+__attribute__((noinline)) void visit_forwarding_channel_out_of_line(
+    const ForwardingChannelConstants& c,
+    SenderChannelProgress& progress,
+    uint64_t upstream_free_slots_addr,
+    uint32_t& channels_in_flight,
+    bool has_packet,
+    Remote& remote,
+    bool& send_yielded) {
+    if (has_packet && remote.has_room(1)) {
+        const uint32_t slot_addr = progress.next_slot_addr;
+        auto* header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(slot_addr);
+        const uint32_t size = header->get_payload_size_excluding_header() + sizeof(PACKET_HEADER_TYPE);
+        if constexpr (!skip_src_ch_id_update) {
+            header->src_ch_id = static_cast<uint8_t>(c.ch);
+        }
+        if (txq_busy(read_txq_status(sender_txq_id))) {
+            send_yielded = true;
+        } else {
+            internal_::eth_send_packet_bytes_unsafe(sender_txq_id, slot_addr, remote.next_slot_addr(), size);
+            remote.take_slot();
+            progress.next_slot_addr =
+                slot_addr == c.last_slot_addr ? c.first_slot_addr : slot_addr + channel_buffer_size;
+            increment_local_update_ptr_val(c.free_slots_stream, 1);
+            while (internal_::eth_txq_is_busy(sender_txq_id)) {
+            }
+            remote_update_ptr_val<RemoteReceiverChannel<0>::packets_received_stream, sender_txq_id>(1);
+            progress.sent++;
+            if constexpr (telemetry::counts_sent) {
+                telemetry::note_sent(size);
+            }
+        }
+    }
+    if (progress.sent != progress.completed) {
+        const uint32_t completions =
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(c.completion_counter_addr) - progress.completed;
+        if (completions != 0) {
+            remote.add_free_slots(completions);
+            progress.completed += completions;
+            noc_inline_dw_write<InlineWriteDst::REG, true>(
+                upstream_free_slots_addr,
+                pack_value_for_inc_on_write_stream_reg_write(completions),
+                INLINE_WRITE_ALL_BYTES,
+                tt::tt_fabric::worker_handshake_noc);
+        }
+    }
+    const uint32_t bit = 1u << c.ch;
+    channels_in_flight = progress.sent != progress.completed ? channels_in_flight | bit : channels_in_flight & ~bit;
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Where the channel states live, and the loop
 // ---------------------------------------------------------------------------------------------------------------------
@@ -803,6 +876,30 @@ FORCE_INLINE void visit_forwarding_channels(
     }
 }
 
+// visit_forwarding_channels, out of line (visit_forwarding_channel_out_of_line)
+template <uint32_t MASK, typename Remote>
+FORCE_INLINE void visit_forwarding_channels_out_of_line(
+    SenderChannelStates& states, uint32_t holding, uint32_t& channels_in_flight, Remote& remote, bool& send_yielded) {
+    if constexpr (MASK != 0) {
+        constexpr size_t CH = lowest_bit(MASK);
+        const bool has_packet = ((holding >> CH) & 1u) != 0;
+        if (has_packet || ((channels_in_flight >> CH) & 1u) != 0) {
+            static constexpr ForwardingChannelConstants constants = forwarding_channel_constants<CH>();
+            auto& state = states.forwarding.template get<CH>();
+            visit_forwarding_channel_out_of_line(
+                constants,
+                state.progress,
+                state.upstream_free_slots_addr,
+                channels_in_flight,
+                has_packet,
+                remote,
+                send_yielded);
+        }
+        visit_forwarding_channels_out_of_line<without_lowest_bit(MASK)>(
+            states, holding, channels_in_flight, remote, send_yielded);
+    }
+}
+
 template <uint32_t MASK, typename Remote>
 FORCE_INLINE void visit_other_worker_channels(
     SenderChannelStates& states, uint32_t holding, uint32_t& channels_in_flight, Remote& remote, bool& send_yielded) {
@@ -871,17 +968,17 @@ FORCE_INLINE void visit_vc(
         if constexpr (SenderChannelStates::visited_every_pass<VC>) {
             visit_channels<VC>(states, send_state, send_state.remote, holding, channels_in_flight, send_yielded);
         } else if constexpr (remote_progress_vc<VC> != VC) {
-            // on another VC's progress, in place
+            // forwarding channels only, out of line, on another VC's progress in place
             static_assert(SenderChannelStates::visited_every_pass<remote_progress_vc<VC>>);
+            static_assert(SenderVc<VC>::worker_channels == 0);
             if (((holding | channels_in_flight) & SenderVc<VC>::sender_channels) == 0) {
                 return;
             }
-            visit_channels<VC>(
+            visit_forwarding_channels_out_of_line<SenderVc<VC>::forwarding_channels>(
                 states,
-                send_state,
-                states.template progress_for<remote_progress_vc<VC>>(loop_copy).remote,
                 holding,
                 channels_in_flight,
+                states.template progress_for<remote_progress_vc<VC>>(loop_copy).remote,
                 send_yielded);
         } else {
             if (((holding | channels_in_flight) & SenderVc<VC>::sender_channels) == 0) {

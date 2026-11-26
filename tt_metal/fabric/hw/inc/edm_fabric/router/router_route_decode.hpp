@@ -84,22 +84,21 @@ struct Routing2D {
             } else {
                 fabric_set_2d_intermesh_landing_route(header, routing_table, VC2_DOMAIN_Y_SIZE, VC2_DOMAIN_X_SIZE);
             }
-        } else {
-            if constexpr (vc2_domain) {
-                // into another domain: to its exit chip and out its inter-domain link, or toward the exit's mesh
-                const InterDomainExit exit = domain_exit(header);
-                if (exit.action != 0) {
-                    const uint16_t chip = exit.mesh_id == routing_table.my_mesh_id
-                                              ? exit.chip_id
-                                              : routing_table.exit_node_table[exit.mesh_id];
-                    widen_2d_route_to_chip(
-                        header, routing_table.route_table_2d.action_vectors, chip, MESH_Y_SIZE, MESH_X_SIZE);
-                    if (exit.mesh_id == routing_table.my_mesh_id) {
-                        header->route_buffer[MESH_Y_SIZE + chip % MESH_X_SIZE] = exit.action;
-                    }
-                    return;
-                }
+        } else if constexpr (vc2_domain) {
+            // into another domain: landed as if bound for its exit chip (the header keeps the destination, as the
+            // translation above does), then out its inter-domain link there
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* const volatile_header = header;
+            const InterDomainExit exit = domain_exit(header);
+            const uint32_t destination = volatile_header->dst_start_node_id;
+            if (exit.action != 0) {
+                volatile_header->dst_start_node_id = (uint32_t{exit.mesh_id} << 16) | exit.chip_id;
             }
+            fabric_set_2d_intermesh_landing_route(header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
+            volatile_header->dst_start_node_id = destination;
+            if (exit.action != 0 && exit.mesh_id == routing_table.my_mesh_id) {
+                header->route_buffer[MESH_Y_SIZE + exit.chip_id % MESH_X_SIZE] = exit.action;
+            }
+        } else {
             fabric_set_2d_intermesh_landing_route(header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
         }
     }
