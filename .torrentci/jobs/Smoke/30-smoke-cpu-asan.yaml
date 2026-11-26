@@ -33,8 +33,6 @@ jobs:
         kind: shell
         shell:
           run:
-            - cat .torrentci/packages.json 2>/dev/null || true
-            - dpkg -s tt-metalium tt-metalium-validation | grep -e '^Package' -e '^Version'
             - mkdir -p test-reports
             # find: the UMD tree layout moves between UMD bumps.
             - >-

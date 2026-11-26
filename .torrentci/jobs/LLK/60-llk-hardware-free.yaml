@@ -21,7 +21,6 @@ jobs:
         shell:
           run:
             - mkdir -p "$HOME"
-            - python3 --version
             - python3 -m venv /tmp/venv
             - /tmp/venv/bin/pip install -q -r tt_metal/tt-llk/tests/requirements.txt
             - . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
