@@ -46,11 +46,11 @@ sfpi_inline sfpi::vFloat eval_exp(sfpi::vFloat x) {
 
 namespace ckernel::sfpu {
 
-// [[gnu::noinline]] keeps GCC's rvtt_replay buffer scoped to this leaf SFPU call. Ends with
+// __attribute__((noinline)) keeps GCC's rvtt_replay buffer scoped to this leaf SFPU call. Ends with
 // STALL_MATH on WAIT_SFPU because _llk_math_eltwise_sfpu_done_() only clears dst_reg_addr and
 // follow-on FPU ops do not wait on SFPU.
 template <bool is_fp32_dest_acc_en, std::uint32_t NUM_ROWS>
-[[gnu::noinline]] inline void _calculate_softmax_k_(const std::uint32_t k) {
+__attribute__((noinline)) inline void _calculate_softmax_k_(const std::uint32_t k) {
     static_assert(softmax_k_detail::valid_num_rows<NUM_ROWS>, "softmax_k: NUM_ROWS must be 1, 2, 4, or 8");
     LLK_ASSERT(k >= 1u && k <= FACE_C_DIM, "softmax_k: k must be in [1, FACE_C_DIM]");
 

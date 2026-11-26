@@ -458,7 +458,7 @@ inline void _row_norm_init_() {
     sqrt_init<APPROXIMATION_MODE>();
 }
 
-// All top-level _calculate_row_*_ entry points are [[gnu::noinline]] so GCC's per-function
+// All top-level _calculate_row_*_ entry points are __attribute__((noinline)) so GCC's per-function
 // rvtt_replay pass keeps every generated ttreplay strictly local to one leaf SFPU call and never
 // assumes replay-buffer slots stay live across calls to sibling SFPU helpers. Each entry point ends
 // with STALL_MATH on WAIT_SFPU because _llk_math_eltwise_sfpu_done_() only clears dst_reg_addr and
@@ -473,7 +473,7 @@ template <
     std::uint32_t TILE_H,
     std::uint32_t NUM_TILES,
     bool SCALE_SUM = true>
-[[gnu::noinline]] inline void _calculate_row_rmsnorm_(
+__attribute__((noinline)) inline void _calculate_row_rmsnorm_(
     const std::uint32_t inv_width_bits, const std::uint32_t epsilon_bits) {
     static_assert(row_norm::valid_tile_h<NUM_ROWS, TILE_H>, "row_norm: invalid (NUM_ROWS, TILE_H)");
     static_assert(row_norm::valid_num_tiles<NUM_TILES>, "row_norm: NUM_TILES must be in [1, 8]");
@@ -497,7 +497,7 @@ template <
     std::uint32_t NUM_TILES,
     bool SCALE_SUM = true,
     bool FACE0_ONLY = false>
-[[gnu::noinline]] inline void _calculate_row_reduce_scale_add_rsqrt_(
+__attribute__((noinline)) inline void _calculate_row_reduce_scale_add_rsqrt_(
     const std::uint32_t inv_width_bits, const std::uint32_t epsilon_bits) {
     static_assert(row_norm::valid_tile_h<NUM_ROWS, TILE_H>, "row_norm: invalid (NUM_ROWS, TILE_H)");
     static_assert(row_norm::valid_num_tiles<NUM_TILES>, "row_norm: NUM_TILES must be in [1, 8]");
@@ -521,7 +521,7 @@ template <
     std::uint32_t TILE_H,
     std::uint32_t NUM_TILES,
     std::uint32_t SCRATCH_TILE = NUM_TILES>
-[[gnu::noinline]] inline void _calculate_row_layernorm_(
+__attribute__((noinline)) inline void _calculate_row_layernorm_(
     const std::uint32_t inv_width_bits, const std::uint32_t epsilon_bits) {
     static_assert(row_norm::valid_tile_h<NUM_ROWS, TILE_H>, "row_norm: invalid (NUM_ROWS, TILE_H)");
     static_assert(row_norm::valid_num_tiles<NUM_TILES>, "row_norm: NUM_TILES must be in [1, 8]");
@@ -583,7 +583,7 @@ template <
     std::uint32_t NUM_TILES,
     std::uint32_t STATS_TILE,
     bool STATS_IS_FP32 = is_fp32_dest_acc_en>
-[[gnu::noinline]] inline void _calculate_row_reduce_mean_(const std::uint32_t inv_width_bits) {
+__attribute__((noinline)) inline void _calculate_row_reduce_mean_(const std::uint32_t inv_width_bits) {
     static_assert(row_norm::valid_tile_h<NUM_ROWS, TILE_H>, "row_norm: invalid (NUM_ROWS, TILE_H)");
     static_assert(row_norm::valid_num_tiles<NUM_TILES>, "row_norm: NUM_TILES must be in [1, 8]");
     static_assert(
@@ -611,7 +611,7 @@ template <
     bool ACCUMULATE,
     bool ZERO_MEAN = false,
     bool STATS_IS_FP32 = is_fp32_dest_acc_en>
-[[gnu::noinline]] inline void _calculate_row_sum_centered_squares_() {
+__attribute__((noinline)) inline void _calculate_row_sum_centered_squares_() {
     static_assert(row_norm::valid_tile_h<NUM_ROWS, TILE_H>, "row_norm: invalid (NUM_ROWS, TILE_H)");
     static_assert(row_norm::valid_num_tiles<NUM_TILES>, "row_norm: NUM_TILES must be in [1, 8]");
     static_assert(
@@ -646,7 +646,7 @@ template <
     std::uint32_t NUM_ROWS,
     std::uint32_t STATS_TILE,
     bool STATS_IS_FP32 = is_fp32_dest_acc_en>
-[[gnu::noinline]] inline void _calculate_row_finalize_inv_std_(
+__attribute__((noinline)) inline void _calculate_row_finalize_inv_std_(
     const std::uint32_t inv_width_bits, const std::uint32_t epsilon_bits) {
     static_assert(row_norm::valid_num_rows<NUM_ROWS>, "row_norm: NUM_ROWS must be 1, 2, 4, or 8");
     static_assert(
@@ -669,7 +669,7 @@ template <
     std::uint32_t STATS_TILE,
     bool ZERO_MEAN = false,
     bool STATS_IS_FP32 = is_fp32_dest_acc_en>
-[[gnu::noinline]] inline void _calculate_row_center_scale_() {
+__attribute__((noinline)) inline void _calculate_row_center_scale_() {
     static_assert(row_norm::valid_tile_h<NUM_ROWS, TILE_H>, "row_norm: invalid (NUM_ROWS, TILE_H)");
     static_assert(row_norm::valid_num_tiles<NUM_TILES>, "row_norm: NUM_TILES must be in [1, 8]");
     static_assert(
