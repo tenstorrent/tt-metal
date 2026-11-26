@@ -236,10 +236,12 @@ static void fill_core_state(Program& program, EmuleProgramDescriptor& pd) {
                     continue;
                 }
                 CbDescriptor cd;
-                // 0 until the CB is allocated: a compile (fast dispatch, or slow dispatch's eager compile) builds the
-                // descriptor before allocation. No launch reads it then: slow-dispatch launches marshal again after
-                // allocation, and fast-dispatch launches read the rings from L1.
+                // A compile (fast dispatch, or slow dispatch's eager compile) builds the descriptor before allocation;
+                // address_valid says so, and tt-emule refuses a launch from such a descriptor.
                 cd.address = cb->is_allocated() ? cb->address() : 0;
+#ifdef TT_EMULE_CB_DESCRIPTOR_HAS_ADDRESS_VALID
+                cd.address_valid = cb->is_allocated();
+#endif
                 cd.total_size = cb->size();
                 cd.globally_allocated = cb->globally_allocated();
                 cd.creation_index = cb_creation_index.at(cb.get());
@@ -342,6 +344,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     // worker and an ethernet core can share a logical (x,y) and must not merge their kernels.
     std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::vector<CoreKernel>> core_kernels;
 
+    [[maybe_unused]] bool build_state_defines_copied = false;
     const uint32_t pct_count = hw.get_programmable_core_type_count();
     for (uint32_t pct = 0; pct < pct_count; ++pct) {
         pd.config.sem_offset.push_back(impl.get_program_config(pct).sem_offset);
@@ -378,25 +381,35 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             });
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
-            // The dispatch defines jit_build adds to every kernel build, copied from the kernel's build state.
-            {
-                const auto recipe = metal_context.build_env_manager()
-                                        .get_kernel_build_state(
-                                            device->build_id(),
-                                            hw.get_programmable_core_type_index(k.get_kernel_programmable_core_type()),
-                                            enchantum::to_underlying(k.get_kernel_processor_class()),
-                                            k.get_kernel_processor_type(0))
-                                        .export_target_recipe(nullptr);
-                for (const auto& flag : recipe.defines) {
-                    for (const std::string_view name : {"DISPATCH_MESSAGE_ADDR", "FDS_SIGNALLING"}) {
-                        const std::string prefix = "-D" + std::string(name);
-                        if (flag.starts_with(prefix) && (flag.size() == prefix.size() || flag[prefix.size()] == '=')) {
-                            kd.defines[std::string(name)] =
-                                flag.size() == prefix.size() ? "" : flag.substr(prefix.size() + 1);
-                        }
+            // The defines jit_build adds to every kernel build from its build state. They are the same for every
+            // build state, so tt-emule gets them once and picks what it implements.
+            auto build_state_recipe = [&]() {
+                return metal_context.build_env_manager()
+                    .get_kernel_build_state(
+                        device->build_id(),
+                        hw.get_programmable_core_type_index(k.get_kernel_programmable_core_type()),
+                        enchantum::to_underlying(k.get_kernel_processor_class()),
+                        k.get_kernel_processor_type(0))
+                    .export_target_recipe(nullptr);
+            };
+#ifdef TT_EMULE_PROGRAM_CONFIG_HAS_BUILD_STATE_DEFINES
+            if (!build_state_defines_copied) {
+                for (const auto& flag : build_state_recipe().defines) {
+                    pd.config.build_state_defines += flag + " ";
+                }
+                build_state_defines_copied = true;
+            }
+#else
+            for (const auto& flag : build_state_recipe().defines) {
+                for (const std::string_view name : {"DISPATCH_MESSAGE_ADDR", "FDS_SIGNALLING"}) {
+                    const std::string prefix = "-D" + std::string(name);
+                    if (flag.starts_with(prefix) && (flag.size() == prefix.size() || flag[prefix.size()] == '=')) {
+                        kd.defines[std::string(name)] =
+                            flag.size() == prefix.size() ? "" : flag.substr(prefix.size() + 1);
                     }
                 }
             }
+#endif
             if (!k.get_full_kernel_name().empty()) {
                 kd.elf_paths = k.elf_paths_by_processor_index(
                     *device,
