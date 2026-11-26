@@ -19,7 +19,7 @@ Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
 An iteration is a board reset followed by one run of the Ethernet, DRAM, DRAM ACT and PCIe tests.
-The DRAM ACT test takes about 10.5 minutes per iteration.
+The DRAM ACT test takes about 10.3 minutes per iteration.
 After all iterations, the NOC tests run once, then the boards are reset and DIDT runs once.
 
 Optional:

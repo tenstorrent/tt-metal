@@ -45,7 +45,7 @@ FILL, READ, WRITE = 0, 1, 2
 ROW_SHIFT, GBANK_SHIFT, COL_SHIFT = 17, 13, 6
 L1_BUDGET = 64 * 1024
 
-REPO = Path(__file__).resolve().parents[5]
+REPO = Path(__file__).resolve().parents[2]
 OUT_DIR = Path(os.environ.get("STRESS_OUT_DIR", REPO / "repro_logs" / "act"))
 
 DM_KERNEL = f"{sweep.KERNEL_DIR}/act_dm.cpp"
@@ -666,6 +666,9 @@ class Driver:
                             f"chip {r.chip} ({ident_str(r.ident)}) {pattern}/{name} arm {arm}: "
                             f"{s} first {first[r.chip]}"
                         )
+                # A hit is the verdict; more launches only delay the report.
+                if first and self.cfg.get("v2_stop_on_hit"):
+                    break
                 # One more launch would overrun t_end by more than it fills.
                 left = t_end - time.monotonic()
                 if left <= 0 or (self.ramp == "proportional" and left < dt / 2):
@@ -684,6 +687,8 @@ class Driver:
                 f"passes per RISC (min-max) by launch {' '.join(f'{lo}-{hi}' for lo, hi in passes)} "
                 f"(floor {self.iters}), bad reads by chip {bad or 'none'}"
             )
+            if bad and self.cfg.get("v2_stop_on_hit"):
+                break
 
     def self_test(self):
         """Plants a lane-3 alias of bit 26 in one read per RISC and checks the decode names it exactly."""
@@ -921,6 +926,7 @@ def hit_summary(results):
 
 
 def run_act(chips, cfg):
+    sweep.require_blackhole()
     assert all(form in FORMS for _, _, form in cfg["v2_plan"]), cfg["v2_plan"]
     assert all(form in FORMS for form in cfg["ca_forms"]), cfg["ca_forms"]
     assert all(a in ("on", "off") for a in cfg["arms"]), cfg["arms"]

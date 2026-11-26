@@ -35,7 +35,7 @@ KT = 8
 CB_IN0, CB_IN1, CB_OUT = 0, 1, 16
 CB_SCRATCH = (2, 3)
 
-REPO = Path(__file__).resolve().parents[5]
+REPO = Path(__file__).resolve().parents[2]
 OUT_DIR = Path(os.environ.get("STRESS_OUT_DIR", REPO / "repro_logs" / "sweep"))
 
 KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/diagnostics/dram/kernels"
@@ -57,6 +57,12 @@ DM_DEFINES = MM_DEFINES + [
 
 def env_int(name, default):
     return int(os.environ.get(name, str(default)), 0)
+
+
+def require_blackhole():
+    # Bank count, worker grid and address decode are Blackhole's; get_arch_name opens no device.
+    if "blackhole" not in ttnn.get_arch_name():
+        pytest.skip("DRAM ACT and sweep screens need Blackhole's eight-bank DRAM")
 
 
 def allocate_buffer(device, bank_mb):
@@ -305,6 +311,7 @@ def run_chips(chips, cfg):
     """All chips run each fill and each check together, so the whole machine is under load for the full run."""
     arms = cfg["arms"]
     seed = cfg["seed0"]
+    require_blackhole()
     devices = ttnn.CreateDevices(chips)
     try:
         runs = [ChipRun(c, devices[c], cfg) for c in chips]
