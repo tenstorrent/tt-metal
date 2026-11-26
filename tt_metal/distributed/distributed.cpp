@@ -139,11 +139,14 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     } else if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        // Slow dispatch normally JIT-compiles inside LaunchProgram, but the SD mesh CQ
-        // short-circuits for mock devices (no hardware to dispatch to). Compile here so
-        // kernel artifacts are still produced; the SD CQ then no-ops the skipped dispatch.
+        // Slow dispatch normally JIT-compiles and checks the KERNEL_CONFIG window inside LaunchProgram, but the SD
+        // mesh CQ short-circuits for mock devices (no hardware to dispatch to). Do both here so kernel artifacts are
+        // still produced and an oversized program still fails; the SD CQ then no-ops the skipped dispatch.
         // Mock only, not is_mock_or_emulated(): Emule builds kernels via its own host-JIT path.
         mesh_workload.impl().compile(mesh_cq.device());
+        if (!mesh_workload.impl().fits_kernel_config_window()) {
+            mesh_workload.impl().throw_kernel_config_window_overflow(mesh_cq.device());
+        }
     }
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }

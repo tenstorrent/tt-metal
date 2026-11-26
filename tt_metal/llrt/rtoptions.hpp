@@ -290,7 +290,8 @@ class RunTimeOptions {
     bool skip_loading_fw = false;
 
     bool jit_analytics_enabled = false;
-    bool riscv_debug_info_enabled = false;
+    // TT_METAL_RISCV_DEBUG_INFO when set; unset, get_riscv_debug_info_enabled() picks the default.
+    std::optional<bool> riscv_debug_info_override;
     uint32_t watcher_debug_delay = 0;
 
     bool validate_kernel_binaries = false;
@@ -397,6 +398,8 @@ class RunTimeOptions {
 
     // EXPERIMENTAL: Build fabric routers from the fabric graph instead of the stock builder
     bool fabric_graph_builder = false;
+
+    bool fabric_inter_domain = false;
 
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
@@ -585,6 +588,7 @@ public:
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+    void set_allocator_mode_hybrid(bool enable) { allocator_mode_hybrid = enable; }
 
     bool get_socket_coowners_mirror() const { return socket_coowners_mirror; }
 
@@ -828,9 +832,21 @@ public:
     bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
     void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
 
-    // Whether to compile with -g to include DWARF debug info in the binary.
-    bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
-    void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
+    // Whether to compile with -g to include DWARF debug info in the binary. TT_METAL_RISCV_DEBUG_INFO=0/1 decides
+    // when set. Unset, it follows the Inspector (tt-triage reads the debug info for hang callstacks), except on a
+    // simulator, where nothing reads it unless DPRINT is on (enum names and callstacks) or a debug tool can attach
+    // (TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS).
+    bool get_riscv_debug_info_enabled() const {
+        if (riscv_debug_info_override) {
+            return *riscv_debug_info_override;
+        }
+        if (get_simulator_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint) &&
+            !simulator_serve_over_sockets) {
+            return false;
+        }
+        return get_inspector_enabled();
+    }
+    void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_override = enable; }
 
     unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
@@ -993,6 +1009,9 @@ public:
     // EXPERIMENTAL: graph-based fabric builder
     bool get_fabric_graph_builder() const { return fabric_graph_builder; }
     void set_fabric_graph_builder(bool enable) { fabric_graph_builder = enable; }
+
+    bool get_fabric_inter_domain() const { return fabric_inter_domain; }
+    void set_fabric_inter_domain(bool enable) { fabric_inter_domain = enable; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
