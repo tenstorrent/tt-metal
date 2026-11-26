@@ -32,6 +32,8 @@ TUNING_OVERRIDES = {
     "max_resident_chunks": None,
     "chunk_tiles_target": None,
     "max_cores": None,
+    # Profiling only: compile the per-chunk device zones in (perf_instrumentation.hpp). No effect without the profiler.
+    "chunk_zones": None,
 }
 
 

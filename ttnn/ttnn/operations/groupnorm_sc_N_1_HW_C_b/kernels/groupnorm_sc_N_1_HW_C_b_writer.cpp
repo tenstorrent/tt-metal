@@ -24,6 +24,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 constexpr uint32_t cb_output_rm = 1;
@@ -56,7 +57,9 @@ void kernel_main() {
     constexpr bool IS_ROOT = get_compile_time_arg_val(7) != 0;  // one binary per role (unit root / member)
     constexpr bool IS_RM = get_compile_time_arg_val(8) != 0;
     constexpr bool SHARDED = get_compile_time_arg_val(9) != 0;
-    constexpr auto out_args = TensorAccessorArgs<10>();
+    // Per-chunk zones only when the host found every chunk's zone executions inside the marker budget.
+    constexpr bool CHUNK_ZONES = get_compile_time_arg_val(10) != 0;
+    constexpr auto out_args = TensorAccessorArgs<11>();
     constexpr auto mc = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
@@ -126,8 +129,13 @@ void kernel_main() {
         if constexpr (IS_ROOT) {
             cb_reserve_back(cb_gathered_partials, 2 * R);
         }
-        cb_wait_front(cb_local_partials, 2);
         {
+            // Pass 1 + collapse on this core's compute (the writer idles until the local partials exist).
+            MaybeDeviceZoneScope("w_wait_partials");
+            cb_wait_front(cb_local_partials, 2);
+        }
+        {
+            MaybeDeviceZoneScope("w_gather_send");
             // Row 0 of each partial tile (lanes 0..15 in face 0, 16..31 in face 1) -> row `slot` of the pair.
             const uint32_t src = get_read_ptr(cb_local_partials);
             for (uint32_t k = 0; k < 4; ++k) {
@@ -142,13 +150,21 @@ void kernel_main() {
         // ---------------- combine / broadcast ----------------
         if constexpr (IS_ROOT) {
             volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_l1);
-            noc_semaphore_wait_min(sem, cpi);
+            {
+                // The slowest unit core's pass 1 + collapse + gather write.
+                MaybeDeviceZoneScope("w_wait_gather");
+                noc_semaphore_wait_min(sem, cpi);
+            }
             noc_semaphore_set(sem, 0);
             cb_push_back(cb_gathered_partials, 2 * R);
 
-            cb_wait_front(cb_stats_out, 2);
+            {
+                MaybeDeviceZoneScope("w_wait_finalize");
+                cb_wait_front(cb_stats_out, 2);
+            }
             cb_reserve_back(cb_group_stats, 2);
             if constexpr (McastT::sender_available) {
+                MaybeDeviceZoneScope("w_mcast_send");
                 mc.sender(noc).send(get_read_ptr(cb_stats_out), group_stats_base, STATS_BYTES);
             }
             cb_push_back(cb_group_stats, 2);
@@ -157,12 +173,15 @@ void kernel_main() {
             // Member cores exist only when cpi > 1; their binary carries the receiver pipe only.
             cb_reserve_back(cb_group_stats, 2);
             if constexpr (McastT::receiver_available) {
+                // The combine round trip seen from a member: gather -> root finalize -> mcast.
+                MaybeDeviceZoneScope("w_mcast_recv");
                 mc.receiver(noc).receive();
             }
             cb_push_back(cb_group_stats, 2);
         }
 
         // ---------------- output: pass-2 order (resident tail first, then the re-read head) ----------------
+        MaybeDeviceZoneScope("w_output");
         if constexpr (SHARDED) {
             constexpr uint32_t cb_out = IS_RM ? cb_output_rm : cb_output_tiles;
             const uint32_t credits = (IS_RM ? first_resident : 0) + num_chunks;
@@ -177,7 +196,11 @@ void kernel_main() {
             const uint32_t row0 = row_start + j * CHUNK_HT;
             const uint32_t rows_left = rows_core - j * CHUNK_HT;
             const uint32_t rows_valid = rows_left < CHUNK_HT ? rows_left : CHUNK_HT;
-            cb_wait_front(cb_output_tiles, T);
+            {
+                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "w_wait_out");
+                cb_wait_front(cb_output_tiles, T);
+            }
+            MaybeDeviceZoneScopeIf(CHUNK_ZONES, "w_issue");
             uint32_t src = get_read_ptr(cb_output_tiles);
             for (uint32_t r = 0; r < rows_valid; ++r) {
                 const uint32_t tile0 = (n * HT + row0 + r) * WT_TOTAL + wt0;
@@ -190,6 +213,7 @@ void kernel_main() {
             cb_pop_front(cb_output_tiles, T);
         }
     }
+    MaybeDeviceZoneScope("w_final_barrier");
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }

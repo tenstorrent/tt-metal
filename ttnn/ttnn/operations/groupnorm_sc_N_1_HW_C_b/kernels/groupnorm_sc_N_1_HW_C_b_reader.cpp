@@ -32,6 +32,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
@@ -92,7 +93,9 @@ void kernel_main() {
     // Pilot rows are emitted PILOT_REPEAT times (m copies of the W tiles): compute's pass-1 chain walks m tile
     // rows as one row of m*W tiles so its DEST window fills on narrow slices.
     constexpr uint32_t PILOT_TILES = get_compile_time_arg_val(13) * W;
-    constexpr auto in_args = TensorAccessorArgs<14>();
+    // Per-chunk zones only when the host found every chunk's zone executions inside the marker budget.
+    constexpr bool CHUNK_ZONES = get_compile_time_arg_val(14) != 0;
+    constexpr auto in_args = TensorAccessorArgs<15>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -125,8 +128,11 @@ void kernel_main() {
     Noc noc;
 
     // ---------------- Constants (once per kernel) ----------------
-    dataflow_kernel_lib::
-        prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>(1.0f);
+    {
+        MaybeDeviceZoneScope("r_scaler");
+        dataflow_kernel_lib::
+            prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>(1.0f);
+    }
 
     const uint32_t num_chunks = (rows_core + CHUNK_HT - 1) / CHUNK_HT;
     const uint32_t K = resident_chunks < num_chunks ? resident_chunks : num_chunks;
@@ -134,6 +140,7 @@ void kernel_main() {
     const uint32_t staging = get_write_ptr(cb_affine_staging);
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+        MaybeDeviceZoneScope("r_block");
         const uint32_t unit = unit_start + blk;
         const uint32_t n = unit / GX;
         const uint32_t c_start = (unit % GX) * P;  // first channel of the slice
@@ -144,6 +151,7 @@ void kernel_main() {
         // B+1..B+first_resident re-read the non-resident head for pass 2.
         for (uint32_t step = 0; step <= num_chunks + first_resident; ++step) {
             if (step == num_chunks) {
+                MaybeDeviceZoneScope("r_ones_shift_affine");
                 if (is_root) {
                     // Ones tiles (R): matmul in0 of the root's sender sum. RISC-V writes one 64 B row, then NoC
                     // self-copies keep doubling the filled prefix until all R tiles are ones (one NoC site). The
@@ -248,16 +256,21 @@ void kernel_main() {
                 }
             }
 
-            if constexpr (SHARDED) {
-                // The chunk is already resident in this core's shard: hand compute its credits.
+            {
+                // Back-pressure: compute has not freed the ring slot yet.
+                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_reserve");
                 if constexpr (IS_RM) {
                     cb_reserve_back(cb_input_rm, T);
                 } else {
+                    // Both views must have room: the keep view still holds the resident tail until pass 2.
                     cb_reserve_back(cb_input_tiles, T);
                     cb_reserve_back(cb_input_keep, T);
                 }
+            }
+            if constexpr (SHARDED) {
+                // The chunk is already resident in this core's shard: the reserve above hands compute its credits.
             } else if constexpr (IS_RM) {
-                cb_reserve_back(cb_input_rm, T);
+                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_issue");
                 uint32_t page = n * HW + row0 * 32;
                 uint32_t dst = get_write_ptr(cb_input_rm);
                 for (uint32_t s = 0; s < rows_valid * 32; ++s) {
@@ -266,9 +279,7 @@ void kernel_main() {
                     dst += SLICE_BYTES;
                 }
             } else {
-                // Both views must have room: the keep view still holds the resident tail until pass 2.
-                cb_reserve_back(cb_input_tiles, T);
-                cb_reserve_back(cb_input_keep, T);
+                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_issue");
                 uint32_t dst = get_write_ptr(cb_input_tiles);
                 for (uint32_t r = 0; r < rows_valid; ++r) {
                     const uint32_t tile0 = (n * HT + row0 + r) * WT_TOTAL + wt0;
@@ -280,6 +291,7 @@ void kernel_main() {
             }
 
             if (step == 0) {
+                MaybeDeviceZoneScope("r_map_setup");
                 cb_reserve_back(cb_pilot_rows, PILOT_TILES);
                 cb_reserve_back(cb_sum_seed, W);
                 if (is_root) {
@@ -315,9 +327,13 @@ void kernel_main() {
                     cb_push_back(cb_group_map, W);
                 }
             }
-            noc_async_read_barrier();
+            {
+                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_barrier");
+                noc_async_read_barrier();
+            }
 
             if (step == 0) {
+                MaybeDeviceZoneScope("r_shift_rows");
                 // ---------------- Shift rows: lane v -> k = x[row 0, first channel of v's group] ----------------
                 // cb_pilot_rows (bf16): k, the srcB operand of pass 1's x - k. cb_sum_seed (Float32, unpacked to
                 // DEST): -n*k, exact. cb_group_shift (root, Float32): k per group lane, 0 past G_CORE.

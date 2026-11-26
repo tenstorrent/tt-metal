@@ -45,6 +45,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 using namespace compute_kernel_lib;
 
@@ -96,6 +97,9 @@ constexpr bool IS_ROOT = get_compile_time_arg_val(9) != 0;
 // row of m*W tiles, so its DEST window fills on narrow slices too (the window only spans one walk row).
 constexpr uint32_t PILOT_REPEAT = get_compile_time_arg_val(10);
 constexpr uint32_t PILOT_TILES = PILOT_REPEAT * W;
+// Per-chunk device zones (perf_instrumentation.hpp): the host enables them only when every core's chunk count keeps
+// the zone executions inside the per-RISC marker budget (a long DRAM block would silently exhaust it).
+constexpr bool CHUNK_ZONES = get_compile_time_arg_val(11) != 0;
 constexpr uint32_t T = CHUNK_HT * W;
 // Tiles per DEST window of the two-op per-chunk chains (pass-1 x*(x - k), pass-2 a*x - b'): each element runs
 // over the whole window, so its FPU init is paid once per window, not per tile. The chain clamps it to DEST.
@@ -120,6 +124,7 @@ ALWI void push_pad(uint32_t cb, uint32_t pad) {
 // RM: tilize one chunk (rows_valid tile-rows of W tiles) from cb_input_rm into the input ring, then consume
 // the rm pad pages and push the pad so every ring advances by the nominal T (both ring views in lockstep).
 NOINLINE_BLOCK_OP void tilize_chunk(uint32_t rows_valid) {
+    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_tilize");
     DataflowBuffer rm_dfb(cb_input_rm);
     DataflowBuffer x_dfb(cb_input_tiles);
     cb_reserve_back(cb_input_keep, T);
@@ -152,7 +157,10 @@ ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
     DataflowBuffer pilot_dfb(cb_pilot_rows);
     DataflowBuffer seed_dfb(cb_sum_seed);
 
-    cb_wait_front(x_cb, T);
+    {
+        MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_wait_x");
+        cb_wait_front(x_cb, T);
+    }
 
     // x*(x - k) -> cb_x_squared (Float32), the sequential intermediate of the second reduce. x - k (fp32 DEST)
     // re-enters the FPU through the bf16 srcB the pilot left: exact whenever k/2 <= x <= 2k (Sterbenz), the
@@ -160,21 +168,25 @@ ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
     // Walk ceil(rows_valid/m) rows of m*W tiles (m | CHUNK_HT keeps a ragged chunk's rounded-up walk inside its
     // nominal T pages; the extra tiles are pad, never reduced).
     const uint32_t walk_rows = (rows_valid + PILOT_REPEAT - 1) / PILOT_REPEAT;
-    eltwise_chain(
-        IterationShape::grid(walk_rows, PILOT_TILES).block_size(CHAIN_BLOCK),
-        BinaryFpu<
-            BinaryFpuOp::Sub,
-            input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
-            input(cb_pilot_rows, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row)>{
-            x_dfb, pilot_dfb},
-        DestReuseBinary<
-            BinaryFpuOp::Mul,
-            input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
-            DestReuseType::DEST_TO_SRCB>{x_dfb},
-        PackTile<output(cb_x_squared, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{xsq_dfb});
-    push_pad(cb_x_squared, T - walk_rows * PILOT_TILES);
-    cb_wait_front(cb_x_squared, T);
+    {
+        MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_xk_chain");
+        eltwise_chain(
+            IterationShape::grid(walk_rows, PILOT_TILES).block_size(CHAIN_BLOCK),
+            BinaryFpu<
+                BinaryFpuOp::Sub,
+                input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
+                input(cb_pilot_rows, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row)>{
+                x_dfb, pilot_dfb},
+            DestReuseBinary<
+                BinaryFpuOp::Mul,
+                input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
+                DestReuseType::DEST_TO_SRCB>{x_dfb},
+            PackTile<output(cb_x_squared, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{xsq_dfb});
+        push_pad(cb_x_squared, T - walk_rows * PILOT_TILES);
+        cb_wait_front(cb_x_squared, T);
+    }
 
+    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_reduce");
     const auto shape = ReduceInputBlockShape::of(rows_valid, W);
     reduce<
         PoolType::SUM,
@@ -238,7 +250,11 @@ ALWI void normalize_chunk(uint32_t rows_valid) {
     // the DEST window spans tile rows; otherwise the window is bounded by the W-tile walk row (Row mapping).
     constexpr InputTileMapping CHAN_MAP = W == 1 ? InputTileMapping::Scalar : InputTileMapping::Row;
     IterationShape shape = W == 1 ? IterationShape::tiles(rows_valid) : IterationShape::grid(rows_valid, W);
-    cb_wait_front(x_cb, T);
+    {
+        MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_wait_x");
+        cb_wait_front(x_cb, T);
+    }
+    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_normalize");
     eltwise_chain(
         shape.block_size(CHAIN_BLOCK),
         BinaryFpu<
@@ -299,7 +315,10 @@ void kernel_main() {
     compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(cb_chan_scale, cb_group_map, cb_local_partials);
 
     // The map is resident for the whole kernel (matmul in1, NoWaitNoPop).
-    cb_wait_front(cb_group_map, W);
+    {
+        MaybeDeviceZoneScope("c_wait_map");
+        cb_wait_front(cb_group_map, W);
+    }
 
     const uint32_t num_chunks = (rows_core + CHUNK_HT - 1) / CHUNK_HT;
     const uint32_t K = resident_chunks < num_chunks ? resident_chunks : num_chunks;
@@ -311,27 +330,33 @@ void kernel_main() {
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         // ---------------- accumulate_moments (pass 1) ----------------
-        for (uint32_t j = 0; j < num_chunks; ++j) {
-            const uint32_t rows_valid = rows_valid_of(j);
-            if constexpr (IS_RM) {
-                tilize_chunk(rows_valid);
+        {
+            MaybeDeviceZoneScope("c_pass1");
+            for (uint32_t j = 0; j < num_chunks; ++j) {
+                const uint32_t rows_valid = rows_valid_of(j);
+                if constexpr (IS_RM) {
+                    tilize_chunk(rows_valid);
+                }
+                if (blk > 0 && j == 0) {
+                    // Alias group B: the writer must have drained the previous block's output before x^2 lands.
+                    cb_reserve_back(cb_output_tiles, OUT_CB_PAGES);
+                }
+                accumulate_chunk(j, rows_valid);
+                if (j < first_resident) {
+                    skip_chunk(cb_input_keep);  // streamed head chunk: not held for pass 2
+                }
             }
-            if (blk > 0 && j == 0) {
-                // Alias group B: the writer must have drained the previous block's output before x^2 lands.
-                cb_reserve_back(cb_output_tiles, OUT_CB_PAGES);
-            }
-            accumulate_chunk(j, rows_valid);
-            if (j < first_resident) {
-                skip_chunk(cb_input_keep);  // streamed head chunk: not held for pass 2
-            }
+            cb_pop_front(cb_pilot_rows, PILOT_TILES);
         }
-        cb_pop_front(cb_pilot_rows, PILOT_TILES);
-        publish_channel_moments();
+        {
+            MaybeDeviceZoneScope("c_collapse");
+            publish_channel_moments();
 
-        // ---------------- collapse_to_group_partials ----------------
-        // [1 x W] per-channel row x [W x 1] map -> one tile; row 0 holds the G_core group lanes.
-        matmul_with_map<false>(chan_scale_cb, map_cb, local_partials_cb, MatmulBlockShape::of(1, 1, 1, 1, W, 1));
-        matmul_with_map<false>(chan_work_cb, map_cb, local_partials_cb, MatmulBlockShape::of(1, 1, 1, 1, W, 1));
+            // ---------------- collapse_to_group_partials ----------------
+            // [1 x W] per-channel row x [W x 1] map -> one tile; row 0 holds the G_core group lanes.
+            matmul_with_map<false>(chan_scale_cb, map_cb, local_partials_cb, MatmulBlockShape::of(1, 1, 1, 1, W, 1));
+            matmul_with_map<false>(chan_work_cb, map_cb, local_partials_cb, MatmulBlockShape::of(1, 1, 1, 1, W, 1));
+        }
 
         // RM stall shadow: tilize the first pass-2 re-read chunk before blocking on the combine.
         bool pretilized = false;
@@ -344,6 +369,12 @@ void kernel_main() {
 
         // ---------------- combine_group_stats (root) ----------------
         if constexpr (IS_ROOT) {
+            {
+                // The gather round trip: every unit core's partial row landed (writer semaphore wait).
+                MaybeDeviceZoneScope("c_wait_gather");
+                cb_wait_front(cb_gathered_partials, 2 * R);
+            }
+            MaybeDeviceZoneScope("c_finalize");
             // Sum the cpi sender rows: ones [1 x R] x gathered [R x 2] -> [S1, S2], every row = the total.
             matmul_block<
                 false,
@@ -409,40 +440,48 @@ void kernel_main() {
         }
 
         // ---------------- expand_stats_to_channels ----------------
-        // stats tile [32 x 32 lanes] x map^T [lanes x 32 channels] -> per-channel value, rows replicated.
-        const auto expand_shape = MatmulBlockShape::of(1, W / EXP_SBW, 1, EXP_SBW, 1, 1);
-        if constexpr (HAS_GAMMA) {
-            // Both expands land in cb_chan_work (rstd_ch, then mean_ch): one call site, two iterations.
-            for (uint32_t s = 0; s < 2; ++s) {
-                matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);
-                if (s == 0) {
-                    eltwise_chain(
-                        IterationShape::tiles(W),
-                        BinaryFpu<BinaryFpuOp::Mul, input(cb_chan_work), input(cb_gamma_rows, BroadcastDim::Row)>{
-                            chan_work_dfb, gamma_dfb},
-                        PackTile<output(cb_chan_scale)>{chan_scale_dfb});  // a = rstd_ch * gamma
-                }
-            }
-        } else {
-            matmul_with_map<true>(group_stats_cb, map_cb, chan_scale_cb, expand_shape);  // a = rstd_ch
-            matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);   // mean_ch
+        {
+            // The combine round trip seen from this core: [rstd, mean] multicast back from the unit root.
+            MaybeDeviceZoneScope("c_wait_stats");
+            cb_wait_front(cb_group_stats, 2);
         }
-        // m = mean_ch * a -> cb_chan_shift (alias of cb_chan_work: tile i over tile i, in place).
-        eltwise_chain(
-            IterationShape::tiles(W),
-            BinaryFpu<
-                BinaryFpuOp::Mul,
-                input(cb_chan_work),
-                input(cb_chan_scale, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block)>{
-                chan_work_dfb, chan_scale_dfb},
-            PackTile<output(cb_chan_shift)>{chan_shift_dfb});
-        if constexpr (HAS_BETA) {
-            // b' = m - beta -> cb_chan_work (in place over cb_chan_shift's bytes).
+        {
+            MaybeDeviceZoneScope("c_expand");
+            // stats tile [32 x 32 lanes] x map^T [lanes x 32 channels] -> per-channel value, rows replicated.
+            const auto expand_shape = MatmulBlockShape::of(1, W / EXP_SBW, 1, EXP_SBW, 1, 1);
+            if constexpr (HAS_GAMMA) {
+                // Both expands land in cb_chan_work (rstd_ch, then mean_ch): one call site, two iterations.
+                for (uint32_t s = 0; s < 2; ++s) {
+                    matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);
+                    if (s == 0) {
+                        eltwise_chain(
+                            IterationShape::tiles(W),
+                            BinaryFpu<BinaryFpuOp::Mul, input(cb_chan_work), input(cb_gamma_rows, BroadcastDim::Row)>{
+                                chan_work_dfb, gamma_dfb},
+                            PackTile<output(cb_chan_scale)>{chan_scale_dfb});  // a = rstd_ch * gamma
+                    }
+                }
+            } else {
+                matmul_with_map<true>(group_stats_cb, map_cb, chan_scale_cb, expand_shape);  // a = rstd_ch
+                matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);   // mean_ch
+            }
+            // m = mean_ch * a -> cb_chan_shift (alias of cb_chan_work: tile i over tile i, in place).
             eltwise_chain(
                 IterationShape::tiles(W),
-                BinaryFpu<BinaryFpuOp::Sub, input(cb_chan_shift), input(cb_beta_rows, BroadcastDim::Row)>{
-                    chan_shift_dfb, beta_dfb},
-                PackTile<output(cb_chan_work)>{chan_work_dfb});
+                BinaryFpu<
+                    BinaryFpuOp::Mul,
+                    input(cb_chan_work),
+                    input(cb_chan_scale, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block)>{
+                    chan_work_dfb, chan_scale_dfb},
+                PackTile<output(cb_chan_shift)>{chan_shift_dfb});
+            if constexpr (HAS_BETA) {
+                // b' = m - beta -> cb_chan_work (in place over cb_chan_shift's bytes).
+                eltwise_chain(
+                    IterationShape::tiles(W),
+                    BinaryFpu<BinaryFpuOp::Sub, input(cb_chan_shift), input(cb_beta_rows, BroadcastDim::Row)>{
+                        chan_shift_dfb, beta_dfb},
+                    PackTile<output(cb_chan_work)>{chan_work_dfb});
+            }
         }
 
         // ---------------- normalize_block (pass 2): resident chunks first, then re-reads ----------------
@@ -450,6 +489,7 @@ void kernel_main() {
         // In place (sharded, the output CBs are the input shard's bytes) needs no extra ordering: TILE packs tile i
         // over the tile i it just unpacked (unpack -> math -> pack per tile); RM untilizes a chunk over the rows it
         // was tilized from, which happened in pass 1 (resident) or in the tilize_chunk just above (re-read).
+        MaybeDeviceZoneScope("c_pass2");
         if constexpr (UNTILIZE_OUT) {
             // The output shard is a FIFO in row order: skip the head region (re-read last), write the resident
             // tail, then wrap to the head. The writer drains every credit.
@@ -466,6 +506,7 @@ void kernel_main() {
             }
             normalize_chunk(rows_valid);
             if constexpr (UNTILIZE_OUT) {
+                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_untilize");
                 DataflowBuffer out_tiles_dfb(cb_output_tiles);
                 DataflowBuffer out_rm_dfb(cb_output_rm);
                 untilize<W, cb_output_tiles, cb_output_rm>(out_tiles_dfb, out_rm_dfb, rows_valid);

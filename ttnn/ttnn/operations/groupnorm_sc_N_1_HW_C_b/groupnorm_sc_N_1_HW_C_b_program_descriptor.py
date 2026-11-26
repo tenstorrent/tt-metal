@@ -52,6 +52,13 @@ D_RM = 2  # RM stick CB depth (chunks)
 CHAIN_BLOCK_TILES = 4
 D_OUT = 2  # output CB depth (chunks); group B total = max(4 KB*T, D_OUT*T*2 KB)
 MAX_GROUP_LANES = 32  # group lanes in one tile row
+# Per-chunk device zones (perf_instrumentation.hpp MaybeDeviceZoneScopeIf) split each chunk's wait from its work.
+# They are opt-in (TUNING_OVERRIDES["chunk_zones"]): in a profiled build they cost about 0.9 us on a 25 us sharded
+# case on top of the always-on block-level zones (about 1.3 us), so routine device-time runs leave them off. Even
+# when requested they are compiled in only when a core's chunk steps (pass 1 + pass-2 re-reads) keep every RISC
+# inside the ~125 zone-execution marker budget: at most 4 per-chunk zones per step, plus about a dozen block zones.
+# 16 leaves margin: a 22-step DRAM block (vae_dram_262144x256) crashed the Tracy capture with chunk zones on.
+CHUNK_ZONE_MAX_STEPS = 16
 
 BF16_TILE_BYTES = 2048
 F32_TILE_BYTES = 4096
@@ -735,6 +742,12 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     reader_ct = [W, h, int(is_rm), hg, hb, R, plan.Cg, plan.Wt, plan.Ht, plan.gx, in_page_bytes, map_period]
     reader_ct.append(int(sharded))
     reader_ct.append(pilot_repeat(W, h))
+    # Per-chunk zones (CT): every core's chunk steps fit the marker budget.
+    chunk_zones = int(
+        bool(_tuning().get("chunk_zones"))
+        and plan.B_max + (plan.B_max - min(plan.K_alloc, plan.B_max)) <= CHUNK_ZONE_MAX_STEPS
+    )
+    reader_ct.append(chunk_zones)
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         (ttnn.TensorAccessorArgs(gamma) if gamma is not None else ttnn.TensorAccessorArgs()).get_compile_time_args()
@@ -750,12 +763,25 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     # block loop on it, emitting the whole per-block body twice; the root binary must fit the kernel-config ring
     # (also under the watcher / assert build).
     def compute_ct(is_root):
-        return [W, h, int(is_rm), hg, hb, R, exp_sbw, out_cb_pages, int(sharded), int(is_root), pilot_repeat(W, h)]
+        return [
+            W,
+            h,
+            int(is_rm),
+            hg,
+            hb,
+            R,
+            exp_sbw,
+            out_cb_pages,
+            int(sharded),
+            int(is_root),
+            pilot_repeat(W, h),
+            chunk_zones,
+        ]
 
     # The writer is built once per role (IS_ROOT is compile-time): each binary carries only its own mcast pipe
     # (sender on unit roots, receiver elsewhere) and only the root's gather-wait / zero-fill code.
     def writer_ct(is_root):
-        ct = [W, h, R, plan.Wt, plan.Ht, plan.gx, out_page_bytes, int(is_root), int(is_rm), int(sharded)]
+        ct = [W, h, R, plan.Wt, plan.Ht, plan.gx, out_page_bytes, int(is_root), int(is_rm), int(sharded), chunk_zones]
         ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
         return ct
 
