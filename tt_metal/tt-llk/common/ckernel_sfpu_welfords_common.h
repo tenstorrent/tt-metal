@@ -26,7 +26,6 @@
 #include "api/numeric/bfloat16.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 /**
@@ -184,7 +183,7 @@ sfpi_inline void _program_welfords_replay_buffer_()
             _compute_welfords_row_<ckernel::p_sfpu::LREG3>();
         });
 #else
-    lltt::record(0, WELFORD_INSTR_PER_ROW * 4);
+    TTI_REPLAY(0, WELFORD_INSTR_PER_ROW * 4, 0, 1);
 
     _compute_welfords_row_<ckernel::p_sfpu::LREG0>();
     _compute_welfords_row_<ckernel::p_sfpu::LREG1>();
@@ -203,7 +202,7 @@ sfpi_inline void _program_welfords_replay_buffer_()
 template <std::uint32_t input_lreg>
 sfpi_inline void _execute_welfords_row_replay_buffer_()
 {
-    lltt::replay(WELFORD_INSTR_PER_ROW * input_lreg, WELFORD_INSTR_PER_ROW);
+    TTI_REPLAY(WELFORD_INSTR_PER_ROW * input_lreg, WELFORD_INSTR_PER_ROW, 0, 0);
 }
 
 /**

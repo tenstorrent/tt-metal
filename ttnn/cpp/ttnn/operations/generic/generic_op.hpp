@@ -13,6 +13,7 @@
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/compiled_program.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {
@@ -71,9 +72,12 @@ struct MeshProgramRunArgs {
 // two forms share cache entries. The output is the last tensor in io_tensors, which the caller preallocates, and each
 // tensor parameter binds its own io_tensors entry. The program cache keys on a hash of the spec. PrefetcherPipes in
 // the run args must outlive every program that uses them, and a program stays bound to its first pipe (or one
-// re-carved in its place), so a call with another pipe needs another pipe parameter name. generic_op does not check
-// SRAMArenas yet: give every arena the spec declares on every call, and keep it allocated while a program that uses it
-// can run, since a call that leaves one out runs with the arena the cached program got last.
+// re-carved in its place), so a call with another pipe needs another pipe parameter name. Every call must give a
+// GlobalSemaphore for each GlobalSemaphore parameter, on the MeshDevice the program runs on, and generic_op checks
+// that on every call. Keep each one alive until the last program that uses it has run; a later call may give another
+// one without a new program, and a GlobalSemaphore keeps its value from one call to the next. generic_op does not
+// check SRAMArenas yet: give every arena the spec declares on every call, and keep it allocated while a program that
+// uses it can run, since a call that leaves one out runs with the arena the cached program got last.
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args);
 
 // Runs each range's program on the devices in that range.
@@ -95,6 +99,30 @@ void prepare_generic_op(
 // The hash generic_op keys its program cache on, combined with each program's mesh range. Runtime argument values,
 // ProgramSpec::name and WorkUnitSpec::name are not part of it.
 uint64_t compute_program_spec_hash(const ProgramSpec& spec);
+
+// Compiles and lays out the program that generic_op would enqueue, into a CompiledProgram, without enqueueing it or
+// touching the program cache (ttnn::device_operation::compile). In slow dispatch its kernel binaries may outgrow the
+// KERNEL_CONFIG window, to run from a kernel config buffer (ttnn::device_operation::create_kernel_config_buffer).
+ttnn::device_operation::CompiledProgram compile_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
+ttnn::device_operation::CompiledProgram compile_generic_op(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
+
+// generic_op, launching `compiled` (from compile_generic_op) instead of a program from the program cache: the
+// descriptor's runtime arguments, and the buffers of its CBs, are applied to it as a cache hit applies them
+// (ttnn::device_operation::run). The descriptor must have the program cache key of the one `compiled` was compiled
+// from. `kernel_config_buffer`, when given, holds the Tensix kernel binaries instead of the KERNEL_CONFIG window.
+Tensor run_compiled_program(
+    ttnn::device_operation::CompiledProgram& compiled,
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor,
+    const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer = nullptr);
+Tensor run_compiled_program(
+    ttnn::device_operation::CompiledProgram& compiled,
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::ProgramDescriptor& program_descriptor,
+    const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer = nullptr);
 
 }  // namespace experimental
 
