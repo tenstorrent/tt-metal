@@ -8,7 +8,7 @@
 
 #include "cross_node_dfb_test_utils.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include "impl/allocator/allocator.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/program/dispatch.hpp"

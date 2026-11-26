@@ -5,7 +5,12 @@
 #pragma once
 
 // DEPRECATED-FORWARDING-HEADER: <tt-metalium/host_api.hpp> moved to <tt-metalium/workload/legacy/host_api.hpp>.
-// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
+// This forwarding header will be removed after 2027-03-05.
+#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
+// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
+#warning \
+    "<tt-metalium/host_api.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/workload/legacy/host_api.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
+#endif
 
 #include <tt-metalium/workload/legacy/host_api.hpp>  // IWYU pragma: export
 #include <tt-metalium/discovery/cluster.hpp>  // IWYU pragma: export

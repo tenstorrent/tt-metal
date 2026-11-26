@@ -4,7 +4,7 @@
 
 #include "repeat_interleave.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"

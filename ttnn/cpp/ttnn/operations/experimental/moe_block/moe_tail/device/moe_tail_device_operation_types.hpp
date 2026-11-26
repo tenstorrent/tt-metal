@@ -9,7 +9,7 @@
 #include <optional>
 #include <tuple>
 
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"

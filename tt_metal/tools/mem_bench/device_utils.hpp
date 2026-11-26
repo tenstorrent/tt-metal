@@ -5,8 +5,8 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <optional>
 #include <vector>
 

@@ -21,11 +21,11 @@
 #include <memory>
 #include <string>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <internal/kernel_build_options.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"

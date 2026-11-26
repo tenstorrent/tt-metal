@@ -5,8 +5,8 @@
 #include "routed_experts_combine.hpp"
 #include <tracy/Tracy.hpp>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "device/routed_experts_combine_device_operation.hpp"

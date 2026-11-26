@@ -8,7 +8,7 @@
 
 #include "ttnn/distributed/types.hpp"
 
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 namespace ttnn::operations::ccl {
 

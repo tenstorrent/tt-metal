@@ -11,7 +11,6 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -89,7 +88,7 @@ inline void _calculate_lcm_gcd_sfp_rows_() {
 
 #pragma GCC unroll LCM_MAX_REPLAY_COUNT
     for (int r = 0; r < LCM_GCD_REPLAY_COUNT; r++) {
-        lltt::replay(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN);
+        TTI_REPLAY(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN, 0, 0, 0, 0);
     }
 }
 
@@ -98,13 +97,13 @@ inline void _calculate_lcm_gcd_sfp_rows_() {
  * @note Re-run after any op that records into replay slots [0, 28).
  */
 inline void calculate_lcm_init() {
-    lltt::record(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN);
+    TTI_REPLAY(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN, 0, 0, 0, 1);
 
     // LREG2 and LREG0 trade roles so -a is back in LREG2 after two steps.
     _calculate_lcm_gcd_step_<p_sfpu::LREG2, p_sfpu::LREG0>();
     _calculate_lcm_gcd_step_<p_sfpu::LREG0, p_sfpu::LREG2>();
 
-    lltt::record(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN);
+    TTI_REPLAY(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN, 0, 0, 0, 1);
 
     TTI_SFPENCC(0 /* imm12 */, LCM_ENCC_MOD_RESET);  // wake retired lanes; lreg1 = g
 
@@ -189,7 +188,7 @@ inline void calculate_lcm(
 
         _calculate_lcm_gcd_sfp_rows_<MAX_INPUT_BITS>();
 
-        lltt::replay(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN);
+        TTI_REPLAY(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN, 0, 0, 0, 0);
 
         // Non-negative result: no SMAG32 conversion needed on store.
         TT_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0 /* done */, out_offset + (d << 1));

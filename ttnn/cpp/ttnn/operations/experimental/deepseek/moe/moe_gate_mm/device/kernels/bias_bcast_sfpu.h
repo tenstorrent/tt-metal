@@ -33,7 +33,6 @@ namespace ckernel {
 #ifdef TRISC_MATH
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace sfpu {
@@ -56,14 +55,16 @@ inline void _add_bias_configure_addrmod_() {
         .dest = {.incr = 14, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
         .set(ADDRMOD_OFFSET + ADDR_MOD_2);
-
-    addr_mod_t{
-        .dest = {.incr = -14, .clr = 0, .cr = 0, .c_to_cr = 0},
-    }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_3);
 }
 
 inline void _add_bias_() {
+    // ADDR_MOD_3 is slot 7 under the SFPU addr-mod base. This op steps dest by -14 through it; restore zero
+    // advance before returning.
+    addr_mod_t{
+        .dest = {.incr = -14, .clr = 0, .cr = 0, .c_to_cr = 0},
+    }
+        .set(ADDR_MOD_7);
+
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // Let us load in the bias values
@@ -72,7 +73,7 @@ inline void _add_bias_() {
     TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 128);
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_0, 128);
 
-    lltt::record<lltt::Exec>(0, 4 + 1 + 5 + 1 + 4);
+    TTI_REPLAY(0, 4 + 1 + 5 + 1 + 4, 1, 1);
     // Now load in the input, 4 rows at a time
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
     TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
@@ -98,12 +99,12 @@ inline void _add_bias_() {
 
     // Now do this 3 more times, to complete first two faces (16 rows)
     for (uint32_t i = 0; i < 3; ++i) {
-        lltt::replay(0, 15);
+        TTI_REPLAY(0, 15, 0, 0);
     }
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-    lltt::record<lltt::Exec>(15, 4 + 1 + 5 + 1 + 4);
+    TTI_REPLAY(15, 4 + 1 + 5 + 1 + 4, 1, 1);
     // Now load in the input, 4 rows at a time
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 32 + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 32 + 0);
@@ -129,8 +130,11 @@ inline void _add_bias_() {
 
     // Now do this 3 more times, to complete lower two faces (16 rows)
     for (uint32_t i = 0; i < 3; ++i) {
-        lltt::replay(15, 15);
+        TTI_REPLAY(15, 15, 0, 0);
     }
+
+    // Restore the ADDR_MOD_7 invariant (zero advance) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
 }
 
 }  // namespace sfpu
