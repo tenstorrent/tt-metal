@@ -11,7 +11,6 @@
 #include "ckernel_ops.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "llk_defs.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -174,7 +173,7 @@ inline void calculate_quant_int32(
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off);  // operand A (fp32)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN);                        // RNE MAD + clamp + convert
+        TTI_REPLAY(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN, 0, 0);                        // RNE MAD + clamp + convert
         TT_SFPSTORE(p_sfpu::LREG0, out_mode, ADDR_MOD_2, out_off);                // store + dst_reg += 2
     }
 }
@@ -218,7 +217,7 @@ inline void calculate_requant_int32(
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80 (excess-128)
         }
-        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN);      // CAST + RNE MAD + clamp + convert
+        TTI_REPLAY(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN, 0, 0);      // CAST + RNE MAD + clamp + convert
         TT_SFPSTORE(p_sfpu::LREG0, out_mode, ADDR_MOD_2, out_off);  // store + dst_reg += 2
     }
 }
@@ -238,7 +237,7 @@ inline void calculate_quant_int32_int8_pack(
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off);  // operand A (fp32)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);               // RNE MAD + clamp + convert + XOR
+        TTI_REPLAY(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT, 0, 0);               // RNE MAD + clamp + convert + XOR
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_2, out_off);
     }
 }
@@ -262,7 +261,7 @@ inline void calculate_requant_int32_int8_pack(
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
-        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_INT8_OUT);  // CAST + RNE MAD + clamp + convert + XOR
+        TTI_REPLAY(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_INT8_OUT, 0, 0);  // CAST + RNE MAD + clamp + convert + XOR
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_2, out_off);
     }
 }
@@ -302,7 +301,7 @@ inline void calculate_dequant_int32(
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
-        lltt::replay(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);                     // CAST + ADD + SFPNOP + MUL + SFPNOP
+        TTI_REPLAY(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN, 0, 0);                     // CAST + ADD + SFPNOP + MUL + SFPNOP
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, out_off);  // store fp32 + dst_reg += 2
     }
 }
@@ -329,7 +328,7 @@ void quant_init(const std::uint32_t zero_point) {
     // rather than the generic Tensix TTI_NOP for their pipeline bubbles.
     constexpr std::uint32_t REPLAY_LEN =
         OUTPUT_FORMAT == DataFormat::Int8 ? QUANT_REPLAY_LEN_INT8_OUT : QUANT_REPLAY_LEN;
-    lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
+    TTI_REPLAY(QUANT_REPLAY_SLOT, REPLAY_LEN, 0, 1);
     {
         // m = RNE(A * B + zp_hi) + RNE_MAGIC: the single rounding step of the MAD rounds to nearest even
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /*mod1*/);
@@ -368,7 +367,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
 
     constexpr std::uint32_t REPLAY_LEN =
         OUTPUT_FORMAT == DataFormat::Int8 ? REQUANT_REPLAY_LEN_INT8_OUT : REQUANT_REPLAY_LEN;
-    lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REPLAY_LEN);
+    TTI_REPLAY(REQUANT_REPLAY_SLOT, REPLAY_LEN, 0, 1);
     {
         // int32 sign-magnitude (loaded that way regardless of input bit
         // representation, via SFPLOAD instr_mod0) -> fp32.
@@ -404,7 +403,7 @@ void dequant_init(const std::uint32_t zero_point) {
         _sfpu_load_imm32_(p_sfpu::LREG4, INT8_SIGN_MASK);
     }
 
-    lltt::record<lltt::NoExec>(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);
+    TTI_REPLAY(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN, 0, 1);
     {
         // int32 sign-magnitude -> fp32.
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);

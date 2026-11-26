@@ -101,10 +101,14 @@ void sum_candidate() {
     copy_init(cb_local);
     pack_reconfig_data_format(cb_out);
     tile_regs_acquire();
+    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     copy_tile(cb_local, 0, 0);
+    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
     add_binary_tile_init();
     for (uint32_t r = 0; r + 1 < chunks_per_row; ++r) {
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(cb_received, r, 1);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         add_binary_tile(0, 1, 0);
     }
     tile_regs_commit();

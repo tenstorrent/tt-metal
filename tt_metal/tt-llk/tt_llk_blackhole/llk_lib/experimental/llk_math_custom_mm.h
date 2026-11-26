@@ -147,7 +147,7 @@ inline void custom_mm_configure_narrow_mop(const std::uint32_t operandB_face_r_d
         });
 
     // The single top MVMUL from the replay buffer, then the end of tile or block MVMULs as in custom_mm_configure_mop
-    const std::uint32_t mvmul_base      = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, 1 /*length*/);
+    const std::uint32_t mvmul_base      = TT_OP_REPLAY(ckernel::math::replay_buf_offset + 0, 1 /*length*/, 0, 0);
     const std::uint32_t mvmul_end_tile  = TT_OP_MVMUL(p_setrwc::CLR_A, 0 /*instr_mod19*/, ADDR_MOD_2, 0 /*dst*/);
     const std::uint32_t mvmul_end_block = TT_OP_MVMUL(p_setrwc::CLR_AB, 0 /*instr_mod19*/, ADDR_MOD_3, 0 /*dst*/);
 
@@ -204,7 +204,7 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
         });
 
     // Top 3 MVMUL instructions from the replay buffer
-    const std::uint32_t mvmul_base = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, 3);
+    const std::uint32_t mvmul_base = TT_OP_REPLAY(ckernel::math::replay_buf_offset + 0, 3, 0, 0);
     // F1 @ F3 => 16 (24 if split_acc) (clear only SrcA as SrcB is reused)
     const std::uint32_t mvmul_end_tile = TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
     // F1 @ F3 => 16 (24 if split_acc) (clear both SrcA and SrcB as this is the end if the block)
@@ -316,10 +316,10 @@ inline void _llk_math_custom_mm_(
         // Run the full replay ct_dim - 1 times as it has the full finalization sequence for cases where SrcB is reused
         for (std::uint32_t i = 0; i < ct_dim - 1; i++)
         {
-            lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+            TT_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
         }
         // Run the full replay - the last ELWADD as it differs on the last ct_dim iteration and is issued directly after
-        lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len - 1);
+        TT_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len - 1, 0, 0);
         TTI_ELWADD(3, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
 
         // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.

@@ -13,7 +13,6 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
-#include "lltt.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -379,7 +378,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
 
             // Replay the 13 instructions (slots 2-14): hi/lo transpose of the single face-row + CLR_B.
-            lltt::replay(2, 13);
+            TTI_REPLAY(2, 13, 0, 0);
 
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
             math::_configure_src_zero_flag_(false);
@@ -387,7 +386,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
         else
         {
             // Replay the 7 instructions (slots 2-8) to transpose the single reduced face-row + CLR_B.
-            lltt::replay(2, 7);
+            TTI_REPLAY(2, 7, 0, 0);
         }
         addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
         return;
@@ -401,7 +400,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
     }
 
     // Replay the 13 instructions to transpose the reduced results
-    lltt::replay(2, 13);
+    TTI_REPLAY(2, 13, 0, 0);
 
     if constexpr (is_fp32_dest_acc_en)
     {

@@ -8,7 +8,6 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel
@@ -160,7 +159,7 @@ inline void _calculate_sdpa_reduce_row_8x32_(std::uint32_t src_index)
 
     TTI_SFPLOAD(p_sfpu::LREG0, 0, sdpa_reduce_row::ZERO_ADDR_MOD, 0);
     TTI_SFPLOAD(p_sfpu::LREG2, 0, sdpa_reduce_row::ZERO_ADDR_MOD, 4);
-    lltt::replay(replay_start + 4, 12);
+    TTI_REPLAY(replay_start + 4, 12, 0, 0);
 
     if constexpr (block_width > 1)
     {
@@ -174,7 +173,7 @@ inline void _calculate_sdpa_reduce_row_8x32_(std::uint32_t src_index)
                     t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU);
                 }
             }
-            lltt::replay(replay_start, 16);
+            TTI_REPLAY(replay_start, 16, 0, 0);
         }
     }
     _sdpa_reduce_row_8x32_epilogue_<format, pool_type>();

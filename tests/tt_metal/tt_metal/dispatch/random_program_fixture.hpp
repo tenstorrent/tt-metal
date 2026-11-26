@@ -6,19 +6,19 @@
 
 #include "command_queue_fixture.hpp"
 #include "common/env_lib.hpp"
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <gtest/gtest.h>
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
@@ -95,12 +95,12 @@ protected:
         const CoreType kernel_core_type,
         const bool simple_kernel = false,
         KernelProperties kernel_properties = KernelProperties()) {
-        if (device_->arch() != ARCH::QUASAR) {
-            Program program = CreateProgram(*device_);
-            this->create_kernel(program, kernel_core_type, simple_kernel, kernel_properties);
-            return program;
+        if (simple_kernel || device_->arch() == ARCH::QUASAR) {
+            return this->create_program_from_spec(kernel_core_type, simple_kernel, kernel_properties);
         }
-        return this->create_gen2_program(kernel_core_type, simple_kernel, kernel_properties);
+        Program program = CreateProgram(*device_);
+        this->create_kernel(program, kernel_core_type, simple_kernel, kernel_properties);
+        return program;
     }
 
     void create_kernel(
@@ -242,7 +242,7 @@ protected:
 
 private:
     // Semaphores are not value checked: Gen2 only allows a zero initial value.
-    Program create_gen2_program(
+    Program create_program_from_spec(
         const CoreType kernel_core_type, const bool simple_kernel, KernelProperties kernel_properties) {
         using namespace tt::tt_metal::experimental;
 
@@ -352,6 +352,11 @@ private:
             // Implicit sync takes a transaction id per DFB from a pool of 24.
             .hw_config =
                 DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = this->get_processor(false),
+                            .noc = NOC::RISCV_0_default,
+                        },
                     .config_2xx =
                         DataMovementHardwareConfig::DataMovement2XXConfig{
                             .disable_dfb_implicit_sync_for_all = true,

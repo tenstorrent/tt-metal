@@ -5,8 +5,8 @@
 #pragma once
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_device_operation_types.hpp"
 
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 namespace ttnn::prim {
 struct AllBroadcastProgramFactory {

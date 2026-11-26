@@ -9,8 +9,8 @@
 #include <enchantum/enchantum.hpp>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <vector>
 
 #include "gumbel_sample_program_factory.hpp"

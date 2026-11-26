@@ -3,15 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
 #include <cstddef>
 #include <functional>
 #include <numeric>
 #include <ostream>
 
 #include <tt_stl/assert.hpp>
-#include "constants.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
 #include <tt_stl/span.hpp>
 
 std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {
