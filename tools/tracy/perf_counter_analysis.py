@@ -234,13 +234,12 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
 
 
 def decode_riscv_pmc_markers(rows: List[Dict[str, Any]], device_arch: str) -> Optional[pd.DataFrame]:
-    """One row per core launch from the RISC-V monitor markers (ids 9092 to 9096) of a device log.
+    """One row per core launch from the RISC-V monitor markers of a device log; tt_llk_perf/riscv_pmc.py has the
+    marker layout.
 
     Each row is a dict with device_id (the PCIe slot column), run_host_id, core_x, core_y, risc_type, marker_id,
-    record_time and data. A mesh op gives every chip one run_host_id, so launches are keyed by device too. The streams of a
-    core are paired in time order, so a stream cut short by a full profiler buffer yields fewer rows. The upper pair
-    (ids 9095, 9096) exists only for Quasar data-movement cores with a programmed counter 5 or 6.
-    The result has the named events of every counter, mcycle, minstret and the derived RISC-V metrics.
+    record_time and data. A mesh op gives every chip one run_host_id, so launches are keyed by device too. The streams
+    of a core are paired in time order, so a stream cut short by a full profiler buffer yields fewer rows.
     """
     all_ids = _riscv_pmc.MARKER_IDS + _riscv_pmc.UPPER_MARKER_IDS
     streams: Dict[Tuple, Dict[int, List[Tuple[int, int]]]] = {}

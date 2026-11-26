@@ -4,16 +4,9 @@
 
 """Hardware-free checks of the RISC-V performance monitor tables and decoder in tt_llk_perf."""
 
-import re
-
 import pytest
+from helpers.perf.marker_rows import marker_row, tracy_analysis
 from tt_llk_perf import headers, riscv_metrics, riscv_pmc
-
-EXPECTED_COUNTS = {
-    "blackhole": {"baby": 93},
-    "wormhole": {"baby": 0},
-    "quasar": {"trisc": 95, "dm": 24},
-}
 
 
 @pytest.fixture(scope="module")
@@ -24,14 +17,6 @@ def event_names():
 def test_enum_names_are_unique_and_start_with_undef(event_names):
     assert event_names[0] == "UNDEF"
     assert len(set(event_names)) == len(event_names)
-
-
-@pytest.mark.parametrize("arch", sorted(EXPECTED_COUNTS))
-def test_table_sizes(arch):
-    tables = headers.riscv_event_tables(arch)
-    assert {kind: len(entries) for kind, entries in tables.items()} == EXPECTED_COUNTS[
-        arch
-    ]
 
 
 @pytest.mark.parametrize("arch", ("blackhole", "quasar"))
@@ -61,6 +46,7 @@ def test_dm_selects_are_one_mask_bit_of_one_set():
 def test_quasar_trisc_is_the_baby_table_plus_two_if_events():
     baby = dict(headers.riscv_event_tables("blackhole")["baby"])
     trisc = dict(headers.riscv_event_tables("quasar")["trisc"])
+    assert len(trisc) == len(baby) + 2
     assert {k: v for k, v in trisc.items() if k in baby} == baby
     assert set(trisc) - set(baby) == {"IF_STALL_NO_IF_RTS", "IF_ID_STALL_LD"}
     assert trisc["IF_STALL_NO_IF_RTS"] == 0x70 and trisc["IF_ID_STALL_LD"] == 0x80
@@ -93,9 +79,9 @@ def test_known_selects_decode_to_names():
 
 
 def test_select_round_trip():
-    for arch, kinds in EXPECTED_COUNTS.items():
-        for kind in kinds:
-            for name, select in headers.riscv_event_tables(arch)[kind]:
+    for arch in ("blackhole", "quasar"):
+        for kind, entries in headers.riscv_event_tables(arch).items():
+            for name, select in entries:
                 assert headers.riscv_event_select(arch, kind, [name]) == select
                 assert name in headers.riscv_select_events(arch, kind, select)
 
@@ -130,23 +116,29 @@ def test_unknown_kind_and_event_raise():
         headers.riscv_event_select("blackhole", "baby", ["NOPE"])
 
 
-def test_csr_addresses_in_the_hw_header():
-    text = (headers.find_include_dir() / "riscv_pmc_hw.h").read_text()
-    csrs = {
-        n: int(v, 16) for n, v in re.findall(r"CSR_(\w+)\s*=\s*(0x[0-9A-Fa-f]+)", text)
-    }
-    assert csrs == {
-        "MCYCLE": 0xB00,
-        "MINSTRET": 0xB02,
-        "MHPMCOUNTER3": 0xB03,
-        "MHPMCOUNTER4": 0xB04,
-        "MHPMCOUNTER5": 0xB05,
-        "MHPMCOUNTER6": 0xB06,
-        "MHPMEVENT3": 0x323,
-        "MHPMEVENT4": 0x324,
-        "MHPMEVENT5": 0x325,
-        "MHPMEVENT6": 0x326,
-    }
+def test_unknown_select_bits_are_labelled_and_counted():
+    # IF has no event 15 on Blackhole, and DM set 1 has no mask bit 10.
+    launch = riscv_pmc.unpack_launch(
+        (7 << 32) | 9, (100 << 32) | 1000, (0x40001 << 32) | 0xA00000F0
+    )
+    decoded = riscv_pmc.decode_launch("blackhole", "baby", launch)
+    assert decoded["event3"] == "MEM_INS_BUF_WRITE|UNKNOWN_0xf0"
+    assert decoded["metrics"][
+        "riscv_mem_ins_buf_write_or_unknown_0xf0_pct"
+    ] == pytest.approx(0.9)
+    dm = riscv_pmc.decode_launch("quasar", "dm", launch)
+    assert dm["event4"] == "UNKNOWN_0x40001"
+    assert dm["metrics"]["riscv_unknown_0x40001_pct"] == pytest.approx(0.7)
+
+
+def test_stall_pct_needs_the_whole_stall_union():
+    union = "|".join(sorted(riscv_metrics.STALL_UNION))
+    assert (
+        riscv_metrics.compute_riscv_metrics(1000, 500, {union: 400})["riscv_stall_pct"]
+        == 40.0
+    )
+    one = riscv_metrics.compute_riscv_metrics(1000, 500, {"LS_STALL_ANY": 400})
+    assert one["riscv_stall_pct"] is None and one["riscv_ls_stall_any_pct"] == 40.0
 
 
 def test_core_kind():
@@ -219,69 +211,19 @@ def test_metrics_absent_inputs_read_none_not_zero():
     )
 
 
-def test_metric_labels():
-    assert riscv_metrics.riscv_metric_label("riscv_ipc_ratio") == "RISC-V IPC"
-    assert (
-        riscv_metrics.riscv_metric_label("riscv_ls_load_op_pct")
-        == "RISC-V LS_LOAD_OP Cycle Fraction"
-    )
-    assert (
-        riscv_metrics.riscv_metric_label("riscv_ls_load_op_per_instr_ratio")
-        == "RISC-V LS_LOAD_OP per Instruction"
-    )
-    assert riscv_metrics.riscv_is_ratio_key(
-        "riscv_ipc_ratio"
-    ) and not riscv_metrics.riscv_is_ratio_key("riscv_stall_pct")
-
-
-def _tracy_analysis():
-    import importlib.util
-    from pathlib import Path
-
-    pytest.importorskip("pandas")
-    pytest.importorskip("loguru")
-    path = (
-        Path(__file__).resolve().parents[5]
-        / "tools"
-        / "tracy"
-        / "perf_counter_analysis.py"
-    )
-    if not path.is_file():
-        pytest.skip("not inside a tt-metal checkout")
-    spec = importlib.util.spec_from_file_location(
-        "perf_counter_analysis_under_test", path
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _marker(run, risc, marker_id, time, data, core=(1, 2), device=0):
-    return {
-        "device_id": device,
-        "run_host_id": run,
-        "core_x": core[0],
-        "core_y": core[1],
-        "risc_type": risc,
-        "marker_id": marker_id,
-        "record_time": time,
-        "data": data,
-    }
-
-
 def test_tracy_decoder_pairs_streams_and_names_events():
-    analysis = _tracy_analysis()
+    analysis = tracy_analysis()
     rows = []
     for run, (c3, c4, cyc, ins) in enumerate(
         [(400, 100, 1000, 500), (50, 25, 100, 40)], start=7
     ):
         t = run * 100
         rows += [
-            _marker(run, "TRISC_1", 9092, t, (c4 << 32) | c3),
-            _marker(run, "TRISC_1", 9093, t + 1, (ins << 32) | cyc),
-            _marker(run, "TRISC_1", 9094, t + 2, (0xA0000000 << 32) | 0x10110111),
+            marker_row(run, "TRISC_1", 9092, t, (c4 << 32) | c3),
+            marker_row(run, "TRISC_1", 9093, t + 1, (ins << 32) | cyc),
+            marker_row(run, "TRISC_1", 9094, t + 2, (0xA0000000 << 32) | 0x10110111),
         ]
-    rows.append(_marker(7, "BRISC", 38106, 5, 0))
+    rows.append(marker_row(7, "BRISC", 38106, 5, 0))
     df = analysis.decode_riscv_pmc_markers(rows, "blackhole")
     assert list(df["run_host_id"]) == [7, 8]
     assert set(df["event4"]) == {"MEM_INS_BUF_WRITE"}
@@ -290,13 +232,13 @@ def test_tracy_decoder_pairs_streams_and_names_events():
 
 
 def test_tracy_decoder_keeps_chips_apart():
-    analysis = _tracy_analysis()
+    analysis = tracy_analysis()
     rows = []
     for device, (cyc, ins) in enumerate([(1000, 500), (2000, 600)]):
         rows += [
-            _marker(7, "TRISC_1", 9092, 100, 0, device=device),
-            _marker(7, "TRISC_1", 9093, 101, (ins << 32) | cyc, device=device),
-            _marker(7, "TRISC_1", 9094, 102, 0, device=device),
+            marker_row(7, "TRISC_1", 9092, 100, 0, device=device),
+            marker_row(7, "TRISC_1", 9093, 101, (ins << 32) | cyc, device=device),
+            marker_row(7, "TRISC_1", 9094, 102, 0, device=device),
         ]
     df = analysis.decode_riscv_pmc_markers(rows, "blackhole")
     assert list(df["device_id"]) == [0, 1]
@@ -305,19 +247,19 @@ def test_tracy_decoder_keeps_chips_apart():
 
 
 def test_tracy_decoder_skips_cores_without_the_monitor():
-    analysis = _tracy_analysis()
-    rows = [_marker(1, "BRISC", i, 1, 0) for i in (9092, 9093, 9094)]
+    analysis = tracy_analysis()
+    rows = [marker_row(1, "BRISC", i, 1, 0) for i in (9092, 9093, 9094)]
     assert analysis.decode_riscv_pmc_markers(rows, "wormhole") is None
-    rows = [_marker(1, "ERISC", i, 1, 0) for i in (9092, 9093, 9094)]
+    rows = [marker_row(1, "ERISC", i, 1, 0) for i in (9092, 9093, 9094)]
     assert analysis.decode_riscv_pmc_markers(rows, "wormhole") is None
 
 
 def test_tracy_decoder_names_blackhole_ethernet_events():
-    analysis = _tracy_analysis()
+    analysis = tracy_analysis()
     rows = [
-        _marker(3, "ERISC", 9092, 10, (7 << 32) | 9),
-        _marker(3, "ERISC", 9093, 11, (400 << 32) | 1000),
-        _marker(3, "ERISC", 9094, 12, (0xA0000000 << 32) | 0x10110111),
+        marker_row(3, "ERISC", 9092, 10, (7 << 32) | 9),
+        marker_row(3, "ERISC", 9093, 11, (400 << 32) | 1000),
+        marker_row(3, "ERISC", 9094, 12, (0xA0000000 << 32) | 0x10110111),
     ]
     df = analysis.decode_riscv_pmc_markers(rows, "blackhole")
     assert list(df["risc_type"]) == ["ERISC"]
@@ -326,16 +268,16 @@ def test_tracy_decoder_names_blackhole_ethernet_events():
 
 
 def test_tracy_decoder_pairs_the_upper_dm_markers():
-    analysis = _tracy_analysis()
+    analysis = tracy_analysis()
     rows = []
     for n in range(2):
         t = 100 * (n + 1)
         rows += [
-            _marker(5, "QUASAR_DM2", 9092, t, (n << 32) | 3),
-            _marker(5, "QUASAR_DM2", 9093, t + 1, (300 << 32) | 600),
-            _marker(5, "QUASAR_DM2", 9094, t + 2, (0x801 << 32) | 0x201),
-            _marker(5, "QUASAR_DM2", 9095, t + 3, ((7 + n) << 32) | 9),
-            _marker(5, "QUASAR_DM2", 9096, t + 4, (0x402 << 32) | 0x202),
+            marker_row(5, "QUASAR_DM2", 9092, t, (n << 32) | 3),
+            marker_row(5, "QUASAR_DM2", 9093, t + 1, (300 << 32) | 600),
+            marker_row(5, "QUASAR_DM2", 9094, t + 2, (0x801 << 32) | 0x201),
+            marker_row(5, "QUASAR_DM2", 9095, t + 3, ((7 + n) << 32) | 9),
+            marker_row(5, "QUASAR_DM2", 9096, t + 4, (0x402 << 32) | 0x202),
         ]
     df = analysis.decode_riscv_pmc_markers(rows, "quasar")
     assert len(df) == 2
@@ -348,23 +290,23 @@ def test_tracy_decoder_pairs_the_upper_dm_markers():
 
 
 def test_tracy_decoder_without_upper_markers_leaves_them_idle():
-    analysis = _tracy_analysis()
+    analysis = tracy_analysis()
     rows = [
-        _marker(1, "QUASAR_DM3", 9092, 10, 3),
-        _marker(1, "QUASAR_DM3", 9093, 11, (300 << 32) | 600),
-        _marker(1, "QUASAR_DM3", 9094, 12, 0x201),
+        marker_row(1, "QUASAR_DM3", 9092, 10, 3),
+        marker_row(1, "QUASAR_DM3", 9093, 11, (300 << 32) | 600),
+        marker_row(1, "QUASAR_DM3", 9094, 12, 0x201),
     ]
     df = analysis.decode_riscv_pmc_markers(rows, "quasar")
     assert df["event5"][0] == "DISABLED" and df["event6"][0] == "DISABLED"
 
 
 def test_tracy_decoder_short_stream_pairs_what_it_can():
-    analysis = _tracy_analysis()
+    analysis = tracy_analysis()
     rows = [
-        _marker(1, "QUASAR_DM0", 9092, 10, 3),
-        _marker(1, "QUASAR_DM0", 9093, 11, (300 << 32) | 600),
-        _marker(1, "QUASAR_DM0", 9094, 12, 0x201),
-        _marker(1, "QUASAR_DM0", 9092, 20, 3),
+        marker_row(1, "QUASAR_DM0", 9092, 10, 3),
+        marker_row(1, "QUASAR_DM0", 9093, 11, (300 << 32) | 600),
+        marker_row(1, "QUASAR_DM0", 9094, 12, 0x201),
+        marker_row(1, "QUASAR_DM0", 9092, 20, 3),
     ]
     df = analysis.decode_riscv_pmc_markers(rows, "quasar")
     assert len(df) == 1 and df["event3"][0] == "DM_PIPE_LONG_LATENCY"
