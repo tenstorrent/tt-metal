@@ -5,17 +5,18 @@
 #pragma once
 
 #include "gtest/gtest.h"
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "impl/program/program_impl.hpp"
 #include "test_host_kernel_common.hpp"
 

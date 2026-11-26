@@ -5,12 +5,12 @@
 #include "pad_rm_reader_writer_multi_core_program_factory.hpp"
 #include "ttnn/core.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
 
 #include <cmath>
 #include <filesystem>

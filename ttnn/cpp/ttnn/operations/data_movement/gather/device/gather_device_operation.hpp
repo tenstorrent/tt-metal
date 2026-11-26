@@ -11,7 +11,7 @@
 #include <variant>
 
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/operation.hpp"
 
 namespace ttnn::prim {

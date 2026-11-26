@@ -7,7 +7,7 @@
 #include <array>
 #include <optional>
 #include <string_view>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-umd-workload/cluster.hpp>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
@@ -17,7 +17,7 @@
 #include "metal/operations.hpp"
 #include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
-#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/data_formats/bfloat16.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/tensor/tensor.hpp"

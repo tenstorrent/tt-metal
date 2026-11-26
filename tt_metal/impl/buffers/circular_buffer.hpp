@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
 #include <cstdint>
 
 namespace tt::tt_metal {

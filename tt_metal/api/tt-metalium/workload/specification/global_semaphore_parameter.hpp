@@ -15,7 +15,7 @@ namespace tt::tt_metal {
 // ============================================================================
 //
 // A GlobalSemaphoreParameter declares that a Program uses a GlobalSemaphore
-// (tt-metalium/global_semaphore.hpp). The GlobalSemaphore object is supplied
+// (tt-metalium/memory/cross_program/global_semaphore.hpp). The GlobalSemaphore object is supplied
 // at Program execution time, via ProgramRunArgs::global_semaphore_args.
 //
 // Like a MeshTensor, a GlobalSemaphore is a user-managed resource: its lifetime

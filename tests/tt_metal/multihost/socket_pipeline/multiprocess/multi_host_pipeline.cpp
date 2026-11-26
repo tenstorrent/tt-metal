@@ -13,11 +13,11 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include <chrono>
 #include <filesystem>
 #include <numeric>

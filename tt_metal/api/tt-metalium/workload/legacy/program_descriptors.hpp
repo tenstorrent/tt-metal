@@ -8,17 +8,17 @@
 #include <cstdint>
 #include <initializer_list>
 #include <string>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/face_geometry.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/data_formats/face_geometry.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <fmt/base.h>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt-metalium/experimental/cb_descriptor_options.hpp>
 #include <internal/reload_table.hpp>
 #include <tt_stl/small_vector.hpp>
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 
 #include <functional>
 

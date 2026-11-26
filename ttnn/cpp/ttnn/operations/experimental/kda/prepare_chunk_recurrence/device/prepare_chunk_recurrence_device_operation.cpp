@@ -8,9 +8,9 @@
 #include <cmath>
 #include <limits>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"

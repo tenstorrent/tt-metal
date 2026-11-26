@@ -4,8 +4,8 @@
 
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"

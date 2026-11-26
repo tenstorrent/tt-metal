@@ -15,7 +15,6 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -51,7 +50,7 @@ inline void calculate_gelu_appx() {
         sfpi::l_reg[GELU_APPX_HALF_LREG] = half;
     }
     // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), lut pass r+1, mad pass r+1.
-    lltt::record(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN);
+    TTI_REPLAY(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN, 0, 0, 0, 1);
     {
         sfpi::vFloat half = sfpi::l_reg[GELU_APPX_HALF_LREG];
         sfpi::vFloat result = sfpi::l_reg[GELU_APPX_RESULT_LREG];
@@ -63,7 +62,7 @@ inline void calculate_gelu_appx() {
     }
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN);
+        TTI_REPLAY(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN, 0, 0, 0, 0);
     }
     sfpi::dst_reg[0].mode(ADDR_MOD_6) = sfpi::vFloat(sfpi::l_reg[GELU_APPX_RESULT_LREG]);
 }

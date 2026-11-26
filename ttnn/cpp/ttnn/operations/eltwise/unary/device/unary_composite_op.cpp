@@ -9,7 +9,7 @@
 #include <variant>
 
 #include <utility>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -22,7 +22,7 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <cstdint>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -31,7 +31,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
 namespace ttnn::detail {
 
 // Function variance of whole tensor.

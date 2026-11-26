@@ -6,8 +6,8 @@
 #include <memory>
 #include <optional>
 
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/experimental/fabric/fabric_switch_manager.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"

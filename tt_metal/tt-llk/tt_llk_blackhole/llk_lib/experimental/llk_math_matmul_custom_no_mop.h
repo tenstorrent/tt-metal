@@ -87,18 +87,6 @@ inline void matmul_configure_addrmod_no_mop(
     }
         .set(ADDR_MOD_5);
 
-    if constexpr (THROTTLE_LEVEL)
-    {
-        // reset all, including fidelity
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 1, .cr = 1},
-            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-            .dest     = {.incr = 0, .clr = 1, .cr = 1},
-            .fidelity = {.incr = 0, .clr = 1},
-        }
-            .set(ADDR_MOD_6);
-    }
-
     if (transpose)
     {
         addr_mod_t {
@@ -160,7 +148,8 @@ inline void matmul_configure_addrmod_reinit(
 {
     // Reinit must restore the address-modifier contract used by replay. For tiny tiles this
     // re-establishes the shape-aware addrmods (see matmul_configure_addrmod_no_mop); for full tiles
-    // it restores the hardcoded 32x32 addrmods. transpose affects ADDR_MOD_1/4, fidelity uses ADDR_MOD_5/6.
+    // it restores the hardcoded 32x32 addrmods. transpose affects ADDR_MOD_1/4, fidelity uses ADDR_MOD_5
+    // (slot 6 is the throttled-execute counter reset, programmed in the execute itself).
     matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(
         transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 }
@@ -203,7 +192,7 @@ inline void matmul_configure_mop_custom(
     //
     // 16x32 / 32x16 tiny tiles record a shorter, face-row-confined MVMUL sequence (identical to the proven
     // regular matmul_configure_mop) so the replay never marches SrcB into non-existent faces; full 32x32
-    // tiles keep the original 16-MVMUL 4-face walk. The no-mop path drives this via direct lltt::replay.
+    // tiles keep the original 16-MVMUL 4-face walk. The no-mop path drives this via direct TT_REPLAY.
 
     constexpr bool high_fidelity = math_fidelity != MathFidelity::LoFi;
 
@@ -466,6 +455,18 @@ inline void _llk_math_matmul_no_mop_(
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face            = false)
 {
+    if constexpr (THROTTLE_LEVEL > 0)
+    {
+        // The throttled sequence's last MVMUL resets all counters, including fidelity, through ADDR_MOD_6.
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = 0, .clr = 1},
+        }
+            .set(ADDR_MOD_6);
+    }
+
     const bool reuse_a                = ct_dim >= rt_dim;
     const std::uint32_t t_dim         = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim       = reuse_a ? ct_dim : rt_dim; // reuse-dim
@@ -504,7 +505,7 @@ inline void _llk_math_matmul_no_mop_(
                             // inner loop (2 iterations for standard tiles)
                             for (std::uint32_t inner = 0; inner < 2; inner++)
                             {
-                                lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                                TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
                                 if (inner < 1)
                                 {
                                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // inner loop continuation
@@ -534,7 +535,7 @@ inline void _llk_math_matmul_no_mop_(
                         // Not high fidelity, outer_loops = 2
                         for (std::uint32_t inner = 0; inner < 2; inner++)
                         {
-                            lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                            TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
                             if (inner < 1)
                             {
                                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
@@ -546,7 +547,7 @@ inline void _llk_math_matmul_no_mop_(
                         }
                         for (std::uint32_t inner = 0; inner < 2; inner++)
                         {
-                            lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                            TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
                             if (inner < 1)
                             {
                                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
@@ -568,7 +569,7 @@ inline void _llk_math_matmul_no_mop_(
                         {
                             for (std::uint32_t inner = 0; inner < 2; inner++)
                             {
-                                lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                                TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
                                 if (inner < 1)
                                 {
                                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // inner loop continuation
@@ -589,7 +590,7 @@ inline void _llk_math_matmul_no_mop_(
                         // Not high fidelity, outer_loops = 1
                         for (std::uint32_t inner = 0; inner < 2; inner++)
                         {
-                            lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                            TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
                             if (inner < 1)
                             {
                                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
@@ -610,7 +611,7 @@ inline void _llk_math_matmul_no_mop_(
                     // Replay num_fidelity_phases times
                     for (std::uint32_t phase = 0; phase < num_fidelity_phases; phase++)
                     {
-                        lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                        TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
                     }
                     // Final clear after all fidelity phases
                     if (reuse_a)
@@ -625,7 +626,7 @@ inline void _llk_math_matmul_no_mop_(
                 else
                 {
                     // Just replay once
-                    lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                    TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
                 }
             }
 
@@ -642,5 +643,11 @@ inline void _llk_math_matmul_no_mop_(
                 }
             }
         }
+    }
+
+    if constexpr (THROTTLE_LEVEL > 0)
+    {
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     }
 }

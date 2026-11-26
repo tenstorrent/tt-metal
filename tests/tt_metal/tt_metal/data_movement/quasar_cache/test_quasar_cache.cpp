@@ -8,8 +8,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "context/metal_context.hpp"
