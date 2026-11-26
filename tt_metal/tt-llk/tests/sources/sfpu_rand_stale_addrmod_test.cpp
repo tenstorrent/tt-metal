@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regression test: rand must store the whole tile when another op's init (topk, slot 6 = dest incr 32)
-// last programmed its dest address mode; seed once, sentinel into Dest, topk init, rand with no rand init.
+// Regression test: rand must store the whole tile when a preceding op's execute (square) last
+// owned the dest address-mode slot it stores under. Seed once, sentinel into Dest, then square:
+// its execute sets slot 6 to +4 per face call and restores the dest += 2 invariant at exit.
+// The draws land on every row only if that restore held; a stale stride would leave rows
+// holding the squared sentinel (outside the draw interval). No rand init follows the seed.
 
 #include <cstdint>
 
@@ -50,6 +53,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_sfpu/ckernel_sfpu_rand.h"
+#include "llk_sfpu/ckernel_sfpu_square.h"
 
 using namespace ckernel;
 
@@ -79,8 +83,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         dst_index, formats.math, formats.math);
 
-    // Another op's init between the seed and the draw: programs slot 6 to dest incr 32.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
+    // square's execute sets slot 6 to +4 and must restore dest += 2 on exit; the draw below fills every
+    // row only if it did. square_init loads the constants square's bf16 rounding reads.
+    _llk_math_eltwise_unary_sfpu_init_<SfpuType::square>();
+    ckernel::sfpu::square_init();
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::calculate_square<APPROX_MODE, is_fp32_dest_acc_en, 32 /* ITERATIONS */>, dst_index, VECTOR_MODE);
 
     // The draw. rand must overwrite the whole tile regardless of what slot 6 held.
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rand<APPROX_MODE>, dst_index, VECTOR_MODE, RAND_FROM_BITS, RAND_SCALE_BITS);

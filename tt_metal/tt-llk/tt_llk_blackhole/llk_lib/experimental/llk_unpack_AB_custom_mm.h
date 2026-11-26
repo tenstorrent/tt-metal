@@ -116,8 +116,8 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     // The reuses split evenly; the remainder goes to A3, A2 and A1 before A0, which already holds the full unpack,
     // so A1..A3 get a reuse each from ct_dim 4 on.
     const std::uint32_t reuses          = ct_dim - 1;
-    const auto full_and                 = [](const std::uint32_t n) { return lltt::replay_insn(0, 2 + (1 + n) * 3); };
-    const auto final_reuses             = [](const std::uint32_t n) { return lltt::replay_insn(32 - n * 3, n * 3); };
+    const auto full_and                 = [](const std::uint32_t n) { return TT_OP_REPLAY(0, 2 + (1 + n) * 3, 0, 0); };
+    const auto final_reuses             = [](const std::uint32_t n) { return TT_OP_REPLAY(32 - n * 3, n * 3, 0, 0); };
     constexpr std::uint32_t reuse_start = 5;
 
     std::uint32_t a0 = 0, a1 = 0, a2 = 0, a3 = 0, b = 0;
@@ -138,8 +138,8 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
         const std::uint32_t base = reuses >> 2;
         const std::uint32_t rem  = reuses & 3;
         a0                       = full_and(base);
-        a1                       = lltt::replay_insn(reuse_start, (base + (rem > 2 ? 1 : 0)) * 3);
-        a2                       = lltt::replay_insn(reuse_start, (base + (rem > 1 ? 1 : 0)) * 3);
+        a1                       = TT_OP_REPLAY(reuse_start, (base + (rem > 2 ? 1 : 0)) * 3, 0, 0);
+        a2                       = TT_OP_REPLAY(reuse_start, (base + (rem > 1 ? 1 : 0)) * 3, 0, 0);
         a3                       = final_reuses(base + (rem > 0 ? 1 : 0));
     }
 

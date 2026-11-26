@@ -5080,7 +5080,9 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
 
     # Run 1: WITHOUT explicit compute_config (auto-default behavior)
     # Default from get_conv_default_compute_kernel_config() is:
-    # math_fidelity=HiFi4, math_approx_mode=true, fp32_dest_acc_en=true (for FP32xFP32), packer_l1_acc=false
+    # math_fidelity=HiFi4 (HiFi3 on Wormhole), math_approx_mode=true, fp32_dest_acc_en=true (for FP32xFP32),
+    # packer_l1_acc=false. Wormhole uses HiFi3 because of hardware bug #38306 with HiFi4 + fp32_dest_acc_en.
+    default_fidelity = ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4
     tt_output_auto = ttnn.conv2d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
@@ -5098,10 +5100,10 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
     )
 
     # Run 2: WITH explicit fp32_dest_acc_en=True (matching expected default)
-    # Must match all default params: MathFidelity::HiFi4, math_approx_mode=true, packer_l1_acc=false
+    # Must match all default params: default_fidelity, math_approx_mode=true, packer_l1_acc=false
     compute_config_true = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=default_fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -5127,7 +5129,7 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
     # Keep all other params same as default, only change fp32_dest_acc_en
     compute_config_false = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=default_fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,

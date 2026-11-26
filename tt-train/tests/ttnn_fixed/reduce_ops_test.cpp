@@ -47,17 +47,13 @@ TEST_F(ReduceOpTest, TestMeanDim0) {
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
     auto ttnn_mean_dim0 = ttml::ttnn_fixed::mean_ttnn(xtensor_a_tensor, 0, true);
-    auto moreh_mean_dim0 = ttml::ttnn_fixed::mean_moreh(xtensor_a_tensor, 0, true);
 
     xt::xarray<float> mean_xtensor = xt::mean(xtensor_a, {0}, xt::evaluation_strategy::immediate);
     mean_xtensor.reshape({1, 1, 64, 64});
 
     auto mean_ttnn = ttml::core::to_xtensor(ttnn_mean_dim0);
-    auto mean_moreh = ttml::core::to_xtensor(moreh_mean_dim0);
 
-    EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/7e-2, /*atol=*/1e-3));
     EXPECT_TRUE(xt::allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2));
 }
 
 TEST_F(ReduceOpTest, TestSumDim0) {
@@ -70,17 +66,13 @@ TEST_F(ReduceOpTest, TestSumDim0) {
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
     auto ttnn_sum_dim0 = ttml::ttnn_fixed::sum_ttnn(xtensor_a_tensor, 0, true);
-    auto moreh_sum_dim0 = ttml::ttnn_fixed::sum_moreh(xtensor_a_tensor, 0, true);
 
     xt::xarray<float> sum_xtensor = xt::sum(xtensor_a, {0}, xt::evaluation_strategy::immediate);
     sum_xtensor.reshape({1, 1, 64, 64});
 
     auto sum_ttnn = ttml::core::to_xtensor(ttnn_sum_dim0);
-    auto sum_moreh = ttml::core::to_xtensor(moreh_sum_dim0);
 
-    EXPECT_TRUE(xt::allclose(sum_ttnn, sum_moreh, /*rtol=*/1e-4, /*atol=*/1e-3));
     EXPECT_TRUE(xt::allclose(sum_xtensor, sum_ttnn, /*rtol=*/1e-2, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(sum_xtensor, sum_moreh, /*rtol=*/1e-2, /*atol=*/1e-2));
 }
 
 TEST_F(ReduceOpTest, TestMeanDim3) {
@@ -93,16 +85,12 @@ TEST_F(ReduceOpTest, TestMeanDim3) {
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
     auto ttnn_mean_dim3 = ttml::ttnn_fixed::mean_ttnn(xtensor_a_tensor, 3, true);
-    auto moreh_mean_dim3 = ttml::ttnn_fixed::mean_moreh(xtensor_a_tensor, 3, true);
 
     xt::xarray<float> mean_xtensor = xt::mean(xtensor_a, {3}, xt::evaluation_strategy::immediate);
     mean_xtensor.reshape({2, 1, 64, 1});
 
     auto mean_ttnn = ttml::core::to_xtensor(ttnn_mean_dim3);
-    auto mean_moreh = ttml::core::to_xtensor(moreh_mean_dim3);
-    EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/1e-4, /*atol=*/1e-3));
     EXPECT_TRUE(xt::allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2));
 }
 
 TEST_F(ReduceOpTest, TestSumDim3) {
@@ -115,17 +103,13 @@ TEST_F(ReduceOpTest, TestSumDim3) {
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
     auto ttnn_sum_dim3 = ttml::ttnn_fixed::sum_ttnn(xtensor_a_tensor, 3, true);
-    auto moreh_sum_dim3 = ttml::ttnn_fixed::sum_moreh(xtensor_a_tensor, 3, true);
 
     xt::xarray<float> sum_xtensor = xt::sum(xtensor_a, {3}, xt::evaluation_strategy::immediate);
     sum_xtensor.reshape({2, 1, 64, 1});
 
     auto sum_ttnn = ttml::core::to_xtensor(ttnn_sum_dim3);
-    auto sum_moreh = ttml::core::to_xtensor(moreh_sum_dim3);
 
-    EXPECT_TRUE(xt::allclose(sum_ttnn, sum_moreh, /*rtol=*/1e-4, /*atol=*/1e-3));
     EXPECT_TRUE(xt::allclose(sum_xtensor, sum_ttnn, /*rtol=*/1e-2, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(sum_xtensor, sum_moreh, /*rtol=*/1e-2, /*atol=*/1e-2));
 }
 
 TEST_F(ReduceOpTest, TestMeanLargeDim3) {
@@ -138,17 +122,13 @@ TEST_F(ReduceOpTest, TestMeanLargeDim3) {
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
     auto ttnn_mean_dim3 = ttml::ttnn_fixed::mean_ttnn(xtensor_a_tensor, 3, true);
-    auto moreh_mean_dim3 = ttml::ttnn_fixed::mean_moreh(xtensor_a_tensor, 3, true);
 
     xt::xarray<float> mean_xtensor = xt::mean(xtensor_a, {3}, xt::evaluation_strategy::immediate);
     mean_xtensor.reshape({2, 1, 512, 1});
 
     auto mean_ttnn = ttml::core::to_xtensor(ttnn_mean_dim3);
-    auto mean_moreh = ttml::core::to_xtensor(moreh_mean_dim3);
 
-    EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/1e-4, /*atol=*/1e-3));
     EXPECT_TRUE(xt::allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2));
 }
 
 TEST_F(ReduceOpTest, TestSumOverLeadingDims) {

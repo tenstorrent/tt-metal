@@ -22,6 +22,7 @@
 #include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
+#include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 
 namespace tt::tt_metal {
 // #22835: These Fixtures will be removed once tests are fully migrated, and replaced by UnitMeshCQFixtures
@@ -195,7 +196,20 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_devices(90000000);
+        const tt::tt_metal::MetalContext& metal_context = tt::tt_metal::MetalContext::instance();
+        const tt::Cluster& cluster = metal_context.get_cluster();
+        const metal_SocDescriptor& soc_descriptor = cluster.get_soc_desc(*cluster.mmio_chip_ids().begin());
+        uint64_t dram_bank_size = soc_descriptor.dram_view_size;
+        if (const std::optional<std::string_view> att_map = metal_context.rtoptions().get_noc_att_map();
+            this->arch_ == tt::ARCH::QUASAR && att_map.has_value()) {
+            if (const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map)) {
+                dram_bank_size = std::min(dram_bank_size, quasar_att::dram_window_local_address_limit(*map_info));
+            }
+        }
+        const uint64_t allocatable_dram_bank_size =
+            dram_bank_size - metal_context.hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+        const uint64_t allocatable_dram_size = allocatable_dram_bank_size * soc_descriptor.get_num_dram_views();
+        this->create_devices(std::min<uint64_t>(90000000, allocatable_dram_size / 4));
         init_max_dfbs();
     }
 };
