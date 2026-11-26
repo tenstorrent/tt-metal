@@ -179,6 +179,35 @@ def _reads_on_noc1(core, grid):
     raise ValueError(f"unknown READ_NOC_SPLIT {READ_NOC_SPLIT!r}")
 
 
+# Worker reader per-bank NoC choice (Perf 1). Per worker core (indexed [logical y][logical x]) a 16-bit mask:
+# bit (bank + 8 * ((page / 8) & 1)) set = that DRAM page is read on NoC 1, else NoC 0 (the reader issues on
+# both NoCs from NCRISC, kernels/a2a_wkv_b2_reader.cpp). The R2 "halves" split leaves the NoC 1 northbound
+# links of the two DRAM columns saturated (link-load model, perf_experiments/reader_issue/ri_linkmodel.py);
+# these masks (searched with that model, ri_masksearch*.py, seed "s1") spread every core's DRAM responses so
+# no link binds. The read itself is at a DRAM ceiling either way (reader alone ~52.4 us); what moves is the
+# NoC 1 bandwidth left for the fabric_tx pulls / sends: 82.4 -> 78.6 us per call (seeds u4 / u6: 78.2-79.4).
+# The table is specific to this placement: a 12-wide worker grid of 8 rows on the Blackhole p150b layout
+# (harvested physical columns, DRAM endpoints) the search modelled. Any mask is CORRECT on any grid (it only
+# picks a NoC per page); off that layout the table has no meaning and _noc1_bank_mask falls back to the
+# "halves" equivalent (the core's default reader NoC for every page).
+NOC1_BANK_MASKS = (
+    (0x844D, 0x5155, 0x81F0, 0x864D, 0xC09C, 0x4C88, 0x7474, 0x5D40, 0x45CD, 0xC3AC, 0x45B6, 0x0905),
+    (0x8C0C, 0x5ACC, 0x94B2, 0x9455, 0x5C5B, 0xF576, 0xC85E, 0x4C4F, 0x45CE, 0x068D, 0x8D45, 0x80C4),
+    (0x1D0A, 0xD49C, 0x3C1D, 0x1434, 0x18C4, 0x1414, 0xE288, 0xC9CE, 0x68D6, 0xED21, 0x4D60, 0x2C4C),
+    (0x3130, 0xB01A, 0x3913, 0x1818, 0x1801, 0x918A, 0x9190, 0xA129, 0x0881, 0x2101, 0x8001, 0x8000),
+    (0x0909, 0x1F91, 0x2118, 0x908A, 0x9302, 0x1119, 0xA998, 0x8909, 0x2E08, 0x09A1, 0x3981, 0x8929),
+    (0x1281, 0x98B8, 0x1000, 0x309A, 0x8B00, 0x008A, 0xB131, 0x1B8A, 0x80C9, 0x0903, 0x4381, 0xC9A3),
+    (0x0000, 0x0122, 0x1252, 0x1030, 0x1003, 0x3131, 0x3012, 0x0141, 0x2302, 0x2230, 0x8000, 0xB121),
+    (0x1011, 0x2201, 0x7210, 0x1050, 0x0242, 0x3312, 0x1113, 0x0101, 0xA363, 0x0120, 0x0301, 0x0009),
+)
+
+
+def _noc1_bank_mask(core, grid, worker_cores):
+    if grid.x == len(NOC1_BANK_MASKS[0]) and all(c.y < len(NOC1_BANK_MASKS) for c in worker_cores):
+        return NOC1_BANK_MASKS[core.y][core.x]
+    return 0xFFFF if _reads_on_noc1(core, grid) else 0x0000
+
+
 def _core_ranges(cores):
     """Pack cores into as few rectangles as possible (x-runs per row, merged over consecutive rows), so
     dispatch can multicast binaries / launch messages to a core set instead of unicasting per core."""
@@ -435,7 +464,10 @@ def create_mesh_program_descriptor(
         for core, start, cnt in worker_assign:
             assert start < 256 and cnt < 256
             core_table[core.y * grid.x + core.x] = start | (cnt << 8)
-        w_reader_common = [input_tensor.buffer_address(), weight.buffer_address(), grid.x] + core_table
+        reader_table = list(core_table)  # + the core's per-bank NoC 1 mask (Perf 1, worker reader)
+        for core in worker_cores:
+            reader_table[core.y * grid.x + core.x] |= _noc1_bank_mask(core, grid, worker_cores) << 16
+        w_reader_common = [input_tensor.buffer_address(), weight.buffer_address(), grid.x] + reader_table
         w_writer_common = [output_tensor.buffer_address(), r, grid.x, 4 + heads_per_core]
         w_writer_common += counter_addrs[:heads_per_core] + core_table
         compute_common = [grid.x] + core_table
@@ -447,16 +479,17 @@ def create_mesh_program_descriptor(
             if not cores:
                 continue
             crs = _core_ranges(cores)
-            if on_noc1:
-                reader_cfg = ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
-                )
-                writer_cfg = ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
-                )
-            else:
-                reader_cfg = ttnn.ReaderConfigDescriptor()
-                writer_cfg = ttnn.WriterConfigDescriptor()
+            # Dynamic NoC mode (Perf 1): the reader issues DRAM reads on BOTH NoCs (per-bank NoC mask), so the
+            # two RISCs share a NoC; in dedicated mode the writer's end-of-kernel idle check (and any barrier
+            # on its NoC) would count the reader's transactions as its own. Each kernel's default NoC is
+            # unchanged: reader NoC 0 / writer NoC 1, swapped on the on_noc1 set.
+            read_noc, write_noc = (ttnn.NOC.NOC_1, ttnn.NOC.NOC_0) if on_noc1 else (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
+            reader_cfg = ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1, noc=read_noc, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC
+            )
+            writer_cfg = ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=write_noc, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC
+            )
             worker_kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_reader.cpp"),
