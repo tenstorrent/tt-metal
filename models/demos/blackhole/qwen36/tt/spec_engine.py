@@ -1379,8 +1379,6 @@ class MTPSpecEngine:
                 "warmup_model_decode(can_sample_on_device=True)"
             )
         penalties = step_penalties(sampling, active)
-        if penalties is not None and spec_mode != "argmax_ids":
-            raise ValueError("verify penalties apply to an argmax_ids verify; a logits verify returns raw logits")
         if slot_remap is not None:
             self.remap_slots(slot_remap)
         if penalties is not None:

@@ -502,20 +502,28 @@ def test_a_chained_verify_whose_counts_are_not_the_runners_output_is_built_from_
     assert eng.materialized_steps == 1 and eng.chained_steps == 0
 
 
-def test_a_logits_verify_refuses_penalties(penalized, expect_error):
+def test_a_device_sampled_narrow_decode_with_logprobs_reads_raw_logits_and_penalized_ids(penalized):
+    """The ordinary decode of a device-sampled step with logprobs reads the verify's logits: the step replays the
+    penalty trace too, after the logits traces (raw logits, penalized ids)."""
     eng, log, state, pen, ch = penalized
     B, T = eng.B, eng.T
-    with expect_error(ValueError, "a logits verify returns raw logits"):
-        eng.decode_forward(
-            torch.zeros(B, T, dtype=torch.int64),
-            torch.tensor([[100 + j for j in range(T)]] * B),
-            num_valid_drafts=torch.zeros(B, dtype=torch.int32),
-            accepted_counts=torch.ones(B, dtype=torch.int32),
-            page_table=torch.ones(B, eng.nb, dtype=torch.int32),
-            spec_mode="logits",
-            mamba_state="S",
-            sampling=_sampling(presence_penalty=[0.5] * B, temperature=[0.0] * B),
-        )
+    state["ids"] = [torch.zeros(B, T, dtype=torch.int64)]
+    eng.decode_forward(
+        torch.tensor([[1, -1, -1, -1]] * B),
+        torch.tensor([[100, -1, -1, -1]] * B),
+        num_valid_drafts=torch.zeros(B, dtype=torch.int32),
+        accepted_counts=torch.ones(B, dtype=torch.int32),
+        page_table=torch.arange(1, B * eng.nb + 1, dtype=torch.int32).reshape(B, eng.nb),
+        spec_mode="logits",
+        mamba_state=ch._mamba(eng),
+        sampling=_sampling(presence_penalty=[0.5] * B, temperature=[0.0] * B),
+        one_enqueue=False,
+        prompt_tokens=_padded({u: [7] for u in range(B)}, B),
+        output_tokens=_padded({u: [1] for u in range(B)}, B),
+    )
+    kw = log["traced"][-1]
+    assert kw["read_logits"] is True and kw["penalties"] is True and "bucket" not in kw
+    _assert_counts(pen, {u: [1] for u in range(B)})
 
 
 def test_the_class_declares_verify_penalties_and_hands_over_the_histories():

@@ -680,9 +680,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_sample_on_device": True,
         "spec_ids_are_sampled": True,
         "max_device_top_k": SAMPLER_TOP_K,
-        # A verify applies presence, frequency and repetition penalties to every column it draws or argmaxes, from
-        # device counts the engine keeps per state slot (spec_penalties). An ordinary decode is sampled on the host
-        # when a row has a penalty, and the verify sampler applies no grammar mask.
+        # A verify, and so an ordinary decode, applies presence, frequency and repetition penalties to every column it
+        # draws or argmaxes, from device counts the engine keeps per state slot (spec_penalties). A prefill's first
+        # token is sampled on the host when its row has a penalty, and the verify sampler applies no grammar mask.
         "supports_spec_device_penalties": True,
         "supports_device_penalties": False,
         "supports_device_grammar": False,
@@ -957,8 +957,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         ``accepted_counts`` (a previous multi-token commit) is checked; the start state is start_blocks.
         Host-sampled step: returns host float logits [B, 1, V], and the runner samples ``tt_out[rows, -1, :]``.
         Device-sampled step (``sampling_params``): returns the tokens [B, 1] int32, column 0's device draw for a
-        sampled row and its argmax otherwise; with logprobs enabled, also the sampled tokens' raw logprobs and ranks
-        from the step's logits (``sampled_token_logprobs``)."""
+        sampled row and its argmax otherwise, both after the row's penalties (``prompt_tokens``, ``output_tokens``;
+        spec_penalties); with logprobs enabled, also the sampled tokens' raw logprobs and ranks from the step's logits
+        (``sampled_token_logprobs``), read before the penalties."""
         nv, ac = kwargs.get("num_valid_drafts"), kwargs.get("accepted_counts")
         B = int(tokens.shape[0])
         if nv is not None and bool(torch.as_tensor(nv).any()):

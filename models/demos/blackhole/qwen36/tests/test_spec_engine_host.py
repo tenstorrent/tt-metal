@@ -524,6 +524,7 @@ def test_mark_cleared_on_release_and_prefill(expect_error):
             model=types.SimpleNamespace(),
             _last_hidden=[],
             _rope_deltas=[0],
+            _pen_rows=[None],
         )
 
     def clean(e):
