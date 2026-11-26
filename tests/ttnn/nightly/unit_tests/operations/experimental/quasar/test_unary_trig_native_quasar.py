@@ -203,6 +203,25 @@ def test_unrouted_configs_stay_unary(device, config):
     assert_with_pcc(want[finite], got[finite], 0.999)
 
 
+def test_overpadded_input_stays_unary(device):
+    # The unary program keeps the input's padded shape; the native program pads the logical shape to tiles only.
+    torch.manual_seed(0)
+    width = 32 * CUTOFF[("cos", torch.bfloat16)] * _cores(device)
+    x = _input((1, 1, 32, width), torch.bfloat16)
+    host = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).pad(
+        [1, 1, 64, width], [0, 0, 0, 0], 0.0
+    )
+    tx = host.to(ttnn.TILE_LAYOUT).to(device, ttnn.DRAM_MEMORY_CONFIG)
+    assert list(tx.padded_shape) == [1, 1, 64, width], f"test setup did not pad the input: {tx.padded_shape}"
+    out, ops = _device_ops(lambda: ttnn.cos(tx))
+    assert ops == {"UnaryDeviceOperation"}, f"cos on an overpadded input ran {ops}"
+    assert out.padded_shape == tx.padded_shape, f"output padded shape {out.padded_shape}, input {tx.padded_shape}"
+    want = torch.cos(x.float())
+    got = ttnn.to_torch(out).float()
+    finite = torch.isfinite(want) & torch.isfinite(got)
+    assert_with_pcc(want[finite], got[finite], 0.999)
+
+
 def test_non_32x32_tile_stays_unary(device, expect_error):
     # The unary program, which rejects tiles other than 32x32, still gets the call.
     torch.manual_seed(0)

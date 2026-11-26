@@ -124,6 +124,12 @@ std::optional<Tensor> quasar_native_trig(
         quasar_native_trig_l1_headroom * quasar_native_trig_ring_bytes(dtype)) {
         return std::nullopt;
     }
+    // The native program pads the output to tiles only; the unary program keeps the input's padded shape.
+    const auto default_layout =
+        tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::TILE), output_memory_config);
+    if (default_layout.compute_padded_shape(input_tensor.logical_shape()) != input_tensor.padded_shape()) {
+        return std::nullopt;
+    }
     const std::array<unary::EltwiseUnaryWithParam, 1> post_activation = {op_chain.front()};
     return ttnn::operations::experimental::quasar::binary::add(
         input_tensor, -0.0f, output_dtype, output_memory_config, std::nullopt, post_activation);
