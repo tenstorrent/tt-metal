@@ -283,6 +283,12 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["gate_up_mailbox_sem"] = 0;
     options["gate_up_grant_sem"] = GRANT;
     options["gate_up_data_sem"] = DATA;
+    // Until a gate/up core has its first sub-block's x, it grants its weight reads 8 landing slots, not the ring's two
+    // loads: the 64 cores' ring fill (2 experts' gate/up weights at once) slows the x snake's start, and the snake's
+    // tail sets every core's pace (the h buffers). Loads of 24+ blocks only - shorter ones need the prefetch (GLM-5.3-
+    // Flash, 16: +1.8% at 8, +3.7% at 4). Against no cap (P150): GLM-5.3 4x4 10240 -1.3% / zipf -0.6%, 8x4 5120 -1.0
+    // .. -1.6%, 8x4 10240 -1.6% / -1.4%, K2.7 -1.1%.
+    options["gate_up_w_start"] = p.gate_up_k_blocks >= 24 ? 8u : 0u;
     // the h exchange: the gate/up cores' slices into the down chain heads' buffers (one gather semaphore a buffer), go
     options["gate_up_core_count"] = ngu;
     options["gate_up_tile_pairs"] = NP;
