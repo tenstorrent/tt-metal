@@ -55,6 +55,7 @@ from models.demos.blackhole.qwen36.tt.spec_step import (
     reseed_table,
     rope_rows,
 )
+from models.demos.blackhole.qwen36.tt.spec_top_p import certificate_rows, failed_rows, redo_draws, sampler_params
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -116,6 +117,8 @@ class PendingVerify:
         reads=None,
         rope_deltas=None,
         logprobs=False,
+        cert=None,
+        logits=None,
     ):
         self.B, self.K, self.T = int(B), int(K), int(K) + 1
         # The slots' M-RoPE deltas the step ran with: a request released before its propose resets its slot's.
@@ -125,6 +128,10 @@ class PendingVerify:
         self.pt, self.cap_blocks, self.no_draft = pt, cap_blocks, set(no_draft)
         self.plan, self.sample_plan, self.reads = plan, sample_plan, reads
         self.logprobs = bool(logprobs)
+        # A step with certificate rows (spec_top_p): their rows, and the host reads of the step's device logits
+        # (per device, in shard order, or one replica of the whole vocabulary) that a failed row's redo draws from.
+        self.cert, self.logits = cert, logits
+        self.redone = None  # [B*T] bool: the rows whose token the host drew again
         self.ids = self.pack = self.drafts = self.payload = None
         # The block's tokens [B, T] (drafts in columns 1..K) and column-0 positions [B]: known at a host-staged verify,
         # filled by the predecessor's propose on a chained one.
@@ -153,8 +160,16 @@ class PendingVerify:
                 if self.sample_plan is not None:
                     ids = with_draws(ids, host[1], self.sample_plan)
                     k = 2
+                full = None
+                if self.cert is not None:
+                    live = self.active.reshape(B, 1).expand(B, T).reshape(-1)
+                    self.redone = failed_rows(host[k], self.cert, T) & live
+                    k += 1
+                    if bool(self.redone.any()):
+                        full = self._full_logits()
+                        ids = redo_draws(ids, full, self.redone, self.cert, self.sample_plan.seeds, T)
                 if self.logprobs:
-                    self.payload = payload_from_reads(host[k : k + 3], ids, self.active, B, T)
+                    self.payload = payload_from_reads(host[k : k + 3], ids, self.active, B, T, full, self.redone)
                     k += 3
                 if self.plan is not None:
                     self.pack = host[k].to(torch.int64)
@@ -165,6 +180,14 @@ class PendingVerify:
 
     def result(self):
         return mask_unused_columns(self.wait(), self.num_valid).to(torch.int32)
+
+    def _full_logits(self):
+        """[B*T, V] float32 host logits of the step from the reads in ``logits``."""
+        parts, sharded = self.logits
+        rows = self.B * self.T
+        host = [ttnn.to_torch(p) for p in parts]
+        host = [h.reshape(-1, h.shape[-1])[:rows] for h in host]
+        return (torch.cat(host, dim=1) if sharded else host[0]).to(torch.float32)
 
     def logprobs_result(self):
         """The logprobs payload of the ids wait() returns: (sampled_logprobs float32 [B, T], selected_token_ranks int32
@@ -569,6 +592,8 @@ class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
 
     sample_on_device = False  # the verify sampler is prepared (MTPBlockEngine, a device-sampling launch)
+    # A sampled row with top-k off and top_p < 1 draws on the device under the top-p certificate (spec_top_p).
+    serves_top_p = False
 
     def __init__(self, model, batch_size, draft_len):
         assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
@@ -1371,9 +1396,14 @@ class MTPSpecEngine:
             raise ValueError(f"block has {clean.shape[0]} rows, engine has B={self.B}")
         if not bool(active.any()):
             raise ValueError("no active row in the verify block")
-        plan = None
+        plan = cert = None
         if sampling is not None:
-            plan = sampling_plan(sampling, torch.where(active, start0, -1).tolist(), self.T)
+            if self.serves_top_p:
+                cert = certificate_rows(sampling, self.B, self.vocab)
+                if cert is not None:
+                    cert.rows = [bool(c and a) for c, a in zip(cert.rows, active.tolist())]
+                    cert = cert if cert.any else None
+            plan = sampling_plan(sampler_params(sampling, cert), torch.where(active, start0, -1).tolist(), self.T)
             plan = plan if plan.any_sampled else None
         if plan is not None and not self.sample_on_device:
             raise ValueError(
@@ -1406,6 +1436,7 @@ class MTPSpecEngine:
             **({"defer": True} if defer and spec_mode == "argmax_ids" else {}),
             **({"keep_pending": True} if keep_pending else {}),
             **({"logprobs": True} if logprobs else {}),
+            **({} if cert is None else {"top_p": cert}),
         )
         if isinstance(ids, PendingVerify):
             return VerifyResult(spec_mode, ids, logits)
@@ -1961,7 +1992,14 @@ class MTPBlockEngine(MTPSpecEngine):
     into the B-user draws buffer with the seeds staged or chained as for the B-user sampler. vllm-tt-plugin's
     InputBatch (without data-parallel lanes) keeps a decode step's n requests in rows 0 .. n-1, so they take the
     smallest bucket of at least n users. A logits verify reads logits, which only the B-user trace gathers: it replays
-    the B-user trace."""
+    the B-user trace.
+
+    Certificate rows (spec_top_p: sampled, top-k off, top_p < 1) draw with the certificate sampler trace in place of
+    the sampler trace. Such a verify runs no device acceptance and drafter, and reads its device logits with its ids, so
+    a row that fails the certificate is drawn again on the host when the verify is read; its propose drafts on the
+    host path."""
+
+    serves_top_p = True
 
     def __init__(self, model, batch_size, draft_len):
         super().__init__(model, batch_size, draft_len)
@@ -2025,12 +2063,14 @@ class MTPBlockEngine(MTPSpecEngine):
             sample=self.sample_on_device,
             buckets=verify_buckets(self.B),
             logprobs=True,
+            top_p=True,
         )
 
-    def _verify_bucket(self, active, read_logits=False, sample_plan=None, logprobs=False):
+    def _verify_bucket(self, active, read_logits=False, sample_plan=None, logprobs=False, top_p=None):
         """The verify row bucket a step over ``active`` rows replays (verify_bucket over the captured ones; with
-        ``sample_plan`` over those with a sampler trace, with ``logprobs`` over those with a logprobs trace), or None for
-        the B-user trace; counts the step in verify_bucket_steps."""
+        ``sample_plan`` over those with a sampler trace, with ``logprobs`` over those with a logprobs trace, with
+        ``top_p`` over those with a certificate sampler trace), or None for the B-user trace; counts the step in
+        verify_bucket_steps."""
         traces = getattr(self.model, "_vfy_bucket_traces", None) or {}
         if sample_plan is not None:
             sampled = getattr(self.model, "_vfy_bucket_sample_traces", None) or {}
@@ -2038,6 +2078,9 @@ class MTPBlockEngine(MTPSpecEngine):
         if logprobs:
             with_logprobs = getattr(self.model, "_vfy_bucket_logprobs_traces", None) or {}
             traces = {b: t for b, t in traces.items() if b in with_logprobs}
+        if top_p is not None:
+            with_top_p = getattr(self.model, "_vfy_bucket_top_p_traces", None) or {}
+            traces = {b: t for b, t in traces.items() if b in with_top_p}
         users = self.B
         if traces and not read_logits:
             users = verify_bucket(traces, active.tolist(), self.B)
@@ -2197,6 +2240,11 @@ class MTPBlockEngine(MTPSpecEngine):
         request of a verify still to propose: the runner releases a finished request first (release_request)."""
         slots = [int(s) for s in slots]
         for step in self._pending:
+            if step.cert is not None and step.ids is None:
+                raise ValueError(
+                    "a prefill behind a verify with certificate rows: the prefill may overwrite the device logits a "
+                    "failed row is drawn again from"
+                )
             taken = [s for s in slots if bool(step.active[s]) and s in self._active]
             if taken:
                 raise ValueError(
@@ -2238,6 +2286,7 @@ class MTPBlockEngine(MTPSpecEngine):
         defer=False,
         keep_pending=False,
         logprobs=False,
+        top_p=None,
     ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j, every GDN layer on the blocks of
         ``mamba_state``. A row's first verify after its prompt also writes the drafter KV of the prompt's last position
@@ -2250,10 +2299,15 @@ class MTPBlockEngine(MTPSpecEngine):
         decided before the verify (_one_enqueue_plan). ``defer`` (argmax_ids only): enqueue the reads without waiting
         and return a PendingVerify in place of the ids. ``keep_pending``: the verify continues an unread one whose
         propose is still to come (_materialize). ``logprobs`` (argmax_ids only): also replay the logprobs trace and read
-        its outputs with the ids; the verify is then returned as a PendingVerify, as with ``defer``."""
+        its outputs with the ids; the verify is then returned as a PendingVerify, as with ``defer``. ``top_p``
+        (spec_top_p.CertificateRows, with ``sample_plan``): draw with the certificate sampler trace, run no device
+        acceptance and drafter, and read q and the device logits with the ids, so that the read draws a failed row
+        again; the verify is returned as a PendingVerify."""
         if logprobs and read_logits:
             raise ValueError("a logits verify carries no logprobs payload")
-        defer = defer or logprobs
+        if top_p is not None and (read_logits or sample_plan is None):
+            raise ValueError("certificate rows draw on an argmax_ids verify of a device-sampled step")
+        defer = defer or logprobs or top_p is not None
         assert self.captured, "verify before capture"
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
@@ -2301,7 +2355,10 @@ class MTPBlockEngine(MTPSpecEngine):
             kw["sample_plan"] = sample_plan
         if logprobs:
             kw["logprobs"] = True
-        bucket = self._verify_bucket(active, read_logits, sample_plan, logprobs)
+        if top_p is not None:
+            kw["top_p"] = top_p
+            one_enqueue = False  # a redone row's token is not the one the device acceptance would walk
+        bucket = self._verify_bucket(active, read_logits, sample_plan, logprobs, top_p)
         if bucket is not None:
             kw["bucket"] = bucket
         plan = None
@@ -2320,16 +2377,26 @@ class MTPBlockEngine(MTPSpecEngine):
             sample_plan=sample_plan,
             rope_deltas=self._rope_deltas,
             logprobs=logprobs,
+            cert=top_p,
         )
         step.tokens, step.p0 = tokens.clone(), torch.where(active, start_pos, 0)
         self._pending.append(step)
         if plan is not None:
             self._verify_one_enqueue(args, kw, step, after_verify=warm)
             return (step if defer else step.result()), None
-        if defer and not read_logits and (logprobs or not self._timing):
+        if defer and not read_logits and (logprobs or top_p is not None or not self._timing):
             self.model.verify_enqueue(*args, **{k: v for k, v in kw.items() if k != "read_logits"})
             draws = [] if sample_plan is None else [self.model._vfy_sampler.draws]
-            step.reads = self._read_device0_async([self.model._vfy_ids_out, *draws, *self._logprobs_outputs(step)])
+            cert = []
+            if top_p is not None:
+                # Enqueued before the reads below, whose event therefore covers them; converted only for a redo.
+                source, sharded = self.model.verify_logits_source(bucket)
+                parts = ttnn.get_device_tensors(source) if sharded else ttnn.get_device_tensors(source)[:1]
+                step.logits = ([ttnn.from_device(p, blocking=False) for p in parts], sharded)
+                cert = [self.model._vfy_top_p.q]
+            step.reads = self._read_device0_async(
+                [self.model._vfy_ids_out, *draws, *cert, *self._logprobs_outputs(step)]
+            )
             self._vfeed = self.model._vfy_rows_out
             if warm is not None:
                 warm()
