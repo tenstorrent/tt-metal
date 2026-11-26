@@ -17,6 +17,92 @@ from models.tt_transformers.tt.model_config import ModelArgs
 # l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
 GDN_CONV1D_L1_SMALL_SIZE = 24576
 
+# The TP=8 decode MLP runs on DRAM-sharded matmuls where Qwen36ModelArgs._init_tp_config allows it (mlp_decode_ds).
+# False keeps the 1D decode MLP and its interleaved gate and up weights.
+MLP_DECODE_DS = True
+# Math fidelity of the two DRAM-sharded decode MLP matmuls; LoFi is the fidelity of the other dense MLP matmuls.
+MLP_DS_MATH_FIDELITY = "LoFi"
+
+
+def _init_mlp_decode_ds(args, mesh_device, tp8):
+    """Set args.mlp_decode_ds and, when it is True, the configs of the DRAM-sharded decode MLP (Qwen36MLP, at most
+    one tile of rows). Part of Qwen36ModelArgs._init_tp_config.
+
+    gate and up are one matmul on the packed per-device [gate | up] weight that reads its activation straight from
+    the RES40 width shards (decode_allreduce.RES40_GRID, [32, dim / 40] per core), the layout of the MTP verify's
+    norm output. SiLU(gate) * up is written as the down matmul's input shards. Both matmuls run the multicore
+    pipeline of the DRAM-sharded program (4 workers next to each DRAM bank), which needs the weight width-sharded
+    over every DRAM bank of the device. The op places the output shards by per_core_N (cdiv(N, per_core_N) cores,
+    row-major), so the output memory configs below repeat that placement."""
+    import ttnn
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
+    from models.demos.blackhole.qwen36.tt.decode_allreduce import RES40_GRID
+
+    tile = tpc.TILE_SIZE
+    res_cores = RES40_GRID[0] * RES40_GRID[1]
+    hidden_tiles = args.hidden_dim // args.num_devices // tile
+    grid = mesh_device.compute_with_storage_grid_size()
+    args.mlp_decode_ds = (
+        MLP_DECODE_DS
+        and tp8
+        and args.mlp_1d_decode
+        and mesh_device.dram_grid_size().x == tpc.DRAM_CORES
+        and grid.x >= RES40_GRID[0]
+        and grid.y >= RES40_GRID[1]
+        and args.dim % (res_cores * tile) == 0
+        and args.hidden_dim % (args.num_devices * tile) == 0
+        and hidden_tiles % 2 == 0
+    )
+    if not args.mlp_decode_ds:
+        return
+
+    def width_shards(num_cores, shard_tiles):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True),
+                (tile, shard_tiles * tile),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    def ds_matmul(n_tiles, in0_block_w):
+        per_core_n = -(-n_tiles // min(n_tiles, 64))
+        pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=in0_block_w,
+            per_core_M=1,
+            per_core_N=per_core_n,
+            fused_activation=None,
+            num_workers_per_dram_bank=4,
+            use_multicore_pipeline=True,
+        )
+        return pc, width_shards(-(-n_tiles // per_core_n), per_core_n)
+
+    args.mlp_ds_res_memcfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(RES40_GRID[0] - 1, RES40_GRID[1] - 1))}
+            ),
+            (tile, args.dim // res_cores),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    # gate and up: 136 output tiles at TP=8 -> 46 cores x 3 tiles. down: 160 -> 54 cores x 3 tiles, from 34 cores x
+    # 2 tiles of SiLU(gate) * up.
+    args.mlp_ds_gateup_progcfg, args.mlp_ds_gateup_out_memcfg = ds_matmul(2 * hidden_tiles, 2)
+    args.mlp_ds_down_progcfg, args.mlp_ds_down_out_memcfg = ds_matmul(args.dim // tile, 2)
+    args.mlp_ds_down_in_memcfg = width_shards(hidden_tiles // 2, 2)
+    args.mlp_ds_gateup_weight_memcfg = tpc.create_dram_sharded_mem_config(
+        args.dim, 2 * args.hidden_dim // args.num_devices
+    )
+    args.mlp_ds_w2_weight_memcfg = tpc.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+    args.mlp_ds_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=getattr(ttnn.MathFidelity, MLP_DS_MATH_FIDELITY), fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+
 
 class Qwen36ModelArgs(ModelArgs):
     """ModelArgs for the Qwen3.5 / 3.6 family on Blackhole (9B / 27B / 35B-A3B; dense + MoE)."""
@@ -319,6 +405,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_out_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.gdn_value_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
         )
+        _init_mlp_decode_ds(self, mesh_device, tp8)
 
         # Prefill matmul factory (M = seq_len)
         self._prefill_grid = tpc.prefill_grid_default()
