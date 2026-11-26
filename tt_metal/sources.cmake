@@ -70,6 +70,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
+    api/tt-metalium/experimental/kernel_config_buffer.hpp
     api/tt-metalium/experimental/operation_timeout.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
@@ -79,6 +80,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/blaze/named_kernel_args.hpp
     api/tt-metalium/experimental/command_list.hpp
     api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
+    api/tt-metalium/experimental/metal2_host_api/fabric_connections_spec.hpp
     api/tt-metalium/workload/utils/arg_value.hpp
     api/tt-metalium/workload/specification/compute_hardware_config.hpp
     api/tt-metalium/workload/specification/data_movement_hardware_config.hpp
@@ -173,6 +175,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/kv_chunk_address_table.hpp
     api/internal/disaggregation/kv_chunk_table_cache.hpp
     api/internal/fabric.hpp
+    api/internal/fabric/inter_domain.hpp
     api/internal/graph_function_abort.hpp
     api/internal/l1_ecc_halt.hpp
     api/tt-metalium/workload/legacy/kernel_types.hpp

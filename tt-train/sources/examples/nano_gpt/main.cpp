@@ -176,6 +176,8 @@ struct TrainingConfig {
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
+    // A typo under precision stops the run here, before the model is built.
+    ttml::core::validate_precision_config(training_config);
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>(config.model_save_interval);
@@ -244,6 +246,7 @@ struct DeviceConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
     bool enable_cp = false;
+    bool cp_reuse_forward_kv = false;
 };
 
 DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
@@ -256,6 +259,7 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
     config.enable_cp = device_node["enable_cp"].as<bool>(false);
+    config.cp_reuse_forward_kv = device_node["cp_reuse_forward_kv"].as<bool>(false);
 
     auto mesh_shape_node = device_node["mesh_shape"];
     bool multidevice = config.enable_ddp || config.enable_tp || config.enable_cp;
@@ -440,6 +444,7 @@ int main(int argc, char **argv) {
         fmt::println("Device config:");
         fmt::println("  Tensor parallel enabled: {}", device_config.enable_tp);
         fmt::println("  Context parallel enabled: {}", device_config.enable_cp);
+        fmt::println("  CP reuse forward K/V: {}", device_config.cp_reuse_forward_kv);
         fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
         fmt::println("  Mesh shape: {}", device_config.mesh_shape);
         fmt::println("  Device IDs: {}", device_config.device_ids);
@@ -447,7 +452,9 @@ int main(int argc, char **argv) {
         ttml::autograd::ctx().initialize_parallelism_context(
             {.enable_ddp = device_config.enable_ddp,
              .enable_tp = device_config.enable_tp,
-             .enable_cp = device_config.enable_cp});
+             .cp = device_config.enable_cp ? std::make_optional(ttml::autograd::ContextParallelConfig{
+                                                 .reuse_forward_kv = device_config.cp_reuse_forward_kv})
+                                           : std::nullopt});
     }
 
     if (multihost_config.enable_mpi) {

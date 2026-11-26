@@ -68,6 +68,7 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
+    INP_FLOAT32,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -132,6 +133,61 @@ TAN_RTOL = {
     DataFormat.Float32: 2 * 2.0**-23,
     DataFormat.Float16_b: 2 * 2.0**-7,
 }
+
+# Max |result - golden| for erf / erfc on [-3, 3], about two bf16 steps near 1; the suite's 0.05 is
+# far looser. Float32 inputs build erf's fp32 table, as ttnn does, and are held to 2**-21.
+ERF_ERFC_ATOL = {
+    (MathOperation.Erf, ApproximationMode.No, DataFormat.Float16_b): 2.0**-7,
+    (MathOperation.Erf, ApproximationMode.No, DataFormat.Float32): 2.0**-7,
+    (MathOperation.Erf, ApproximationMode.Yes, DataFormat.Float16_b): 2.0**-6,
+    (MathOperation.Erf, ApproximationMode.Yes, DataFormat.Float32): 2.0**-6,
+    (MathOperation.Erfc, ApproximationMode.No, DataFormat.Float16_b): 2.0**-6,
+    (MathOperation.Erfc, ApproximationMode.No, DataFormat.Float32): 2.0**-7,
+}
+ERF_FP32_TABLE_ATOL = 2.0**-21
+
+
+def _erf_fp32_table(mathop, formats):
+    # ttnn defines INP_FLOAT32 for a float32 input, which selects erf's fp32 coefficient table.
+    return mathop == MathOperation.Erf and formats.input_format == DataFormat.Float32
+
+
+def _erf_erfc_atol(mathop, approx_mode, formats):
+    if (
+        _erf_fp32_table(mathop, formats)
+        and approx_mode == ApproximationMode.No
+        and formats.output_format == DataFormat.Float32
+    ):
+        return ERF_FP32_TABLE_ATOL
+    return ERF_ERFC_ATOL[(mathop, approx_mode, formats.output_format)]
+
+
+# Erf inputs around the |x| = 10 clamp, huge, infinite and ±0. NaN is left out (the simulators
+# disagree on erf(NaN)), and so is the sign of zero (erf(-0) returns +0).
+ERF_SPECIAL_VALUES = (
+    0.0,
+    -0.0,
+    9.99,
+    -9.99,
+    10.0,
+    -10.0,
+    10.01,
+    -10.01,
+    1.0e5,
+    -1.0e5,
+    3.0e38,
+    -3.0e38,
+    math.inf,
+    -math.inf,
+)
+
+
+def _plant_erf_special_values(src_A: torch.Tensor) -> torch.Tensor:
+    flat = src_A.flatten().clone()
+    n = len(ERF_SPECIAL_VALUES)
+    flat[:n] = torch.tensor(ERF_SPECIAL_VALUES, dtype=torch.float32).to(flat.dtype)
+    return flat.view(src_A.shape)
+
 
 # The six comparison-to-zero modes. These run integer formats too (and UInt16 via
 # the Int16 container), so the sweep adds them to the float formats above.
@@ -304,6 +360,41 @@ def prepare_square_inputs(
     return _log_uniform_signed_inputs(src_A, src_B, input_format, max_safe_value)
 
 
+LOG_OPS = (MathOperation.Log, MathOperation.LogWithBase, MathOperation.Log10)
+
+# Log inputs outside the polynomial, planted on the first lanes; NaN-result ones only in Float32
+# because the Float16_b golden turns NaN into +inf.
+LOG_SPECIAL_VALUES = (
+    0.0,
+    -0.0,
+    math.inf,
+    2.0**-126,
+    1.5 * 2.0**-126,
+    1.75 * 2.0**-126,
+    2.0**-125,
+    1.0,
+    2.0,
+    0.5,
+    2.0**100,
+    2.0**-100,
+    3.0e38,
+)
+LOG_NAN_VALUES = (-math.inf, math.nan, -1.0, -2.5, -(2.0**-126))
+
+
+def _log_special_values(torch_format) -> tuple:
+    return LOG_SPECIAL_VALUES + (
+        LOG_NAN_VALUES if torch_format == torch.float32 else ()
+    )
+
+
+def _plant_log_special_values(src_A: torch.Tensor) -> torch.Tensor:
+    values = _log_special_values(src_A.dtype)
+    flat = src_A.flatten().clone()
+    flat[: len(values)] = torch.tensor(values, dtype=torch.float32).to(flat.dtype)
+    return flat.view(src_A.shape)
+
+
 def prepare_inputs_for_operation(
     src_A: torch.Tensor,
     mathop: MathOperation,
@@ -427,9 +518,9 @@ def prepare_inputs_for_operation(
             src_A_float32,
         )
         src_A = src_A_float32.to(torch_format)
-    elif mathop == MathOperation.Rsqrt:
+    elif mathop == MathOperation.Rsqrt or mathop in LOG_OPS:
         # Full representable range via log-uniform distribution
-        # (rsqrt accepts only positive inputs).
+        # (rsqrt and log accept only positive inputs).
         finfo = torch.finfo(torch_format)
         min_val = max(1e-6, finfo.tiny * 100)
         max_val = finfo.max
@@ -438,6 +529,8 @@ def prepare_inputs_for_operation(
         src_A = torch.exp(log_min + src_A.to(torch.float32) * (log_max - log_min)).to(
             torch_format
         )
+        if mathop in LOG_OPS:
+            src_A = _plant_log_special_values(src_A)
     elif mathop == MathOperation.Tanh:
         # Scale to range [-10, 10] for tanh
         min_val = -10.0
@@ -473,14 +566,18 @@ def prepare_inputs_for_operation(
         MathOperation.Softplus,
         MathOperation.Softsign,
         MathOperation.I0,
+        MathOperation.Erf,
+        MathOperation.Erfc,
     ):
-        # for_op spans softplus' t < -5 tail and linear threshold, softsign's [-5, 5] and i0's
-        # |x| <= 3.75 fit.
+        # for_op spans softplus' t < -5 tail and linear threshold, softsign's [-5, 5], i0's
+        # |x| <= 3.75 fit and erf / erfc's [-3, 3].
         spec = for_op(mathop, input_format).spec_A
         min_val = spec.low
         max_val = spec.high
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+        if mathop == MathOperation.Erf:
+            src_A = _plant_erf_special_values(src_A)
     elif mathop in ROUNDING_OPS:
         # [-10, 10] spans both signs so floor/ceil differ from trunc. Overlay op_edge_points()
         # so ties and integer knees are exact; a uniform draw does not hit them.
@@ -1396,8 +1493,12 @@ TENSOR_DIMS = ([32, 32], [64, 64])
 PERF_INPUT_DIMENSIONS_UNARY = [[64, 64]]
 DEST_SYNC_MODES = (DestSync.Half, DestSync.Full)
 _APPROX_MATHOPS = (
+    MathOperation.Erf,
     MathOperation.Exp,
     MathOperation.Gelu,
+    MathOperation.Log,
+    MathOperation.LogWithBase,
+    MathOperation.Log10,
     MathOperation.Reciprocal,
     MathOperation.Rsqrt,
     MathOperation.Softsign,
@@ -1407,6 +1508,7 @@ _QSR_EXTRA_MATHOPS = (
     MathOperation.Cumsum,
     MathOperation.Ema,
     MathOperation.Dropout,
+    MathOperation.Log10,
 )
 _BH_UNARY_OPS = sfpu_unary_ops()
 
@@ -1454,6 +1556,13 @@ OP_CONFIGS = [
     ],
     OpConfig(MathOperation.Reciprocal, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Log, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(
+        MathOperation.LogWithBase, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True
+    ),
+    OpConfig(MathOperation.Log10, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Shares the log kernel's calculate_log_body.
+    OpConfig(MathOperation.Erfinv, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
@@ -1467,6 +1576,8 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Softsign, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Reaches calculate_i0 through SFPU_UNARY_INIT(i0), the Compute API's i0_tile_init.
     OpConfig(MathOperation.I0, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Erf, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Erfc, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
@@ -1796,6 +1907,7 @@ def run_eltwise_unary_sfpu_quasar(
                 if is_max_min and max_min_sign_magnitude
                 else []
             ),
+            *([INP_FLOAT32()] if _erf_fp32_table(mathop, formats) else []),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -1882,6 +1994,22 @@ def run_eltwise_unary_sfpu_quasar(
             mismatch.any()
         ), f"{mathop.name} differs from torch in {int(mismatch.sum())} lanes"
 
+    if mathop in LOG_OPS:
+        # The special inputs must match exactly: -inf for zeros, +inf for +inf, NaN for negatives
+        # and NaN, and the finite value for the smallest normal binade.
+        values = _log_special_values(src_A.dtype)
+        n = len(values)
+        got = res_tensor.flatten()[:n].to(torch.float32)
+        want = golden_tensor.flatten()[:n].to(torch.float32)
+        same = (got == want) | (torch.isnan(got) & torch.isnan(want))
+        if mathop == MathOperation.Log10:
+            # log10's scale multiply rounds once more, so finite lanes may be one ULP off.
+            ulp = torch.nextafter(want.abs(), torch.tensor(math.inf)) - want.abs()
+            same |= torch.isfinite(want) & ((got - want).abs() <= ulp)
+        assert bool(
+            same.all()
+        ), f"{mathop} special inputs {[values[i] for i in torch.nonzero(~same).flatten().tolist()]}: got {got[~same].tolist()}, want {want[~same].tolist()}"
+
     if mathop == MathOperation.Tan:
         # The suite tolerance passes a tangent whose polynomial coefficients are bound in the
         # wrong order; the kernel itself stays within one output step of the golden.
@@ -1894,6 +2022,26 @@ def run_eltwise_unary_sfpu_quasar(
                 atol=0.0,
             )
         ), "tan is more than two output steps from the golden"
+
+    if mathop in (MathOperation.Erf, MathOperation.Erfc):
+        err = (
+            (res_tensor.to(torch.float64) - golden_tensor.to(torch.float64))
+            .abs()
+            .max()
+            .item()
+        )
+        assert err <= _erf_erfc_atol(
+            mathop, approx_mode, formats
+        ), f"{mathop.name} is {err} from the golden"
+
+    if mathop == MathOperation.Erf:
+        n = len(ERF_SPECIAL_VALUES)
+        got = res_tensor.flatten()[:n].to(torch.float64)
+        want = golden_tensor.flatten()[:n].to(torch.float64)
+        bad = ~((got - want).abs() <= _erf_erfc_atol(mathop, approx_mode, formats))
+        assert not bool(
+            bad.any()
+        ), f"Erf special inputs {[ERF_SPECIAL_VALUES[i] for i in torch.nonzero(bad).flatten().tolist()]}: got {got[bad].tolist()}, want {want[bad].tolist()}"
 
     if mathop == MathOperation.Softplus:
         # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive

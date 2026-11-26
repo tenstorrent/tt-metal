@@ -19,6 +19,7 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "internal/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
+#include "internal/tt-2xx/machine_external_interrupts.h"
 #include "internal/tt-2xx/worker_go_signalling.h"
 // The TensorAccessor address-generator path (internal/tensor/generated_noc_addr.h) only exists with the ATT backend,
 // and ttsim doesn't model the address generators.
@@ -395,6 +396,10 @@ extern "C" uint32_t _start1() {
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
+#ifdef FDS_SIGNALLING
+        // FDS go groups are the only PLIC sources, and builds without FDS leave the PLIC untouched.
+        init_machine_external_interrupts();
+#endif
         init_go_signalling(mailboxes);
         trigger_sync_register_init();
 #if WATCHER_ASSERT_ENABLED

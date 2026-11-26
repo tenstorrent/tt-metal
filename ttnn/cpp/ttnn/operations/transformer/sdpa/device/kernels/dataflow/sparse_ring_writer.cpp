@@ -19,6 +19,7 @@
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_ring_balance_plan.hpp"
 #if defined(SPARSE_LOGICAL_N_TENSOR)
 #include "sparse_ring_length.hpp"
 #endif
@@ -71,14 +72,19 @@ void kernel_main() {
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // With load balancing, replaced by positions in the core's unit table.
+    uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     argidx++;  // logical_nt (unused: the writer only follows the ring order)
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     argidx++;  // single-valid-K-chunk mask (only the save / restore path needs it)
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
+    // Load balancing (cross-device): [export buffer address, balance core NoC x, y].
+    constexpr bool balance = get_named_compile_time_arg_val("balance") == 1;
+    constexpr bool balance_remote = get_named_compile_time_arg_val("balance_remote") == 1;
+    const uint32_t balance_base = argidx;
 
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
@@ -125,6 +131,9 @@ void kernel_main() {
     using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
     const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
+    // Swapped-in units' outputs go to the export buffer, laid out as the output, from where they go home.
+    const auto export_generator = PaddedAddrGenerator(
+        TensorAccessor(out_args, balance_remote ? get_arg_val<uint32_t>(balance_base) : 0u), output_tile_logical);
 
     {
         // Zero the identity tile first: generate_bcast_col_scalar writes column 0 only, and the compute step
@@ -155,6 +164,17 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
+    // The core's unit table in cb_balance; the reader, not this kernel, pushes it to compute.
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* unit_table = nullptr;
+    if constexpr (balance) {
+        Semaphore<>(get_named_compile_time_arg_val("balance_sem_table")).wait_min(1);
+        unit_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            CircularBuffer(get_named_compile_time_arg_val("cb_balance")).get_write_ptr());
+        invalidate_l1_cache();
+        global_q_start = 0;
+        global_q_end = unit_table[0];
+    }
+
     // Passes split the core's Q blocks evenly (see the reader); each replays the ring order from the start (the
     // writer never waits on the all-gather, so a fresh copy of the receiver is enough).
     constexpr uint32_t num_q_passes = get_named_compile_time_arg_val("num_q_passes");
@@ -172,11 +192,15 @@ void kernel_main() {
                 !is_last_active_ring_iter(active_ring_iter_mask, ring_iter)) {
                 continue;
             }
-            for (uint32_t q_flat = pass_q_start; q_flat < pass_q_end; ++q_flat) {
+            [[maybe_unused]] uint32_t n_exported = 0;
+            for (uint32_t pos = pass_q_start; pos < pass_q_end; ++pos) {
+                const uint32_t q_flat = balance ? sparse_balance::unit_of(unit_table[1 + pos]) : pos;
+                const bool exported = balance_remote && sparse_balance::is_imported(unit_table[1 + pos]);
+                n_exported += exported ? 1u : 0u;
                 const auto decoded_q = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing);
                 write_block_row_grouped_trid<output_has_no_padding>(
                     noc,
-                    out_generator,
+                    exported ? export_generator : out_generator,
                     q_chunk_out_slice(decoded_q.q_chunk, decoded_q.nb, decoded_q.nq, Sq_chunk_t, vDHt),
                     /*end_seq_tile=*/q_local_padded_Nt,
                     cb_out,
@@ -185,6 +209,16 @@ void kernel_main() {
                     /*flush_trid=*/0);
             }
             noc.async_write_barrier();
+            if constexpr (balance_remote) {
+                if (n_exported > 0) {
+                    Semaphore<>(get_named_compile_time_arg_val("balance_sem_outputs"))
+                        .up(noc,
+                            get_arg_val<uint32_t>(balance_base + 1),
+                            get_arg_val<uint32_t>(balance_base + 2),
+                            n_exported);
+                    noc.async_atomic_barrier();
+                }
+            }
         }
     }
 }
