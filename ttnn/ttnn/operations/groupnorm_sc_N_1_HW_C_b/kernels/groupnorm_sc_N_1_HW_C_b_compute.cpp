@@ -314,12 +314,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(cb_chan_scale, cb_group_map, cb_local_partials);
 
-    // The map is resident for the whole kernel (matmul in1, NoWaitNoPop).
-    {
-        MaybeDeviceZoneScope("c_wait_map");
-        cb_wait_front(cb_group_map, W);
-    }
-
     const uint32_t num_chunks = (rows_core + CHUNK_HT - 1) / CHUNK_HT;
     const uint32_t K = resident_chunks < num_chunks ? resident_chunks : num_chunks;
     const uint32_t first_resident = num_chunks - K;
@@ -347,6 +341,12 @@ void kernel_main() {
                 }
             }
             cb_pop_front(cb_pilot_rows, PILOT_TILES);
+        }
+        if (blk == 0) {
+            // The map is resident for the whole kernel (matmul in1, NoWaitNoPop). It is first read here, so the reader
+            // builds it in pass 1's shadow.
+            MaybeDeviceZoneScope("c_wait_map");
+            cb_wait_front(cb_group_map, W);
         }
         {
             MaybeDeviceZoneScope("c_collapse");
