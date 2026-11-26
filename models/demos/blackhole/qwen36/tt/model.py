@@ -2306,7 +2306,7 @@ class Qwen36Model:
         if sample_plan is not None:
             self._vfy_sampler.stage(sample_plan)
         if top_p is not None:
-            self._vfy_top_p.stage(top_p, sample_plan, T)
+            self._vfy_top_p.stage(top_p, T)
 
         ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
         if bucketed:

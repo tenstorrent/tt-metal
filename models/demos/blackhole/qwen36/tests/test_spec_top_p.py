@@ -5,15 +5,17 @@ on controlled logits.
 
 The trace runs as the model runs it: a trace of its own over a persistent buffer holding each device's vocabulary shard
 [1, 1, rows, V / TP] bfloat16 (V = 248320), warmed eagerly, captured with program cache misses disallowed, and replayed
-with a fresh sampling plan per verify (the plan of spec_top_p.sampler_params). B = 8 users x T = 4 columns:
+with a fresh sampling plan per verify (the plan of spec_top_p.sampler_params). B = 8 users x T = 4 columns. Every row
+is checked before the test fails; a row with chi-square p below 0.01 logs its 10 most likely tokens with logit,
+reference probability, expected and observed counts:
 
 * users 0 to 3: peaked rows whose nucleus lies inside the top-32 at their (temperature, top_p): q equals the float64
-  host value within 1e-4 and q >= top_p + CERT_EPS on every device, and over N replays each column's draws follow vLLM's full-vocabulary nucleus
-  in (value descending, id ascending) order (spec_top_p.row_distribution, top-k off; a tie at the cut is split in
-  that order): Pearson chi-square p-value above P_MIN per column;
+  host value within 1e-4 and q >= top_p + CERT_EPS on every device, and over N replays each column's draws follow
+  vLLM's full-vocabulary nucleus in (value descending, id ascending) order (spec_top_p.row_distribution, top-k off; a
+  tie at the cut is split in that order): Pearson chi-square p-value above P_MIN per column;
 * user 4: rows with a plateau of 200 tokens, whose nucleus reaches far past the top-32: q < top_p, so
-  spec_top_p.failed_rows marks every column, and the redo from the logits read back from the devices (the reads the engine makes) follows vLLM's
-  nucleus (chi-square over seeds);
+  spec_top_p.failed_rows marks every column, and the redo from the logits read back from the devices (the reads the
+  engine makes) follows vLLM's nucleus (chi-square over seeds);
 * user 5: a top-k 20 top_p 0.9 row next to them draws as on the sampler trace (target_probs under either top-p rule);
 * user 6 greedy, user 7 padding: they draw nothing.
 
@@ -91,10 +93,29 @@ def _nucleus(x, temperature, top_p):
 
 
 def _host_q(x, temperature):
-    """q of a row in float64 at the sampler's bfloat16 inverse temperature: the top-32's share of the vocabulary."""
-    t = float(torch.tensor(1.0 / temperature).to(torch.bfloat16))
-    e = torch.exp((x.double() - x.max()) * t)
+    """q of a row in float64: the top-32's share of the vocabulary at the row's temperature."""
+    e = torch.exp((x.double() - x.max()) / temperature)
     return float(torch.topk(e, 32).values.sum() / e.sum())
+
+
+def _check_draws(r, counts, want, logits, failures):
+    """Pearson chi-square p of row ``r``'s draw ``counts`` [V] against ``want`` [V]. Below P_MIN the row is added to
+    ``failures``; below 0.01 its 10 most likely tokens are logged with their logit, reference probability, expected
+    and observed counts, and every token drawn outside them."""
+    pv = chi_square_p(counts, want)
+    if pv < 0.01:
+        n = float(counts.sum())
+        top = torch.argsort(want, descending=True, stable=True)[:10].tolist()
+        drawn = sorted(set(counts.nonzero().reshape(-1).tolist()) - set(top))
+        rows = [
+            f"{t}: logit {float(logits[t]):.4f} p {float(want[t]):.4f} expected {n * float(want[t]):.1f} "
+            f"observed {int(counts[t])}"
+            for t in top
+        ]
+        logger.warning(f"row {r}: chi-square p {pv:.3g}; " + "; ".join(rows) + f"; drawn outside the top 10: {drawn}")
+    if pv <= P_MIN:
+        failures.append((r, pv))
+    return pv
 
 
 def _capture(mesh, fn):
@@ -136,7 +157,7 @@ def test_certificate_rows_draw_vllms_nucleus_and_failed_rows_redo_from_the_devic
     positions = [100 + 9 * u for u in range(B - 1)] + [-1]
     plan = sampling_plan(sampler_params(params, cert), positions, T)
     sampler.stage(plan)
-    cert_dev.stage(cert, plan, T)
+    cert_dev.stage(cert, T)
     cert_dev.body(buf)
     ttnn.synchronize_device(mesh_device)
     trace = _capture(mesh_device, lambda: cert_dev.body(buf))
@@ -146,7 +167,7 @@ def test_certificate_rows_draw_vllms_nucleus_and_failed_rows_redo_from_the_devic
         for i in range(N):
             plan = sampling_plan(sampler_params(params, cert), [p + i if p >= 0 else p for p in positions], T)
             sampler.stage(plan)
-            cert_dev.stage(cert, plan, T)
+            cert_dev.stage(cert, T)
             ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             per_device = [
@@ -164,30 +185,36 @@ def test_certificate_rows_draw_vllms_nucleus_and_failed_rows_redo_from_the_devic
             want = _host_q(logits[r], USERS[r // T][0])
             assert abs(float(q[r]) - want) < 1e-4, f"row {r}: q {float(q[r])} on the device, {want} on the host"
         assert fail.tolist() == [False] * (4 * T) + [True] * T + [False] * (3 * T)
+        failures = []
         for u in range(4):
             temp, _, p = USERS[u]
             assert bool((q[u * T : u * T + T] >= p + CERT_EPS).all())
             for j in range(T):
                 r = u * T + j
-                pv = chi_square_p(torch.bincount(draws[:, r], minlength=VOCAB), _nucleus(logits[r], temp, p))
+                counts = torch.bincount(draws[:, r], minlength=VOCAB)
+                pv = _check_draws(r, counts, _nucleus(logits[r], temp, p), logits[r], failures)
                 logger.info(f"user {u} column {j}: chi-square p {pv:.3g}")
-                assert pv > P_MIN, f"row {r}: the certificate draws do not follow the nucleus (p = {pv})"
         temp, k, p = USERS[5]
         for j in range(T):
             counts = torch.bincount(draws[:, 5 * T + j], minlength=VOCAB)
             by_rule = [
                 chi_square_p(counts, target_probs(logits[5 * T + j], temp, k, p, rule)) for rule in ("vllm", "at_most")
             ]
-            assert max(by_rule) > P_MIN, f"the top-k 20 row next to the certificate rows: {by_rule}"
+            logger.info(f"user 5 column {j}: chi-square p by rule {by_rule}")
+            if max(by_rule) < 0.01:
+                _check_draws(5 * T + j, counts, target_probs(logits[5 * T + j], temp, k, p), logits[5 * T + j], [])
+            if max(by_rule) <= P_MIN:
+                failures.append((5 * T + j, max(by_rule)))
         # the redo of the failed user from the logits the engine reads back
         parts = [ttnn.to_torch(ttnn.from_device(t, blocking=True)) for t in ttnn.get_device_tensors(buf)]
         full = torch.cat([t.reshape(-1, t.shape[-1])[: B * T] for t in parts], dim=1).float()
         assert torch.equal(full, logits), "the logits read back differ from the staged ones"
         temp, _, p = USERS[4]
         redone = [int(redo_draws(torch.zeros(B, T), full, fail, cert, [s] * (B * T), T)[4, 0]) for s in range(1, 1501)]
-        pv = chi_square_p(torch.bincount(torch.tensor(redone), minlength=VOCAB), _nucleus(logits[4 * T], temp, p))
+        counts = torch.bincount(torch.tensor(redone), minlength=VOCAB)
+        pv = _check_draws(4 * T, counts, _nucleus(logits[4 * T], temp, p), logits[4 * T], failures)
         logger.info(f"failed user 4: redo chi-square p {pv:.3g}")
-        assert pv > P_MIN, f"the redo does not follow the nucleus (p = {pv})"
+        assert not failures, f"rows whose draws do not follow their distribution (row, p): {failures}"
     finally:
         ttnn.release_trace(mesh_device, trace)
         ttnn.deallocate(buf)

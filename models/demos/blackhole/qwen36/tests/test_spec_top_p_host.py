@@ -111,7 +111,7 @@ def test_certificate_rows_and_the_sampler_parameters_of_their_step():
     assert cert.rows == [True, False, False, True, False] and cert.top_p[0] == 0.9 and cert.temperature[3] == 0.8
     sp = sampler_params(params, cert)
     assert sp.top_k == [32, 20, 1, 32, V] and sp.top_p == [1.0, 0.9, 1.0, 1.0, 1.0]
-    assert sp.temperature is params.temperature and sp.seed is params.seed
+    assert sp.temperature == [1.0, 0.7, 0.0, 1.0, 0.9] and sp.seed is params.seed
     plan = sampling_plan(sp, [10, 20, 30, 40, -1], 2)
     assert plan.sampled == [True] * 4 + [False] * 2 + [True] * 2 + [False] * 2
     assert certificate_rows(SimpleNamespace(temperature=[1.0], top_k=[20], top_p=[0.9], seed=[None]), 1, V) is None
@@ -202,6 +202,7 @@ def test_a_failed_certificate_row_is_drawn_again_from_the_steps_logits(engine):
     assert "accept_rows" not in kw, "a certificate step runs no device acceptance and drafter"
     assert kw["top_p"].rows == [True, True] and kw["sample_plan"].k[: 2 * T] == [SAMPLER_TOP_K] * (2 * T)
     assert kw["sample_plan"].p[: 2 * T] == [1.0] * (2 * T)
+    assert kw["sample_plan"].temp[: 2 * T] == [1.0] * (2 * T), "certificate rows draw at temperature 1"
     ids = pending.result()
     # user 0 passes (q = 0.99 > 0.9): the device draws; user 1 fails (q = 0.5 < 0.8): each column drawn again.
     assert ids[0].tolist() == [3, 3, 3, 3]
