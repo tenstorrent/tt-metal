@@ -779,7 +779,7 @@ class MTPSpecEngine:
             b: self._alloc_host_replicated(
                 torch.zeros(1, 1, 1, b, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
             )
-            for b in self.model._PREFILL_MASK_BUCKETS
+            for b in sorted({*self.model._PREFILL_MASK_BUCKETS, *_prefill_big_rows(self.model)})
         }
         self._mtp_pt = self._alloc_host_replicated(pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._mtp_pt_rows = [
@@ -923,6 +923,9 @@ class MTPSpecEngine:
             ttnn.release_trace(model.device, model._chunked_trace_id)
             model._chunked_trace_id = None
             model._chunked_prepared_key = None
+            release_big = getattr(model, "release_prefill_trace_chunked_big", None)  # absent on test fakes
+            if release_big is not None:
+                release_big()
         if self._dr_trace is not None:
             ttnn.release_trace(self.mesh, self._dr_trace)
             self._dr_trace = None
@@ -1962,9 +1965,9 @@ class MTPBlockEngine(MTPSpecEngine):
 
     def prepare_prefill(self, page_table):
         """Allocate the engine buffers and compile the drafter's prompt programs (the drafter KV warm and the last-row
-        capture of every masked bucket and of a full 2048-token chunk) on the eager prefill path of the batch-1 GDN
-        workspace. The model's own prefill programs and chunk trace are prepared by the caller. Idempotent per table
-        width."""
+        capture of every masked bucket, of a full 2048-token chunk and of a big chunk) on the eager prefill path of the
+        batch-1 GDN workspace. The model's own prefill programs and chunk traces are prepared by the caller. Idempotent
+        per table width."""
         model, T = self.model, self.T
         pt0 = torch.as_tensor(page_table)
         width = int(pt0.shape[-1])
@@ -1981,12 +1984,27 @@ class MTPBlockEngine(MTPSpecEngine):
             logits = model._prefill_for_spec_b1(prompt, pt[0:1], L, self.prefill_hook(0, prompt[0], pt[0:1], True))
             if not isinstance(logits, torch.Tensor):
                 ttnn.deallocate(logits)
+        # The prefill's big chunk trace and masked big-bucket traces hand prefill_hook outputs of their own row counts
+        # (Qwen36Model.big_chunk_rows, masked_big_buckets).
+        if _prefill_big_rows(model):
+            model.warm_big_chunk_output(lambda hidden: self._warm_big_chunk(hidden, pt[0:1]))
+            model.warm_masked_big_outputs(lambda hidden: self._warm_big_chunk(hidden, pt[0:1]))
         self.release(0)
         self.prefill_prepared = True
         logger.info(
             f"[spec_engine] prefill prepared (GDN state in KV cache blocks) B={self.B} K={self.K} nb={self.nb} "
             f"block={self.block_size} warm_prompts={warm_lens} in {time.perf_counter() - t0:.1f}s"
         )
+
+    def _warm_big_chunk(self, hidden, page_table_torch):
+        """Compile prefill_hook's drafter KV warm and last-row capture of a prefill forward past 2048 rows on its output
+        ``hidden`` (state slot 0, all rows real, as the warm prompts)."""
+        rows = int(hidden.shape[-2])
+        feed = self.model.spec_feed_rows(hidden)
+        self._warm_mtp_chunk(feed, 0, rows, [1] * (rows + 2), page_table_torch)
+        self._capture_last_row(feed, rows - 1, 0)
+        if feed is not hidden:
+            ttnn.deallocate(feed)
 
     def record_prefill(self):
         """The chunk trace belongs to the model's prefill, which records it."""
@@ -2823,6 +2841,14 @@ def _with_start_blocks(mamba_state, m):
     if dataclasses.is_dataclass(mamba_state):
         return dataclasses.replace(mamba_state, groups=tuple(groups))
     return SimpleNamespace(**{**vars(mamba_state), "groups": tuple(groups)})
+
+
+def _prefill_big_rows(model):
+    """Row counts past the masked buckets of the prefill outputs that prefill_hook can get: the big chunk set's and the
+    masked big buckets' (none on a test fake)."""
+    masked = getattr(model, "masked_big_buckets", None)
+    rows = {getattr(model, "prefill_big_chunk_size", 0), *(masked() if masked is not None else ())}
+    return tuple(sorted(rows - {0}))
 
 
 def get_spec_engine(model, batch_size, draft_len, engine_cls=MTPSpecEngine):
