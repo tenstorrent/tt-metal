@@ -100,9 +100,8 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
 };
 
 // Applies row(i) to ITERATIONS dest rows (a multiple of 8). Inside a group of 8 rows, row i is addressed as
-// dst_reg[i], so the group advances the dest pointer with 3 increments instead of 8: sfpi encodes the INCRWC dest
-// increment as a signed 4-bit immediate at 2 per row, so one dst_reg += n covers at most 3 rows. row must be
-// always_inline so that i is a compile-time dst_reg offset.
+// dst_reg[i], so the group advances the dest pointer once per 8 rows. row must be always_inline so that i is a
+// compile-time dst_reg offset.
 template <int ITERATIONS, typename Row>
 sfpi_inline void _for_each_row_(Row row) {
     static_assert(ITERATIONS % 8 == 0, "rows are processed in groups of 8");
@@ -111,6 +110,7 @@ sfpi_inline void _for_each_row_(Row row) {
         for (int i = 0; i < 8; i++) {
             row(i);
         }
+        // Not one += 8: the INCRWC dest increment is a signed 4-bit immediate at 2 per row, so at most 3 rows.
         sfpi::dst_reg += 3;
         sfpi::dst_reg += 3;
         sfpi::dst_reg += 2;
