@@ -75,7 +75,8 @@ Tensor typecast_on_device(
 
 bool row_major_pages_match(
     const Tensor& input_tensor, const DataType& output_dtype, const MemoryConfig& memory_config) {
-    if (input_tensor.layout() != Layout::ROW_MAJOR) {
+    // An unchanged memory config keeps the page geometry, so the spec build is skipped.
+    if (input_tensor.layout() != Layout::ROW_MAJOR || memory_config == input_tensor.memory_config()) {
         return true;
     }
     const auto output_spec = TensorSpec(

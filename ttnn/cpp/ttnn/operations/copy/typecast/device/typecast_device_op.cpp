@@ -181,7 +181,7 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+    if (input_tensor.layout() == Layout::ROW_MAJOR && out_memory_config != input_tensor.memory_config()) {
         const auto output_spec = compute_output_specs(args, tensor_args);
         TT_FATAL(
             row_major_page_elements_match(input_tensor.tensor_spec(), output_spec),
