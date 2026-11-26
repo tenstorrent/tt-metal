@@ -1382,10 +1382,7 @@ def test_eltwise_unary_sfpu_identity_int32():
     )
 
 
-# Unary eq/ne on Int32 compare the two's-complement Dest word against an integer scalar through
-# calculate_comp_unary_int. INT_MIN is the edge a sign-magnitude load would lose. Scalars: the
-# fixed 5 the other sweeps use, 0 and INT_MIN, and both ends of the range. Inputs: both int32
-# extremes, the scalar with its neighbours, zero, small values of both signs.
+# Unary eq/ne on Int32 against an integer scalar; INT_MIN is the edge a sign-magnitude load loses.
 _UNARY_COMP_INT_SCALARS = [5, 0, -(2**31), -1, 2**31 - 1]
 
 

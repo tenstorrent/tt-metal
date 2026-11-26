@@ -820,10 +820,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
 #else
     constexpr std::uint32_t RELU_MIN_INT_THRESHOLD = 5u;
 #endif
-    // Integer scalar that unary_eq/unary_ne (Int32) compare against via metal
-    // calculate_comp_unary_int. The int32 compare test overrides it through
-    // SFPU_UNARY_COMP_INT_SCALAR (two's-complement uint32, same arrangement as
-    // SFPU_RELU_MIN_INT_THRESHOLD) to reach INT_MIN and 0; everything else keeps the fixed 5.
+    // Int32 scalar for unary_eq/unary_ne; overridable via SFPU_UNARY_COMP_INT_SCALAR.
 #ifdef SFPU_UNARY_COMP_INT_SCALAR
     constexpr int UNARY_COMP_INT_SCALAR = static_cast<int>(SFPU_UNARY_COMP_INT_SCALAR);
 #else

@@ -267,11 +267,8 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-    // Dest Int32 and the scalar are both two's complement; compare the raw word via I32
-    // load/store. No lane predication: v == s iff lz(v - s) == 32 (SFPLZ returns 32 only for 0),
-    // so eq = lz >> 5 and ne = (lz - 32) >> 31, both logical shifts giving exactly 0 or 1.
-    // Two rows share one TTINCRWC. (A store-side increment would save it, but needs ADDR_MOD_6
-    // programmed by this op's init, which unary_eq/ne share with the float kernels.)
+    // Raw two's-complement I32 compare without lane predication: v == s iff lz(v - s) == 32.
+    // Two rows per iteration share one TTINCRWC.
     const vInt s = scalar;
 
     auto row = [&](const int r) __attribute__((always_inline)) {
