@@ -144,8 +144,10 @@ class PluginRunner:
     speculable=False never has its drafts published, so it is always narrow.
 
     ``logprobs`` (supports_spec_device_logprobs): every verify is sent spec_num_logprobs, its read returns the payload,
-    and the same block is verified again in spec_mode "logits", whose logits the payload of each committed column is
-    checked against (``check_payload``); the largest differences are kept in ``logprob_errors``."""
+    and the payload of each verified column is checked against that verify's own logits (``verify_logits``, the logits
+    a logits verify would read back), ``check_payload``; the largest differences are kept in ``logprob_errors``. The
+    block cannot be verified again for a reference: the verify writes the state after each column into the row's
+    1 + K GDN blocks, one of which held its start state (mamba_cache_mode "none")."""
 
     def __init__(self, model, kv, layout, seed, speculable=True, sample_seed=0, logprobs=None):
         self.m, self.kv, self.K = model, kv, K
@@ -258,15 +260,7 @@ class PluginRunner:
                 read = m.read_decode_output(res.argmax_ids)
                 if self.logprobs is not None:
                     read, payload = read
-                    shard = self.shard_logits()
-                    logits = m.decode_forward(**block, spec_mode="logits").logits[0]
-                    if shard is not None:
-                        gap = (shard[: n + 1] - logits[: n + 1].float()).abs().max()
-                        logger.info(
-                            f"[vllm_class] verify shard logits ({shard.dtype}) vs the logits verify's: max |diff| "
-                            f"{float(gap):.3g}"
-                        )
-                    self.check_payload(read[0], payload, logits, n)
+                    self.check_payload(read[0], payload, self.verify_logits(), n)
                 ids = read[0].tolist()
                 assert all(i == PAD for i in ids[n + 1 :]), f"step {len(steps)}: ids past n={n} not -1: {ids}"
                 assert all(i != PAD for i in ids[: n + 1]), f"step {len(steps)}: -1 inside valid ids {ids} (n={n})"
@@ -301,18 +295,20 @@ class PluginRunner:
         self.state.release(0)
         return out, {"steps": steps, "stop": stop}
 
-    def shard_logits(self):
-        """[1+K, V] float32 logits of the last argmax_ids verify, read from each device's vocabulary shard (the logits
-        the logprobs trace reads), or None when the verify gathers its logits itself."""
+    def verify_logits(self):
+        """[1+K, V] float32 logits of the last verify (B = 1), as the logprobs trace reads them: each device's
+        vocabulary shard in shard order, or one replica of the whole vocabulary when the verify gathers its logits
+        itself. A logits verify reads back these values, all-gathered."""
         model = self.m.model[0]
         shard = getattr(model, "_vfy_shard_out", None)
         if shard is None:
-            return None
+            whole = ttnn.to_torch(ttnn.get_device_tensors(model._vfy_logits_out)[0])
+            return whole.reshape(-1, whole.shape[-1])[: 1 + self.K].float()
         parts = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(shard)]
         return torch.cat([p.reshape(-1, p.shape[-1])[: 1 + self.K].float() for p in parts], dim=1)
 
     def check_payload(self, ids, payload, logits, n):
-        """The payload of a B = 1 verify's columns 0 .. n against the logits of the same block: ids its argmax, each
+        """The payload of a B = 1 verify's columns 0 .. n against the verify's own logits: ids their argmax, each
         token's logprob log_softmax's (float64) within LOGPROB_TOL, its rank vLLM's count of logits at or above it (or
         a lower bound when the token ties a candidate shard boundary), the top-20 ids a stable sort's and their logprobs
         within LOGPROB_TOL."""
@@ -458,7 +454,7 @@ def test_spec_vllm_class_runner(mesh_device, monkeypatch, warmup):
         assert sampled[0] != outs["P1"][:48], "sampled output equals the greedy output"
         assert sampled[0] == sampled[1], "sampled tokens not reproducible with the same seed"
 
-        # GREEDY P1 with logprobs: each verify's payload against a logits verify of the same block, same tokens
+        # GREEDY P1 with logprobs: each verify's payload against that verify's own logits, same tokens
         runner = PluginRunner(cls, kv, layout, seed=77, logprobs=5)
         out, st = runner.run(p1, 64, policies["P1"])
         _log("P1_logprobs", out, st)
