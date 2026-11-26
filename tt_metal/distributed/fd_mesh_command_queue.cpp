@@ -796,9 +796,7 @@ void FDMeshCommandQueue::begin_transfer_stats(
     HostTransferCategory category,
     const std::optional<MeshCoordinateRange>& device_range,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    const auto target = this->get_target_device_type();
-    transfer_stats_events_ =
-        target != tt::TargetDevice::Mock && target != tt::TargetDevice::Emule && !trace_id_.has_value();
+    transfer_stats_events_ = this->runs_dispatch_firmware() && !trace_id_.has_value();
     if (!transfer_stats_events_) {
         return;
     }
@@ -1391,8 +1389,7 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     bool stall_first,
     bool stall_before_program) {
     if (host_transfer_stats_->enabled() && !devices.empty()) {
-        const auto target = this->get_target_device_type();
-        if (target != tt::TargetDevice::Mock && target != tt::TargetDevice::Emule) {
+        if (this->runs_dispatch_firmware()) {
             host_transfer_stats_->add_bytes(
                 HostTransferCategory::ProgramConfigFastDispatch,
                 devices.size() * program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true));
@@ -1564,8 +1561,7 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     }
     const auto size = program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true);
     if (host_transfer_stats_->enabled()) {
-        const auto target = this->get_target_device_type();
-        if (target != tt::TargetDevice::Mock && target != tt::TargetDevice::Emule) {
+        if (this->runs_dispatch_firmware()) {
             host_transfer_stats_->add_bytes(
                 HostTransferCategory::ProgramConfigFastDispatch, local_devices.size() * size);
         }

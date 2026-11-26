@@ -30,15 +30,14 @@ private:
     bool was_enabled_;
 };
 
-// Whether mesh command queue buffer transfers are recorded: fast dispatch times them with events, which mock and
-// emulated devices lack, and slow dispatch skips transfers to mock devices.
+// Whether mesh command queue buffer transfers are recorded: fast dispatch times them with events, which a device
+// without dispatch firmware lacks, and slow dispatch skips transfers to mock devices.
 inline bool buffer_transfers_recorded(ContextId context_id = DEFAULT_CONTEXT_ID) {
     auto& context = MetalContext::instance(context_id);
-    const auto target = context.get_cluster().get_target_device_type();
-    if (target == tt::TargetDevice::Mock) {
+    if (context.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return false;
     }
-    return !(context.rtoptions().get_fast_dispatch() && target == tt::TargetDevice::Emule);
+    return !context.rtoptions().get_fast_dispatch() || context.get_cluster().runs_dispatch_firmware();
 }
 
 inline HostTransferCategory buffer_write_category(ContextId context_id = DEFAULT_CONTEXT_ID) {

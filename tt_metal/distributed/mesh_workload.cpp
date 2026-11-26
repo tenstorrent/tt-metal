@@ -1159,8 +1159,11 @@ void SetRuntimeArgsPerDevice(
 }
 
 bool ArePerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range) {
+    // An emulated chip in slow dispatch launches one program per device itself; in fast dispatch it runs metal's
+    // per-device runtime-arg commands like silicon.
+    const auto& cluster = mesh_device.impl().metal_env().get_cluster();
     return !program_range.wraparound_shape().has_value() && !LightMetalCaptureContext::get().is_tracing() &&
-           mesh_device.impl().metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
+           (cluster.get_target_device_type() != tt::TargetDevice::Emule || cluster.runs_dispatch_firmware());
 }
 
 const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() const {
