@@ -222,7 +222,8 @@ def test_sharded_to_interleaved_partial_docstring_round_trip(memory_layout, buff
     cache_tensor = ttnn.from_torch(
         torch.where(expected == 1, 2, 1).to(expected.dtype), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
-    shard_shape, grid_size = _SLICE_SHARDS[memory_layout]
+    shard_shape, grids = _SLICE_SHARDS[memory_layout]
+    grid_size = grids["ROW_MAJOR"]
     for slice_index in range(_NUM_SLICES):
         sharded_slice = ttnn.interleaved_to_sharded_partial(
             input_tensor,
