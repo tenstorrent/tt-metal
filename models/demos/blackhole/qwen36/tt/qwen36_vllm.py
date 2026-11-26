@@ -680,7 +680,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_sample_on_device": True,
         "spec_ids_are_sampled": True,
         "max_device_top_k": SAMPLER_TOP_K,
-        # The verify sampler applies no penalties and no grammar mask: such a step is sampled on the host.
+        # A verify, and so an ordinary decode, applies presence, frequency and repetition penalties to every column it
+        # draws or argmaxes, from device counts the engine keeps per state slot (spec_penalties). A prefill's first
+        # token is sampled on the host when its row has a penalty, and the verify sampler applies no grammar mask.
+        "supports_spec_device_penalties": True,
         "supports_device_penalties": False,
         "supports_device_grammar": False,
         # vllm-tt-plugin adds these to its ttnn.set_fabric_config arguments before it opens the mesh. No "config" key:
@@ -832,6 +835,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             # A device-sampling launch also prepares the verify sampler (spec_sample.VerifySampler).
             eng.sample_on_device = bool(kwargs.get("can_sample_on_device", False))
             eng.prepare_decode()
+            if eng.sample_on_device and getattr(self.model[0], "_vfy_penalties", None) is None:
+                # This mesh's verify has no vocab-sharded logits for the penalties: penalty rows go to the host.
+                self.model_capabilities = {**type(self).model_capabilities, "supports_spec_device_penalties": False}
 
     def _ensure_ready(self, kv_cache=None):
         eng = self._engine()
@@ -923,6 +929,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             sampling=kwargs.get("sampling_params"),
             defer=defer,
             predecessor=predecessor,
+            prompt_tokens=kwargs.get("prompt_tokens"),
+            output_tokens=kwargs.get("output_tokens"),
         )
         logits = res.logits if spec_mode == "logits" else None
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
@@ -949,8 +957,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         ``accepted_counts`` (a previous multi-token commit) is checked; the start state is start_blocks.
         Host-sampled step: returns host float logits [B, 1, V], and the runner samples ``tt_out[rows, -1, :]``.
         Device-sampled step (``sampling_params``): returns the tokens [B, 1] int32, column 0's device draw for a
-        sampled row and its argmax otherwise; with logprobs enabled, also the sampled tokens' raw logprobs and ranks
-        from the step's logits (``sampled_token_logprobs``)."""
+        sampled row and its argmax otherwise, both after the row's penalties (``prompt_tokens``, ``output_tokens``;
+        spec_penalties); with logprobs enabled, also the sampled tokens' raw logprobs and ranks from the step's logits
+        (``sampled_token_logprobs``), read before the penalties."""
         nv, ac = kwargs.get("num_valid_drafts"), kwargs.get("accepted_counts")
         B = int(tokens.shape[0])
         if nv is not None and bool(torch.as_tensor(nv).any()):
@@ -979,6 +988,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             mamba_state=mamba_state,
             sampling=sampling,
             one_enqueue=False,
+            prompt_tokens=kwargs.get("prompt_tokens"),
+            output_tokens=kwargs.get("output_tokens"),
         )
         if sampling is None:
             return res.logits[:, :1].float()
