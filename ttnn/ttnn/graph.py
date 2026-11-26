@@ -371,17 +371,21 @@ def end_graph_capture_to_file(report_path):
 # every operation carries the summary, in the Python I/O sidecar and the report DB, so a tensor spread over a
 # 16x8 multi-host mesh would otherwise add 128 coordinates to each.
 _MAX_MESH_COORDS_LISTED = 8
+# The two shortened forms, kept fixed so tools reading the summaries (ttnn-visualizer's MCP tools among them) can parse
+# the count back out: the whole mesh, and the last entry after the first few coordinates.
+_MESH_COORDS_WHOLE_MESH_FORMAT = "all {count}"
+_MESH_COORDS_COUNT_MARKER_FORMAT = "... {count} in all"
 
 
 def _mesh_coords_summary(mesh_coords, device):
     """The tensor's mesh coordinates: each one for a few, ``all <n>`` when it spans the whole mesh, else the first few
-    and a count."""
+    and a ``... <n> in all`` count."""
     if len(mesh_coords) <= _MAX_MESH_COORDS_LISTED:
         return [str(c) for c in mesh_coords]
     if device is not None and len(mesh_coords) == device.get_num_devices():
-        return f"all {len(mesh_coords)}"
+        return _MESH_COORDS_WHOLE_MESH_FORMAT.format(count=len(mesh_coords))
     listed = [str(c) for c in mesh_coords[:_MAX_MESH_COORDS_LISTED]]
-    return listed + [f"... {len(mesh_coords)} in all"]
+    return listed + [_MESH_COORDS_COUNT_MARKER_FORMAT.format(count=len(mesh_coords))]
 
 
 def _ttnn_tensor_summary(t) -> str:

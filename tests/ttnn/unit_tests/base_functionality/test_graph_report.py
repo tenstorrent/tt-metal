@@ -8571,6 +8571,12 @@ class TestTensorSummaryMeshCoords:
         assert "mesh_coords=all 128" in summary
         assert "MeshCoordinate" not in summary
 
+    def test_the_shortened_forms_are_pinned(self):
+        """Tools parse the count back out of these, so a change to either spelling must be deliberate."""
+        assert re.search(r"mesh_coords=all 128[,)]", self._summary(128, 128))
+        first_8 = ", ".join(f"'MeshCoordinate([0, {i}])'" for i in range(8))
+        assert f"mesh_coords=[{first_8}, '... 64 in all']" in self._summary(64, 128)
+
     def test_part_of_a_large_mesh_lists_the_first_few_and_a_count(self):
         summary = self._summary(64, 128)
         assert "MeshCoordinate([0, 7])" in summary and "MeshCoordinate([1, 0])" not in summary
