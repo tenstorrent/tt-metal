@@ -46,10 +46,8 @@ constexpr int ERF_DEN_TERMS = 4;
 constexpr float ERF_DEN[ERF_DEN_TERMS] = {5.7439188334e-01f, 1.3675764810e-01f, 8.2844606784e-03f, 2.4813862145e-05f};
 #endif
 
-// Coefficient slots in the order Horner uses them, highest power first: even slots are numerator
-// coefficients, odd slots denominator ones. A coefficient loaded per pass costs two SFPLOADIs, so the
-// first slots stay in registers for the whole call: Prgm0..2 (set by erf_init; accurate mode keeps
-// Newton's 2.0 in Prgm0), then up to five LRegs, which is what a pass leaves free.
+// Coefficient slots, highest power first (even: numerator, odd: denominator). The first stay in Prgm0..2
+// (erf_init; accurate mode keeps Newton's 2.0 in Prgm0) and up to five LRegs, not two SFPLOADIs per pass.
 template <bool APPROXIMATION_MODE>
 constexpr int erf_prgm_slots() {
     return APPROXIMATION_MODE ? 3 : 2;

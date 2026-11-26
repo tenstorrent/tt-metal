@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 from dataclasses import dataclass
 from typing import List
 
@@ -69,6 +68,7 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
+    INP_FLOAT32,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -135,7 +135,7 @@ TAN_RTOL = {
 }
 
 # Max |result - golden| for erf / erfc on [-3, 3], about two bf16 steps near 1; the suite's 0.05 is
-# far looser. Without INP_FLOAT32, erf uses its bf16 table even for Float32 output.
+# far looser. Float32 inputs build erf's fp32 table, as ttnn does, and are held to 2**-21.
 ERF_ERFC_ATOL = {
     (MathOperation.Erf, ApproximationMode.No, DataFormat.Float16_b): 2.0**-7,
     (MathOperation.Erf, ApproximationMode.No, DataFormat.Float32): 2.0**-7,
@@ -147,23 +147,23 @@ ERF_ERFC_ATOL = {
 ERF_FP32_TABLE_ATOL = 2.0**-21
 
 
-def _erf_erfc_atol(mathop, approx_mode, output_format):
+def _erf_fp32_table(mathop, formats):
+    # ttnn defines INP_FLOAT32 for a float32 input, which selects erf's fp32 coefficient table.
+    return mathop == MathOperation.Erf and formats.input_format == DataFormat.Float32
+
+
+def _erf_erfc_atol(mathop, approx_mode, formats):
     if (
-        mathop == MathOperation.Erf
+        _erf_fp32_table(mathop, formats)
         and approx_mode == ApproximationMode.No
-        and output_format == DataFormat.Float32
-        and any(
-            define.strip().split("=", 1)[0] == "INP_FLOAT32"
-            for define in os.environ.get("LLK_EXTRA_DEFINES", "").split(",")
-        )
+        and formats.output_format == DataFormat.Float32
     ):
         return ERF_FP32_TABLE_ATOL
-    return ERF_ERFC_ATOL[(mathop, approx_mode, output_format)]
+    return ERF_ERFC_ATOL[(mathop, approx_mode, formats.output_format)]
 
 
-# Erf inputs at and past the |x| = 10 clamp, large and infinite, and signed zero, planted on the
-# first lanes. NaN is left out because the simulators disagree on erf(NaN), and the sign of zero
-# is not checked: erf(-0) returns +0.
+# Erf inputs around the |x| = 10 clamp, huge, infinite and ±0. NaN is left out (the simulators
+# disagree on erf(NaN)), and so is the sign of zero (erf(-0) returns +0).
 ERF_SPECIAL_VALUES = (
     0.0,
     -0.0,
@@ -1859,6 +1859,7 @@ def run_eltwise_unary_sfpu_quasar(
                 if is_max_min and max_min_sign_magnitude
                 else []
             ),
+            *([INP_FLOAT32()] if _erf_fp32_table(mathop, formats) else []),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -1966,17 +1967,14 @@ def run_eltwise_unary_sfpu_quasar(
             .item()
         )
         assert err <= _erf_erfc_atol(
-            mathop, approx_mode, formats.output_format
+            mathop, approx_mode, formats
         ), f"{mathop.name} is {err} from the golden"
 
     if mathop == MathOperation.Erf:
         n = len(ERF_SPECIAL_VALUES)
         got = res_tensor.flatten()[:n].to(torch.float64)
         want = golden_tensor.flatten()[:n].to(torch.float64)
-        bad = ~(
-            (got - want).abs()
-            <= _erf_erfc_atol(mathop, approx_mode, formats.output_format)
-        )
+        bad = ~((got - want).abs() <= _erf_erfc_atol(mathop, approx_mode, formats))
         assert not bool(
             bad.any()
         ), f"Erf special inputs {[ERF_SPECIAL_VALUES[i] for i in torch.nonzero(bad).flatten().tolist()]}: got {got[bad].tolist()}, want {want[bad].tolist()}"
