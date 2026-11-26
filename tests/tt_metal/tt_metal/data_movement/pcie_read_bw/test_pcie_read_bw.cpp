@@ -12,6 +12,7 @@
 #include "dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <chrono>
+#include <cstdlib>
 
 namespace tt::tt_metal {
 
@@ -167,13 +168,16 @@ TEST_F(UnitMeshFastDispatchFixture, PCIeReadBandwidthSweep) {
 
 /* ========== Host-side D2H (ReadShard) bandwidth sweep; Test id = 607 ========== */
 TEST_F(UnitMeshFastDispatchFixture, PCIeHostReadBandwidthSweep) {
-    // Remove GTEST_SKIP to run the test
-    GTEST_SKIP() << "Skipping: CLI timeout with large iteration count";
+    // Skipped unless TT_METAL_DM_HOST_BW_ITERS sets the iteration count: the default count outlasts the CLI timeout.
+    const char* iters_env = std::getenv("TT_METAL_DM_HOST_BW_ITERS");
+    if (iters_env == nullptr) {
+        GTEST_SKIP() << "Set TT_METAL_DM_HOST_BW_ITERS to run";
+    }
     auto device_coord = distributed::MeshCoordinate(0, 0);
     auto& cq = this->device().mesh_command_queue();
 
     constexpr uint32_t page_size = 4096;
-    constexpr uint32_t num_iterations = 100000;
+    const uint32_t num_iterations = std::strtoul(iters_env, nullptr, 10);
     constexpr uint32_t min_buf_size = 4 * 1024;
     constexpr uint32_t max_buf_size = 16 * 1024 * 1024;
 

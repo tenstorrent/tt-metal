@@ -186,3 +186,39 @@ The copies are what slow the models, and they slow them more with the profiler o
 changes between the two (52.5-54.7 GB/s alone, 50.6-52.3 GB/s with the profiler). The likely cause, not yet tested, is
 that the copies saturate the PCIe path that fast dispatch also uses, and the drain jobs' holds open gaps in it. Sharing
 that path is a question for the service, not the profiler.
+
+### Why copies slow the models, 2026-11-25
+
+The copies here are synthetic: ResNet does not use the service; a separate SteadyLoad process keeps every loaded seat
+busy with 1 MiB copies (from a DRAM region ResNet never touches, into a 64 MiB host buffer) for the whole run. It is the
+worst case for one client's copies against another process's fast dispatch, continuous and uncapped, not a model doing
+its own transfers.
+
+ResNet-50 on bh-17 against SteadyLoad copies, 2 runs each (`DRISC_SERVICE_LOAD_BANKS` limits the copies to the first
+N banks; 2 seats per bank). Copy rates are inside the model's window.
+
+| Copies | Profiler off FPS | Profiler on FPS | Copy rate |
+|---|---|---|---|
+| none | 10,496-10,509 | 9,923-9,937 | - |
+| local, 7 banks | 6,763-7,216 | 8,833-8,842 | 200-202 GB/s |
+| d2h, 1 bank | 9,166-9,186 | | 49.4-49.6 GB/s |
+| d2h, 2 banks | 3,589-3,620 | | 50.6-51.0 GB/s |
+| d2h, 4 banks | 800-802 | | 52.0 GB/s |
+| d2h, 7 banks | 176-177 | 2,712-2,722 | 52.6 GB/s |
+| d2h, 7 banks, 1 or 6 spinning host threads | 176-177 | | 52.6-53.7 GB/s |
+
+Host memcpy (numpy, 1 / 6 processes): 39.2 / 57.7 GB/s idle, 16.1 / 49.4 GB/s under d2h copies, 38.5 / 70.1 GB/s under
+local copies.
+
+- PCIe bandwidth is not it. One bank already moves 49.6 GB/s, within 6% of seven, yet costs the model 13% where seven
+  cost it 98%. The model's loss follows the number of seats writing to the host, not the bytes.
+- Host memory is not it. Its load is the same at 1 bank and at 7, and the model differs 52x between them.
+- Host CPU is not it. Spinning threads change nothing, so the profiler's own threads are not what helps.
+- Local copies at 200 GB/s cost the model a third, far less than 1/7 of that rate crossing PCIe.
+
+What fits is queueing at the PCIe tile. Fast dispatch's prefetcher reads its commands from host memory, and a device
+read request cannot pass the posted writes queued ahead of it toward the host, so each read waits behind every seat's
+outstanding writes; more writers make that queue deeper at the same bandwidth. The drain jobs' holds take each seat's
+copies off the queue for a while, which is why the profiler helps (and helps under local copies too, by the same
+pause). Not yet measured directly; a 64 B host-to-device probe timed against the number of writing banks would confirm
+it.

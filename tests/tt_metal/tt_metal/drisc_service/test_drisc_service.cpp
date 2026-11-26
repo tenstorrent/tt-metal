@@ -2413,10 +2413,15 @@ TEST_F(DriscService, SteadyLoad) {
     const uint32_t banks = device().num_banks();
     HostMemory host(device(), host_size);
 
+    // DRISC_SERVICE_LOAD_BANKS limits the copies to the first N banks, to vary the load.
+    const char* banks_env = std::getenv("DRISC_SERVICE_LOAD_BANKS");
+    const uint32_t loaded_banks =
+        banks_env != nullptr ? std::min<uint32_t>(banks, std::strtoul(banks_env, nullptr, 10)) : banks;
+
     std::optional<Client> client;
     attach(client, all_banks());
     std::vector<BenchLane> lanes;
-    for (uint32_t bank = 0; bank < banks; bank++) {
+    for (uint32_t bank = 0; bank < loaded_banks; bank++) {
         for (uint32_t noc = 0; noc < 2; noc++) {
             SeatClient& seat = client->seat(bank, noc);
             BenchLane& lane = lanes.emplace_back(BenchLane{&seat, {}});
