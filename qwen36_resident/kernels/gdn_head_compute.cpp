@@ -291,17 +291,18 @@ __attribute__((noinline)) void kt_step(uint32_t cb_k) {
     CircularBuffer(cb_k).pop_front(Kt);
 }
 
-// 5. S' = decay * S + k^T (x) delta (decay: a full fp32 tile of cb_dec). Per DEST window: three state tiles and
-//    decay are copied in (fp32), scaled on SFPU, then the rank-1 tile k^T[kt] @ delta[vt] is accumulated onto them
-//    by the FPU (only column 0 of k^T and row 0 of delta are live). Packed twice: for the query matmul and for the
-//    writer.
+// 5. S' = decay * S + k^T (x) delta (decay: a full fp32 tile of cb_dec; O-3b: its [0][0] read once as a scalar for
+//    the SFPU's scale, so a DEST window holds four state tiles and copies no decay tile — 4 windows, not 6, of the
+//    copy / scale / matmul re-inits). Per window the state tiles are copied in (fp32), scaled on SFPU, then the rank-1
+//    tile k^T[kt] @ delta[vt] is accumulated onto them by the FPU (only column 0 of k^T and row 0 of delta are live).
+//    Packed twice: for the query matmul and for the writer.
 __attribute__((noinline)) void state_update(uint32_t cb_dec) {
-    constexpr uint32_t kWin = 3;
-    constexpr uint32_t kDecaySlot = 3;
+    constexpr uint32_t kWin = 4;
     CircularBuffer(cb_kt).wait_front(Kt);
     CircularBuffer(cb_delta).wait_front(Vt);
     CircularBuffer(cb_s_in).wait_front(st);
     CircularBuffer(cb_dec).wait_front(1);
+    const uint32_t dec_bits = read_tile_value(cb_dec, 0, 0);
     CircularBuffer(cb_s_new_mm).reserve_back(st);
     CircularBuffer(cb_s_new_out).reserve_back(st);
     for (uint32_t t0 = 0; t0 < st; t0 += kWin) {
@@ -312,10 +313,9 @@ __attribute__((noinline)) void state_update(uint32_t cb_dec) {
         for (uint32_t i = 0; i < n; i++) {
             copy_tile(cb_s_in, t0 + i, i);
         }
-        copy_to_dst(cb_dec, 0, kDecaySlot);
-        mul_binary_tile_init();
+        binop_with_scalar_tile_init();
         for (uint32_t i = 0; i < n; i++) {
-            mul_binary_tile(i, kDecaySlot, i);
+            mul_unary_tile(i, dec_bits);
         }
         matmul_setup(cb_kt, cb_delta, cb_s_new_mm);
         for (uint32_t i = 0; i < n; i++) {
