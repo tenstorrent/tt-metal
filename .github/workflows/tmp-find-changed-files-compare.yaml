@@ -1,0 +1,82 @@
+name: "tmp: compare find-changed-files old and new"
+on:
+  push:
+    branches: ["mchiou/0-scan-type-test-*"]
+jobs:
+  old:
+    runs-on: ubuntu-latest
+    outputs:
+      json: ${{ steps.dump.outputs.json }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github
+      - id: f
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@bb364419e0ef653ea18f7a3fada201ece966bfd5
+      - id: dump
+        env:
+          J: ${{ toJSON(steps.f.outputs) }}
+        run: echo "json=$(jq -cS . <<<"$J")" >> "$GITHUB_OUTPUT"
+  new:
+    runs-on: ubuntu-latest
+    outputs:
+      json: ${{ steps.dump.outputs.json }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github
+      - id: f
+        uses: ./.github/actions/find-changed-files
+      - id: dump
+        env:
+          J: ${{ toJSON(steps.f.outputs) }}
+        run: echo "json=$(jq -cS . <<<"$J")" >> "$GITHUB_OUTPUT"
+  new-no-checkout:
+    runs-on: ubuntu-latest
+    outputs:
+      json: ${{ steps.dump.outputs.json }}
+    steps:
+      - id: f
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@84194196c02259d0115c5a0dbc8cc83d6ba755e4
+      - id: dump
+        env:
+          J: ${{ toJSON(steps.f.outputs) }}
+        run: echo "json=$(jq -cS . <<<"$J")" >> "$GITHUB_OUTPUT"
+  new-full-checkout:
+    runs-on: ubuntu-latest
+    outputs:
+      json: ${{ steps.dump.outputs.json }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - id: f
+        uses: ./.github/actions/find-changed-files
+      - id: dump
+        env:
+          J: ${{ toJSON(steps.f.outputs) }}
+        run: echo "json=$(jq -cS . <<<"$J")" >> "$GITHUB_OUTPUT"
+  compare:
+    needs: [old, new, new-no-checkout, new-full-checkout]
+    runs-on: ubuntu-latest
+    env:
+      OLD: ${{ needs.old.outputs.json }}
+      NEW: ${{ needs.new.outputs.json }}
+      NEW_NC: ${{ needs.new-no-checkout.outputs.json }}
+      NEW_FULL: ${{ needs.new-full-checkout.outputs.json }}
+    steps:
+      - run: |
+          echo "OLD=$OLD"
+          echo "NEW=$NEW"
+          echo "count=$(jq length <<<"$OLD")"
+          for k in clang-tidy-config-changed any-code-changed tt-metalium-api-headers-changed docs-changed run-clang-tidy; do
+            echo "$k old=$(jq -r --arg k "$k" '.[$k]' <<<"$OLD") new=$(jq -r --arg k "$k" '.[$k]' <<<"$NEW")"
+          done
+          test "$(jq length <<<"$OLD")" -ge 28
+          test "$OLD" = "$NEW"
+          test "$OLD" = "$NEW_NC"
+          test "$OLD" = "$NEW_FULL"
+          echo "ALL EQUAL"
