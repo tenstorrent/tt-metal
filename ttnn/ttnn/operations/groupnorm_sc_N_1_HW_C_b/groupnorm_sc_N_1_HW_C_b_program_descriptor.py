@@ -49,7 +49,14 @@ CHUNK_TILES_TARGET = 32  # streaming quantum target (tiles per chunk)
 D_IN = 2  # TILE input stream depth (chunks)
 D_RM = 2  # RM stick CB depth (chunks)
 # DEST window of the compute's two-op per-chunk chains (fp32 DEST, half sync: the device DEST_AUTO_LIMIT).
-D_OUT = 2  # output tile ring depth (chunks)
+# Interleaved output: the pass-2 output is split across both DM RISCs (perf_experiments/dram_dynamic_balance). The
+# writer's share CB holds 1 chunk (2 when L1 has a chunk to spare after the resident ring) and the reader's 1 chunk:
+# D_OUT = 2 chunks at minimum, the op's former output ring. Compute packs each chunk into whichever share has a free
+# slot (the writer's first) and names it on that RISC's sequence CB (OUT_SEQ_PAGES uint32 pages).
+D_OUT = 2  # output chunks at minimum (writer's share 1 + reader's share 1)
+OUT_READER_CHUNKS = 1
+OUT_SEQ_PAGES = 8  # per sequence CB; at most 2 + the writer's depth outstanding
+OUT_SEQ_PAGE_BYTES = 16
 MAX_GROUP_LANES = 32  # group lanes in one tile row
 # Per-chunk device zones (perf_instrumentation.hpp MaybeDeviceZoneScopeIf) split each chunk's wait from its work.
 # They are opt-in (TUNING_OVERRIDES["chunk_zones"]): in a profiled build they cost about 0.9 us on a 25 us sharded
@@ -86,6 +93,9 @@ CB_GROUP_STATS = 20
 CB_AFFINE_STAGING = 21  # reader-only staging: pilot row (step 0) / affine slices (step B), disjoint in time
 CB_PILOT_ROWS = 22  # -k per channel (row 0, bf16), one per block, held for pass 1
 CB_GROUP_SHIFT = 24  # unit root: k per group lane (Float32, rows replicated), read by the finalize
+CB_OUTPUT_B = 27  # interleaved: the reader's share of the pass-2 output (written on the reader's NoC)
+CB_OUT_SEQ_A = 28  # interleaved: pass-2 index of each chunk packed into CB_OUTPUT_TILES (-> writer)
+CB_OUT_SEQ_B = 29  # interleaved: pass-2 index of each chunk packed into CB_OUTPUT_B (-> reader)
 
 NUM_CB_SLOTS = 64  # unpack_to_dest_mode vector length (covers WH 32 / BH 64)
 
@@ -140,8 +150,9 @@ def input_ring_pages(*, T, K_alloc, stream, is_rm):
 
 
 def output_ring_bytes(T):
-    """The D_OUT-deep bf16 output tile ring (interleaved output only)."""
-    return D_OUT * T * BF16_TILE_BYTES
+    """The minimum interleaved output CBs: the writer's and the reader's bf16 shares (D_OUT chunks) + the two
+    sequence CBs. The writer's optional second chunk is added by plan_or_raise when it fits."""
+    return D_OUT * T * BF16_TILE_BYTES + 2 * OUT_SEQ_PAGES * OUT_SEQ_PAGE_BYTES
 
 
 def staging_bytes(*, W, map_period, is_rm, n_affine):
@@ -161,7 +172,7 @@ def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map
     bf16_pages = (
         (D_RM * T if is_rm and not sharded else 0)
         + (0 if tile_shard else input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm))
-        + 1  # the constant -1 tile (pass 2)
+        + 1  # the constant -1 tile (root finalize in0)
         + W * (2 + hg + hb)  # map, pilot rows, gamma map, beta map
     )
     # Sharded: TILE packs into the output shard, RM pack-untilizes into it (no output tile ring).
@@ -219,6 +230,7 @@ class GroupNormPlan:
     l1_budget: int
     footprint: int
     work: list = field(default_factory=list)
+    out_writer_chunks: int = 1  # interleaved: chunk depth of the writer's output share (CB_OUTPUT_TILES)
     sharded: bool = False
     in_place: bool = False  # sharded only: the output is the input shard
     map_period: int = 0  # channels per slice (lane v holds channel v mod map_period)
@@ -404,6 +416,14 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta, in_place=Fal
     else:
         K_alloc = max(0, min(int(override), K_max, B_max))
     stream = B_max > K_alloc
+    footprint = footprint_bytes(
+        W=W, T=T, R=R, K_alloc=K_alloc, stream=stream, is_rm=is_rm, has_gamma=has_gamma, has_beta=has_beta
+    )
+    # The writer's output share keeps a double buffer when L1 has a chunk to spare after the resident ring; an
+    # L1-bound plan (the ring took every spare chunk) runs 1 + 1, the former 2-chunk ring's bytes.
+    chunk_bytes = BF16_TILE_BYTES * T
+    out_writer_chunks = 2 if l1_budget - footprint >= chunk_bytes else 1
+    footprint += (out_writer_chunks - 1) * chunk_bytes
 
     fields = dict(U=best["U"], P=P, cpi=best["cpi"], Ht=Ht)
     plan = GroupNormPlan(
@@ -437,10 +457,9 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta, in_place=Fal
         grid_x=grid.x,
         grid_y=grid.y,
         l1_budget=l1_budget,
-        footprint=footprint_bytes(
-            W=W, T=T, R=R, K_alloc=K_alloc, stream=stream, is_rm=is_rm, has_gamma=has_gamma, has_beta=has_beta
-        ),
+        footprint=footprint,
         map_period=W * 32,
+        out_writer_chunks=out_writer_chunks,
     )
     plan.work = _distribute(fields, grid.x)
     return plan
@@ -669,7 +688,14 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         )
         if not sharded:
             # Sharded RM pack-untilizes the normalized tiles straight into the output shard: no tile ring.
-            cbs.append(_cb(output_ring_bytes(T), cores, [(CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)]))
+            # The pass-2 output split across both DM RISCs, each writing its share on its own NoC.
+            chunk_bytes = T * BF16_TILE_BYTES
+            seq_bytes = OUT_SEQ_PAGES * OUT_SEQ_PAGE_BYTES
+            u32 = ttnn.uint32
+            cbs.append(_cb(plan.out_writer_chunks * chunk_bytes, cores, [(CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)]))
+            cbs.append(_cb(OUT_READER_CHUNKS * chunk_bytes, cores, [(CB_OUTPUT_B, bf16, BF16_TILE_BYTES)]))
+            cbs.append(_cb(seq_bytes, cores, [(CB_OUT_SEQ_A, u32, OUT_SEQ_PAGE_BYTES)]))
+            cbs.append(_cb(seq_bytes, cores, [(CB_OUT_SEQ_B, u32, OUT_SEQ_PAGE_BYTES)]))
     # Alias group E: the S1' spill accumulator (UnpackToDestFp32, multi-chunk pass 1) / the FPU-readable chan_scale.
     # The last chunk reloads accumulator tile i and packs the collapsed chan tile i over it (in-place lockstep; every
     # view returns to its base each block), so the accumulator costs no L1 of its own.
@@ -725,6 +751,9 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     reader_ct.extend(
         (ttnn.TensorAccessorArgs(beta) if beta is not None else ttnn.TensorAccessorArgs()).get_compile_time_args()
     )
+    # The output, for the reader's pass-2 share (interleaved only; sharded builds carry it unused).
+    reader_ct.append(out_page_bytes)
+    reader_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     # Compute is built once per role too (IS_ROOT is compile-time, CT 7): a runtime role flag lets O3 unswitch the
     # block loop on it, emitting the whole per-block body twice; the root binary must fit the kernel-config ring
@@ -784,6 +813,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             wk.is_root,
             root_virt.x,
             root_virt.y,
+            output_tensor.buffer_address(),
         ]
         compute_rt[wk.is_root][x][y] = [wk.num_blocks, wk.rows_core, K_core, inv_n_bits, eps_bits]
         writer_cores[wk.is_root].append(wk.core)

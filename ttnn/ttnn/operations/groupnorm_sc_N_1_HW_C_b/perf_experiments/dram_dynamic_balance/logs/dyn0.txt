@@ -1,0 +1,3 @@
+case                             kernels#dyn
+flux1_dram_16384x256           59,833
+vae_dram_65536x512            389,773

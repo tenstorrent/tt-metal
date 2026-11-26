@@ -10,7 +10,10 @@
 //   root     : wait for cpi arrivals, publish the gathered tiles to compute; multicast [rstd, mean] from
 //              cb_stats_out into every unit core's cb_group_stats (McastArgs; cpi == 1 is a local copy).
 //   receiver : take the multicast into cb_group_stats.
-//   output   : pass-2 chunks (resident tail first, then the re-read head) -> DRAM via TensorAccessor.
+//   output   : this RISC's share of the pass-2 chunks -> DRAM via TensorAccessor. Compute packs each chunk for
+//              whichever DM RISC has a free output slot (this one's cb_output_tiles preferred, else the reader's
+//              cb_output_b) and names its pass-2 index q (resident tail first, then the re-read head) on
+//              cb_out_seq_a here; END closes the block. The reader writes the other share on its NoC.
 //              SHARDED: compute writes the output shard directly (zero-copy CB); the writer only drains the
 //              credits (RM: the head-skip credits compute pushes first, then every chunk).
 //
@@ -33,6 +36,8 @@ constexpr uint32_t cb_local_partials = 15;
 constexpr uint32_t cb_gathered_partials = 16;
 constexpr uint32_t cb_stats_out = 19;
 constexpr uint32_t cb_group_stats = 20;
+constexpr uint32_t cb_out_seq_a = 28;  // DRAM interleaved: pass-2 index of each chunk packed into cb_output_tiles
+constexpr uint32_t OUT_SEQ_END = 0xFFFFFFFFu;
 
 constexpr uint32_t F32_TILE_BYTES = 4096;
 constexpr uint32_t F32_FACE_BYTES = 1024;
@@ -200,7 +205,14 @@ void kernel_main() {
             }
             continue;
         }
-        for (uint32_t jj = 0; jj < num_chunks; ++jj) {
+        for (;;) {
+            cb_wait_front(cb_out_seq_a, 1);
+            invalidate_l1_cache();
+            const uint32_t jj = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_out_seq_a));
+            cb_pop_front(cb_out_seq_a, 1);
+            if (jj == OUT_SEQ_END) {
+                break;
+            }
             const uint32_t j = jj < K ? first_resident + jj : jj - K;
             const uint32_t row0 = row_start + j * CHUNK_HT;
             const uint32_t rows_left = rows_core - j * CHUNK_HT;

@@ -17,6 +17,12 @@
 //           expand matmul's gamma map (gamma[c] at row g(c), column c's lane) + beta map (row 0 = -beta[c]),
 //           cb_gamma_rows (stall shadow of the combine)
 //   pass 2: re-read chunks 0..B-K-1 -> the input ring (cb_input_rm for RM)
+//   output share (DRAM interleaved): compute packs each pass-2 chunk for whichever DM RISC has a free output slot
+//           (the writer's cb_output_tiles preferred, else this RISC's cb_output_b) and names the chunk's pass-2
+//           index q on that consumer's sequence CB (cb_out_seq_b here; END closes the block). This RISC writes its
+//           share to DRAM on its own NoC: it drains cb_output_b while a pass-2 re-read waits for ring room, then
+//           to END after the block's last re-read. Both NoCs carry pass-2 writes, in proportion to how fast each
+//           drains (the pass-2 writer on NOC0 was ~6x slower per chunk than on NOC1 in DRAM-congested units).
 // Every chunk pushes the nominal T pages (ragged tail: only rows_valid tile-rows transferred).
 // SHARDED: the input CB (TILE: the ring, RM: cb_input_rm) is backed on this core's own shard, so a chunk is
 // a credit push with no data movement; the pilot comes from the unit root's shard (row 0 of the image).
@@ -47,6 +53,9 @@ constexpr uint32_t cb_gamma_rows = 13;  // the expand matmul's in1: gamma map (+
 constexpr uint32_t cb_affine_staging = 21;
 constexpr uint32_t cb_pilot_rows = 22;
 constexpr uint32_t cb_group_shift = 24;
+constexpr uint32_t cb_output_b = 27;   // DRAM interleaved: this RISC's share of the pass-2 output
+constexpr uint32_t cb_out_seq_b = 29;  // pass-2 index of each chunk compute packed into cb_output_b (16 B pages)
+constexpr uint32_t OUT_SEQ_END = 0xFFFFFFFFu;
 
 constexpr uint32_t BF16_TILE_BYTES = 2048;
 constexpr uint32_t BF16_FACE_BYTES = 512;
@@ -127,6 +136,9 @@ void kernel_main() {
     constexpr auto in_args = TensorAccessorArgs<14>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    // The output (written for this RISC's pass-2 share; DRAM interleaved only).
+    constexpr uint32_t OUT_PAGE_BYTES = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
+    constexpr auto out_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset() + 1>();
 
     constexpr uint32_t T = CHUNK_HT * W;
     constexpr uint32_t HW = HT * 32;
@@ -148,8 +160,10 @@ void kernel_main() {
     const uint32_t is_root = get_arg_val<uint32_t>(arg++);
     const uint32_t root_x = get_arg_val<uint32_t>(arg++);  // SHARDED: unit root (virtual), holds image row 0
     const uint32_t root_y = get_arg_val<uint32_t>(arg++);
+    const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
 
     const auto in_acc = TensorAccessor(in_args, in_addr, IN_PAGE_BYTES);
+    [[maybe_unused]] const auto out_acc = TensorAccessor(out_args, out_addr, OUT_PAGE_BYTES);
     [[maybe_unused]] const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr, C * 2);
     [[maybe_unused]] const auto beta_acc = TensorAccessor(beta_args, beta_addr, C * 2);
 
@@ -162,6 +176,22 @@ void kernel_main() {
     // work), DRAM after chunk 0's (whose read the pilot rides with). RM compute tilizes meanwhile; TILE compute
     // waits only for the pilot rows, which are emitted first.
     const uint32_t pro_step = SHARDED ? num_chunks - 1 : 0;
+
+    // One output chunk at the front of cb_output_b -> DRAM: rows_valid tile rows from image tile row row0g
+    // (n * HT + row0), the writer's page walk.
+    auto write_b_chunk = [&](uint32_t row0g, uint32_t rows_valid, uint32_t wt0) {
+        cb_wait_front(cb_output_b, T);
+        uint32_t src = get_read_ptr(cb_output_b);
+        for (uint32_t r = 0; r < rows_valid; ++r) {
+            const uint32_t tile0 = (row0g + r) * WT_TOTAL + wt0;
+            for (uint32_t wt = 0; wt < W; ++wt) {
+                noc_async_write_page(tile0 + wt, out_acc, src);
+                src += OUT_PAGE_BYTES;
+            }
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb_output_b, T);
+    };
 
     // Group map M (W tiles): element (slice lane r, group lane l) = 1.0 iff slice lane r holds a channel of group
     // lane l. Slices start on group boundaries, so the map is block-invariant: built once per kernel. Compute first
@@ -217,6 +247,29 @@ void kernel_main() {
         const uint32_t n = unit / GX;
         const uint32_t c_start = (unit % GX) * P;  // first channel of the slice
         const uint32_t wt0 = c_start / 32;         // its tile column (P = W*32 whenever the input is tiled in DRAM)
+        // Output share (DRAM interleaved; SHARDED packs into the output shard and has none).
+        [[maybe_unused]] bool b_done = false;
+        // One cb_output_b chunk if its index and data are both there (block: wait for them); END ends the share.
+        [[maybe_unused]] auto try_b = [&](bool block) {
+            if (!block && !cb_pages_available_at_front(cb_out_seq_b, 1)) {
+                return;
+            }
+            cb_wait_front(cb_out_seq_b, 1);
+            invalidate_l1_cache();
+            const uint32_t q = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_out_seq_b));
+            if (q == OUT_SEQ_END) {
+                cb_pop_front(cb_out_seq_b, 1);
+                b_done = true;
+                return;
+            }
+            if (!block && !cb_pages_available_at_front(cb_output_b, T)) {
+                return;
+            }
+            cb_pop_front(cb_out_seq_b, 1);
+            const uint32_t j = q < K ? first_resident + q : q - K;  // pass-2 order: resident tail, then the head
+            const uint32_t rows_left = rows_core - j * CHUNK_HT;
+            write_b_chunk(n * HT + row_start + j * CHUNK_HT, rows_left < CHUNK_HT ? rows_left : CHUNK_HT, wt0);
+        };
 
         // One loop, one site per NoC pattern (kernel text must fit the kernel-config ring under --dev):
         // steps 0..B-1 are pass 1, step B emits the affine rows (stall shadow of the combine), and steps
@@ -337,6 +390,23 @@ void kernel_main() {
             {
                 // Back-pressure: compute has not freed the ring slot yet.
                 MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_reserve");
+                if constexpr (!SHARDED) {
+                    // Pass-2 re-read: compute may be blocked on cb_output_b (this RISC's share), so write the share
+                    // out while the ring has no room for the next chunk.
+                    if (step > num_chunks) {
+                        for (;;) {
+                            const bool room = IS_RM ? cb_pages_reservable_at_back(cb_input_rm, T)
+                                                    : cb_pages_reservable_at_back(cb_input_tiles, T) &&
+                                                          cb_pages_reservable_at_back(cb_input_keep, T);
+                            if (room) {
+                                break;
+                            }
+                            if (!b_done) {
+                                try_b(false);
+                            }
+                        }
+                    }
+                }
                 if constexpr (IS_RM) {
                     cb_reserve_back(cb_input_rm, T);
                 } else {
@@ -454,5 +524,15 @@ void kernel_main() {
                 build_map();
             }
         }
+        // The rest of this block's output share: whatever compute packs for this RISC after the last re-read was
+        // issued (every chunk of the share when nothing is re-read), up to END.
+        if constexpr (!SHARDED) {
+            while (!b_done) {
+                try_b(true);
+            }
+        }
+    }
+    if constexpr (!SHARDED) {
+        noc_async_write_barrier();
     }
 }

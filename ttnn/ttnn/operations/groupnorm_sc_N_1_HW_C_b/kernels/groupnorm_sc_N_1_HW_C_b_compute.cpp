@@ -86,6 +86,14 @@ constexpr uint32_t cb_stats_out = 19;
 constexpr uint32_t cb_group_stats = 20;
 constexpr uint32_t cb_pilot_rows = 22;   // -k per channel (row 0), held for pass 1
 constexpr uint32_t cb_group_shift = 24;  // root: k per group lane in row 0, rows 1..31 zero (finalize_raw)
+// DRAM interleaved output split across both DM RISCs: per pass-2 chunk the packer takes whichever output CB has a free
+// chunk slot - the writer's cb_output_tiles first, else the reader's cb_output_b - and names the chunk's pass-2 index
+// on that consumer's sequence CB (one 16 B uint32 page per chunk; OUT_SEQ_END closes the block). Each RISC writes its
+// share on its own NoC, so a core whose writer NoC is congested hands the excess to the reader's NoC.
+constexpr uint32_t cb_output_b = 27;
+constexpr uint32_t cb_out_seq_a = 28;  // -> writer
+constexpr uint32_t cb_out_seq_b = 29;  // -> reader
+constexpr uint32_t OUT_SEQ_END = 0xFFFFFFFFu;
 
 constexpr uint32_t W = get_compile_time_arg_val(0);
 constexpr uint32_t CHUNK_HT = get_compile_time_arg_val(1);
@@ -480,8 +488,47 @@ ALWI void p2_mul_tile(uint32_t x_cb, uint32_t xi, uint32_t w, uint32_t dst) {
           EltwiseBinaryReuseDestType::NONE>(x_cb, cb_chan_scale, dst, true)));
 }
 
-ALWI void normalize_chunk(uint32_t rows_valid) {
+#ifdef TRISC_PACK
+// Raw CB state on the packer (perf_experiments/dram_dynamic_balance; no helper offers a producer-side "is there room"
+// probe or a consumer choice): free pages = capacity - (pushed - acked); the sequence word is stored straight into
+// the reserved page (CB addresses are 16 B units on TRISC).
+inline uint32_t pack_free_pages(uint32_t cb) {
+    volatile tt_reg_ptr uint32_t* acked_ptr = get_cb_tiles_acked_ptr(cb);
+    const uint16_t received = get_local_cb_interface(cb).tiles_received;
+    const uint16_t acked = (uint16_t)reg_read((uint32_t)acked_ptr);
+    return (uint16_t)(get_local_cb_interface(cb).fifo_num_pages - (uint16_t)(received - acked));
+}
+inline void pack_seq_word(uint32_t cb, uint32_t w) {
+    cb_reserve_back(cb, 1);
+    *reinterpret_cast<volatile uint32_t*>(get_local_cb_interface(cb).fifo_wr_ptr << 4) = w;
+    cb_push_back(cb, 1);
+}
+#endif
+
+// The output CB of pass-2 chunk q (DRAM interleaved: the first with a free chunk slot, writer's first, announced on
+// its sequence CB). Only the packer touches the output CBs, so only it chooses; SHARDED packs into the output shard.
+ALWI uint32_t output_cb_for([[maybe_unused]] uint32_t q) {
+    uint32_t out_cb = cb_output_tiles;
+#ifdef TRISC_PACK
+    if constexpr (!SHARDED) {
+        for (;;) {
+            if (pack_free_pages(cb_output_tiles) >= T) {
+                break;
+            }
+            if (pack_free_pages(cb_output_b) >= T) {
+                out_cb = cb_output_b;
+                break;
+            }
+        }
+        pack_seq_word(out_cb == cb_output_tiles ? cb_out_seq_a : cb_out_seq_b, q);
+    }
+#endif
+    return out_cb;
+}
+
+ALWI void normalize_chunk(uint32_t rows_valid, uint32_t q) {
     constexpr uint32_t x_cb = cb_input_keep;
+    const uint32_t out_cb = output_cb_for(q);
     {
         MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_wait_x");
         cb_wait_front(x_cb, T);
@@ -491,11 +538,11 @@ ALWI void normalize_chunk(uint32_t rows_valid) {
     cb_wait_front(cb_bprime, W);
     const uint32_t n = rows_valid * W;
     p2_init(x_cb);
-    pack_reconfig_data_format(cb_output_tiles);
+    pack_reconfig_data_format(out_cb);
     uint32_t w = 0;
     for (uint32_t i = 0; i < n; i += CHAIN_BLOCK) {
         const uint32_t cnt = n - i < CHAIN_BLOCK ? n - i : CHAIN_BLOCK;
-        cb_reserve_back(cb_output_tiles, cnt);
+        cb_reserve_back(out_cb, cnt);
         tile_regs_acquire();
         p2_seed_window(cnt, w, W, 0);
         for (uint32_t j = 0; j < cnt; ++j) {
@@ -505,12 +552,12 @@ ALWI void normalize_chunk(uint32_t rows_valid) {
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t j = 0; j < cnt; ++j) {
-            pack_tile(j, cb_output_tiles);
+            pack_tile(j, out_cb);
         }
         tile_regs_release();
-        cb_push_back(cb_output_tiles, cnt);
+        cb_push_back(out_cb, cnt);
     }
-    push_pad(cb_output_tiles, T - n);
+    push_pad(out_cb, T - n);
     cb_pop_front(x_cb, T);
 }
 
@@ -863,12 +910,18 @@ void kernel_main() {
             if constexpr (UNTILIZE_OUT) {
                 normalize_untilize_chunk(rows_valid);
             } else {
-                normalize_chunk(rows_valid);
+                normalize_chunk(rows_valid, jj);
             }
             if (reread) {
                 skip_chunk(cb_input_tiles);  // the pass-1 view also carried the re-read
             }
         }
+#ifdef TRISC_PACK
+        if constexpr (!SHARDED) {
+            pack_seq_word(cb_out_seq_a, OUT_SEQ_END);
+            pack_seq_word(cb_out_seq_b, OUT_SEQ_END);
+        }
+#endif
         cb_pop_front(cb_chan_scale, W);
         cb_pop_front(cb_bprime, W);
     }

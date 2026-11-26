@@ -1,0 +1,8 @@
+case                          plit:d+da:auto
+mid_4096x640_rm:k1             56,290
+mid_4096x640_tile:k1           37,379
+mid_16384x320_rm:k2            82,833
+g_dram_tile_16384x96_cg3:k1    26,341
+mid_4096x640_tile:g:k1         36,794
+mid_4096x640_rm:n:k1           56,189
+mid_16384x320_tile:k3          68,273

@@ -1,0 +1,51 @@
+[
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_4096x640_rm:k1",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "ns": 56290
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_4096x640_tile:k1",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "ns": 37379
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_16384x320_rm:k2",
+  "pcc": 0.9999983624108368,
+  "rms": 0.0018119780849674375,
+  "ns": 82833
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "g_dram_tile_16384x96_cg3:k1",
+  "pcc": 0.999997799282496,
+  "rms": 0.0021316492878646915,
+  "ns": 26341
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_4096x640_tile:g:k1",
+  "pcc": 0.9999976493966742,
+  "rms": 0.0021690965846799474,
+  "ns": 36794
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_4096x640_rm:n:k1",
+  "pcc": 0.9999973726538126,
+  "rms": 0.002336429154347653,
+  "ns": 56189
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_16384x320_tile:k3",
+  "pcc": 0.9999983690597842,
+  "rms": 0.0018061185798945638,
+  "ns": 68273
+ }
+]

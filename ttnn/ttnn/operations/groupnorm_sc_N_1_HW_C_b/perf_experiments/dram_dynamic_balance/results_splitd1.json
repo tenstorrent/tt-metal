@@ -1,0 +1,65 @@
+[
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "vae_dram_65536x512",
+  "pcc": 0.9999984395742231,
+  "rms": 0.0017685554981331127,
+  "ns": 373966
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d",
+  "case": "vae_dram_65536x512",
+  "pcc": 0.9999984395742231,
+  "rms": 0.0017685554981331127,
+  "ns": 335610
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:2+db:2",
+  "case": "vae_dram_65536x512",
+  "pcc": 0.9999984395742231,
+  "rms": 0.0017685554981331127,
+  "ns": 344678
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "flux1_dram_16384x256",
+  "pcc": 0.9999983791181052,
+  "rms": 0.001810615273418217,
+  "ns": 53193
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d",
+  "case": "flux1_dram_16384x256",
+  "pcc": 0.9999983791181052,
+  "rms": 0.001810615273418217,
+  "ns": 55415
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:2+db:2",
+  "case": "flux1_dram_16384x256",
+  "pcc": 0.9999983791181052,
+  "rms": 0.001810615273418217,
+  "ns": 53376
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "refiner_dram_16384x1152",
+  "pcc": 0.9999981690675384,
+  "rms": 0.001919320903469321,
+  "ns": 214847
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d",
+  "case": "refiner_dram_16384x1152",
+  "pcc": 0.9999981690675384,
+  "rms": 0.001919320903469321,
+  "ns": 200092
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:2+db:2",
+  "case": "refiner_dram_16384x1152",
+  "pcc": 0.9999981690675384,
+  "rms": 0.001919320903469321,
+  "ns": 206819
+ }
+]

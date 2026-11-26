@@ -1,0 +1,16 @@
+[
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#dyn",
+  "case": "flux1_dram_16384x256",
+  "pcc": 0.9999984165323741,
+  "rms": 0.0017908049645499326,
+  "ns": 59833
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#dyn",
+  "case": "vae_dram_65536x512",
+  "pcc": 0.9999985086991438,
+  "rms": 0.001731239834097751,
+  "ns": 389773
+ }
+]

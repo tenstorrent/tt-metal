@@ -1,0 +1,254 @@
+[
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "vae_dram_65536x512",
+  "pcc": 0.9999984395742231,
+  "rms": 0.0017685554981331127,
+  "ns": 373590
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "vae_dram_65536x512",
+  "pcc": 0.9999984395742231,
+  "rms": 0.0017685554981331127,
+  "ns": 339496
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "vae_dram_262144x256",
+  "pcc": 0.9999981812167665,
+  "rms": 0.0019142114189015893,
+  "ns": 782181
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "vae_dram_262144x256",
+  "pcc": 0.9999981812167665,
+  "rms": 0.0019142114189015893,
+  "ns": 710639
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "refiner_dram_16384x1152",
+  "pcc": 0.9999981690675384,
+  "rms": 0.001919320903469321,
+  "ns": 214551
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "refiner_dram_16384x1152",
+  "pcc": 0.9999981690675384,
+  "rms": 0.001919320903469321,
+  "ns": 200249
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "flux1_dram_16384x256",
+  "pcc": 0.9999983791181052,
+  "rms": 0.001810615273418217,
+  "ns": 53254
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "flux1_dram_16384x256",
+  "pcc": 0.9999983791181052,
+  "rms": 0.001810615273418217,
+  "ns": 53400
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "vae_dram_1048576x256",
+  "pcc": 0.9999982580800274,
+  "rms": 0.001877342566754175,
+  "ns": 3755850
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "vae_dram_1048576x256",
+  "pcc": 0.9999982580800274,
+  "rms": 0.001877342566754175,
+  "ns": 3680034
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "vae_dram_1048576x128",
+  "pcc": 0.9999982176646512,
+  "rms": 0.0019024875397914954,
+  "ns": 1758002
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "vae_dram_1048576x128",
+  "pcc": 0.9999982176646512,
+  "rms": 0.0019024875397914954,
+  "ns": 1686519
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "vae_dram_262144x512",
+  "pcc": 0.9999983473590032,
+  "rms": 0.001818555989645051,
+  "ns": 1769501
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "vae_dram_262144x512",
+  "pcc": 0.9999983473590032,
+  "rms": 0.001818555989645051,
+  "ns": 1710715
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "flux1_dram_1048576x64",
+  "pcc": 0.9999981534551516,
+  "rms": 0.001941147633098631,
+  "ns": 726710
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "flux1_dram_1048576x64",
+  "pcc": 0.9999981534551516,
+  "rms": 0.001941147633098631,
+  "ns": 632839
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "mochi_dram_8x407040x128",
+  "pcc": 0.9999983434812986,
+  "rms": 0.00183066428267665,
+  "ns": 5896573
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mochi_dram_8x407040x128",
+  "pcc": 0.9999983434812986,
+  "rms": 0.00183066428267665,
+  "ns": 5911627
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "mid_4096x640_rm",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "ns": 46126
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_4096x640_rm",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "ns": 45757
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "mid_16384x320_rm",
+  "pcc": 0.9999983624108368,
+  "rms": 0.0018119780849674375,
+  "ns": 82102
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_16384x320_rm",
+  "pcc": 0.9999983624108368,
+  "rms": 0.0018119780849674375,
+  "ns": 81879
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "mid_4096x640_tile",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "ns": 37612
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_4096x640_tile",
+  "pcc": 0.9999982915180461,
+  "rms": 0.0018548243582242447,
+  "ns": 37469
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "mid_16384x320_tile",
+  "pcc": 0.9999983690597842,
+  "rms": 0.0018061185798945638,
+  "ns": 69027
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_16384x320_tile",
+  "pcc": 0.9999983690597842,
+  "rms": 0.0018061185798945638,
+  "ns": 68508
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "g_dram_tile_16384x96_cg3",
+  "pcc": 0.999997799282496,
+  "rms": 0.0021316492878646915,
+  "ns": 26870
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "g_dram_tile_16384x96_cg3",
+  "pcc": 0.999997799282496,
+  "rms": 0.0021316492878646915,
+  "ns": 26475
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "mid_4096x640_tile:g",
+  "pcc": 0.9999976493966742,
+  "rms": 0.0021690965846799474,
+  "ns": 37108
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_4096x640_tile:g",
+  "pcc": 0.9999976493966742,
+  "rms": 0.0021690965846799474,
+  "ns": 37454
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "mid_4096x640_tile:n",
+  "pcc": 0.9999973726538126,
+  "rms": 0.002336429154347653,
+  "ns": 37228
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_4096x640_tile:n",
+  "pcc": 0.9999973726538126,
+  "rms": 0.002336429154347653,
+  "ns": 37284
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "mid_4096x640_rm:g",
+  "pcc": 0.9999976493966742,
+  "rms": 0.0021690965846799474,
+  "ns": 45030
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_4096x640_rm:g",
+  "pcc": 0.9999976493966742,
+  "rms": 0.0021690965846799474,
+  "ns": 45644
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels",
+  "case": "mid_4096x640_rm:n",
+  "pcc": 0.9999973726538126,
+  "rms": 0.002336429154347653,
+  "ns": 44911
+ },
+ {
+  "variant": "/localdev/mmoscicki/gn-regen/tt-metal/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/perf_experiments/dram_dynamic_balance/kernels#split:d+da:auto",
+  "case": "mid_4096x640_rm:n",
+  "pcc": 0.9999973726538126,
+  "rms": 0.002336429154347653,
+  "ns": 44956
+ }
+]
