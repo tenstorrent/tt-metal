@@ -75,6 +75,7 @@ namespace experimental {
 class GlobalCircularBuffer;
 class CrossNodeDFB;
 class PrefetcherPipeImpl;
+class KernelConfigBufferImpl;
 }  // namespace experimental
 
 namespace program_dispatch {
@@ -142,6 +143,10 @@ struct ProgramConfig {
     uint32_t kernel_text_offset;  // offset of first kernel bin
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
+
+// Bytes of `kernel_group`'s packed kernel text, from the start of the program's text section: what a
+// core of the group needs in a kernel config buffer.
+uint32_t kernel_text_footprint(const KernelGroup& kernel_group, const ProgramConfig& program_config);
 
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
 enum class ProgramBinaryStatus : uint8_t {
@@ -357,11 +362,25 @@ public:
 
     void populate_dispatch_data(IDevice* device);
 
+    // Lays out the program's kernel-config block. Checks no size limit: where the block runs is only
+    // known at launch, which checks it with check_kernel_config_fits.
     void finalize_offsets(IDevice* device);
 
-    // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
-    // all the programs, to determine whether the mesh workload can fit in the prefetcher cache all of the programs in
-    // it.
+    // Lays out the kernel-config block of `programs` for each programmable core type, in core-type
+    // index order. Writes each kernel group's offsets (RTAs, kernel text) into the group and returns
+    // the program-level offsets and size; checks no size limit and stores nothing on the programs.
+    static std::vector<ProgramOffsetsState> compute_program_offsets_and_size(
+        ContextId context_id,
+        IDevice* device,
+        const KernelsGetter& kernels_getter,
+        const KernelGroupsGetter& kernel_groups_getter,
+        const SemaphoresGetter& semaphores_getter,
+        ttsl::Span<ProgramImpl*> programs);
+
+    // Helper function to finalize program offsets with custom getters: lays out the block and stores it
+    // on the programs, checking no size limit. Returns the maximum kernel binaries size among all the
+    // programs, to determine whether the mesh workload can fit in the prefetcher cache all of the
+    // programs in it.
     // context_id is which context the program and device belong to
     static uint32_t finalize_program_offsets(
         ContextId context_id,
@@ -370,6 +389,32 @@ public:
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
         ttsl::Span<ProgramImpl*> programs);
+
+    // Throws if this program's kernel-config block does not fit where it runs on `device`: its core
+    // type's KERNEL_CONFIG window, except the Tensix kernel binaries, which go in `kernel_config_buffer`
+    // when one is given. Does nothing for a program that is not finalized.
+    void check_kernel_config_fits(
+        IDevice* device, const experimental::KernelConfigBufferImpl* kernel_config_buffer = nullptr);
+
+    // Whether `program`'s whole kernel-config block, kernel binaries included, fits each core type's KERNEL_CONFIG
+    // window on `device`: what check_kernel_config_fits checks with no kernel config buffer, without throwing.
+    static bool fits_kernel_config_window(ContextId context_id, IDevice* device, const ProgramImpl& program);
+
+    // Marks a fast-dispatch kernels' program. Its Tensix KERNEL_CONFIG window ends at DEFAULT_UNRESERVED, where the
+    // dispatch kernels' own L1 starts, rather than at the allocator's l1_unreserved_base, which a large
+    // worker_l1_size pulls below it.
+    void set_runs_on_dispatch_cores() { runs_on_dispatch_cores_ = true; }
+
+    // The same check for programs laid out together, as a MeshWorkload's are: `program` is any of them,
+    // since they share one layout, and the getters name the kernels of all of them, for the error's
+    // breakdown.
+    static void check_kernel_config_fits(
+        ContextId context_id,
+        IDevice* device,
+        const KernelsGetter& kernels_getter,
+        const KernelGroupsGetter& kernel_groups_getter,
+        const ProgramImpl& program,
+        const experimental::KernelConfigBufferImpl* kernel_config_buffer);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
@@ -863,6 +908,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool runs_on_dispatch_cores_{false};
     bool program_run_args_initialized_{false};
     PerDeviceRunArgDrops per_device_run_arg_drops_;
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
@@ -876,7 +922,7 @@ private:
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_dfbs_;  // Architecture-specific max DFBs
-    uint64_t id;        // Need to make non-const due to move constructor
+    uint64_t id;         // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
     // Programmable core type index -> KernelHandle -> Kernel
