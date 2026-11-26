@@ -9,12 +9,9 @@
 //   dL/d(up)   = dL/dh * silu(gate)
 //   dL/d(gate) = (dL/dh * up) * silu'(gate)
 //
-// Both gradients stay in DEST from the first SFPU step to the pack: silu(gate) by silu_tile, then the FPU multiplies
-// dL/dh in from DEST; silu'(gate) by silu_bw_tile, the same SFPU kernel as ttnn::silu_bw, applied to the incoming
-// gradient dL/dh * up. Each output is rounded once more than its SFPU result, instead of once per step of
-// sigmoid * (1 + gate * (1 - sigmoid)) through circular buffers. silu_bw_tile evaluates a BF16 DEST, so the
-// programs run with fp32_dest_acc_en = false, and it reads x and the gradient from two DEST tiles, so a block of
-// up to 4 tiles uses the 8 DEST tiles of a half-sync BF16 DEST.
+// One SFPU pass (swiglu_gate_bw_tile, swiglu_gate_bw_sfpu.h) computes both from gate, dL/dh and up in DEST, with one
+// sigmoid, in fp32, and rounds each to BF16 once. It reads three DEST tiles per tile of the block and needs a BF16
+// DEST, so the programs run with fp32_dest_acc_en = false and a block goes through DEST two tiles at a time.
 //
 // KERNEL-SIDE ONLY: include this from a compute kernel .cpp; it pulls in the LLK compute API.
 
@@ -22,13 +19,11 @@
 
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/pack.h"
 #include "api/compute/reg_api.h"
-#include "api/compute/silu_bw.h"
 #include "api/compute/tile_move_copy.h"
-#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/swiglu_gate_bw_sfpu.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 // Compute one block of the SwiGLU-gating backward. The caller must have already
 // waited `block_size` tiles on cb_gate / cb_up / cb_dh; this function leaves cb_grad_gate / cb_grad_up pushed.
@@ -44,48 +39,45 @@ template <
     uint32_t cb_silu_grad,
     uint32_t block_size>
 inline void swiglu_gate_bw_block() {
-    static_assert(2 * block_size <= 8, "silu_bw_tile needs two BF16 DEST tiles per tile of the block");
+    // gate, dL/dh and up of one tile take DEST tiles 3k, 3k + 1 and 3k + 2.
+    constexpr uint32_t tiles_per_pass = compute_kernel_lib::DEST_AUTO_LIMIT / 3U;
+    static_assert(tiles_per_pass >= 1U, "swiglu_gate_bw_tile needs three DEST tiles");
 
-    // dL/d(up) = silu(gate) * dL/dh: silu in DEST, then dL/dh multiplied in from DEST.
-    tile_regs_acquire();
-    copy_init(cb_gate);
-    for (uint32_t i = 0; i < block_size; ++i) {
-        copy_tile(cb_gate, i, i);
-    }
-    silu_tile_init();
-    for (uint32_t i = 0; i < block_size; ++i) {
-        silu_tile(i);
-    }
-    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_dh);
-    for (uint32_t i = 0; i < block_size; ++i) {
-        mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_dh, i, i);
-    }
-    tile_regs_commit();
-    pack_and_push_block(cb_grad_up, block_size);
+    for (uint32_t first = 0; first < block_size; first += tiles_per_pass) {
+        const uint32_t n = block_size - first < tiles_per_pass ? block_size - first : tiles_per_pass;
 
-    // dL/d(gate) = (dL/dh * up) * silu'(gate): silu_bw_tile(2i) reads gate from DEST 2i and the incoming gradient
-    // from DEST 2i + 1, and writes the product into DEST 2i.
-    tile_regs_acquire();
-    copy_init(cb_gate);
-    for (uint32_t i = 0; i < block_size; ++i) {
-        copy_tile(cb_gate, i, 2 * i);
-    }
-    mul_init(cb_up, cb_dh);
-    for (uint32_t i = 0; i < block_size; ++i) {
-        mul_tiles(cb_up, cb_dh, i, i, 2 * i + 1);
-    }
-    silu_bw_tile_init();
-    for (uint32_t i = 0; i < block_size; ++i) {
-        silu_bw_tile(2 * i);
-    }
-    tile_regs_commit();
+        tile_regs_acquire();
+        copy_init(cb_gate);
+        for (uint32_t k = 0; k < n; ++k) {
+            copy_tile(cb_gate, first + k, 3U * k);
+        }
+        copy_init(cb_dh);
+        for (uint32_t k = 0; k < n; ++k) {
+            copy_tile(cb_dh, first + k, 3U * k + 1U);
+        }
+        copy_init(cb_up);
+        for (uint32_t k = 0; k < n; ++k) {
+            copy_tile(cb_up, first + k, 3U * k + 2U);
+        }
+        swiglu_gate_bw_tile_init();
+        for (uint32_t k = 0; k < n; ++k) {
+            swiglu_gate_bw_tile(3U * k);
+        }
+        tile_regs_commit();
 
-    cb_reserve_back(cb_grad_gate, block_size);
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_grad_gate);
-    for (uint32_t i = 0; i < block_size; ++i) {
-        pack_tile(2 * i, cb_grad_gate);
+        cb_reserve_back(cb_grad_gate, n);
+        cb_reserve_back(cb_grad_up, n);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_grad_gate);
+        for (uint32_t k = 0; k < n; ++k) {
+            pack_tile(3U * k, cb_grad_gate);
+        }
+        pack_reconfig_data_format(cb_grad_up);
+        for (uint32_t k = 0; k < n; ++k) {
+            pack_tile(3U * k + 1U, cb_grad_up);
+        }
+        tile_regs_release();
+        cb_push_back(cb_grad_gate, n);
+        cb_push_back(cb_grad_up, n);
     }
-    tile_regs_release();
-    cb_push_back(cb_grad_gate, block_size);
 }
