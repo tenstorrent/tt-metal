@@ -118,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
     {
         _llk_math_pack_sync_init_<dest_sync>();
     }
@@ -148,12 +148,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // FPU alone: no Dest handoff, so the inactive SFPU never blocks it.
+            // FPU alone: no Dest handoff, so the inactive SFPU never blocks it. Each group still ends its section.
+            const std::uint32_t num_groups = KT_DIM / GROUP_KT_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < KT_DIM; i++)
+                for (std::uint32_t group = 0; group < num_groups; group++)
                 {
-                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                    for (std::uint32_t i = 0; i < GROUP_KT_DIM; i++)
+                    {
+                        _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                    }
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                 }
             }
         }
