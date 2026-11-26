@@ -77,6 +77,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t section_tiles = reduce_section_tiles(TILE_CNT);
     const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    _llk_unpack_dest_init_();
     {
         START_PERF_MEASURE("INIT")
 
@@ -88,7 +90,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Configure the unpacker and set it up to unpack into Dest; the tile loop pulls the whole bank in.
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-        _llk_unpack_dest_init_();
         _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
 
         if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
@@ -174,11 +175,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_pack_sync_init_<dest_sync>();
     }
+    const DataFormat math_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
     {
         START_PERF_MEASURE("INIT")
-
-        const DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
         _llk_math_eltwise_sfpu_init_();
         ckernel::sfpu::init_reduce<POOL_TYPE, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en>();
@@ -293,18 +293,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
     }
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+    // Where to write to: buffer_Res in L1, holding pack_dst, with the harness's face geometry.
+    // pack_src below is the Dest-side format the packer reads.
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    // Configure pack engine 0 and set it up for one section of tiles.
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
     {
         START_PERF_MEASURE("INIT")
-
-        // Where to write to: buffer_Res in L1, holding pack_dst, with the harness's face geometry.
-        // pack_src below is the Dest-side format the packer reads.
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
-            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-
-        // Configure pack engine 0 and set it up for one section of tiles.
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
 
         if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {

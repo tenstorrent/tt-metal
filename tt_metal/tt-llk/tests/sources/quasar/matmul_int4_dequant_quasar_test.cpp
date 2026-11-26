@@ -56,6 +56,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr ckernel::TensorShape tensor_shape_B = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 #endif
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    // Matmul's hw startup takes the operands reversed: in0 (A) feeds SrcB and in1 (B) feeds SrcA.
+    _llk_unpack_configure_binary_<ckernel::p_unpacr::UNP_A, ckernel::p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_B_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     {
         START_PERF_MEASURE("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
@@ -64,8 +68,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP1;
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_B, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP0;
-        _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
-        _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM, tensor_shape_A, tensor_shape_B);
         PROFILER_SYNC();
     }
@@ -152,6 +154,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_pack_sync_init_<dest_sync>();
     }
+    const DataFormat math_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
     {
         START_PERF_MEASURE("INIT")
         // A partial last group would stay in a Dest section that is never handed to the SFPU.
@@ -161,8 +165,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        const DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
         // matmul_block_init's ALU config, before the matmul init.
         _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
         _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
@@ -525,6 +527,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
     }
+    if constexpr (active)
+    {
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(DataFormat::Float32, ckernel::ReluConfig::none());
+    }
     {
         START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -537,7 +543,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // The SFPU leaves fp32 in Dest; the Int32 format inferred from the matmul does not apply.
             ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
             constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-            _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(DataFormat::Float32, ckernel::ReluConfig::none());
             _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/, output_shape);
         }
         PROFILER_SYNC();
