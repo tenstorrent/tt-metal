@@ -34,7 +34,6 @@
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
-#include "api/debug/kernel_profiler.hpp"  // TEMP zones
 
 namespace {
 
@@ -144,7 +143,6 @@ void kernel_main() {
     // the taps are distributed. Leaves every outstanding read complete.
     bool taps_pending = true;
     auto publish_taps_and_barrier = [&]() {
-        DeviceZoneScopedN("TAPS");
         if (tap_sender) {
             noc_async_read_barrier();  // own tap rows (and the first tile-row) landed
             tap_sender->send(tap_base, tap_base, tap_tiles_bytes);
@@ -191,7 +189,6 @@ void kernel_main() {
         if constexpr (!tile_input) {
             // Body: per tile-row, 32 stick reads -> ONE barrier -> push.
             for (uint32_t m = 0; m < rows_this_block; ++m) {
-                DeviceZoneScopedN("RD_ROW");
                 const uint32_t token0 = (block_seq_start + m) * TILE_DIM;
                 const uint32_t dst = slot_base + (HALO_ROWS + TILE_DIM * m) * stick_bytes;
                 for (uint32_t i = 0; i < TILE_DIM; ++i) {

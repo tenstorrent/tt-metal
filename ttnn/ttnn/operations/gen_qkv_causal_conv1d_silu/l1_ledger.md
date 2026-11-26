@@ -29,7 +29,7 @@ Audit notes:
 | Symbol | Meaning | Bound | Predicate establishing it |
 |---|---|---|---|
 | `w = block_ch_tiles` | channel tiles per block (= per core) | `1 ≤ w ≤ min(255, tensor_ch_tiles)`, `w | tensor_ch_tiles` | `select_plan` candidate filter (`footprint(w,1) ≤ L1_BUDGET`, `G ≤ N`) |
-| `M = block_rows` | token tile-rows per block | `1 ≤ M ≤ core_seq_tiles_max` | `select_plan`: largest balanced `M` with `footprint(w, M) ≤ L1_BUDGET` |
+| `M = block_rows` | token tile-rows per block | `1 ≤ M ≤ min(core_seq_tiles_max, OVERLAP_BLOCK_ROWS)` | `select_plan`: largest balanced `M` with `footprint(w, M) ≤ L1_BUDGET` and `M ≤` the block-rows target (`OVERLAP_BLOCK_ROWS = 1` by default — implementer, measured Overlap lamp; `plan_limits(max_block_rows=…)` replaces it) |
 | `M_b` | rows of the current block | `1 ≤ M_b ≤ M` | last block of a core only |
 | `ROWS_DEPTH, OUT_DEPTH, IN_DEPTH, UNTILIZED_DEPTH` | buffer depths | 2 each | host constants |
 | `TAP_COUNT = 4`, `HALO_ROWS = 3` | op math constants | fixed | op definition |
@@ -50,7 +50,14 @@ footprint(w, M) = ROWS_DEPTH·(32·M + 3)·64·w          # cb_rows        — s
 
 `M`-dependent terms: `cb_rows`, `cb_window_tiles` (12288 B per tile-row per channel tile). Smallest
 plan (w = 1, M = 1): 18,816 B (RM) / 27,008 B (TILE) — always inside the budget, so no golden shape
-is refused for L1. Largest Phase-0 golden plan (004 on 11×10: w = 16, M = 3): 694,272 B.
+is refused for L1. Largest Phase-0 golden plan at the L1-bound block (004 on 11×10: w = 16, M = 3):
+694,272 B; at the implemented default block-rows target (`OVERLAP_BLOCK_ROWS = 1`, see below): 301,056 B.
+
+> **Implementer update (block-rows target).** The planner's rule "coarsest `M` that fits L1" is kept,
+> but capped by a single-source host constant `OVERLAP_BLOCK_ROWS = 1` (the design's Overlap perf
+> lamp). Measured device kernel time, BH 11×10: 004 M = 3 → 153.4 µs, M = 1 → 129.0 µs; 020 M = 5 →
+> 75.8 µs, M = 1 → 73.4 µs. Capacities are unchanged formulas of `M`; only the selected `M` moved.
+> Mechanism semaphores of the tap multicast (below) add 2 × 16 B per core, outside the CB footprint.
 
 ## Data-movement budget
 
@@ -63,11 +70,19 @@ the DRAM-bound target 004 (T 4096, C 2560, 11×10 grid: w 16, G 5, U 22) and the
 | input (RM) | 1× + 3 sticks per core whose range starts at `t0 > 0` (004: 105 cores × 3 KiB = 315 KiB, +1.5%; 001: 0) | the whole core range streams once through `cb_rows`; later blocks' halo is copied from the previous slot in L1, only a core's first halo is re-read | none (core-local halo copies: 3 sticks per later block) |
 | input (TILE) | 1× + one tile-row (`w` tiles) per core with `t0 > 0` | same; the halo needs rows 29..31 of the preceding tile-row | core-local: one L1→L1 copy of every untilized tile-row (1× input bytes, same core) |
 | history | 1× per channel (only the `t0 = 0` core of each group reads it) | only the first tile-row needs it | none |
-| taps | `cores_per_group`× of the tap rows (004: 440 KiB vs 20 KiB logical; 001: 1×) | reuse-shared across the token split; each core reads only row 0 of each tap tile (2 × 32 B per tap per channel tile), never the whole tile | none (multicast deferred) |
+| taps | **1× per channel** (implemented regime `tap_multicast_per_group`): only the slot-0 core of each channel group reads row 0 of its tap tiles (2 × 32 B per tap per channel tile) | reuse-shared across the token split; the group's sender multicasts the packed tap tiles to the other `cores_per_group − 1` cores | NoC multicast of `w·2048` B per group to ≤ 3 rectangles (004: 5 groups × 32 KiB); 0 DRAM |
 | q, k, v | 1× | written once from `cb_output_tiles` | none |
 | actual_start, predecessor_carry | 0 | never read (one sequence-parallel rank) | none |
 
-Totals, 004: DRAM ≈ 20,480 KiB in + 20,480 KiB out + 15 KiB history + 440 KiB taps + 315 KiB halo
+> **Implementer update (taps).** The planner deferred `tap_multicast_per_group` because the redundant
+> tap reads were judged off the critical path. Device zones on 004 (110 cores) falsified that: the
+> per-core tap fetch (128 × 32 B DRAM requests per core, ~14k in total) kept the reader from issuing
+> its first input row for 3–80 µs (median 34 µs); removing it took 004 from 185.9 to 152.9 µs. The
+> cost is request count, not bytes: DRAM behaved request-rate-bound. Implemented with the kernel_lib
+> mcast helper (`ttnn.Mcast`, groups = `cores_per_group` consecutive row-major cores, fixed sender
+> at slot 0); the tap row below is now 20 KiB.
+
+Totals (planner, per-core tap reads), 004: DRAM ≈ 20,480 KiB in + 20,480 KiB out + 15 KiB history + 440 KiB taps + 315 KiB halo
 = 41,730 KiB vs the 40,995 KiB minimum (+1.8%); cross-core NoC traffic 0. 001: 160 KiB + 160 KiB +
 15 KiB + 20 KiB = the minimum.
 

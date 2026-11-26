@@ -6,7 +6,7 @@
 Run with:  scripts/run_safe_pytest.sh --profile --no-py-zones --run-all <this file>
 One GenericOpDeviceOperation row per case, in parametrize order. Every variant is checked for
 correctness (the knobs never change the result). The PERF FOCUS targets 001..004 at the default
-plan come first, then 004 under block_rows caps (the design's Overlap lamp).
+plan come first; 004 / 020 are also run at the L1-bound block_rows (the design's Overlap lamp).
 """
 
 import importlib
@@ -26,10 +26,10 @@ KNOBS = [
     pytest.param(1, None, id="002-default"),
     pytest.param(2, None, id="003-default"),
     pytest.param(3, None, id="004-default"),
-    pytest.param(3, 1, id="004-block_rows1"),
-    pytest.param(3, 2, id="004-block_rows2"),
+    pytest.param(3, 3, id="004-block_rows3_l1_bound"),
     pytest.param(14, None, id="020-default"),
-    pytest.param(14, 1, id="020-block_rows1"),
+    pytest.param(14, 5, id="020-block_rows5_l1_bound"),
+    pytest.param(4, None, id="005-tile-default"),
 ]
 
 
