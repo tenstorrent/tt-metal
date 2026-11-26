@@ -619,9 +619,7 @@ struct ServiceCoreReleaseGuard {
 // connections, so the router's worker channel only ever has one of them.
 enum class D2DMuxSlot : uint8_t { FullSize = 0, HeaderOnly = 1 };
 
-// Up to 4 simultaneous streams on middle pipeline stages (`act_in`, `grad_out`, `act_out`, `grad_in`)
-// can share one in-stage hop, requiring up to 4 FullSize + 4 HeaderOnly channels.
-constexpr uint8_t kMuxChannelsPerType = 4;
+constexpr uint8_t kMuxChannelsPerType = 2;
 
 class FabricLinkRegistry {
 public:
@@ -831,51 +829,9 @@ private:
     std::vector<std::tuple<tt::tt_fabric::FabricNodeId, CoreCoord, D2DMuxSlot, uint8_t>> mux_held_;
 };
 
-// Matches tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE and EDMStatus::TERMINATED (device-side headers).
+// Matches tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE (device-side header).
 constexpr uint32_t kMuxGracefulTerminate = 1u;
-constexpr uint32_t kMuxStatusTerminated = 0xA4B4C4D4u;
 constexpr uint8_t kMuxBuffersPerChannel = 16;
-
-// Dispatch-column service core shared by up to two persistent `d2d_fabric_mux.cpp` instances
-// (`RISCV_0`/`NOC_0` and `RISCV_1`/`NOC_1`) created in the same `claim_relay_links` pass, so
-// `>= 3`-stage middle pipeline ranks with up to 4 streams + 4 muxes per chip fit comfortably
-// within Blackhole's 7 claimable dispatch-column service cores.
-struct D2DMuxSharedCore {
-    std::shared_ptr<distributed::MeshDevice> mesh_device;
-    distributed::MeshCoordinate coord{0, 0};
-    CoreCoord mux_logical_core{0, 0};
-    std::unique_ptr<distributed::MeshWorkload> workload;
-    std::vector<DeviceAddr> l1_allocs;
-    bool core_claimed = false;
-    bool launched = false;
-
-    ~D2DMuxSharedCore() {
-        try {
-            auto* mesh = mesh_device.get();
-            if (mesh != nullptr && mesh->is_initialized()) {
-                auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
-                auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
-                if (launched) {
-                    tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
-                    svc.wait_done(device, mux_logical_core);
-                }
-                workload.reset();
-                for (DeviceAddr addr : l1_allocs) {
-                    svc.deallocate_l1(device, mux_logical_core, addr);
-                }
-                if (core_claimed) {
-                    svc.release(device, {mux_logical_core});
-                }
-            } else {
-                workload.reset();
-            }
-        } catch (const std::exception& e) {
-            log_warning(tt::LogOp, "D2DStreamService D2DMuxSharedCore: shutdown failed: {}", e.what());
-        } catch (...) {
-            log_warning(tt::LogOp, "D2DStreamService D2DMuxSharedCore: shutdown failed with unknown exception");
-        }
-    }
-};
 
 // Persistent FabricMux (d2d_fabric_mux.cpp) on a dispatch-column service core, holding
 // link 0 of one outgoing direction (cable or in-stage). Reference-counted by the services
@@ -891,48 +847,44 @@ struct D2DMuxInstance {
     CoreCoord mux_virtual_core{0, 0};
     DeviceAddr mux_l1_base = 0;
     size_t full_buf_bytes = 0;
-    uint32_t stream_id_offset = 0;
     bool lease_upstream = false;
     std::optional<tt::tt_fabric::FabricMuxConfig> config;
-    std::shared_ptr<D2DMuxSharedCore> shared_core;
+    std::unique_ptr<distributed::MeshWorkload> workload;
+    bool core_claimed = false;
+    bool l1_allocated = false;
+    bool launched = false;
 
     ~D2DMuxInstance() {
         try {
             auto* mesh = mesh_device.get();
-            if (mesh != nullptr && mesh->is_initialized() && shared_core && shared_core->launched &&
-                config.has_value()) {
+            if (mesh != nullptr && mesh->is_initialized()) {
                 auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
-                std::vector<uint32_t> term{kMuxGracefulTerminate};
-                tt::tt_metal::detail::WriteToDeviceL1(
-                    device,
-                    mux_logical_core,
-                    static_cast<uint32_t>(config->get_termination_signal_address()),
-                    term);
-                // When a sibling mux is still running on the other RISC of `shared_core`, wait for this
-                // RISC to write `EDMStatus::TERMINATED` so its upstream router is closed before release.
-                if (shared_core.use_count() > 1) {
+                auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
+                if (launched && config.has_value()) {
+                    std::vector<uint32_t> term{kMuxGracefulTerminate};
+                    tt::tt_metal::detail::WriteToDeviceL1(
+                        device,
+                        mux_logical_core,
+                        static_cast<uint32_t>(config->get_termination_signal_address()),
+                        term);
                     tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
-                    std::vector<uint32_t> st;
-                    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-                    while (std::chrono::steady_clock::now() < deadline) {
-                        tt::tt_metal::detail::ReadFromDeviceL1(
-                            device,
-                            mux_logical_core,
-                            static_cast<uint32_t>(config->get_status_address()),
-                            sizeof(uint32_t),
-                            st);
-                        if (!st.empty() && st[0] == kMuxStatusTerminated) {
-                            break;
-                        }
-                    }
+                    svc.wait_done(device, mux_logical_core);
                 }
+                workload.reset();
+                if (l1_allocated) {
+                    svc.deallocate_l1(device, mux_logical_core, mux_l1_base);
+                }
+                if (core_claimed) {
+                    svc.release(device, {mux_logical_core});
+                }
+            } else {
+                workload.reset();
             }
         } catch (const std::exception& e) {
             log_warning(tt::LogOp, "D2DStreamService D2DMuxInstance: shutdown failed: {}", e.what());
         } catch (...) {
             log_warning(tt::LogOp, "D2DStreamService D2DMuxInstance: shutdown failed with unknown exception");
         }
-        shared_core.reset();
         fabric_link_registry().set_mux_alive(src_node, eth_core, false);
     }
 };
@@ -946,26 +898,6 @@ struct MuxBinding {
 
 class D2DMuxRegistry {
 public:
-    class LaunchBatch {
-    public:
-        explicit LaunchBatch(D2DMuxRegistry& reg) : reg_(reg) { reg_.begin_batch(); }
-        LaunchBatch(const LaunchBatch&) = delete;
-        LaunchBatch& operator=(const LaunchBatch&) = delete;
-        ~LaunchBatch() {
-            if (!committed_) {
-                reg_.abort_batch();
-            }
-        }
-        void commit() {
-            committed_ = true;
-            reg_.commit_batch();
-        }
-
-    private:
-        D2DMuxRegistry& reg_;
-        bool committed_ = false;
-    };
-
     std::shared_ptr<D2DMuxInstance> acquire(
         const std::shared_ptr<distributed::MeshDevice>& mesh,
         const distributed::MeshCoordinate& coord,
@@ -975,7 +907,7 @@ public:
         CoreCoord eth_core,
         const CommonPlan& common,
         bool lease_upstream) {
-        std::unique_lock lock(mutex_);
+        std::lock_guard lock(mutex_);
         auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const Key key{device->id(), eth_core};
         const size_t full_buf_bytes =
@@ -992,200 +924,100 @@ public:
             }
         }
 
-        const bool auto_flush = (batch_depth_ == 0);
-        if (auto_flush) {
-            ++batch_depth_;
-        }
+        auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
+        const auto claimable = svc.get_claimable_cores(device);
+        TT_FATAL(
+            !claimable.empty(),
+            "D2DStreamService {} mux at coord {} (eth {}): no free dispatch-column service cores",
+            lease_upstream ? "in-stage" : "cable",
+            coord,
+            eth_core);
+        const CoreCoord mux_core = claimable.back();
 
-        try {
-            auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
-            PendingCore* target_pending = nullptr;
-            // Co-locate up to two muxes created in the same batch onto one dispatch-column service
-            // core (`RISCV_0`/`NOC_0` for slot 0, `RISCV_1`/`NOC_1` for slot 1), giving every mux
-            // its own dedicated RISC + NOC while keeping >= 3-stage middle ranks within 7 cores/chip.
-            for (auto& pc : pending_) {
-                if (pc.device_id == device->id() && pc.slots.size() < 2u) {
-                    target_pending = &pc;
-                    break;
-                }
-            }
+        auto inst = std::make_shared<D2DMuxInstance>();
+        inst->mesh_device = mesh;
+        inst->coord = coord;
+        inst->src_node = src_node;
+        inst->dst_node = dst_node;
+        inst->link_index = link_index;
+        inst->eth_core = eth_core;
+        inst->mux_logical_core = mux_core;
+        inst->mux_virtual_core = device->worker_core_from_logical_core(mux_core);
+        inst->full_buf_bytes = full_buf_bytes;
+        inst->lease_upstream = lease_upstream;
 
-            if (target_pending == nullptr) {
-                const auto claimable = svc.get_claimable_cores(device);
-                TT_FATAL(
-                    !claimable.empty(),
-                    "D2DStreamService {} mux at coord {} (eth {}): no free dispatch-column service cores",
-                    lease_upstream ? "in-stage" : "cable",
-                    coord,
-                    eth_core);
-                const CoreCoord mux_core = claimable.back();
-                auto shared = std::make_shared<D2DMuxSharedCore>();
-                shared->mesh_device = mesh;
-                shared->coord = coord;
-                shared->mux_logical_core = mux_core;
-                svc.claim(device, {mux_core});
-                shared->core_claimed = true;
-                pending_.push_back(PendingCore{.device_id = device->id(), .core = std::move(shared), .slots = {}});
-                target_pending = &pending_.back();
-            }
+        svc.claim(device, {mux_core});
+        inst->core_claimed = true;
 
-            const CoreCoord mux_core = target_pending->core->mux_logical_core;
-            const uint32_t slot_idx = static_cast<uint32_t>(target_pending->slots.size());
-            const uint32_t stream_offset = slot_idx * static_cast<uint32_t>(2u * kMuxChannelsPerType);
+        const tt::tt_fabric::FabricMuxConfig sizing_cfg(
+            *mesh,
+            /*num_full_size_channels=*/kMuxChannelsPerType,
+            /*num_header_only_channels=*/kMuxChannelsPerType,
+            kMuxBuffersPerChannel,
+            kMuxBuffersPerChannel,
+            full_buf_bytes,
+            /*base_l1_address=*/0,
+            tt::CoreType::WORKER);
+        const size_t map_bytes =
+            tt::align(sizing_cfg.get_memory_map_end_address(), static_cast<size_t>(common.l1_alignment));
 
-            auto inst = std::make_shared<D2DMuxInstance>();
-            inst->mesh_device = mesh;
-            inst->coord = coord;
-            inst->src_node = src_node;
-            inst->dst_node = dst_node;
-            inst->link_index = link_index;
-            inst->eth_core = eth_core;
-            inst->mux_logical_core = mux_core;
-            inst->mux_virtual_core = device->worker_core_from_logical_core(mux_core);
-            inst->full_buf_bytes = full_buf_bytes;
-            inst->stream_id_offset = stream_offset;
-            inst->lease_upstream = lease_upstream;
-            inst->shared_core = target_pending->core;
+        inst->mux_l1_base = svc.allocate_l1(device, mux_core, map_bytes);
+        inst->l1_allocated = true;
 
-            const tt::tt_fabric::FabricMuxConfig sizing_cfg(
-                *mesh,
-                /*num_full_size_channels=*/kMuxChannelsPerType,
-                /*num_header_only_channels=*/kMuxChannelsPerType,
-                kMuxBuffersPerChannel,
-                kMuxBuffersPerChannel,
-                full_buf_bytes,
-                /*base_l1_address=*/0,
-                tt::CoreType::WORKER);
-            const size_t map_bytes =
-                tt::align(sizing_cfg.get_memory_map_end_address(), static_cast<size_t>(common.l1_alignment));
+        std::vector<uint32_t> zero(map_bytes / sizeof(uint32_t), 0u);
+        tt::tt_metal::detail::WriteToDeviceL1(device, mux_core, static_cast<uint32_t>(inst->mux_l1_base), zero);
 
-            inst->mux_l1_base = svc.allocate_l1(device, mux_core, map_bytes);
-            target_pending->core->l1_allocs.push_back(inst->mux_l1_base);
+        inst->config.emplace(
+            *mesh,
+            /*num_full_size_channels=*/kMuxChannelsPerType,
+            /*num_header_only_channels=*/kMuxChannelsPerType,
+            kMuxBuffersPerChannel,
+            kMuxBuffersPerChannel,
+            full_buf_bytes,
+            static_cast<size_t>(inst->mux_l1_base),
+            tt::CoreType::WORKER);
 
-            std::vector<uint32_t> zero(map_bytes / sizeof(uint32_t), 0u);
-            tt::tt_metal::detail::WriteToDeviceL1(device, mux_core, static_cast<uint32_t>(inst->mux_l1_base), zero);
+        auto program = CreateProgram();
+        auto mux_kernel = CreateKernel(
+            program,
+            "ttnn/core/tensor/kernels/d2d_fabric_mux.cpp",
+            mux_core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = inst->config->get_fabric_mux_compile_time_args_for_relay_mux(),
+                .named_compile_args = {{"lease_upstream_edm", lease_upstream ? 1u : 0u}},
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+        const auto mux_rt =
+            inst->config->get_fabric_mux_run_time_args(*mesh, src_node, dst_node, link_index, program, mux_core);
+        SetRuntimeArgs(program, mux_kernel, mux_core, mux_rt);
 
-            inst->config.emplace(
-                *mesh,
-                /*num_full_size_channels=*/kMuxChannelsPerType,
-                /*num_header_only_channels=*/kMuxChannelsPerType,
-                kMuxBuffersPerChannel,
-                kMuxBuffersPerChannel,
-                full_buf_bytes,
-                static_cast<size_t>(inst->mux_l1_base),
-                tt::CoreType::WORKER);
+        inst->workload = std::make_unique<distributed::MeshWorkload>();
+        inst->workload->add_program(distributed::MeshCoordinateRange(coord), std::move(program));
 
-            fabric_link_registry().set_mux_alive(src_node, eth_core, true);
-            target_pending->slots.push_back(inst);
-            muxes_[key] = inst;
+        fabric_link_registry().set_mux_alive(src_node, eth_core, true);
+        EnqueueMeshWorkload(mesh->mesh_command_queue(), *inst->workload, /*blocking=*/false);
+        inst->launched = true;
 
-            if (auto_flush) {
-                lock.unlock();
-                commit_batch();
-            }
-            return inst;
-        } catch (...) {
-            if (auto_flush) {
-                lock.unlock();
-                abort_batch();
-            }
-            throw;
-        }
+        log_info(
+            tt::LogMetal,
+            "D2DStreamService {} mux: launched on coord {} logical core {} (virtual {}) -> eth {} (link {}, {} -> {})",
+            lease_upstream ? "in-stage" : "cable",
+            coord,
+            mux_core,
+            inst->mux_virtual_core,
+            eth_core,
+            link_index,
+            src_node,
+            dst_node);
+
+        muxes_[key] = inst;
+        return inst;
     }
 
 private:
     using Key = std::pair<tt::ChipId, CoreCoord>;
-    struct PendingCore {
-        tt::ChipId device_id = 0;
-        std::shared_ptr<D2DMuxSharedCore> core;
-        std::vector<std::shared_ptr<D2DMuxInstance>> slots;
-    };
-
-    void begin_batch() {
-        std::lock_guard lock(mutex_);
-        ++batch_depth_;
-    }
-
-    void commit_batch() {
-        std::vector<PendingCore> to_launch;
-        {
-            std::lock_guard lock(mutex_);
-            if (--batch_depth_ > 0) {
-                return;
-            }
-            to_launch.swap(pending_);
-        }
-        for (auto& pc : to_launch) {
-            auto& shared = *pc.core;
-            auto program = CreateProgram();
-            for (size_t s = 0; s < pc.slots.size(); ++s) {
-                const auto& inst = *pc.slots[s];
-                auto ct_args = inst.config->get_fabric_mux_compile_time_args_for_relay_mux();
-                const size_t total_ch = 2u * kMuxChannelsPerType;
-                for (size_t i = ct_args.size() - total_ch; i < ct_args.size(); ++i) {
-                    ct_args[i] += inst.stream_id_offset;
-                }
-
-                const auto mux_rt = inst.config->get_fabric_mux_run_time_args(
-                    *shared.mesh_device,
-                    inst.src_node,
-                    inst.dst_node,
-                    inst.link_index,
-                    program,
-                    shared.mux_logical_core);
-
-                const auto proc = (s == 0) ? tt::tt_metal::DataMovementProcessor::RISCV_0
-                                           : tt::tt_metal::DataMovementProcessor::RISCV_1;
-                const auto noc =
-                    (s == 0) ? tt::tt_metal::NOC::RISCV_0_default : tt::tt_metal::NOC::RISCV_1_default;
-                auto mux_kernel = CreateKernel(
-                    program,
-                    "ttnn/core/tensor/kernels/d2d_fabric_mux.cpp",
-                    shared.mux_logical_core,
-                    DataMovementConfig{
-                        .processor = proc,
-                        .noc = noc,
-                        .compile_args = std::move(ct_args),
-                        .named_compile_args = {{"lease_upstream_edm", inst.lease_upstream ? 1u : 0u}},
-                        .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-                SetRuntimeArgs(program, mux_kernel, shared.mux_logical_core, mux_rt);
-
-                log_info(
-                    tt::LogMetal,
-                    "D2DStreamService {} mux: launched on coord {} logical core {} slot {} (virtual {}) -> eth {} "
-                    "(link {}, {} -> {})",
-                    inst.lease_upstream ? "in-stage" : "cable",
-                    shared.coord,
-                    shared.mux_logical_core,
-                    s,
-                    inst.mux_virtual_core,
-                    inst.eth_core,
-                    inst.link_index,
-                    inst.src_node,
-                    inst.dst_node);
-            }
-
-            shared.workload = std::make_unique<distributed::MeshWorkload>();
-            shared.workload->add_program(distributed::MeshCoordinateRange(shared.coord), std::move(program));
-            EnqueueMeshWorkload(shared.mesh_device->mesh_command_queue(), *shared.workload, /*blocking=*/false);
-            shared.launched = true;
-        }
-    }
-
-    void abort_batch() {
-        std::vector<PendingCore> dropped;
-        {
-            std::lock_guard lock(mutex_);
-            if (--batch_depth_ > 0) {
-                return;
-            }
-            dropped.swap(pending_);
-        }
-    }
-
     std::mutex mutex_;
-    uint32_t batch_depth_ = 0;
-    std::vector<PendingCore> pending_;
     std::map<Key, std::weak_ptr<D2DMuxInstance>> muxes_;
 };
 
@@ -2210,7 +2042,7 @@ void append_mux_client_rt_args(const MuxBinding& binding, uint32_t word_stride, 
         {
             static_cast<uint32_t>(mux.mux_virtual_core.x),
             static_cast<uint32_t>(mux.mux_virtual_core.y),
-            static_cast<uint32_t>(cfg.get_channel_credits_stream_id(ch_type, ch_idx)) + mux.stream_id_offset,
+            static_cast<uint32_t>(cfg.get_channel_credits_stream_id(ch_type, ch_idx)),
             static_cast<uint32_t>(cfg.get_num_buffers(ch_type)),
             static_cast<uint32_t>(cfg.get_buffer_size_bytes(ch_type)),
             static_cast<uint32_t>(cfg.get_channel_base_address(ch_type, ch_idx)),
@@ -3263,7 +3095,6 @@ void claim_relay_links(
     const D2DStreamConfig& cfg,
     bool is_sender,
     FabricLinkClaims& claims) {
-    D2DMuxRegistry::LaunchBatch mux_batch(d2d_mux_registry());
     const auto& plan = relay.plan;
     const auto& group = cfg.fabric_link_group;
     const uint32_t ncables = static_cast<uint32_t>(plan.cables.size());
@@ -3355,7 +3186,6 @@ void claim_relay_links(
                 relay.source_mux_bindings.emplace(c, std::move(mux_b));
             }
         }
-        mux_batch.commit();
         return;
     }
 
@@ -3458,7 +3288,6 @@ void claim_relay_links(
             relay.ack_mux_bindings.emplace(c, std::move(mux_b));
         }
     }
-    mux_batch.commit();
 }
 
 RelayPeer make_relay_peer(
