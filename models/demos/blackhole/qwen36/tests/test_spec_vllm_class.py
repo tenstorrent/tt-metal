@@ -258,7 +258,15 @@ class PluginRunner:
                 read = m.read_decode_output(res.argmax_ids)
                 if self.logprobs is not None:
                     read, payload = read
-                    self.check_payload(read[0], payload, m.decode_forward(**block, spec_mode="logits").logits[0], n)
+                    shard = self.shard_logits()
+                    logits = m.decode_forward(**block, spec_mode="logits").logits[0]
+                    if shard is not None:
+                        gap = (shard[: n + 1] - logits[: n + 1].float()).abs().max()
+                        logger.info(
+                            f"[vllm_class] verify shard logits ({shard.dtype}) vs the logits verify's: max |diff| "
+                            f"{float(gap):.3g}"
+                        )
+                    self.check_payload(read[0], payload, logits, n)
                 ids = read[0].tolist()
                 assert all(i == PAD for i in ids[n + 1 :]), f"step {len(steps)}: ids past n={n} not -1: {ids}"
                 assert all(i != PAD for i in ids[: n + 1]), f"step {len(steps)}: -1 inside valid ids {ids} (n={n})"
@@ -292,6 +300,16 @@ class PluginRunner:
         m.release_request(0)
         self.state.release(0)
         return out, {"steps": steps, "stop": stop}
+
+    def shard_logits(self):
+        """[1+K, V] float32 logits of the last argmax_ids verify, read from each device's vocabulary shard (the logits
+        the logprobs trace reads), or None when the verify gathers its logits itself."""
+        model = self.m.model[0]
+        shard = getattr(model, "_vfy_shard_out", None)
+        if shard is None:
+            return None
+        parts = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(shard)]
+        return torch.cat([p.reshape(-1, p.shape[-1])[: 1 + self.K].float() for p in parts], dim=1)
 
     def check_payload(self, ids, payload, logits, n):
         """The payload of a B = 1 verify's columns 0 .. n against the logits of the same block: ids its argmax, each
