@@ -845,6 +845,19 @@ unit_tests_api:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
+  # Don't enable yet. Attempt to run all DFB tests.
+  # - filter: "*DFB*:-*MultiCore*"
+  #   config: 1x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # - filter: "*DFB*MultiCore*"
+  #   config: 2x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+
 # Fast Dispatch (Dispatch Engine) tests
   - filter: "*QuasarCRTASharedL1Address*"
     config: 2x3_DISPATCH
