@@ -253,42 +253,48 @@ def test_trig_succeeds_under_l1_pressure(device, op, dtype):
     }, f"{op} {dtype} over the L1 levels ran {seen}; expected the routed and the unary program"
 
 
+# Runs tan bf16 at its cutoff and prints the device operations and the PCC against torch. With TRIG_CACHED_KNOB set to
+# a variable's name, a native add reads the settings first and that variable is then removed.
+_SUBPROCESS_SCRIPT = textwrap.dedent(
+    """
+    import os, torch, ttnn
+    device = ttnn.open_device(device_id=0)
+    try:
+        cached_knob = os.environ.pop("TRIG_CACHED_KNOB", "")
+        if cached_knob:
+            small = ttnn.from_torch(torch.rand(1, 1, 32, 32).bfloat16(), dtype=ttnn.bfloat16,
+                                    layout=ttnn.TILE_LAYOUT, device=device)
+            ttnn.experimental.quasar.add(small, 1.0)
+            os.environ.pop(cached_knob)
+        grid = device.compute_with_storage_grid_size()
+        torch.manual_seed(0)
+        x = (torch.rand(1, 1, 32, 32 * 64 * grid.x * grid.y) * 2 - 1).bfloat16()
+        tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+                             memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        out = ttnn.tan(tx)
+        graph = ttnn.graph.end_graph_capture()
+        names = sorted({n["params"]["name"] for n in graph if n.get("node_type") == "function_start"
+                        and n.get("params", {}).get("name", "").endswith("DeviceOperation")})
+        got = ttnn.to_torch(out).float().flatten()
+        want = torch.tan(x.float()).flatten()
+        pcc = torch.corrcoef(torch.stack([got, want]))[0, 1].item()
+        print("DEVICE_OPS", ",".join(names), "PCC", pcc)
+    finally:
+        ttnn.close_device(device)
+    """
+)
+
+
 def _device_ops_in_subprocess(knob, cached=False):
-    # Runs tan bf16 at its cutoff in a fresh process with one TTNN_QSR_* variable set, since the native factory reads
-    # its settings once per process. With cached, a native add reads the settings first and the variable is then
-    # removed. Returns the device operations and the PCC against torch.
+    # A fresh process with one TTNN_QSR_* variable set, since the native factory reads its settings once per process.
     name, value = knob.split("=")
-    script = textwrap.dedent(
-        """
-        import os, torch, ttnn
-        device = ttnn.open_device(device_id=0)
-        try:
-            if __CACHED__:
-                small = ttnn.from_torch(torch.rand(1, 1, 32, 32).bfloat16(), dtype=ttnn.bfloat16,
-                                        layout=ttnn.TILE_LAYOUT, device=device)
-                ttnn.experimental.quasar.add(small, 1.0)
-                os.environ.pop(__KNOB__)
-            grid = device.compute_with_storage_grid_size()
-            torch.manual_seed(0)
-            x = (torch.rand(1, 1, 32, 32 * 64 * grid.x * grid.y) * 2 - 1).bfloat16()
-            tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-                                 memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-            out = ttnn.tan(tx)
-            graph = ttnn.graph.end_graph_capture()
-            names = sorted({n["params"]["name"] for n in graph if n.get("node_type") == "function_start"
-                            and n.get("params", {}).get("name", "").endswith("DeviceOperation")})
-            got = ttnn.to_torch(out).float().flatten()
-            want = torch.tan(x.float()).flatten()
-            pcc = torch.corrcoef(torch.stack([got, want]))[0, 1].item()
-            print("DEVICE_OPS", ",".join(names), "PCC", pcc)
-        finally:
-            ttnn.close_device(device)
-        """
-    )
-    script = script.replace("__CACHED__", str(cached)).replace("__KNOB__", repr(name))
     env = dict(os.environ, **{name: value})
-    result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=1200)
+    if cached:
+        env["TRIG_CACHED_KNOB"] = name
+    result = subprocess.run(
+        [sys.executable, "-c", _SUBPROCESS_SCRIPT], env=env, capture_output=True, text=True, timeout=1200
+    )
     lines = [line for line in result.stdout.splitlines() if line.startswith("DEVICE_OPS")]
     assert result.returncode == 0 and lines, f"{knob}: subprocess failed: {result.returncode}\n{result.stderr[-2000:]}"
     _, ops, _, pcc = lines[-1].split()
