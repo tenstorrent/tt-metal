@@ -119,9 +119,9 @@ void PinnedMemoryImpl::initialize_from_devices(
         unique_mmio_devices.insert(mmio_device_id);
     }
 
-    // MockChip has no SysmemManager, so there is nothing to map: keep the host pointer and let
+    // MockChip has no system memory allocator, so there is nothing to map: keep the host pointer and let
     // device/NOC queries return dummies (see get_device_addr / get_noc_addr). Mock only, not
-    // is_mock_or_emulated() — SWEmuleChip has a real SimulationSysmemManager, and a dummy address
+    // is_mock_or_emulated() — SWEmuleChip has a real allocator, and a dummy address
     // would strand the host-facing socket counters an emulated kernel writes back.
     if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
         is_mock_ = true;
