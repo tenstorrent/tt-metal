@@ -11,6 +11,7 @@
 #include <iterator>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
@@ -158,7 +159,7 @@ void RealtimeProfilerTracyConsumer::apply_events() {
             case Event::Kind::Calibrate: {
                 Chip& chip = chips_[event.chip_id];
                 if (chip.ctx != nullptr) {
-                    add_anchor(chip, event.host_time, event.device_timestamp);
+                    chip.clock.add_anchor(event.host_time, event.device_timestamp);
                 }
                 break;
             }
@@ -194,11 +195,8 @@ void RealtimeProfilerTracyConsumer::apply_add(const Event& event) {
     ns_per_host_tick_ = TracyGetTimerMul();
     chip = Chip{};
     chip.frequency = event.frequency;
-    chip.base_host = event.host_time;
-    chip.base_wall = event.device_timestamp;
-    chip.raw.push_back({});
     // Host ticks per device cycle, from the nominal frequency until anchors measure it.
-    chip.host_per_wall = 1.0 / (event.frequency * ns_per_host_tick_);
+    chip.clock.start(event.host_time, event.device_timestamp, 1.0 / (event.frequency * ns_per_host_tick_));
     chip.context_host = event.host_time;
     chip.ctx = TracyTTContext();
     // Time 0 on the context is host time context_host, and the context counts in ns.
@@ -218,10 +216,8 @@ void RealtimeProfilerTracyConsumer::apply_remove(const Event& event) {
     if (chip.ctx == nullptr) {
         return;
     }
-    // No later anchor is coming, so finalize the last one and place what is left past it.
-    if (!chip.raw.empty()) {
-        finalize_anchor(chip, chip.raw.size() - 1);
-    }
+    // No later anchor is coming, so finalize the last one and place what is left.
+    chip.clock.finish();
     emit_pending(chip, true);
     flush_stall_message(event.chip_id, chip);
     TracyTTDestroy(chip.ctx);
@@ -273,11 +269,7 @@ void RealtimeProfilerTracyConsumer::emit_pending(Chip& chip, bool all) {
         return;
     }
     // A zone is placeable once a final anchor sits at or after its end, and an earlier one starts the segment.
-    const auto placeable = [&](uint64_t end_timestamp) {
-        return all ||
-               (chip.smooth.size() >= 2 &&
-                static_cast<double>(static_cast<int64_t>(end_timestamp - chip.base_wall)) <= chip.smooth.back().wall);
-    };
+    const auto placeable = [&](uint64_t end_timestamp) { return all || chip.clock.covers(end_timestamp); };
     while (!chip.pending_programs.empty() && placeable(chip.pending_programs.front().end_timestamp)) {
         emit_program(chip, chip.pending_programs.front());
         chip.pending_programs.pop_front();
@@ -289,67 +281,17 @@ void RealtimeProfilerTracyConsumer::emit_pending(Chip& chip, bool all) {
     trim_anchors(chip);
 }
 
-void RealtimeProfilerTracyConsumer::add_anchor(Chip& chip, int64_t host_time, uint64_t device_timestamp) {
-    const Anchor anchor{
-        static_cast<double>(static_cast<int64_t>(device_timestamp - chip.base_wall)),
-        static_cast<double>(host_time - chip.base_host)};
-    // Both clocks only move forward, so a reading that does not is a bad one.
-    if (anchor.wall <= chip.raw.back().wall || anchor.host <= chip.raw.back().host) {
-        return;
-    }
-    chip.raw.push_back(anchor);
-    // The anchor before this one now has a neighbour on each side.
-    finalize_anchor(chip, chip.raw.size() - 2);
-    constexpr size_t kRawAnchorsKept = 8;
-    if (chip.raw.size() > kRawAnchorsKept) {
-        chip.raw.erase(chip.raw.begin());
-    }
-}
-
-void RealtimeProfilerTracyConsumer::finalize_anchor(Chip& chip, size_t index) {
-    // The slope at an anchor is the monotone cubic's (Fritsch and Carlson): the weighted harmonic mean of the slopes
-    // of the two segments that meet there, or the one segment's slope at an end. It keeps every segment increasing.
-    const auto segment_slope = [&](size_t from) {
-        return (chip.raw[from + 1].host - chip.raw[from].host) / (chip.raw[from + 1].wall - chip.raw[from].wall);
-    };
-    Anchor result = chip.raw[index];
-    const bool has_prev = index > 0;
-    const bool has_next = index + 1 < chip.raw.size();
-    if (has_prev && has_next) {
-        const double prev_span = chip.raw[index].wall - chip.raw[index - 1].wall;
-        const double next_span = chip.raw[index + 1].wall - chip.raw[index].wall;
-        const double w1 = 2.0 * next_span + prev_span;
-        const double w2 = next_span + 2.0 * prev_span;
-        result.slope = (w1 + w2) / (w1 / segment_slope(index - 1) + w2 / segment_slope(index));
-    } else if (has_next) {
-        result.slope = segment_slope(index);
-    } else if (has_prev) {
-        result.slope = segment_slope(index - 1);
-    } else {
-        result.slope = chip.host_per_wall;
-    }
-    chip.smooth.push_back(result);
-    trim_anchors(chip);
-}
-
 void RealtimeProfilerTracyConsumer::trim_anchors(Chip& chip) {
-    // An anchor stays until no zone that is still waiting can need the segment before it. Zones of a chip come in
-    // order, so only the oldest waiting one matters. A consumer that falls behind keeps the anchors it will need.
-    double oldest_waiting = std::numeric_limits<double>::infinity();
-    const auto relative = [&](uint64_t timestamp) {
-        return static_cast<double>(static_cast<int64_t>(timestamp - chip.base_wall));
-    };
+    // Zones of a chip come in order, so the oldest one still waiting is the only one that decides which anchors stay.
+    std::optional<uint64_t> oldest_waiting;
     if (!chip.pending_programs.empty()) {
-        oldest_waiting = std::min(oldest_waiting, relative(chip.pending_programs.front().start_timestamp));
+        oldest_waiting = chip.pending_programs.front().start_timestamp;
     }
     if (!chip.pending_stalls.empty()) {
-        oldest_waiting = std::min(oldest_waiting, relative(chip.pending_stalls.front().device_timestamp));
+        const uint64_t stall = chip.pending_stalls.front().device_timestamp;
+        oldest_waiting = oldest_waiting ? std::min(*oldest_waiting, stall) : stall;
     }
-    size_t drop = 0;
-    while (chip.smooth.size() - drop > 2 && chip.smooth[drop + 1].wall <= oldest_waiting) {
-        ++drop;
-    }
-    chip.smooth.erase(chip.smooth.begin(), chip.smooth.begin() + drop);
+    chip.clock.trim(oldest_waiting);
 }
 
 const tracy::SourceLocationData* RealtimeProfilerTracyConsumer::program_srcloc(
@@ -383,28 +325,9 @@ const tracy::SourceLocationData* RealtimeProfilerTracyConsumer::program_srcloc(
 }
 
 uint64_t RealtimeProfilerTracyConsumer::context_ns(const Chip& chip, uint64_t device_timestamp) const {
-    const double wall = static_cast<double>(static_cast<int64_t>(device_timestamp - chip.base_wall));
-    double host = 0.0;
-    if (chip.smooth.empty()) {
-        host = wall * chip.host_per_wall;
-    } else if (wall <= chip.smooth.front().wall) {
-        host = chip.smooth.front().host + (wall - chip.smooth.front().wall) * chip.smooth.front().slope;
-    } else if (wall >= chip.smooth.back().wall) {
-        host = chip.smooth.back().host + (wall - chip.smooth.back().wall) * chip.smooth.back().slope;
-    } else {
-        // Between two final anchors: the cubic Hermite curve through them with their slopes.
-        const auto upper = std::ranges::upper_bound(chip.smooth, wall, {}, &Anchor::wall);
-        const Anchor& hi = *upper;
-        const Anchor& lo = *std::prev(upper);
-        const double span = hi.wall - lo.wall;
-        const double t = (wall - lo.wall) / span;
-        const double t2 = t * t;
-        const double t3 = t2 * t;
-        host = (2.0 * t3 - 3.0 * t2 + 1.0) * lo.host + (t3 - 2.0 * t2 + t) * span * lo.slope +
-               (-2.0 * t3 + 3.0 * t2) * hi.host + (t3 - t2) * span * hi.slope;
-    }
+    const double host = chip.clock.host_ticks(device_timestamp);
     const int64_t ns =
-        std::llround((static_cast<double>(chip.base_host - chip.context_host) + host) * ns_per_host_tick_);
+        std::llround((static_cast<double>(chip.clock.base_host() - chip.context_host) + host) * ns_per_host_tick_);
     return static_cast<uint64_t>(std::max<int64_t>(ns, 0));
 }
 

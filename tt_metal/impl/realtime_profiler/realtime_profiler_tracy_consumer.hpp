@@ -16,6 +16,8 @@
 #include <tracy/TracyTTDevice.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
+#include "tt_metal/impl/realtime_profiler/realtime_profiler_clock_map.hpp"
+
 #if defined(TRACY_ENABLE)
 #include <common/TracyTTDeviceData.hpp>
 #endif
@@ -69,13 +71,6 @@ private:
         uint32_t stall_cycles = 0;
         double frequency = 0.0;
     };
-    // A point on a device's clock mapping: device wall clock cycles and Tracy host ticks, each relative to the
-    // chip's first anchor. `slope` is the curve's slope there in host ticks per cycle, set once the anchor is final.
-    struct Anchor {
-        double wall = 0.0;
-        double host = 0.0;
-        double slope = 0.0;
-    };
     struct PendingStall {
         uint64_t device_timestamp = 0;
         uint32_t stall_cycles = 0;
@@ -86,15 +81,8 @@ private:
         uint32_t stall_lane = 0;
         // The context counts ns from context_host.
         int64_t context_host = 0;
-        // The first anchor, which the others are relative to.
-        int64_t base_host = 0;
-        uint64_t base_wall = 0;
-        // The newest anchors as measured, oldest first. One becomes final when the anchor after it arrives.
-        std::vector<Anchor> raw;
-        // The final anchors, oldest first, newest last. Zones are placed on the curve through them.
-        std::vector<Anchor> smooth;
-        // Host ticks per device cycle from the nominal frequency, for zones before any anchor is final.
-        double host_per_wall = 0.0;
+        // Maps the device's clock to the host's from the anchors.
+        DeviceClockMap clock;
         // Records and stalls waiting for a final anchor at or after their end.
         std::deque<experimental::ProgramRealtimeRecord> pending_programs;
         std::deque<PendingStall> pending_stalls;
@@ -112,13 +100,10 @@ private:
     void apply_events();
     void apply_add(const Event& event);
     void apply_remove(const Event& event);
-    void add_anchor(Chip& chip, int64_t host_time, uint64_t device_timestamp);
-    // Makes raw anchor `index` final: fixes the curve's slope at it from its neighbours.
-    void finalize_anchor(Chip& chip, size_t index);
     // Emits the chip's pending zones that smoothed anchors bracket, or all of them when `all` is set.
     void emit_pending(Chip& chip, bool all);
     // Drops the oldest final anchors that no waiting zone can still need.
-    void trim_anchors(Chip& chip);
+    static void trim_anchors(Chip& chip);
     void emit_program(Chip& chip, const experimental::ProgramRealtimeRecord& record);
     void emit_stall(Chip& chip, const PendingStall& stall);
     void flush_stall_message(uint32_t chip_id, Chip& chip);

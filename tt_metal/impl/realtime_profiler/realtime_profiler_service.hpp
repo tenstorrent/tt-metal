@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <condition_variable>
+#include <memory>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -64,6 +66,14 @@ private:
         bool draining = false;
     };
 
+    // Signalled once a consumer's thread has been joined and the consumer removed. Shared, so a thread waiting on it
+    // keeps it alive after the registration is gone.
+    struct Completion {
+        std::mutex mutex;
+        std::condition_variable condition;
+        bool done = false;
+    };
+
     struct ConsumerRegistration {
         ConsumerRegistration(uint64_t handle, experimental::ProgramRealtimeProfilerCallback callback) :
             handle(handle), callback(std::move(callback)) {}
@@ -79,6 +89,12 @@ private:
 
         // Set by a callback unregistering itself.
         std::atomic<bool> retired{false};
+
+        // Set by the one thread that joins this consumer's thread and removes it. Until that is done the registration
+        // stays in the service, so a second unregister of the same handle finds it and waits on `finished`, and does
+        // not return while the callback is still running.
+        std::atomic<bool> destroying{false};
+        std::shared_ptr<Completion> finished = std::make_shared<Completion>();
 
         // Cross-thread inbox. The hot loop only checks control_pending; control_mutex guards the actual resources.
         std::atomic<bool> control_pending{false};
@@ -99,7 +115,12 @@ private:
         ConsumerRegistration& registration,
         std::span<const experimental::ProgramRealtimeRecord> batch,
         uint64_t dropped);
+    // Joins the consumer's thread, removes it from the service and signals anyone waiting on it. Only the thread that
+    // won `destroying` calls this.
     void destroy_consumer(ConsumerRegistration& registration);
+    // Unregisters the consumer on a thread that is not its own. Returns once its callback can no longer run: if
+    // another thread is already destroying it, waits for that.
+    void unregister_from_other_thread(uint64_t handle);
     // A callback cannot join its own thread, so a self-unregistering consumer only marks itself retired;
     // this joins and drops it from the service on behalf of the next non-consumer-thread caller.
     void reap_retired_consumers();

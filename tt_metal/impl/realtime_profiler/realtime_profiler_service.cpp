@@ -82,18 +82,37 @@ void RealtimeProfilerService::unregister_consumer(uint64_t handle) {
         return;
     }
 
-    ConsumerMap::node_type registration;
+    unregister_from_other_thread(handle);
+    reap_retired_consumers();
+}
+
+void RealtimeProfilerService::unregister_from_other_thread(uint64_t handle) {
+    ConsumerRegistration* mine = nullptr;
+    std::shared_ptr<Completion> other;
     {
+        // The registration is claimed under the lock that also removes it, so a claimed one stays valid until its
+        // claimer is done.
         std::lock_guard lock(topology_mutex_);
-        registration = consumers_.extract(handle);
-    }
-    if (registration) {
-        if (!registration.mapped().retired.exchange(true, std::memory_order_acq_rel)) {
+        const auto it = consumers_.find(handle);
+        if (it == consumers_.end()) {
+            return;
+        }
+        ConsumerRegistration& registration = it->second;
+        if (!registration.retired.exchange(true, std::memory_order_acq_rel)) {
             num_live_consumers_.fetch_sub(1, std::memory_order_relaxed);
         }
-        destroy_consumer(registration.mapped());
+        if (registration.destroying.exchange(true, std::memory_order_acq_rel)) {
+            other = registration.finished;
+        } else {
+            mine = &registration;
+        }
     }
-    reap_retired_consumers();
+    if (mine != nullptr) {
+        destroy_consumer(*mine);
+        return;
+    }
+    std::unique_lock wait_lock(other->mutex);
+    other->condition.wait(wait_lock, [&] { return other->done; });
 }
 
 void RealtimeProfilerService::attach_producer(RealtimeProfilerRecordRing& ring, size_t max_batch_records) noexcept {
@@ -244,19 +263,18 @@ void RealtimeProfilerService::reap_retired_consumers() {
     if (current_registration_ != nullptr) {
         return;
     }
-    std::vector<ConsumerMap::node_type> retired;
+    std::vector<ConsumerRegistration*> claimed;
     {
         std::lock_guard lock(topology_mutex_);
-        for (auto it = consumers_.begin(); it != consumers_.end();) {
-            const auto next = std::next(it);
-            if (it->second.retired.load(std::memory_order_acquire)) {
-                retired.push_back(consumers_.extract(it));
+        for (auto& registration : consumers_ | std::views::values) {
+            if (registration.retired.load(std::memory_order_acquire) &&
+                !registration.destroying.exchange(true, std::memory_order_acq_rel)) {
+                claimed.push_back(&registration);
             }
-            it = next;
         }
     }
-    for (auto& node : retired) {
-        destroy_consumer(node.mapped());
+    for (ConsumerRegistration* registration : claimed) {
+        destroy_consumer(*registration);
     }
 }
 
@@ -273,6 +291,18 @@ void RealtimeProfilerService::destroy_consumer(ConsumerRegistration& registratio
         log_warning(
             tt::LogMetal, "[Real-time profiler] Callback {} dropped {} record(s)", registration.handle, dropped);
     }
+
+    // The callback can no longer run. Take the registration out, then let anyone waiting on it go.
+    const auto finished = registration.finished;
+    {
+        std::lock_guard lock(topology_mutex_);
+        consumers_.erase(registration.handle);
+    }
+    {
+        std::lock_guard lock(finished->mutex);
+        finished->done = true;
+    }
+    finished->condition.notify_all();
 }
 
 }  // namespace tt::tt_metal

@@ -62,6 +62,7 @@ WORKLOAD_DIR = Path(__file__).parent
 CORRELATION_WORKLOAD = WORKLOAD_DIR / "host_device_correlation_workload.py"
 CROSS_REFERENCE_WORKLOAD = WORKLOAD_DIR / "cross_reference_workload.py"
 MATMUL_WORKLOAD = WORKLOAD_DIR / "matmul_workload.py"
+ALIGNMENT_WORKLOAD = WORKLOAD_DIR / "tracy_alignment_workload.py"
 
 # Every test in this module runs its device-touching work in a subprocess.
 # The UMD ``CHIP_IN_USE_*_PCIe`` lock is held for the lifetime of the first
@@ -662,3 +663,133 @@ def test_host_device_correlation(tmp_path):
         },
     )
 
+
+# ---------------------------------------------------------------------------
+# 6. Tracy zone placement across clock re-anchors (runs workload under Tracy capture)
+# ---------------------------------------------------------------------------
+
+# The device clock's rate changes with load, and the profiler re-anchors its host/device clock mapping many times a
+# second. Zones must still be placed one for one, without overlapping, close to when the host enqueued them, and the
+# last ones must not be lost when the device is removed.
+ALIGNMENT_RUN_SECONDS = 8
+ALIGNMENT_WINDOW_NS = 100_000_000
+ALIGNMENT_SETTLE_NS = 1_000_000_000  # the clock rate is still moving in the first second
+ALIGNMENT_MAX_RMS_MS = 1.0
+ALIGNMENT_MAX_ABS_MS = 2.0
+ALIGNMENT_MAX_MISSING_ZONES = 3
+ALIGNMENT_MAX_TAIL_GAP_MS = 100.0
+RUNTIME_ID_WRAP = 65535
+
+
+def _enqueue_program_start_ns(unwrapped_csv: Path) -> list[int]:
+    """Start time in ns of every host EnqueueProgram zone, from csvexport -u output (comma separated)."""
+    with open(unwrapped_csv, "r", newline="") as f:
+        return sorted(int(row["ns_since_start"]) for row in csv.DictReader(f) if row["name"] == "EnqueueProgram")
+
+
+def _device_zones(gpu_csv: Path) -> list[tuple[int, int, int]]:
+    """(start ns, duration ns, runtime id with the 16-bit wrap undone) for each device zone, in start order.
+
+    Zone names can span lines, so rows are matched by their trailing fields instead of parsed as CSV.
+    """
+    pattern = re.compile(r',(\d+),(\d+),"Runtime ID: (\d+)"\s*$')
+    zones = []
+    for line in open(gpu_csv, "r"):
+        m = pattern.search(line)
+        if m:
+            zones.append((int(m[1]), int(m[2]), int(m[3])))
+    zones.sort()
+    unwrapped, wraps, previous = [], 0, None
+    for start, duration, runtime_id in zones:
+        if previous is not None and runtime_id < previous - RUNTIME_ID_WRAP // 2:
+            wraps += 1
+        unwrapped.append((start, duration, runtime_id + wraps * RUNTIME_ID_WRAP))
+        previous = runtime_id
+    return unwrapped
+
+
+@pytest.mark.timeout(600)
+def test_tracy_zone_alignment(tmp_path):
+    """
+    Run a matmul load long enough for the device clock rate to change and for the clock mapping to be re-anchored
+    dozens of times, capture it under Tracy, and check that the Tracy device zones:
+      * are one for one with the host's EnqueueProgram zones (none lost to a step in the mapping),
+      * never overlap and are never zero length (Tracy drops those),
+      * start where the host enqueued them, within ALIGNMENT_MAX_RMS_MS / ALIGNMENT_MAX_ABS_MS once the clock settles,
+      * include the last zones, which the profiler places when the device is removed.
+    """
+    assert CAPTURE_TOOL.exists(), f"Tracy capture tool not found: {CAPTURE_TOOL}"
+    assert CSVEXPORT_TOOL.exists(), f"Tracy csvexport tool not found: {CSVEXPORT_TOOL}"
+    assert ALIGNMENT_WORKLOAD.exists(), f"Workload script not found: {ALIGNMENT_WORKLOAD}"
+
+    tracy_file = tmp_path / "trace.tracy"
+    workload_log = tmp_path / "workload_output.log"
+    host_csv = tmp_path / "host_zones.csv"
+    device_csv = tmp_path / "device_zones.csv"
+
+    rc, stdout = _run_under_tracy(
+        ALIGNMENT_WORKLOAD,
+        tracy_file,
+        log_path=workload_log,
+        extra_env={"SECONDS": str(ALIGNMENT_RUN_SECONDS)},
+        timeout_s=300,
+    )
+    print(f"\n--- Workload output (tail) ---\n{stdout[-2000:]}\n--- End workload output ---")
+    if rc == 2:
+        pytest.skip("Workload reported no devices available")
+    if rc == 5:
+        pytest.skip("Real-time profiler not active on this dispatch config (workload exit code 5)")
+    assert rc == 0, f"Workload failed (rc={rc})"
+    assert tracy_file.exists(), f"Tracy trace file not generated: {tracy_file}"
+
+    # Comma separated, so the host and device exports parse the same way.
+    with open(host_csv, "w") as f:
+        subprocess.run([str(CSVEXPORT_TOOL), "-u", str(tracy_file)], stdout=f, stderr=subprocess.DEVNULL, check=True)
+    with open(device_csv, "w") as f:
+        subprocess.run([str(CSVEXPORT_TOOL), "-g", str(tracy_file)], stdout=f, stderr=subprocess.DEVNULL, check=True)
+
+    enqueues = _enqueue_program_start_ns(host_csv)
+    zones = _device_zones(device_csv)
+    assert enqueues, "No host EnqueueProgram zones captured"
+    assert zones, "No Tracy device zones captured: the real-time profiler placed nothing"
+
+    overlaps = sum(1 for a, b in zip(zones, zones[1:]) if b[0] < a[0] + a[1])
+    zero_length = sum(1 for _, duration, _ in zones if duration <= 0)
+    missing = len(enqueues) - len(zones)
+
+    # The smallest (device start - host enqueue start) in each 100 ms window: the host runs ahead of the device by a
+    # roughly constant amount, so what matters is how that offset moves, not its value.
+    window_min: dict[int, int] = {}
+    for start, _, runtime_id in zones:
+        index = runtime_id - 1
+        if 0 <= index < len(enqueues):
+            window = start // ALIGNMENT_WINDOW_NS
+            window_min[window] = min(window_min.get(window, 1 << 62), start - enqueues[index])
+    settled = {w: v for w, v in window_min.items() if w * ALIGNMENT_WINDOW_NS >= ALIGNMENT_SETTLE_NS}
+    assert len(settled) > 20, f"Too few settled windows to judge alignment: {len(settled)}"
+    ordered = sorted(settled.values())
+    median = ordered[len(ordered) // 2]
+    drift_ms = [(v - median) / 1e6 for v in settled.values()]
+    rms_ms = (sum(x * x for x in drift_ms) / len(drift_ms)) ** 0.5
+    max_ms = max(abs(x) for x in drift_ms)
+    tail_gap_ms = abs(zones[-1][0] - enqueues[-1]) / 1e6
+
+    print(
+        f"\n  host EnqueueProgram zones: {len(enqueues)}, Tracy device zones: {len(zones)} (missing {missing})"
+        f"\n  overlaps: {overlaps}, zero-length: {zero_length}"
+        f"\n  offset to host enqueue after {ALIGNMENT_SETTLE_NS / 1e9:.0f} s: rms {rms_ms:.3f} ms, max {max_ms:.3f} ms"
+        f"\n  last zone vs last enqueue: {tail_gap_ms:.1f} ms"
+    )
+
+    _save_artifacts("test_tracy_zone_alignment", **{"trace.tracy": tracy_file, "workload_output.log": workload_log})
+
+    assert overlaps == 0, f"{overlaps} Tracy device zones overlap an earlier one"
+    assert zero_length == 0, f"{zero_length} Tracy device zones have no length"
+    assert (
+        0 <= missing <= ALIGNMENT_MAX_MISSING_ZONES
+    ), f"{missing} of {len(enqueues)} programs have no Tracy device zone (allowed {ALIGNMENT_MAX_MISSING_ZONES})"
+    assert rms_ms < ALIGNMENT_MAX_RMS_MS, f"Zones drift {rms_ms:.3f} ms rms from where the host enqueued them"
+    assert max_ms < ALIGNMENT_MAX_ABS_MS, f"A zone is {max_ms:.3f} ms off from where the host enqueued it"
+    assert (
+        tail_gap_ms < ALIGNMENT_MAX_TAIL_GAP_MS
+    ), f"The last Tracy zone is {tail_gap_ms:.1f} ms from the last enqueue: trailing zones were lost or misplaced"
