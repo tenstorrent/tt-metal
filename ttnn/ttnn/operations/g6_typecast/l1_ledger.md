@@ -1,44 +1,63 @@
-# L1 Ledger: g6_typecast (Phase 0, TILE stream regime)
+# L1 Ledger: g6_typecast
 
-Schema: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_design.md`): the
-**page axis** (extent `block_tiles`; leading dims, tile rows and tile cols are folded into it) and
-the **intra-tile** axis (one whole tile, atomic).
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes from `op_design.md` → Blocking Model: `tile_page` (knob `block_tiles`), `batch` / `tile_row` / `tile_col` (folded into `tile_page`), `tile_elements` (1 whole tile, fixed), `rm_row` / `rm_width` (ROW_MAJOR regimes, not built in Phase 0).
+
+Built regime: `tile_convert`.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_input_tiles` | `in_depth_blocks · block_tiles` (Phase 0: `2 · min(core_pages_max, 8)`) | `2 · block_tiles` pages: one block being converted + one being filled | `{page: spans → block_tiles ·in_depth_blocks, intra_tile: spans → 1 tile (page = whole tile)}` | input dtype (Phase 0 Float16_b, 2048 B) — a dataflow payload read from the tensor, its width is the tensor's | reader | compute | whole kernel, streaming | none — concurrent lifetime with `cb_output_tiles` (both live for the whole kernel) and differing page format/size; capacity − live set = 0 (depth 2 is the overlap mechanism) |
-| `cb_output_tiles` | `out_depth_blocks · block_tiles` (Phase 0: `2 · min(core_pages_max, 8)`) | `2 · block_tiles` pages: one block being packed + one being written | `{page: spans → block_tiles ·out_depth_blocks, intra_tile: spans → 1 tile}` | output dtype: Float32 (4096 B), Bfp8_b (1088 B) or Int32 (4096 B) — the output ABI format; Float32/Int32 match `fp32_dest_acc_en = 1` for those pairs; Bfp8_b with 16-bit DEST | compute | writer | whole kernel, streaming | none — concurrent lifetime with `cb_input_tiles`; it is already the destination (no intermediate exists to fold into it) |
+| `cb_input_tiles` | `IN_DEPTH · block_tiles` (Phase 0: `2 · block_tiles`) | `IN_DEPTH · block_tiles`: block `k` held by compute for the whole `convert_block` (Upfront wait, AtEnd pop) while block `k+1` lands from the reader | `{tile_page: spans → block_tiles (× IN_DEPTH); batch: streams (folded into tile_page); tile_row: streams (folded); tile_col: streams (folded); tile_elements: spans → 1 tile per page (fixed); rm_row: n/a (TILE regime); rm_width: n/a (TILE regime)}` | input dtype. Phase 0: Float16_b (bf16 tile, 2048 B). Under `fp32_dest_acc_en=1` (→f32, →int32) this 16-bit page is the **input ABI** (the tensor arrives as bf16 from DRAM / L1), not a DEST-fed intermediate, so audit 2's "under" case does not apply: nothing accumulated is truncated | reader | compute | whole program | cannot share with `cb_output_tiles`: concurrent lifetime (depth-2 pipelining keeps blocks `k` and `k+1` of both CBs live) and a different page format/size (2048 B vs 4096 / 1088 B), so in-place transform is impossible. Capacity = live set; nothing to account for |
+| `cb_output_tiles` | `OUT_DEPTH · block_tiles` (Phase 0: `2 · block_tiles`) | `OUT_DEPTH · block_tiles`: block `k` being written by the writer while compute packs block `k+1` (Upfront reserve, AtEnd push) | `{tile_page: spans → block_tiles (× OUT_DEPTH); batch: streams (folded); tile_row: streams (folded); tile_col: streams (folded); tile_elements: spans → 1 tile per page (fixed); rm_row: n/a; rm_width: n/a}` | output dtype: Float32 (4096 B) when `fp32_dest_acc_en=1` (→f32); Int32 (4096 B) when `fp32_dest_acc_en=1` (→int32); Bfp8_b (1088 B) when `fp32_dest_acc_en=0` (→bf8b). The Float32/Int32 pages are the **output ABI** and pair with 32-bit DEST, so audit 2's "over" case does not apply | compute | writer | whole program | cannot share with `cb_input_tiles` (same reason). No intermediate CB exists: the conversion packs straight into the output CB, which is the "pack into destination" pattern. Capacity = live set |
 
-No intermediate CB: the conversion packs directly into the destination CB (Rule 3 pattern 1); an
-in-place transform is impossible because input and output page formats differ.
+Deferred regimes (sizes stated so the refinement inherits the bound; not allocated in Phase 0):
 
-### Symbol table
+| CB | Regime | Capacity (pages) | Note |
+|----|--------|------------------|------|
+| `cb_input_tiles` only | `tile_bitcopy` | `IN_DEPTH · block_tiles` | reader → writer directly; the compute kernel and `cb_output_tiles` are absent |
+| `cb_input_slots`, `cb_output_slots` | `rm_convert` | `DEPTH · ceil(block_rows · S_in / tile_bytes_in)` and the output analogue | pages are tile-sized pseudo-tiles holding `tile_bytes_in / S_in` page slots; `block_rows` is bounded by `BLOCK_ROWS_CAP` (refinement host constant) |
+| `cb_input_tiles` (RM page slots) | `rm_bitcopy` | `DEPTH · block_rows` pages of `aligned_page_size` | reader → writer |
+
+## Symbol table
 
 | Symbol | Bound | Established by |
 |--------|-------|----------------|
-| `block_tiles` | `1 ≤ block_tiles ≤ 8` (Phase 0 `min(core_pages_max, BLOCK_TILES_DEFAULT=8)`); L1 bound ≈ `floor(1 347 776 / (2·(4096+4096))) = 82` at TARGET's widest pair | host constant `BLOCK_TILES_DEFAULT` |
-| `in_depth_blocks`, `out_depth_blocks` | 2 | host constants |
-| `in_page_bytes` | ≤ 4096 (tile of a 32-bit dtype) | TILE layout, TARGET dtypes |
-| `out_page_bytes` | ≤ 4096 | TILE layout, TARGET dtypes |
-| `core_pages` | unbounded (up to 8192/grid); **does not appear in any capacity** | — |
+| `block_tiles` | `1 ≤ block_tiles = min(core_tiles_g1, BLOCK_TILES_CAP) ≤ 8` | host derivation from `BLOCK_TILES_CAP = 8` (single source) |
+| `core_tiles_g1` | `ceil(tensor_pages / num_cores)`; unbounded in the op's contract, but it **never** sizes a CB (it is clamped through `block_tiles`) | `ttnn.split_work_to_cores` |
+| `tensor_pages` | `input_tensor.buffer_num_pages()`; 1 … 8192 in Phase 0 INPUTS (P39) | the input tensor; it sizes no CB |
+| `IN_DEPTH`, `OUT_DEPTH` | 2 | host constants |
+| `in_page_bytes` | ∈ {2048 (bf16 / uint16 tile), 4096 (f32 / int32 / uint32 tile)} — Phase 0: 2048 | input dtype ∈ TARGET |
+| `out_page_bytes` | ∈ {1088 (bf8b), 2048 (bf16), 4096 (f32 / int32 / uint32)} for TILE outputs — Phase 0: 4096 or 1088 | output dtype ∈ TARGET, TILE layout |
+| `NB_L1` | number of L1 banks (≈ worker cores) | device allocator; used only for the op's own output allocation when `buffer == "l1"` |
 
-### Total per-core footprint
+## Per-core footprint
 
-`L1_op = block_tiles · (in_depth_blocks · in_page_bytes + out_depth_blocks · out_page_bytes)`
+```
+CB_bytes  = IN_DEPTH  · block_tiles · in_page_bytes        # scales with block_tiles and the input dtype
+          + OUT_DEPTH · block_tiles · out_page_bytes       # scales with block_tiles and the output dtype
+OUT_bytes = ceil(tensor_pages / NB_L1) · out_page_bytes    # only when buffer == "l1": the op's own output allocation
+```
 
-- Phase 0 worst (bf16 → float32/int32): `8 · (2·2048 + 2·4096) = 98 304 B`; bf16 → bf8b: `8 · (2·2048 + 2·1088) = 50 176 B`.
-- TARGET worst (32-bit → 32-bit): `8 · (2·4096 + 2·4096) = 131 072 B`.
-- Every term scales linearly with `block_tiles` and with its CB's depth knob; nothing scales with the tensor size. Bound 1 347 776 B (BB-05) holds for every golden shape.
+| Case | `block_tiles` | `CB_bytes` | `OUT_bytes` (L1 only) | Total vs. 1,347,776 B budget |
+|------|---------------|------------|-----------------------|-------------------------------|
+| Phase 0 worst CB (bf16 → f32 / int32) | 8 | 2·8·2048 + 2·8·4096 = 98,304 | — (DRAM) | 98,304 (7.3%) |
+| P39 bf16 → bf8b, L1 (largest L1 output) | 8 | 2·8·2048 + 2·8·1088 = 50,176 | `ceil(8192/NB_L1)·1088` ≈ 68.6 KiB at `NB_L1 ≈ 130` | ≈ 120 KiB (9%) |
+| TARGET worst CB (32-bit in and out, refinement) | 8 | 2·8·4096 + 2·8·4096 = 131,072 | — | 131,072 (9.7%) |
 
-## Data-movement budget
+No term scales with an op dimension: `tensor_pages` enters only the L1 output allocation, which is the tensor the op must return, divided by the bank count. A budget solve is unnecessary. The inventory is the minimum two CBs, and the block cap is set by the overlap lamp, not by L1 pressure.
+
+## Data-movement budget (chosen split: contiguous `tile_page` ranges, full grid)
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| `input_tensor` (DRAM placement) | 1 | every page is read exactly once by exactly one core; no re-read, no staging | none |
-| `output_tensor` (DRAM placement) | 1 | every page written once | none |
-| `input_tensor` (L1 placement) | 0 | lives in L1 banks | `(1 − 1/num_l1_banks)` of its bytes cross the NoC (pages are round-robin over all L1 banks; contiguous ranges do not align with banks) |
-| `output_tensor` (L1 placement) | 0 | lives in L1 banks | same fraction |
+| input | 1 (DRAM placement) / 0 (L1 placement) | each page is read once, by exactly one core (disjoint contiguous ranges), and consumed from the CB; no second pass, nothing re-read | DRAM: none. L1 placement: each page crosses the NoC mesh once, from its bank's core to its worker core |
+| output | 1 (DRAM placement) / 0 (L1 placement) | each page is packed once into `cb_output_tiles` and written once | DRAM: none. L1 placement: each page crosses the mesh once, from worker to bank core |
 
-Totals for the flagged Phase 0 cases: p3 Q2185 `[16,4096,12]` bf16→f32 DRAM: 4 194 304 B read + 8 388 608 B written from/to DRAM, 0 cross-core. p4 P39 `[1,128,256,256]` bf16→bf8b L1: 0 DRAM; ≈ 16 777 216 + 8 912 896 B over the NoC (× `(1 − 1/nb)` cross-core).
+Totals per tier (examples):
 
-> Cheapest-traffic split considered: page axis, **bank-affine** strided sets (`page = bank_id + j·nb`) — saves all cross-core NoC traffic for L1 placements (P39: ≈ 25.7 MB × (1 − 1/nb)), identical for DRAM placements. Implemented: page axis, contiguous ranges (the cheapest split for every DRAM placement). Deferred because the contiguous split is already correct for every L1 shape and the bank-affine one needs the host L1 bank → logical core map verified per arch/harvest; the reader/writer carry `page_stride` RT args from Phase 0, so turning it on is a knob-turn (regime row "TILE bank-affine").
+| Case | DRAM bytes | NoC-mesh bytes (beyond the DRAM path) |
+|------|------------|----------------------------------------|
+| Q2185 `(16,4096,12)` bf16 → f32, DRAM | 4 MiB read + 8 MiB write = 12 MiB (12/32 of each tile row is logical; the padding is part of the TILE layout) | 0 |
+| Q2187 `(1,1,3844,256)` bf16 → bf8b, DRAM | 968 · 2048 + 968 · 1088 = 2.9 MiB | 0 |
+| P39 `(1,128,256,256)` bf16 → bf8b, L1 | 0 | 16 MiB + 8.5 MiB = 24.5 MiB |
+
+> Cheapest-traffic split considered: `tile_convert_bank_local` (each core converts the pages of the L1 bank it hosts) — for L1 placements it removes all NoC-mesh crossings (P39: 24.5 MiB → 0, both tensors stay core-local). DRAM placements: every split moves the same bytes. Implemented: contiguous `tile_page` ranges over the full grid (`tile_convert`), which is also the cheapest split for every DRAM-placed case. Deferred because the built `tile_convert` already serves every L1 shape (P22, P31, P39, P46, P50) with the same kernels. The bank-local split changes only the page walk (`page_stride = NB_L1`, bank-owner cores), and Phase 0 keeps that walk parameterized (`page_stride` RT arg, value 1). One experiment settles it: P39 with `page_stride = NB_L1` against Phase 0 at equal `block_tiles`.
