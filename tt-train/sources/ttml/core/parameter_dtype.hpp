@@ -24,6 +24,10 @@ namespace ttml::core {
 // state follows the dtype the parameters have when it is created.
 void store_trainable_parameters_as(const serialization::NamedParameters& parameters, ttnn::DataType dtype);
 
+// Checks training_config.precision without applying it, with the TT_FATAL apply_precision_config() would raise. The
+// runners' config parsers call it, so a typo stops the run before the model is built.
+void validate_precision_config(const YAML::Node& training_config);
+
 // Applies training_config.precision. precision.master_dtype ("bfloat16" or "float32") stores the parameters in that
 // dtype with store_trainable_parameters_as(), whose contract applies; unset, or set to null, leaves them in the dtype
 // the model builds them in. precision.reduce_dtype (same names) becomes the dtype the gradient syncs sum in when a call

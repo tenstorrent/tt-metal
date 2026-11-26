@@ -555,15 +555,6 @@ Tensor concat_impl(
         }
         return concat_impl(interleaved_inputs, dim, groups, output_mem_config, sub_core_grids);
     }
-    if (input_tensors[0].layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
-        for (const auto& input_tensor : input_tensors) {
-            TT_FATAL(
-                (input_tensor.padded_shape()[dim] * input_tensor.element_size()) %
-                        input_tensor.mesh_buffer().alignment() ==
-                    0,
-                "Current concat implementation requires aligned last dim when concatting on last dim");
-        }
-    }
     // Determine target layout by checking all inputs
     // Start with first input's layout, but may need to fall back to ROW_MAJOR
     Layout target_layout = input_tensors[0].layout();
@@ -594,6 +585,20 @@ Tensor concat_impl(
         }
     }
 
+    // Post-conversion RM width-concat NOC rule: output alignment also counts (writer lands in output pages).
+    if (target_layout == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
+        const uint32_t common_align = rm_width_concat_common_alignment(formatted_tensors, output_mem_config);
+        for (const auto& t : formatted_tensors) {
+            TT_FATAL(
+                (static_cast<uint64_t>(t.padded_shape()[normalized_dim]) * t.element_size()) % common_align == 0,
+                "ttnn.concat: RM width-concat requires every input's last dim to be a multiple of the max buffer "
+                "alignment across inputs and the output (got {} elements, element size {}, max alignment {}).",
+                t.padded_shape()[normalized_dim],
+                t.element_size(),
+                common_align);
+        }
+    }
+
     if (output_mem_config.is_sharded() && target_layout == Layout::ROW_MAJOR &&
         output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         // For width/block-sharded RM output the buffer page width equals the shard width,
@@ -607,6 +612,22 @@ Tensor concat_impl(
         return ttnn::to_memory_config(interleaved_result, output_mem_config, std::nullopt);
     }
     return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config, sub_core_grids);
+}
+
+uint32_t rm_width_concat_common_alignment(
+    const std::vector<Tensor>& tensors, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    uint32_t align = 0;
+    for (const auto& t : tensors) {
+        TT_FATAL(
+            t.storage_type() == ttnn::StorageType::DEVICE,
+            "ttnn.concat: expected device storage, got storage type {}",
+            t.storage_type());
+        align = std::max<uint32_t>(align, t.mesh_buffer().alignment());
+    }
+    const uint32_t out_align = output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM
+                                   ? tt::tt_metal::hal::get_dram_alignment()
+                                   : tt::tt_metal::hal::get_l1_alignment();
+    return std::max(align, out_align);
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os, random
+from collections.abc import Mapping
 from contextlib import contextmanager
 
 import numpy as np
@@ -193,6 +194,50 @@ def initialize_device(yaml_config: dict):
     ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
 
 
+_PRECISION_DTYPE_NAMES = {ttnn.DataType.BFLOAT16: "bfloat16", ttnn.DataType.FLOAT32: "float32"}
+
+
+def _precision_block_as_yaml(precision):
+    """``precision`` with each ``ttnn.DataType`` value written as its YAML name, so ``ttnn.DataType.FLOAT32`` and
+    ``"float32"`` mean the same. ``None`` is no block. A block that is not a mapping, or a value that is neither a
+    string, ``None`` nor a bf16/fp32 ``ttnn.DataType``, raises ``TypeError``: converted to YAML it could read as
+    unset."""
+    if precision is None:
+        return None
+    if not isinstance(precision, Mapping):
+        raise TypeError(
+            f'precision must be a dict such as {{"master_dtype": "float32"}} or None, got '
+            f"{type(precision).__name__} {precision!r}"
+        )
+    converted = {}
+    for key, value in precision.items():
+        if isinstance(value, ttnn.DataType):
+            if value not in _PRECISION_DTYPE_NAMES:
+                raise TypeError(f"precision.{key} must be BFLOAT16 or FLOAT32, got {value}")
+            value = _PRECISION_DTYPE_NAMES[value]
+        elif value is not None and not isinstance(value, str):
+            raise TypeError(
+                f'precision.{key} must be "bfloat16", "float32" or a ttnn.DataType, got {type(value).__name__} {value!r}'
+            )
+        converted[key] = value
+    return converted
+
+
+def validate_precision(precision: dict | None) -> None:
+    """Check the YAML's ``training_config.precision`` block, given as a dict, without applying it: the errors
+    ``apply_precision`` would raise, with no model and no device needed. ``None`` means no block."""
+    ttml.core.validate_precision_config({"precision": _precision_block_as_yaml(precision)})
+
+
+def apply_precision(model, precision: dict | None) -> None:
+    """Apply the YAML's ``training_config.precision`` block, given as a dict, to *model*'s parameters with
+    ``ttml.core.apply_precision_config``, as ``create_optimizer`` does with the whole config. ``None`` means no block:
+    the parameters keep their dtype and no reduce dtype is stored, so a value stored earlier in the process is cleared.
+    Values are ``"bfloat16"``/``"float32"`` or the matching ``ttnn.DataType``. Call it once per run, after the model is
+    built and before weights load and the optimizer is created (see ``docs/MIXED_PRECISION.md``)."""
+    ttml.core.apply_precision_config({"precision": _precision_block_as_yaml(precision)}, model.parameters())
+
+
 def create_optimizer(model, yaml_config: dict):
     """Create an optimizer from the optimizer config YAML.
 
@@ -224,7 +269,7 @@ def create_optimizer(model, yaml_config: dict):
         if _is_pipeline_parallel(yaml_config):
             optimizer_cfg = {**optimizer_cfg, "allow_empty_param_groups": True}
         params = model.parameters()
-        ttml.core.apply_precision_config(tc, params)
+        ttml.core.apply_precision_config({**tc, "precision": _precision_block_as_yaml(tc.get("precision"))}, params)
         return ttml.optimizers.create_optimizer(optimizer_cfg, params)
     return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
 
