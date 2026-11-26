@@ -303,7 +303,7 @@ its normal operation family remains paired through
 | Shared sweep and runner | `test_pack_l1_acc.py` | `perf_pack_l1_acc.py` | Functional owns `PACK_L1_ACC_SWEEP`; regression stays separate |
 | Several named families in one module | `test_eltwise_binary.py` | `perf_eltwise_binary.py` | Shows normalized per-function peers and shared runners |
 | Quasar generated narrowing | `quasar/test_pack_quasar.py` | `quasar/perf_pack_quasar.py` | One generator creates functional and documented perf combinations |
-| Shared tile axis with perf packaging | `test_unpack_tilize.py` | `perf_unpack_tilize.py` | Shows a legitimate dimension-grid narrowing; inspect manually |
+| Legacy dimension drift to repair | `test_unpack_tilize.py` | `perf_unpack_tilize.py` | Perf expands `rt_dim` / `ct_dim` beyond the functional `[64, 64]` default, so those values lack functional goldens; do not copy this pattern |
 
 Do not copy legacy defects such as the cross-stem tiny-tile import or
 `math_transpose_perf.cpp`. A dedicated phase source is allowed only for a

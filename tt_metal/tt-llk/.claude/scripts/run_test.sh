@@ -531,9 +531,9 @@ _watchdog_silicon() {
 }
 
 # ── count ─────────────────────────────────────────────────────────────────────
-# Outputs the variant count (integer) to stdout.
-# Collection log (including any errors) goes to stderr so the caller can
-# capture just the count: COUNT=$(run_llk_tests.sh count ...)
+# Outputs the compile-producer (ELF) variant count as an integer to stdout.
+# Collection logs and a labeled ELF/runtime summary go to stderr so callers can
+# still capture the ELF count: ELF_COUNT=$(run_test.sh count ...)
 
 _do_count() {
   _validate
@@ -542,30 +542,46 @@ _do_count() {
   _perf_pytest_args
   local -a solflag=()
   [[ "$SPEED_OF_LIGHT" == "true" ]] && solflag=(--speed-of-light)
-  local output exit_code
-  exit_code=0
-  output=$(
+  local producer_output producer_exit runtime_output runtime_exit
+  producer_exit=0
+  producer_output=$(
     # shellcheck disable=SC1091
     source "${VENV}/bin/activate"
     cd "${TEST_DIR}"
     CHIP_ARCH="${ARCH}" pytest --compile-producer --co -q ${solflag+"${solflag[@]}"} \
       ${PERF_PYTEST_ARGS+"${PERF_PYTEST_ARGS[@]}"} "${TEST_FILE}" 2>&1
-  ) || exit_code=$?
+  ) || producer_exit=$?
 
-  # Show collection log to the agent (stderr stays visible in Bash tool output)
-  printf '%s\n' "${output}" >&2
+  runtime_exit=0
+  runtime_output=$(
+    # shellcheck disable=SC1091
+    source "${VENV}/bin/activate"
+    cd "${TEST_DIR}"
+    CHIP_ARCH="${ARCH}" pytest --co -q ${solflag+"${solflag[@]}"} \
+      ${PERF_PYTEST_ARGS+"${PERF_PYTEST_ARGS[@]}"} "${TEST_FILE}" 2>&1
+  ) || runtime_exit=$?
 
-  if [[ $exit_code -ne 0 ]]; then
+  printf '%s\n' "${producer_output}" >&2
+  printf '%s\n' "${runtime_output}" >&2
+
+  if [[ $producer_exit -ne 0 || $runtime_exit -ne 0 ]]; then
     echo "0"
-    [[ "$PERF" == "true" && $exit_code -eq 5 ]] && return 0
-    return "$exit_code"
+    if [[ "$PERF" == "true" && $producer_exit -eq 5 && $runtime_exit -eq 5 ]]; then
+      echo "=== RUN_LLK_TESTS_COUNT === elf=0 runtime=0" >&2
+      return 0
+    fi
+    [[ $producer_exit -ne 0 ]] && return "$producer_exit"
+    return "$runtime_exit"
   fi
 
-  # Last non-blank line looks like "N tests collected" or "N test collected"
-  local last count
-  last=$(printf '%s\n' "${output}" | grep -v '^[[:space:]]*$' | tail -1)
-  count=$(printf '%s' "${last}" | grep -oE '^[0-9]+' || echo "0")
-  echo "${count}"
+  # Last non-blank line looks like "N tests collected" or "N test collected".
+  local producer_last producer_count runtime_last runtime_count
+  producer_last=$(printf '%s\n' "${producer_output}" | grep -v '^[[:space:]]*$' | tail -1)
+  producer_count=$(printf '%s' "${producer_last}" | grep -oE '^[0-9]+' || echo "0")
+  runtime_last=$(printf '%s\n' "${runtime_output}" | grep -v '^[[:space:]]*$' | tail -1)
+  runtime_count=$(printf '%s' "${runtime_last}" | grep -oE '^[0-9]+' || echo "0")
+  echo "=== RUN_LLK_TESTS_COUNT === elf=${producer_count} runtime=${runtime_count}" >&2
+  echo "${producer_count}"
 }
 
 # ── compile ───────────────────────────────────────────────────────────────────
