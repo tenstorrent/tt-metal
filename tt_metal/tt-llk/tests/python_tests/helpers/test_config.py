@@ -574,7 +574,7 @@ class TestConfig:
     ):
         debug_flag = "" if no_debug_symbols else "-g "
         TestConfig.OPTIONS_ALL = (
-            f"{debug_flag}-O3 "
+            f"{debug_flag}-O3 -falign-functions=16 "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
             "-ffast-math "
             "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
