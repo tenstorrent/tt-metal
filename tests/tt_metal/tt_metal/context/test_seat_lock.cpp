@@ -5,19 +5,24 @@
 // DRISC seat locks without a device: each test gets its own lock directory through TT_DRISC_SEAT_LOCK_DIR.
 
 #include <gtest/gtest.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <new>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #include "impl/drisc_service/seat_lock.hpp"
 
@@ -49,8 +54,8 @@ protected:
         std::filesystem::remove_all(dir_);
     }
 
-    // `seat`'s file with extension `ext`.
-    std::filesystem::path seat_file(const char* ext) const { return dir_ / (std::string("seat-1-2-3.") + ext); }
+    // The file of `seat`'s chip.
+    std::filesystem::path chip_file() const { return dir_ / "chip-1.lock"; }
     const std::filesystem::path& dir() const { return dir_; }
 
 private:
@@ -103,12 +108,40 @@ TEST_F(SeatLockFiles, CPU_SecondClientSharesOnlyAfterTheFirstShares) {
     EXPECT_TRUE(SeatLock::try_acquire_exclusive(seat).has_value()) << "the seat stayed held after both clients left";
 }
 
-TEST_F(SeatLockFiles, CPU_ExclusiveBacksOffWhileAClientIsAttaching) {
+// The gate admits one attach at a time on its own seat only.
+TEST_F(SeatLockFiles, CPU_GateAdmitsOneAttachAtATime) {
     {
         const SeatGate gate(seat, gate_timeout);
-        EXPECT_FALSE(SeatLock::try_acquire_exclusive(seat).has_value()) << "metal took a seat during an attach";
+        EXPECT_ANY_THROW({ const SeatGate second(seat, std::chrono::milliseconds(10)); }) << "two attaches at once";
+        const SeatGate other(other_seat, gate_timeout);
     }
-    EXPECT_TRUE(SeatLock::try_acquire_exclusive(seat).has_value());
+    const SeatGate again(seat, gate_timeout);
+}
+
+size_t open_files() {
+    size_t count = 0;
+    for ([[maybe_unused]] const auto& entry : std::filesystem::directory_iterator("/proc/self/fd")) {
+        count++;
+    }
+    return count;
+}
+
+// A process keeps one file open per chip, however many seats it holds there and however it holds them.
+TEST_F(SeatLockFiles, CPU_OneOpenFilePerChip) {
+    const size_t before = open_files();
+    std::vector<SeatLock> held;
+    for (uint32_t y = 0; y < 12; y++) {
+        held.push_back(SeatLock::try_acquire_exclusive({.asic_id = 1, .noc0_x = 0, .noc0_y = y}).value());
+        held.push_back(SeatLock::try_acquire_client({.asic_id = 1, .noc0_x = 9, .noc0_y = y}).value());
+    }
+    {
+        const SeatGate gate(seat, gate_timeout);
+        EXPECT_EQ(open_files(), before + 1);
+    }
+    held.push_back(SeatLock::try_acquire_exclusive({.asic_id = 2, .noc0_x = 0, .noc0_y = 0}).value());
+    EXPECT_EQ(open_files(), before + 2);
+    held.clear();
+    EXPECT_EQ(open_files(), before) << "a chip file stayed open with nothing held in it";
 }
 
 TEST_F(SeatLockFiles, CPU_LockIsReleasedWhenItsLastOwnerGoes) {
@@ -127,14 +160,18 @@ TEST_F(SeatLockFiles, CPU_LockIsReleasedWhenItsLastOwnerGoes) {
     EXPECT_TRUE(SeatLock::try_acquire_exclusive(seat).has_value());
 }
 
-// A child forked without exec shares the parent's lock, which lasts until the child is gone too; the OS drops it
-// when the child dies, which is how a crashed client's seat is freed.
+// The OS drops a process's locks when it dies, which is how a crashed client's seat is freed.
 TEST_F(SeatLockFiles, CPU_LockOfAKilledProcessIsReleased) {
-    std::optional<SeatLock> lock = SeatLock::try_acquire_exclusive(seat);
-    ASSERT_TRUE(lock.has_value());
+    int ready[2];
+    ASSERT_EQ(::pipe(ready), 0);
     const pid_t child = ::fork();
     ASSERT_GE(child, 0);
     if (child == 0) {
+        const std::optional<SeatLock> lock = SeatLock::try_acquire_exclusive(seat);
+        const char held = lock.has_value() ? 'y' : 'n';
+        if (::write(ready[1], &held, 1) != 1) {
+            ::_exit(1);
+        }
         ::pause();
         ::_exit(0);
     }
@@ -148,12 +185,90 @@ TEST_F(SeatLockFiles, CPU_LockOfAKilledProcessIsReleased) {
         }
     } reaper{child};
 
-    lock.reset();
-    EXPECT_FALSE(SeatLock::try_acquire_exclusive(seat).has_value()) << "the seat was freed while the child lived";
+    char held = 0;
+    ASSERT_EQ(::read(ready[0], &held, 1), 1);
+    ::close(ready[0]);
+    ::close(ready[1]);
+    ASSERT_EQ(held, 'y') << "the child could not take the seat";
+    EXPECT_FALSE(SeatLock::try_acquire_exclusive(seat).has_value()) << "took a seat another process holds";
     ASSERT_EQ(::kill(child, SIGKILL), 0);
     ASSERT_EQ(::waitpid(child, nullptr, 0), child);
     reaper.pid = 0;
     EXPECT_TRUE(SeatLock::try_acquire_exclusive(seat).has_value()) << "the dead child's seat stayed held";
+}
+
+// A child forked without exec takes its parent's seat no more than another process could, and destroying the copy of
+// the lock it inherited leaves the seat held.
+TEST_F(SeatLockFiles, CPU_ForkedChildLeavesItsParentsLocksAlone) {
+    std::optional<SeatLock> lock = SeatLock::try_acquire_exclusive(seat);
+    ASSERT_TRUE(lock.has_value());
+    const pid_t child = ::fork();
+    ASSERT_GE(child, 0);
+    if (child == 0) {
+        lock.reset();
+        ::_exit(SeatLock::try_acquire_exclusive(seat).has_value() ? 1 : 0);
+    }
+    int status = 0;
+    ASSERT_EQ(::waitpid(child, &status, 0), child);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "the child took its parent's seat, status " << status;
+}
+
+// share() turns a sole client's lock into a shared one without freeing the seat in between: another process that
+// keeps trying to take the seat across many shares never gets it.
+TEST_F(SeatLockFiles, CPU_SharingNeverFreesTheSeat) {
+    struct Rounds {
+        std::atomic<int> started{0};  // The round the parent started, -1 to stop the child.
+        std::atomic<int> trying{0};   // The round the child is trying to take the seat in.
+        std::atomic<int> stopped{0};  // The round the parent finished sharing in.
+        std::atomic<int> done{0};     // The round the child stopped trying in.
+        std::atomic<int> taken{0};    // Times the child took the seat.
+    };
+    void* mem = ::mmap(nullptr, sizeof(Rounds), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    ASSERT_NE(mem, MAP_FAILED);
+    auto* rounds = new (mem) Rounds;
+    const pid_t child = ::fork();
+    ASSERT_GE(child, 0);
+    if (child == 0) {
+        for (int round = 1;; round++) {
+            int started = 0;
+            while ((started = rounds->started.load()) != round && started != -1) {
+            }
+            if (started == -1) {
+                ::_exit(0);
+            }
+            rounds->trying = round;
+            while (rounds->stopped.load() != round) {
+                if (SeatLock::try_acquire_exclusive(seat).has_value()) {
+                    rounds->taken++;
+                }
+            }
+            rounds->done = round;
+        }
+    }
+    struct Reaper {
+        pid_t pid;
+        ~Reaper() {
+            ::kill(pid, SIGKILL);
+            ::waitpid(pid, nullptr, 0);
+        }
+    } reaper{child};
+
+    constexpr int num_rounds = 500;
+    for (int round = 1; round <= num_rounds; round++) {
+        std::optional<SeatLock> client = SeatLock::try_acquire_client(seat);
+        ASSERT_TRUE(client.has_value() && client->sole()) << "round " << round;
+        rounds->started = round;
+        while (rounds->trying.load() != round) {
+        }
+        client->share();
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+        rounds->stopped = round;
+        while (rounds->done.load() != round) {
+        }
+    }
+    rounds->started = -1;
+    EXPECT_EQ(rounds->taken.load(), 0) << "another process took the seat while a client shared it";
+    ::munmap(mem, sizeof(Rounds));
 }
 
 TEST_F(SeatLockFiles, CPU_GenerationsCountUpWrapAndRecover) {
@@ -163,12 +278,11 @@ TEST_F(SeatLockFiles, CPU_GenerationsCountUpWrapAndRecover) {
     EXPECT_EQ(gate.next_gen(3), 3u);
     EXPECT_EQ(gate.next_gen(3), 1u) << "did not wrap from max to 1";
 
-    std::ofstream(seat_file("gen"), std::ios::binary | std::ios::trunc) << "x";
-    EXPECT_EQ(gate.next_gen(3), 1u) << "a short .gen file did not restart the count";
-    const uint32_t past_max = 7;
-    std::ofstream(seat_file("gen"), std::ios::binary | std::ios::trunc)
-        .write(reinterpret_cast<const char*>(&past_max), sizeof(past_max));
-    EXPECT_EQ(gate.next_gen(3), 1u) << "a .gen value past max did not restart the count";
+    std::filesystem::resize_file(chip_file(), 0);
+    EXPECT_EQ(gate.next_gen(3), 1u) << "a short chip file did not restart the count";
+    const std::string past_max(64 * 1024, '\x07');
+    std::ofstream(chip_file(), std::ios::binary | std::ios::trunc) << past_max;
+    EXPECT_EQ(gate.next_gen(3), 1u) << "a generation past max did not restart the count";
 }
 
 mode_t mode_of(const std::filesystem::path& path) {
@@ -192,23 +306,19 @@ TEST_F(SeatLockFiles, CPU_FilesAreSharedWhateverTheUmask) {
 
     EXPECT_EQ(::umask(077), 077) << "taking a seat changed the umask";
     EXPECT_EQ(mode_of(dir()), 01777);
-    for (const char* ext : {"lock", "gate", "gen"}) {
-        EXPECT_EQ(mode_of(seat_file(ext)), 0666) << ext;
-    }
+    EXPECT_EQ(mode_of(chip_file()), 0666);
 }
 
-// 1) A seat file that is a symlink is refused, not followed: whoever owns the shared dir could plant one.
+// 1) A chip file that is a symlink is refused, not followed: whoever owns the shared dir could plant one.
 // 2) The file it points to is left untouched.
-TEST_F(SeatLockFiles, CPU_SymlinkedSeatFilesAreRefused) {
+TEST_F(SeatLockFiles, CPU_SymlinkedChipFilesAreRefused) {
     std::filesystem::create_directories(dir());
     const std::filesystem::path target = dir() / "target";
     std::ofstream(target) << "keep";
 
-    std::filesystem::create_symlink(target, seat_file("gen"));
-    SeatGate gate(seat, gate_timeout);
-    EXPECT_ANY_THROW(gate.next_gen(3)) << ".gen was followed";
-    std::filesystem::create_symlink(target, seat_file("lock"));
-    EXPECT_ANY_THROW(SeatLock::try_acquire_client(seat)) << ".lock was followed";
+    std::filesystem::create_symlink(target, chip_file());
+    EXPECT_ANY_THROW({ const SeatGate gate(seat, gate_timeout); }) << "the gate followed it";
+    EXPECT_ANY_THROW(SeatLock::try_acquire_client(seat)) << "the seat lock followed it";
 
     std::string content;
     std::ifstream(target) >> content;
