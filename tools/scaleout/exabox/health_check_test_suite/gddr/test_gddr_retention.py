@@ -505,12 +505,12 @@ def allocate_rows(device, rows):
     )
 
 
-def reserve_dram(device, base):
-    """Allocate the largest buffer that starts at `base` and ends below every other DRAM allocation.
+def reserve_dram(device, base, buffers):
+    """Allocate the largest buffer that starts at `base` and ends below every other DRAM allocation in `buffers`.
 
     Returns the buffer and the covered end: the next allocation above it, since the sub-page gap between the two is
     free and nothing is allocated while the sweep runs."""
-    limit = min((addr for addr, size in dram_buffers(device) if addr + size > base), default=DRAM_TOP)
+    limit = min((addr for addr, size in buffers if addr + size > base), default=DRAM_TOP)
     # Each probe is freed before the next, so every size is tried against the same empty space.
     best, low, high = 0, 1, (limit - base) // PAGE_BYTES
     while low <= high:
@@ -582,16 +582,15 @@ class ChipRun:
             self.launch(mode, empty, NONE, NONE, 1, pass_index)
             read_out(self.tt_out, self.slots, NONE, pass_index)
         ttnn.deallocate(probe)
-        self.dram, self.covered_hi = reserve_dram(device, self.dram_base)
+        # Read once, before reserving: ttnn's buffer report walks every page of an interleaved buffer, so with the
+        # reservation's 16.7 million pages allocated, each read takes 0.2 s.
+        buffers = dram_buffers(device)
+        self.dram, self.covered_hi = reserve_dram(device, self.dram_base, buffers)
         self.covered_lo = cfg["lo"]
         # The sweep starts at the bottom of the bank, so a buffer allocated before the probe would be overwritten.
-        inside = [
-            (hex(addr), size)
-            for addr, size in dram_buffers(device)
-            if addr < self.covered_hi and addr != self.dram_base
-        ]
+        inside = [(hex(addr), size) for addr, size in buffers if addr < self.covered_hi]
         assert not inside, f"chip {chip}: DRAM buffers inside the swept range {inside}"
-        self.above = [(addr, size) for addr, size in dram_buffers(device) if addr >= self.covered_hi]
+        self.above = [(addr, size) for addr, size in buffers if addr >= self.covered_hi]
 
         self.ranges = [None] * self.slots
         for bank in range(BANKS):
