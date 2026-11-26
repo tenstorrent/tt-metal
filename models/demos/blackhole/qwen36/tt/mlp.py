@@ -18,6 +18,8 @@ class MLPWeights:
     w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b
     w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
+    # TP decode on DRAM-sharded matmuls (mlp_decode_ds): per-device [gate | up], bfloat4_b; w1 and w3 are None then.
+    w_gu_ds: ttnn.Tensor = None
 
 
 def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
@@ -44,6 +46,48 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
         mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=cache_path,
+    )
+
+
+def mlp_decode_ds(args, use_gateup_agmm):
+    """True when a TP layer's decode MLP runs on DRAM-sharded matmuls (args.mlp_decode_ds, Qwen36ModelArgs).
+
+    Its gate and up weights then load only as the packed decode weight and the prefill AGMM weight, so the layer needs
+    the prefill AGMM (a dense layer: the MoE shared expert has use_gateup_agmm=False) and no short-prefill path that
+    reads separate gate and up weights (args.prefill_small_m_max)."""
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+    return (
+        getattr(args, "mlp_decode_ds", False)
+        and use_gateup_agmm
+        and tpc.mlp_gateup_agmm_enabled(args.num_devices)
+        and getattr(args, "prefill_small_m_max", 0) <= 0
+    )
+
+
+def _build_gate_up_ds(gate_w, up_w, mesh, tp, cache_path, memory_config, dtype=ttnn.bfloat4_b):
+    """Packed DRAM-sharded decode weight: each device holds [gate_d | up_d] ([dim, 2 * hidden / tp], gate first), so
+    one matmul gives a row's gate and up columns side by side."""
+    import torch
+
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+    def pack(gate):
+        # Runs only on a tensor-cache miss. [K, tp, N] gate and up blocks -> [K, tp, 2N] -> [K, tp * 2N], sharded on -1.
+        gk = gate.to(torch.bfloat16).T.contiguous()
+        uk = up_w.to(torch.bfloat16).T.contiguous()
+        k = gk.shape[0]
+        return torch.cat([gk.reshape(k, tp, -1), uk.reshape(k, tp, -1)], dim=-1).reshape(k, -1).contiguous()
+
+    return ttnn.as_tensor(
+        gate_w,
+        preprocess=pack,
+        dtype=dtype,
+        device=mesh,
+        mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
         cache_file_name=cache_path,
     )
 
@@ -82,6 +126,31 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             if tpc.mlp_gateup_agmm_enabled(tp) and use_gateup_agmm
             else None
         )
+
+        if mlp_decode_ds(args, use_gateup_agmm):
+            # Decode reads the packed gate | up and the DRAM-sharded down; prefill reads w_gate_up (AGMM) and the same
+            # down. w1 and w3 are not loaded, so the DRAM use is that of the 1D decode weights.
+            return MLPWeights(
+                w1=None,
+                w3=None,
+                w2=tpc.shard_w(
+                    state_dict["down_proj.weight"],
+                    mesh_device,
+                    dim=0,
+                    memory_config=args.mlp_ds_w2_weight_memcfg,
+                    cache_path=cache("down_proj", ".ds"),
+                    dtype=ttnn.bfloat8_b,
+                ),
+                w_gate_up=wgu,
+                w_gu_ds=_build_gate_up_ds(
+                    state_dict["gate_proj.weight"],
+                    state_dict["up_proj.weight"],
+                    mesh_device,
+                    tp,
+                    cache("gate_up", ".ds_packed"),
+                    args.mlp_ds_gateup_weight_memcfg,
+                ),
+            )
 
         if dram_sharded:
             return MLPWeights(
@@ -182,6 +251,8 @@ class Qwen36MLP:
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and use_gateup_agmm
+        self._decode_ds = self.num_devices > 1 and mlp_decode_ds(args, use_gateup_agmm)
+        self.compute_kernel_config_ds = args.mlp_ds_compute_kernel_config if self._decode_ds else None
         self.weights = load_mlp_weights(
             mesh_device, state_dict, tensor_cache_path, args=args, use_gateup_agmm=use_gateup_agmm
         )
@@ -298,6 +369,36 @@ class Qwen36MLP:
                 config_override=tpc.agmm_config_override(args, x.shape[-2], "mlp_gateup"),
             )
             _silu_fused = True
+        elif self._decode_ds and x.shape[-2] <= ttnn.TILE_SIZE:
+            # One DRAM-sharded matmul for gate and up, read from the RES40 shards (the MTP verify's norm output is
+            # RES40 already; a reshard would hand out a second handle to its buffer). Its width-sharded output is
+            # interleaved, split into gate and up, and SiLU(gate) * up is written as the down matmul's input shards.
+            res = args.mlp_ds_res_memcfg
+            x_res = x if x.memory_config() == res else ttnn.to_memory_config(x, res)
+            gu = ttnn.linear(
+                x_res,
+                w.w_gu_ds,
+                compute_kernel_config=self.compute_kernel_config_ds,
+                program_config=args.mlp_ds_gateup_progcfg,
+                memory_config=args.mlp_ds_gateup_out_memcfg,
+                dtype=ttnn.bfloat16,
+            )
+            if x_res is not x:
+                ttnn.deallocate(x_res)
+            gu_il = ttnn.to_memory_config(gu, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(gu)
+            n_h = gu_il.shape[-1] // 2
+            w1_out, w3_out = gu_il[..., :n_h], gu_il[..., n_h:]
+            hidden = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                memory_config=args.mlp_ds_down_in_memcfg,
+            )
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
+            ttnn.deallocate(gu_il)
+            _fused_gu = True  # `hidden` is ready: skip the gate * up below
         elif getattr(self, "_dram_sharded", False) and x.shape[-2] <= ttnn.TILE_SIZE:
             # DRAM-WIDTH_SHARDED w1/w3 decode (M=1 tile). Prefill uses fused AGMM above.
             x_sh = ttnn.to_memory_config(x, args.act_shard_hidden)
@@ -404,7 +505,21 @@ class Qwen36MLP:
             if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned)
             else mc
         )
-        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
+        ds_down = self._decode_ds and hidden.shape[-2] <= ttnn.TILE_SIZE
+        if ds_down:
+            # Width-sharded partial: the RES40 all-reduce reshards it, tt_all_reduce takes it interleaved (below).
+            partial = ttnn.linear(
+                hidden,
+                w.w2,
+                compute_kernel_config=self.compute_kernel_config_ds,
+                program_config=args.mlp_ds_down_progcfg,
+                memory_config=args.mlp_ds_down_out_memcfg,
+                dtype=ttnn.bfloat16,
+            )
+        else:
+            partial = ttnn.linear(
+                hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc
+            )
         ttnn.deallocate(hidden)
 
         if decode_ar is not None:
@@ -413,6 +528,10 @@ class Qwen36MLP:
             return tpc.tp_reduce_scatter(
                 partial, self.device, self.tt_ccl, args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+        if ds_down:
+            interleaved = ttnn.to_memory_config(partial, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(partial)
+            partial = interleaved
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
         out = tt_all_reduce(
             partial,
