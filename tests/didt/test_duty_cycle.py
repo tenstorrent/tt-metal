@@ -7,6 +7,7 @@ import pytest
 import torch
 import random
 
+from tests.didt.didt_chip import pick_submesh
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
@@ -152,7 +153,11 @@ def test_specific_chip_duty_cycle(
 ):
     submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_duty_cycle(
-        submesh_devices[logical_chip_id], didt_workload_iterations, determinism_check_interval, non_mm_loops, wl_loops
+        pick_submesh(submesh_devices, logical_chip_id),
+        didt_workload_iterations,
+        determinism_check_interval,
+        non_mm_loops,
+        wl_loops,
     )
 
 

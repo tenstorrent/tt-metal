@@ -7,6 +7,7 @@ import pytest
 import torch
 import random
 
+from tests.didt.didt_chip import pick_submesh
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
@@ -182,7 +183,7 @@ def test_specific_chip_ff1_matmul(
 ):
     submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_ff1_matmul(
-        submesh_devices[logical_chip_id],
+        pick_submesh(submesh_devices, logical_chip_id),
         gelu,
         math_fidelity,
         didt_workload_iterations,
