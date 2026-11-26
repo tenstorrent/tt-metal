@@ -43,6 +43,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
     const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
 
+    const std::uint32_t l1_addr_16B           = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? L1_ADDRESS(buffer_B[0]) : L1_ADDRESS(buffer_A[0]);
+    const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
+    constexpr std::uint8_t bfd_unpack         = ckernel::trisc::BFD_ID_UNP0;
+
     {
         START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
@@ -58,40 +62,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        unsigned l1_addr_16B;
-        if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B)
-        {
-            l1_addr_16B = L1_ADDRESS(buffer_B[0]);
-        }
-        else
-        {
-            l1_addr_16B = L1_ADDRESS(buffer_A[0]);
-        }
-
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(TENSOR_SHAPE_FROM_PARAMS(params), l1_addr_16B, formats.unpack_A_src);
-        constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
-        if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
-        {
-            // If Dest is in 32bit mode and operation is Mov2D, we need both SrcA/B fmts to be configured since Mov2D will be implemented via ELWADD
-            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-                static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-        }
-        else
-        {
-            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-        }
-
+        // compute_kernel_hw_startup configures both unpackers; the 32-bit forms run transpose_init / copy_init once,
+        // the 16-bit form re-runs copy_init per DEST section.
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
         if constexpr (unpack_to_dest)
         {
             // The to-dest placers carry no synchronization: in L1_TO_L1 a Dest loan from math brackets them and
             // sets the section base, so every section starts at DEST tile 0.
             _llk_unpack_dest_init_();
+            ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
             _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
-        }
-        else
-        {
-            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-                bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, tiles_in_block);
         }
         PROFILER_SYNC();
     }
@@ -131,7 +112,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
                         }
-                        _llk_unpack_unary_operand_to_dest_block_(block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block);
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_unpack_unary_operand_to_dest_tile_(block * tiles_in_block + i /*l1_tile_idx*/, i /*dst_tile_idx*/);
+                            // transpose_tile posts each tile's dummy SrcB valid; L1_TO_L1 hands DEST over per section,
+                            // so its transposes cannot start before the section is done.
+                            if constexpr (MATH_TRANSPOSE_FACES && PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
+                            {
+                                _llk_unpack_set_srcB_dummy_valid_();
+                            }
+                        }
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
                             _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
@@ -144,14 +134,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else
                     {
-                        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
+                        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+                            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block + i /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                        }
                     }
 
-                    // After datacopy consumes SrcA and clears its dvalid, provide
-                    // dummy SrcA+SrcB dvalid so transpose dest can use srcA/B.
-                    for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                    if constexpr (!(unpack_to_dest && MATH_TRANSPOSE_FACES && PERF_RUN_TYPE != PerfRunType::L1_TO_L1))
                     {
-                        _llk_unpack_set_srcB_dummy_valid_();
+                        // After datacopy consumes SrcA and clears its dvalid, provide
+                        // dummy SrcA+SrcB dvalid so transpose dest can use srcA/B.
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_unpack_set_srcB_dummy_valid_();
+                        }
                     }
                 }
             }
