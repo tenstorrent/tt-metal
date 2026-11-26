@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "unpack.h"
+#include "utils/helpers.h"
 
 namespace hal::nop
 {
@@ -60,7 +61,17 @@ inline __attribute__((always_inline)) void vector()
 template <hal::unpack::Engine Engine>
 constexpr std::uint32_t unpacker_operation()
 {
-    return TT_OP_UNPACR_NOP(static_cast<std::uint32_t>(Engine), 0, 0, 0, 0, 0, 0, 0, ckernel::p_unpacr_nop::UNP_NOP);
+    static_assert(hal::unpack::detail::is_valid(Engine), "UNPACR_NOP engine must be Unpacker0 or Unpacker1");
+    return TT_OP_UNPACR_NOP(
+        hal::to_underlying(Engine),
+        0 /*Stream_Id*/,
+        0 /*Msg_Clr_Cnt*/,
+        0 /*Set_Dvalid*/,
+        0 /*Clr_to1_fmt_Ctrl*/,
+        0 /*Stall_Clr_Cntrl*/,
+        0 /*Bank_Clr_Ctrl*/,
+        0 /*Src_ClrVal_Ctrl*/,
+        hal::to_underlying(hal::unpack::detail::NopMode::Delay));
 }
 
 /** @brief Consume one unpacker instruction slot and cycle (UNPACR_NOP, delay flavor). */

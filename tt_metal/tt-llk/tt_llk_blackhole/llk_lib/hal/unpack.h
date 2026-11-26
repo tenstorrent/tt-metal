@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "utils/helpers.h"
 #include "utils/validate.h"
 
 namespace hal::unpack
@@ -312,37 +313,37 @@ inline constexpr __attribute__((always_inline)) void validate(const Engine engin
 
 constexpr std::uint32_t value(const Engine engine)
 {
-    return static_cast<std::uint32_t>(engine);
+    return hal::to_underlying(engine);
 }
 
 constexpr std::uint32_t value(const DatumOverride override)
 {
-    return static_cast<std::uint32_t>(override);
+    return hal::to_underlying(override);
 }
 
 constexpr std::uint32_t value(const SearchMode mode)
 {
-    return static_cast<std::uint32_t>(mode);
+    return hal::to_underlying(mode);
 }
 
 constexpr std::uint32_t value(const AccumulationAction action)
 {
-    return static_cast<std::uint32_t>(action);
+    return hal::to_underlying(action);
 }
 
 constexpr std::uint32_t value(const CacheScope scope)
 {
-    return static_cast<std::uint32_t>(scope);
+    return hal::to_underlying(scope);
 }
 
 constexpr std::uint32_t value(const ClearValue clear_value)
 {
-    return static_cast<std::uint32_t>(clear_value);
+    return hal::to_underlying(clear_value);
 }
 
 constexpr std::uint32_t value(const ClearWait wait)
 {
-    return static_cast<std::uint32_t>(wait);
+    return hal::to_underlying(wait);
 }
 
 constexpr std::uint32_t address_mode(const AddressCounterPostIncrements increments)
@@ -376,8 +377,12 @@ constexpr std::uint32_t set_data_valid(const SrcHandoff handoff)
     return handoff == SrcHandoff::FlipAndSetDataValid ? 1 : 0;
 }
 
-/** @brief UNPACR_NOP mode that clears a source bank, the only mode with documented Blackhole behavior. */
-inline constexpr std::uint32_t NOP_MODE_CLEAR_SRC = 1;
+/** @brief UNPACR_NOP Unpack_Pop modes; the ISA leaves Delay unsupported, with no known usage. */
+enum class NopMode : std::uint32_t
+{
+    ClearSrc = 1,
+    Delay    = 2
+};
 
 constexpr std::uint32_t transfer_operation(const Engine engine, const Transfer options)
 {
@@ -414,9 +419,9 @@ constexpr std::uint32_t clear_operation(
         set_data_valid(handoff),
         0 /*Clr_to1_fmt_Ctrl*/,
         value(wait),
-        static_cast<std::uint32_t>(banks),
+        hal::to_underlying(banks),
         value(clear_value),
-        NOP_MODE_CLEAR_SRC);
+        hal::to_underlying(NopMode::ClearSrc));
 }
 
 constexpr std::uint32_t clear_operation(const Engine engine, const Clear options)
@@ -426,12 +431,38 @@ constexpr std::uint32_t clear_operation(const Engine engine, const Clear options
 
 constexpr std::uint32_t context_counter_increment_operation(const Engine engine)
 {
-    return TT_OP_UNPACR(value(engine), 0, 1 /*CfgContextCntInc*/, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    return TT_OP_UNPACR(
+        value(engine),
+        0 /*AddrMode*/,
+        1 /*CfgContextCntInc*/,
+        0 /*CfgContextId*/,
+        0 /*AddrCntContextId*/,
+        0 /*OvrdThreadId*/,
+        0 /*SetDatValid*/,
+        0 /*srcb_bcast*/,
+        0 /*ZeroWrite2*/,
+        0 /*AutoIncContextID*/,
+        0 /*RowSearch*/,
+        0 /*SearchCacheFlush*/,
+        0 /*Last*/);
 }
 
 constexpr std::uint32_t row_start_cache_flush_operation(const Engine engine, const CacheScope scope)
 {
-    return TT_OP_UNPACR(value(engine), 0, 0, 0, 0, value(scope), 0, 0, 0, 0, 0, 1 /*SearchCacheFlush*/, 0);
+    return TT_OP_UNPACR(
+        value(engine),
+        0 /*AddrMode*/,
+        0 /*CfgContextCntInc*/,
+        0 /*CfgContextId*/,
+        0 /*AddrCntContextId*/,
+        value(scope) /*OvrdThreadId*/,
+        0 /*SetDatValid*/,
+        0 /*srcb_bcast*/,
+        0 /*ZeroWrite2*/,
+        0 /*AutoIncContextID*/,
+        0 /*RowSearch*/,
+        1 /*SearchCacheFlush*/,
+        0 /*Last*/);
 }
 
 // Known encodings issue as immediates; runtime-selected ones go through the instruction buffer.
@@ -504,7 +535,7 @@ public:
         /**
          * @brief Encode a source-bank clear.
          *
-         * @tparam Options: Clear value and source handoff.
+         * @tparam Options: Clear value, source handoff and wait.
          */
         template <Clear Options>
         [[nodiscard]] constexpr std::uint32_t clear() const;
@@ -512,7 +543,7 @@ public:
         /**
          * @brief Encode a runtime-selected source-bank clear.
          *
-         * @param options: Clear value and source handoff.
+         * @param options: Clear value, source handoff and wait.
          * @note Invalid options fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
          */
         [[nodiscard]] constexpr std::uint32_t clear(Clear options) const;
@@ -569,7 +600,7 @@ public:
     /**
      * @brief Issue a source-bank clear.
      *
-     * @tparam Options: Clear value and source handoff.
+     * @tparam Options: Clear value, source handoff and wait.
      */
     template <Clear Options>
     inline __attribute__((always_inline)) void clear() const
@@ -580,7 +611,7 @@ public:
     /**
      * @brief Issue a runtime-selected source-bank clear.
      *
-     * @param options: Clear value and source handoff.
+     * @param options: Clear value, source handoff and wait.
      * @note Enable LLK assertions to diagnose invalid options; disabled assertions add no runtime check.
      */
     inline __attribute__((always_inline)) void clear(const Clear options) const
@@ -688,11 +719,11 @@ namespace experimental
 /**
  * @brief Describe an UNPACR_NOP clear of both banks of the unpacker's source register.
  *
- * After the selected wait, every datum of both SrcA banks (unpacker 0) or both SrcB banks (unpacker 1)
- * is set to value. Bank ownership, the unpacker's current bank, and implied formats are unchanged, so
- * there is no source handoff.
+ * Once the Matrix Unit's current bank belongs to the unpackers, every datum of both SrcA banks (unpacker 0)
+ * or both SrcB banks (unpacker 1) is set to value. Bank ownership, the unpacker's current bank, and implied
+ * formats are unchanged, so there is no source handoff. The clear always waits for the Matrix Unit's bank:
+ * waiting for the unpacker's own bank could clear a bank the Matrix Unit is still reading.
  *
- * @note The wait covers one bank only; ensure the Matrix Unit does not hold the other bank.
  * @note The unpackers share the both-banks select. STALLWAIT until both unpackers are idle before the
  *       clear, and until the clearing unpacker is idle before the other unpacker's next instruction.
  *       While unpacker 1 clears both SrcB banks, concurrent unpacker 0 writes can be lost if unpacker 0's
@@ -701,8 +732,7 @@ namespace experimental
 class BothBanksClear
 {
 public:
-    ClearValue value = ClearValue::Zero;        ///< Value written to every datum of both banks.
-    ClearWait wait   = ClearWait::UnpackerBank; ///< Bank the clear waits for before writing.
+    ClearValue value = ClearValue::Zero; ///< Value written to every datum of both banks.
 };
 
 namespace detail
@@ -711,22 +741,21 @@ inline constexpr __attribute__((always_inline)) std::uint32_t clear_both_banks_o
 {
     unpack::detail::validate(engine);
     hal::detail::require(unpack::detail::is_valid(options.value), "UNPACR_NOP both-bank clear value must be Zero, NegativeInfinity, or One");
-    hal::detail::require(unpack::detail::is_valid(options.wait), "UNPACR_NOP both-bank clear wait must be MatrixBank or UnpackerBank");
     hal::detail::require(unpack::detail::supports(engine, options.value), "UNPACR_NOP cannot clear SrcB to negative infinity");
-    return unpack::detail::clear_operation(engine, options.value, SrcHandoff::Keep, options.wait, unpack::detail::ClearBanks::Both);
+    return unpack::detail::clear_operation(engine, options.value, SrcHandoff::Keep, ClearWait::MatrixBank, unpack::detail::ClearBanks::Both);
 }
 } // namespace detail
 
 /**
  * @brief Encode a both-bank source clear without issuing it.
  *
- * @tparam Options: Clear value and wait.
+ * @tparam Options: Clear value.
  * @param unpacker: Unpacker whose source register is cleared.
  */
 template <BothBanksClear Options>
 [[nodiscard]] constexpr std::uint32_t clear_both_banks_operation(const Unpacker unpacker)
 {
-    static_assert(unpack::detail::is_valid(Options.value) && unpack::detail::is_valid(Options.wait), "invalid UNPACR_NOP both-bank clear options");
+    static_assert(unpack::detail::is_valid(Options.value), "invalid UNPACR_NOP both-bank clear options");
     return detail::clear_both_banks_operation(unpacker.engine, Options);
 }
 
@@ -734,7 +763,7 @@ template <BothBanksClear Options>
  * @brief Encode a runtime-selected both-bank source clear without issuing it.
  *
  * @param unpacker: Unpacker whose source register is cleared.
- * @param options: Clear value and wait.
+ * @param options: Clear value.
  * @note Invalid options fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
  */
 [[nodiscard]] inline constexpr __attribute__((always_inline)) std::uint32_t clear_both_banks_operation(const Unpacker unpacker, const BothBanksClear options)
@@ -745,7 +774,7 @@ template <BothBanksClear Options>
 /**
  * @brief Clear both banks of the unpacker's source register.
  *
- * @tparam Options: Clear value and wait.
+ * @tparam Options: Clear value.
  * @param unpacker: Unpacker whose source register is cleared.
  */
 template <BothBanksClear Options>
@@ -758,7 +787,7 @@ inline __attribute__((always_inline)) void clear_both_banks(const Unpacker unpac
  * @brief Clear both banks of the unpacker's source register with runtime-selected options.
  *
  * @param unpacker: Unpacker whose source register is cleared.
- * @param options: Clear value and wait.
+ * @param options: Clear value.
  * @note Enable LLK assertions to diagnose invalid options; disabled assertions add no runtime check.
  */
 inline __attribute__((always_inline)) void clear_both_banks(const Unpacker unpacker, const BothBanksClear options)
