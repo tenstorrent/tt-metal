@@ -1,0 +1,105 @@
+---
+# PR Gate SFPU ULP check (llk_pr_gate_tests.yaml "llk_sfpu_ulp_pr_check blackhole|wormhole"):
+# tt_metal/tt-llk/tests/run_sfpu_ulp_pr_check.sh on one card per architecture. It diffs HEAD
+# against HEAD^1 (the queue base on a merge-queue entry), so the tree is a git clone, not a copy.
+# It exits at once unless this architecture's SFPU kernels, a budget table or the check change.
+# Gap: no PR labels reach the job, so a budget raise reads as unlabelled and fails here.
+# SFPI comes from the image (/opt/tenstorrent/sfpi, built from this tree's sfpi-version), so
+# setup_testing_env.sh downloads nothing unless HEAD^1 pins another version.
+jobs:
+  - id: llk-sfpu-ulp-p150b
+    name: LLK SFPU ULP check p150b
+    description: Run the PR Gate SFPU ULP check (blackhole) on one p150b (VM path, vfio-vm)
+    timeout: 45m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        accelerator: {type: p150b, count: 1}
+        resources:
+          requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: CHIP_ARCH, value: blackhole}
+    steps:
+      - id: setup
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME" && git config --global --add safe.directory '*'
+            - ls -l /dev/tenstorrent/
+            - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
+            - /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv
+            - >-
+              /tmp/uv/bin/uv pip install -q --python /tmp/venv/bin/python --index-strategy unsafe-best-match
+              -r tt_metal/tt-llk/tests/requirements.txt
+            # The guest /workspace is a 9p share, about 3x slower for kernel builds (torrentci#2327).
+            # A shared clone keeps HEAD^1 reachable for the check's base build.
+            - >-
+              t0=$(date +%s) && git clone -q --shared --no-checkout "$PWD" /tmp/ws
+              && git -C /tmp/ws checkout -q --detach "$(git rev-parse HEAD)"
+              && echo "clone seconds: $(( $(date +%s) - t0 ))"
+            - git -C /tmp/ws log --oneline -2
+            - >-
+              cd /tmp/ws/tt_metal/tt-llk/tests && eval "$(./sfpi-info.sh SHELL txz)"
+              && if [ -d /opt/tenstorrent/sfpi ]; then mkdir sfpi && cp -as /opt/tenstorrent/sfpi/. sfpi/
+              && rm -f sfpi/sfpi.version && echo "$sfpi_version" > sfpi/sfpi.version; fi
+            - . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh
+      - id: ulp-check
+        kind: shell
+        shell:
+          run:
+            - >-
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk && rc=0;
+              timeout 30m ./tests/run_sfpu_ulp_pr_check.sh --junitxml=pytest-report-blackhole-4.xml
+              >/tmp/ulp.log 2>&1 || rc=$?; tail -c 12000 /tmp/ulp.log; exit $rc
+  - id: llk-sfpu-ulp-n150
+    name: LLK SFPU ULP check n150
+    description: Run the PR Gate SFPU ULP check (wormhole) on one n150 (VM path, vfio-vm)
+    timeout: 45m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: CHIP_ARCH, value: wormhole}
+    steps:
+      - id: setup
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME" && git config --global --add safe.directory '*'
+            - ls -l /dev/tenstorrent/
+            - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
+            - /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv
+            - >-
+              /tmp/uv/bin/uv pip install -q --python /tmp/venv/bin/python --index-strategy unsafe-best-match
+              -r tt_metal/tt-llk/tests/requirements.txt
+            # The guest /workspace is a 9p share, about 3x slower for kernel builds (torrentci#2327).
+            # A shared clone keeps HEAD^1 reachable for the check's base build.
+            - >-
+              t0=$(date +%s) && git clone -q --shared --no-checkout "$PWD" /tmp/ws
+              && git -C /tmp/ws checkout -q --detach "$(git rev-parse HEAD)"
+              && echo "clone seconds: $(( $(date +%s) - t0 ))"
+            - git -C /tmp/ws log --oneline -2
+            - >-
+              cd /tmp/ws/tt_metal/tt-llk/tests && eval "$(./sfpi-info.sh SHELL txz)"
+              && if [ -d /opt/tenstorrent/sfpi ]; then mkdir sfpi && cp -as /opt/tenstorrent/sfpi/. sfpi/
+              && rm -f sfpi/sfpi.version && echo "$sfpi_version" > sfpi/sfpi.version; fi
+            - . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh
+      - id: ulp-check
+        kind: shell
+        shell:
+          run:
+            - >-
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk && rc=0;
+              timeout 30m ./tests/run_sfpu_ulp_pr_check.sh --junitxml=pytest-report-wormhole-3.xml
+              >/tmp/ulp.log 2>&1 || rc=$?; tail -c 12000 /tmp/ulp.log; exit $rc
