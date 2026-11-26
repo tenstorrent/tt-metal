@@ -4,6 +4,8 @@
 
 * test_drafter_argmax_matches_the_sharded_tail: fp32 shards, b in (1, 2, 4, 8) rows; draft_argmax (fused per-shard
   argmax, tt/spec_argmax_fused.py) against Qwen36MTP._argmax_sharded and torch.argmax.
+* test_the_sharded_tail_of_an_8_row_drafter_takes_fewer_rows: the same at b in (1, 2, 4) rows on a drafter built for 8
+  (a drafter row bucket).
 * test_verify_argmax_matches_the_gathered_argmax: bf16, R in (4, 8, 16, 32) rows (the verify's B*T); the fused ids
   of the vocab shards against ttnn.argmax over the untilized full row (the verify tail's argmax) and torch.argmax.
 * test_fused_argmax_in_a_trace: both captured in a trace, replayed on fresh inputs, == the replaced tails == torch;
@@ -103,6 +105,28 @@ def test_drafter_argmax_matches_the_sharded_tail(mesh_device):
             for t in (s, old, new):
                 ttnn.deallocate(t)
         logger.info(f"drafter b={b}: fused == _argmax_sharded == torch over 12 seeds")
+
+
+@torch.no_grad()
+@_parametrize
+def test_the_sharded_tail_of_an_8_row_drafter_takes_fewer_rows(mesh_device):
+    """A drafter of max_batch_size 8 runs a drafter row bucket of b in (1, 2, 4) rows: _argmax_sharded binds the
+    constants of b rows and gives the ids of draft_argmax and torch.argmax."""
+    from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+
+    m = _drafter(mesh_device, 8)
+    for b in (1, 2, 4):
+        for seed in range(12):
+            x = _rows(b, torch.float32, seed)
+            s = _shards(mesh_device, x, ttnn.float32)
+            old, new = m._argmax_sharded(s), draft_argmax(m, s)
+            got_old, got_new = _ids(old, b), _ids(new, b)
+            want = torch.argmax(x, dim=-1)
+            assert torch.equal(got_old, want), f"b={b} seed={seed}: {got_old.tolist()} != torch {want.tolist()}"
+            assert torch.equal(got_new, got_old), f"b={b} seed={seed}: fused {got_new.tolist()} != {got_old.tolist()}"
+            for t in (s, old, new):
+                ttnn.deallocate(t)
+        logger.info(f"8-row drafter, b={b}: _argmax_sharded == fused == torch over 12 seeds")
 
 
 def _gathered_argmax(mesh, x):

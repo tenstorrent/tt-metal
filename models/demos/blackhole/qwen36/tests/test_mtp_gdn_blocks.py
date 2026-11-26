@@ -29,6 +29,12 @@ into theirs (slot_remap). test_a_prefill_behind_an_unread_verify_equals_the_drai
 while a verify is unread (supports_prefill_over_pending_spec), into a free slot and into the slot of a request that
 finished, against the drained order.
 
+test_a_bucket_drafter_drafts_what_the_full_width_drafter_drafts runs the drafter row buckets (the drafter trace of
+users 0 .. b-1) against the 8-row drafter on the same commits, and a chained run with and without them; with the
+drafter's decode SDPA pinned to one core split for every row count, drafts and committed tokens are equal.
+test_drafter_bucket_cost logs the drafter replay time per bucket and the time per verify of a chained run of 1 and 3
+requests with and without them.
+
     MESH_DEVICE=P150x8 HF_MODEL=<Qwen3.8-27B dir> pytest models/demos/blackhole/qwen36/tests/test_mtp_gdn_blocks.py
 """
 
@@ -87,6 +93,7 @@ class Pair:
         bmax=BMAX,
         spec_sample=False,
         block_size=None,
+        drafter_sdpa_cores=None,
     ):
         stub_vllm_if_missing(monkeypatch)
         from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, Qwen36MTPContractForCausalLM
@@ -101,6 +108,9 @@ class Pair:
             mesh_device, max_batch_size=bmax, max_seq_len=CTX, n_layers=n_layers, hf_model=model_path(), enable_mtp=mtp
         )
         self.spec_model = build(True)
+        if drafter_sdpa_cores is not None:
+            # Before the warmup compiles the drafter's decode SDPA: the core split per head it gives every row count.
+            self.spec_model.mtp.attention.decode_sdpa_max_cores = drafter_sdpa_cores
         self.ref_model = build(False) if (n_layers, bmax) != (N_LAYERS, BMAX) else _build(mesh_device)
         self.spec = Qwen36MTPContractForCausalLM([self.spec_model], [self.spec_model.args], mesh_device)
         self.ref = Qwen36ForCausalLM([self.ref_model], [self.ref_model.args], mesh_device)
@@ -1221,3 +1231,163 @@ def test_a_prefill_behind_an_unread_verify_equals_the_drained_order(mesh_device,
                 assert torch.equal(rec_a, rec_b) and torch.equal(
                     hist_a, hist_b
                 ), f"request {q} layer {layer} device {d}"
+
+
+def _committed_block(pair, committed):
+    """The runner's committed block after a step: committed = {row: number of tokens the step committed}. Returns
+    (tokens [B, T], positions [B, T], counts [B]) as Pair.propose builds them."""
+    T = pair.K + 1
+    toks = torch.full((pair.bmax, T), -1, dtype=torch.int32)
+    pos = torch.full((pair.bmax, T), -1, dtype=torch.int32)
+    acc = torch.ones(pair.bmax, dtype=torch.int32)
+    for r, a in committed.items():
+        req = pair.rows[r]
+        c, n = req["c"], req["n"]
+        toks[r, :a] = torch.tensor(req["xs"][c - a + 1 : c + 1], dtype=torch.int32)
+        pos[r, :a] = torch.arange(n - a + 1, n + 1, dtype=torch.int32)
+        acc[r] = a
+    return toks, pos, acc
+
+
+def _stream(record, q):
+    """Request q's committed tokens over the verifies of an _async_run record, in order."""
+    return [t for step in record if q in step for t in step[q][1]]
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@_parametrize_pair
+def test_a_bucket_drafter_drafts_what_the_full_width_drafter_drafts(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """B = 8, K = 3, the drafter's decode SDPA pinned at 13 cores per head (every row count up to 8 then splits the KV
+    range alike). Live rows {0}, {0, 1}, {0, 1, 2} and {0 .. 3} (drafter buckets 1, 2, 4 and 4), 3 steps each: after
+    each verify the drafter runs twice from the same commit, on the bucket's trace and on the 8-row trace
+    (MTPSpecEngine.propose with and without the bucket traces), and the drafts of the live rows are equal, and equal
+    to the drafts of the runner's propose after it. Then a chained run of three requests (_async_run: one-enqueue
+    steps, every verify over the unread one) with the bucket traces equals the same run on the 8-row trace: the
+    committed tokens and counts of every verify, and no program compiles in either run. QWEN36_PAIR_LAYERS sets the
+    layer count."""
+    from models.demos.blackhole.qwen36.tt.spec_engine import MTPSpecEngine
+
+    K, B = 3, 8
+    T = K + 1
+    pair = Pair(
+        mesh_device, monkeypatch, K, "align", n_layers=PAIR_LAYERS, bmax=B, block_size=1024, drafter_sdpa_cores=13
+    )
+    eng = pair.spec._engine()
+    assert sorted(eng._dr_bucket_traces) == [1, 2, 4], "the drafter row bucket traces are captured"
+    buckets = dict(eng._dr_bucket_traces)
+    prompts = _prompts(4, 800, seed=53)
+    for r, n in zip(range(4), (650, 410, 530, 300)):
+        first = int(pair.prefill(r, prompts[r][:n].tolist()).argmax())
+        pair.reference(r, first, 13 * T)
+    compared = 0
+    for live, bucket in (((0,), 1), ((0, 1), 2), ((0, 1, 2), 4), ((0, 1, 2, 3), 4)):
+        for step in range(3):
+            a = 1 + (step + len(live)) % T
+            pair.verify({r: (K, a) for r in live})
+            toks, pos, acc = _committed_block(pair, {r: a for r in live})
+            q = eng._propose_request(K, toks, pos, acc, None, None)
+            runs = []
+            for traces in (buckets, {}):
+                eng._dr_bucket_traces = traces
+                before = dict(eng.drafter_bucket_steps)
+                drafts = MTPSpecEngine.propose(
+                    eng, q.ctok, q.cpos, q.acc, q.page_table, decline=q.decline, cap_blocks=q.cap_blocks,
+                    keep_kv=q.keep,
+                )  # fmt: skip
+                ran = {u: n - before.get(u, 0) for u, n in eng.drafter_bucket_steps.items() if n != before.get(u, 0)}
+                assert ran == {bucket if traces else B: 1}, f"live rows {live}: replayed {ran}"
+                runs.append(drafts)
+            eng._dr_bucket_traces = buckets
+            runner = pair.spec.propose_draft_tokens(K, toks, pos, acc).draft_token_ids
+            rows = list(live)
+            got, want = runs[0][rows], runs[1][rows]
+            where = f"live rows {live}, step {step}"
+            assert torch.equal(got, want), f"{where}: bucket drafts {got.tolist()}, 8-row drafts {want.tolist()}"
+            assert torch.equal(runner[rows].to(got.dtype), got), f"{where}: the runner's drafts {runner[rows].tolist()}"
+            compared += len(rows) * K
+            logger.info(f"{where}: drafter bucket {bucket} drafts {got.tolist()} == the 8-row drafter's")
+    assert compared == 3 * K * (1 + 2 + 3 + 4)
+    for r in list(pair.rows):
+        pair.release(r)
+
+    lens = {0: 300, 1: 421, 2: 517}
+    async_prompts = {q: p[: lens[q]].tolist() for q, p in zip(lens, _prompts(3, 600, seed=59))}
+    hint = lambda q, p0: K if p0 % 5 else 1
+    records = {}
+    programs = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        for name, traces in (("buckets", buckets), ("8-row", {})):
+            eng._dr_bucket_traces = traces
+            records[name], _, _, _ = _async_run(pair, async_prompts, True, hint, 24)
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+        eng._dr_bucket_traces = buckets
+    assert mesh_device.num_program_cache_entries() == programs, "a program compiled after the capture"
+    for step, (a, b) in enumerate(zip(records["buckets"], records["8-row"])):
+        assert a == b, f"verify {step}: with drafter buckets {a}, 8-row drafter {b}"
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@_parametrize_pair
+def test_drafter_bucket_cost(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """B = 8, K = 3, the served drafter (decode SDPA at 64 cores per head). Not a pass / fail gate on time.
+
+    * Drafter replay time per row bucket: the replay of each bucket's trace and of the 8-row trace, back to back.
+    * Step time: the same chained run (_async_run, every verify over the unread one, as the plugin runs under
+      asynchronous scheduling) of 1 and of 3 requests, with the drafter row buckets and on the 8-row drafter: wall time
+      per verify, and the requests' committed tokens of both runs (their streams are compared position by position;
+      a different draft can only change which drafts the verify accepts, so equal streams are expected but not
+      asserted). Both runs compile no program. QWEN36_PAIR_LAYERS sets the layer count."""
+    K, steps = 3, 48
+    pair = Pair(mesh_device, monkeypatch, K, "align", n_layers=PAIR_LAYERS, bmax=8, block_size=1024)
+    eng = pair.spec._engine()
+    buckets = dict(eng._dr_bucket_traces)
+    assert sorted(buckets) == [1, 2, 4], "the drafter row bucket traces are captured"
+    hint = lambda q, p0: K
+    pool = _prompts(3, 900, seed=61)
+    lens = {0: 700, 1: 520, 2: 610}
+    programs = mesh_device.num_program_cache_entries()
+    summary = []
+    for n in (1, 3):
+        prompts = {q: pool[q][: lens[q]].tolist() for q in range(n)}
+        times, records = {}, {}
+        mesh_device.set_program_cache_misses_allowed(False)
+        try:
+            for name, traces in (("8-row", {}), ("buckets", buckets), ("8-row again", {}), ("buckets again", buckets)):
+                eng._dr_bucket_traces = traces
+                t0 = time.perf_counter()
+                records[name], _, _, _ = _async_run(pair, prompts, True, hint, steps)
+                times[name] = (time.perf_counter() - t0) / steps * 1e3
+        finally:
+            mesh_device.set_program_cache_misses_allowed(True)
+            eng._dr_bucket_traces = buckets
+        for q in prompts:
+            a, b = _stream(records["buckets"], q), _stream(records["8-row"], q)
+            m = min(len(a), len(b))
+            diverge = next((i for i in range(m) if a[i] != b[i]), None)
+            accepted = {k: len(_stream(records[k], q)) / steps for k in ("buckets", "8-row")}
+            summary.append(
+                f"{n} requests, request {q}: committed tokens per verify {accepted['buckets']:.2f} (buckets) vs "
+                f"{accepted['8-row']:.2f} (8-row); streams "
+                + (f"equal over {m} tokens" if diverge is None else f"first differ at token {diverge} of {m}")
+            )
+        best = {k: min(times[k], times[f"{k} again"]) for k in ("8-row", "buckets")}
+        summary.append(
+            f"{n} requests: {best['buckets']:.2f} ms per verify with drafter buckets, {best['8-row']:.2f} ms on the "
+            f"8-row drafter (whole chained run incl. prefill / {steps}; all runs {[round(v, 2) for v in times.values()]})"
+        )
+    assert mesh_device.num_program_cache_entries() == programs, "a program compiled after the capture"
+    for b in (None, 4, 2, 1):
+        trace_id = eng._dr_trace if b is None else buckets[b]
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(50):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        summary.append(f"drafter replay, {b or 8} rows: {(time.perf_counter() - t0) / 50 * 1e3:.3f} ms")
+    for line in summary:
+        logger.info(f"DRAFTER BUCKET COST: {line}")

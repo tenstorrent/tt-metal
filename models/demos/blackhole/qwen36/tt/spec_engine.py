@@ -372,6 +372,22 @@ def verify_bucket(buckets, active, B):
     return min((int(b) for b in buckets if int(b) > top), default=int(B))
 
 
+# Drafter row buckets below the decode width: a drafter replay whose rows all sit below b replays the drafter trace of
+# rows 0 .. b-1 (MTPSpecEngine._drafter_body with ``b``).
+DRAFTER_BUCKETS = (1, 2, 4)
+
+
+def drafter_buckets(B):
+    """The drafter row buckets of an engine of B users: DRAFTER_BUCKETS below B."""
+    return tuple(b for b in DRAFTER_BUCKETS if b < int(B))
+
+
+def drafter_rows(declined, keep):
+    """The rows a drafter replay serves: a row that drafts (not declined) and a declined row that keeps its anchor
+    slot's drafter KV (keep). Every other row's drafter writes go to the scratch block and its ids are discarded."""
+    return [(not bool(d)) or bool(k) for d, k in zip(declined, keep)]
+
+
 def spec_table_width(max_seq_len, draft_len, block_size=64):
     """Page-table width (blocks) the engine needs: max_seq_len + K + 1 lookahead (no padding; fits vLLM's pool)."""
     return -(-(int(max_seq_len) + int(draft_len) + 1) // int(block_size))
@@ -554,6 +570,9 @@ class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
 
     sample_on_device = False  # the verify sampler is prepared (MTPBlockEngine, a device-sampling launch)
+    # Drafter row buckets (drafter_bucket_sizes); defaults for engines built without __init__.
+    _dr_bucket_traces = None  # bucket b -> trace id of the drafter over rows 0 .. b-1
+    _dr_buckets = ()  # the buckets prepare_decode warmed, ascending
 
     def __init__(self, model, batch_size, draft_len):
         assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
@@ -628,6 +647,11 @@ class MTPSpecEngine:
         self._mtp_pt_staged = None  # host table _mtp_pt holds, None when unknown
         self._dr_trace = None  # trace id: anchor gather + batched reseed + K draft steps
         self._dr_outs = []  # K persistent [1,1,B] uint32 ids outputs of that trace
+        self._dr_bucket_traces = {}  # drafter row bucket b -> trace id of the drafter over rows 0 .. b-1
+        self._dr_buckets = ()
+        self._hp_bufs = {}  # bucket b -> persistent anchor hidden [1,1,b,dim/tp] of its drafter
+        self._dr_bucket_zeros = {}  # bucket b -> persistent [1,1,B-b,1] uint32 zeros: the hand-off's rows past b
+        self.drafter_bucket_steps = {}  # rows of the drafter trace a replay ran -> replays
         self._last_pt = None  # fitted host page table of the most recent verify
         self._fresh = {}  # slot -> prompt length, prefilled and awaiting the seed verify
         self._active = set()  # slots holding a live request
@@ -836,8 +860,9 @@ class MTPSpecEngine:
             feed = self.model.spec_feed_rows(z)
             if feed is not z:
                 ttnn.deallocate(z)
-            for o in self._drafter_body(feed):  # compiles every program of the trace body (scratch-only inputs)
-                ttnn.deallocate(o)
+            outs = self._drafter_body(feed)  # compiles every program of the trace body (scratch-only inputs)
+            self._dr_buckets = self._warm_drafter_buckets(feed, outs)
+            free_tensors(*outs)
             ttnn.synchronize_device(self.mesh)
             ttnn.deallocate(feed)
 
@@ -899,6 +924,7 @@ class MTPSpecEngine:
                     ttnn.end_trace_capture(self.mesh, self._dr_trace, cq_id=0)
                     ttnn.synchronize_device(self.mesh)
                     logger.info(f"[spec_engine] drafter trace captured (anchor + reseed + {self.K} draft steps)")
+                    self._capture_drafter_buckets(feed)
                 else:
                     logger.info("[spec_engine] drafter runs eagerly (QWEN36_SPEC_EAGER_DRAFTER=1)")
                 self._capture_step()
@@ -926,9 +952,12 @@ class MTPSpecEngine:
         if self._dr_trace is not None:
             ttnn.release_trace(self.mesh, self._dr_trace)
             self._dr_trace = None
-        for t in (*self._dr_outs, *self._dr_bufs):
+        for trace_id in (self._dr_bucket_traces or {}).values():
+            ttnn.release_trace(self.mesh, trace_id)
+        for t in (*self._dr_outs, *self._dr_bufs, *self._hp_bufs.values(), *self._dr_bucket_zeros.values()):
             ttnn.deallocate(t)
         self._dr_outs, self._dr_bufs = [], []
+        self._dr_bucket_traces, self._dr_buckets, self._hp_bufs, self._dr_bucket_zeros = {}, (), {}, {}
         self._dr_pack = self._dr_rs_pt = self._dr_iota = None
         self._dr_rs_staged = self._mtp_pt_staged = None
         bufs = [
@@ -1616,88 +1645,177 @@ class MTPSpecEngine:
         self._dr_iota = al(iota, ttnn.float32, ttnn.TILE_LAYOUT)
         self._dr_bufs = [self._dr_pack, self._dr_rs_pt, self._dr_iota]
 
-    def _drafter_inputs(self):
+    def _drafter_inputs(self, b=None):
         """The drafter trace's per-step inputs, derived inside the trace from _dr_pack (spec_step layout): tokens as
         [1, n] uint32 slices, KV positions as [n] int32, RoPE cos and sin looked up by table row, and the anchor one-hot
         [1,1,B,B*T] bf16, 1.0 at (u, u*T + m[u]). Returns (inputs, owned): every tensor in ``owned`` is freed after the
         body.
 
         The one-hot compares column number + 1 (_dr_iota, zero in the tile padding) with anchor + 1 >= 1, so its padding
-        columns are 0 and the anchor matmul stays exact when B*T < 32 and the feed's padding rows hold any value."""
-        B, K, R, pk, model = self.B, self.K, self.B * self.T, self._dr_pack, self.model
+        columns are 0 and the anchor matmul stays exact when B*T < 32 and the feed's padding rows hold any value.
+
+        ``b`` (a drafter row bucket): the inputs of users 0 .. b-1 only, the first b (reseed: b*T) columns of each pack
+        row; the one-hot is then [1,1,b,B*T], still over every feed row (the anchor of a user below b is below b*T)."""
+        n = self.B if b is None else int(b)
+        K, R, pk, model = self.K, n * self.T, self._dr_pack, self.model
         owned = []
 
-        def seg(row, n):
-            t = ttnn.slice(pk, (row, 0), (row + 1, n))
+        def seg(row, width):
+            t = ttnn.slice(pk, (row, 0), (row + 1, width))
             owned.append(t)
             return t
 
-        def positions(row, n):
-            t = ttnn.reshape(ttnn.typecast(seg(row, n), ttnn.int32), (n,))
+        def positions(row, width):
+            t = ttnn.reshape(ttnn.typecast(seg(row, width), ttnn.int32), (width,))
             owned.append(t)
             return t
 
-        def rope(row, n):
-            cos, sin = model.rope_lookup(seg(row, n), n)
+        def rope(row, width):
+            cos, sin = model.rope_lookup(seg(row, width), width)
             owned.extend((cos, sin))
             return cos, sin
 
-        tiled = ttnn.to_layout(seg(draft_anchor(K), B), ttnn.TILE_LAYOUT)
-        anchor = ttnn.typecast(tiled, ttnn.float32)  # [1, B]
+        tiled = ttnn.to_layout(seg(draft_anchor(K), n), ttnn.TILE_LAYOUT)
+        anchor = ttnn.typecast(tiled, ttnn.float32)  # [1, n]
         anchor_t = ttnn.transpose(anchor, 0, 1)
-        column = ttnn.add(anchor_t, 1.0)  # [B, 1]
-        onehot = ttnn.eq(self._dr_iota, column, dtype=ttnn.bfloat16)  # [B, B*T]
-        anchor_sel = ttnn.reshape(onehot, (1, 1, B, R))
+        column = ttnn.add(anchor_t, 1.0)  # [n, 1]
+        onehot = ttnn.eq(self._dr_iota, column, dtype=ttnn.bfloat16)  # [n, B*T]
+        anchor_sel = ttnn.reshape(onehot, (1, 1, n, self.B * self.T))
         owned.extend((tiled, anchor, anchor_t, column, onehot, anchor_sel))
         rs_cos, rs_sin = rope(draft_reseed_rope(K), R)
-        steps = [rope(draft_step_rope(K, k), B) for k in range(K)]
+        steps = [rope(draft_step_rope(K, k), n) for k in range(K)]
         inputs = dict(
             anchor_sel=anchor_sel,
             rs_tok=seg(draft_reseed_tokens(K), R),
             rs_pos=positions(draft_reseed_positions(K), R),
             rs_cos=rs_cos,
             rs_sin=rs_sin,
-            tok0=seg(DRAFT_PENDING, B),
-            pos=[positions(draft_step_row(k), B) for k in range(K)],
+            tok0=seg(DRAFT_PENDING, n),
+            pos=[positions(draft_step_row(k), n) for k in range(K)],
             cos=[c for c, _ in steps],
             sin=[s for _, s in steps],
         )
         return inputs, owned
 
-    def _drafter_body(self, feed):
+    def _drafter_body(self, feed, b=None, dst=None):
         """Anchor gather from ``feed`` [1,1,B*T,dim/tp], batched reseed, K chained draft steps, over the inputs
         _drafter_inputs derives from the persistent pack (device-input twin of _set_anchor + _reseed_mtp_batched +
-        _draft). Returns the K ids tensors [1,1,B] uint32 (step k's drafts)."""
-        B, mtp = self.B, self.mtp
-        x, owned = self._drafter_inputs()
+        _draft). Returns the K ids tensors [1,1,B] uint32 (step k's drafts).
+
+        ``b`` (a drafter row bucket below B): the same body over users 0 .. b-1 alone, on the first rows of the B-user
+        pack, feed rows and tables. It hands its K ids [1,1,b,1] over to ``dst`` (the K [1,1,B,1] outputs of the B-user
+        body) with zero ids in the rows past b, in place, so the step trace's reads and the chain program find the
+        outputs of a B-user drafter whose rows from b on are declined. Returns ``dst``."""
+        mtp = self.mtp
+        n = self.B if b is None else int(b)
+        bucket = n < self.B
+        if bucket and dst is None:
+            raise ValueError(f"the drafter of row bucket {n} hands its ids over to the B-user outputs: dst is None")
+        x, owned = self._drafter_inputs(b)
+        hp, rs_feed, rs_pt, mtp_pt = self._hp_buf, feed, self._dr_rs_pt, self._mtp_pt
+        if bucket:
+            # A full-span slice would alias its input, so only a bucket below B slices.
+            rows = n * self.T
+            hp = self._hp_bufs[n]
+            rs_feed = ttnn.slice(feed, (0, 0, 0, 0), (1, 1, rows, int(feed.shape[-1])))
+            rs_pt = ttnn.slice(self._dr_rs_pt, (0, 0), (rows, self.nb))
+            mtp_pt = ttnn.slice(self._mtp_pt, (0, 0), (n, self.nb))
+            owned += [rs_feed, rs_pt, mtp_pt]
         Hp = ttnn.matmul(x["anchor_sel"], feed, compute_kernel_config=self._anchor_cc)
-        ttnn.copy(Hp, self._hp_buf)
+        ttnn.copy(Hp, hp)
         ttnn.deallocate(Hp)
         _, hn = mtp.forward_decode(
-            feed,
+            rs_feed,
             x["rs_tok"],
             x["rs_pos"],
             x["rs_cos"],
             x["rs_sin"],
-            self._dr_rs_pt,
+            rs_pt,
             need_logits=False,
             alias_kv_write=True,
-            spec_n_users=B,
+            spec_n_users=n,
         )
         free_tensors(hn)
-        h, tok, outs = self._hp_buf, x["tok0"], []
+        h, tok, outs = hp, x["tok0"], []
         for k in range(self.K):
-            logits, hn = mtp.forward_decode(h, tok, x["pos"][k], x["cos"][k], x["sin"][k], self._mtp_pt)
+            logits, hn = mtp.forward_decode(h, tok, x["pos"][k], x["cos"][k], x["sin"][k], mtp_pt)
             idx = draft_argmax(mtp, logits)
             ttnn.deallocate(logits)
-            tok = ttnn.reshape(idx, (B, 1))
+            tok = ttnn.reshape(idx, (n, 1))
             outs.append(idx)
-            if h is not self._hp_buf:
+            if h is not hp:
                 ttnn.deallocate(h)
             h = hn
         ttnn.deallocate(h)
         free_tensors(*owned)
-        return outs
+        if not bucket:
+            return outs
+        for idx, out in zip(outs, dst):
+            # ttnn.copy writes into ``out``, which keeps its address: every trace that reads it stays valid.
+            full = ttnn.concat([idx, self._dr_bucket_zeros[n]], dim=2)
+            ttnn.copy(full, out)
+            free_tensors(idx, full)
+        return dst
+
+    def drafter_bucket_sizes(self):
+        """The drafter row buckets this engine warms and captures; none for the base engine."""
+        return ()
+
+    def _warm_drafter_buckets(self, feed, outs):
+        """Allocate the anchor hidden and zero id rows of each drafter row bucket (drafter_bucket_sizes) and run its body
+        once on the warm feed rows ``feed``, handing its ids over into the warm B-user outputs ``outs``, so its capture
+        compiles nothing. Returns the buckets, ascending."""
+        B = self.B
+        buckets = tuple(sorted({int(b) for b in self.drafter_bucket_sizes()}))
+        bad = [b for b in buckets if not 1 <= b < B]
+        if bad:
+            raise ValueError(f"drafter row buckets {bad} are not below the decode width {B}")
+        for b in buckets:
+            self._hp_bufs[b] = ttnn.zeros(
+                [1, 1, b, self._dim_frac],
+                device=self.mesh,
+                dtype=self._feed_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._dr_bucket_zeros[b] = self._alloc_host_replicated(
+                torch.zeros(1, 1, B - b, 1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+            )
+        for b in buckets:
+            self._drafter_body(feed, b, outs)
+        return buckets
+
+    def _capture_drafter_buckets(self, feed):
+        """One trace per warmed drafter row bucket, right after the B-user drafter's, writing into its outputs
+        _dr_outs; raises when a capture moved one of them (a trace that reads it would read a stale buffer)."""
+        if not self._dr_buckets:
+            return
+        addrs = [t.buffer_address() for t in self._dr_outs]
+        self._dr_bucket_traces = {}
+        for b in self._dr_buckets:
+            trace_id = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self._drafter_body(feed, b, self._dr_outs)
+            ttnn.end_trace_capture(self.mesh, trace_id, cq_id=0)
+            ttnn.synchronize_device(self.mesh)
+            self._dr_bucket_traces[b] = trace_id
+        moved = [k for k, (t, a) in enumerate(zip(self._dr_outs, addrs)) if t.buffer_address() != a]
+        if moved:
+            raise RuntimeError(f"the drafter bucket captures moved the drafter outputs {moved}")
+        logger.info(f"[spec_engine] drafter row bucket traces captured for {list(self._dr_buckets)} users")
+
+    def _drafter_bucket(self, declined, keep):
+        """The drafter row bucket a replay for the propose decisions ``declined`` and ``keep`` [B] takes: the smallest
+        captured bucket that holds every row drafter_rows serves, or None for the B-user trace. Counts the replay in
+        drafter_bucket_steps."""
+        traces = self._dr_bucket_traces or {}
+        users = verify_bucket(traces, drafter_rows(declined, keep), self.B) if traces else self.B
+        steps = self.__dict__.setdefault("drafter_bucket_steps", {})
+        steps[users] = steps.get(users, 0) + 1
+        return None if users == self.B else users
+
+    def _dr_trace_for(self, bucket):
+        """The drafter trace of row bucket ``bucket`` (None: the B-user trace)."""
+        return self._dr_trace if bucket is None else self._dr_bucket_traces[bucket]
 
     def _draft_table(self, pt, decline):
         """The draft steps' MTP table: ``pt`` with every declined row on the scratch block."""
@@ -1722,7 +1840,8 @@ class MTPSpecEngine:
         self._stage(pack, self._dr_pack, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         real = reseed_real_rows(m, decline, keep, T)
         self._stage_table(reseed_table(pt, real, T, self._scratch_block), "_dr_rs_pt", "_dr_rs_staged")
-        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        trace_id = self._dr_trace_for(self._drafter_bucket(decline, keep))
+        ttnn.execute_trace(self.mesh, trace_id, cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
         return self._drafts_to_host(self._read_ids(self._dr_outs))
@@ -1937,7 +2056,14 @@ class MTPBlockEngine(MTPSpecEngine):
     into the B-user draws buffer with the seeds staged or chained as for the B-user sampler. vllm-tt-plugin's
     InputBatch (without data-parallel lanes) keeps a decode step's n requests in rows 0 .. n-1, so they take the
     smallest bucket of at least n users. A logits verify reads logits, which only the B-user trace gathers: it replays
-    the B-user trace."""
+    the B-user trace.
+
+    Drafter row buckets: a drafter replay whose rows that draft or keep their drafter KV (drafter_rows) all sit below a
+    bucket b of drafter_buckets(B) replays the drafter trace of users 0 .. b-1 (MTPSpecEngine._drafter_body with b)
+    instead of the B-user one. It reads the first rows of the B-user pack, feed rows and tables and hands its drafts to
+    the B-user outputs with zero ids in the rows past b. Those rows are declined in that step: the host zeroes a
+    declined row's drafts, and the chain program takes no draft of a row its predecessor declined. So the bucket follows
+    each step's own propose decisions and changes from one step to the next without a hold."""
 
     def __init__(self, model, batch_size, draft_len):
         super().__init__(model, batch_size, draft_len)
@@ -1992,6 +2118,9 @@ class MTPBlockEngine(MTPSpecEngine):
         """The chunk trace belongs to the model's prefill, which records it."""
         assert self.prefill_prepared, "record_prefill before prepare_prefill"
         self.prefill_recorded = True
+
+    def drafter_bucket_sizes(self):
+        return drafter_buckets(self.B)
 
     def _prepare_verify(self):
         self.model.prepare_verify_trace(
@@ -2091,7 +2220,8 @@ class MTPBlockEngine(MTPSpecEngine):
             f"{self.one_enqueue_host_proposes} of them drafted again on the host; chained verifies: "
             f"{self.chained_steps} built on the device, {self.materialized_steps} from a read predecessor; "
             f"verifies a prefill ran behind: {self.prefills_over_pending}; "
-            f"verifies per replayed user count: {dict(sorted(self.verify_bucket_steps.items()))}"
+            f"verifies per replayed user count: {dict(sorted(self.verify_bucket_steps.items()))}; "
+            f"drafter replays per replayed user count: {dict(sorted(getattr(self, 'drafter_bucket_steps', {}).items()))}"
         )
 
     def shutdown(self):
@@ -2373,8 +2503,9 @@ class MTPBlockEngine(MTPSpecEngine):
     def _enqueue_step_and_drafter(self, step):
         """Replay the step and drafter traces after a one-enqueue verify and enqueue its reads."""
         model = self.model
+        drafter = self._dr_trace_for(self._drafter_bucket(step.plan.declined, step.plan.keep))
         ttnn.execute_trace(self.mesh, self._acc_trace, cq_id=0, blocking=False)
-        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, drafter, cq_id=0, blocking=False)
         self._dr_rs_staged = None  # the step trace wrote the reseed table
         draws = [] if step.sample_plan is None else [model._vfy_sampler.draws]
         step.reads = self._read_device0_async([model._vfy_ids_out, *draws, self._dr_pack, *self._dr_outs])
