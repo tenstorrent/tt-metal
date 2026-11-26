@@ -85,7 +85,12 @@ def _pad_rows(x: ttnn.Tensor, multiple: int) -> ttnn.Tensor:
 
 
 class WindowSoftmax:
-    """Window softmax for one layout. Inputs `[1, H, N, d]` bf16, QK-normed and RoPE'd."""
+    """Window softmax for one layout. Inputs `[1, H, N, d]` bf16, QK-normed and RoPE'd.
+
+    The padding masks depend only on the group shapes, so one set serves every instance (every layer) on a device:
+    at a 768p, 5 s sequence they are ~1 GB, which per layer would not fit."""
+
+    _shared_masks: dict[tuple[int, int, int], ttnn.Tensor] = {}
 
     def __init__(
         self,
@@ -108,13 +113,13 @@ class WindowSoftmax:
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
         )
-        self._masks: dict[tuple[int, int], ttnn.Tensor] = {}
+        self._masks = self._shared_masks
 
     def _mask(self, q_rows: int, k_rows: int) -> ttnn.Tensor | None:
         """Additive mask hiding the padded keys, or None when nothing is padded."""
         if k_rows % _PAD == 0:
             return None
-        key = (q_rows, k_rows)
+        key = (id(self.device), q_rows, k_rows)
         if key not in self._masks:
             q_pad, k_pad = q_rows + (-q_rows % _PAD), k_rows + (-k_rows % _PAD)
             mask = torch.zeros(1, 1, q_pad, k_pad)
