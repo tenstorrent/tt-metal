@@ -132,6 +132,20 @@ FLAT_DN_NOC_SWAP=1 (down weight reads on NOC1, the h chain / y on NOC0; each RIS
 stalls everything (gate/up h wait 818 us). With the chains ordered by NOC0 hops: 821.7 / 1084.3 / 1469.3, still worse
 than 796.6 / 1055.9 / 1364.2. Not kept.
 
+## NoC placement experiments (after the ablation)
+
+GLM 4x4 uniform, us (baseline 796.6 / 1055.9 / 1364.2 at M 80 / 320 / 480):
+- FLAT_ISO=508 (only the two weight streams): 721.2 / 939.4 / 1326.8 - the pair alone is +46 over the floor at M 320;
+  the rest (~115) is the x path beside the weights (x alone ~+20).
+- FLAT_GU_RIF=2: M 320 1112.0 / M 480 1375.5 (more weight reads in flight slow x). FLAT_W_START=4 / 12: noise.
+- FLAT_GU_W_NOC1=1 (gate/up weights on the receiver BRISC, NOC1): 1200.6 / 1576.5 / 1899.5 - the helpers' x DRAM reads
+  (NOC1) collapse.
+- FLAT_XH_SWAP=1 (helper x DRAM reads on NOC0, landing writes on NOC1): 804.0 / 1109.0 / 1457.6; + FLAT_GU_W_NOC1=1:
+  805.7 / 1111.6 / 1457.9. The helpers' x reads on NOC0 wait 507 us (165 on NOC1): x supply-limited (primaries wait
+  336-370 us for data), whichever NOC the gate/up weights use. Not kept.
+The x source (helper DRAM reads) and the x snake each lose to whatever weight stream shares their NOC; no placement
+of the existing streams separates them.
+
 ## DRAM timeline (zz_hist.hpp: bytes landed a reader in 12 us bins, FLAT_ZZ_PROBES=1)
 
 Per bin: gate/up weights by bank, down weights, x reads (helpers), y writes (bfp8 tiles, down_core_writer). Bytes a

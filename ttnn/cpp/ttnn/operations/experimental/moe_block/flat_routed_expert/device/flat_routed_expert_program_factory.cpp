@@ -547,8 +547,15 @@ FlatProgramHandles add_flat_routed_expert_program(
              {"token_index_arg", idx_arg},
              {"x_pages_per_row", p.hidden / t.x.logical_shape()[-1]}});
         // (the helpers read / tilize all of x; the primaries only multicast it)
+        // (MEASUREMENT ONLY, FLAT_XH_SWAP=1: the helper relays' x DRAM reads (BRISC) on NOC0 and their landing writes
+        // (NCRISC) on NOC1 - each RISC still one NOC)
+        const bool xh_swap = std::getenv("FLAT_XH_SWAP") != nullptr && std::getenv("FLAT_XH_SWAP")[0] == '1';
         const auto k_x_reader =
-            dm("x_injector_reader.cpp", x_helper_cores, DataMovementProcessor::RISCV_0, NOC::NOC_1, x_reader_options);
+            dm("x_injector_reader.cpp",
+               x_helper_cores,
+               DataMovementProcessor::RISCV_0,
+               xh_swap ? NOC::NOC_0 : NOC::NOC_1,
+               x_reader_options);
         cp("x_injector_tilize_compute.cpp",
            x_helper_cores,
            with_added(options, {{"x_row_major_cb", X_ROW_MAJOR_CB}, {"x_super_block_cb", X_SUPER_BLOCK_CB}}));
@@ -575,7 +582,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                 dm("x_injector_helper_writer.cpp",
                    {p.relay_cores[NR + k]},
                    DataMovementProcessor::RISCV_1,
-                   NOC::NOC_0,
+                   xh_swap ? NOC::NOC_1 : NOC::NOC_0,
                    with_added(
                        options,
                        {{"x_super_block_cb", X_SUPER_BLOCK_CB},
