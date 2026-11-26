@@ -90,10 +90,10 @@ inline void init() {
 // Two rows per step with the statements interleaved, so each dependent SFPMAD's result latency is
 // covered by the other row's instruction (measured: one SiLU pass over conv1d-004's 96 tiles per
 // core, 58.8 us vs 66.4 us one row per step vs 78.8 us for the library body); x is re-read from DEST
-// for the final product (fewer live LRegs).
+// for the final product, and each polynomial coefficient is loaded once per pair and shared by both
+// rows (peak 8 live LRegs: za, zb, ma, mb, ga, gb and two coefficients).
 template <int ITERATIONS>
 inline void silu_bf16_rows() {
-    sfpi::vFloat g1 = G1;
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat ya = sfpi::dst_reg[0] * sfpi::vConstFloatPrgm0 + sfpi::vConstFloatPrgm1;
@@ -106,12 +106,22 @@ inline void silu_bf16_rows() {
         sfpi::vFloat zb = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(yb) << Z_SHIFT);
         sfpi::vFloat ma = sfpi::setexp(za, 127);
         sfpi::vFloat mb = sfpi::setexp(zb, 127);
-        sfpi::vFloat ga = ma * G4 + G3;
-        sfpi::vFloat gb = mb * G4 + G3;
-        ga = ga * ma + G2;
-        gb = gb * mb + G2;
-        ga = ga * ma + g1;
-        gb = gb * mb + g1;
+        sfpi::vFloat ga, gb;
+        {
+            sfpi::vFloat g4 = G4, g3 = G3;
+            ga = ma * g4 + g3;
+            gb = mb * g4 + g3;
+        }
+        {
+            sfpi::vFloat g2 = G2;
+            ga = ga * ma + g2;
+            gb = gb * mb + g2;
+        }
+        {
+            sfpi::vFloat g1 = G1;
+            ga = ga * ma + g1;
+            gb = gb * mb + g1;
+        }
         ga = ga * ma + sfpi::vConstFloatPrgm2;
         gb = gb * mb + sfpi::vConstFloatPrgm2;
         sfpi::vFloat da = za * ga + 1.0f;  // 1 + exp(-x)
