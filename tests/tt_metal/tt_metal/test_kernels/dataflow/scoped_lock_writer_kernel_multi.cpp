@@ -7,28 +7,25 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
-    uint32_t write_size_a = get_arg_val<uint32_t>(1);
-    uint32_t write_size_b = get_arg_val<uint32_t>(2);
-    uint32_t target_noc_x = get_arg_val<uint32_t>(3);
-    uint32_t target_noc_y = get_arg_val<uint32_t>(4);
-    uint32_t target_addr_a = get_arg_val<uint32_t>(5);
-    uint32_t target_addr_b = get_arg_val<uint32_t>(6);
-    uint32_t my_sem_id = get_arg_val<uint32_t>(7);
-    uint32_t other_sem_id = get_arg_val<uint32_t>(8);
-    uint32_t other_noc_x = get_arg_val<uint32_t>(9);
-    uint32_t other_noc_y = get_arg_val<uint32_t>(10);
+    uint32_t local_buffer_addr = get_arg(args::local_buffer_addr);
+    uint32_t write_size_a = get_arg(args::write_size_a);
+    uint32_t write_size_b = get_arg(args::write_size_b);
+    uint32_t target_noc_x = get_arg(args::target_noc_x);  // the locker core
+    uint32_t target_noc_y = get_arg(args::target_noc_y);
+    uint32_t target_addr_a = get_arg(args::target_addr_a);
+    uint32_t target_addr_b = get_arg(args::target_addr_b);
 
-    Semaphore my_sem(my_sem_id);
-    Semaphore other_sem(other_sem_id);
+    Semaphore lock_state_changed(sem::lock_state_changed);
+    Semaphore written(sem::written);
     Noc noc;
     UnicastEndpoint unicast_endpoint;
 
     CoreLocalMem<uint32_t> local_buffer(local_buffer_addr);
 
-    my_sem.down(1);
+    lock_state_changed.down(1);
 
     noc.async_write(
         local_buffer,
@@ -46,7 +43,7 @@ void kernel_main() {
         {.noc_x = target_noc_x, .noc_y = target_noc_y, .addr = target_addr_b});
     noc.async_write_barrier();
 
-    other_sem.up(noc, other_noc_x, other_noc_y, 1);
+    written.up(noc, target_noc_x, target_noc_y, 1);
 
-    my_sem.down(1);
+    lock_state_changed.down(1);
 }

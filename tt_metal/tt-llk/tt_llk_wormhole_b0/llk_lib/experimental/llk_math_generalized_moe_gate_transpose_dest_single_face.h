@@ -45,7 +45,7 @@ inline void generalized_moe_gate_transpose_dest_single_face_step0_configure_mop(
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
     // Load replay buffer with the transpose sequence for one 16x16 face (face 0: rows 0-15)
-    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 16);
+    TTI_REPLAY(ckernel::math::replay_buf_offset, 16, 0, 1);
     // Move 8 rows from DEST to SrcB interleaved (1 row at a time)
     TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);
     TTI_MOVD2B(0, 18, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 1);
@@ -66,8 +66,8 @@ inline void generalized_moe_gate_transpose_dest_single_face_step0_configure_mop(
     TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
     TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
 
-    std::uint32_t d2b_instr = lltt::replay_insn(math::replay_buf_offset, 8);
-    std::uint32_t b2d_instr = lltt::replay_insn(math::replay_buf_offset + 8, 8);
+    std::uint32_t d2b_instr = TT_OP_REPLAY(math::replay_buf_offset, 8, 0, 0);
+    std::uint32_t b2d_instr = TT_OP_REPLAY(math::replay_buf_offset + 8, 8, 0, 0);
 
     ckernel_template tmp(num_tiles, 1, d2b_instr, TT_OP_TRNSPSRCB);
     tmp.set_end_op(b2d_instr);
@@ -80,7 +80,7 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_configure_mop(
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
     // Load replay buffer with the transpose sequence for one 16x16 face (face 0: rows 0-15)
-    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 11);
+    TTI_REPLAY(ckernel::math::replay_buf_offset, 11, 0, 1);
     // Move 4 rows from DEST to SrcB (4 rows at a time)
     // This will place the first 2 rows in the first 2 columns, and the last 2 rows in the last 2 columns
     TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
@@ -97,7 +97,7 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_configure_mop(
     TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 5);
     TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
     TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
-    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
+    std::uint32_t replay_instr = TT_OP_REPLAY(math::replay_buf_offset, 11, 0, 0);
 
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();
@@ -112,7 +112,7 @@ template <std::uint32_t num_tiles, bool is_32bit, std::uint32_t d2b_dst, std::ui
 inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_mop()
 {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
-    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 11);
+    TTI_REPLAY(ckernel::math::replay_buf_offset, 11, 0, 1);
     TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, d2b_dst);
     TTI_MOVD2B(0, 28, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, d2b_dst);
 
@@ -126,7 +126,7 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_m
     TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 5);
     TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 6);
     TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, b2d_base + 7);
-    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
+    std::uint32_t replay_instr = TT_OP_REPLAY(math::replay_buf_offset, 11, 0, 0);
 
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();
@@ -142,13 +142,13 @@ inline void generalized_moe_gate_copy4rows_configure_mop()
     static_assert(!is_32bit, "32-bit is not supported");
     // srcb selects the 4-row SrcB scratch window (16/20/24/28). Back-to-back copy4rows calls use
     // DISJOINT srcb windows so a later MOVB2D cannot read a previous copy's SrcB leftover.
-    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 5);
+    TTI_REPLAY(ckernel::math::replay_buf_offset, 5, 0, 1);
     TTI_MOVD2B(0, srcb, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, src);        // DEST rows src..+3 -> SrcB srcb..+3
     TTI_MOVB2D(0, srcb + 0, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 0); // SrcB srcb -> DEST dst+0 (no transpose)
     TTI_MOVB2D(0, srcb + 1, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 1);
     TTI_MOVB2D(0, srcb + 2, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 2);
     TTI_MOVB2D(0, srcb + 3, ADDR_MOD_2, p_movb2d::MOV_1_ROW, dst + 3); // ADDR_MOD_2 advances base by 64
-    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 5);
+    std::uint32_t replay_instr = TT_OP_REPLAY(math::replay_buf_offset, 5, 0, 0);
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();
 }
@@ -157,7 +157,7 @@ template <std::uint32_t num_tiles = 1, bool is_32bit>
 inline void generalized_moe_gate_transpose_dest_single_face_step2_configure_mop()
 {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
-    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 4);
+    TTI_REPLAY(ckernel::math::replay_buf_offset, 4, 0, 1);
     // Move 8 rows from DEST to SrcB (4 rows at a time)
     TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
     TTI_MOVD2B(0, 20, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 4);
@@ -166,7 +166,7 @@ inline void generalized_moe_gate_transpose_dest_single_face_step2_configure_mop(
 
     // Move 1 row from SrcB back to DEST
     TTI_MOVB2D(0, 16, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 0);
-    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 4);
+    std::uint32_t replay_instr = TT_OP_REPLAY(math::replay_buf_offset, 4, 0, 0);
 
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();

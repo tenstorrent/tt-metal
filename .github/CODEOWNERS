@@ -137,8 +137,10 @@ tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-a
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
 tt_metal/api/tt-metalium/experimental/command_list.hpp @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-runtime-performance
 tt_metal/api/tt-metalium/experimental/dispatch_telemetry.hpp @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
+tt_metal/api/tt-metalium/experimental/kernel_config_buffer.hpp @sohaibnadeemTT @cfjchu @tenstorrent/metalium-runtime-performance
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar
 tt_metal/api/internal/disaggregation/ @SeanNijjar @ubcheema # disaggregation internal APIs (moved from experimental in #48638)
+tt_metal/api/internal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT # fabric internal APIs
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra
 tt_metal/common/broadcast_ring.hpp @yusufbashiTT @mo-tenstorrent @abhullar-tt @tt-aho @tt-asaigal @cfjchu
