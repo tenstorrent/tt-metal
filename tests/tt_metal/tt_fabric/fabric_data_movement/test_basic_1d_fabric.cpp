@@ -38,6 +38,8 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "test_host_kernel_common.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -2193,6 +2195,144 @@ void FabricUnicastCommon(
 
     if (noc_packet_type == NocPacketType::NOC_UNICAST_INLINE_WRITE) {
         worker_mem_map.packet_payload_size_bytes = 4;
+    }
+
+    // Quasar / Metal 2.0 dispatch path: CreateKernel(DataMovementConfig{}) fatals on Quasar
+    if (BaseFabricFixture::arch_ == tt::ARCH::QUASAR) {
+        const bool is_atomic =
+            (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+             noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+             noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC);
+        const std::string sender_kernel_path =
+            is_atomic
+                ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
+                : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp";
+        const std::string receiver_kernel_path =
+            is_atomic ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
+                      : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp";
+
+        const tt::tt_metal::KernelSpecName SENDER_ID{"fabric_unicast_sender"};
+        const tt::tt_metal::KernelSpecName RECEIVER_ID{"fabric_unicast_receiver"};
+
+        std::vector<uint32_t> sender_runtime_args = {
+            worker_mem_map.source_l1_buffer_address,
+            worker_mem_map.packet_payload_size_bytes,
+            num_packets,
+            time_seed,
+            static_cast<uint32_t>(receiver_virtual_core.x),
+            static_cast<uint32_t>(receiver_virtual_core.y),
+        };
+        for (auto [dir, num_hops] : dir_configs) {
+            sender_runtime_args.push_back(num_hops);
+        }
+
+        tt::tt_metal::KernelSpec sender_kernel_spec{
+            .unique_id = SENDER_ID,
+            .source = sender_kernel_path,
+            .num_threads = 1,
+            .hw_config = tt::tt_metal::DataMovementHardwareConfig{},
+            .advanced_options = {.compile_time_varargs = compile_time_args},
+        };
+        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            *sender_device,
+            src_fabric_node_id,
+            dest_fabric_node_ids,
+            {},
+            sender_kernel_spec,
+            sender_logical_core,
+            sender_runtime_args,
+            api_type);
+        sender_kernel_spec.advanced_options.num_runtime_varargs = static_cast<uint32_t>(sender_runtime_args.size());
+
+        tt::tt_metal::ProgramSpec sender_pspec{
+            .name = "fabric_unicast_sender",
+            .kernels = {std::move(sender_kernel_spec)},
+            .work_units = {tt::tt_metal::WorkUnitSpec{
+                .name = "main", .kernels = {SENDER_ID}, .target_nodes = sender_logical_core}},
+        };
+        tt::tt_metal::Program sender_prog =
+            tt::tt_metal::experimental::MakeProgramFromSpec(*sender_device, sender_pspec);
+        tt::tt_metal::ProgramRunArgs sender_run;
+        sender_run.kernel_run_args = {tt::tt_metal::ProgramRunArgs::KernelRunArgs{
+            .kernel = SENDER_ID,
+            .advanced_options = {.runtime_varargs = {{sender_logical_core, sender_runtime_args}}},
+        }};
+        tt::tt_metal::experimental::SetProgramRunArgs(sender_prog, sender_run);
+
+        std::vector<uint32_t> receiver_runtime_args = {
+            worker_mem_map.packet_payload_size_bytes,
+            num_packets,
+            time_seed,
+        };
+        tt::tt_metal::KernelSpec receiver_kernel_spec{
+            .unique_id = RECEIVER_ID,
+            .source = receiver_kernel_path,
+            .num_threads = 1,
+            .hw_config = tt::tt_metal::DataMovementHardwareConfig{},
+            .advanced_options =
+                {
+                    .num_runtime_varargs = static_cast<uint32_t>(receiver_runtime_args.size()),
+                    .compile_time_varargs = compile_time_args,
+                },
+        };
+        tt::tt_metal::ProgramSpec receiver_pspec{
+            .name = "fabric_unicast_receiver",
+            .kernels = {receiver_kernel_spec},
+            .work_units = {tt::tt_metal::WorkUnitSpec{
+                .name = "main", .kernels = {RECEIVER_ID}, .target_nodes = receiver_logical_core}},
+        };
+        tt::tt_metal::ProgramRunArgs receiver_run;
+        receiver_run.kernel_run_args = {tt::tt_metal::ProgramRunArgs::KernelRunArgs{
+            .kernel = RECEIVER_ID,
+            .advanced_options = {.runtime_varargs = {{receiver_logical_core, receiver_runtime_args}}},
+        }};
+
+        for (const auto& recv_dev : receiver_devices) {
+            tt::tt_metal::Program recv_prog =
+                tt::tt_metal::experimental::MakeProgramFromSpec(*recv_dev, receiver_pspec);
+            tt::tt_metal::experimental::SetProgramRunArgs(recv_prog, receiver_run);
+            tt::tt_metal::distributed::MeshWorkload recv_wl;
+            recv_wl.add_program(
+                tt::tt_metal::distributed::MeshCoordinateRange(recv_dev->shape()), std::move(recv_prog));
+            tt::tt_metal::distributed::EnqueueMeshWorkload(recv_dev->mesh_command_queue(), recv_wl, false);
+        }
+
+        tt::tt_metal::distributed::MeshWorkload sender_wl;
+        sender_wl.add_program(
+            tt::tt_metal::distributed::MeshCoordinateRange(sender_device->shape()), std::move(sender_prog));
+        tt::tt_metal::distributed::EnqueueMeshWorkload(sender_device->mesh_command_queue(), sender_wl, true);
+
+        for (const auto& recv_dev : receiver_devices) {
+            tt::tt_metal::distributed::Finish(recv_dev->mesh_command_queue());
+        }
+
+        std::vector<uint32_t> sender_status;
+        tt_metal::slow_dispatch::ReadFromL1(
+            *sender_device,
+            sender_logical_core,
+            worker_mem_map.test_results_address,
+            worker_mem_map.test_results_size_bytes,
+            sender_status,
+            CoreType::WORKER);
+        EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+
+        for (const auto& recv_dev : receiver_devices) {
+            std::vector<uint32_t> receiver_status;
+            tt_metal::slow_dispatch::ReadFromL1(
+                *recv_dev,
+                receiver_logical_core,
+                worker_mem_map.test_results_address,
+                worker_mem_map.test_results_size_bytes,
+                receiver_status,
+                CoreType::WORKER);
+            EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+            uint64_t sender_words =
+                ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
+            uint64_t receiver_words = ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) |
+                                      receiver_status[TT_FABRIC_WORD_CNT_INDEX];
+            EXPECT_EQ(sender_words, receiver_words);
+        }
+        return;
     }
 
     auto sender_kernel = tt_metal::CreateKernel(

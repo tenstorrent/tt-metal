@@ -319,6 +319,44 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
+class NightlyFabricHorizonFixture : public BaseFabricFixture {
+    static constexpr std::string_view kMGDRelPath =
+        "tt_metal/fabric/mesh_graph_descriptors/horizon_x2_mesh_graph_descriptor.textproto";
+    inline static bool should_skip_ = false;
+
+public:
+    static void SetUpTestSuite() {
+        auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        if (arch != tt::ARCH::QUASAR || tt::tt_metal::GetNumAvailableDevices() < 2) {
+            should_skip_ = true;
+            return;
+        }
+        auto mgd_path = (std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+                         std::string(kMGDRelPath))
+                            .string();
+        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
+            mgd_path,
+            {{tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 0), 0},
+             {tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 1), 1}});
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+    }
+
+    static void TearDownTestSuite() {
+        should_skip_ = false;
+        if (!devices_map_.empty()) {
+            BaseFabricFixture::DoTearDownTestSuite();
+            tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+        }
+    }
+
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "NightlyFabricHorizonFixture requires Quasar arch with at least 2 devices";
+        }
+        BaseFabricFixture::SetUp();
+    }
+};
+
 class CustomMeshGraphFabric2DFixture : public BaseFabricFixture {
 public:
     static void SetUpTestSuite() {}

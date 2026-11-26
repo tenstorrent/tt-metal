@@ -452,10 +452,17 @@ FORCE_INLINE void open_connections(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint32_t num_connections_to_build,
     size_t& rt_arg_idx) {
+#if defined(ARCH_QUASAR) && defined(IP_VARIANT_HORIZON)
+    connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_args<
+        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_ONLY,
+        WORKER_HANDSHAKE_NOC,
+        sem_args_are_l1_addresses>(rt_arg_idx, num_connections_to_build);
+#else
     connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_args<
         tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION,
         WORKER_HANDSHAKE_NOC,
         sem_args_are_l1_addresses>(rt_arg_idx, num_connections_to_build);
+#endif
 }
 
 // clang-format off
@@ -473,7 +480,9 @@ FORCE_INLINE void open_connections(
 // clang-format on
 template <uint8_t WORKER_HANDSHAKE_NOC = tt::tt_fabric::get_fabric_worker_noc()>
 FORCE_INLINE void close_connections(tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager) {
+#if !defined(ARCH_QUASAR) || !defined(IP_VARIANT_HORIZON)
     connection_manager.close<WORKER_HANDSHAKE_NOC>();
+#endif
 }
 
 }  // namespace tt::tt_fabric::common::experimental

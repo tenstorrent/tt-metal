@@ -2012,4 +2012,43 @@ TEST_F(Fabric2DFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this); }
 TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) { RunSetUnicastRouteTest(this, HalProgrammableCoreType::IDLE_ETH); }
 
 // Test for std::atomic_exchange on kernels using BRISC and NCRISC
+
+TEST_F(NightlyFabricHorizonFixture, TestMeshFabricUnicastNocUnicastWrite) {
+    FabricUnicastCommon(
+        this, NocPacketType::NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)}, FabricApiType::Mesh);
+}
+
+TEST_F(NightlyFabricHorizonFixture, TestMeshFabricUnicastNocUnicastWriteStateful) {
+    FabricUnicastCommon(
+        this, NocPacketType::NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)}, FabricApiType::Mesh, true);
+}
+
+TEST_F(NightlyFabricHorizonFixture, TestMeshFabricUnicastNocScatterWrite) {
+    FabricUnicastCommon(
+        this, NocPacketType::NOC_UNICAST_SCATTER_WRITE, {std::make_tuple(RoutingDirection::E, 1)}, FabricApiType::Mesh);
+}
+
+TEST_F(NightlyFabricHorizonFixture, TestMeshFabricUnicastNocScatterWriteStateful) {
+    FabricUnicastCommon(
+        this,
+        NocPacketType::NOC_UNICAST_SCATTER_WRITE,
+        {std::make_tuple(RoutingDirection::E, 1)},
+        FabricApiType::Mesh,
+        true);
+}
+
+TEST_F(NightlyFabricHorizonFixture, TestMeshFabricUnicastNocInlineWrite) {
+    FabricUnicastCommon(
+        this, NocPacketType::NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::E, 1)}, FabricApiType::Mesh);
+}
+
+TEST_F(NightlyFabricHorizonFixture, TestMeshFabricUnicastNocInlineWriteStateful) {
+    FabricUnicastCommon(
+        this,
+        NocPacketType::NOC_UNICAST_INLINE_WRITE,
+        {std::make_tuple(RoutingDirection::E, 1)},
+        FabricApiType::Mesh,
+        true);
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

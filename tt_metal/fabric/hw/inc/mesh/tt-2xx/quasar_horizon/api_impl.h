@@ -446,16 +446,27 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+    [[maybe_unused]] auto* _ci = client_interface;
+    [[maybe_unused]] auto* _ph = packet_header;
+    const uint64_t remote_addr = horizon_detail::resolve_destination_flat_address(
+        noc_unicast_inline_write_command_header.noc_address, dst_dev_id, dst_mesh_id);
+    noc_inline_dw_write(remote_addr, noc_unicast_inline_write_command_header.value);
 }
 
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+#ifdef FABRIC_2D
+    auto& slot = connection_manager.get(route_id);
+    fabric_unicast_noc_unicast_inline_write<decltype(slot.sender)>(
+        &slot.sender,
+        (volatile PACKET_HEADER_TYPE*)nullptr,
+        static_cast<uint8_t>(slot.dst_dev_id),
+        slot.dst_mesh_id,
+        noc_unicast_inline_write_command_header);
+#endif
 }
 
 template <UnicastInlineWriteUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
@@ -463,8 +474,19 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     CommandHeaderT noc_unicast_inline_write_command_header) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    [[maybe_unused]] auto* _ci = client_interface;
+    if constexpr (has_flag(UpdateMask, UnicastInlineWriteUpdateMask::DstAddr)) {
+        packet_header->command_fields.unicast_inline_write.noc_address =
+            noc_unicast_inline_write_command_header.noc_address;
+    }
+    if constexpr (has_flag(UpdateMask, UnicastInlineWriteUpdateMask::Value)) {
+        packet_header->command_fields.unicast_inline_write.value = noc_unicast_inline_write_command_header.value;
+    }
+    const uint64_t remote_addr = horizon_detail::resolve_destination_flat_address(
+        packet_header->command_fields.unicast_inline_write.noc_address,
+        static_cast<uint8_t>(packet_header->dst_start_chip_id),
+        packet_header->dst_start_mesh_id);
+    noc_inline_dw_write(remote_addr, packet_header->command_fields.unicast_inline_write.value);
 }
 
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT>
@@ -472,8 +494,10 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     CommandHeaderT noc_unicast_inline_write_command_header) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    auto& slot = connection_manager.get(route_id);
+    volatile PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+    fabric_unicast_noc_unicast_inline_write_with_state<UpdateMask>(
+        &slot.sender, packet_header, noc_unicast_inline_write_command_header);
 }
 
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT>
@@ -482,15 +506,24 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     CommandHeaderT command_header) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    packet_header->dst_start_chip_id = dst_dev_id;
+    packet_header->dst_start_mesh_id = dst_mesh_id;
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_INLINE_WRITE;
+    if constexpr (has_flag(UpdateMask, UnicastInlineWriteUpdateMask::DstAddr)) {
+        packet_header->command_fields.unicast_inline_write.noc_address = command_header.noc_address;
+    }
+    if constexpr (has_flag(UpdateMask, UnicastInlineWriteUpdateMask::Value)) {
+        packet_header->command_fields.unicast_inline_write.value = command_header.value;
+    }
 }
 
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager, uint8_t route_id, CommandHeaderT command_header) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    auto& slot = connection_manager.get(route_id);
+    volatile PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+    fabric_unicast_noc_unicast_inline_write_set_state<UpdateMask>(
+        packet_header, static_cast<uint8_t>(slot.dst_dev_id), slot.dst_mesh_id, command_header);
 }
 
 template <typename FabricSenderType, bool SetRoute>

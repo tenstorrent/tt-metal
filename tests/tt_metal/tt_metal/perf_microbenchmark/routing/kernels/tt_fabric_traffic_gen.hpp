@@ -42,7 +42,7 @@ inline bool check_packet_data(
     invalidate_l1_cache();
     for (uint32_t i = 0; i < num_words; i++) {
         if (*addr != start_val) {
-            mismatch_addr = reinterpret_cast<uint32_t>(addr);
+            mismatch_addr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(addr));
             mismatch_val = *addr;
             expected_val = start_val;
             return false;
