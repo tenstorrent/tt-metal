@@ -550,6 +550,7 @@ class MiniMaxH3Attention(Module):
             q_chunk_size=VSA_TILE_TOKENS,
             k_chunk_size=vsa_k_chunk_size(rows_per_device),
             exp_approx_mode=False,
+            min_blocked_pack_tiles=2,
         )
 
     def _sparse_attention(self, q_BHNE, k_BHNE, v_BHNE, routing: dict) -> ttnn.Tensor:
