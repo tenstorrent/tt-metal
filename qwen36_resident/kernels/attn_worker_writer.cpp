@@ -65,9 +65,12 @@ void kernel_main() {
     const ActiveRows<kUsers> act(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_ntiles))[kMaskWord]);
     const uint32_t n_act = act.n;
     bool chunk_of_user[kUsers];
+    bool multi_block[kUsers];  // (O-2: a chunk worker's user of more than one KV block, see the pipelined loop)
     bool any_chunkless = false;
     for (uint32_t u = 0; u < kUsers; u++) {
-        chunk_of_user[u] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_ntiles))[u] > 0;
+        const uint32_t n_u = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_ntiles))[u];
+        chunk_of_user[u] = n_u > 0;
+        multi_block[u] = role == 1 && n_u > chunk_max;
         any_chunkless |= !chunk_of_user[u];
     }
     // -inf rows (column 0 of rows 0..heads-1) for a user this worker has no chunk of, next to the counts
@@ -291,14 +294,20 @@ void kernel_main() {
         }
     };
     if constexpr (kAttnPipe) {
-        // (one call site per stage: head(k) then rest(k - 1); the stages are large)
+        // (head(k) then rest(k - 1), in the compute's order: a chunk worker's user k of more than one block is started
+        // after k - 1 finished (attn_worker_compute.cpp first_finish), so k - 1's partial goes first — after m(k) it
+        // waited for all of k's blocks, which at long contexts made O-2 slower than no overlap; one call site per
+        // stage)
         for (uint32_t l = 0; l < layers && n_act > 0; l++) {
             for (uint32_t k = 0; k <= n_act; k++) {
-                if (k < n_act) {
-                    head(l * n_act + k);
-                }
-                if (k > 0) {
-                    rest(l * n_act + k - 1);
+                const bool rest_first = k > 0 && k < n_act && multi_block[act.row[k]];
+                for (uint32_t step = 0; step < 2; step++) {
+                    if (k < n_act && step == (rest_first ? 1u : 0u)) {
+                        head(l * n_act + k);
+                    }
+                    if (k > 0 && step == (rest_first ? 0u : 1u)) {
+                        rest(l * n_act + k - 1);
+                    }
                 }
             }
         }
