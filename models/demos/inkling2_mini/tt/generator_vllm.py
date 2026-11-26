@@ -179,7 +179,24 @@ class Inkling2ForCausalLM:
             f"chunked prefill on for prompts of {self.pf_min}+ tokens: passes of {chunk}"
             f"{f', one pass up to {self.PF_ONE}' if one else ''}; built in {time.time() - t0:.0f} s"
         )
+        if os.environ.get("INKLING_VLLM_PREFILL_WARM", "0") != "0":
+            self._prefill_warm(pf)
         return pf
+
+    def _prefill_warm(self, pf):
+        """INKLING_VLLM_PREFILL_WARM=1: run every program shape of the prefill once at start
+        (Inkling2Prefill.warm_passes), so no request compiles a kernel; the JIT cache keeps them on disk, so the
+        next launch of the same build finds them compiled."""
+        t0, d = time.time(), getattr(self, "drafter", None)
+        rng = torch.Generator().manual_seed(0)
+        ws = pf.warm_passes(self.max_ctx, self.pf_chunk)
+        for s, n in ws:
+            pf.drafter = d if d is not None and s + n + pf.chunk <= d.S else None  # as _prefill_chunked
+            pf.prefill(torch.randint(1000, 100000, (n,), generator=rng).tolist(), chunk=self.pf_chunk, start=s)
+            pf.drop_buffers()
+        pf.drafter = d
+        self.model.reset()
+        logger.info(f"chunked prefill warmed: {len(ws)} prompts in {time.time() - t0:.0f} s")
 
     def _make_gen(self):
         """(the generator with its traces captured, the output dicts of its step traces)."""

@@ -95,6 +95,15 @@ GROUPS = N_HEADS // N_KV
 SCALE = HEAD_DIM**-0.5
 FAR_DH = HEAD_DIM + 32  # far part head dim: q ++ [lse_hi, lse_lo, 0...]
 QB = 128  # local attention query block (SDPA batch element)
+# A pass from a position s > 0 runs its attention SDPAs (rel_logits path) in shapes that do not depend on s, so no
+# kernel is compiled for a new prompt length or start: the query position is the SDPA's runtime rel_q_offset, the
+# keys after the last query are masked and their K chunks not read. Global layers: the far cache rows [0, kb) with
+# kb a multiple of FAR_ROWS, the queries padded to a fixed count (_far_q). Local layers before position 1024: the
+# ring's 1024 slots ++ 1024 rows with the chunk written at row s. Same keys, K chunks and masks per real query
+# as with K / V cut at s + t, so the same numbers.
+FAR_ROWS = 16384
+# the SDPA takes the query position as a runtime argument (ttnn builds from 2026-11-25 on; older: K / V cut at s + t)
+_HAS_QOFF = "rel_q_offset" in (ttnn.transformer.scaled_dot_product_attention.__doc__ or "")
 # rows kept from the end of the last chunk for the decode handoff: the last real row n - 1 lies in the last QB rows,
 # its lags 1..3 go back 3 more, and the conv tails put 32 rows in front: QB + 32 covers both
 KEEP = QB + 32
@@ -962,7 +971,9 @@ class Inkling2Prefill:
         for key distance d < 1024, per-query sink logit; local layers also mask d >= 1024. The queries are the
         last t keys: local keys = [ring rotated to position order ++ chunk] (only the s valid slots while s < 1024),
         global keys =
-        kv_full rows [0, s + t) (the chunk is written there first)."""
+        kv_full rows [0, s + t) (the chunk is written there first). With the SDPA's rel_q_offset (FAR_ROWS): global
+        keys kv_full rows [0, kb), queries padded to _far_q rows; local keys before position 1024 the ring ++ 1024
+        rows with the chunk at row s."""
         skewed = self._pfrel is not None and rel.shape[-1] == 32
         if skewed:  # [1,24,t,1056] rows in the SDPA's skewed layout, built in one program
             rl = self._pfrel(ttnn.to_layout(rel, ttnn.ROW_MAJOR_LAYOUT), lp.rel_bsk)
@@ -970,9 +981,17 @@ class Inkling2Prefill:
             proj = lp.rel_proj_half if rel.shape[-1] == 32 else lp.rel_proj  # PfHeads rel: [proj; proj] (half_proj)
             rl = ttnn.matmul(rel, proj, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,24,t,1024]
             rl = ttnn.to_layout(rl, ttnn.ROW_MAJOR_LAYOUT)
+        qoff, qt = {}, t
         if lp.lay.is_global:
             if s == 0:
                 kk, vv = k_c, v_c
+            elif _HAS_QOFF:
+                qt, kb = self._far_q(s, t, st.kv_full.shape[2])
+                kk = ttnn.slice(st.kv_full, [0, 0, 0, V_MEM], [1, N_KV, kb, KV_MEM])
+                vv = ttnn.slice(st.kv_full, [0, 0, 0, 0], [1, N_KV, kb, HEAD_DIM])
+                if qt > t:  # pad query rows: they see keys past the chunk, their outputs are dropped
+                    qs, rl, sink = (ttnn.pad(x, [(0, 0), (0, 0), (0, qt - t), (0, 0)], 0.0) for x in (qs, rl, sink))
+                qoff = {"rel_q_offset": s}
             else:
                 kv = ttnn.slice(st.kv_full, [0, 0, 0, 0], [1, N_KV, s + t, KV_MEM])
                 kk, vv = _cols(kv, V_MEM, KV_MEM), _cols(kv, 0, HEAD_DIM)
@@ -980,6 +999,11 @@ class Inkling2Prefill:
         else:
             if s == 0:
                 kk, vv = k_c, v_c
+            elif s < WINDOW and _HAS_QOFF:  # ring ++ 1024 rows, the chunk at rows [s, s + t); later rows masked
+                kk, vv = (ttnn.concat([r, r], dim=2) for r in (st.k_ring, st.v_ring))
+                ttnn.fill_cache(kk, k_c, 0, update_idx=s)
+                ttnn.fill_cache(vv, v_c, 0, update_idx=s)
+                qoff = {"rel_q_offset": s}
             elif s < WINDOW:  # positions [0, s) sit in slots [0, s); the other slots are not positions yet
                 kk = ttnn.concat([_rows(st.k_ring, 0, s), k_c], dim=2)
                 vv = ttnn.concat([_rows(st.v_ring, 0, s), v_c], dim=2)
@@ -989,7 +1013,7 @@ class Inkling2Prefill:
                 kk = ttnn.concat([rot(st.k_ring), k_c], dim=2)
                 vv = ttnn.concat([rot(st.v_ring), v_c], dim=2)
             window = WINDOW
-        return ttnn.transformer.scaled_dot_product_attention(
+        o = ttnn.transformer.scaled_dot_product_attention(
             qs,
             kk,
             vv,
@@ -1001,7 +1025,18 @@ class Inkling2Prefill:
             attention_sink=_bf16(sink),
             program_config=self._sdpa_cfg(*self.r3_chunks),
             compute_kernel_config=self.sdpa_ckc,
+            **qoff,
         )
+        return o if qt == t else _rows(o, 0, t)
+
+    @staticmethod
+    def _far_q(s, t, rows):
+        """(query rows, key rows) of a global layer's SDPA for a pass of t rows from s > 0: t padded to a power of
+        two >= 1024, keys [0, kb) with kb a multiple of FAR_ROWS (at most `rows`, the far cache's); near the end of
+        the cache, t and `rows`."""
+        qt = max(WINDOW, 1 << (t - 1).bit_length())
+        kb = min(rows, -(-(s + qt) // FAR_ROWS) * FAR_ROWS)
+        return (qt, kb) if s + qt <= kb else (t, rows)
 
     def _band(self, lp, rel, sink, s, t, is_global):
         """Additive mask in query-block coordinates [nb, 24, QB, KB]: banded rel bias, window / causal limits, sink
@@ -1852,6 +1887,23 @@ class Inkling2Prefill:
                         ttnn.deallocate(t)
         self._in.clear()
         self._cur = None
+
+    def warm_passes(self, max_ctx, chunk=None):
+        """(start, length) prompts whose prefill passes cover every program shape a prefill in passes of `chunk`
+        (default self.chunk) can run, so a process (or the JIT cache, which stays on disk) has compiled them all:
+        each pass length t (multiples of 128) as the last pass and as a full one, from 0, from inside the first
+        1024 window and from a later position; the global layers' key buckets (FAR_ROWS). Not covered: the
+        positions within `chunk` of the end of the far cache (_far_q: one more SDPA shape per t there)."""
+        c = chunk or self.chunk
+        ts = range(QB, c + 1, QB)
+        w = [(0, t) for t in ts] + [(0, c + t) for t in ts] + [(0, 2 * c + QB)]
+        for o in range(QB, WINDOW, QB):  # a first pass to the window's end, last or not; then the same past 1024
+            w += [(o, WINDOW - o), (o, WINDOW - o + QB), (WINDOW + o, WINDOW - o), (WINDOW + o, WINDOW - o + QB)]
+        if _HAS_QOFF:
+            qts = sorted({self._far_q(FAR_ROWS, t, max_ctx)[0] for t in ts})
+            for kb in range(FAR_ROWS, max_ctx + 1, FAR_ROWS):
+                w += [(kb - q, q) for q in qts if kb - q >= WINDOW]
+        return [(s, n) for s, n in w if s + n <= max_ctx and (s == 0 or n >= TAPS)]
 
     def _mem_print(self):
         views = [ttnn.get_memory_view(self.device, bt) for bt in (ttnn.BufferType.DRAM, ttnn.BufferType.L1)]
