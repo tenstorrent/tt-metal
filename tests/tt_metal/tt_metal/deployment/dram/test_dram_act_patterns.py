@@ -26,7 +26,9 @@ from loguru import logger
 
 import ttnn
 
-_spec = importlib.util.spec_from_file_location("dram_sweep_stress", Path(__file__).with_name("test_dram_sweep_stress.py"))
+_spec = importlib.util.spec_from_file_location(
+    "dram_sweep_stress", Path(__file__).with_name("test_dram_sweep_stress.py")
+)
 sweep = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sweep)
 
@@ -483,21 +485,25 @@ class ActRun:
                 mode, barrier_each, ents = specs[s]
                 inj_e, inj_bit, inj_mask = inj
                 # Program cache keys on nmax, not arg count: keep arg counts equal per nmax.
-                rt[x][y] = [
-                    self.tt_out.buffer_address(),
-                    s,
-                    FILL if mode_override == FILL else mode,
-                    seed,
-                    iters,
-                    rb,
-                    len(ents),
-                    int(compute_blocks > 0),
-                    barrier_each,
-                    self.cfg["decode_max"],
-                    inj_e,
-                    inj_bit,
-                    inj_mask,
-                ] + [a | c for a, c in ents] + [0] * (nmax - len(ents))
+                rt[x][y] = (
+                    [
+                        self.tt_out.buffer_address(),
+                        s,
+                        FILL if mode_override == FILL else mode,
+                        seed,
+                        iters,
+                        rb,
+                        len(ents),
+                        int(compute_blocks > 0),
+                        barrier_each,
+                        self.cfg["decode_max"],
+                        inj_e,
+                        inj_bit,
+                        inj_mask,
+                    ]
+                    + [a | c for a, c in ents]
+                    + [0] * (nmax - len(ents))
+                )
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=DM_KERNEL,
@@ -550,9 +556,7 @@ def summarize(out, specs):
         "stale": int(out[:, 4].sum()),
         "other": int(out[:, 5].sum()),
         "undecoded": int(out[:, 6].sum()),
-        "lanes": {
-            c: v for c, v in enumerate(out[:, LANE_OFF:ALIAS_OFF].sum(0).reshape(CTRLS, 4).tolist()) if any(v)
-        },
+        "lanes": {c: v for c, v in enumerate(out[:, LANE_OFF:ALIAS_OFF].sum(0).reshape(CTRLS, 4).tolist()) if any(v)},
         "alias_bits": {k: int(v) for k, v in enumerate(out[:, ALIAS_OFF : ALIAS_OFF + 32].sum(0).tolist()) if v},
         "bad_by_addr": per_addr,
     }
@@ -653,9 +657,7 @@ class Driver:
                     specs = specs_by_chip[r.chip]
                     a = acc[r.chip]
                     a["launches"] += 1
-                    a["reads"] += sum(
-                        int(out[s, 1]) * len(specs[s][2]) for s in range(r.slots) if specs[s][0] == READ
-                    )
+                    a["reads"] += sum(int(out[s, 1]) * len(specs[s][2]) for s in range(r.slots) if specs[s][0] == READ)
                     s = summarize(out, specs)
                     merge(a, s)
                     if s["bad_reads"] and r.chip not in first:
@@ -790,7 +792,9 @@ def run_patterns(drv, cfg):
                     logger.warning(f"ca_full {name}: no placement in the buffer, skipped")
                     continue
                 row, gb, _ = decode(t)
-                logger.info(f"ca_full {name}: {t:#x} row {row:#x} gbank {gb} rising {rising(row, gb):010b} {shape(row)}")
+                logger.info(
+                    f"ca_full {name}: {t:#x} row {row:#x} gbank {gb} rising {rising(row, gb):010b} {shape(row)}"
+                )
                 for form in cfg["ca_forms"]:
                     drv.target(
                         label,
@@ -818,7 +822,9 @@ def run_patterns(drv, cfg):
                 if (m := re.fullmatch(r"r(0x[0-9a-f]+)b(\d+)", name)) and t is None:
                     t = addr_of(int(m.group(1), 16), int(m.group(2)), col0)
                 if t is None or not space.ok(t):
-                    raise ValueError(f"v2 target {name} is not a ca_full, MULTI_PIN or r<row>b<gbank> target in the buffer")
+                    raise ValueError(
+                        f"v2 target {name} is not a ca_full, MULTI_PIN or r<row>b<gbank> target in the buffer"
+                    )
                 row, gb, _ = decode(t)
                 logger.info(f"v2 {name}: {t:#x} rising {rising(row, gb):010b} falling {falling(row):010b}")
                 # "all": same address on all 8 controllers.
@@ -910,9 +916,7 @@ def hit_summary(results):
         for row in results
         if row["bad_reads"]
     ]
-    details = "; ".join(
-        f"chip {h['chip']} ({ident_str(h)}) {h['bad_reads']} bad reads on {h['target']}" for h in hits
-    )
+    details = "; ".join(f"chip {h['chip']} ({ident_str(h)}) {h['bad_reads']} bad reads on {h['target']}" for h in hits)
     return {"hits": hits, "details": f"hits: {details}" if hits else "no hits"}
 
 

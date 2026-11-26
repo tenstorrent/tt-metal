@@ -55,7 +55,6 @@ DM_DEFINES = MM_DEFINES + [
 ]
 
 
-
 def env_int(name, default):
     return int(os.environ.get(name, str(default)), 0)
 
@@ -219,7 +218,9 @@ class ChipRun:
         )
 
     def run(self, fill, blocks, seed, passes, reps, inj=(NONE, 0, 0)):
-        ttnn.generic_op([self.buf, self.tt_out], self.make(fill, blocks, seed, passes, reps, inj, self.cfg["decode_max"]))
+        ttnn.generic_op(
+            [self.buf, self.tt_out], self.make(fill, blocks, seed, passes, reps, inj, self.cfg["decode_max"])
+        )
 
     def self_test(self, seed):
         inj_page = 3
@@ -291,7 +292,13 @@ class ChipRun:
                 f"bad words {a['bad_words']} stale {a.get('stale', 0)} other {a.get('other', 0)} "
                 f"alias bits {a.get('alias_bits', {})}"
             )
-        return {"chip": self.chip, "bank_mb": self.bank_mb, "base": hex(self.base), "blocks": self.blocks, **self.per_arm}
+        return {
+            "chip": self.chip,
+            "bank_mb": self.bank_mb,
+            "base": hex(self.base),
+            "blocks": self.blocks,
+            **self.per_arm,
+        }
 
 
 def run_chips(chips, cfg):
