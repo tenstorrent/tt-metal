@@ -9,25 +9,16 @@
 
 #include "perf_counters/dram_counters_types.h"
 
-// Blackhole DRAM channel tile counters. Include through perf_counters/dram_counters_inventory.h.
-// The NIU slave counters are the status registers 0x33 to 0x3B of the tile NIU: offset = 0x200 + 4 * index.
+// Blackhole DRAM channel tiles: where the host reads their NIU counters, and the GDDR6 controller activity monitor.
+// Include through perf_counters/dram_counters_inventory.h.
 
 namespace llk::perf::dram::blackhole
 {
 
 inline constexpr Layout layout = {0xFFB20000ull, 0x10000u, 0u, 1u, 0u, 64u, 2u};
 
-inline constexpr std::array<Entry, 6> niu_counters = {{
-    {DramCounter::NIU_SLV_RD_REQ_RECEIVED, 0x2D4},
-    {DramCounter::NIU_SLV_RD_DATA_WORD_SENT, 0x2CC},
-    {DramCounter::NIU_SLV_NONPOSTED_WR_REQ_RECEIVED, 0x2E8},
-    {DramCounter::NIU_SLV_POSTED_WR_REQ_RECEIVED, 0x2EC},
-    {DramCounter::NIU_SLV_NONPOSTED_WR_DATA_WORD_RECEIVED, 0x2E0},
-    {DramCounter::NIU_SLV_POSTED_WR_DATA_WORD_RECEIVED, 0x2E4},
-}};
-
 // GDDR6 controller behind the tiles of one channel; AXI ports are numbered 1 to 3.
-inline constexpr ControllerLayout controller_layout = {1ull << 40, 0xFC104A30u, 0xFC104A34u, 0xFC200004u, 0x7u, 0x7u << 16};
+inline constexpr ControllerLayout controller_layout = {1ull << 40, 0xFC104A30u, 0xFC200004u, 0x7u, 0x7u << 16, 64u};
 
 inline constexpr std::array<ControllerEntry, 42> controller_counters = {{
     {"RD_CMD", 0xFC10AC08},

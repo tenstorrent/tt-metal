@@ -30,12 +30,12 @@ Reference: `docs/performance_counters/noc_counters.md`.
 
 DRAM channel tile counters (read by the host, not by a core), namespace `llk::perf::dram`:
 
-- `dram_counters_types.h`: `DramCounter` (names), `Arch`, `Entry` = `{counter, offset}`, `Layout`, and for the
-  memory controller `ControllerEntry` = `{name, address}`, `ControllerTable`, `ControllerLayout`.
-- `dram_counters_blackhole.h`, `dram_counters_wormhole.h`, `dram_counters_quasar.h`: `layout`, `niu_counters`;
-  Quasar's are empty because its register map is not known. Blackhole also has `controller_layout` and
-  `controller_counters`.
-- `dram_counters_inventory.h`: `niu_table(arch)`, `layout_for(arch)`, `niu_address(arch, noc, tile_noc0_y, offset)`,
+- `dram_counters_types.h`: `Arch`, `Layout`, the memory controller's `ControllerEntry` = `{name, address}`,
+  `ControllerTable` and `ControllerLayout`, and the file names and flag bits of the tt-metal capture. The counters are
+  the slave side entries of `noc_counters_types.h`.
+- `dram_counters_blackhole.h`, `dram_counters_wormhole.h`, `dram_counters_quasar.h`: `layout`, zero on Quasar because
+  its register map is not known. Blackhole also has `controller_layout` and `controller_counters`.
+- `dram_counters_inventory.h`: `layout_for(arch)`, `niu_address(arch, noc, tile_noc0_y, reg)`,
   `controller_layout_for(arch)`, `controller_table(arch)`.
 
 Reference: `docs/performance_counters/dram_counters.md`.

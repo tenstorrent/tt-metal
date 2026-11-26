@@ -420,47 +420,27 @@ def noc_selected_counters(arch, group_mask, include_dir=None) -> List[NocEntry]:
     return [e for e in table.entries if (group_mask >> NOC_GROUPS.index(e.group)) & 1]
 
 
-# DRAM channel tile counters: dram_counters_types.h has the DramCounter names, dram_counters_<arch>.h the
-# {name, register offset} table of the NIU and the Layout the offsets are relative to.
+# DRAM channel tile counters: the slave side NIU counters of noc_counters_types.h, read by the host at the Layout of
+# dram_counters_<arch>.h; dram_counters_types.h has the capture's file names and flag bits.
 _DRAM_ARCH_HEADER = {
     "blackhole": "dram_counters_blackhole.h",
     "wormhole": "dram_counters_wormhole.h",
     "wormhole_b0": "dram_counters_wormhole.h",
     "quasar": "dram_counters_quasar.h",
 }
-_DRAM_TABLE_DECL = re.compile(
-    r"std::array<\s*Entry\s*,\s*(\d+)\s*>\s+niu_counters\b[^=;]*="
-)
-_DRAM_ENTRY = re.compile(r"\{\s*DramCounter::(\w+)\s*,\s*(0[xX][0-9a-fA-F]+|\d+)\s*\}")
 _DRAM_LAYOUT = re.compile(
     r"Layout\s+layout\s*=\s*\{" + r",".join([r"\s*(\w+)\s*"] * 7) + r"\}"
 )
-
-
-def dram_counter_names(include_dir=None) -> List[str]:
-    """DramCounter enumerator names in declaration order (UNDEF first), parsed from dram_counters_types.h."""
-    header = find_include_dir(include_dir) / "dram_counters_types.h"
-    names = parse_enum(header.read_text(), "DramCounter")
-    if not names:
-        raise ValueError(f"enum DramCounter in {header} parsed empty")
-    return [names[i] for i in sorted(names)]
-
-
-def parse_dram_table(text: str) -> List[tuple]:
-    """[(counter name, offset)] of niu_counters in one dram_counters_<arch>.h."""
-    text = _strip_comments(text)
-    decl = _DRAM_TABLE_DECL.search(text)
-    if decl is None:
-        raise ValueError("niu_counters not found")
-    size = int(decl.group(1))
-    chunk = text[decl.end() :]
-    chunk = chunk.split("}};", 1)[0] if size else ""
-    pairs = [(n, int(s, 0)) for n, s in _DRAM_ENTRY.findall(chunk)]
-    if len(pairs) != size:
-        raise ValueError(
-            f"niu_counters: parsed {len(pairs)} entries but the array declares {size}"
-        )
-    return pairs
+_DRAM_CONTROLLER_LAYOUT = re.compile(
+    r"ControllerLayout\s+controller_layout\s*=\s*\{([^}]*)\}"
+)
+_DRAM_STRING = re.compile(
+    r'constexpr\s+const\s+char\s+(\w+)\[\]\s*=\s*((?:"[^"]*"\s*)+);'
+)
+_DRAM_FLAG = re.compile(
+    r"constexpr\s+std::uint32_t\s+(FLAG_\w+)\s*=\s*1u\s*<<\s*(\d+)\s*;"
+)
+DRAM_NIU_STATUS_OFFSET = 0x200
 
 
 def _dram_header_text(arch, include_dir) -> str:
@@ -474,8 +454,38 @@ def _dram_header_text(arch, include_dir) -> str:
 
 
 def dram_counter_table(arch, include_dir=None) -> List[tuple]:
-    """[(counter name, offset)] of the NIU table for one arch, empty when the map is not known."""
-    return parse_dram_table(_dram_header_text(arch, include_dir))
+    """[(counter name, status register index)] of the DRAM tile NIU counters of one arch, empty when the arch has no
+    known layout."""
+    if dram_layout(arch, include_dir).niu_base == 0:
+        return []
+    return [
+        (e.name, e.reg)
+        for e in noc_counter_table(arch, include_dir).entries
+        if e.group == "SLAVE"
+    ]
+
+
+def dram_capture_constants(include_dir=None) -> Dict[str, object]:
+    """File names, CSV headers and flag bits of the tt-metal DRAM capture, from dram_counters_types.h."""
+    text = _strip_comments(
+        (find_include_dir(include_dir) / "dram_counters_types.h").read_text()
+    )
+    out: Dict[str, object] = {
+        name: "".join(re.findall(r'"([^"]*)"', value))
+        for name, value in _DRAM_STRING.findall(text)
+    }
+    out.update({name: 1 << int(bit) for name, bit in _DRAM_FLAG.findall(text)})
+    return out
+
+
+def dram_controller_command_bytes(arch, include_dir=None) -> int:
+    """Bytes a full controller command moves, 0 when the arch has no controller map."""
+    match = _DRAM_CONTROLLER_LAYOUT.search(
+        _strip_comments(_dram_header_text(arch, include_dir))
+    )
+    if match is None:
+        return 0
+    return int(match.group(1).split(",")[-1].strip().rstrip("uUlL"), 0)
 
 
 class DramLayout(NamedTuple):
@@ -489,7 +499,7 @@ class DramLayout(NamedTuple):
 
 
 def dram_layout(arch, include_dir=None) -> DramLayout:
-    """What the NIU offsets are relative to. Zeros mean the architecture's map is not known."""
+    """Where the host reads the NIU registers of a DRAM tile. Zeros mean the architecture's map is not known."""
     text = _strip_comments(_dram_header_text(arch, include_dir))
     match = _DRAM_LAYOUT.search(text)
     if match is None:
@@ -497,13 +507,14 @@ def dram_layout(arch, include_dir=None) -> DramLayout:
     return DramLayout(*(int(g.rstrip("uUlL"), 0) for g in match.groups()))
 
 
-def dram_niu_address(arch, noc, tile_noc0_y, offset, include_dir=None) -> int:
-    """Address of an NIU register of a DRAM tile with the given noc0 y, in the space the host reads it in."""
+def dram_niu_address(arch, noc, tile_noc0_y, reg, include_dir=None) -> int:
+    """Address of NIU status register reg of a DRAM tile with the given noc0 y, in the space the host reads it in."""
     layout = dram_layout(arch, include_dir)
     instance = (tile_noc0_y + layout.tile_instance_bias) % layout.tile_instance_count
     return (
         layout.niu_base
         + noc * layout.noc_instance_stride
         + instance * layout.tile_instance_stride
-        + offset
+        + DRAM_NIU_STATUS_OFFSET
+        + 4 * reg
     )

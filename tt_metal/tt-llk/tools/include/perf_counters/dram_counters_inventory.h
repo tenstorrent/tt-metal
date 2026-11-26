@@ -16,32 +16,6 @@
 namespace llk::perf::dram
 {
 
-namespace detail
-{
-
-template <std::size_t N>
-constexpr Table as_table(const std::array<Entry, N>& entries)
-{
-    return Table {entries.data(), entries.size()};
-}
-
-} // namespace detail
-
-// The host picks the architecture at run time, so there is no ARCH_* switch here.
-constexpr Table niu_table(Arch arch)
-{
-    switch (arch)
-    {
-        case Arch::BLACKHOLE:
-            return detail::as_table(blackhole::niu_counters);
-        case Arch::WORMHOLE:
-            return detail::as_table(wormhole::niu_counters);
-        case Arch::QUASAR:
-            return detail::as_table(quasar::niu_counters);
-    }
-    return Table {nullptr, 0};
-}
-
 constexpr Layout layout_for(Arch arch)
 {
     switch (arch)
@@ -70,13 +44,13 @@ constexpr ControllerTable controller_table(Arch arch)
     return ControllerTable {nullptr, 0};
 }
 
-// Register address of a counter on a tile with the given noc0 y: the offset moves with the NoC instance and the
-// register instance of the tile.
-constexpr std::uint64_t niu_address(Arch arch, std::uint32_t noc, std::uint32_t tile_noc0_y, std::uint32_t offset)
+// Address of NIU status register reg (noc_counters_types.h) of a tile with the given noc0 y: it moves with the NoC
+// instance and the register instance of the tile.
+constexpr std::uint64_t niu_address(Arch arch, std::uint32_t noc, std::uint32_t tile_noc0_y, std::uint32_t reg)
 {
     const Layout l = layout_for(arch);
     const std::uint32_t instance = (tile_noc0_y + l.tile_instance_bias) % l.tile_instance_count;
-    return l.niu_base + std::uint64_t(noc) * l.noc_instance_stride + std::uint64_t(instance) * l.tile_instance_stride + offset;
+    return l.niu_base + std::uint64_t(noc) * l.noc_instance_stride + std::uint64_t(instance) * l.tile_instance_stride + NIU_STATUS_OFFSET + 4 * reg;
 }
 
 } // namespace llk::perf::dram

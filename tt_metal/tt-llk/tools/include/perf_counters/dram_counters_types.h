@@ -6,24 +6,15 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <utility>
+
+#include "perf_counters/noc_counters_types.h"
 
 namespace llk::perf::dram
 {
 
-// Counters that live in a DRAM channel tile, not in a worker core. The host reads them over PCIe.
-// Names only: append new counters at the end, never reorder or remove.
-enum class DramCounter : std::uint16_t
-{
-    UNDEF = 0,
-    // NoC interface of the tile, free running, counted per NoC.
-    NIU_SLV_RD_REQ_RECEIVED,
-    NIU_SLV_RD_DATA_WORD_SENT,
-    NIU_SLV_NONPOSTED_WR_REQ_RECEIVED,
-    NIU_SLV_POSTED_WR_REQ_RECEIVED,
-    NIU_SLV_NONPOSTED_WR_DATA_WORD_RECEIVED,
-    NIU_SLV_POSTED_WR_DATA_WORD_RECEIVED,
-};
+// The DRAM tile counters are the slave side NIU counters of noc_counters_types.h, read by the host at
+// Layout::niu_base + NIU_STATUS_OFFSET + 4 * reg (plus the NoC and tile instance terms of the Layout).
+inline constexpr std::uint32_t NIU_STATUS_OFFSET = 0x200;
 
 enum class Arch : std::uint8_t
 {
@@ -34,16 +25,7 @@ enum class Arch : std::uint8_t
 
 inline constexpr std::size_t NUM_ARCHES = 3;
 
-// {counter, offset from the NoC register base of the tile}; every counter is a free running 32-bit register.
-using Entry = std::pair<DramCounter, std::uint32_t>;
-
-struct Table
-{
-    const Entry* data;
-    std::size_t size;
-};
-
-// What a table is relative to; a zero niu_base or word_bytes means unknown.
+// What the register offsets are relative to; a zero niu_base or word_bytes means unknown.
 // The instance of a tile is (noc0 y + tile_instance_bias) % tile_instance_count.
 struct Layout
 {
@@ -74,10 +56,25 @@ struct ControllerLayout
 {
     std::uint64_t register_window;       // OR-ed into every controller register address
     std::uint32_t interval;              // interval length in memory clocks; 0 stops counting and latches the counts
-    std::uint32_t interval_done;         // nonzero after an interval completed, cleared by the read
     std::uint32_t axi_control;           // AXI port resets and clock gating of the controller
     std::uint32_t axi_reset_bits;        // all set on a controller whose registers answer through this tile
     std::uint32_t axi_dynamic_gate_bits; // a dynamically gated port's monitor stops counting with its clock
+    std::uint32_t command_bytes;         // bytes a full read or write command moves
 };
+
+// The files of the tt-metal capture (TT_METAL_PROFILE_DRAM_COUNTERS) and the bits of their flags column; the host
+// decoder reads them from here.
+inline constexpr const char TRAFFIC_LOG[]       = "dram_traffic.csv";
+inline constexpr const char IDLE_LOG[]          = "dram_idle.csv";
+inline constexpr const char CONTROLLER_LOG[]    = "dram_controller.csv";
+inline constexpr const char TRAFFIC_HEADER[]    = "device_id,program_id,launch_seq,flags,elapsed_ns,dram_x,dram_y,noc,counter,delta_words,self_words";
+inline constexpr const char IDLE_HEADER[]       = "device_id,dram_x,dram_y,noc,counter,words_per_snapshot_pair,words_per_second";
+inline constexpr const char CONTROLLER_HEADER[] = "device_id,program_id,launch_seq,flags,elapsed_ns,channel,dram_x,dram_y,counter,value";
+
+inline constexpr std::uint32_t FLAG_OVERLAPPED       = 1u << 0; // another program was in flight on the device
+inline constexpr std::uint32_t FLAG_UNSETTLED        = 1u << 1; // write counters were still moving when the settle loop gave up
+inline constexpr std::uint32_t FLAG_INTERVAL_WRAPPED = 1u << 2; // the window was long enough for the controller interval to run out
+inline constexpr std::uint32_t FLAG_NOT_FINISHED     = 1u << 3; // nobody waited for the program; closed when the device closed
+inline constexpr std::uint32_t FLAG_SERVICE_ACTIVE   = 1u << 4; // a service workload ran on the device during the window
 
 } // namespace llk::perf::dram

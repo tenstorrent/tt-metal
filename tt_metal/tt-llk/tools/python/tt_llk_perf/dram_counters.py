@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Decoder of the metal profiler's DRAM traffic logs (dram_traffic.csv, dram_idle.csv and dram_controller.csv).
-Counter names and the word size come from tools/include/perf_counters/dram_counters_*.h through headers.py.
+File names, flag bits, the word size and the command size come from tools/include/perf_counters/dram_counters_*.h
+through headers.py.
 """
 
 import csv
@@ -11,22 +12,23 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 from . import headers
 
-TRAFFIC_LOG = "dram_traffic.csv"
-IDLE_LOG = "dram_idle.csv"
-CONTROLLER_LOG = "dram_controller.csv"
-FLAG_OVERLAPPED = 1
-FLAG_UNSETTLED = 2
-FLAG_INTERVAL_WRAPPED = 4
+_CAPTURE = headers.dram_capture_constants()
+TRAFFIC_LOG = _CAPTURE["TRAFFIC_LOG"]
+IDLE_LOG = _CAPTURE["IDLE_LOG"]
+CONTROLLER_LOG = _CAPTURE["CONTROLLER_LOG"]
+FLAG_OVERLAPPED = _CAPTURE["FLAG_OVERLAPPED"]
+FLAG_UNSETTLED = _CAPTURE["FLAG_UNSETTLED"]
+FLAG_INTERVAL_WRAPPED = _CAPTURE["FLAG_INTERVAL_WRAPPED"]
+FLAG_NOT_FINISHED = _CAPTURE["FLAG_NOT_FINISHED"]
+FLAG_SERVICE_ACTIVE = _CAPTURE["FLAG_SERVICE_ACTIVE"]
 
-# A full controller command moves 64 B; a narrower host access is still one command, so this is an upper bound.
-COMMAND_BYTES = 64
 READ_COMMANDS = ("RD_CMD", "RD_AP_CMD")
 WRITE_COMMANDS = ("WR_CMD", "WR_AP_CMD")
 
-READ_WORDS = ("NIU_SLV_RD_DATA_WORD_SENT",)
+READ_WORDS = ("SLV_RD_DATA_WORD_SENT",)
 WRITE_WORDS = (
-    "NIU_SLV_NONPOSTED_WR_DATA_WORD_RECEIVED",
-    "NIU_SLV_POSTED_WR_DATA_WORD_RECEIVED",
+    "SLV_NONPOSTED_WR_DATA_WORD_RECEIVED",
+    "SLV_POSTED_WR_DATA_WORD_RECEIVED",
 )
 
 
@@ -227,6 +229,7 @@ class ControllerTraffic(NamedTuple):
     read_commands: int
     write_commands: int
     activates: int
+    bytes_per_command: int
 
     @property
     def wrapped(self) -> bool:
@@ -234,19 +237,24 @@ class ControllerTraffic(NamedTuple):
 
     @property
     def row_hit_rate(self) -> float:
-        """Share of read and write commands that found their row open."""
+        """Share of read and write commands that found their row open, approximately: every activation counts against
+        it, including the ones after a refresh or a power-down exit."""
         commands = self.read_commands + self.write_commands
         return max(0.0, 1.0 - self.activates / commands) if commands else 0.0
 
     @property
     def command_bytes(self) -> int:
-        return (self.read_commands + self.write_commands) * COMMAND_BYTES
+        """Bytes the commands can move; a narrower access is still one command, so an upper bound."""
+        return (self.read_commands + self.write_commands) * self.bytes_per_command
 
 
-def per_program_controller(rows: Iterable[ControllerRow]) -> List[ControllerTraffic]:
+def per_program_controller(
+    rows: Iterable[ControllerRow], arch="blackhole", include_dir=None
+) -> List[ControllerTraffic]:
     """One entry per launch in launch order: counters per channel and the command totals over all channels.
     The flags of a launch are the union over its channels, so a wrap on any channel shows.
     """
+    bytes_per_command = headers.dram_controller_command_bytes(arch, include_dir)
     launches: Dict[tuple, List[ControllerRow]] = defaultdict(list)
     for row in rows:
         launches[(row.device, row.seq, row.program)].append(row)
@@ -272,6 +280,7 @@ def per_program_controller(rows: Iterable[ControllerRow]) -> List[ControllerTraf
                 total(READ_COMMANDS),
                 total(WRITE_COMMANDS),
                 total(("ACT_CMD",)),
+                bytes_per_command,
             )
         )
     return result
@@ -323,7 +332,7 @@ def main(argv=None) -> int:
         print()
         print(
             format_controller_table(
-                per_program_controller(read_controller(controller_path))
+                per_program_controller(read_controller(controller_path), args.arch)
             )
         )
     return 0
