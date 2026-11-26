@@ -339,6 +339,39 @@ def test_a_refused_link_adopts_nothing(checkpoint, monkeypatch, tmp_path):
     assert not list(_key(_module(), [checkpoint]).parent.glob(".*staging-*")), "staging directory leaked"
 
 
+def test_adoption_never_deletes_a_leaf_another_process_published_meanwhile(checkpoint, monkeypatch, tmp_path):
+    """Process A finds the new-key leaf incomplete; process B then publishes it complete and starts
+    loading from it. A must keep B's leaf and report it complete, never delete it to put its own
+    links in place."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    _old_leaf(checkpoint)
+    key = cache.content_key(_module(), [checkpoint])
+    new_dir = _key(_module(), [checkpoint])
+    key_args = dict(
+        model_name="m",
+        subfolder="connector",
+        parallel_config=SimpleNamespace(_asdict=dict),
+        mesh_shape=(4, 8),
+        mesh_device=None,
+    )
+    complete, published = cache._cache_is_complete, []
+
+    def check_then_b_publishes(path, *a, **kw):
+        result = complete(path, *a, **kw)
+        if Path(path) == new_dir and not published:  # A has seen it incomplete; B publishes now
+            published.append(None)
+            monkeypatch.setattr(cache, "_cache_is_complete", complete)
+            cache._publish_cache(_module(), new_dir, key)
+            published[0] = (new_dir / "weight.tensorbin").stat().st_ino
+            monkeypatch.setattr(cache, "_cache_is_complete", check_then_b_publishes)
+        return result
+
+    monkeypatch.setattr(cache, "_cache_is_complete", check_then_b_publishes)
+    assert cache._adopt_legacy_keyed(_module(), [checkpoint], key_args, new_dir, key)
+    assert published and (new_dir / "weight.tensorbin").stat().st_ino == published[0], "B's leaf was replaced"
+    assert not list(new_dir.parent.glob(".*staging-*")), "staging directory leaked"
+
+
 def test_a_cache_with_no_manifest_misses(checkpoint, monkeypatch, tmp_path):
     """Every artifact written before this manifest existed is unverifiable, so it must not be
     served — including the poisoned one. The empty `cache_dict.json` of the old format is exactly

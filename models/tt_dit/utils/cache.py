@@ -836,11 +836,14 @@ def _adopt_legacy_keyed(tt_model: Module, sources, key_args: dict, cache_dir: Pa
             os.link(f, staging / f.name)
         manifest = json.loads((old_dir / CACHE_DICT_FILE).read_text()) | {"content_key": key}
         (staging / CACHE_DICT_FILE).write_text(json.dumps(manifest, indent=2, sort_keys=True))
-        if _cache_is_complete(cache_dir, tt_model, key):
-            return True
-        if cache_dir.exists():
-            shutil.rmtree(cache_dir)
-        os.replace(staging, cache_dir)
+        # Never delete what sits at cache_dir: a process that published it after our check may be
+        # loading from it. rename() refuses a non-empty target, so only a staging dir is ever removed.
+        try:
+            os.rename(staging, cache_dir)
+        except OSError:
+            if _cache_is_complete(cache_dir, tt_model, key):
+                return True
+            raise
     except OSError as err:
         logger.warning(f"could not adopt '{old_dir}' as '{cache_dir}' ({err}); building it instead.")
         return _cache_is_complete(cache_dir, tt_model, key)
