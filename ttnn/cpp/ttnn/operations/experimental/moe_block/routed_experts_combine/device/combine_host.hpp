@@ -22,8 +22,9 @@
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
 inline constexpr uint32_t kTile = 2048;         // bf16 tile bytes (rows are handled as flat tiles)
-// an accumulator's finished-token id CB (32-B pages, one id a page): at least the output CB's 2 rows
-inline constexpr uint32_t kDoneCbPages = 4;
+// CB_FINISHED's pages: one finished token's accumulator-local index per 32-byte page. 4 pages, more than the output
+// CB's 2 rows, so the index queue never stalls the compute before the row queue would
+inline constexpr uint32_t kFinishedCbPages = 4;
 inline constexpr uint32_t kNumHeaders = 8;      // rotating row headers per destination chip (row_header_count)
 inline constexpr uint32_t kHeaderStride = 128;  // bytes between them (row_header_stride)
 // the MISC block of the state (its words: kernels/dataflow/combine_formats.hpp, which the kernels include for them)

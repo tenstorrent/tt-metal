@@ -12,9 +12,9 @@
 // every element), the product lands in DEST. The add is done by the packer: packing with L1 accumulation on adds DEST
 // onto the token's sum already in cb_acc (a token's first row packs without it, so stale L1 is overwritten). Every
 // real token gets exactly top_k rows (the router's top-k). A token is finished as soon as its top_k-th row is in: its
-// sum goes out as bf16 (cb_out) and its id to the writer (cb_done), so output rows are written while other tokens'
-// rows still land, in the order tokens finish. Padding tokens get no rows; once the last row is in, each gets a zero
-// row, in token order.
+// sum goes out as bf16 (cb_out) and its index to the writer (cb_finished), so output rows are written while other
+// tokens' rows still land, in the order tokens finish. Padding tokens get no rows; once the last row is in, each gets a
+// zero row, in token order.
 //
 // The rows are row-major data, but they are processed as if they were tiles: a W-wide bf16 row is W / 1024 "tiles".
 // That is fine because everything here is elementwise - the order of the elements inside a tile does not matter, and
@@ -120,12 +120,13 @@ void kernel_main() {
     constexpr bool snap = snap_step_bits != 0;
     // (1 / q, a power of two too: its exponent field is 254 less q's)
     constexpr uint32_t inverse_snap_step_bits = snap ? 0x7F000000u - snap_step_bits : 0u;
-    // the router's top-k: a token is finished - its sums to bf16, out to the writer - as soon as its top_k-th row is in
+    // the router's top-k: a token is written out as soon as its top_k-th row has been added
     constexpr uint32_t top_k = get_named_compile_time_arg_val(combine_names::kTopK);
-    // the finished tokens' ids, in output order (to the writer), and the pack -> unpack hand-over of a token's sums
-    constexpr uint32_t cb_done = get_named_compile_time_arg_val(combine_names::kDoneCb);
+    // cb_finished: each finished token's accumulator-local index, in the order its row goes into cb_out (to the
+    // writer); cb_sync: the pack -> unpack handshake before a finished token's sum is read back
+    constexpr uint32_t cb_finished = get_named_compile_time_arg_val(combine_names::kFinishedCb);
     constexpr uint32_t cb_sync = get_named_compile_time_arg_val(combine_names::kSyncCb);
-    static_assert(top_k >= 1 && top_k < 256, "rows a token count in a byte");
+    static_assert(top_k >= 1 && top_k < 256, "top_k must be in [1, 255]: rows_seen counts a token's rows in a byte");
     compute_kernel_hw_startup(cb_row, cb_w, cb_acc);
     // (no runtime args: whether this core accumulates differs by chip, and one program for the mesh needs them alike)
     cb_wait_front(cb_meta, 1);
@@ -136,9 +137,9 @@ void kernel_main() {
     }
     const uint32_t n_tokens = first_page & ~kMetaActive;
     mul_bcast_scalar_init(cb_row, cb_w);
-    uint8_t rows_in[max_tokens];  // (each token's rows so far)
+    uint8_t rows_seen[max_tokens];  // (each token's rows added so far)
     for (uint32_t i = 0; i < max_tokens; ++i) {
-        rows_in[i] = 0;
+        rows_seen[i] = 0;
     }
     cb_reserve_back(cb_acc, n_tokens * tiles_per_row);
 
@@ -162,10 +163,10 @@ void kernel_main() {
     };
     // output(token) writes one finished token, with the pipeline already switched by begin_output(): its sum as a bf16
     // row to cb_out (a zero row if the token got no rows - not the stale L1 of its cb_acc slot), then its id to
-    // cb_done, which tells the writer where the row goes.
+    // cb_finished, which tells the writer where the row goes.
     auto output = [&](uint32_t token) {
         cb_reserve_back(cb_out, tiles_per_row);
-        if (rows_in[token] == 0) {
+        if (rows_seen[token] == 0) {
             fill_tile_init();
             for (uint32_t first = 0; first < tiles_per_row; first += kDestTiles) {
                 const uint32_t count = tiles_per_row - first < kDestTiles ? tiles_per_row - first : kDestTiles;
@@ -186,6 +187,8 @@ void kernel_main() {
                 snap_sfpu_init();
             }
         } else {
+            // (cb_acc is reserved once at the start and pushed only at the call's end: its read pointer stays at token
+            // 0's slot, so a token's sum is token * tiles_per_row tiles from it, before and after the push)
             for (uint32_t first = 0; first < tiles_per_row; first += kDestTiles) {
                 const uint32_t count = tiles_per_row - first < kDestTiles ? tiles_per_row - first : kDestTiles;
                 tile_regs_acquire();
@@ -206,9 +209,9 @@ void kernel_main() {
             }
         }
         cb_push_back(cb_out, tiles_per_row);
-        cb_reserve_back(cb_done, 1);
-        PACK((*reinterpret_cast<volatile uint32_t*>(get_local_cb_interface(cb_done).fifo_wr_ptr << 4) = token));
-        cb_push_back(cb_done, 1);
+        cb_reserve_back(cb_finished, 1);
+        PACK((*reinterpret_cast<volatile uint32_t*>(get_local_cb_interface(cb_finished).fifo_wr_ptr << 4) = token));
+        cb_push_back(cb_finished, 1);
     };
 
     while (true) {
@@ -220,7 +223,7 @@ void kernel_main() {
         }
         cb_wait_front(cb_row, tiles_per_row);
         cb_wait_front(cb_w, 1);
-        pack_reconfig_l1_acc(rows_in[token] ? 1 : 0);
+        pack_reconfig_l1_acc(rows_seen[token] ? 1 : 0);
         for (uint32_t first = 0; first < tiles_per_row; first += kDestTiles) {
             const uint32_t count = tiles_per_row - first < kDestTiles ? tiles_per_row - first : kDestTiles;
             tile_regs_acquire();
@@ -245,7 +248,7 @@ void kernel_main() {
         }
         cb_pop_front(cb_row, tiles_per_row);
         cb_pop_front(cb_w, 1);
-        if (++rows_in[token] == top_k) {
+        if (++rows_seen[token] == top_k) {
             // The token's last row is in: write it now. First the packer must have added that row into L1 before the
             // unpacker reads the sum (a CB push from the PACK thread waits for the packer); then switch to writing,
             // write the token, and switch back to accumulating for the next row.
@@ -269,7 +272,7 @@ void kernel_main() {
     cb_wait_front(cb_acc, n_tokens * tiles_per_row);
     begin_output();
     for (uint32_t token = 0; token < n_tokens; ++token) {
-        if (rows_in[token] < top_k) {
+        if (rows_seen[token] < top_k) {
             output(token);
         }
     }

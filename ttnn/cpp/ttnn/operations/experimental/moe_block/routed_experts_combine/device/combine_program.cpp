@@ -200,11 +200,11 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->snap_step_bits = cfg.snap_step_bits();
     plan->home_tokens = in.home_tokens;
     plan->row_elements = in.row_elements;
-    // an accumulator finishes a token (its sums -> bf16 -> the output) as soon as its top-k-th row is in
+    // an accumulator writes a token out (its sum -> bf16 -> the output) as soon as it has added the token's top-k rows
     plan->top_k = resources.dims().top_k;
     TT_FATAL(
         plan->top_k >= 1 && plan->top_k < 256,
-        "routed_experts_combine: top-k {} (a token's rows are counted in a byte)",
+        "routed_experts_combine: top-k {} must be in [1, 255]: the accumulator counts a token's rows in a byte",
         plan->top_k);
     const uint32_t N = mesh.topo.num_chips();
     TT_FATAL(N <= kMaxChips, "routed_experts_combine: {} chips > {}", N, kMaxChips);
@@ -510,7 +510,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->accumulator_fp32_offset = take(plan->max_tokens_per_accumulator * row_tiles * 4096);
     plan->output_cb_offset = take(2 * row_tiles * kTile);
     plan->weight_cb_offset = take(plan->row_depth * kTile);
-    plan->done_cb_offset = take(kDoneCbPages * 32);
+    plan->finished_cb_offset = take(kFinishedCbPages * 32);
     plan->sync_cb_offset = take(32);
     plan->local_ring_offset = e;
     TT_FATAL(
@@ -663,7 +663,7 @@ CombineHandles add_combine_program(
         4096);
     arena_cb(kCbOut, aset, plan.output_cb_offset, 2 * NT * kTile, tt::DataFormat::Float16_b, kTile);
     arena_cb(kCbW, aset, plan.weight_cb_offset, plan.row_depth * kTile, tt::DataFormat::Float16_b, kTile);
-    arena_cb(kCbDone, aset, plan.done_cb_offset, kDoneCbPages * 32, tt::DataFormat::UInt32, 32);
+    arena_cb(kCbFinished, aset, plan.finished_cb_offset, kFinishedCbPages * 32, tt::DataFormat::UInt32, 32);
     arena_cb(kCbSync, aset, plan.sync_cb_offset, 32, tt::DataFormat::UInt32, 32);
 
     // the zero gate: accumulator 0 releases every combine core once the zeroing kernels counted in (ports' senders
@@ -787,7 +787,7 @@ CombineHandles add_combine_program(
             {names::kAccumulatorTableOffset, plan.accumulator_table_offset},
             {names::kAccumulatorTableBytes, plan.accumulator_table_bytes},
             {names::kOutputCb, kCbOut},
-            {names::kDoneCb, kCbDone},
+            {names::kFinishedCb, kCbFinished},
             {names::kRowTiles, NT}};
         // (positional compile-time args: the accessor args - the output's, the device plan's, the routed-header
         // cache's and the per-chip accumulator table's; without per_chip_accumulator_table the plan's stands in,
@@ -966,7 +966,7 @@ CombineHandles add_combine_program(
             {names::kWeightCb, kCbW},
             {names::kSnapStepBits, plan.snap_step_bits},
             {names::kTopK, plan.top_k},
-            {names::kDoneCb, kCbDone},
+            {names::kFinishedCb, kCbFinished},
             {names::kSyncCb, kCbSync}};
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;  // (ComputeConfig's default)
         compute_kernel.config = tt::tt_metal::ComputeConfigDescriptor{
@@ -976,7 +976,7 @@ CombineHandles add_combine_program(
         std::vector<uint32_t> aw_ct;
         NamedArgs aw_named = {
             {names::kOutputCb, kCbOut},
-            {names::kDoneCb, kCbDone},
+            {names::kFinishedCb, kCbFinished},
             {names::kRowBytes, pc.row_bytes},
             {names::kRowTiles, NT},
             {names::kAccumulatorCount, A}};
