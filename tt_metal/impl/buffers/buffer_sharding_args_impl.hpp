@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 
 #include <optional>
 

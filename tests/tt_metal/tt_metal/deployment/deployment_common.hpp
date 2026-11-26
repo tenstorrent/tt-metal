@@ -5,7 +5,7 @@
 #ifndef DEPLOYMENT_COMMON_H
 #define DEPLOYMENT_COMMON_H
 
-#include "tt_metal/api/tt-metalium/hal.hpp"
+#include "tt_metal/api/tt-metalium/discovery/hal.hpp"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
 

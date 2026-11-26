@@ -7,9 +7,9 @@
 #include <fmt/base.h>
 #include <cstdint>
 #include <sys/types.h>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "tt_metal/distributed/mesh_event_impl.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <functional>
 #include <memory>
@@ -17,8 +17,8 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "dispatch_test_utils.hpp"

@@ -33,9 +33,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <ttnn/per_device_program_merge.hpp>
 
 #include "ttnn/distributed/types.hpp"

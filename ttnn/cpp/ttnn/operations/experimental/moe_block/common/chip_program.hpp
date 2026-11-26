@@ -14,9 +14,9 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <ttnn/per_device_program_merge.hpp>
 
 namespace ttnn::operations::experimental::moe_block {

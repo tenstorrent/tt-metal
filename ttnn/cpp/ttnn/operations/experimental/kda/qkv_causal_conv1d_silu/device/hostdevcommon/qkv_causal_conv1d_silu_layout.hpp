@@ -104,11 +104,14 @@ inline void for_each_work_item(
 
 // Fabric exchange buffer pages. The predecessor writes rows [predecessor_page, +3) and the final segment's owner
 // writes rows [carry_page, +3); the convolution cores stage this rank's outgoing and end rows for the exchange core.
+// With an SP-sharded history slab, every rank writes its channels of the slot's old tail into the chronologically
+// first rank's rows [history_page, +3), the only rank that reads it.
 constexpr uint32_t predecessor_page = 0;
 constexpr uint32_t carry_page = predecessor_page + history_rows;
 constexpr uint32_t outgoing_page = carry_page + history_rows;
 constexpr uint32_t end_page = outgoing_page + history_rows;
-constexpr uint32_t exchange_rows = end_page + history_rows;
+constexpr uint32_t history_page = end_page + history_rows;
+constexpr uint32_t exchange_rows = history_page + history_rows;
 // Compile-time index of a fabric connection the exchange core does not have.
 constexpr uint32_t no_fabric_connection = ~0U;
 // The exchange core's fabric connections: the SP neighbors, and on a turning 2D axis the links peer routes leave on.

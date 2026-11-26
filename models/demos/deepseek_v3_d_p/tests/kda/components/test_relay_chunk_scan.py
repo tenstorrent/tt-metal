@@ -14,7 +14,11 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda.ops import sigmoid_gated_rms_norm_reference
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    make_actual_start,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     assert_device_time,
     closed_form_tensor,
@@ -27,7 +31,12 @@ from models.demos.deepseek_v3_d_p.tests.measure.determinism import check_determi
 from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep
 from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _sp_links
-from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_scan import OutputNorm, RelayChunkScan, reset_persistent_semaphores
+from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_scan import (
+    OutputNorm,
+    RelayChunkScan,
+    SlabEntry,
+    reset_persistent_semaphores,
+)
 from tt_py_test_utils_common.realtime_profiler_utils import require_realtime_profiler
 
 pytestmark = run_for_blackhole()
@@ -639,3 +648,219 @@ def test_relay_chunk_scan_kimi_k3_perf(mesh_device, reference_us, margin):
     )
     if reference_us is not None:
         assert_device_time(median_us, reference_us, margin, label)
+
+
+# --- SP-sharded state slab -------------------------------------------------------------------------------------------
+#
+# The model's slab stores, per SP rank, only its heads [r * H / SP, (r + 1) * H / SP) of each (slot, layer) entry. The
+# ranks send their heads of the entry to the chronologically first rank over the fabric, and the first rank sends each
+# head's final carry to its rank only. Contract: the outputs equal the tensor-state call's bit for bit, and each rank's
+# entry ends as its heads of the tensor-state carry; every other entry stays untouched.
+
+_SLAB_LAYERS = 2
+_SLAB_SLOTS = 2
+_SHARDED_MESH = pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"),
+        kda_mesh_param((4, 4), "mesh-4x4", "galaxy4x4-SP4xTP4"),
+        # An SP line (the fabric does not wrap): the line's end ranks have no ranks behind them, so their second carry
+        # senders hold no connection, and the last rank's relay heads backward.
+        kda_mesh_param(
+            (8, 4),
+            "mesh-8x4",
+            "SP8xTP4-fabric-2d",
+            fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+        ),
+    ],
+    indirect=True,
+)
+
+
+class _ShardedSlab:
+    """A sharded [slots * layers, H / SP, K, K] slab of random carries in the model's ND layout, and its host copy."""
+
+    def __init__(self, mesh_device, seed: int):
+        from models.demos.deepseek_v3_d_p.tests.kda.utils import upload_slab
+        from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import nd_dram_memory_config
+        from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_RECURRENT_BAND_WIDTH
+
+        self.mesh_device = mesh_device
+        self.sp_size, _ = _sp_tp(mesh_device)
+        self.stored = _HEADS // self.sp_size
+        generator = torch.Generator().manual_seed(seed)
+        self.entries = 0.1 * torch.randn(_SLAB_SLOTS * _SLAB_LAYERS, _HEADS, _KEY, _KEY, generator=generator)
+        self.slab = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([_SLAB_SLOTS * _SLAB_LAYERS, self.stored, _KEY, _KEY]),
+            ttnn.float32,
+            ttnn.TILE_LAYOUT,
+            mesh_device,
+            nd_dram_memory_config(mesh_device, [1, 1, _KEY, KDA_RECURRENT_BAND_WIDTH]),
+        )
+        upload_slab(
+            self.slab,
+            [self.rank_heads(_rank_tp(mesh_device, index)[0]) for index in range(mesh_device.get_num_devices())],
+        )
+
+    def rank_heads(self, rank: int) -> torch.Tensor:
+        return self.entries[:, rank * self.stored : (rank + 1) * self.stored].clone()
+
+    def entry(self, slot: ttnn.Tensor, layer: int) -> SlabEntry:
+        return SlabEntry(self.slab, slot, _SLAB_LAYERS, layer)
+
+    def assert_matches_host(self, name: str) -> None:
+        for index, stored in enumerate(ttnn.get_device_tensors(self.slab)):
+            rank = _rank_tp(self.mesh_device, index)[0]
+            assert_bit_identical(self.rank_heads(rank), ttnn.to_torch(stored), name=f"{name} slab, device {index}")
+
+
+def _tensor_state_call(relay, transforms, initial: torch.Tensor, start: int, end: int | None):
+    """The tensor-state relay on ``initial`` [H, K, K]: per device its output, and the carry (the same on every rank)."""
+    saved, transforms.initial_tt = transforms.initial_tt, _replicated(transforms.mesh_device, initial)
+    actual_start = make_actual_start(transforms.mesh_device, start)
+    actual_end = None if end is None else make_actual_start(transforms.mesh_device, end)
+    try:
+        output, carry = _run(relay, transforms, actual_start, actual_end)
+        outputs = [ttnn.to_torch(local) for local in ttnn.get_device_tensors(output)]
+        carry_host = ttnn.to_torch(ttnn.get_device_tensors(carry)[0])
+        for tensor in (output, carry, transforms.initial_tt, actual_start, actual_end):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
+    finally:
+        transforms.initial_tt = saved
+    return outputs, carry_host
+
+
+def _expect(relay, transforms, slab: _ShardedSlab, slot: int, layer: int, start: int, end: int | None):
+    """The tensor-state reference of a slab call on the slab's host copy (zeros at a request head or past the slab), and
+    the host copy updated as the call must update the slab."""
+    index = slot * _SLAB_LAYERS + layer
+    in_slab = index < len(slab.entries)
+    initial = slab.entries[index] if in_slab and start != 0 else torch.zeros(_HEADS, _KEY, _KEY)
+    outputs, carry = _tensor_state_call(relay, transforms, initial, start, end)
+    if in_slab:
+        slab.entries[index] = carry
+    return outputs
+
+
+def _assert_outputs(
+    name: str, expected: list[torch.Tensor], output: ttnn.Tensor, start: int, end: int | None, mesh_device
+) -> None:
+    """Each device's valid rows (rows past the interval's end are unspecified)."""
+    chunks = _rank_chunks(_sp_tp(mesh_device)[0], start, end)
+    for index, (reference, local) in enumerate(zip(expected, ttnn.get_device_tensors(output), strict=True)):
+        rows = 32 * chunks[_rank_tp(mesh_device, index)[0]][0]
+        assert_bit_identical(reference[:, :rows], ttnn.to_torch(local)[:, :rows], name=f"{name} output, device {index}")
+
+
+def _sharded_cases(sp_size: int) -> list[tuple[int, int, int, int | None]]:
+    """(slot, layer, start, end): every first rank split and aligned, bounded intervals, a request head and a slot past
+    the slab."""
+    span = sp_size * _ROWS
+    cases = []
+    for rank in range(sp_size):
+        cases.append((rank % _SLAB_SLOTS, 1, rank * _ROWS + 32, None))
+        cases.append(((rank + 1) % _SLAB_SLOTS, 0, rank * _ROWS, rank * _ROWS + span - 64))
+    cases += [(1, 1, 992, 992 + span - 256), (0, 1, 0, None), (_SLAB_SLOTS, 1, _ROWS + 320, None)]
+    return cases
+
+
+@_SHARDED_MESH
+def test_relay_chunk_scan_sharded_slab_matches_tensor_state(mesh_device):
+    """Single calls over every case, a chain of back-to-back calls on one entry whose first rank changes every call
+    (each reads the carry the previous call left across the ranks, so a carry arrival that overtook its carry's writes
+    would read stale heads), and one capture replayed on two slots: outputs and slab bit-identical to the tensor-state
+    calls."""
+    relay = _relay(mesh_device)
+    transforms = _Transforms(mesh_device, relay, seed=917)
+    slab = _ShardedSlab(mesh_device, seed=4401)
+    sp_size = slab.sp_size
+    scalars = []
+
+    def scalar(value: int) -> ttnn.Tensor:
+        scalars.append(make_actual_start(mesh_device, value))
+        return scalars[-1]
+
+    try:
+        slab.assert_matches_host("upload")
+        for slot, layer, start, end in _sharded_cases(sp_size):
+            name = f"slot {slot} layer {layer} [{start}, {end})"
+            expected = _expect(relay, transforms, slab, slot, layer, start, end)
+            output, _ = relay(
+                transforms.packed,
+                *transforms.inputs[:1],
+                slab.entry(scalar(slot), layer),
+                *transforms.inputs[1:],
+                transforms.norm,
+                scalar(start),
+                None if end is None else scalar(end),
+            )
+            _assert_outputs(name, expected, output, start, end, mesh_device)
+            ttnn.deallocate(output)
+            slab.assert_matches_host(name)
+
+        # The chain: one entry, the first rank rotating every call, no host round trip between the calls.
+        chain = [(rank * 3 + 1) % sp_size * _ROWS + 32 * (rank + 1) for rank in range(2 * sp_size)]
+        expected = [_expect(relay, transforms, slab, 1, 0, start, None) for start in chain]
+        slot = scalar(1)
+        outputs = [
+            relay(
+                transforms.packed,
+                *transforms.inputs[:1],
+                slab.entry(slot, 0),
+                *transforms.inputs[1:],
+                transforms.norm,
+                scalar(start),
+            )[0]
+            for start in chain
+        ]
+        for start, reference, output in zip(chain, expected, outputs, strict=True):
+            _assert_outputs(f"chain start {start}", reference, output, start, None, mesh_device)
+            ttnn.deallocate(output)
+        slab.assert_matches_host("chain")
+
+        # One capture, replayed on two slots: the slot is read on device.
+        start = 3 * _ROWS + 64
+        slot, actual_start = scalar(0), scalar(start)
+        expected_eager = _expect(relay, transforms, slab, 0, 1, start, None)
+        eager, _ = relay(
+            transforms.packed,
+            *transforms.inputs[:1],
+            slab.entry(slot, 1),
+            *transforms.inputs[1:],
+            transforms.norm,
+            actual_start,
+        )
+        _assert_outputs("before capture", expected_eager, eager, start, None, mesh_device)
+        ttnn.deallocate(eager)
+        trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        output, _ = relay(
+            transforms.packed,
+            *transforms.inputs[:1],
+            slab.entry(slot, 1),
+            *transforms.inputs[1:],
+            transforms.norm,
+            actual_start,
+        )
+        ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
+        try:
+            for replay_slot in (1, 0):
+                expected = _expect(relay, transforms, slab, replay_slot, 1, start, None)
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        torch.tensor([replay_slot], dtype=torch.int64),
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    ),
+                    slot,
+                )
+                ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
+                _assert_outputs(f"replay slot {replay_slot}", expected, output, start, None, mesh_device)
+                slab.assert_matches_host(f"replay slot {replay_slot}")
+        finally:
+            ttnn.release_trace(mesh_device, trace)
+    finally:
+        for tensor in scalars:
+            ttnn.deallocate(tensor)
+        ttnn.deallocate(slab.slab)

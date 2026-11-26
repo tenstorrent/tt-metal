@@ -5,13 +5,13 @@
 #include "slice_write_rm_interleaved_program_factory.hpp"
 
 #include <cstdint>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 using namespace tt::tt_metal;
