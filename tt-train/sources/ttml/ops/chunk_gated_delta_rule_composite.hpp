@@ -40,7 +40,8 @@ struct ChunkGatedDeltaRuleCompositeResult {
 // save_for_backward = false (inference, or no input requires a gradient) returns h, v_new and a empty.
 //
 // The state-independent per-chunk terms, (I + N)^-1 included, come from ttnn's chunk_gdn_prep, the first phase of
-// ttnn's chunked forward; the loop over the chunks carries the state with ttnn matmuls.
+// ttnn's chunked forward.  With save_for_backward the loop over the chunks carries the state with ttnn matmuls;
+// without it ttnn's chunk_gdn_scan does, in one launch, so its output differs from the saved path's by rounding.
 ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,

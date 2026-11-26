@@ -186,15 +186,19 @@ def test_vs_reference(case, device):
     above = torch.arange(chunk)[None, :] > (torch.arange(T) % chunk)[:, None]
     assert torch.count_nonzero(got[4][:, above]) == 0, "A has non-zeros above the diagonal"
     for name, g, e in zip(OUT_NAMES, got, _reference(x, chunk, case["gate_dtype"], case["scale"])):
-        passed, message = assert_numeric_metrics(
-            e,
-            g,
-            pcc_threshold=PCC_MIN,
-            frobenius_threshold=case["rms_max"][name],
-            check_allclose=False,
-            assert_on_fail=False,
-        )
-        assert passed, f"{name}: {message}"
+        _check_close(name, e, g, case["rms_max"][name])
+
+
+def _check_close(name, expected, actual, rms_max):
+    passed, message = assert_numeric_metrics(
+        expected,
+        actual,
+        pcc_threshold=PCC_MIN,
+        frobenius_threshold=rms_max,
+        check_allclose=False,
+        assert_on_fail=False,
+    )
+    assert passed, f"{name}: {message}"
 
 
 def test_error_does_not_grow_along_the_scan(device):
@@ -228,14 +232,23 @@ def test_bf16_output_only_rounds_o(device):
         assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"{name}: output_dtype changed it"
 
 
-def test_save_for_backward_false_skips_only_the_saved_state(device):
-    shape, chunk = (1, 128, 2, 4, 64, 64), 32
-    t = _upload(_build_inputs(shape, with_h0=True, seed=5), shape, ttnn.float32, device)
-    saved = _dispatch(t, shape[4], chunk)
-    unsaved = _dispatch(t, shape[4], chunk, save_for_backward=False)
-    assert unsaved[2] is None and unsaved[3] is None and unsaved[4] is None
-    for name, a, b in zip(OUT_NAMES[:2], saved[:2], unsaved[:2]):
-        assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"{name}: save_for_backward changed it"
+# save_for_backward=False runs ttnn's scan instead of the loop: o and final_state against the reference.
+UNSAVED_CASES = [p for p in CASES if p.id in ("qwen_tp4_c64", "b2_k96_v160", "decay_gate", "scale_0.3")]
+
+
+@pytest.mark.parametrize("case", UNSAVED_CASES)
+def test_save_for_backward_false(case, device):
+    shape, chunk = case["shape"], case["chunk"]
+    B, T, HK, HV, K, V = shape
+    x = _build_inputs(shape, case["with_h0"], gate_scale=case["gate_scale"], aligned_keys=case["aligned_keys"])
+    outs = _dispatch(
+        _upload(x, shape, case["gate_dtype"], device), K, chunk, scale=case["scale"], save_for_backward=False
+    )
+    assert outs[2] is None and outs[3] is None and outs[4] is None
+    assert tuple(outs[0].shape) == (B * HV, 1, T, V) and tuple(outs[1].shape) == (B, HV, K, V)
+    exp = _reference(x, chunk, case["gate_dtype"], case["scale"])
+    _check_close("o", exp[0], ttnn.to_torch(outs[0]).double().reshape(B * HV, T, V), case["rms_max"]["o"])
+    _check_close("final_state", exp[1], ttnn.to_torch(outs[1]).double(), case["rms_max"]["final_state"])
 
 
 # Every rejection starts from valid inputs (B=1, T=64, HK=1, HV=2, K=V=32, chunk 32) and changes one thing.

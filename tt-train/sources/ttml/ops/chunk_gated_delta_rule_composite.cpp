@@ -236,6 +236,36 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
         prep_kernel_config(),
         /*v_flat=*/true,
         HV);
+    // o per chunk [BH, NC, C, V], from the unscaled q -> [BH, 1, T, V] in output_dtype.
+    const auto finish_output = [&](const Tensor& o_chunks) {
+        auto out = ttnn::reshape(ttnn::multiply(o_chunks, q_scale), ttnn::Shape{BH, 1U, T, V});
+        return out.dtype() == output_dtype ? out : ttnn::typecast(out, output_dtype);
+    };
+
+    // Without the saved state, ttnn's scan runs the recurrence and the output in one launch.  Its o differs from
+    // the saved path's by rounding.
+    if (!save_for_backward) {
+        const Tensor s0 = initial_state.has_value() ? ttnn::reshape(*initial_state, ttnn::Shape{BH, K, V})
+                                                    : core::zeros(ttnn::Shape{BH, K, V}, device, kF32);
+        const auto scan = ttnn::prim::chunk_gdn_scan(
+            prep[0],
+            prep[1],
+            prep[2],
+            prep[3],
+            prep[4],
+            prep[5],
+            prep[6],
+            s0,
+            C,
+            /*output_final_state=*/true,
+            ttnn::DRAM_MEMORY_CONFIG,
+            prep_kernel_config());
+        return {
+            .output = finish_output(scan[0]),
+            .final_state = ttnn::reshape(scan[1], ttnn::Shape{B, HV, K, V}),
+        };
+    }
+
     const auto& q_decay = prep[2];
     const auto& intra = prep[3];
     const auto& k_dec_t = prep[4];
@@ -263,25 +293,13 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
     auto h = ttnn::concat(h_parts, /*dim=*/1);          // [BH, NC, K, V]
     auto v_new = ttnn::concat(v_new_parts, /*dim=*/1);  // [BH, NC, C, V]
 
-    auto out = ttnn::multiply(ttnn::add(mm(q_decay, h), mm(intra, v_new)), q_scale);
-    out = ttnn::reshape(out, ttnn::Shape{BH, 1U, T, V});
-    if (out.dtype() != output_dtype) {
-        out = ttnn::typecast(out, output_dtype);
-    }
-
-    ChunkGatedDeltaRuleCompositeResult result{
-        .output = std::move(out),
+    return {
+        .output = finish_output(ttnn::add(mm(q_decay, h), mm(intra, v_new))),
         .final_state = ttnn::reshape(state, ttnn::Shape{B, HV, K, V}),
-        .h = std::nullopt,
-        .v_new = std::nullopt,
-        .a = std::nullopt,
+        .h = std::move(h),
+        .v_new = ttnn::reshape(v_new, ttnn::Shape{BH, 1U, T, V}),
+        .a = ttnn::reshape(t_inv, ttnn::Shape{BH, 1U, T, C}),
     };
-    if (save_for_backward) {
-        result.h = std::move(h);
-        result.v_new = ttnn::reshape(v_new, ttnn::Shape{BH, 1U, T, V});
-        result.a = ttnn::reshape(t_inv, ttnn::Shape{BH, 1U, T, C});
-    }
-    return result;
 }
 
 }  // namespace ttml::ops
