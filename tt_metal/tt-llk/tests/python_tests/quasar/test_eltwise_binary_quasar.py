@@ -310,25 +310,30 @@ def test_eltwise_binary(
     # returns after run(), and --compile-producer skips inside it. See
     # should_compute_direct_golden for why this is decided here rather than by
     # the get_golden_generator swap the registry-based tests get.
+    # What the StimuliConfig below writes to L1: the tensors, unless the golden
+    # has already packed them.
+    stimuli_A, stimuli_B = src_A, src_B
     if not is_perf and should_compute_direct_golden("the heavyweight eltwise golden"):
         generate_golden = get_golden(Op.EltwiseBinary, QUASAR, mathop, math_fidelity)
-        golden_tensor = generate_golden.run(
+        # Packed once and shared: the golden reads these images and the
+        # StimuliConfig writes the same bytes to L1 verbatim, so the device
+        # sees exactly what the golden saw and nothing is packed twice.
+        stimuli_A, stimuli_B = generate_golden.pack_stimuli(
             [src_A, src_B],
+            formats.input_format,
+            num_faces=num_faces,
+            face_r_dim=tile_shape.face_r_dim,
+        )
+        golden_tensor = generate_golden.run(
+            [stimuli_A, stimuli_B],
             formats.input_format,
             formats.output_format,
             dest_acc=(dest_acc == DestAccumulation.Yes),
             num_faces=num_faces,
             face_r_dim=tile_shape.face_r_dim,
             num_tiles_per_output=num_tiles_per_accumulation,
-            # This sweep covers (16,16), (32,16) and (1,32) tiles as well as
-            # the full one, and the golden cannot tell from a tensor which of
-            # the harness's two writers produced it. The StimuliConfig below
-            # sets use_dense_tile_dimensions=True unconditionally, which is the
-            # writer that strides by the tile's own size -- the same layout the
-            # golden packs. Saying so here keeps the non-32x32 variants on the
-            # heavyweight golden instead of raising for an ambiguity that is
-            # settled at this call site.
-            dense_layout=True,
+            # No dense_layout: the operands are L1 images, which state their
+            # own layout, so there is no stimuli writer left to guess at.
         )
 
     if is_perf and perf_report is None:
@@ -363,9 +368,9 @@ def test_eltwise_binary(
             LOOP_FACTOR(loop_factor),
         ],
         "variant_stimuli": StimuliConfig(
-            src_A,
+            stimuli_A,
             formats.input_format,
-            src_B,
+            stimuli_B,
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
