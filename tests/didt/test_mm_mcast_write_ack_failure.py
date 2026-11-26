@@ -23,9 +23,10 @@ Run this. Reset first, always -- and note the sweep is always a cold-cache run:
     tt-smi -glx_reset_auto
     TT_METAL_HOME=$PWD python_env/bin/python tests/didt/test_mm_mcast_write_ack_failure.py
 
-Exits 1 if any chip hangs. Logs: /tmp/mm_mcast_write_ack_failure/chip<N>/pytest.log. Chips report as
-they finish, so output is in completion order. Reset between runs too: this gate detects a hang but
-cannot clear it, so a still-wedged chip makes its neighbours fail and look faulty.
+Exits 1 if any chip hangs. Logs: /tmp/mm_mcast_write_ack_failure/chip<N>/pytest.log, or under
+$MCAST_ACK_WORK_DIR when set. Chips report as they finish, so output is in completion order. Reset
+between runs too: this gate detects a hang but cannot clear it, so a still-wedged chip makes its
+neighbours fail and look faulty.
 
 One chip, cold:
 
@@ -399,4 +400,4 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None, workload=None):
 
 
 if __name__ == "__main__":
-    sys.exit(1 if scan_all_chips() else 0)
+    sys.exit(1 if scan_all_chips(work_dir=os.environ.get("MCAST_ACK_WORK_DIR")) else 0)
