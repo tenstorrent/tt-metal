@@ -115,7 +115,7 @@ inline void calculate_mish() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void mish_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // 2.0 for u + 2, 1 - 2 / d and the Newton steps.
