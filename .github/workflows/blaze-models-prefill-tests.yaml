@@ -95,10 +95,10 @@ on:
         type: boolean
         default: false
         description: "Group: ring-joint SDPA perf + high-bandwidth all-gather / sparse KV push perf"
-      moe_gate:
+      glm53_sp0_recal:
         type: boolean
         default: false
-        description: "Cross-model: moe_gate"
+        description: "TEMPORARY (#67509, reverted before merge): only the GLM-5.3 sc1_4x4 leg, for baseline recalibration"
       platform:
         required: false
         type: choice

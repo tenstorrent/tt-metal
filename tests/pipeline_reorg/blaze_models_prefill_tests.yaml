@@ -2454,12 +2454,14 @@
     cd "${TT_METAL_HOME}"
     export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 50 * 60 ))  # the bh_sc1_high_power timeout below
     echo "===== [1/2] (GLM-5.3-744B) 2x[4,4] prefill KV accuracy 1M tail@2.5k + perf 1M@2.5k, one chunk per forward ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 || exit $?
+    # TEMPORARY (#67509 baseline recalibration, reverted before merge): step 1's perf gate may fail as "faster";
+    # keep going so the packed step is measured too, and exit with step 1's code.
+    rc1=0; bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 || rc1=$?
     echo "===== [2/2] (GLM-5.3-744B) 2x[4,4] packed prefill KV accuracy 1M tail@2.5k, two chunks per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 --variant packed || exit $?
-    echo "===== both runs passed ====="
+    exit ${rc1}
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed, glm53_sp0_recal]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
