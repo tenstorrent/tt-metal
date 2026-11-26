@@ -289,7 +289,7 @@ def _topology_plan(mesh, cluster_axis, num_links):
     for coord, ch in chips.items():
         links = {}
         for d, peer in ((FWD, ch["next"]), (BWD, ch["prev"])):
-            li = list(ttnn.get_forwarding_link_indices(_node(mesh, coord), _node(mesh, peer)))
+            li = list(ttnn.get_forwarding_link_indices(mesh, _node(mesh, coord), _node(mesh, peer)))
             links[d] = li[:num_links]
         ch["links"] = links
         ports = None

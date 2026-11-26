@@ -131,7 +131,7 @@ def _check_caller_errors(input_tensor, weight, cluster_axis, topology, num_links
             hops.append((grp[-1], grp[0]))
         for a, b in hops:
             for s, d in ((a, b), (b, a)):
-                links = ttnn.get_forwarding_link_indices(_node(mesh_device, s), _node(mesh_device, d))
+                links = ttnn.get_forwarding_link_indices(mesh_device, _node(mesh_device, s), _node(mesh_device, d))
                 if len(links) == 0 and ring and (s, d) in ((grp[-1], grp[0]), (grp[0], grp[-1])):
                     raise ValueError(
                         f"all_to_all_matmul: Ring along cluster_axis={cluster_axis} has no wrap link "
