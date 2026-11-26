@@ -66,9 +66,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (unpack_to_dest)
         {
             // The to-dest placers carry no synchronization: in L1_TO_L1 a Dest loan from math brackets them and
-            // sets the section base, so every section starts at DEST tile 0.
+            // hands over the section base, which the placers count in tiles of tensor_shape_A.
             _llk_unpack_dest_init_();
-            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack, tensor_shape_A);
         }
         else
         {
@@ -110,7 +110,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     if constexpr (unpack_to_dest)
                     {
-                        _llk_unpack_unary_operand_to_dest_block_(block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block);
+                        _llk_unpack_unary_operand_to_dest_block_(
+                            block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block, 1 /*l1_tile_stride*/, tensor_shape_A);
                     }
                     else
                     {

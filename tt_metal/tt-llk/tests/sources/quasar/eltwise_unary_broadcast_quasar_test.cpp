@@ -17,7 +17,6 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "ckernel_buf_desc.h"
-#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_broadcast_operands.h"
@@ -43,17 +42,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
+        if constexpr (unpack_to_dest)
         {
-            if constexpr (unpack_to_dest)
+            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                // CFG persists across run types, so isolates must not inherit a dest-dvalid wait mask.
-                set_up_zero_dest_dvalid_handshake_for_unpack();
+                set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
             else
             {
-                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
+                // CFG persists across run types, so isolates must not inherit
+                // the L1_TO_L1 unpack-to-dest handshake.
+                set_up_zero_dest_dvalid_handshake_for_unpack();
             }
+        }
+        else if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
+        {
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
         }
 
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
@@ -113,14 +117,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                    {
-                        _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
-                    }
                     _llk_unpack_unary_broadcast_operands_<UNPACKER_ENGINE_SEL, unpack_to_dest>(block * tiles_in_block);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
                     }
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
@@ -151,7 +151,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_unary_broadcast.h"
 #include "params.h"
@@ -179,12 +178,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            _llk_math_pack_sync_init_<dest_sync>();
+            // Unpack-to-dest broadcast has no production form (llk_unpack_A_api.h rejects it), and its unpack
+            // writes DEST tile 0 without the borrowed section base, so it keeps the dest-dvalid hand-over.
+            if constexpr (unpack_to_dest)
+            {
+                set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
+            }
+            else
+            {
+                _llk_math_pack_sync_init_<dest_sync>();
+            }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && unpack_to_dest)
         {
-            // Math isolate has no unpack destination pulse, so make FPU the producer and restore immediate
-            // ownership of the destination register.
+            // L1_TO_L1 leaves FPU configured as the middle client in the
+            // UNPACK→FPU→PACK chain. Math isolate has no unpack destination
+            // pulse, so make FPU the producer and restore immediate ownership
+            // of the destination register.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
@@ -251,17 +261,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_math_wait_for_dest_available_();
-                    if constexpr (unpack_to_dest)
+                    if constexpr (!unpack_to_dest)
                     {
-                        _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
-                        _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                        _llk_math_wait_for_dest_available_();
                     }
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
                         _llk_math_eltwise_unary_broadcast_(tile);
                     }
-                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    if constexpr (unpack_to_dest)
+                    {
+                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    }
+                    else
+                    {
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }
@@ -302,7 +317,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+            if constexpr (unpack_to_dest)
+            {
+                set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
+            }
+            else
+            {
+                _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+            }
         }
 
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
@@ -341,13 +363,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < output_num_blocks; block++)
                 {
-                    _llk_packer_wait_for_math_done_();
+                    if constexpr (!unpack_to_dest)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
                     for (std::uint32_t tile = 0; tile < output_tiles_in_block; tile++)
                     {
                         const std::uint32_t res_tile_idx = (block * output_tiles_in_block) + tile;
                         _llk_pack_(tile, res_tile_idx, tensor_shape);
                     }
-                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
+                    if constexpr (unpack_to_dest)
+                    {
+                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                    else
+                    {
+                        _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }

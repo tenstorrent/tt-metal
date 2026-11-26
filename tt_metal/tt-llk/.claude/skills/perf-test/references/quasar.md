@@ -102,10 +102,13 @@ from `max_dest_tiles(dest_acc, dest_sync)`, which halves when `dest_acc=Yes`, so
   - unpack-to-dest writes Dest only on a loan: unpack and math (the section
     owner) both call `_llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>()`
     before the copy and `_llk_tile_regs_return_<...>()` after it, also when
-    math has no other work. A TRISC3 SFPU borrows from PACK or MATH the same
-    way.
+    math has no other work. The placers fold the borrowed section base into
+    the DEST tile index in tiles of the shape they are given, so pass the
+    tile's `TensorShape`. A TRISC3 SFPU borrows from PACK or MATH the same way.
   The test boot (`device_setup`) seeds the semaphores and zeroes the dvalid
-  wait masks, so `L1_TO_L1` sets up no dvalid chain.
+  wait masks, so `L1_TO_L1` sets up no dvalid chain. The one exception is
+  unpack-to-dest unary broadcast: it has no production form and its unpack
+  ignores the section base, so it keeps the dest-dvalid chain.
 - Isolates keep the dest-dvalid helpers in `quasar_test_common.h`:
   `set_up_zero_dest_dvalid_handshake_for_{unpack,math,sfpu,pack}()` clears a
   thread's wait mask so it runs without a partner (pack in `PACK_ISOLATE`,
