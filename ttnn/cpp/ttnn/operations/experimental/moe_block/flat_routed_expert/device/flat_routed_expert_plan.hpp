@@ -117,9 +117,13 @@ struct FlatRoutedExpertPlan {
     uint32_t gate_up_arena_bytes = 0, down_arena_bytes = 0, relay_arena_bytes = 0;
     // a weight slot's gate/up region (bytes per core region)
     uint32_t gate_up_weight_region_bytes = 0;
-    // the down cores' weight blocks rotate over the banks: block k of down core d in bank (d + k) % dram_banks, at
-    // d * down_weight_region_bytes + (k / dram_banks) blocks, like unified_routed_expert_ffn's one-tile-row ND shards
+    // one position's region in a bank (a down core's ceil(blocks / banks) blocks, the widest core's)
     uint32_t down_weight_region_bytes = 0;
+    // down core d's block k sits at position j = k % dram_banks of its bank pattern, in bank (down_bank_pattern[d] >>
+    // 4 j) & 0xF, at down_weight_slot[d] * down_weight_region_bytes + ((k / dram_banks) x (positions of that bank) +
+    // (positions of that bank before j)) blocks: each core's positions in the bank(s) nearest it
+    std::vector<uint32_t> down_bank_pattern, down_weight_slot;
+    uint32_t down_weight_slot_count = 0;  // (regions a bank: the w_d tensor's height in regions)
 
     // ---- role cores (logical)
     // each DRAM bank's anchor: its optimal worker core (gate/up cores are placed by their NOC0 hops from it)

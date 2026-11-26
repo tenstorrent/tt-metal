@@ -33,7 +33,21 @@ the bank count and every bank serves the same bytes.
 The reads are the core's NCRISC's, on NOC0 beside the x forwarder; each slot's cores are the gate/up cores fewest NOC0
 hops from the bank's anchor, its optimal worker core (`get_optimal_dram_bank_to_logical_worker_assignment`; hops from
 `experimental::Device::get_worker_noc_hop_distance`, the reads' response direction), all (slot, core) pairs taken
-nearest first.
+nearest first, then swapped between slots while that lowers the worst slot's mean hops (min-max): every core waits for
+the whole expert, so the bank with the farthest readers paces every expert, and nearest-first leaves the cores no other
+bank took to the last bank. The swaps only change which core reads which slot, not the weights' layout.
+
+## Down weight reads
+
+The down cores are the free cores in raster order, the bank anchors and their east neighbours last (those stay free for
+the combine's ports); each down core then takes its banks: (hops, bank, core) pairs nearest first, every bank serving
+the same down bytes. A down core's blocks go over its bank pattern (`down_bank_pattern`: 8 positions, block k at
+position k % 8; most cores have all 8 positions in one bank, the rest split over two) in its slot (`down_weight_slot`),
+which `down_weight_reader.cpp` decodes and `flat_weight_regions` packs. The weights' layout therefore follows the plan -
+the chip's DRAM endpoints (firmware) and harvesting place the banks' anchors - so a cache of laid-out weights is keyed
+on the plan's packing fields (`down_bank_patterns`, `down_weight_slots`, `down_weight_slot_count`), not on the layout
+options. The down reads' rate is set by their NOC0 distance to the bank: rotating every core over all banks averages
+about 12 hops a block, the nearest banks under 2.
 
 ## Roles and kernels (`device/kernels`)
 

@@ -6,7 +6,8 @@
 // Runs on: down cores (one kernel per column-width group), RISCV_1 (NCRISC), NoC 0
 //
 // Down weights. This core's slice of every scheduled expert's down weights is a sequence of [K block x columns]
-// blocks, one read per block from a contiguous run of one DRAM bank; consecutive blocks rotate over the banks. The
+// blocks, one read per block from a contiguous run in one DRAM bank; block k in the bank of its pattern's position
+// k % banks (the plan's down_bank_pattern: the bank(s) nearest this core). The
 // blocks go into the in1 ring of down_compute.cpp, up to `batch` reads per read barrier. The ring holds about two
 // experts' blocks, so the next expert's blocks load while the current one computes.
 //
@@ -18,7 +19,8 @@
 // Named compile-time args: down_weight_cb (the in1 CB), weight_tile_bytes, down_weight_reads_per_barrier; flat_options:
 // down_block_tiles (tiles per block), down_blocks_per_expert, local_experts, row_tiles_per_sub_block, down_columns (y
 // tile columns this core writes), hidden_tiles (y tile columns in all)
-// Runtime args: 0 down weights address, 1 this core's first bank, 2 byte offset of this core's run in its banks,
+// Runtime args: 0 down weights address, 1 this core's bank pattern (4 bits a position), 2 byte offset of this core's
+// run in its banks,
 // 3.. the schedule args (expert_schedule.hpp); with row-major y then the y address and this core's first y tile
 // column; running with the combine then this core's writer index, report and hand-off args (flat_program.hpp)
 #include <cstdint>
@@ -48,13 +50,26 @@ void kernel_main() {
     constexpr bool reads_per_load = flat_options::down_weights_per_load;
     constexpr bool writes_y = flat_options::y_row_major;
 
-    // block k of this core's sequence sits in bank (first bank + k) % banks, k / banks blocks into the core's run
-    // there (the host packs it so: flat_weight_regions), so every core's reads rotate over the banks
-    const uint32_t first_bank = moe_block_args::arg(1);
+    // block k of this core's sequence sits at position j = k % banks of its bank pattern (arg 1: position j's bank in
+    // bits 4 j ..), in that bank (k / banks) x (the pattern's positions of the bank) + (its positions before j) blocks
+    // into the core's run there (the host packs it so: flat_weight_regions)
+    const uint32_t pattern = moe_block_args::arg(1);
     const uint32_t run_address = moe_block_args::arg(0) + moe_block_args::arg(2);
+    uint32_t pos_bank[banks], pos_count[banks], pos_rank[banks];
+    for (uint32_t j = 0; j < banks; ++j) {
+        pos_bank[j] = (pattern >> (4 * j)) & 0xF;
+        pos_count[j] = 0;
+        pos_rank[j] = 0;
+        for (uint32_t i = 0; i < banks; ++i) {
+            const uint32_t b = (pattern >> (4 * i)) & 0xF;
+            pos_count[j] += b == pos_bank[j];
+            pos_rank[j] += (b == pos_bank[j] && i < j);
+        }
+    }
     auto block_source = [&](uint32_t block) {
+        const uint32_t j = block % banks;
         return get_noc_addr_from_bank_id<true>(
-            (first_bank + block) % banks, run_address + (block / banks) * block_bytes);
+            pos_bank[j], run_address + ((block / banks) * pos_count[j] + pos_rank[j]) * block_bytes);
     };
 
     constexpr uint32_t schedule_args = 3;

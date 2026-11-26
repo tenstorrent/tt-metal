@@ -469,6 +469,25 @@ FlatRoutedExpertPlan make_plan(
         std::stable_partition(
             p.down_cores.begin(), p.down_cores.end(), [&](const Core& c) { return !rd.contains({c.x, c.y}); });
     }
+    // NOC0 hops from bank b's anchor to a core: the direction its read responses travel
+    const auto ref_coord = flat_reference_coord(mesh_device);
+    auto bank_hops = [&](uint32_t b, const Core& c) {
+        return static_cast<uint32_t>(tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+            &mesh_device, ref_coord, opt.at(b), c, tt::tt_metal::NOC::NOC_0));
+    };
+    const uint32_t nbanks = opt.size();
+    // integer caps summing to `total`, even over the banks (the first total % banks one more)
+    auto even_caps = [&](uint32_t total) {
+        std::vector<uint32_t> c(nbanks, total / nbanks);
+        for (uint32_t b = 0; b < total % nbanks; ++b) {
+            ++c[b];
+        }
+        return c;
+    };
+    // The down cores stay the free cores in raster order, the bank anchors and their east neighbours last (above); each
+    // then reads from the bank(s) nearest it (the bank patterns below). Picking the down cores by their distance to the
+    // banks instead would take exactly those anchor-side cores and leave the combine's ports - on the cores the flat
+    // expert leaves free - one or two columns to share.
     uint32_t ND = p.down_cores.size();
     const uint32_t n_slots = p.dram_banks;  // (weight slot r: bank r)
     p.gate_up_weight_slots = n_slots;
@@ -546,6 +565,62 @@ FlatRoutedExpertPlan make_plan(
                 per_slot[r].push_back(ci);
                 placed[ci] = true;
             }
+        }
+        // Then min-max: swap a core of the worst slot (the highest mean hops) with one of another slot while that
+        // lowers the higher of the two slots' means below the worst's. Each bank serves 1/banks of every expert and
+        // every core waits for the whole expert, so the slowest bank paces the call, and nearest-first leaves the last
+        // bank all the far cores the other banks did not take; min-max shares them out. The slots keep their cores'
+        // count, so the weight layout does not change - only which core reads which slot.
+        std::vector<std::vector<uint32_t>> H(n_slots, std::vector<uint32_t>(gu_all.size()));
+        for (uint32_t r = 0; r < n_slots; ++r) {
+            for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
+                H[r][ci] = bank_hops(r, gu_all[ci]);
+            }
+        }
+        auto sum = [&](uint32_t r) {
+            uint32_t s = 0;
+            for (uint32_t ci : per_slot[r]) {
+                s += H[r][ci];
+            }
+            return s;
+        };
+        for (uint32_t it = 0; it < 4096; ++it) {
+            uint32_t w = 0;
+            double wm = -1;
+            for (uint32_t r = 0; r < n_slots; ++r) {
+                const double m = per_slot[r].empty() ? 0.0 : double(sum(r)) / per_slot[r].size();
+                if (m > wm) {
+                    wm = m;
+                    w = r;
+                }
+            }
+            double best = wm;
+            int bi = -1, bs = -1, bj = -1;
+            const uint32_t sw = sum(w);
+            for (uint32_t i = 0; i < per_slot[w].size(); ++i) {
+                const uint32_t a = per_slot[w][i];
+                for (uint32_t s = 0; s < n_slots; ++s) {
+                    if (s == w) {
+                        continue;
+                    }
+                    const uint32_t ss = sum(s);
+                    for (uint32_t j = 0; j < per_slot[s].size(); ++j) {
+                        const uint32_t b = per_slot[s][j];
+                        const double mw = double(sw - H[w][a] + H[w][b]) / per_slot[w].size();
+                        const double ms = double(ss - H[s][b] + H[s][a]) / per_slot[s].size();
+                        if (std::max(mw, ms) + 1e-9 < best) {
+                            best = std::max(mw, ms);
+                            bi = i;
+                            bs = s;
+                            bj = j;
+                        }
+                    }
+                }
+            }
+            if (bi < 0) {
+                break;
+            }
+            std::swap(per_slot[w][bi], per_slot[bs][bj]);
         }
     }
     for (uint32_t r = 0; r < n_slots; ++r) {
@@ -638,18 +713,98 @@ FlatRoutedExpertPlan make_plan(
     p.relay_stride = 1 + p.helper_relays_per_primary;
     p.gate_up_weight_region_bytes = p.experts_per_chip * p.gate_up_k_blocks * p.column_groups_per_weight_slot *
                                     p.weight_block_tiles * p.weight_tile_bytes;
-    // The down cores' weight reads rotate over the DRAM banks instead of one bank per core (bank-pinned streams ran
-    // at 55% of DRAM peak alone, rotating 65%). Bit-identical. Kimi K2.7 / GLM 5.3 us per expert at M 32 / 128: 62.3 /
-    // 72.3 -> 58.2 / 68.7, 54.3 / 63.9 -> 51.2 / 61.4; none at M >= 512.
+    // The down cores' weight blocks: each core's dram_banks positions (block k at position k % banks) in the bank(s)
+    // nearest it, every bank the same down bytes (columns x positions). The down reads' rate is set by their NOC0
+    // distance to the bank, not by how many cores share a bank. Two passes over the (hops, bank, core) pairs, nearest
+    // first. 1: whole cores, at most ND / banks a bank; 2: the cores left, a pair giving the core's next positions to
+    // the bank while the bank has room (each bank: the columns x positions of an even share). Positions left (uneven
+    // columns) go to the least loaded banks. Every bank then holds its whole cores' regions from slot 0 and the split
+    // cores' at one level: the DRAM footprint is that of every core rotating over all banks.
     {
-        uint32_t sub = 0;  // tiles: a core's share of one bank, the widest core's
-        for (uint32_t d = 0; d < p.down_cores.size(); ++d) {
+        const uint32_t banks = p.dram_banks;
+        TT_FATAL(banks >= 1 && banks <= 8 && banks == nbanks, "flat_routed_expert: down bank patterns hold 8 banks");
+        std::vector<std::vector<uint32_t>> pat(ND, std::vector<uint32_t>(banks, 0));
+        uint32_t total = 0;
+        for (uint32_t d = 0; d < ND; ++d) {
+            total += p.down_columns_per_core[d] * banks;
+        }
+        const auto capb = even_caps(total);
+        const uint32_t whole = ND / banks;
+        std::vector<uint32_t> load(banks, 0), next(ND, 0), cores_in(banks, 0);
+        std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> pairs;
+        for (uint32_t b = 0; b < banks; ++b) {
+            for (uint32_t d = 0; d < ND; ++d) {
+                pairs.emplace_back(bank_hops(b, p.down_cores[d]), b, d);
+            }
+        }
+        std::sort(pairs.begin(), pairs.end());
+        for (const auto& [h, b, d] : pairs) {
+            const uint32_t w = p.down_columns_per_core[d] * banks;
+            if (next[d] == 0 && cores_in[b] < whole && load[b] + w <= capb[b]) {
+                std::fill(pat[d].begin(), pat[d].end(), b);
+                next[d] = banks;
+                load[b] += w;
+                ++cores_in[b];
+            }
+        }
+        for (const auto& [h, b, d] : pairs) {
+            const uint32_t w = p.down_columns_per_core[d];
+            while (next[d] < banks && load[b] + w <= capb[b]) {
+                pat[d][next[d]++] = b;
+                load[b] += w;
+            }
+        }
+        for (uint32_t d = 0; d < ND; ++d) {
+            while (next[d] < banks) {
+                uint32_t b = 0;  // (the bank furthest under its cap)
+                for (uint32_t bb = 1; bb < banks; ++bb) {
+                    if (int(capb[bb]) - int(load[bb]) > int(capb[b]) - int(load[b])) {
+                        b = bb;
+                    }
+                }
+                pat[d][next[d]++] = b;
+                load[b] += p.down_columns_per_core[d];
+            }
+        }
+        // Regions of one position's blocks (a core's ceil(blocks / banks) blocks, the widest core's): a core with c
+        // positions in a bank takes c consecutive regions (slots) there, from one slot u in all of its banks.
+        // Single-bank cores first, each bank filled from slot 0.
+        p.down_bank_pattern.assign(ND, 0);
+        p.down_weight_slot.assign(ND, 0);
+        uint32_t region_tiles = 0;
+        for (uint32_t d = 0; d < ND; ++d) {
             const uint32_t kd = FlatRoutedExpertPlan::down_k_block_tiles(
                                p.down_columns_per_core[d], p.intermediate_tiles),
                            nb = p.experts_per_chip * (p.intermediate_tiles / kd);
-            sub = std::max(sub, (nb + p.dram_banks - 1) / p.dram_banks * kd * p.down_columns_per_core[d]);
+            region_tiles = std::max(region_tiles, (nb + banks - 1) / banks * kd * p.down_columns_per_core[d]);
+            uint32_t v = 0;
+            for (uint32_t j = 0; j < banks; ++j) {
+                v |= pat[d][j] << (4 * j);
+            }
+            p.down_bank_pattern[d] = v;
         }
-        p.down_weight_region_bytes = sub * p.weight_tile_bytes;
+        std::vector<uint32_t> fill(banks, 0), order(ND);
+        for (uint32_t d = 0; d < ND; ++d) {
+            order[d] = d;
+        }
+        auto banks_of = [&](uint32_t d) { return std::set<uint32_t>(pat[d].begin(), pat[d].end()).size(); };
+        std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return banks_of(a) < banks_of(b); });
+        for (const uint32_t d : order) {
+            std::map<uint32_t, uint32_t> count;  // positions a bank
+            for (const uint32_t b : pat[d]) {
+                ++count[b];
+            }
+            uint32_t u = 0;
+            for (const auto& [b, c] : count) {
+                u = std::max(u, fill[b]);
+            }
+            for (const auto& [b, c] : count) {
+                fill[b] = std::max(fill[b], u + c);
+            }
+            p.down_weight_slot[d] = u;
+            p.down_weight_slot_count = std::max(p.down_weight_slot_count, *std::max_element(fill.begin(), fill.end()));
+        }
+        p.down_weight_region_bytes = region_tiles * p.weight_tile_bytes;
     }
     p.coordinator_cores.push_back(p.down_cores[0]);
 
