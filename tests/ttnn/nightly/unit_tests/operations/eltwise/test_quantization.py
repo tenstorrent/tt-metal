@@ -1406,3 +1406,21 @@ def test_quantize_row_major_input_tiled_scale(device, axis):
     scale_tt = ttnn.from_torch(scale_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tt = ttnn.quantize(input_tt, scale_tt, zero_point, axis=axis)
     assert torch.equal(ttnn.to_torch(quantized_tt).reshape(expected.shape).float(), expected)
+
+
+@pytest.mark.parametrize("axis", [None, 1])
+@pytest.mark.parametrize(
+    "input_layout, scale_layout",
+    [(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)],
+)
+def test_dequantize_mixed_layout_tensor_scale(device, axis, input_layout, scale_layout):
+    """A scale tensor whose layout differs from the input's dequantizes like a matching pair."""
+    torch.manual_seed(0)
+    q_tr = torch.randint(-128, 127, (1, 2, 64, 128), dtype=torch.int32)
+    scale_tr = torch.tensor([0.02, 0.05]) if axis is not None else torch.tensor([0.02])
+    zero_point = 3
+    expected = (q_tr.float() - zero_point) * scale_tr.view(1, -1, 1, 1)
+    q_tt = ttnn.from_torch(q_tr, dtype=ttnn.int32, layout=input_layout, device=device)
+    scale_tt = ttnn.from_torch(scale_tr, dtype=ttnn.float32, layout=scale_layout, device=device)
+    dequantized_tt = ttnn.dequantize(q_tt, scale_tt, zero_point, axis=axis, dtype=ttnn.float32)
+    assert torch.allclose(ttnn.to_torch(dequantized_tt).reshape(expected.shape), expected, rtol=1e-6, atol=0)
