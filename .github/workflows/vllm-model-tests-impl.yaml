@@ -419,6 +419,12 @@ jobs:
               esac
             done
           fi
+          # CI branch only: a writable symlink overlay of the read-only weight cache, so new cache keys can be written.
+          if [ -n "${TT_CACHE_OVERLAY:-}" ]; then
+            mkdir -p "$TT_CACHE_OVERLAY" && cp -rs "$TT_CACHE_PATH"/. "$TT_CACHE_OVERLAY"/
+            echo "TT_CACHE_PATH overlay: $TT_CACHE_PATH -> $TT_CACHE_OVERLAY ($(find "$TT_CACHE_OVERLAY" -type l | wc -l) links)"
+            export TT_CACHE_PATH="$TT_CACHE_OVERLAY"
+          fi
 
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
