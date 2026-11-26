@@ -539,6 +539,27 @@ class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
 
 
 @dataclass
+class SFPU_POWER_ITERATIVE_EXPONENT(TemplateParameter):
+    """Exponent for power_iterative on Quasar; ``power_iterative_runtime`` has the harness pass it
+    through a volatile, so the kernel takes its runtime-exponent path."""
+
+    power_iterative_exponent: int = 3
+    power_iterative_runtime: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if self.power_iterative_exponent < 0:
+            raise ValueError(
+                f"power_iterative takes a non-negative exponent, got {self.power_iterative_exponent}"
+            )
+        lines = [
+            f"#define SFPU_POWER_ITERATIVE_EXPONENT {self.power_iterative_exponent}u"
+        ]
+        if self.power_iterative_runtime:
+            lines.append("#define SFPU_POWER_ITERATIVE_RUNTIME_EXPONENT 1")
+        return "\n".join(lines)
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
