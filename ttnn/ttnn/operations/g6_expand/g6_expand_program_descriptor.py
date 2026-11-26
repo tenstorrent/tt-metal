@@ -1,231 +1,249 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_expand — program descriptor (regime R1 of op_design.md).
+"""g6_expand program descriptor: plan (work split + block sizes), CB, kernels, column multicast.
 
-R1: 2D grid split of out over (image group, row group, column group) blocks;
-every core reads row 0 of its x tiles (one partial 576 B DRAM read per tile),
-replicates it in place into a broadcast tile B(n, w) with self-aimed L1->L1
-NoC reads, and writes that one B tile to all out pages of its row group.
-
-Every block knob is defined ONCE here (host constants / host-derived values)
-and every CB size, trip count and core count derives from it:
-  BLOCK_IMAGES          — extent of the image axis per block (Phase 0 = 1)
-  MIN_BLOCK_TILE_ROWS   — lower bound of the out-tile-row extent per block (Phase 0 = 2);
-                          block_tile_rows is derived from it and the grid
-  BCAST_BUFFER_DEPTH    — cb_bcast_row_tiles depth in blocks (Phase 0 = 2)
-  block_tile_cols       — derived: ceil(Wt / num_cores), clamped by the L1 budget
+Index space: pattern p = input page (image * Wt + col), replica r = output tile row within an image.
+Grid column gc owns a contiguous pattern range, grid row gr a contiguous replica range. Core (gc, 0)
+is its column's injector; cores (gc, gr > 0) receive the column's pattern block by multicast.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-# ---- knobs (single source of truth) ---------------------------------------
-BLOCK_IMAGES = 1
-MIN_BLOCK_TILE_ROWS = 2
-BCAST_BUFFER_DEPTH = 2
+TILE = 32
 
-# ---- L1 budget (BB-05) -----------------------------------------------------
-L1_BYTES_LEFT_BY_MODEL = 1347776
-RESERVED_MARGIN = 4096
-L1_BUDGET_FOR_OP = L1_BYTES_LEFT_BY_MODEL - RESERVED_MARGIN
+# --- Blocking-model knobs (op_design.md, Blocking Model) -------------------------------------
+# None = the device grid's extent on that axis.
+MAX_PATTERN_GROUPS = None
+MAX_REPLICA_GROUPS = None
+PATTERN_CB_DEPTH_BLOCKS = 1
+L1_OP_BUDGET_BYTES = 1_347_776
+# Multicast semaphores and allocation alignment.
+L1_RESERVED_BYTES = 4096
 
-# ---- CB slot ---------------------------------------------------------------
-CB_BCAST_ROW_TILES = 0
-
-TILE_HW = 32
+CB_PATTERN_TILES = 0
+MCAST_PREFIX = "pattern_mcast"
 
 
 def _div_up(a, b):
     return -(-a // b)
 
 
-def _round_up(a, m):
-    return _div_up(a, m) * m
+@dataclass(frozen=True)
+class Plan:
+    grid: tuple
+    tensor_pattern_wt: int
+    tensor_pattern_tiles: int
+    tensor_replica_rows: int
+    pattern_tiles_per_group: int
+    pattern_groups: int
+    replica_rows_per_group: int
+    replica_groups: int
+    pattern_cb_depth_blocks: int
+    block_pattern_tiles: int
+
+    @property
+    def num_cores(self):
+        return self.pattern_groups * self.replica_groups
+
+    def core_patterns(self, gc):
+        """(pattern_start, core_pattern_tiles) of grid column gc."""
+        start = gc * self.pattern_tiles_per_group
+        return start, min(self.tensor_pattern_tiles, start + self.pattern_tiles_per_group) - start
+
+    def core_replicas(self, gr):
+        """(replica_start, core_replica_rows) of grid row gr."""
+        start = gr * self.replica_rows_per_group
+        return start, min(self.tensor_replica_rows, start + self.replica_rows_per_group) - start
+
+    def num_blocks(self, gc):
+        return _div_up(self.core_patterns(gc)[1], self.block_pattern_tiles)
+
+    @staticmethod
+    def role(gc, gr):
+        return "injector" if gr == 0 else "receiver"
 
 
-def compute_plan(
-    input_shape,
-    out_shape,
-    grid_x,
-    grid_y,
-    tile_bytes,
-    element_size,
+def select_plan(
+    shape,
+    sizes,
+    grid,
     *,
-    block_images=BLOCK_IMAGES,
-    min_block_tile_rows=MIN_BLOCK_TILE_ROWS,
-    bcast_buffer_depth=BCAST_BUFFER_DEPTH,
+    tile_bytes=2048,
+    max_pattern_groups=MAX_PATTERN_GROUPS,
+    max_replica_groups=MAX_REPLICA_GROUPS,
+    pattern_cb_depth_blocks=PATTERN_CB_DEPTH_BLOCKS,
 ):
-    """Pure host derivation of the blocking plan (Work Distribution table of op_design.md)."""
-    num_cores = grid_x * grid_y
-    tensor_images = int(out_shape[0]) * int(out_shape[1])
-    tensor_tile_cols = _div_up(int(out_shape[3]), TILE_HW)  # Wt
-    tensor_out_tile_rows = _div_up(int(out_shape[2]), TILE_HW)  # Ht (per image)
+    """Plan for x of `shape` expanded to `sizes` (-1 keeps the dim) on a `grid` = (grid_x, grid_y)."""
+    out_shape = [int(d) if int(s) == -1 else int(s) for d, s in zip(shape, sizes)]
+    grid_x, grid_y = int(grid[0]), int(grid[1])
+    images = out_shape[0] * out_shape[1]
+    tensor_pattern_wt = _div_up(out_shape[-1], TILE)
+    tensor_pattern_tiles = images * tensor_pattern_wt
+    tensor_replica_rows = _div_up(out_shape[-2], TILE)
 
-    block_images = max(1, min(block_images, tensor_images))
-    image_groups = _div_up(tensor_images, block_images)
+    pattern_cap = grid_x if max_pattern_groups is None else max_pattern_groups
+    replica_cap = grid_y if max_replica_groups is None else max_replica_groups
+    pattern_tiles_per_group = _div_up(tensor_pattern_tiles, min(tensor_pattern_tiles, pattern_cap))
+    pattern_groups = _div_up(tensor_pattern_tiles, pattern_tiles_per_group)
+    replica_rows_per_group = _div_up(tensor_replica_rows, min(tensor_replica_rows, replica_cap))
+    replica_groups = _div_up(tensor_replica_rows, replica_rows_per_group)
 
-    max_block_tile_cols = max(1, L1_BUDGET_FOR_OP // (bcast_buffer_depth * block_images * tile_bytes))
-    block_tile_cols = min(max(1, _div_up(tensor_tile_cols, num_cores)), max_block_tile_cols)
-    col_groups = _div_up(tensor_tile_cols, block_tile_cols)
+    max_block_pattern_tiles = (L1_OP_BUDGET_BYTES - L1_RESERVED_BYTES) // (pattern_cb_depth_blocks * tile_bytes)
+    block_pattern_tiles = min(pattern_tiles_per_group, max_block_pattern_tiles)
 
-    row_groups_fill = max(1, num_cores // (image_groups * col_groups))
-    row_groups_cap = _div_up(tensor_out_tile_rows, max(1, min_block_tile_rows))
-    row_groups = min(max(min(row_groups_fill, row_groups_cap), 1), tensor_out_tile_rows)
-    block_tile_rows = _div_up(tensor_out_tile_rows, row_groups)
-    row_groups = _div_up(tensor_out_tile_rows, block_tile_rows)
-
-    num_blocks = image_groups * row_groups * col_groups
-
-    # Partial x read: row 0 of faces 0 and 1 (face 0 whole + face-1 row 0), DRAM-aligned.
-    face_hw = TILE_HW // 2
-    face_row_bytes = face_hw * element_size
-    face_bytes = face_hw * face_row_bytes
-    x_row_read_bytes = _round_up(face_bytes + face_row_bytes, ttnn.get_dram_alignment())
-    if x_row_read_bytes > tile_bytes:
-        x_row_read_bytes = tile_bytes
-
-    # Per-core block ranges: contiguous block ids, row-wise core order (== split_work_to_cores row_wise).
-    num_cores_used = min(num_blocks, num_cores)
-    base, extra = divmod(num_blocks, num_cores_used)
-    core_blocks = []  # (CoreCoord-xy, first_block, num_blocks_this_core)
-    next_block = 0
-    for k in range(num_cores_used):
-        n_this = base + (1 if k < extra else 0)
-        core_blocks.append(((k % grid_x, k // grid_x), next_block, n_this))
-        next_block += n_this
-    assert next_block == num_blocks
-
-    return {
-        "grid": (grid_x, grid_y),
-        "num_cores": num_cores,
-        "num_cores_used": num_cores_used,
-        "tensor_images": tensor_images,
-        "tensor_tile_cols": tensor_tile_cols,
-        "tensor_out_tile_rows": tensor_out_tile_rows,
-        "block_images": block_images,
-        "image_groups": image_groups,
-        "block_tile_cols": block_tile_cols,
-        "max_block_tile_cols": max_block_tile_cols,
-        "col_groups": col_groups,
-        "block_tile_rows": block_tile_rows,
-        "row_groups": row_groups,
-        "num_blocks": num_blocks,
-        "bcast_buffer_depth": bcast_buffer_depth,
-        "min_block_tile_rows": min_block_tile_rows,
-        "tile_bytes": tile_bytes,
-        "face_row_bytes": face_row_bytes,
-        "face_bytes": face_bytes,
-        "face_rows": face_hw,
-        "x_row_read_bytes": x_row_read_bytes,
-        "core_blocks": core_blocks,
-    }
+    return Plan(
+        grid=(grid_x, grid_y),
+        tensor_pattern_wt=tensor_pattern_wt,
+        tensor_pattern_tiles=tensor_pattern_tiles,
+        tensor_replica_rows=tensor_replica_rows,
+        pattern_tiles_per_group=pattern_tiles_per_group,
+        pattern_groups=pattern_groups,
+        replica_rows_per_group=replica_rows_per_group,
+        replica_groups=replica_groups,
+        pattern_cb_depth_blocks=pattern_cb_depth_blocks,
+        block_pattern_tiles=block_pattern_tiles,
+    )
 
 
-def _core_ranges(num_cores_used, grid_x):
-    """First num_cores_used cores in row-wise order: <= 2 rectangles (BB-17)."""
-    full_rows, rem = divmod(num_cores_used, grid_x)
-    ranges = []
-    if full_rows:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, full_rows - 1)))
-    if rem:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(rem - 1, full_rows)))
-    return ttnn.CoreRangeSet(ranges)
+@dataclass
+class CachedProgram:
+    plan: Plan
+    descriptor: ttnn.ProgramDescriptor
+    # Kernel descriptors in descriptor order. Runtime arg 0 of every core is a tensor address:
+    # x for the readers, out for the writer. Each entry: (kernel, [(x, y) cores]).
+    kernels: list
+    input_address_kernels: list
+    output_address_kernels: list
 
 
-# Address RT arg index (both kernels): patched on a cache hit.
-RT_ADDR_INDEX = 0
+def _crs(x0, y0, x1, y1):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))])
 
 
 def create_program_descriptor(input_tensor, output_tensor, plan):
-    core_set = _core_ranges(plan["num_cores_used"], plan["grid"][0])
-    tile_bytes = plan["tile_bytes"]
-    block_pages = plan["block_images"] * plan["block_tile_cols"]
+    device = input_tensor.device()
+    tile_bytes = input_tensor.buffer_aligned_page_size()
+    if output_tensor.buffer_aligned_page_size() != tile_bytes:
+        raise RuntimeError("g6_expand: input and output pages differ in size")
 
-    cb_bcast_row_tiles = ttnn.CBDescriptor(
-        total_size=block_pages * plan["bcast_buffer_depth"] * tile_bytes,
-        core_ranges=core_set,
+    last_x, last_y = plan.pattern_groups - 1, plan.replica_groups - 1
+    rectangle = _crs(0, 0, last_x, last_y)
+    x_addr = input_tensor.buffer_address()
+    out_addr = output_tensor.buffer_address()
+
+    cb_pattern_tiles = ttnn.CBDescriptor(
+        total_size=plan.pattern_cb_depth_blocks * plan.block_pattern_tiles * tile_bytes,
+        core_ranges=rectangle,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
-                buffer_index=CB_BCAST_ROW_TILES,
+                buffer_index=CB_PATTERN_TILES,
                 data_format=input_tensor.dtype,
                 page_size=tile_bytes,
             )
         ],
     )
 
-    reader_ct = [
-        CB_BCAST_ROW_TILES,
-        plan["x_row_read_bytes"],
-        plan["face_row_bytes"],
-        plan["face_bytes"],
-        plan["face_rows"],
-        tile_bytes,
-    ]
-    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    x_accessor_ct = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    reader_config = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0)
 
-    writer_ct = [CB_BCAST_ROW_TILES, tile_bytes]
-    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    def cores(rows):
+        return [(gc, gr) for gc in range(plan.pattern_groups) for gr in rows]
 
-    reader_rt = ttnn.RuntimeArgs()
+    def reader_kernel(is_injector, rows):
+        rt = ttnn.RuntimeArgs()
+        for gc in range(plan.pattern_groups):
+            pattern_start, core_pattern_tiles = plan.core_patterns(gc)
+            for gr in rows:
+                rt[gc][gr] = [x_addr, pattern_start, core_pattern_tiles]
+        return ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "g6_expand_reader.cpp"),
+            core_ranges=_crs(0, rows[0], last_x, rows[-1]),
+            compile_time_args=[
+                CB_PATTERN_TILES,
+                plan.block_pattern_tiles,
+                tile_bytes,
+                int(is_injector),
+                *x_accessor_ct,
+            ],
+            runtime_args=rt,
+            config=reader_config,
+        )
+
+    injector_reader = reader_kernel(True, [0])
+    readers = [injector_reader]
+    reader_cores = [cores([0])]
+    if plan.replica_groups > 1:
+        receiver_rows = list(range(1, plan.replica_groups))
+        readers.append(reader_kernel(False, receiver_rows))
+        reader_cores.append(cores(receiver_rows))
+
     writer_rt = ttnn.RuntimeArgs()
-    x_addr = input_tensor.buffer_address()
-    out_addr = output_tensor.buffer_address()
-    for (cx, cy), first_block, n_blocks in plan["core_blocks"]:
-        reader_rt[cx][cy] = [
-            x_addr,
-            first_block,
-            n_blocks,
-            plan["tensor_tile_cols"],
-            plan["row_groups"],
-            plan["col_groups"],
-            plan["block_tile_cols"],
-            plan["block_images"],
-            plan["tensor_images"],
-        ]
-        writer_rt[cx][cy] = [
-            out_addr,
-            first_block,
-            n_blocks,
-            plan["tensor_tile_cols"],
-            plan["tensor_out_tile_rows"],
-            plan["row_groups"],
-            plan["col_groups"],
-            plan["block_tile_cols"],
-            plan["block_tile_rows"],
-            plan["block_images"],
-            plan["tensor_images"],
-        ]
-
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "g6_expand_reader.cpp"),
-        core_ranges=core_set,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
-    )
+    for gc in range(plan.pattern_groups):
+        pattern_start, core_pattern_tiles = plan.core_patterns(gc)
+        for gr in range(plan.replica_groups):
+            replica_start, core_replica_rows = plan.core_replicas(gr)
+            writer_rt[gc][gr] = [out_addr, pattern_start, core_pattern_tiles, replica_start, core_replica_rows]
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_expand_writer.cpp"),
-        core_ranges=core_set,
-        compile_time_args=writer_ct,
+        core_ranges=rectangle,
+        compile_time_args=[
+            CB_PATTERN_TILES,
+            plan.block_pattern_tiles,
+            tile_bytes,
+            plan.tensor_pattern_wt,
+            plan.tensor_replica_rows,
+            *ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args(),
+        ],
         runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
+        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
     )
-    # No compute kernel: data_movement op (design: no arithmetic, bit-exact byte moves only).
-    return ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=[cb_bcast_row_tiles])
+
+    descriptor = ttnn.ProgramDescriptor(cbs=[cb_pattern_tiles])
+    if plan.replica_groups > 1:
+        # One group per grid column (column-major order), fixed sender = the column's top core.
+        pattern_mcast = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True),
+            rectangle,
+            plan.replica_groups,
+            ttnn.McastFixedSenderConfig(),
+            ttnn.McastCoreOrder.ColumnMajor,
+        )
+        pattern_mcast.attach(descriptor, MCAST_PREFIX, readers, 0)
+    else:
+        ttnn.attach_absent_mcast(injector_reader, MCAST_PREFIX)
+
+    kernels = [*readers, writer]
+    descriptor.kernels = kernels
+    return CachedProgram(
+        plan=plan,
+        descriptor=descriptor,
+        kernels=kernels,
+        input_address_kernels=list(zip(readers, reader_cores)),
+        output_address_kernels=[(writer, cores(range(plan.replica_groups)))],
+    )
 
 
-def patch_addresses(descriptor, plan, input_tensor, output_tensor):
-    """Cache hit: rewrite only the buffer-address RT arg of each core (BB-07)."""
+def _patch_address(kernel, kernel_cores, address):
+    runtime_args = kernel.runtime_args
+    for x, y in kernel_cores:
+        runtime_args[x][y][0] = address
+
+
+def patch_buffer_addresses(cached, input_tensor, output_tensor):
+    """Point a cached descriptor at this call's tensors; nothing else changes between calls."""
     x_addr = input_tensor.buffer_address()
     out_addr = output_tensor.buffer_address()
-    reader_rt = descriptor.kernels[0].runtime_args
-    writer_rt = descriptor.kernels[1].runtime_args
-    for (cx, cy), _, _ in plan["core_blocks"]:
-        reader_rt[cx][cy][RT_ADDR_INDEX] = x_addr
-        writer_rt[cx][cy][RT_ADDR_INDEX] = out_addr
+    for kernel, kernel_cores in cached.input_address_kernels:
+        _patch_address(kernel, kernel_cores, x_addr)
+    for kernel, kernel_cores in cached.output_address_kernels:
+        _patch_address(kernel, kernel_cores, out_addr)
+    cached.descriptor.kernels = cached.kernels

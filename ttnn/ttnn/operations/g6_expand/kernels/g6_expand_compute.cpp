@@ -1,12 +1,8 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_expand compute — intentionally NOT part of the program.
-//
-// op_design.md classifies g6_expand as data_movement: the broadcast tile B(n, w) is built by
-// self-aimed L1->L1 NoC reads in the reader (byte moves, bit-exact by construction). Routing the
-// values through unpack/DEST/pack (rejected regime R5) would risk the bit identity of NaN
-// payloads and denormals, so g6_expand_program_descriptor.py registers no compute kernel.
-// This file exists only to document that decision; it is never compiled.
+// g6_expand has no compute stage and the program descriptor dispatches no compute kernel: the
+// contract is bit-exact, and a pass through unpack/DEST/pack could alter NaN payloads, signed zeros
+// or denormals. Every output byte is a NoC copy made by the reader and writer kernels.
 
 void kernel_main() {}

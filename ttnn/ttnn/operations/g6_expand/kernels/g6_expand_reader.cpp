@@ -1,110 +1,136 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_expand reader (NCRISC / NoC0) — block operations `read_x_row_block` and `replicate_row_block`.
+// g6_expand reader (NCRISC, NoC0). Produces cb_pattern_tiles: one block of pattern tiles, each tile
+// holding row 0 of its input tile in all 32 rows.
 //
-// Per block (image group ig, row group rg, column group cg):
-//   read_x_row_block:    reserve block_pages = block_images * block_tile_cols CB pages (nominal),
-//                        one partial DRAM read (x_row_read_bytes: face-0 + face-1 row 0) per x tile
-//                        into the start of its CB page, ONE read barrier per block.
-//   replicate_row_block: per tile, row 0 of faces 0/1 -> every other row of faces 0..3 in place via
-//                        self-aimed single-packet L1->L1 NoC reads (local_copy_helpers_dataflow),
-//                        one barrier per tile, push 1 page per tile so the writer starts early.
-//   ragged block:        the unused (block_pages - real) pages are pushed at block end.
-// Byte moves only: bit-exact for NaN payloads, signed zeros, denormals. Rows 1..31 of x (tile
-// padding) never reach a destination row: every row of every face is a source or overwritten.
+//   injector (top core of a grid column): fetch row 0 of the block's input tiles from DRAM, replicate
+//       it into rows 1..31 in place, multicast the block down the column, publish.
+//   receiver (every other core of the column): reserve, receive the multicast block, publish.
 //
-// Raw NoC page read for x: no kernel_lib helper moves a partial interleaved DRAM page (design,
-// "Helpers considered and rejected").
+// Every core of a column walks the same blocks and reserves/pushes the nominal block_pattern_tiles
+// pages per block, so the multicast lands at the same CB write pointer on every receiver. The ragged
+// last block narrows only the fetch, replicate and send size.
+//
+// fetch_row0_block uses raw Noc::async_read: kernel_lib has no DRAM sub-page reader (local_copy
+// helpers address this core's own L1 only).
 
 #include <cstdint>
+#include <optional>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tile_constants.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
-template <uint32_t face_row_bytes, uint32_t face_bytes, uint32_t face_rows>
-FORCE_INLINE void replicate_row_in_tile(Noc noc, uint32_t tile_l1) {
-    // Two halves: left (faces 0, 2) sourced from face-0 row 0, right (faces 1, 3) from face-1 row 0.
-    for (uint32_t half = 0; half < 2; ++half) {
-        const uint32_t src = tile_l1 + half * face_bytes;
-        dataflow_kernel_lib::set_read_state<face_row_bytes>(noc, src);
-        // top face (0 or 1): rows 1..face_rows-1
-        for (uint32_t r = 1; r < face_rows; ++r) {
-            dataflow_kernel_lib::read_with_state<face_row_bytes>(noc, src + r * face_row_bytes, src);
-        }
-        // bottom face (2 or 3): rows 0..face_rows-1
-        const uint32_t bottom = tile_l1 + (2 + half) * face_bytes;
-        for (uint32_t r = 0; r < face_rows; ++r) {
-            dataflow_kernel_lib::read_with_state<face_row_bytes>(noc, bottom + r * face_row_bytes, src);
+using namespace dataflow_kernel_lib;
+
+namespace {
+
+using tt::constants::FACE_HEIGHT;
+using tt::constants::FACE_HW;
+using tt::constants::TILE_HW;
+
+// 32x32 tile = four 16x16 faces: face 0 / 1 hold rows 0..15, faces 2 / 3 rows 16..31.
+constexpr uint32_t NUM_FACES = TILE_HW / FACE_HW;
+
+// Row 0 of a tile is row 0 of face 0 and row 0 of face 1. Each lands at the same in-page offset it
+// has in x: Blackhole DRAM reads need source and destination congruent modulo 64 B.
+template <uint32_t tile_bytes, uint32_t face_bytes, uint32_t face_row_bytes, typename Accessor>
+FORCE_INLINE void fetch_row0_block(
+    const Noc& noc, const Accessor& x, const CircularBuffer& cb, uint32_t first_page, uint32_t num_pages) {
+    for (uint32_t i = 0; i < num_pages; ++i) {
+        for (uint32_t half = 0; half < 2; ++half) {
+            const uint32_t offset = half * face_bytes;
+            noc.async_read<NocOptions::DEFAULT, face_row_bytes>(
+                x,
+                cb,
+                face_row_bytes,
+                {.page_id = first_page + i, .offset_bytes = offset},
+                {.offset_bytes = i * tile_bytes + offset});
         }
     }
+    noc.async_read_barrier();
 }
 
-void kernel_main() {
-    constexpr uint32_t cb_bcast_row_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t x_row_read_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t face_row_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t face_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t face_rows = get_compile_time_arg_val(4);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
-    constexpr auto x_args = TensorAccessorArgs<6>();
-
-    uint32_t arg = 0;
-    const uint32_t x_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t first_block = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(arg++);
-    const uint32_t tensor_tile_cols = get_arg_val<uint32_t>(arg++);
-    const uint32_t row_groups = get_arg_val<uint32_t>(arg++);
-    const uint32_t col_groups = get_arg_val<uint32_t>(arg++);
-    const uint32_t block_tile_cols = get_arg_val<uint32_t>(arg++);
-    const uint32_t block_images = get_arg_val<uint32_t>(arg++);
-    const uint32_t tensor_images = get_arg_val<uint32_t>(arg++);
-
-    const auto x_accessor = TensorAccessor(x_args, x_addr, tile_bytes);
-    Noc noc;
-
-    const uint32_t block_pages = block_images * block_tile_cols;
-
-    for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
-        const uint32_t b = first_block + block_idx;
-        const uint32_t cg = b % col_groups;
-        const uint32_t ig = b / (col_groups * row_groups);  // rg = (b / col_groups) % row_groups: unused here
-        const uint32_t n0 = ig * block_images;
-        const uint32_t c0 = cg * block_tile_cols;
-        const uint32_t this_images = (tensor_images - n0) < block_images ? (tensor_images - n0) : block_images;
-        const uint32_t this_cols =
-            (tensor_tile_cols - c0) < block_tile_cols ? (tensor_tile_cols - c0) : block_tile_cols;
-        const uint32_t real_pages = this_images * this_cols;
-
-        cb_reserve_back(cb_bcast_row_tiles, block_pages);
-        const uint32_t block_l1 = get_write_ptr(cb_bcast_row_tiles);
-
-        {
-            DeviceZoneScopedN("read_x_row");
-            uint32_t page_l1 = block_l1;
-            for (uint32_t i = 0; i < this_images; ++i) {
-                const uint32_t x_page_base = (n0 + i) * tensor_tile_cols + c0;
-                for (uint32_t c = 0; c < this_cols; ++c) {
-                    noc_async_read(x_accessor.get_noc_addr(x_page_base + c), page_l1, x_row_read_bytes);
-                    page_l1 += tile_bytes;
-                }
+// Fill rows 1..31 of every page from its own row 0: face h row 0 -> face h rows 1..15 and face h+2
+// rows 0..15, for h in {0, 1}. One stateful-read setup per (page, face half), one barrier per block.
+template <uint32_t tile_bytes, uint32_t face_bytes, uint32_t face_row_bytes>
+FORCE_INLINE void replicate_block(const Noc& noc, uint32_t block_base, uint32_t num_pages) {
+    for (uint32_t i = 0; i < num_pages; ++i) {
+        const uint32_t page = block_base + i * tile_bytes;
+        for (uint32_t half = 0; half < 2; ++half) {
+            const uint32_t row0 = page + half * face_bytes;
+            set_read_state<face_row_bytes>(noc, row0);
+            for (uint32_t r = 1; r < FACE_HEIGHT; ++r) {
+                read_with_state<face_row_bytes>(noc, row0 + r * face_row_bytes, row0);
             }
-            noc_async_read_barrier();
-        }
-
-        uint32_t page_l1 = block_l1;
-        for (uint32_t k = 0; k < real_pages; ++k) {
-            {
-                DeviceZoneScopedN("replicate_row");
-                replicate_row_in_tile<face_row_bytes, face_bytes, face_rows>(noc, page_l1);
-                noc_async_read_barrier();
+            const uint32_t lower_face = row0 + 2 * face_bytes;
+            for (uint32_t r = 0; r < FACE_HEIGHT; ++r) {
+                read_with_state<face_row_bytes>(noc, lower_face + r * face_row_bytes, row0);
             }
-            cb_push_back(cb_bcast_row_tiles, 1);
-            page_l1 += tile_bytes;
-        }
-        if (real_pages < block_pages) {
-            cb_push_back(cb_bcast_row_tiles, block_pages - real_pages);
         }
     }
+    noc.async_read_barrier();
+}
+
+}  // namespace
+
+void kernel_main() {
+    constexpr uint32_t cb_pattern_tiles_id = get_compile_time_arg_val(0);
+    constexpr uint32_t block_pattern_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
+    constexpr bool is_injector = get_compile_time_arg_val(3) != 0;
+    constexpr auto x_args = TensorAccessorArgs<4>();
+    constexpr auto pattern_mcast = McastArgs<
+        get_named_compile_time_arg_val("pattern_mcast_ct_offset"),
+        get_named_compile_time_arg_val("pattern_mcast_rt_offset")>();
+
+    constexpr uint32_t face_bytes = tile_bytes / NUM_FACES;
+    constexpr uint32_t face_row_bytes = face_bytes / FACE_HEIGHT;
+    static_assert(face_row_bytes <= NOC_MAX_BURST_SIZE);
+
+    const uint32_t x_addr = get_arg_val<uint32_t>(0);
+    const uint32_t pattern_start = get_arg_val<uint32_t>(1);
+    const uint32_t core_pattern_tiles = get_arg_val<uint32_t>(2);
+
+    const uint32_t num_blocks = (core_pattern_tiles + block_pattern_tiles - 1) / block_pattern_tiles;
+
+    Noc noc;
+    CircularBuffer cb_pattern_tiles(cb_pattern_tiles_id);
+
+    if constexpr (is_injector) {
+        const auto x = TensorAccessor(x_args, x_addr, tile_bytes);
+        // Absent when the column has no receivers (one replica group).
+        auto sender = pattern_mcast.optional_sender(noc);
+        for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            const uint32_t block_offset = block_idx * block_pattern_tiles;
+            const uint32_t remaining = core_pattern_tiles - block_offset;
+            const uint32_t this_block_pattern_tiles = remaining < block_pattern_tiles ? remaining : block_pattern_tiles;
+
+            cb_pattern_tiles.reserve_back(block_pattern_tiles);
+            const uint32_t block_base = cb_pattern_tiles.get_write_ptr();
+            fetch_row0_block<tile_bytes, face_bytes, face_row_bytes>(
+                noc, x, cb_pattern_tiles, pattern_start + block_offset, this_block_pattern_tiles);
+            replicate_block<tile_bytes, face_bytes, face_row_bytes>(noc, block_base, this_block_pattern_tiles);
+            if (sender) {
+                sender->send(block_base, block_base, this_block_pattern_tiles * tile_bytes);
+            }
+            cb_pattern_tiles.push_back(block_pattern_tiles);
+        }
+    } else {
+        auto receiver = pattern_mcast.optional_receiver(noc);
+        ASSERT(receiver.has_value());
+        for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            cb_pattern_tiles.reserve_back(block_pattern_tiles);
+            receiver->receive();
+            cb_pattern_tiles.push_back(block_pattern_tiles);
+        }
+    }
+
+    // Multicast data/flag writes and ready-signal increments must land before the next program.
+    noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }

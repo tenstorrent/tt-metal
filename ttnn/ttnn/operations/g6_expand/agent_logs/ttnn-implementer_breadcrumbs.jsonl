@@ -1,1 +1,2 @@
 {"event":"test_run","status":"pass","tests":"test_g6_expand.py (21, plain+dev) + eval/golden_tests/g6_expand (20)","ts":"2026-11-26T19:39:11+00:00"}
+{"event":"test_run","result":"pass","detail":"acceptance 22/22 dev+prod, R1 column mcast","ts":"2026-11-26T23:10:12+00:00"}

@@ -1,85 +1,88 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_expand writer (BRISC / NoC1) — block operation `write_out_block`.
+// g6_expand writer (BRISC, NoC1). For each resident block of pattern tiles, writes every one of this
+// core's replica rows of those patterns to out as whole 2 KB pages: replica row outer, pattern inner,
+// no barrier inside the block. A pattern page p (input page) maps to output page
+//   (p / Wt) * (R * Wt) + row * Wt + p % Wt,   Wt = tensor_pattern_wt, R = tensor_replica_rows.
 //
-// Per block (image group ig, row group rg, column group cg), per real B tile (image n, column w):
-// wait 1 page, write it to the this_block_tile_rows out pages (n*Ht + h)*Wt + w of the row group
-// straight from L1, flush, pop. Pad pages of a ragged block are waited/popped unwritten.
-// One write barrier at kernel end (BB-03).
-//
-// Raw NoC page write: no kernel_lib helper writes interleaved tile pages from one source page.
+// store_block uses raw Noc::async_write: kernel_lib has no DRAM page writer.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
-void kernel_main() {
-    constexpr uint32_t cb_bcast_row_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(1);
-    constexpr auto out_args = TensorAccessorArgs<2>();
+namespace {
 
-    uint32_t arg = 0;
-    const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t first_block = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(arg++);
-    const uint32_t tensor_tile_cols = get_arg_val<uint32_t>(arg++);
-    const uint32_t tensor_out_tile_rows = get_arg_val<uint32_t>(arg++);
-    const uint32_t row_groups = get_arg_val<uint32_t>(arg++);
-    const uint32_t col_groups = get_arg_val<uint32_t>(arg++);
-    const uint32_t block_tile_cols = get_arg_val<uint32_t>(arg++);
-    const uint32_t block_tile_rows = get_arg_val<uint32_t>(arg++);
-    const uint32_t block_images = get_arg_val<uint32_t>(arg++);
-    const uint32_t tensor_images = get_arg_val<uint32_t>(arg++);
-
-    const auto out_accessor = TensorAccessor(out_args, out_addr, tile_bytes);
-
-    const uint32_t block_pages = block_images * block_tile_cols;
-
-    for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
-        const uint32_t b = first_block + block_idx;
-        const uint32_t cg = b % col_groups;
-        const uint32_t rg = (b / col_groups) % row_groups;
-        const uint32_t ig = b / (col_groups * row_groups);
-        const uint32_t n0 = ig * block_images;
-        const uint32_t c0 = cg * block_tile_cols;
-        const uint32_t h0 = rg * block_tile_rows;
-        const uint32_t this_images = (tensor_images - n0) < block_images ? (tensor_images - n0) : block_images;
-        const uint32_t this_cols =
-            (tensor_tile_cols - c0) < block_tile_cols ? (tensor_tile_cols - c0) : block_tile_cols;
-        const uint32_t this_rows =
-            (tensor_out_tile_rows - h0) < block_tile_rows ? (tensor_out_tile_rows - h0) : block_tile_rows;
-        const uint32_t real_pages = this_images * this_cols;
-
-        for (uint32_t i = 0; i < this_images; ++i) {
-            const uint32_t n = n0 + i;
-            for (uint32_t c = 0; c < this_cols; ++c) {
-                {
-                    DeviceZoneScopedN("wait_bcast_tile");
-                    cb_wait_front(cb_bcast_row_tiles, 1);
-                }
-                const uint32_t src_l1 = get_read_ptr(cb_bcast_row_tiles);
-                {
-                    DeviceZoneScopedN("write_out");
-                    uint32_t out_page = (n * tensor_out_tile_rows + h0) * tensor_tile_cols + c0 + c;
-                    for (uint32_t h = 0; h < this_rows; ++h) {
-                        noc_async_write_page(out_page, out_accessor, src_l1);
-                        out_page += tensor_tile_cols;
-                    }
-                    noc_async_writes_flushed();
-                }
-                cb_pop_front(cb_bcast_row_tiles, 1);
+template <uint32_t tile_bytes, uint32_t tensor_pattern_wt, uint32_t tensor_replica_rows, typename Accessor>
+FORCE_INLINE void store_block(
+    const Noc& noc,
+    const Accessor& out,
+    const CircularBuffer& cb,
+    uint32_t first_pattern,
+    uint32_t num_patterns,
+    uint32_t replica_start,
+    uint32_t replica_rows) {
+    constexpr uint32_t image_pages = tensor_replica_rows * tensor_pattern_wt;
+    const uint32_t first_image = first_pattern / tensor_pattern_wt;
+    const uint32_t first_col = first_pattern - first_image * tensor_pattern_wt;
+    for (uint32_t r = 0; r < replica_rows; ++r) {
+        uint32_t row_base = first_image * image_pages + (replica_start + r) * tensor_pattern_wt;
+        uint32_t col = first_col;
+        for (uint32_t i = 0; i < num_patterns; ++i) {
+            noc.async_write<NocOptions::DEFAULT, tile_bytes>(
+                cb, out, tile_bytes, {.offset_bytes = i * tile_bytes}, {.page_id = row_base + col});
+            if (++col == tensor_pattern_wt) {
+                col = 0;
+                row_base += image_pages;
             }
         }
-        if (real_pages < block_pages) {
-            cb_wait_front(cb_bcast_row_tiles, block_pages - real_pages);
-            cb_pop_front(cb_bcast_row_tiles, block_pages - real_pages);
-        }
+    }
+}
+
+}  // namespace
+
+void kernel_main() {
+    constexpr uint32_t cb_pattern_tiles_id = get_compile_time_arg_val(0);
+    constexpr uint32_t block_pattern_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t tensor_pattern_wt = get_compile_time_arg_val(3);
+    constexpr uint32_t tensor_replica_rows = get_compile_time_arg_val(4);
+    constexpr auto out_args = TensorAccessorArgs<5>();
+    static_assert(tile_bytes <= NOC_MAX_BURST_SIZE);
+
+    const uint32_t out_addr = get_arg_val<uint32_t>(0);
+    const uint32_t pattern_start = get_arg_val<uint32_t>(1);
+    const uint32_t core_pattern_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t replica_start = get_arg_val<uint32_t>(3);
+    const uint32_t core_replica_rows = get_arg_val<uint32_t>(4);
+
+    const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
+    const uint32_t num_blocks = (core_pattern_tiles + block_pattern_tiles - 1) / block_pattern_tiles;
+
+    Noc noc;
+    CircularBuffer cb_pattern_tiles(cb_pattern_tiles_id);
+
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        const uint32_t block_offset = block_idx * block_pattern_tiles;
+        const uint32_t remaining = core_pattern_tiles - block_offset;
+        const uint32_t this_block_pattern_tiles = remaining < block_pattern_tiles ? remaining : block_pattern_tiles;
+
+        cb_pattern_tiles.wait_front(block_pattern_tiles);
+        store_block<tile_bytes, tensor_pattern_wt, tensor_replica_rows>(
+            noc,
+            out,
+            cb_pattern_tiles,
+            pattern_start + block_offset,
+            this_block_pattern_tiles,
+            replica_start,
+            core_replica_rows);
+        // The pages may be overwritten once popped, so the NoC must have read them first.
+        noc.async_writes_flushed();
+        cb_pattern_tiles.pop_front(block_pattern_tiles);
     }
 
-    {
-        DeviceZoneScopedN("drain_writes");
-        noc_async_write_barrier();
-    }
+    noc.async_write_barrier();
 }
