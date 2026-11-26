@@ -4,7 +4,7 @@
 
 #include "rgb_to_yuv_program_factory.hpp"
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/math.hpp>
@@ -153,7 +153,9 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
     const bool wide_rows = op_attrs.wide_rows;
     const uint32_t row_bytes_y = W * T;
     const uint32_t row_bytes_uv = W2 * T;
-    const uint32_t rowpage = tt::align(row_bytes_y, std::max(hal::get_l1_alignment(), hal::get_dram_alignment()));
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*device);
+    const uint32_t rowpage =
+        tt::align(row_bytes_y, std::max(device_props.node_local_mem_alignment(), device_props.dram_alignment()));
     if (wide_rows) {
         auto cfg = CircularBufferConfig(2 * rowpage, {{cb_rowbuf, u8_fmt}}).set_page_size(cb_rowbuf, rowpage);
         CreateCircularBuffer(program, all_cores, cfg);

@@ -69,6 +69,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 
 [[maybe_unused]] KernelHandle CreateReadKernel(
     Program& program,
+    tt::ARCH arch,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::vector<uint32_t>& compile_args = {},
@@ -76,6 +77,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 
 [[maybe_unused]] KernelHandle CreateWriteKernel(
     Program& program,
+    tt::ARCH arch,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::vector<uint32_t>& compile_args = {},

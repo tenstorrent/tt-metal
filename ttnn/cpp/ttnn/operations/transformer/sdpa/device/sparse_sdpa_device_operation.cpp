@@ -8,7 +8,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <bit>
 
 namespace ttnn::prim {
@@ -208,7 +208,7 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // DRAM access alignment; that also covers the in-L1 row offsets (DRAM alignment >= L1 alignment).
     // Each Q/K row is one DRAM page in its native dtype (fp8 -> 1 byte, bf16 -> 2). The output dtype
     // matches q (compute_output_specs), so its row width uses q's element size.
-    const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_align = tt::tt_metal::experimental::get_device_properties(*q.device()).dram_alignment();
     TT_FATAL((K_DIM * q.element_size()) % dram_align == 0, "Q row bytes must be {}B aligned", dram_align);
     if (!attrs.has_scaled_kv()) {
         TT_FATAL(

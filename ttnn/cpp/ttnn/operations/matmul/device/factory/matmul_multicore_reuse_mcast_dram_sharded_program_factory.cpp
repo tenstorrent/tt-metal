@@ -13,7 +13,7 @@
 #include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/utils/math.hpp>
@@ -276,7 +276,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     // in1/bias are DRAM sharded with one tile per page; the allocator pads each page to the DRAM
     // alignment (e.g. bfp8 32x16 tile = 544B padded to 576B on Blackhole's 64B alignment). The
     // reader copies blocks contiguously from DRAM, so the buffer must hold tiles at the padded stride.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(device).dram_alignment();
     uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
 
@@ -1450,8 +1450,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         Kt);
 
     const uint32_t x_tile_size = in0_tile.get_tile_size(in0_data_format);
-    const uint32_t w_tile_size =
-        tt::align(in1_tile.get_tile_size(in1_data_format), tt::tt_metal::hal::get_dram_alignment());
+    const uint32_t w_tile_size = tt::align(
+        in1_tile.get_tile_size(in1_data_format),
+        tt::tt_metal::experimental::get_device_properties(device).dram_alignment());
     const uint32_t out_tile_size = output_tile.get_tile_size(output_data_format);
     const uint32_t part_tile_size = output_tile.get_tile_size(part_format);
 

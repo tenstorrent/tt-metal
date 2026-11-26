@@ -8,7 +8,7 @@
 
 #include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-metalium/utils/math.hpp>
@@ -25,9 +25,11 @@ using namespace tt::tt_metal;
 
 namespace {
 
-uint32_t aligned_page_size(uint32_t raw_bytes, BufferType buffer_type) {
-    const uint32_t alignment = buffer_type == BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
-                                                               : tt::tt_metal::hal::get_l1_alignment();
+uint32_t aligned_page_size(
+    const tt::tt_metal::distributed::MeshDevice& device, uint32_t raw_bytes, BufferType buffer_type) {
+    const auto props = tt::tt_metal::experimental::get_device_properties(device);
+    const uint32_t alignment =
+        buffer_type == BufferType::DRAM ? props.dram_alignment() : props.node_local_mem_alignment();
     return tt::round_up(raw_bytes, alignment);
 }
 
@@ -86,10 +88,12 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const uint32_t attn_stick_raw = P * attn.element_size();
     const uint32_t output_stick_raw = D * output.element_size();
 
-    const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value.memory_config().buffer_type());
-    const uint32_t grid_stick_aligned = aligned_page_size(grid_stick_raw, grid.memory_config().buffer_type());
-    const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.memory_config().buffer_type());
-    const uint32_t output_stick_aligned = aligned_page_size(output_stick_raw, output.memory_config().buffer_type());
+    const uint32_t value_stick_aligned =
+        aligned_page_size(*device, value_stick_raw, value.memory_config().buffer_type());
+    const uint32_t grid_stick_aligned = aligned_page_size(*device, grid_stick_raw, grid.memory_config().buffer_type());
+    const uint32_t attn_stick_aligned = aligned_page_size(*device, attn_stick_raw, attn.memory_config().buffer_type());
+    const uint32_t output_stick_aligned =
+        aligned_page_size(*device, output_stick_raw, output.memory_config().buffer_type());
 
     // Tile size (bf16): 32 * 32 * 2 = 2048 bytes.
     const auto data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);

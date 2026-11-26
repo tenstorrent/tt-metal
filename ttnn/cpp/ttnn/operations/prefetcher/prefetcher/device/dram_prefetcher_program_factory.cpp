@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <tuple>
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
@@ -190,7 +190,9 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
 
     uint32_t reader_cb_index = tt::CBIndex::c_0;
     uint32_t sync_cb_index = tt::CBIndex::c_3;
-    uint32_t sync_cb_page_size = hal::get_l1_alignment();
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*tensor_addrs.device()).node_local_mem_alignment();
+    uint32_t sync_cb_page_size = l1_alignment;
 
     /* tensor addresses cb setup */
     uint32_t tensor_addrs_single_tile_size = sizeof(uint32_t);
@@ -201,7 +203,7 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
     /* remote cb setup */
     uint32_t remote_cb_size = global_cb.size();
 
-    auto L1_ALIGNMENT = tt::tt_metal::hal::get_l1_alignment();
+    auto L1_ALIGNMENT = l1_alignment;
     uint32_t remote_cb_index = tt::CBIndex::c_31;
 
     ProgramDescriptor desc;

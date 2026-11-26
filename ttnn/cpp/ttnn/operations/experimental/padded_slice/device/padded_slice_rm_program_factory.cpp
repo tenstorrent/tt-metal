@@ -20,7 +20,7 @@
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <vector>
@@ -80,10 +80,13 @@ PaddedSliceRmReaderOffset padded_slice_rm_reader_offset(
     const bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     const uint32_t output_row_size_bytes = output_shard_spec.shape[1] * input_tensor.element_size();
 
-    const auto src_buffer_alignment =
-        input_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
-    const auto dst_buffer_alignment =
-        output_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*input_tensor.device());
+    const auto src_buffer_alignment = input_buffer->buffer_type() == BufferType::DRAM
+                                          ? device_props.dram_alignment()
+                                          : device_props.node_local_mem_alignment();
+    const auto dst_buffer_alignment = output_buffer->buffer_type() == BufferType::DRAM
+                                          ? device_props.dram_alignment()
+                                          : device_props.node_local_mem_alignment();
     const uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     const uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
 
@@ -171,9 +174,10 @@ get_padded_slice_runtime_args_rm_sharded_output(
             num_input_sticks_per_dim[i],
             accumulated_total_per_dim[i]);
     }
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*output_tensor.device());
     auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
+                                    ? device_props.dram_alignment()
+                                    : device_props.node_local_mem_alignment();
 
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
     // The input base address is a tensor binding, and the reader's accessor takes its page size from
@@ -316,12 +320,13 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1,
         "Output buffer should be L1 for padded_slice operation with tiled inputs");
 
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*a.device());
     auto src_buffer_alignment = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
+                                    ? device_props.dram_alignment()
+                                    : device_props.node_local_mem_alignment();
     auto dst_buffer_alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
+                                    ? device_props.dram_alignment()
+                                    : device_props.node_local_mem_alignment();
 
     TT_FATAL(
         output_row_size_bytes % dst_buffer_alignment == 0,

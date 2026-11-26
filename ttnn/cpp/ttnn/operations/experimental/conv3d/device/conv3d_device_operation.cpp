@@ -12,7 +12,7 @@
 #include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
@@ -64,7 +64,8 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
     if (input_tensor_a.is_sharded()) {
         const auto& shard_spec = input_tensor_a.memory_config().shard_spec().value();
         const uint32_t page_size_bytes = input_tensor_a.buffer()->page_size();
-        const uint32_t alignment_requirement = hal::get_l1_alignment();
+        const uint32_t alignment_requirement =
+            tt::tt_metal::experimental::get_device_properties(*input_tensor_a.device()).node_local_mem_alignment();
         const uint32_t shard_width = shard_spec.shape[1];
         TT_FATAL(
             page_size_bytes == input_tensor_a.buffer()->aligned_page_size(),
@@ -234,7 +235,8 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
         device_grid.y);
 
     uint32_t C_in = input_tensor_a.logical_shape()[4];
-    const uint32_t l1_alignment = hal::get_l1_alignment();
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*input_tensor_a.device()).node_local_mem_alignment();
     if (args.config.C_in_block > 0) {
         TT_FATAL(
             C_in % args.config.C_in_block == 0,

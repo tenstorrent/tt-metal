@@ -86,6 +86,7 @@ struct MergeReport {
 // weights_from_table). The merge gives it an L1 page past both halves' buffers and hands the
 // reader its address; see kernels/hybrid_weight_table.hpp.
 tt::tt_metal::ProgramDescriptor merge_halves(
+    const tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::ProgramDescriptor fused,
     tt::tt_metal::ProgramDescriptor unified,
     const MergedKernelSources& sources,

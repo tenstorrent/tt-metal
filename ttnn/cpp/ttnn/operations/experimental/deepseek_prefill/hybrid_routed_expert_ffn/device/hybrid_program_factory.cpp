@@ -27,7 +27,7 @@
 #include <utility>
 #include <vector>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
@@ -536,7 +536,7 @@ void append_to_descriptor(
 
     const bool direct_write = tensor_arguments.expert_region_offsets.has_value();
     const Tensor& start_tensor = direct_write ? *tensor_arguments.expert_region_offsets : tensor_arguments.counts;
-    const uint32_t dram_alignment = hal::get_dram_alignment();
+    const uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(*device).dram_alignment();
     const uint32_t idx_page =
         std::max<uint32_t>(tensor_arguments.global_expert_idx_table.mesh_buffer().aligned_page_size(), dram_alignment);
     const uint32_t start_page = std::max<uint32_t>(start_tensor.mesh_buffer().aligned_page_size(), dram_alignment);
@@ -3135,7 +3135,8 @@ void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoute
         // alignment, so anything but exactly that layout reads the wrong words.
         const auto& table = *t.weight_table;
         const uint32_t entries = 3 * op.experts_per_chip;
-        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        const uint32_t dram_alignment =
+            tt::tt_metal::experimental::get_device_properties(*t.x.device()).dram_alignment();
         const uint32_t read_bytes =
             (entries * static_cast<uint32_t>(sizeof(uint32_t)) + dram_alignment - 1) / dram_alignment * dram_alignment;
         TT_FATAL(
@@ -3229,6 +3230,7 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
         .buffer = weights_from_table ? t.weight_table->buffer() : nullptr, .experts_per_chip = op.experts_per_chip};
     MergeReport report;
     auto merged = merge_halves(
+        *t.x.device(),
         std::move(fused_descriptor),
         std::move(unified_descriptor),
         merged_kernel_sources(),

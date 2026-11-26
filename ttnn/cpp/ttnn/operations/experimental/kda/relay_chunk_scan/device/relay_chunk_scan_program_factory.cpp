@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -441,8 +441,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto eout_set = relay_set.merge(sender_set);
 
     const uint32_t sender_slots = relay_chunk_scan_sender_slots(kt, mesh->arch());
-    const uint32_t chron_slot_bytes =
-        std::max(tt::tt_metal::hal::get_dram_alignment(), tt::tt_metal::hal::get_l1_alignment());
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*mesh);
+    const uint32_t chron_slot_bytes = std::max(device_props.dram_alignment(), device_props.node_local_mem_alignment());
     // The landing buffer on each relay core, in place: a K x K entry state per head slot, then a final state per slot.
     const auto landing_cb = [&](uint32_t index, uint32_t first_slot) {
         auto cb = kda_factory_detail::cb_descriptor(

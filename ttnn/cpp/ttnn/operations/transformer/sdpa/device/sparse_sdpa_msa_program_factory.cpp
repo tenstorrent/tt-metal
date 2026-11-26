@@ -9,6 +9,7 @@
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <array>
 #include <bit>
 #include <map>
@@ -99,7 +100,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     // Per-core K/V block cache: the reader fills a slot on a miss and compute reads it in place, replacing the
     // streamed K/V block buffers. The count is hashed, so this layout is fixed for the program's lifetime.
     const uint32_t kv_cache_slots = attrs.kv_cache_slots;
-    for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/kv_cache_slots > 0)) {
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*t.q.device()).node_local_mem_alignment();
+    for (const CbSpec& s :
+         base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/kv_cache_slots > 0, l1_alignment)) {
         cb(s.id, s.page_size, s.num_pages, s.df);
     }
     if (kv_cache_slots > 0) {
@@ -107,7 +111,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         cb(cb_v_cache, v_tile_bytes, kv_cache_slots * v_tiles_per_block, g.v_df);
         // The reader runs one block ahead of compute (a miss's DRAM read overlaps the previous block's math) and
         // keeps the previous block's slot off the victim list.
-        cb(cb_slot, message_page_bytes(1), sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, bf);
+        cb(cb_slot, message_page_bytes(1, l1_alignment), sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, bf);
     }
 
     // Block-cyclic ("slab") cache: the invP remap is baked as compile-time args, so a natural-order cache folds

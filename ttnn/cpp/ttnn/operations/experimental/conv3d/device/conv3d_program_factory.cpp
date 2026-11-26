@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <hostdevcommon/common_values.hpp>
 
 namespace ttnn::experimental::prim {
@@ -93,7 +93,7 @@ Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, co
         input_tensor.buffer()->is_dram() &&
         input_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         !input_tensor.buffer()->buffer_distribution_spec().has_value();
-    g.dram_read_alignment = tt::tt_metal::hal::get_dram_alignment();
+    g.dram_read_alignment = tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).dram_alignment();
     const bool input_pages_are_dram_read_aligned = g.in_row_size_bytes % g.dram_read_alignment == 0;
     const bool c_in_slice_is_dram_read_aligned = g.C_in_block_bytes % g.dram_read_alignment == 0;
     g.enable_dram_read_staging =

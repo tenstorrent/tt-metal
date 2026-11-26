@@ -342,7 +342,7 @@ BalanceConfig make_balance_config(const SparseRingSDPAParams& args, const Sparse
         same_noc = same_noc && device->worker_core_from_logical_core(c.core) == noc;
     }
     c.remote = c.on && same_noc && args.ring_size > 1 && !args.all_gather_operation_attributes.full_mesh &&
-               tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
+               tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh)) &&
                scratch(args.ring_size) <= kMaxScratchBytes && same_dram_banks_on_every_device(mesh);
     c.devices = c.remote ? static_cast<uint32_t>(args.ring_size) : 1u;
     c.scratch_bytes = scratch(c.devices);
