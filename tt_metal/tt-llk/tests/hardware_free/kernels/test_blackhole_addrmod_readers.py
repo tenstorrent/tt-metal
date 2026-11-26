@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Hardware free: no LLK op may rely on an address mod that main's matmul never writes without writing it itself.
 
-Main's matmul writes ADDR_MOD_0, 1, 2, 4 and 5 (and 6 under a static throttle); the head's forms also write 3 and 6 (rows form, half sync end fold, row MOP, row end fold).
-An op whose mods all lie in {3, 6, 7} could skip its init after a matmul on main, which breaks with those forms. The set of such files is pinned below (every one of them
-is an SFPU or custom kernel that sets the mod in its own init); a new file that reads only 3, 6 or 7 fails this test until it is added with the production kernels that run
-it next to a matmul checked (addrmod_audit.md). usage: python3 test_blackhole_addrmod_readers.py (or pytest).
+Main's matmul writes ADDR_MOD_0, 1, 2, 4 and 5 in its init (6 only inside a throttled or row MOP call, restored to dest += 2); the head's forms also write 3 in the
+init (rows form, half sync end fold, row MOP) and 6 inside the call (row MOP, row end fold). An op whose mods all lie in {3, 6, 7} could skip its init after a matmul on main,
+which breaks with those forms where it reads 3. The set of such files is pinned below (an SFPU or custom kernel that sets 3 in its own init or reads 6 / 7 at their
+hw_configure invariants); a new file that reads only 3, 6 or 7 fails this test until it is added with the production kernels that run it next to a matmul checked
+(addrmod_audit.md). usage: python3 test_blackhole_addrmod_readers.py (or pytest).
 """
 import re
 from pathlib import Path
@@ -14,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[3] / "tt_llk_blackhole"
 PINNED = {
     "common/inc/sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h",
     "common/inc/sfpu/experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h",
-    "llk_lib/llk_math_eltwise_ternary_sfpu.h",
+    "common/inc/sfpu/experimental/ckernel_sfpu_topk_pack_indices.h",
 }
 
 
