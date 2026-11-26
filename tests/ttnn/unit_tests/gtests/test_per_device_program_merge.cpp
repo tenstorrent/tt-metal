@@ -13,9 +13,9 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/device_operation.hpp"

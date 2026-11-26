@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 
 #include <atomic>
 #include <memory>

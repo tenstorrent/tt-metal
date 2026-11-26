@@ -72,6 +72,24 @@ def manual_seed(seed: int) -> None:
     _rng = np.random.default_rng(seed)
 
 
+def get_rng_state() -> dict:
+    """The state of ttml.init's RNG, as its numpy bit generator's ``state`` dict (a PCG64's after ``manual_seed``), for
+    ``set_rng_state`` to put back, e.g. after restoring a checkpoint."""
+    return _rng.bit_generator.state
+
+
+def set_rng_state(state: dict) -> None:
+    """Continue ttml.init's RNG from ``state``, a dict ``get_rng_state`` returned. Like ``manual_seed`` this makes a new
+    generator; a state its bit generator refuses raises and leaves the current generator in place."""
+    global _rng
+    kind = getattr(np.random, str(state.get("bit_generator")), None)
+    if not (isinstance(kind, type) and issubclass(kind, np.random.BitGenerator)):
+        raise ValueError(f"not a numpy bit generator's state: bit_generator={state.get('bit_generator')!r}")
+    bit_generator = kind()
+    bit_generator.state = state
+    _rng = np.random.Generator(bit_generator)
+
+
 def _calculate_fan_in_and_fan_out(shape) -> tuple[int, int]:
     # ttml pads weight shapes to 4D with leading 1s (e.g. [1, 1, out, in]).
     # Strip them so the standard PyTorch fan calculation works correctly.
@@ -466,6 +484,7 @@ __all__ = [
     "calculate_gain",
     "constant",
     "constant_",
+    "get_rng_state",
     "kaiming_normal",
     "kaiming_normal_",
     "kaiming_uniform",
@@ -475,6 +494,7 @@ __all__ = [
     "normal_",
     "ones",
     "ones_",
+    "set_rng_state",
     "uniform",
     "uniform_",
     "xavier_normal",

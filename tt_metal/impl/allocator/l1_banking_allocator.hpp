@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "dispatch/dispatch_core_manager.hpp"
 #include <cstdint>
 

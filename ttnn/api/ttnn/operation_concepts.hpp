@@ -11,9 +11,9 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/graph_tracking.hpp>
-#include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <cstdint>
@@ -124,6 +124,10 @@ concept HasRangeRunArgsOverride = requires {
         typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
         ttnn::device_operation::RangeRunArgs>;
 };
+
+// True iff T maps its TTNN command-list parameters, which a recording binds through the cache miss's tensor bindings.
+template <typename T>
+concept MapsCmdListParameters = requires { &T::map_cmd_list_parameters; };
 }  // namespace detail
 
 // A factory whose programs vary across the mesh: one call returns the workload-scoped resources
