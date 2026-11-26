@@ -1,0 +1,24 @@
+---
+# PR Gate model-charts-sync: check the models chart in README.md matches the
+# one in models/README.md (.github/scripts/utils/model-charts-sync.py, stdlib only).
+jobs:
+  - id: model-charts-sync
+    name: Model charts sync
+    description: Check the models chart in README.md matches the one in models/README.md
+    timeout: 10m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/python:3.10-bookworm@sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8
+        resources:
+          requests: {cpu: '1', memory: 1Gi, ephemeral-storage: 2Gi}
+          limits: {memory: 2Gi, ephemeral-storage: 4Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+    steps:
+      - id: model-charts-sync
+        kind: shell
+        shell:
+          run:
+            - python .github/scripts/utils/model-charts-sync.py

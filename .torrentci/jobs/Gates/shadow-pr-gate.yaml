@@ -22,3 +22,5 @@ dashboards:
         when:
           changed: [llk-wormhole, llk-blackhole, llk-common, llk-sfpi, llk-tests, llk-ci, llk-perf, llk-hardware-free,
                     llk-quasar]
+      # Not a member yet: model-charts-sync (Lint/model-charts-sync.yaml, when model-charts changes) takes about
+      # 41 s here against ~15 s for GitHub's lint-sized jobs, most of it checkout.
