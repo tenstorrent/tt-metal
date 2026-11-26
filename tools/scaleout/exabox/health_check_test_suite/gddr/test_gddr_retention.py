@@ -16,11 +16,12 @@ and read values, flipped bits, first failing read and its page's classification.
 last gap until that long after the write; RETENTION_REPS=n reads each chunk n times a pass and counts every failing
 read.
 
-test_gddr_retention_detects_changes is the negative test. Between the write and the reads a third program flips bits
-of single words (the first and last tested word, a slice boundary, the DIIM-751 address, and one more between the two
-reads), puts a line back to the previous pattern's data, overwrites a line with another address's data and copies the
-first line above the swept range into a line. Exactly those words must be reported, with their values and first read,
-and the three lines classified as stale and as aliases of the differing address bit.
+test_gddr_retention_detects_changes is the negative test. It reads on the same default schedule, whatever
+RETENTION_GAPS_S says. Between the write and the reads a third program flips bits of single words (the first and last
+tested word, a slice boundary, the DIIM-751 address, and one more between the first and second reads), puts a line back
+to the previous pattern's data, overwrites a line with another address's data and copies the first line above the swept
+range into a line. Exactly those words must be reported, with their values and first read, and the three lines
+classified as stale and as aliases of the differing address bit.
 
 Coverage is [0x40, lowest kernel binary) of every bank, 99.9999% on Blackhole. That includes the reserved bottom, so the
 profiler, device print, watcher and DRAM-backed command queue must be off. Every program is launched once before the
@@ -123,11 +124,18 @@ def env_float(name, default):
     return float(os.environ.get(name, str(default)))
 
 
+# Read schedule: each read pass starts this many seconds after the one before it (the first, after the write).
+# RETENTION_GAPS_S overrides it for test_gddr_retention; the negative test always uses it.
+DEFAULT_GAPS_S = [2, 2, 2]
+
+
 def read_config():
     unsafe = [name for name in UNSAFE_ENV if os.environ.get(name, "0") not in ("", "0")]
     assert not unsafe, f"{unsafe} use the reserved bottom of DRAM, which this test overwrites; unset them"
     cfg = {
-        "gaps_s": [float(gap) for gap in os.environ.get("RETENTION_GAPS_S", "2,2,2").split(",")],
+        "gaps_s": [
+            float(gap) for gap in os.environ.get("RETENTION_GAPS_S", ",".join(map(str, DEFAULT_GAPS_S))).split(",")
+        ],
         "seconds": env_float("RETENTION_SECONDS", 0),
         "reps": env_int("RETENTION_REPS", 1),
         "max_passes": env_int("RETENTION_MAX_PASSES", 1 << 30),
@@ -578,7 +586,8 @@ def test_gddr_retention():
 # at 0x1400A2D0 (byte 0x10 of its 64 B burst), always 1 to 0, while it was being re-read.
 DIIM_751_ADDR, DIIM_751_MASK = 0x1400A2D0, 0x00000060
 ALIAS_TEST_BIT = 20
-NEGATIVE_GAPS_S = [1, 1]
+# The same schedule as test_gddr_retention's default. The plan below needs at least two reads.
+NEGATIVE_GAPS_S = DEFAULT_GAPS_S
 
 
 def negative_plan(run, seed, prev_seed):
