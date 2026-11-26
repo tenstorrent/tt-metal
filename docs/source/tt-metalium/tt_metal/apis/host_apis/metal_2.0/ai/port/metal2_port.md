@@ -57,7 +57,7 @@ If you nonetheless hit a host-computed `base + offset` folded into an address ar
 
   **What this costs you, honestly:** that tree is the only place in the repo where these constructs appear already converted, so the rule gives up the one ready-made precedent you could have had. That's deliberate, and the replacement is better — next bullet.
 
-- **Go to the headers first; they are ground truth and they are good.** The Metal 2.0 host API under [`tt_metal/api/tt-metalium/experimental/metal2_host_api/`](../../../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/) documents the DFB endpoint invariant, aliasing and multi-binding rules, the advanced options, and the tensor relaxations **at the field**, frequently in more detail than this recipe's paraphrase. When you're unsure how a construct should look, the reflex to hunt for a precedent is the weaker one: reading the declaring header is usually faster and gives you a definitive answer instead of one porter's choice.
+- **Go to the headers first; they are ground truth and they are good.** The Metal 2.0 host API under [`tt_metal/api/tt-metalium/workload/specification/`](../../../../../../../../../tt_metal/api/tt-metalium/workload/specification/) and [`tt_metal/api/tt-metalium/experimental/metal2_host_api/`](../../../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/) documents the DFB endpoint invariant, aliasing and multi-binding rules, the advanced options, and the tensor relaxations **at the field**, frequently in more detail than this recipe's paraphrase. When you're unsure how a construct should look, the reflex to hunt for a precedent is the weaker one: reading the declaring header is usually faster and gives you a definitive answer instead of one porter's choice.
 
 - **`tests/tt_metal/` is not a source of port examples either.** Those tests drive Metal primitives *imperatively* — building a `Program` and calling creation functions directly, sometimes reaching internal APIs that unit tests are allowed to touch and the public surface no longer exposes. A TTNN port is a different shape entirely: you declare a `ProgramSpec` and the framework builds the program. Kernel code there can be worth reading; the **host** side is not a model for your factory, however Metal-2.0-looking the call names are.
 
@@ -705,7 +705,7 @@ If any of these appear in your draft, **stop and report**. The likely cause is a
 
 ### Hardware configuration
 
-`KernelSpec::hw_config` is a `std::variant<DataMovementHardwareConfig, ComputeHardwareConfig>`, and each of those is itself a variant over a Gen1 (WH/BH) and a Gen2 (Quasar) config. **Everything here is a pure performance / precision setting.** A wrong value almost never fails the build, and usually slips past the op's tests too; it silently shifts the op's perf/precision tradeoff and surfaces much later as a model-level regression that is miserable to trace back to this line. This is the one field where the "syntax-only swap, no semantic change" promise is easy to break by accident, with no safety net but your own attention. So the discipline throughout is: **read the legacy op's *resolved* settings, port them to their exact equivalents, and diff before against after.** The field *names* were deliberately renamed for clarity — carry over the *values*, not the names.
+`KernelSpec::hw_config` is a `std::variant<DataMovementHardwareConfig, ComputeHardwareConfig>`, and each of those holds an optional Gen1 (WH/BH) config (`config_1xx`) and an optional Gen2 (Quasar) config (`config_2xx`). **Everything here is a pure performance / precision setting.** A wrong value almost never fails the build, and usually slips past the op's tests too; it silently shifts the op's perf/precision tradeoff and surfaces much later as a model-level regression that is miserable to trace back to this line. This is the one field where the "syntax-only swap, no semantic change" promise is easy to break by accident, with no safety net but your own attention. So the discipline throughout is: **read the legacy op's *resolved* settings, port them to their exact equivalents, and diff before against after.** The field *names* were deliberately renamed for clarity — carry over the *values*, not the names.
 
 The port targets Gen1. **Build only the Gen1 config, and add no `if (arch == QUASAR)` branch of your own** — the reasons are in [Gen2 is out of scope](#gen2-is-out-of-scope) below.
 
@@ -713,10 +713,10 @@ The port targets Gen1. **Build only the Gen1 config, and add no `if (arch == QUA
 
 Resolve the legacy DM kernel's effective `(processor, noc, noc_mode)` — the *values*, not the constructor spelling. Legacy code reaches the same config three ways: `ReaderDataMovementConfig{}` / `WriterDataMovementConfig{}` (which default the triple), a raw `DataMovementConfig{.processor = …, .noc = …}` that happens to equal a default, or a genuinely custom triple. Decide on the resolved values:
 
-- **Matches the reader or writer default** → use the arch-agnostic TTNN helper (from `ttnn/cpp/ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp`). It selects the generation internally and supplies the Gen2 branch for free, so default-case host code needs no arch branch:
+- **Matches the reader or writer default** → use the arch-agnostic TTNN helper (from `ttnn/cpp/ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp`). It fills both generations' configs, so it supplies the Gen2 branch for free and default-case host code needs no arch branch:
 
   ```cpp
-  .hw_config = create_reader_datamovement_config(device->arch()),   // or create_writer_datamovement_config
+  .hw_config = create_reader_datamovement_config(),   // or create_writer_datamovement_config
   ```
 
   Match on the *values*, not the role name: a kernel whose resolved triple is the reader default takes the *reader* helper even if the op calls it a writer — on Gen1 the helper reproduces that triple byte-for-byte. The two defaults are value-distinct:
@@ -726,12 +726,14 @@ Resolve the legacy DM kernel's effective `(processor, noc, noc_mode)` — the *v
   | reader | `RISCV_1` | `NOC_0` | `DM_DEDICATED_NOC` |
   | writer | `RISCV_0` | `NOC_1` | `DM_DEDICATED_NOC` |
 
-  (The Metal 2.0 [migration guide](../shared/migration_guide.md) uses the Metal-layer `CreateReaderGen1DataMovementConfig()` / `CreateWriterGen1DataMovementConfig()` for these same defaults — identical on Gen1. The TTNN helper here wraps those and adds generation selection; prefer it for a TTNN port, since it also supplies the Gen2 branch the Gen1-only Metal helpers lack.)
+  (The Metal 2.0 [migration guide](../shared/migration_guide.md) uses the Metal-layer `CreateReaderDataMovementConfig()` / `CreateWriterDataMovementConfig()` for these same defaults — identical on Gen1. The TTNN helper here wraps those and adds the Gen2 config; prefer it for a TTNN port, since it also supplies the Gen2 branch the Gen1-only Metal helpers lack.)
 
 - **Custom** (any field differs from both defaults) → replicate it *exactly* with a Gen1 config, every field copied verbatim from the legacy config:
 
   ```cpp
-  .hw_config = DataMovementGen1Config{.processor = …, .noc = …, .noc_mode = …},
+  .hw_config = DataMovementHardwareConfig{
+      .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = …, .noc = …, .noc_mode = …},
+  },
   ```
 
   Do **not** reach for a helper that is "close." A single flipped NOC is precisely the silent regression this section exists to prevent.
@@ -746,22 +748,22 @@ Resolve the legacy DM kernel's effective `(processor, noc, noc_mode)` — the *v
 
 **First, determine how the legacy op builds its compute config, and mirror that.** The config is constructed one of two ways; the port keeps whichever the op uses. This matters because the two config structs default *opposite* ways — the TTNN helper toward **high performance**, the Metal struct toward **high precision** — so moving an op from one style to the other silently changes any field you don't carry over by hand. Whichever style the op uses, two further Metal-only fields fall outside the helper — usually left at their legacy-matching defaults, occasionally set; see *Both styles* below.
 
-**Style A — the op resolves a TTNN `ComputeKernelConfig`** (via `init_device_compute_kernel_config` / `get_compute_kernel_config_args`; most ops do this). Translate the config the op resolved with `to_compute_hardware_config(device->arch(), config)` (from `ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp`). Like the DM helper, it selects the generation and returns the matching variant. It carries four knobs, two of them with a representation change baked in:
+**Style A — the op resolves a TTNN `ComputeKernelConfig`** (via `init_device_compute_kernel_config` / `get_compute_kernel_config_args`; most ops do this). Translate the config the op resolved with `to_compute_hardware_config(config)` (from `ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp`). Like the DM helper, it covers both generations. It carries four knobs, two of them with a representation change baked in:
 
-   | legacy `ComputeConfig` | Metal 2.0 (`ComputeGen1Config`) | transform |
+   | legacy `ComputeConfig` | Metal 2.0 (`ComputeHardwareConfig`) | transform |
    |---|---|---|
    | `math_fidelity` | `fpu_math_fidelity` | 1:1 |
    | `math_approx_mode` (bool) | `sfpu_precision_mode` (`Precision`) | `true` → `Approximate`, `false` → `Precise` |
    | `fp32_dest_acc_en` | `enable_32_bit_dest` | 1:1 |
    | `dst_full_sync_en` | `double_buffer_dest` | **inverted**: `double_buffer_dest = !dst_full_sync_en` |
 
-   **Check for a *dropped* field before using the helper.** The helper translates the config the op **resolved**, which is the config the op **used** only if the op passed every field through. A factory that destructures the resolved config and then hand-copies a *subset* onto its `ComputeConfigDescriptor` leaves the rest at the descriptor's defaults — so the op ignores those knobs whatever the caller passed, while the helper, reading the richer source, hands the caller's value back. Common enough to check every time: compare the fields the op resolves against the fields it sets, and for each resolved-but-unset field assign the legacy-default result on the returned config (the `std::get<ComputeGen1Config>(…)` form below). A dropped `dst_full_sync_en` means `double_buffer_dest = true`, always.
+   **Check for a *dropped* field before using the helper.** The helper translates the config the op **resolved**, which is the config the op **used** only if the op passed every field through. A factory that destructures the resolved config and then hand-copies a *subset* onto its `ComputeConfigDescriptor` leaves the rest at the descriptor's defaults — so the op ignores those knobs whatever the caller passed, while the helper, reading the richer source, hands the caller's value back. Common enough to check every time: compare the fields the op resolves against the fields it sets, and for each resolved-but-unset field assign the legacy-default result on the returned config (the `compute_hw.<field> = …` form below). A dropped `dst_full_sync_en` means `double_buffer_dest = true`, always.
 
    This is **not** the default-divergence hazard above: a dropped field's defaults often *agree* (`dst_full_sync_en` is `false` on both sides), and the divergence surfaces only for a caller that sets the knob — which is why no test catches it. Nor is it a bug to fix; a silently-ignored parameter is preserved behavior, reported rather than repaired ([§Scope discipline](#the-principle)). A resolved field with no Metal 2.0 counterpart (`packer_l1_acc`) needs no action.
 
-**Style B — the op sets a Metal `ComputeConfig` / `ComputeConfigDescriptor` directly** (literal or computed field values, with no TTNN `ComputeKernelConfig` feeding them). Build a `ComputeGen1Config` directly and copy each field the op set, using the same table above — minding the two non-1:1 transforms (the `math_approx_mode` bool → `Precision` enum, and the `dst_full_sync_en` → `double_buffer_dest` **inversion**). Fields the op left at their Metal defaults need no action: Metal 2.0's `ComputeGen1Config` defaults match the legacy `ComputeConfig` defaults exactly, so an unset field reproduces the legacy value. **Don't reroute these through the TTNN helper to save typing** — the helper's defaults are the high-performance ones, so any field you didn't explicitly copy would flip.
+**Style B — the op sets a Metal `ComputeConfig` / `ComputeConfigDescriptor` directly** (literal or computed field values, with no TTNN `ComputeKernelConfig` feeding them). Build a `ComputeHardwareConfig` directly and copy each field the op set, using the same table above — minding the two non-1:1 transforms (the `math_approx_mode` bool → `Precision` enum, and the `dst_full_sync_en` → `double_buffer_dest` **inversion**). Fields the op left at their Metal defaults need no action: Metal 2.0's `ComputeHardwareConfig` defaults match the legacy `ComputeConfig` defaults exactly, so an unset field reproduces the legacy value. **Don't reroute these through the TTNN helper to save typing** — the helper's defaults are the high-performance ones, so any field you didn't explicitly copy would flip.
 
-**Both styles — check two Metal-only fields the helper can't reach.** These live only on the Metal side, so the TTNN helper *structurally cannot* set them — but both usually stay at their defaults, which match legacy, so most ports touch neither. Set a field by hand only where the legacy `ComputeConfig{}` set it non-default; the one *forced* exception is `unpack_modes` under FP32, where Metal 2.0 requires an entry legacy didn't (item below). Where a field does need setting, apply it on the Gen1 config (Style A: via `std::get<ComputeGen1Config>(compute_hw).<field> = …` into the returned variant; Style B: on the config you built):
+**Both styles — check two Metal-only fields the helper can't reach.** These live only on the Metal side, so the TTNN helper *structurally cannot* set them — but both usually stay at their defaults, which match legacy, so most ports touch neither. Set a field by hand only where the legacy `ComputeConfig{}` set it non-default; the one *forced* exception is `unpack_modes` under FP32, where Metal 2.0 requires an entry legacy didn't (item below). Where a field does need setting, apply it on the config (Style A: via `compute_hw.<field> = …` on the returned config, with `bfp_pack_precision_mode` under its `config_1xx`; Style B: on the config you built):
 
    - **`bfp_pack_precision_mode`** (legacy `bfp8_pack_precise`). Rare; a clean bool→enum. Gen1-only — Gen2 replaces BFP with MXFP and has no such field:
 
@@ -779,7 +781,7 @@ Resolve the legacy DM kernel's effective `(processor, noc, noc_mode)` — the *v
      3. **A newly-required explicit entry.** The Metal 2.0 validator is stricter than legacy: when a compute kernel **consumes a Float32 DFB with `enable_32_bit_dest = true`**, an explicit `unpack_modes` entry is *required* where legacy silently defaulted. Add one — and derive its value from the legacy vector (`Default` → `UnpackToSrc`, `UnpackToDestFp32` → `UnpackToDest`); do not guess. This is **Float32-only for now**; Int32/UInt32 are deliberately not required yet (issue #49936), so don't preemptively add entries there. **The trigger is the DFB's format, not the op's tensor dtypes** — an op deriving an intermediate format as `fp32_dest_acc_en ? Float32 : data_format` (a very common idiom) has no Float32 *tensor* anywhere, yet every such buffer its compute kernel consumes needs an entry whenever that flag is on.
 
      ```cpp
-     std::get<ComputeGen1Config>(compute_hw).unpack_modes = {
+     compute_hw.unpack_modes = {
          {INPUT_A, UnpackMode::UnpackToDest},   // legacy CB entry was UnpackToDestFp32
      };
      ```
@@ -790,7 +792,7 @@ Resolve the legacy DM kernel's effective `(processor, noc, noc_mode)` — the *v
 
 #### Gen2 is out of scope
 
-Build only the Gen1 config; do not populate a `Gen2Config` or add your own `if (arch == QUASAR)` branch. Two reasons:
+Build only the Gen1 config; do not populate a `config_2xx` or add your own `if (arch == QUASAR)` branch. Two reasons:
 
 - **A custom DM config has no mechanical Gen1→Gen2 mapping.** Gen2 has no processor/NOC concept, so its config isn't derivable from the Gen1 one — authoring it means Quasar-specific judgment (e.g. whether to set `disable_dfb_implicit_sync_for_all`) that you cannot validate on a Gen1 bench.
 - **The Gen2-only compute field is temporary.** `enable_2x_src_register` is an explicitly interim setting, documented in the header as not final and subject to change.
@@ -902,13 +904,13 @@ Recommended order: gtests first (faster, exercises the C++ op directly), then py
 
 > **A selected-but-unconverted kernel path can crash the whole pytest *session*, not just fail it.** While converting kernels path-by-path, a test that selects a not-yet-converted kernel hits that kernel's positional `get_compile_time_arg_val(0)` (the host now emits only named args), which `static_assert`s at JIT; the resulting `TT_FATAL` can segfault the Python process during traceback rendering (exit 139) and take down the entire pytest run rather than reporting a clean failure. Exclude not-yet-converted paths with `-k` until you convert them. This is a known tooling issue — not a port error, and not a card hang (no `0xdeadc0de`).
 
-All tests passing pre-conversion should continue to pass post-conversion. If a previously-passing test now fails, **stop and report** — likely cause is a structural error in the spec that compiled but failed at `MakeProgramFromSpec` validation, or an incorrect tensor-arg / runtime-arg layout.
+All tests passing pre-conversion should continue to pass post-conversion. If a previously-passing test now fails, **stop and report** — likely cause is a structural error in the spec that compiled but failed at `ValidateProgramSpec` validation, or an incorrect tensor-arg / runtime-arg layout.
 
-If compilation passes but the test fails with a `TT_FATAL` from `program_spec.cpp` or `program_run_args.cpp`, the [patterns catalog](../shared/port_patterns.md) has entries for the most common failure modes (DFB binding multiplicity mismatches, missing kernel run-args entries, etc.). Cross-reference the error message against the catalog.
+If compilation passes but the test fails with a `TT_FATAL` from `tt_metal/impl/metal2_host_api/program_spec/` or `program_run_args.cpp`, the [patterns catalog](../shared/port_patterns.md) has entries for the most common failure modes (DFB binding multiplicity mismatches, missing kernel run-args entries, etc.). Cross-reference the error message against the catalog.
 
 For symptom-organized lookup (errors whose fix isn't obvious from the message text), see the [migration guide's troubleshooting table](../shared/migration_guide.md#cryptic-error--likely-cause).
 
-**Custom `compute_program_hash` failure mode.** Signature: a `TensorSpec` legality failure on the *second and later* test invocations (program cache hot), not the first. **Which call reports it depends on your target concept** — the cache-hit refresh runs through `UpdateTensorArgs` on a `ProgramSpecFactoryConcept` port and through `UpdateProgramRunArgs` on a `CustomProgramSpecFactoryConcept` one. Same check, same verdict; match on the `TensorSpec` rejection, not on the function name. That means the op's cache key admits a `TensorSpec` deviation the strict `TensorParameter` match won't accept. **This is a stop-and-report, not a fix** — do not delete the hash, and do not patch it to include `TensorSpec`; either one silently changes the op's cache-equivalence class to make a symptom go away. Record the hash's file:line, what the legality check rejected, and the invocation it fired on, then stop.
+**Custom `compute_program_hash` failure mode.** Signature: a `TensorSpec` legality failure on the *second and later* test invocations (program cache hot), not the first. **Which call reports it depends on your target concept** — the cache-hit refresh runs through `update_tensor_args` on a `ProgramSpecFactoryConcept` port and through `update_program_run_args` on a `CustomProgramSpecFactoryConcept` one. Same check, same verdict; match on the `TensorSpec` rejection, not on the function name. That means the op's cache key admits a `TensorSpec` deviation the strict `TensorParameter` match won't accept. **This is a stop-and-report, not a fix** — do not delete the hash, and do not patch it to include `TensorSpec`; either one silently changes the op's cache-equivalence class to make a symptom go away. Record the hash's file:line, what the legality check rejected, and the invocation it fired on, then stop.
 
 Why this one is worth aborting for rather than working around: an ops-team expert analysed this op's hash before the port and cleared it, and that verdict is what your cleared audit is carrying. This failure is *evidence that the vetting was wrong* — an upstream error, not a porter-resolvable snag. Flag it loudly. See [The cache key: leave the custom hash alone](../shared/ttnn_factory.md#the-cache-key-leave-the-custom-hash-alone), which also covers the case where you spot the same defect by reading the hash instead of by running the tests.
 

@@ -123,9 +123,9 @@ Per-feature disables and log format: [`tools/watcher.rst`](../../../../../../too
 ### Worked example: `reduction`
 
 ```bash
-# C++: test_reduction.cpp -> unit_tests_ttnn (tests: SumTensor*, MinMaxTensor* fixtures)
-./build/test/ttnn/unit_tests_ttnn --gtest_list_tests | grep -iE '(sum|minmax)tensor'
-./build/test/ttnn/unit_tests_ttnn --gtest_filter='SumTensor*:MinMaxTensor*'
+# C++: test_reduction.cpp -> unit_tests_ttnn (tests: ReductionSmoke.SumReduce*, ReductionSmoke.MinMaxReduce*)
+./build/test/ttnn/unit_tests_ttnn --gtest_list_tests | grep -iE '(sum|minmax)reduce'
+./build/test/ttnn/unit_tests_ttnn --gtest_filter='ReductionSmoke.SumReduce*:ReductionSmoke.MinMaxReduce*'
 
 # UDM reduction lives in a sibling binary
 ./build/test/ttnn/unit_tests_ttnn_udm --gtest_filter='*Reduction*'

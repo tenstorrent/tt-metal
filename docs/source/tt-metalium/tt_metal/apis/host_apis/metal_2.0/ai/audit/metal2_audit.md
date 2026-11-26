@@ -743,12 +743,12 @@ This list is **authoritative**: if a construct isn't here, it's supported — do
 
 - Any reference to the type `tt::tt_metal::experimental::GlobalCircularBuffer` (qualified or via a `using` alias).
 - Calls to `experimental::CreateGlobalCircularBuffer(...)`.
-- `#include <tt-metalium/global_circular_buffer.hpp>` paired with any of the other signals (header presence alone is suggestive but not definitive).
+- `#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>` paired with any of the other signals (header presence alone is suggestive but not definitive).
 - **Descriptor-API attachment**: a `CBDescriptor` literal or struct with its `.global_circular_buffer` field set to a non-null pointer. The type token does not appear at the assignment site — look for the **field name** `global_circular_buffer` on a `CBDescriptor`. This is the arcane signal; an AI scanning a `CBDescriptor` setup can easily miss it.
 - **Imperative-API attachment**: the `UpdateDynamicCircularBufferAddress(program, cb_handle, const GlobalCircularBuffer&)` overload (the three-arg form taking a `GlobalCircularBuffer`). The two-arg form taking a `Buffer&` is unrelated.
 - Op factory function signatures with parameter type `std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>&` (commonly named `global_cb`).
 - **Construction-by-consumption** (the common in-op shape): ops rarely call `CreateGlobalCircularBuffer` themselves — they receive a *pre-built* `GlobalCircularBuffer` and wrap it into a CB via the experimental overload `experimental::CreateCircularBuffer(program, core_spec, cb_config, global_cb)` (the 4-arg form whose last argument is a `GlobalCircularBuffer`), with a `CircularBufferConfig` (often named `remote_cb_config`) configured via `.remote_index(...)`. The "remote CB" idiom — `remote_cb_*` identifiers, `CircularBufferConfig::remote_index()`, the `remote_circular_buffer.h` device header — is itself a strong cue: **in this codebase, "remote CB" means GlobalCircularBuffer.**
-- **Both include spellings** resolve to the same type — match either: `#include <tt-metalium/global_circular_buffer.hpp>` and `#include <tt-metalium/experimental/global_circular_buffer.hpp>`.
+- **Both include spellings** resolve to the same type — match either: `#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>` and `#include <tt-metalium/experimental/global_circular_buffer.hpp>`.
 
 **Recognition — false-positive guard**:
 

@@ -6,12 +6,12 @@
 > If you are an AI agent, please refer to `../ai/shared/migration_guide.md` instead.
 >
 
-This guide introduces the new Metal 2.0 host APIs in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`, and outlines the migration from the legacy `ProgramDescriptor` / `host_api.hpp` APIs. Its goal is to give you enough of the concepts and vocabulary to understand a Metal 2.0 program — and to read and vet a port — not to be an exhaustive API reference. The headers themselves are the reference; they are extensively commented.
+This guide introduces the new Metal 2.0 host APIs in `tt_metal/api/tt-metalium/workload/specification/` and `tt_metal/api/tt-metalium/workload/run_args/`, and outlines the migration from the legacy `ProgramDescriptor` / `host_api.hpp` APIs. Its goal is to give you enough of the concepts and vocabulary to understand a Metal 2.0 program — and to read and vet a port — not to be an exhaustive API reference. The headers themselves are the reference; they are extensively commented.
 
 The focus of this guide is **Wormhole** and **Blackhole** (Gen1 architectures).
 
 Things to remember:
- - Metal 2.0 is still an `experimental` API.
+ - Metal 2.0's advanced options are still an `experimental` API.
  - Not all planned improvements are available yet.
  - A small handful of legacy API features are not yet supported.
 
@@ -49,7 +49,7 @@ Metal 2.0 introduces a new family of host APIs for Program specification. Metal 
 Key Metal 2.0 changes, at a glance:
  - **Immutable and mutable descriptors**. Like `ProgramDescriptor`, Metal 2.0 is a descriptor-based API. However, it separates the immutable properties of a Program (`ProgramSpec`) from those properties that are updated for each execution (`ProgramRunArgs`).
  - **Dataflow Buffers (DFBs)** replace Circular Buffers (CBs). Both host and device-side syntax is improved.
- - **Kernel arguments** specification (host side) and retrieval (device side) are significantly improved. (_Note_: Typed and array kernel arguments are planned, but not yet implemented.)
+ - **Kernel arguments** specification (host side) and retrieval (device side) are significantly improved. (_Note_: Typed kernel arguments are planned, but not yet implemented.)
  - **Resource placement** (i.e. `core_ranges`) is inferred where possible. The mapping of kernels to worker nodes in the device is communicated via a new top-level concept (`WorkUnitSpec`).
 
 Two benefits stand out:
@@ -85,18 +85,18 @@ Two benefits stand out:
 ## Header Files
 
 ```cpp
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 ```
 
 Each Metal 2.0 descriptor object is defined in its own sub-header (`kernel_spec.hpp`, `dataflow_buffer_spec.hpp`, `semaphore_spec.hpp`, `tensor_parameter.hpp`, etc.), pulled in transitively by the headers above.
 
 **All Metal 2.0 header files are self-documenting, with extensive comments.** Please read them!
 
-All Metal 2.0 host API symbols temporarily live in the `tt::tt_metal::experimental` namespace.
+All Metal 2.0 host API symbols live in the `tt::tt_metal` namespace (the advanced options in `tt::tt_metal::experimental`).
 
-> **Note:** The Program-creation entry points in `metal2_host_api/program.hpp` are *temporary*; these will be replaced with `Program` and `MeshWorkload` constructors and methods once the Metal 2.0 APIs graduate from `experimental`. User code updates will be trivial.
+> **Note:** The Program-creation entry points are the `Program` and `MeshWorkload` constructors and methods (`workload/program.hpp`, `workload/mesh_workload.hpp`).
 
 ---
 
@@ -127,8 +127,7 @@ ProgramSpec spec{
     .semaphores = {sem_1},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(*mesh_device, spec);  // temporary free function
-//Program program = Program(*mesh_device, spec);            // stable API form
+Program program(*mesh_device, spec);
 ```
 
 Two structural additions vs. `ProgramDescriptor`:
@@ -179,7 +178,7 @@ KernelSpec reader{
         // Schema only — argument values are set per execution, on ProgramRunArgs.
         .runtime_arg_names = {"start_page", "num_pages"},
     },
-    .hw_config = CreateReaderGen1DataMovementConfig(),
+    .hw_config = CreateReaderDataMovementConfig(),
 };
 ```
 
@@ -231,14 +230,14 @@ KernelSpec producer{ /* ... */
     .dfb_bindings = {{
         .dfb_spec_name = MY_DFB,
         .accessor_name = "out_dfb",
-        .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER
+        .endpoint_type = DFBEndpointType::PRODUCER
     }},
 };
 KernelSpec consumer{ /* ... */
     .dfb_bindings = {{
         .dfb_spec_name = MY_DFB,
         .accessor_name = "in_dfb",  // independent of the producer's name
-        .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER
+        .endpoint_type = DFBEndpointType::CONSUMER
     }},
 };
 ```
@@ -335,14 +334,14 @@ KernelSpec reader{ /* ... */
 };
 spec.kernels = {reader};
 
-Program program = MakeProgramFromSpec(*mesh_device, spec);
+Program program(*mesh_device, spec);
 
 // In ProgramRunArgs — supply the actual MeshTensor per execution.
 ProgramRunArgs params;
 params.tensor_args = {
     {INPUT, TensorArgument{input_tensor}},
 };
-SetProgramRunArgs(program, params);
+program.set_program_run_args(params);
 ```
 
 ```cpp
@@ -431,7 +430,7 @@ params.kernel_run_args = {{
                            {"num_tiles",  {{NodeCoord{0, 0}, num_tiles}}}},
     .common_runtime_arg_values = {{"bank_id", bank_id}},
 }};
-SetProgramRunArgs(program, params); // temporary free function
+program.set_program_run_args(params);
 ```
 
 > **Varargs (niche).** For kernels that read a genuinely dynamic argument tail in a loop — the canonical case being an N-dimensional shape where N is a compile-time `rank` — Metal 2.0 provides a positional "varargs" mechanism alongside named arguments.
@@ -550,7 +549,7 @@ void kernel_main() {
 
 CTAs, RTAs, and CRTAs are all accessed through the same `get_arg(args::name)` mechanism. The dispatch type (compile-time, runtime, common runtime) is a host-only concept — the kernel author no longer needs to know which kind of argument they're reading. The C++ type-deduction context (`constexpr auto`, `auto`, `const auto`) is the only place the distinction surfaces.
 
-> **Note**: This argument-retrieval syntax will evolve again to support custom argument types beyond `uint32_t` (including `std::array` and user-defined POD types). The named-accessor mechanism (`get_arg(args::name)`) will be preserved; the underlying types will become user-extensible.
+> **Note**: This argument-retrieval syntax will evolve again to support custom argument types beyond `uint32_t` (including user-defined POD types). The named-accessor mechanism (`get_arg(args::name)`) will be preserved; the underlying types will become user-extensible.
 
 ---
 
@@ -635,8 +634,8 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
     const auto& input  = tensor_args.input.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
 
-    tt::tt_metal::experimental::ProgramSpec spec{ .name = "my_program", /* ... */ };
-    tt::tt_metal::experimental::ProgramRunArgs run_params;
+    tt::tt_metal::ProgramSpec spec{ .name = "my_program", /* ... */ };
+    tt::tt_metal::ProgramRunArgs run_params;
     // ... populate spec and run_params ...
 
     return ttnn::device_operation::ProgramArtifacts{
@@ -648,7 +647,7 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
 }
 ```
 
-A Metal 2.0 factory **does not** construct the `Program` itself, nor call `SetProgramRunArgs` directly — those are the framework adapter's responsibilities. On a cache miss the framework builds the `Program` from the spec and applies the run args; on a cache hit it refreshes only the tensor bindings and skips the rebuild. A practical consequence of TTNN's caching: most parameters that *could* vary between calls are treated as immutable, and the cache is invalidated when they change; the actually-mutable surface is usually just the tensor identities.
+A Metal 2.0 factory **does not** construct the `Program` itself, nor call `set_program_run_args` directly — those are the framework adapter's responsibilities. On a cache miss the framework builds the `Program` from the spec and applies the run args; on a cache hit it refreshes only the tensor bindings and skips the rebuild. A practical consequence of TTNN's caching: most parameters that *could* vary between calls are treated as immutable, and the cache is invalidated when they change; the actually-mutable surface is usually just the tensor identities.
 
 > **A note on tensor types.** A factory sits between two tensor-type universes: **`ttnn::Tensor`** (TTNN's PyTorch-like wrapper; always device-resident inside a factory) and **`tt::tt_metal::MeshTensor`** (Metalium's native device-tensor type, which the Metal 2.0 API speaks). A `ttnn::Tensor`'s underlying `MeshTensor` is obtained via `.mesh_tensor()` (as in the skeleton above); the Metal 2.0 API operates on the `MeshTensor`.
 
@@ -726,7 +725,7 @@ KernelSpec reader{
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .accessor_name = "out_dfb",
-        .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER
+        .endpoint_type = DFBEndpointType::PRODUCER
     }},
     .tensor_bindings = {{
         .tensor_parameter_name = INPUT,
@@ -734,7 +733,7 @@ KernelSpec reader{
     }},
     .compile_time_args = {{"page_size", page_size}},
     .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
-    .hw_config = CreateReaderGen1DataMovementConfig(),
+    .hw_config = CreateReaderDataMovementConfig(),
 };
 
 KernelSpec writer{
@@ -743,7 +742,7 @@ KernelSpec writer{
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .accessor_name = "in_dfb",
-        .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER
+        .endpoint_type = DFBEndpointType::CONSUMER
     }},
     .tensor_bindings = {{
         .tensor_parameter_name = OUTPUT,
@@ -751,7 +750,7 @@ KernelSpec writer{
     }},
     .compile_time_args = {{"page_size", page_size}},
     .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
-    .hw_config = CreateWriterGen1DataMovementConfig(),
+    .hw_config = CreateWriterDataMovementConfig(),
 };
 
 DataflowBufferSpec dfb{
@@ -775,7 +774,7 @@ ProgramSpec spec{
         .target_nodes = node,
     }},
 };
-Program program = MakeProgramFromSpec(*mesh_device, spec);
+Program program(*mesh_device, spec);
 
 ProgramRunArgs params;
 params.kernel_run_args = {
@@ -788,7 +787,7 @@ params.tensor_args = {
     {INPUT,  TensorArgument{input_tensor}},
     {OUTPUT, TensorArgument{output_tensor}},
 };
-SetProgramRunArgs(program, params);
+program.set_program_run_args(params);
 ```
 
 `ProgramDescriptor` collapses placement, schema, and values into one nested struct; Metal 2.0 keeps each concern visible as its own field. This example demonstrated named CTAs, DFB binding-by-name, derived DFB placement, TensorAccessor binding (replacing the manual `TensorAccessorArgs` plumbing on the host and the offset bookkeeping in the kernel), and the mutable / immutable separation.

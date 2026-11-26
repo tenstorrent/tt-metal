@@ -57,8 +57,8 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
     tensor_return_value_t&        tensor_return_value) {
 
     // ... build the spec and run-args (see the recipe's Construct step) ...
-    tt::tt_metal::experimental::ProgramSpec    spec{ /* ... */ };
-    tt::tt_metal::experimental::ProgramRunArgs run_args{ /* ... */ };
+    tt::tt_metal::ProgramSpec    spec{ /* ... */ };
+    tt::tt_metal::ProgramRunArgs run_args{ /* ... */ };
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec       = std::move(spec),
@@ -75,7 +75,7 @@ The op author writes only `create_program_artifacts`. The framework adapter does
 - **Cache miss**: the adapter calls `create_program_artifacts`, builds one `Program` per mesh coordinate range from the spec, applies the initial `ProgramRunArgs`, and resolves each `TensorArgument` against the tensors enumerated from `tensor_args` / `tensor_return_value` followed by the factory's `op_owned_tensors` (matched by `MeshTensor` identity within the call). The op-owned tensors are parked in the cache entry so their allocation outlives the miss and stays at a stable address across dispatches.
 - **Cache hit**: the adapter enumerates fresh tensors (io tensors plus the parked op-owned ones) and patches their `TensorArgument`s into the cached `Program` in place — **only the tensor arguments are refreshed**, nothing else in the run-args — no `Program` rebuild, no factory re-run.
 
-The cache key is the op itself — its type, attributes, and tensor args (the framework's automatic hash), combined with the target mesh coordinates; a custom `compute_program_hash`, if present, replaces that default. Two dispatches with matching op-args share a cache entry, and only the tensor bindings are refreshed between them. The porter doesn't write any of this — it falls out of returning a correct `ProgramArtifacts`.
+The cache key is the op itself — its type, attributes, and tensor args (the framework's automatic hash), combined with the target mesh coordinates and which `tensor_args` slots hold the same tensor; a custom `compute_program_hash`, if present, replaces that default. Two dispatches with matching op-args share a cache entry, and only the tensor bindings are refreshed between them. The porter doesn't write any of this — it falls out of returning a correct `ProgramArtifacts`.
 
 ### Extracting the tensor
 
@@ -93,7 +93,7 @@ Everything above still applies. This concept **is** the base concept plus one me
 struct MyProgramFactory {
     // create_program_artifacts exactly as on the base concept ...
 
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const operation_attributes_t& attributes,
         const tensor_args_t&          tensor_args,
         tensor_return_value_t&        tensor_return_value,
@@ -105,10 +105,10 @@ Only the **return type** is concept-enforced. A ported-from `override_runtime_ar
 
 ### The cache-hit contract
 
-On every cache hit the adapter calls `override_runtime_arguments` **once per mesh coordinate range**, passing that range's start coordinate, and applies the result via `UpdateProgramRunArgs`. The factory is not re-run; the `Program` is not rebuilt.
+On every cache hit the adapter calls `override_runtime_arguments` **once per mesh coordinate range**, passing that range's start coordinate, and applies the result via `Program::update_program_run_args`. The factory is not re-run; the `Program` is not rebuilt.
 
 - **`coord` is the start of the range one `Program` covers** (usually the whole mesh), and the result applies to every device in that range. It is the coordinate the ported-from adapter passed, unless that op built a program per coordinate (then it is only the first); use it wherever the ported-from override did. Values that vary per device need a program per coordinate: that is [`MeshWorkloadSpecFactoryConcept`](#per-coordinate-programs-meshworkloadspecfactoryconcept). A `descriptor (per-coord)` op reaches this concept only when its coordinate turned out unused; drop the coordinate.
-- **`UpdateProgramRunArgs` is an arbitrary *partial* update.** Anything you leave out keeps whatever value it was last given, from the cache-miss `SetProgramRunArgs` or from an earlier hit. That makes **the set of things the override refreshes part of the op's behavior** — and that set is **inherited, not decided.** Refresh exactly what the ported-from override refreshed: no more, no less. Adding a refresh it didn't do is as much a deviation as dropping one it did. You are not being asked to work out what does or doesn't vary across the enqueue loop; the ported-from override already encodes that answer.
+- **`Program::update_program_run_args` is an arbitrary *partial* update.** Anything you leave out keeps whatever value it was last given, from the cache-miss `Program::set_program_run_args` or from an earlier hit. That makes **the set of things the override refreshes part of the op's behavior** — and that set is **inherited, not decided.** Refresh exactly what the ported-from override refreshed: no more, no less. Adding a refresh it didn't do is as much a deviation as dropping one it did. You are not being asked to work out what does or doesn't vary across the enqueue loop; the ported-from override already encodes that answer.
 - **Borrowed-memory DFBs couple the two.** If the override sets a size override for a borrowed-memory DFB, it must *also* supply that DFB's backing tensor argument.
 
 ### The override owns the tensor bindings too
@@ -175,7 +175,7 @@ struct MyMeshWorkloadFactory {
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
     // Only if the ported-from factory has an override_runtime_arguments:
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const operation_attributes_t&    attributes,
         const tensor_args_t&             tensor_args,
         tensor_return_value_t&           tensor_return_value,
@@ -267,7 +267,7 @@ The ops team analyses each op's custom hash *before* the port and records the ve
 
 That is also why deleting the hash is not a neutral simplification. The hash *is* the op's cache-equivalence class: removing it trades away the op's cache hits, which is a performance decision the port has no standing to make, and overrules the person who cleared it.
 
-Do not reason your way back to deleting it from "Metal 2.0 doesn't read a custom hash" — it does. The spec-path adapter uses the op's `compute_program_hash` whenever one is present ([`mesh_device_operation_adapter.hpp:982-983`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/mesh_device_operation_adapter.hpp)), and the exact collision-resolution key beside it is deliberately built to accommodate one.
+Do not reason your way back to deleting it from "Metal 2.0 doesn't read a custom hash" — it does. The spec-path adapter uses the op's `compute_program_hash` whenever one is present ([`mesh_device_operation_adapter.hpp:278-281`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/mesh_device_operation_adapter.hpp)), and the exact collision-resolution key beside it is deliberately built to accommodate one.
 
 ### If the hash contradicts the audit, stop — you have found an upstream error
 
@@ -275,13 +275,13 @@ The audit tells you which tensor relaxations apply to this op. **The hash must n
 
 The other direction is not a defect. A hash *tighter* than the declaration just splits work across more cache entries than it strictly needs; that is a performance choice, and sometimes a deliberate one.
 
-With a **`none`** relaxation this reduces to the familiar rule — the hash must pin the whole `TensorSpec`. And because `tensor_layout` (dtype, page config including `Tile`, memory config, alignment) is freed by **no** flag, a hash that does not pin it fails the test under *every* declaration.
+With a **`none`** relaxation this reduces to the familiar rule — the hash must pin the whole `TensorSpec`. And because `tensor_layout` apart from its alignment (dtype, page config including `Tile`, memory config) is freed by **no** flag, a hash that does not pin it fails the test under *every* declaration.
 
 Either way the contradiction means the pre-port vetting was wrong.
 
 It surfaces two ways, and they are the same defect:
 
-- **At verification** — a `TensorSpec` legality failure on the *second and later* dispatches (program cache hot), never the first. It is reported by whichever call refreshes the cache hit on your concept: `UpdateTensorArgs` on the base concept, `UpdateProgramRunArgs` on the custom one.
+- **At verification** — a `TensorSpec` legality failure on the *second and later* dispatches (program cache hot), never the first. It is reported by whichever call refreshes the cache hit on your concept: `Program::update_tensor_args` on the base concept, `Program::update_program_run_args` on the custom one.
 - **By reading** — you notice, while working from the inventory, that the hash omits part of the `TensorSpec`; equivalently, that its tolerance could be expressed as a relaxation. A failing test is not required to have found this. Don't go hunting for it — but don't sit on it either.
 
 Either way the response is the same, and it is **not** a fix:

@@ -179,7 +179,7 @@ KernelSpec writer{
 
 Per node this is exactly 1 PRODUCER + 1 CONSUMER, so the SPSC validator passes with no advanced option. On Gen2 the cosmetic labels become real (a CONSUMER can't write), so Quasar uplift refactors this into a genuine reader→writer topology — out of scope for the Gen1 port.
 
-**Constraint — distinguish from the disjoint-node work-split.** This is **not** the [Demoting per-group CTA to RTA](#anti-pattern-demoting-per-group-cta-to-rta) case, where two same-source `KernelSpec`s cover **disjoint** node sets (two `WorkUnitSpec`s over different core groups). There, each node sees exactly *one* instance, so each node's DFB is an ordinary 1:1 with no assignment question — and binding both `KernelSpec`s to one endpoint role is legal precisely *because* their node sets don't overlap (the [`dataflow_buffer_spec.hpp`](../../../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp) invariant). Here both instances hit *every* node, so each node genuinely has two touchers to assign.
+**Constraint — distinguish from the disjoint-node work-split.** This is **not** the [Demoting per-group CTA to RTA](#anti-pattern-demoting-per-group-cta-to-rta) case, where two same-source `KernelSpec`s cover **disjoint** node sets (two `WorkUnitSpec`s over different core groups). There, each node sees exactly *one* instance, so each node's DFB is an ordinary 1:1 with no assignment question — and binding both `KernelSpec`s to one endpoint role is legal precisely *because* their node sets don't overlap (the [`dataflow_buffer_spec.hpp`](../../../../../../../../../tt_metal/api/tt-metalium/workload/specification/dataflow_buffer_spec.hpp) invariant). Here both instances hit *every* node, so each node genuinely has two touchers to assign.
 
 **See also**: [Sync-free and single-ended CBs → self-loop DFB](#pattern-sync-free-and-single-ended-cbs--self-loop-dfb) (the one-toucher sibling); [CB endpoints](../audit/metal2_audit.md#cb-endpoints) (the authoritative census-to-disposition table); [Demoting per-group CTA to RTA](#anti-pattern-demoting-per-group-cta-to-rta) (the disjoint-node case, not to be confused).
 
@@ -251,9 +251,9 @@ The validator enforces these as the three legality rules; missing any of them su
 ```cpp
 // Two indices that legacy shared via a single CBDescriptor become two
 // DFBs with mutual alias_with entries (advanced_options-nested):
-DataflowBufferSpec INTERM0{ .unique_id = INTERM0_ID, .num_entries = N, .entry_size = S,
+DataflowBufferSpec INTERM0{ .unique_id = INTERM0_ID, .entry_size = S, .num_entries = N,
                             .advanced_options = {.alias_with = {OUTPUT_ID}} };
-DataflowBufferSpec OUTPUT{  .unique_id = OUTPUT_ID,  .num_entries = N, .entry_size = S,
+DataflowBufferSpec OUTPUT{  .unique_id = OUTPUT_ID,  .entry_size = S, .num_entries = N,
                             .advanced_options = {.alias_with = {INTERM0_ID}} };
 ```
 
@@ -444,7 +444,7 @@ WorkUnitSpec wu_g2{.name = "wu_g2", .kernels = {READER, WRITER, COMPUTE_G2},
                    .target_nodes = core_group_2};
 ```
 
-The framework validates that the two compute `KernelSpec`s have non-overlapping WU coverage and that their CONSUMER bindings of INPUT (and PRODUCER bindings of OUTPUT) match — the local hardware invariant that exactly one reader, one writer, and one compute run together at each node is preserved. (See [`dataflow_buffer_spec.hpp`](../../../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp) for the full canonical statement of the DFB endpoint invariant — including the third condition, "same kernel kind," that's implicit in this all-compute example.)
+The framework validates that the two compute `KernelSpec`s have non-overlapping WU coverage and that their CONSUMER bindings of INPUT (and PRODUCER bindings of OUTPUT) match — the local hardware invariant that exactly one reader, one writer, and one compute run together at each node is preserved. (See [`dataflow_buffer_spec.hpp`](../../../../../../../../../tt_metal/api/tt-metalium/workload/specification/dataflow_buffer_spec.hpp) for the full canonical statement of the DFB endpoint invariant — including the third condition, "same kernel kind," that's implicit in this all-compute example.)
 
 ---
 

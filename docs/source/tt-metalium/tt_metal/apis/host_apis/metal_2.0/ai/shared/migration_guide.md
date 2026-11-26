@@ -1,11 +1,11 @@
 # Metal 2.0 Migration Guide (WH/BH)
 
-This guide helps developers migrate from the legacy `ProgramDescriptor` / `host_api.hpp` APIs to the new  Metal 2.0 host APIs in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`.
+This guide helps developers migrate from the legacy `ProgramDescriptor` / `host_api.hpp` APIs to the new  Metal 2.0 host APIs in `tt_metal/api/tt-metalium/workload/`.
 
 The focus of this guide is **Wormhole** and **Blackhole** (Gen1 architectures).
 
 Things to remember:
- - The Metal 2.0 APIs are experimental and subject to changes.
+ - The Metal 2.0 advanced options (`experimental/metal2_host_api/`) are experimental and subject to changes.
  - Metal 2.0 is a work in progress; not all legacy API features fully implemented.
  - Not all planned improvements are available yet.
 
@@ -61,7 +61,7 @@ Some benefits of Metal 2.0:
 
 > **Argument naming.** Metal 2.0 is designed around named arguments. Compile-time arguments must be named — positional CTAs are no longer part of the API. Runtime and common runtime arguments may be named (the typical case) or positional (varargs, intended for kernels with a genuinely dynamic argument count consumed in a loop — e.g., an N-dimensional shape where N is a CTA). When porting from a legacy kernel, individually-known RTAs translate naturally to named RTAs; reach for varargs only when the kernel reaches an argument *by index rather than as a distinct named field* — a variable-count loop, or a data-selected index.
 
-Many additional refinements are planned as the experimental APIs mature.
+Many additional refinements are planned as the APIs mature.
 
 ---
 
@@ -87,9 +87,9 @@ Many additional refinements are planned as the experimental APIs mature.
 ## Header Files
 
 ```cpp
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 ```
 
 Sub-headers are pulled in transitively:
@@ -100,9 +100,9 @@ Sub-headers are pulled in transitively:
 
 **These header files are self-documenting, with extensive comments.** Please read them!
 
-All Metal 2.0 host API symbols currently live in the `tt::tt_metal::experimental` namespace.
+All Metal 2.0 host API symbols live in the `tt::tt_metal` namespace, except the contents of `experimental/metal2_host_api/` (the advanced options), which live in `tt::tt_metal::experimental`.
 
-> **Note:** The Program-creation entry points in `metal2_host_api/program.hpp` are *temporary*. Migration to the final form will take place when the APIs leave `experimental` to join the main API directory. User code updates will be trivial.
+> **Note:** The Program-creation entry point is the `Program(mesh_device, spec)` constructor in `workload/program.hpp`; run args are applied with the `Program` member functions `set_program_run_args`, `update_program_run_args`, and `update_tensor_args`.
 
 ---
 
@@ -152,8 +152,7 @@ ProgramSpec spec{
     .semaphores = {sem_1},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(*mesh_device, spec);  // temporary free function
-//Program program = Program(spec);            // stable API form
+Program program(*mesh_device, spec);
 ```
 
 Two structural additions vs. `ProgramDescriptor`:
@@ -208,10 +207,11 @@ KernelSpec reader{
         .runtime_arg_names = {"start_page", "num_pages"},
     },
     // Conventional reader placement (RISCV_1 / NOC_0 on Gen1). hw_config is a
-    // variant over a Gen1 (WH/BH) and a Gen2 config; the reader/writer helpers
-    // build the Gen1 alternative for you. Reach for a raw DataMovementGen1Config
+    // DataMovementHardwareConfig with optional Gen1 (WH/BH, config_1xx) and Gen2
+    // (config_2xx) configs; the reader/writer helpers build the Gen1 config for
+    // you. Reach for a raw DataMovementHardwareConfig::DataMovement1XXConfig
     // only when the kernel's (processor, NOC) matches neither default.
-    .hw_config = CreateReaderGen1DataMovementConfig(),
+    .hw_config = CreateReaderDataMovementConfig(),
 };
 
 // ----- WorkUnitSpec: kernel placement and worker assignments -----
@@ -227,7 +227,7 @@ ProgramSpec spec{
     .kernels = {reader},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(*mesh_device, spec);
+Program program(*mesh_device, spec);
 
 // ----- ProgramRunArgs: argument values, set per execution -----
 ProgramRunArgs params;
@@ -236,7 +236,7 @@ params.kernel_run_args = {{
     .runtime_arg_values = {{"start_page", {{NodeCoord{0, 0}, start_page}}},
                            {"num_pages",  {{NodeCoord{0, 0}, num_pages}}}},
 }};
-SetProgramRunArgs(program, params);
+program.set_program_run_args(params);
 ```
 
 
@@ -285,14 +285,14 @@ KernelSpec producer{ /* ... */
     .dfb_bindings = {{
         .dfb_spec_name = MY_DFB,
         .accessor_name = "out_dfb",
-        .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER
+        .endpoint_type = DFBEndpointType::PRODUCER
     }},
 };
 KernelSpec consumer{ /* ... */
     .dfb_bindings = {{
         .dfb_spec_name = MY_DFB,
         .accessor_name = "in_dfb",  // independent of the producer's name
-        .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER
+        .endpoint_type = DFBEndpointType::CONSUMER
     }},
 };
 ```
@@ -305,7 +305,7 @@ KernelSpec consumer{ /* ... */
 
 **Aliased DFBs.** Two or more DFBs can share backing L1 memory via `DataflowBufferSpec::advanced_options.alias_with` (the field lives on `DFBAdvancedOptions`). The aliased DFBs are logically distinct (each has its own `unique_id` and bindings) but physically occupy the same L1 region. Useful when two same-shape DFBs are produced and consumed in non-overlapping phases of the kernel — the L1 footprint collapses. All aliased DFBs must have the same total size (`num_entries * entry_size`), must be bound to the same kernels, and must mutually declare each other in `alias_with`. Aliased DFBs offer no guarantee against data clobbering between the logical buffers; correctness is the kernel author's responsibility.
 
-Remote DFBs spanning nodes are described in `dataflow_buffer_spec.hpp` but are not yet supported.
+Remote DFBs spanning nodes are not yet supported.
 
 > **`tile_format_metadata` (the legacy `format_descriptors[i].tile` field).** `DataflowBufferSpec` carries a second optional metadata field, `std::optional<tt::tt_metal::Tile> tile_format_metadata`, that mirrors the legacy `CBFormatDescriptor::tile`. It is load-bearing for non-default tile geometry — tiny tiles, non-32x32, transposed-face, narrow-tile configurations (introduced for matmul tiny tiles in PR #12908). The value threads through the JIT path into per-CB `constexpr uint8_t unpack_tile_r_dim[]` / `unpack_tile_c_dim[]` / `unpack_num_faces[]` (and pack-side equivalents) inside the compute kernel's generated `chlkc_descriptors.h`, where LLK unpacker / packer init reads it.
 >
@@ -412,14 +412,14 @@ KernelSpec reader{ /* ... */
 };
 spec.kernels = {reader};
 
-Program program = MakeProgramFromSpec(*mesh_device, spec);
+Program program(*mesh_device, spec);
 
 // In ProgramRunArgs — supply the actual MeshTensor per execution.
 ProgramRunArgs params;
 params.tensor_args = {
     {INPUT, TensorArgument{input_tensor}},
 };
-SetProgramRunArgs(program, params);
+program.set_program_run_args(params);
 ```
 
 ```cpp
@@ -540,7 +540,7 @@ params.kernel_run_args = {{
                            {"num_tiles",  {{NodeCoord{0, 0}, num_tiles}}}},
     .common_runtime_arg_values = {{"bank_id", bank_id}},
 }};
-SetProgramRunArgs(program, params); // temporary free function
+program.set_program_run_args(params);
 ```
 
 Vararg form — for kernels with a genuinely dynamic argument tail (loop-retrieved on the device side). The canonical fit is a CTA-bound count plus a per-element payload, e.g. an N-dimensional shape. Vararg counts live on `KernelAdvancedOptions` (schema side); vararg values live on `AdvancedKernelRunArgs` (per-execution side, nested under each `KernelRunArgs` entry's `.advanced_options`):
@@ -604,7 +604,7 @@ dfb.push_back(num_entries);
 ```
 
 
-> **Implicit sync (Quasar)**: On Gen2, you can elide the explicit `reserve_back` / `push_back` (or `wait_front` / `pop_front`) pattern entirely. Pass the DFB directly to `Noc::async_read` or `async_write`, and the runtime hardware handles the FIFO sync via ISR. This is the default behavior; you can disable it per-DFB endpoint by listing the DFB's `unique_id` in `Gen2Config::disable_implicit_sync_for` (on the kernel's `DataMovementHardwareConfig::gen2_config`): e.g. `gen2_config = Gen2Config{.disable_implicit_sync_for = {"my_dfb"}}` (rarely needed). On Gen1, the option is a no-op — the explicit FIFO pattern shown above remains the way.
+> **Implicit sync (Quasar)**: On Gen2, you can elide the explicit `reserve_back` / `push_back` (or `wait_front` / `pop_front`) pattern entirely. Pass the DFB directly to `Noc::async_read` or `async_write`, and the runtime hardware handles the FIFO sync via ISR. This is the default behavior; you can disable it per-DFB endpoint by listing the DFB's `unique_id` in `DataMovement2XXConfig::disable_dfb_implicit_sync_for` (on the kernel's `DataMovementHardwareConfig::config_2xx`): e.g. `config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for = {MY_DFB}}` (rarely needed). On Gen1, the option is a no-op — the explicit FIFO pattern shown above remains the way.
 
 ---
 
@@ -696,6 +696,8 @@ Some kernels read a dynamic-count argument tail in a loop — e.g. an N-dimensio
 .runtime_arg_schema = {
     .runtime_arg_names = {"start_page"},
     .common_runtime_arg_names = {"num_entries"},
+},
+.advanced_options = {
     .num_runtime_varargs = rank,  // shape: one entry per dimension
 },
 ```
@@ -723,7 +725,7 @@ Common runtime varargs are analogous: declare with `num_common_runtime_varargs`,
 
 Vararg indices are stable across schema changes: promoting a named RTA to a CRTA, or adding or removing named arguments, does not shift vararg indices. (This stability lets you migrate incrementally — rename arguments to named form one at a time without disturbing the remaining varargs.)
 
-> **Note**: This argument-retrieval syntax will evolve again to support custom argument types beyond `uint32_t` (including std::array and user-defined POD types). The named-accessor mechanism (`get_arg(args::name)`) will be preserved; the underlying types will become user-extensible. Migrators should plan to revisit kernel arguments after these changes.
+> **Note**: This argument-retrieval syntax will evolve again to support custom argument types beyond `uint32_t` (including user-defined POD types). The named-accessor mechanism (`get_arg(args::name)`) will be preserved; the underlying types will become user-extensible. Migrators should plan to revisit kernel arguments after these changes.
 
 ---
 
@@ -883,11 +885,11 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
 
     // ... build the spec and run args ...
 
-    tt::tt_metal::experimental::ProgramSpec spec{
+    tt::tt_metal::ProgramSpec spec{
         .name = "my_program",
         // ...
     };
-    tt::tt_metal::experimental::ProgramRunArgs run_params;
+    tt::tt_metal::ProgramRunArgs run_params;
     // ... populate run_params ...
 
     return ttnn::device_operation::ProgramArtifacts{
@@ -924,14 +926,14 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
 >
 > Pass `MeshTensor` directly to helper functions as `const MeshTensor&`; do **not** wrap in `std::cref` / `std::reference_wrapper<const MeshTensor>`. Reaching back to `.mesh_tensor()` at each call site compiles and runs correctly but is not the recommended style — extract once and pass the reference.
 
-A Metal 2.0 factory **does not** construct the `Program` itself, nor does it call `SetProgramRunArgs` directly. Those are the framework adapter's responsibilities.
+A Metal 2.0 factory **does not** construct the `Program` itself, nor does it call `set_program_run_args` directly. Those are the framework adapter's responsibilities.
 
 ### Cache-miss vs cache-hit lifecycle
 
 The framework manages two distinct execution paths:
 
-- **Cache miss** (first execution, or a new op-args key): the framework calls `create_program_artifacts`, then internally calls `MakeProgramFromSpec(*device, spec)` to build the `Program`, then `SetProgramRunArgs(program, run_params)` to apply the per-execution values, resolving each `TensorArgument` against the op's io tensors and any `op_owned_tensors`. The full spec is realized once; op-owned tensors are parked in the cache entry at a stable address.
-- **Cache hit** (subsequent executions with a still-valid cached `Program`): the framework **does not re-run the factory**. It refreshes the tensor bindings — the io tensors plus the parked op-owned ones — via `UpdateTensorArgs`, and skips the build. Only the tensor bindings are refreshed; other run-arg values keep the values they were given at cache-miss.
+- **Cache miss** (first execution, or a new op-args key): the framework calls `create_program_artifacts`, then internally builds the `Program` from `spec` (via the `MeshWorkload` constructor), then calls `program.set_program_run_args(run_params)` to apply the per-execution values, resolving each `TensorArgument` against the op's io tensors and any `op_owned_tensors`. The full spec is realized once; op-owned tensors are parked in the cache entry at a stable address.
+- **Cache hit** (subsequent executions with a still-valid cached `Program`): the framework **does not re-run the factory**. It refreshes the tensor bindings — the io tensors plus the parked op-owned ones — via `Program::update_tensor_args`, and skips the build. Only the tensor bindings are refreshed; other run-arg values keep the values they were given at cache-miss.
 
 The cache key is the op itself — its type, attributes, and tensor args (the framework's automatic hash), combined with the target mesh coordinates; a custom `compute_program_hash`, if present, replaces that default. A factory satisfying `ProgramSpecFactoryConcept` is routed through `ProgramSpecMeshWorkloadFactoryAdapter`, which handles both paths.
 
@@ -1017,7 +1019,7 @@ KernelSpec reader{
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .accessor_name = "out_dfb",
-        .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER
+        .endpoint_type = DFBEndpointType::PRODUCER
     }},
     .tensor_bindings = {{
         .tensor_parameter_name = INPUT,
@@ -1025,7 +1027,7 @@ KernelSpec reader{
     }},
     .compile_time_args = {{"page_size", page_size}},
     .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
-    .hw_config = CreateReaderGen1DataMovementConfig(),
+    .hw_config = CreateReaderDataMovementConfig(),
 };
 
 KernelSpec writer{
@@ -1034,7 +1036,7 @@ KernelSpec writer{
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .accessor_name = "in_dfb",
-        .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER
+        .endpoint_type = DFBEndpointType::CONSUMER
     }},
     .tensor_bindings = {{
         .tensor_parameter_name = OUTPUT,
@@ -1042,7 +1044,7 @@ KernelSpec writer{
     }},
     .compile_time_args = {{"page_size", page_size}},
     .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
-    .hw_config = CreateWriterGen1DataMovementConfig(),
+    .hw_config = CreateWriterDataMovementConfig(),
 };
 
 DataflowBufferSpec dfb{
@@ -1066,7 +1068,7 @@ ProgramSpec spec{
         .target_nodes = node,
     }},
 };
-Program program = MakeProgramFromSpec(*mesh_device, spec);
+Program program(*mesh_device, spec);
 
 ProgramRunArgs params;
 params.kernel_run_args = {
@@ -1079,7 +1081,7 @@ params.tensor_args = {
     {INPUT,  TensorArgument{input_tensor}},
     {OUTPUT, TensorArgument{output_tensor}},
 };
-SetProgramRunArgs(program, params);
+program.set_program_run_args(params);
 ```
 
 `ProgramDescriptor` collapses all of placement, schema, and values into one nested struct, while Metal 2.0 keeps each concern visible as its own field. This example demonstrated named CTAs, DFB binding-by-name, derived DFB placement, TensorAccessor binding (replacing the manual `TensorAccessorArgs` plumbing chain on the host and the `TensorAccessorArgs<N>()` offset bookkeeping in the kernel), and mutable / immutable separation.
@@ -1163,7 +1165,7 @@ ProgramSpec spec{
         .target_nodes = cores,  // 2×2 grid
     }},
 };
-Program program = MakeProgramFromSpec(*mesh_device, spec);
+Program program(*mesh_device, spec);
 
 ProgramRunArgs params;
 // runtime_arg_values is keyed by argument name, then by node. (Legacy factories
@@ -1183,7 +1185,7 @@ params.tensor_args = {
     {INPUT,  TensorArgument{input_tensor}},
     {OUTPUT, TensorArgument{output_tensor}},
 };
-SetProgramRunArgs(program, params);
+program.set_program_run_args(params);
 ```
 
 Key differences vs. the legacy pattern:
@@ -1205,7 +1207,7 @@ Common pitfalls when migrating from `ProgramDescriptor`:
 - **Local DFB invariant.** A local DFB's producer and consumer kernels must share *identical* `WorkUnitSpec` membership.
 - **Compile-time arguments are named only.** Positional CTAs are not part of the Metal 2.0 API; use named CTAs throughout.
 - **Runtime varargs are for indexed-collection elements.** `num_runtime_varargs` / `num_common_runtime_varargs` fit an argument reached **by index** — a variable-count loop, or a data-selected index. A **distinct field read a fixed number of times** is a named RTA (see the [patterns caution](port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary) for the `arg_index++` / separate-section subtleties).
-- **`ProgramRunArgs` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `SetProgramRunArgs` to error. The same applies to varargs.
+- **`ProgramRunArgs` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `Program::set_program_run_args` to error. The same applies to varargs.
 
 ### Cryptic error → likely cause
 
@@ -1214,8 +1216,8 @@ When a build error or spec-validator failure doesn't make the fix obvious, searc
 | Symptom (substring to grep for in your output) | Likely cause | Fix |
 |---|---|---|
 | Linker: `undefined reference to 'dfb::...'` (e.g. `dfb::cb_scaled`) inside a kernel TU | Kernel `#include`s the wrong generated header. `dfb::*` lives in `kernel_bindings_generated.h`; `args::*` lives in `kernel_args_generated.h`. | Remove any explicit include of either generated header. The only include a ported kernel adds is `experimental/kernel_args.h` — the framework injects both. |
-| Spec-validator: DataflowBuffer with 0 producers / 0 consumers | Host-side topology mismatch — the DFB was declared but only one end of its pipeline binds it. The other end is bound to a different DFB, missing entirely, or doesn't appear in any kernel's `kernel_bindings`. | Fix on the host: add the missing binding. **Do not** modify the kernel's `wait_front` / `pop_front` calls to mask the imbalance — per-execution DFB state is reinitialized, so a tile produced and never consumed is harmless. |
+| Spec-validator: DataflowBuffer with 0 producers / 0 consumers | Host-side topology mismatch — the DFB was declared but only one end of its pipeline binds it. The other end is bound to a different DFB, missing entirely, or doesn't appear in any kernel's `dfb_bindings`. | Fix on the host: add the missing binding. **Do not** modify the kernel's `wait_front` / `pop_front` calls to mask the imbalance — per-execution DFB state is reinitialized, so a tile produced and never consumed is harmless. |
 | Spec-validator: TensorParameter with 0 TensorBindings | TensorParameter declared but no kernel binds it. | Bind the tensor on the kernel(s) that use it, or remove the parameter. |
-| Spec-validator: `unpack_modes` required (or LLK-side dest-accumulator dtype assert) | Compute kernel sets `enable_32_bit_dest = true` and consumes a `DataType::Float32` DFB, but no `unpack_modes` entry was set for that DFB on the compute kernel's hardware config. | On the compute kernel's `hw_config`, add an entry to the `unpack_modes` table keyed by the DFB's `DFBSpecName`, choosing the mode to match the legacy config: `unpack_modes = {{DFB_NAME, UnpackMode::UnpackToSrc}}` for a legacy `Default`, or `UnpackMode::UnpackToDest` for a legacy `UnpackToDestFp32`. |
+| Spec-validator: `unpack_modes` required (or LLK-side dest-accumulator dtype assert) | Compute kernel sets `enable_32_bit_dest = true` and consumes a `tt::DataFormat::Float32` DFB, but no `unpack_modes` entry was set for that DFB on the compute kernel's hardware config. | On the compute kernel's `hw_config`, add an entry to the `unpack_modes` table keyed by the DFB's `DFBSpecName`, choosing the mode to match the legacy config: `unpack_modes = {{DFB_NAME, UnpackMode::UnpackToSrc}}` for a legacy `Default`, or `UnpackMode::UnpackToDest` for a legacy `UnpackToDestFp32`. |
 | Spec-validator: aliased-DFB rule failure (size / strict-clique / borrowed-memory consistency) | The DFBs declared via `advanced_options.alias_with` violate one of the three legality rules. | The error names which rule fails. Most common case: a DFB was added on one member's alias list but missed on the other(s) — `advanced_options.alias_with` must form a strict clique (every member names every other member). |
-| `TensorSpec` legality check fires — typically on a fast-path program-cache hit; reported by `UpdateTensorArgs` (base concept) or `UpdateProgramRunArgs` (custom concept) | The op defines a custom `compute_program_hash` that doesn't fold `TensorSpec` into the hash key. The program cache reports a hit, but the cached `ProgramSpec` was built for a different `TensorSpec`. Metal 2.0's legality check catches the resulting mismatch. | **Stop and report — this is not a port-time fix.** Do **not** patch the custom hash to include `TensorSpec`, and do **not** delete it in favour of the default hash; both silently change the op's cache-equivalence class, which is the op author's call, not the port's. Record the hash's file:line, what the legality check rejected, and the invocation it fired on, in `METAL2_PORT_REPORT.md`. The op's hash was vetted and cleared by an ops-team expert before the port; this failure is evidence that vetting was wrong, which is an upstream error rather than something the port can absorb. |
+| `TensorSpec` legality check fires — typically on a fast-path program-cache hit; reported by `Program::update_tensor_args` (base concept) or `Program::update_program_run_args` (custom concept) | The op defines a custom `compute_program_hash` that doesn't fold `TensorSpec` into the hash key. The program cache reports a hit, but the cached `ProgramSpec` was built for a different `TensorSpec`. Metal 2.0's legality check catches the resulting mismatch. | **Stop and report — this is not a port-time fix.** Do **not** patch the custom hash to include `TensorSpec`, and do **not** delete it in favour of the default hash; both silently change the op's cache-equivalence class, which is the op author's call, not the port's. Record the hash's file:line, what the legality check rejected, and the invocation it fired on, in `METAL2_PORT_REPORT.md`. The op's hash was vetted and cleared by an ops-team expert before the port; this failure is evidence that vetting was wrong, which is an upstream error rather than something the port can absorb. |
