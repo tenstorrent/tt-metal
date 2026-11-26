@@ -55,13 +55,13 @@ RealtimeProfilerService::RealtimeProfilerService() :
 #endif
 }
 
-uint64_t RealtimeProfilerService::register_consumer(const experimental::ProgramRealtimeProfilerCallback& callback) {
+uint64_t RealtimeProfilerService::register_consumer(experimental::ProgramRealtimeProfilerCallback&& callback) {
     TT_FATAL(callback != nullptr, "Cannot register a null real-time profiler callback");
     reap_retired_consumers();
 
     std::lock_guard lock(topology_mutex_);
     const auto handle = next_consumer_handle_++;
-    auto& registration = consumers_.try_emplace(handle, handle, callback).first->second;
+    auto& registration = consumers_.try_emplace(handle, handle, std::move(callback)).first->second;
     for (const AttachedProducer& producer : attached_producers_) {
         registration.readers.emplace_back(producer.ring, producer.ring->make_reader(), producer.max_batch_records);
     }

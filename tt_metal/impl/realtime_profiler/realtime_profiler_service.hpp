@@ -34,7 +34,7 @@ public:
     RealtimeProfilerService(const RealtimeProfilerService&) = delete;
     RealtimeProfilerService& operator=(const RealtimeProfilerService&) = delete;
 
-    uint64_t register_consumer(const experimental::ProgramRealtimeProfilerCallback& callback);
+    uint64_t register_consumer(experimental::ProgramRealtimeProfilerCallback&& callback);
     void unregister_consumer(uint64_t handle);
 
     // `max_batch_records` is the most records a callback may be handed at a time from this ring.

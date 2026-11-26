@@ -690,8 +690,11 @@ def test_host_device_correlation(tmp_path):
 ALIGNMENT_RUN_SECONDS = 8
 ALIGNMENT_WINDOW_NS = 100_000_000
 ALIGNMENT_SETTLE_NS = 1_000_000_000  # the clock rate is still moving in the first second
-ALIGNMENT_MAX_RMS_MS = 1.0
-ALIGNMENT_MAX_ABS_MS = 2.0
+# The offset is measured against when the host enqueued each program, so it also moves with how deep the queue is. A BH
+# box stays under 0.1 ms; a WH n150 CI runner showed 0.67 ms rms and 2.6 ms max. Constant 1 s anchors reached 5.7 ms in the
+# first seconds and the original zone loss stepped the mapping by up to 15 ms, so these limits still catch those.
+ALIGNMENT_MAX_RMS_MS = 1.5
+ALIGNMENT_MAX_ABS_MS = 5.0
 ALIGNMENT_MAX_MISSING_ZONES = 3
 ALIGNMENT_MAX_TAIL_GAP_MS = 100.0
 RUNTIME_ID_WRAP = 65535
