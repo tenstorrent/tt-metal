@@ -14,11 +14,31 @@ dashboards:
       - job: asan-build
         when:
           changed: [any-code, image]
-      # runtime-smoke-tests (cpu-only leg).
+      # runtime-smoke-tests (cpu-only and n150 legs).
       - job: smoke-cpu-asan
         when:
           changed: [cmake, tt-metalium, tt-metalium-tests, tt-nn-tests, image]
+      - job: smoke-n150-asan
+        when:
+          changed: [cmake, tt-metalium, tt-metalium-tests, tt-nn-tests, image]
+      - job: ttnn-smoke-n150-asan
+        when:
+          changed: [cmake, tt-metalium, tt-nn, tt-metalium-tests, tt-nn-tests, image]
       - job: llk-hardware-free
         when:
           changed: [llk-wormhole, llk-blackhole, llk-common, llk-sfpi, llk-tests, llk-ci, llk-perf, llk-hardware-free,
                     llk-quasar]
+      # llk-smoke-tests with the sku-allowlist's wh_n150_civ2.
+      - job: llk-smoke-n150-g1
+        when:
+          changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-wormhole, llk-perf, image]
+      - job: llk-smoke-n150-g2
+        when:
+          changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-wormhole, llk-perf, image]
+      # runtime-examples and ttnn-examples (sdk-examples.yaml, wh_n150_civ2).
+      - job: runtime-examples-n150-asan
+        when:
+          changed: [cmake, tt-metalium, image]
+      - job: ttnn-examples-n150-asan
+        when:
+          changed: [cmake, tt-metalium, tt-nn, image]
