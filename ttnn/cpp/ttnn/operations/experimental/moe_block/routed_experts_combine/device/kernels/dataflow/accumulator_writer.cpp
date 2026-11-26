@@ -7,9 +7,10 @@
 //          combine_port_or_accumulator_writer.cpp),
 //          RISCV_0 (BRISC), NoC 1 (combine dm_kernel: RISCV_0 is pinned to NoC 1)
 // Responsibilities:
-//  - reads each finished row from cb_out (L1), produced by accumulator_compute
-//  - writes it to the output tensor (TensorAccessor, row i * A + me) over NoC 1
-//  - synchronises only through cb_out with the compute
+//  - reads each finished row from cb_out (L1), produced by accumulator_compute, and its token from cb_done (tokens
+//    finish in the order their last rows land, not in token order)
+//  - writes it to the output tensor (TensorAccessor, row token * A + me) over NoC 1
+//  - synchronises only through cb_out / cb_done with the compute
 // Note: with accumulators_on_ports the port cores' combine_port_writer does these writes instead
 
 // Accumulator writer: accumulator `me`'s finished token rows (tokens me, me + A, ...)
@@ -23,6 +24,7 @@
 // Compile-time args: all named (combine_names.hpp), the same whether this role runs alone or in a two-role kernel;
 // the output's accessor args are the only positional ones
 constexpr uint32_t cb_out = get_named_compile_time_arg_val(combine_names::kOutputCb);
+constexpr uint32_t cb_done = get_named_compile_time_arg_val(combine_names::kDoneCb);  // (each output row's token)
 constexpr uint32_t row_bytes = get_named_compile_time_arg_val(combine_names::kRowBytes);
 constexpr uint32_t NT = get_named_compile_time_arg_val(combine_names::kRowTiles);
 constexpr uint32_t A = get_named_compile_time_arg_val(combine_names::kAccumulatorCount);
@@ -38,10 +40,13 @@ void kernel_main() {
     const uint32_t o_addr = moe_block_args::arg(0), n_tok = moe_block_args::arg(1), me = moe_block_args::arg(2);
     const auto o = TensorAccessor(o_args, o_addr, row_bytes);
     for (uint32_t i = 0; i < n_tok; ++i) {
+        cb_wait_front(cb_done, 1);
+        const uint32_t token = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_done));
         cb_wait_front(cb_out, NT);
-        noc_async_write(get_read_ptr(cb_out), o.get_noc_addr(i * A + me), row_bytes);
+        noc_async_write(get_read_ptr(cb_out), o.get_noc_addr(token * A + me), row_bytes);
         noc_async_writes_flushed();
         cb_pop_front(cb_out, NT);
+        cb_pop_front(cb_done, 1);
     }
     noc_async_write_barrier();
 }
