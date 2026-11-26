@@ -354,6 +354,24 @@ def _pad_to_l1_alignment(data: list[int]) -> list[int]:
     return data if pad == 0 else data + [0] * pad
 
 
+def _mx_tile_layout(scales, elements, tile_count: int = 1) -> bytes:
+    """Lay MX blocks out as `tile_count` back-to-back L1 tiles.
+
+    Each tile is [its block scales][its element bytes], both sections padded
+    with zeros to the 16-byte L1 alignment. `scales` and `elements` cover every
+    tile, in tile order.
+    """
+    scales = np.ascontiguousarray(scales, dtype=np.uint8).reshape(tile_count, -1)
+    elements = np.ascontiguousarray(elements).view(np.uint8).reshape(tile_count, -1)
+    scale_len = l1_align(scales.shape[1])
+    tiles = np.zeros(
+        (tile_count, scale_len + l1_align(elements.shape[1])), dtype=np.uint8
+    )
+    tiles[:, : scales.shape[1]] = scales
+    tiles[:, scale_len : scale_len + elements.shape[1]] = elements
+    return tiles.tobytes()
+
+
 def _mx_shared_exponents(blocks, elem_exp_max_unbiased):
     """Derive one E8M0 block scale per 32-datum block, as the Tensix packer does.
 
@@ -408,8 +426,25 @@ def _pack_mxfp8(
     num_faces=4,
     face_r_dim=16,
 ):
+    """One MXFP8 tile as a list of bytes. See :func:`_pack_mxfp8_tiles`."""
+    return list(
+        _pack_mxfp8_tiles(tensor, fp8_dtype, element_max_normal, num_faces, face_r_dim)
+    )
+
+
+def _pack_mxfp8_tiles(
+    tensor,
+    fp8_dtype,
+    element_max_normal,
+    num_faces=4,
+    face_r_dim=16,
+    tile_count=1,
+) -> bytes:
     """
     Internal helper to pack MXFP8 formats with FULLY SEPARATED layout.
+
+    Packs `tile_count` tiles in one pass. Blocks are independent, so the bytes
+    are the ones a tile-by-tile loop would produce back to back.
 
     Layout (similar to BFP8_b): [all_scales][all_elements], each section 16-byte aligned.
     Padding bytes (zeros) are appended after scales and after FP8 payload as needed.
@@ -424,21 +459,24 @@ def _pack_mxfp8(
         element_max_normal: Maximum normal value for element format
         num_faces: Number of faces to pack (1, 2, or 4). Defaults to 4.
         face_r_dim: Number of rows per face (1, 2, 4, 8, or 16). Defaults to 16.
+        tile_count: Number of tiles to pack. Defaults to 1.
 
     Returns:
-        List of packed bytes: [all scales][all elements]
+        Packed bytes, per tile: [all scales][all elements]
     """
     # Convert to numpy and prepare data
     fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
 
     # Calculate elements per face based on face_r_dim
     elements_per_face = face_r_dim * FACE_C_DIM
-    elements_to_pack = elements_per_face * num_faces
+    elements_per_tile = elements_per_face * num_faces
+    elements_to_pack = elements_per_tile * tile_count
     assert (
         len(fp32_array) >= elements_to_pack
-    ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s)"
-    assert elements_to_pack % MX_FORMAT_BLOCK_SIZE == 0, (
-        f"Element count ({elements_to_pack}) must be a multiple of "
+    ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s) x {tile_count} tile(s)"
+    # Per tile, not in total: a block never spans two tiles.
+    assert elements_per_tile % MX_FORMAT_BLOCK_SIZE == 0, (
+        f"Element count ({elements_per_tile}) must be a multiple of "
         f"MX_FORMAT_BLOCK_SIZE ({MX_FORMAT_BLOCK_SIZE})"
     )
 
@@ -455,7 +493,6 @@ def _pack_mxfp8(
         blocks,
         elem_exp_max_unbiased=ml_dtypes.finfo(fp8_dtype).maxexp - 1,
     )
-    scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
     scale_factors = e8m0_scale_factors(scales_e8m0_array)
 
@@ -471,9 +508,7 @@ def _pack_mxfp8(
     fp8_blocks = scaled_blocks.astype(fp8_dtype)
 
     # FULLY SEPARATED layout: all scales first, then all elements (both 16B-aligned)
-    # Convert FP8 blocks to list of bytes (integers 0-255)
-    fp8_bytes = list(fp8_blocks.tobytes())
-    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(fp8_bytes)
+    return _mx_tile_layout(scales_e8m0_array, fp8_blocks, tile_count)
 
 
 def _pack_mxfp8_srcs(
@@ -656,20 +691,26 @@ def pack_mxfp4(
     # If needed in the future, implement similar to _pack_mxfp8_srcs
     if use_srcs:
         raise NotImplementedError("use_srcs=True not yet implemented for pack_mxfp4")
+    return list(_pack_mxfp4_tiles(tensor, num_faces, face_r_dim))
 
+
+def _pack_mxfp4_tiles(tensor, num_faces=4, face_r_dim=16, tile_count=1) -> bytes:
+    """`tile_count` MXFP4 tiles in one pass, as the bytes a tile loop would give."""
     # Convert to numpy and prepare data
     fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
 
     # Calculate elements per face based on face_r_dim
     elements_per_face = face_r_dim * FACE_C_DIM
-    elements_to_pack = elements_per_face * num_faces
+    elements_per_tile = elements_per_face * num_faces
+    elements_to_pack = elements_per_tile * tile_count
     assert (
         len(fp32_array) >= elements_to_pack
-    ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s)"
-    if elements_to_pack % MX_FORMAT_BLOCK_SIZE != 0:
+    ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s) x {tile_count} tile(s)"
+    # Per tile, not in total: a block never spans two tiles.
+    if elements_per_tile % MX_FORMAT_BLOCK_SIZE != 0:
         raise ValueError(
             "pack_mxfp4 requires a block-aligned geometry: "
-            f"elements_to_pack={elements_to_pack} is not a multiple of "
+            f"elements_to_pack={elements_per_tile} is not a multiple of "
             f"MX_FORMAT_BLOCK_SIZE={MX_FORMAT_BLOCK_SIZE} "
             f"(face_r_dim={face_r_dim}, num_faces={num_faces})"
         )
@@ -687,7 +728,6 @@ def pack_mxfp4(
     # E8M0 block scales, per the packer's floor(log2(amax)) rule
     # (elem_exp_max_unbiased is 2 for E2M1: max normal 6.0 = 1.5 * 2^2)
     scales_e8m0_array = _mx_shared_exponents(blocks_raw, elem_exp_max_unbiased=2)
-    scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
     scale_factors = e8m0_scale_factors(scales_e8m0_array)
 
@@ -699,9 +739,7 @@ def pack_mxfp4(
     packed_bytes = ((fp4_nibbles[1::2] & 0x0F) << 4) | (fp4_nibbles[0::2] & 0x0F)
 
     # FULLY SEPARATED layout: [scales padded to 16B][packed elements padded to 16B]
-    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
-        packed_bytes.tolist()
-    )
+    return _mx_tile_layout(scales_e8m0_array, packed_bytes, tile_count)
 
 
 def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
@@ -777,7 +815,14 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
 
 
 def _mxint_block_scale_and_quantize(
-    tensor, num_faces, face_r_dim, *, elem_scale: int, elem_max: int, fmt_name: str
+    tensor,
+    num_faces,
+    face_r_dim,
+    *,
+    elem_scale: int,
+    elem_max: int,
+    fmt_name: str,
+    tile_count: int = 1,
 ):
     """
     Shared block-scale + symmetric quantization for MxInt formats.
@@ -795,19 +840,22 @@ def _mxint_block_scale_and_quantize(
                   1 for MxInt2).
       fmt_name:   for error messages only.
 
-    Returns: (scales_e8m0 as list[int], int_values as np.int8 array, shape (num_blocks, 32)).
+    Returns: (scales_e8m0 as np.uint8 array, shape (num_blocks,), int_values as
+    np.int8 array, shape (num_blocks, 32)), covering all `tile_count` tiles.
     """
     fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
     elements_per_face = face_r_dim * FACE_C_DIM
-    elements_to_pack = elements_per_face * num_faces
+    elements_per_tile = elements_per_face * num_faces
+    elements_to_pack = elements_per_tile * tile_count
     assert len(fp32_array) >= elements_to_pack, (
         f"Tensor has {len(fp32_array)} elements, "
-        f"need {elements_to_pack} for {num_faces} face(s)"
+        f"need {elements_to_pack} for {num_faces} face(s) x {tile_count} tile(s)"
     )
-    if elements_to_pack % MX_FORMAT_BLOCK_SIZE != 0:
+    # Per tile, not in total: a block never spans two tiles.
+    if elements_per_tile % MX_FORMAT_BLOCK_SIZE != 0:
         raise ValueError(
             f"{fmt_name} requires a block-aligned geometry: "
-            f"elements_to_pack={elements_to_pack} is not a multiple of "
+            f"elements_to_pack={elements_per_tile} is not a multiple of "
             f"MX_FORMAT_BLOCK_SIZE={MX_FORMAT_BLOCK_SIZE} "
             f"(face_r_dim={face_r_dim}, num_faces={num_faces})"
         )
@@ -836,7 +884,7 @@ def _mxint_block_scale_and_quantize(
     # was zeroed and an Inf still reaches it.
     scales_e8m0_array = _mx_shared_exponents(blocks_raw, elem_exp_max_unbiased=0)
 
-    scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
+    scales_e8m0 = scales_e8m0_array.astype(np.uint8)
 
     scale_factors = e8m0_scale_factors(scales_e8m0_array)
 
@@ -880,7 +928,11 @@ def pack_mxint8(
     """
     if use_srcs:
         raise NotImplementedError("use_srcs=True not yet implemented for pack_mxint8")
+    return list(_pack_mxint8_tiles(tensor, num_faces, face_r_dim))
 
+
+def _pack_mxint8_tiles(tensor, num_faces=4, face_r_dim=16, tile_count=1) -> bytes:
+    """`tile_count` MxInt8 tiles in one pass, as the bytes a tile loop would give."""
     scales_e8m0, int_values = _mxint_block_scale_and_quantize(
         tensor,
         num_faces,
@@ -888,12 +940,11 @@ def pack_mxint8(
         elem_scale=64,
         elem_max=127,
         fmt_name="pack_mxint8",
+        tile_count=tile_count,
     )
 
     # Layout: [scales padded to 16B][int8 elements padded to 16B].
-    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
-        list(int_values.tobytes())
-    )
+    return _mx_tile_layout(scales_e8m0, int_values, tile_count)
 
 
 def pack_mxint4(
@@ -920,7 +971,11 @@ def pack_mxint4(
     """
     if use_srcs:
         raise NotImplementedError("use_srcs=True not yet implemented for pack_mxint4")
+    return list(_pack_mxint4_tiles(tensor, num_faces, face_r_dim))
 
+
+def _pack_mxint4_tiles(tensor, num_faces=4, face_r_dim=16, tile_count=1) -> bytes:
+    """`tile_count` MxInt4 tiles in one pass, as the bytes a tile loop would give."""
     scales_e8m0, int_values = _mxint_block_scale_and_quantize(
         tensor,
         num_faces,
@@ -928,6 +983,7 @@ def pack_mxint4(
         elem_scale=4,
         elem_max=7,
         fmt_name="pack_mxint4",
+        tile_count=tile_count,
     )
 
     # Pack 2 nibbles per byte: low nibble = even index, high nibble = odd index.
@@ -936,9 +992,7 @@ def pack_mxint4(
     packed_bytes = ((nibbles[1::2] & 0x0F) << 4) | (nibbles[0::2] & 0x0F)
 
     # Layout: [scales padded to 16B][packed nibbles padded to 16B].
-    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
-        packed_bytes.tolist()
-    )
+    return _mx_tile_layout(scales_e8m0, packed_bytes, tile_count)
 
 
 def pack_mxint2(
@@ -966,7 +1020,11 @@ def pack_mxint2(
     """
     if use_srcs:
         raise NotImplementedError("use_srcs=True not yet implemented for pack_mxint2")
+    return list(_pack_mxint2_tiles(tensor, num_faces, face_r_dim))
 
+
+def _pack_mxint2_tiles(tensor, num_faces=4, face_r_dim=16, tile_count=1) -> bytes:
+    """`tile_count` MxInt2 tiles in one pass, as the bytes a tile loop would give."""
     scales_e8m0, int_values = _mxint_block_scale_and_quantize(
         tensor,
         num_faces,
@@ -974,6 +1032,7 @@ def pack_mxint2(
         elem_scale=1,
         elem_max=1,
         fmt_name="pack_mxint2",
+        tile_count=tile_count,
     )
 
     # Pack 4 crumbs per byte: bits[1:0]=i, [3:2]=i+1, [5:4]=i+2, [7:6]=i+3.
@@ -987,6 +1046,36 @@ def pack_mxint2(
     )
 
     # Layout: [scales padded to 16B][packed crumbs padded to 16B].
-    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
-        packed_bytes.tolist()
-    )
+    return _mx_tile_layout(scales_e8m0, packed_bytes, tile_count)
+
+
+#: Packers that take `tile_count` whole tiles in one call and return the bytes
+#: the matching per-tile packer would produce back to back. Called as
+#: ``fn(tensor, num_faces, face_r_dim, tile_count)``. The SrcS slice layout is
+#: not covered: that one still goes tile by tile.
+TILE_BATCH_PACKERS = {
+    DataFormat.MxFp8R: lambda tensor, num_faces, face_r_dim, tile_count: (
+        _pack_mxfp8_tiles(
+            tensor,
+            ml_dtypes.float8_e5m2,
+            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
+            num_faces,
+            face_r_dim,
+            tile_count,
+        )
+    ),
+    DataFormat.MxFp8P: lambda tensor, num_faces, face_r_dim, tile_count: (
+        _pack_mxfp8_tiles(
+            tensor,
+            ml_dtypes.float8_e4m3fn,
+            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
+            num_faces,
+            face_r_dim,
+            tile_count,
+        )
+    ),
+    DataFormat.MxFp4: _pack_mxfp4_tiles,
+    DataFormat.MxInt8: _pack_mxint8_tiles,
+    DataFormat.MxInt4: _pack_mxint4_tiles,
+    DataFormat.MxInt2: _pack_mxint2_tiles,
+}

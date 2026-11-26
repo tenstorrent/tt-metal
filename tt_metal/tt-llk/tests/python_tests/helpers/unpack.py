@@ -29,73 +29,105 @@ from .tile_constants import (
 )
 
 
+def _decode_fp16(packed, twos_complement=False):
+    return np.frombuffer(packed, dtype=np.float16)
+
+
+def _decode_bfp16(packed, twos_complement=False):
+    return np.frombuffer(packed, dtype=ml_dtypes.bfloat16).astype(np.float32)
+
+
+def _decode_fp32(packed, twos_complement=False):
+    return np.frombuffer(packed, dtype=np.float32)
+
+
+def _decode_int32(packed, twos_complement=False):
+    if twos_complement:
+        return np.frombuffer(packed, dtype=np.int32)
+    # INT32 uses sign-magnitude format in hardware (not two's complement)
+    # Format: bit 31 = sign, bits 30:0 = magnitude
+    uint32_array = np.frombuffer(packed, dtype=np.uint32)
+    sign = (uint32_array & 0x80000000).astype(bool)
+    magnitude = (uint32_array & 0x7FFFFFFF).astype(np.int64)
+    return np.where(sign, -magnitude, magnitude).astype(np.int32)
+
+
+def _decode_uint32(packed, twos_complement=False):
+    return np.frombuffer(packed, dtype=np.uint32)
+
+
+def _decode_int16(packed, twos_complement=False):
+    if twos_complement:
+        return np.frombuffer(packed, dtype=np.int16)
+    # INT16 uses sign-magnitude format in hardware (not two's complement)
+    # Format: bit 15 = sign, bits 14:0 = magnitude
+    uint16_array = np.frombuffer(packed, dtype=np.uint16)
+    sign = (uint16_array & 0x8000).astype(bool)
+    magnitude = (uint16_array & 0x7FFF).astype(np.int16)
+    return np.where(sign, -magnitude, magnitude)
+
+
+def _decode_uint16(packed, twos_complement=False):
+    return np.frombuffer(packed, dtype=np.uint16)
+
+
+def _decode_fp8_e4m3(packed, twos_complement=False):
+    return np.frombuffer(packed, dtype=ml_dtypes.float8_e4m3fn).astype(np.float32)
+
+
+def _decode_int8(packed, twos_complement=False):
+    if twos_complement:
+        return np.frombuffer(packed, dtype=np.int8)
+    # INT8 uses sign-magnitude format in hardware (not two's complement)
+    # Format: bit 7 = sign, bits 6:0 = magnitude
+    uint8_array = np.frombuffer(packed, dtype=np.uint8)
+    sign = (uint8_array & 0x80).astype(bool)
+    magnitude = (uint8_array & 0x7F).astype(np.int8)
+    return np.where(sign, -magnitude, magnitude)
+
+
+def _decode_uint8(packed, twos_complement=False):
+    return np.frombuffer(packed, dtype=np.uint8)
+
+
 def unpack_fp16(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.float16).tolist()
+    return _decode_fp16(bytes(packed_list)).tolist()
 
 
 def unpack_bfp16(packed_list):
-    return (
-        np.frombuffer(bytes(packed_list), dtype=ml_dtypes.bfloat16)
-        .astype(np.float32)
-        .tolist()
-    )
+    return _decode_bfp16(bytes(packed_list)).tolist()
 
 
 def unpack_fp32(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.float32).tolist()
+    return _decode_fp32(bytes(packed_list)).tolist()
 
 
 def unpack_int32(packed_list, twos_complement=False):
-    if twos_complement:
-        return np.frombuffer(bytes(packed_list), dtype=np.int32).tolist()
-    # INT32 uses sign-magnitude format in hardware (not two's complement)
-    # Format: bit 31 = sign, bits 30:0 = magnitude
-    uint32_array = np.frombuffer(bytes(packed_list), dtype=np.uint32)
-    sign = (uint32_array & 0x80000000).astype(bool)
-    magnitude = (uint32_array & 0x7FFFFFFF).astype(np.int64)
-    return np.where(sign, -magnitude, magnitude).astype(np.int32).tolist()
+    return _decode_int32(bytes(packed_list), twos_complement).tolist()
 
 
 def unpack_uint32(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.uint32).tolist()
+    return _decode_uint32(bytes(packed_list)).tolist()
 
 
 def unpack_int16(packed_list, twos_complement=False):
-    if twos_complement:
-        return np.frombuffer(bytes(packed_list), dtype=np.int16).tolist()
-    # INT16 uses sign-magnitude format in hardware (not two's complement)
-    # Format: bit 15 = sign, bits 14:0 = magnitude
-    uint16_array = np.frombuffer(bytes(packed_list), dtype=np.uint16)
-    sign = (uint16_array & 0x8000).astype(bool)
-    magnitude = (uint16_array & 0x7FFF).astype(np.int16)
-    return np.where(sign, -magnitude, magnitude).tolist()
+    return _decode_int16(bytes(packed_list), twos_complement).tolist()
 
 
 def unpack_uint16(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.uint16).tolist()
+    return _decode_uint16(bytes(packed_list)).tolist()
 
 
 def unpack_fp8_e4m3(packed_list):
-    return (
-        np.frombuffer(bytes(packed_list), dtype=ml_dtypes.float8_e4m3fn)
-        .astype(np.float32)
-        .tolist()
-    )
+    return _decode_fp8_e4m3(bytes(packed_list)).tolist()
 
 
 def unpack_int8(packed_list, twos_complement=False):
-    if twos_complement:
-        return np.frombuffer(bytes(packed_list), dtype=np.int8).tolist()
-    # INT8 uses sign-magnitude format in hardware (not two's complement)
-    # Format: bit 7 = sign, bits 6:0 = magnitude
-    uint8_array = np.frombuffer(bytes(packed_list), dtype=np.uint8)
-    sign = (uint8_array & 0x80).astype(bool)
-    magnitude = (uint8_array & 0x7F).astype(np.int8)
-    return np.where(sign, -magnitude, magnitude).tolist()
+    return _decode_int8(bytes(packed_list), twos_complement).tolist()
 
 
 def unpack_uint8(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.uint8).tolist()
+    return _decode_uint8(bytes(packed_list)).tolist()
 
 
 # ============================================================================
@@ -229,7 +261,24 @@ def _align16(n: int) -> int:
     return (n + 15) & ~15
 
 
-def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DIM):
+def _mx_tile_sections(packed_bytes, tile_count, num_scales, element_bytes_len):
+    """Scale bytes and element bytes of `tile_count` back-to-back MX tiles.
+
+    Every tile is [scales padded to 16B][elements padded to 16B] and the tiles
+    are the same length, so both sections come out as one array each, in tile
+    order. Bytes past a tile's element section are padding and are dropped.
+    """
+    tiles = np.frombuffer(bytes(packed_bytes), dtype=np.uint8).reshape(tile_count, -1)
+    start = _align16(num_scales)
+    return (
+        np.ascontiguousarray(tiles[:, :num_scales]).reshape(-1),
+        np.ascontiguousarray(tiles[:, start : start + element_bytes_len]).reshape(-1),
+    )
+
+
+def _unpack_mxfp8(
+    packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DIM, tile_count=1
+):
     """
     Unpack MXFP8 format with layout: [scales padded to 16B][elements padded to 16B].
 
@@ -248,6 +297,7 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
         fp8_dtype: ml_dtypes dtype (float8_e5m2 or float8_e4m3fn)
         num_faces: Number of faces (1, 2, or 4). Defaults to 4.
         face_r_dim: Rows per face (1, 2, 4, 8, or 16). Defaults to 16.
+        tile_count: Number of equal-length tiles in packed_bytes. Defaults to 1.
 
     Returns:
         torch.Tensor of bfloat16 values
@@ -255,20 +305,18 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
     num_elements = face_r_dim * FACE_C_DIM * num_faces
     num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
 
-    scale_section_len = _align16(num_scales)
+    scales_array, elements_bytes = _mx_tile_sections(
+        packed_bytes, tile_count, num_scales, num_elements
+    )
 
-    scales_e8m0 = packed_bytes[:num_scales]
-    elements_bytes = packed_bytes[scale_section_len : scale_section_len + num_elements]
-
-    # Convert elements bytes to FP8 blocks and reshape to (num_scales, 32)
-    fp8_blocks = np.frombuffer(bytes(elements_bytes), dtype=fp8_dtype).reshape(
-        num_scales, MX_FORMAT_BLOCK_SIZE
+    # Convert elements bytes to FP8 blocks and reshape to (blocks, 32)
+    fp8_blocks = elements_bytes.view(fp8_dtype).reshape(
+        tile_count * num_scales, MX_FORMAT_BLOCK_SIZE
     )
 
     # Vectorized scale decoding - decode all E8M0 scales at once. float64 keeps
     # element * 2^block_exp exact across the whole E8M0 range, so the range
     # clamps below (not a float32 round) decide overflow and underflow.
-    scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
     nan_blocks = scales_array == E8M0_NAN_CODE
     block_exp_unbiased = scales_array.astype(np.int32) - E8M0_BIAS
     scaled_blocks = (
@@ -322,6 +370,7 @@ def unpack_mxfp8r(
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
     dest_acc: bool = False,
+    tile_count: int = 1,
 ):
     """
     Unpack MXFP8R format (E5M2 variant) to bfloat16 tensor.
@@ -340,7 +389,9 @@ def unpack_mxfp8r(
     """
     if use_srcs:
         return _unpack_mxfp8_srcs(packed_bytes, ml_dtypes.float8_e5m2, dest_acc)
-    return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e5m2, num_faces, face_r_dim)
+    return _unpack_mxfp8(
+        packed_bytes, ml_dtypes.float8_e5m2, num_faces, face_r_dim, tile_count
+    )
 
 
 def unpack_mxfp8p(
@@ -349,6 +400,7 @@ def unpack_mxfp8p(
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
     dest_acc: bool = False,
+    tile_count: int = 1,
 ):
     """
     Unpack MXFP8P format (E4M3 variant) to bfloat16 tensor.
@@ -367,7 +419,9 @@ def unpack_mxfp8p(
     """
     if use_srcs:
         return _unpack_mxfp8_srcs(packed_bytes, ml_dtypes.float8_e4m3fn, dest_acc)
-    return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e4m3fn, num_faces, face_r_dim)
+    return _unpack_mxfp8(
+        packed_bytes, ml_dtypes.float8_e4m3fn, num_faces, face_r_dim, tile_count
+    )
 
 
 def unpack_mxfp4(
@@ -376,6 +430,7 @@ def unpack_mxfp4(
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
     dest_acc: bool = False,
+    tile_count: int = 1,
 ):
     """
     Unpack MXFP4 format (E2M1 variant) to bfloat16 tensor.
@@ -419,18 +474,17 @@ def unpack_mxfp4(
     # Expected bytes = 1 scale byte per block (16B-aligned) + packed FP4 elements.
     scale_section_len = _align16(num_blocks)
     element_bytes_len = num_blocks * (block_size // 2)
-    expected_len = scale_section_len + element_bytes_len
+    expected_len = (scale_section_len + element_bytes_len) * tile_count
     if len(packed_bytes) != expected_len:
         raise ValueError(
             "Invalid packed_bytes length for MXFP4: got "
             f"{len(packed_bytes)} bytes, expected {expected_len} bytes."
         )
 
-    scales_u8 = np.frombuffer(bytes(packed_bytes[:num_blocks]), dtype=np.uint8)
-    packed_u8 = np.frombuffer(
-        bytes(packed_bytes[scale_section_len : scale_section_len + element_bytes_len]),
-        dtype=np.uint8,
+    scales_u8, packed_u8 = _mx_tile_sections(
+        packed_bytes, tile_count, num_blocks, element_bytes_len
     )
+    num_blocks *= tile_count
 
     # Each byte packs 2 FP4 values: low nibble then high nibble.
     nibbles_u8 = np.empty(packed_u8.size * 2, dtype=np.uint8)
@@ -534,6 +588,7 @@ def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
     it today.
     """
     scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
+    int_blocks = int_blocks.reshape(-1, MX_FORMAT_BLOCK_SIZE)
     # Same decode the packers use, NaN at 0xFF included -- multiplying by that
     # NaN is what carries the rule through, so no separate overlay is needed.
     scale_factors = e8m0_scale_factors(scales_array)
@@ -557,6 +612,7 @@ def unpack_mxint8(
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
     dest_acc: bool = False,
+    tile_count: int = 1,
 ):
     """
     Unpack MxInt8 format (signed S1.6 with E8M0 block scale) to bfloat16 tensor.
@@ -575,18 +631,17 @@ def unpack_mxint8(
     num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
     scale_section_len = _align16(num_scales)
 
-    if len(packed_bytes) < scale_section_len + num_elements:
+    if len(packed_bytes) < (scale_section_len + num_elements) * tile_count:
         raise ValueError(
             "Invalid packed_bytes length for MxInt8: got "
             f"{len(packed_bytes)} bytes, expected at least "
-            f"{scale_section_len + num_elements} bytes."
+            f"{(scale_section_len + num_elements) * tile_count} bytes."
         )
 
-    scales_e8m0 = packed_bytes[:num_scales]
-    elements_bytes = packed_bytes[scale_section_len : scale_section_len + num_elements]
-    int8_blocks = np.frombuffer(bytes(elements_bytes), dtype=np.int8).reshape(
-        num_scales, MX_FORMAT_BLOCK_SIZE
+    scales_e8m0, elements_bytes = _mx_tile_sections(
+        packed_bytes, tile_count, num_scales, num_elements
     )
+    int8_blocks = elements_bytes.view(np.int8)
     return _mxint_decode_blocks(scales_e8m0, int8_blocks, elem_scale_divisor=64.0)
 
 
@@ -596,6 +651,7 @@ def unpack_mxint4(
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
     dest_acc: bool = False,
+    tile_count: int = 1,
 ):
     """
     Unpack MxInt4 format (signed S1.2 with E8M0 block scale) to bfloat16 tensor.
@@ -616,20 +672,19 @@ def unpack_mxint4(
     scale_section_len = _align16(num_scales)
     element_bytes_len = num_elements // 2  # 2 elements per byte
 
-    if len(packed_bytes) < scale_section_len + element_bytes_len:
+    if len(packed_bytes) < (scale_section_len + element_bytes_len) * tile_count:
         raise ValueError(
             "Invalid packed_bytes length for MxInt4: got "
             f"{len(packed_bytes)} bytes, expected at least "
-            f"{scale_section_len + element_bytes_len} bytes."
+            f"{(scale_section_len + element_bytes_len) * tile_count} bytes."
         )
 
-    scales_e8m0 = packed_bytes[:num_scales]
-    elements_bytes = packed_bytes[
-        scale_section_len : scale_section_len + element_bytes_len
-    ]
+    scales_e8m0, elements_bytes = _mx_tile_sections(
+        packed_bytes, tile_count, num_scales, element_bytes_len
+    )
 
     # Unpack 2 nibbles per byte: low = even index, high = odd index.
-    packed_u8 = np.frombuffer(bytes(elements_bytes), dtype=np.uint8)
+    packed_u8 = elements_bytes
     nibbles_u8 = np.empty(packed_u8.size * 2, dtype=np.uint8)
     nibbles_u8[0::2] = packed_u8 & 0x0F
     nibbles_u8[1::2] = packed_u8 >> 4
@@ -639,7 +694,7 @@ def unpack_mxint4(
         nibbles_u8.astype(np.int16) - 16,
         nibbles_u8.astype(np.int16),
     ).astype(np.int8)
-    int4_blocks = int4_as_int8.reshape(num_scales, MX_FORMAT_BLOCK_SIZE)
+    int4_blocks = int4_as_int8
     return _mxint_decode_blocks(scales_e8m0, int4_blocks, elem_scale_divisor=4.0)
 
 
@@ -649,6 +704,7 @@ def unpack_mxint2(
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
     dest_acc: bool = False,
+    tile_count: int = 1,
 ):
     """
     Unpack MxInt2 format (signed S1.0 with E8M0 block scale) to bfloat16 tensor.
@@ -669,20 +725,19 @@ def unpack_mxint2(
     scale_section_len = _align16(num_scales)
     element_bytes_len = num_elements // 4  # 4 elements per byte
 
-    if len(packed_bytes) < scale_section_len + element_bytes_len:
+    if len(packed_bytes) < (scale_section_len + element_bytes_len) * tile_count:
         raise ValueError(
             "Invalid packed_bytes length for MxInt2: got "
             f"{len(packed_bytes)} bytes, expected at least "
-            f"{scale_section_len + element_bytes_len} bytes."
+            f"{(scale_section_len + element_bytes_len) * tile_count} bytes."
         )
 
-    scales_e8m0 = packed_bytes[:num_scales]
-    elements_bytes = packed_bytes[
-        scale_section_len : scale_section_len + element_bytes_len
-    ]
+    scales_e8m0, elements_bytes = _mx_tile_sections(
+        packed_bytes, tile_count, num_scales, element_bytes_len
+    )
 
     # Unpack 4 crumbs per byte: bits[1:0], [3:2], [5:4], [7:6].
-    packed_u8 = np.frombuffer(bytes(elements_bytes), dtype=np.uint8)
+    packed_u8 = elements_bytes
     crumbs_u8 = np.empty(packed_u8.size * 4, dtype=np.uint8)
     crumbs_u8[0::4] = packed_u8 & 0x03
     crumbs_u8[1::4] = (packed_u8 >> 2) & 0x03
@@ -694,9 +749,22 @@ def unpack_mxint2(
         crumbs_u8.astype(np.int16) - 4,
         crumbs_u8.astype(np.int16),
     ).astype(np.int8)
-    int2_blocks = int2_as_int8.reshape(num_scales, MX_FORMAT_BLOCK_SIZE)
+    int2_blocks = int2_as_int8
     return _mxint_decode_blocks(scales_e8m0, int2_blocks, elem_scale_divisor=1.0)
 
+
+#: Numpy decoders for the formats where one datum is one fixed-width field, so
+#: any run of tiles decodes in a single call. Called as ``fn(bytes, twos_complement)``.
+_ARRAY_DECODERS = {
+    DataFormat.Float16: _decode_fp16,
+    DataFormat.Float16_b: _decode_bfp16,
+    DataFormat.Float32: _decode_fp32,
+    DataFormat.Int32: _decode_int32,
+    DataFormat.Int16: _decode_int16,
+    DataFormat.Fp8_e4m3: _decode_fp8_e4m3,
+    DataFormat.Int8: _decode_int8,
+    DataFormat.UInt8: _decode_uint8,
+}
 
 _UNPACKERS = {
     DataFormat.Float16: unpack_fp16,
@@ -710,6 +778,98 @@ _UNPACKERS = {
     DataFormat.Int8: unpack_int8,
     DataFormat.UInt8: unpack_uint8,
 }
+
+
+def _as_result_tensor(values: torch.Tensor, output_dtype) -> torch.Tensor:
+    """A decoded tile tensor in `output_dtype`, with every NaN the same quiet NaN.
+
+    The tile decoders can leave a NaN with any sign and payload. Results used
+    to be rebuilt from Python floats, which collapsed them all to one pattern,
+    so this keeps the returned bits what they have always been.
+    """
+    values = values.to(output_dtype)
+    if values.is_floating_point():
+        nan = torch.isnan(values)
+        if bool(nan.any()):
+            values = torch.where(nan, torch.full_like(values, float("nan")), values)
+    return values
+
+
+#: MX unpackers, which take ``tile_count`` equal-length tiles in one call.
+_MX_TILE_UNPACKERS = {
+    DataFormat.MxFp8R: unpack_mxfp8r,
+    DataFormat.MxFp8P: unpack_mxfp8p,
+    DataFormat.MxFp4: unpack_mxfp4,
+    DataFormat.MxInt8: unpack_mxint8,
+    DataFormat.MxInt4: unpack_mxint4,
+    DataFormat.MxInt2: unpack_mxint2,
+}
+
+
+def _unpack_tiles_batched(
+    packed_list,
+    output_format,
+    output_dtype,
+    tile_count,
+    tile_stride_bytes,
+    bytes_per_tile,
+    *,
+    num_faces,
+    face_r_dim,
+    use_srcs,
+    dest_acc,
+    twos_complement,
+):
+    """Decode every tile in one call, or return None to go tile by tile.
+
+    Covers the formats whose tiles decode independently of their position: the
+    fixed-width ones and the MX ones outside the SrcS slice layout. Gathers the
+    `bytes_per_tile` wanted from each `tile_stride_bytes` stride first, so the
+    decoder sees the tiles back to back, exactly the bytes the per-tile loop
+    would have handed it one tile at a time.
+    """
+    decoder = _ARRAY_DECODERS.get(output_format)
+    mx_unpacker = None if use_srcs else _MX_TILE_UNPACKERS.get(output_format)
+    if (decoder is None and mx_unpacker is None) or tile_count < 1:
+        return None
+    span = (tile_count - 1) * tile_stride_bytes + bytes_per_tile
+    if len(packed_list) < span:
+        return None  # a short buffer keeps the per-tile behaviour
+
+    raw = packed_list
+    if not isinstance(raw, (bytes, bytearray)):
+        raw = bytes(raw[:span])
+    if bytes_per_tile == tile_stride_bytes:
+        tiles = bytes(raw[:span])
+    else:
+        strided = np.frombuffer(raw, dtype=np.uint8, count=span)
+        offsets = (
+            np.arange(tile_count)[:, np.newaxis] * tile_stride_bytes
+            + np.arange(bytes_per_tile)[np.newaxis, :]
+        )
+        tiles = strided[offsets].tobytes()
+
+    if mx_unpacker is not None:
+        return _as_result_tensor(
+            mx_unpacker(
+                tiles,
+                num_faces=num_faces,
+                face_r_dim=face_r_dim,
+                use_srcs=False,
+                dest_acc=dest_acc,
+                tile_count=tile_count,
+            ),
+            output_dtype,
+        )
+
+    # Sign-magnitude or two's complement only matters to the signed integers.
+    values = decoder(tiles, twos_complement)
+    if values.dtype.kind == "f" and np.isnan(values).any():
+        # The bits a NaN lands with depend on the route into torch, and the
+        # per-tile path goes through a list of Python floats. Take that route
+        # for the rare buffer holding one, so the result is the same tensor.
+        values = values.tolist()
+    return torch.tensor(values, dtype=output_dtype)
 
 
 def unpack_res_tiles(
@@ -767,7 +927,23 @@ def unpack_res_tiles(
     else:
         unpack_func = _UNPACKERS[output_format]
 
-    unpacked_data = []
+    batched = _unpack_tiles_batched(
+        packed_list,
+        output_format,
+        output_dtype,
+        tile_count,
+        tile_stride_bytes,
+        elements_per_tile_needed,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        use_srcs=use_srcs,
+        dest_acc=dest_acc,
+        twos_complement=twos_complement,
+    )
+    if batched is not None:
+        return batched
+
+    unpacked_tiles = []
 
     # Stride at tile_stride_bytes (L1 layout), but only extract needed bytes per tile
     for tile in range(tile_count):
@@ -803,6 +979,12 @@ def unpack_res_tiles(
         else:
             unpacked_tile = unpack_func(tile_data)
 
-        unpacked_data.extend(unpacked_tile)
+        unpacked_tiles.append(
+            _as_result_tensor(unpacked_tile, output_dtype)
+            if isinstance(unpacked_tile, torch.Tensor)
+            else torch.tensor(unpacked_tile, dtype=output_dtype)
+        )
 
-    return torch.tensor(unpacked_data, dtype=output_dtype)
+    if not unpacked_tiles:
+        return torch.tensor([], dtype=output_dtype)
+    return torch.cat(unpacked_tiles)
