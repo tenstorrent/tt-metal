@@ -5,9 +5,12 @@
 # MANUAL companion to the generated test_untilize.py — do NOT regenerate this file
 # from a capture.
 #
-# The captured call untilizes a [1, 1, 32, 262144] bfloat8_b tensor: one tile row of 8192 tiles.
-# On the 2-node Quasar emulator that is hours of simulated work on one core (the reader waits on
-# a NoC read per MX tile), far beyond the ``-m emulator`` budget.
+# The captured call untilizes a [1, 1, 32, 262144] bfloat8_b tensor: one tile row of 8192 tiles,
+# all handled by one core on the 2-node Quasar emulator, where the reader does one NoC read per
+# tile. That is slow, and more so with the MX formats (the captured bfloat8_b runs as MX under
+# TTNN_GRAPH_OPS_BF8_AS_MXFP8x). The full-width case is left out of the ``-m emulator`` subset
+# (conftest.py, ``_fits_emulator``) and still runs outside it; the cases below stand in for it inside
+# the subset.
 #
 # What the capture exercises is the *block* untilize factory (``UntilizeMultiCoreBlockProgramFactory``:
 # reader_unary_interleaved_wh_multicore, untilize_wh, writer_unary_stick_layout_wh_multicore). A
@@ -64,8 +67,8 @@ CASES = [
 ]
 
 
-# 1248 tiles on one core is minutes on the emulator, and longer with the watcher on; the repo default
-# (pytest.ini: 300 s) timed the bf16 baseline out. The marker overrides the ini and any --timeout.
+# 1248 tiles on one core takes minutes on the emulator, and longer with the watcher on; the repo default
+# (pytest.ini: 300 s) timed the bf16 baseline out under the watcher. The marker overrides the ini and any --timeout.
 @pytest.mark.timeout(1200)
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
