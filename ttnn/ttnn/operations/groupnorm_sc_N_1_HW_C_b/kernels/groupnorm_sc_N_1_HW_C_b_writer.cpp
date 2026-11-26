@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// groupnorm_sc_N_1_HW_C_b writer (BRISC, NoC1).
+// groupnorm_sc_N_1_HW_C_b writer (BRISC; NoC1, NoC0 on the DRAM odd-column cores: program descriptor "NoC pairing").
 //
 // Per block:
 //   gather   : row 0 of the 2 local partial tiles (group lanes of S1 / S2) -> row `slot` of the root's

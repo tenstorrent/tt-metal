@@ -5,9 +5,9 @@
 // groupnorm_sc_N_1_HW_C_b compute.
 //
 // Per block (op_design.md "Block schedule"):
-//   accumulate_moments  : per chunk [RM: tilize] -> chain x*(x - k) -> reduce(x) & reduce(x*(x - k)) with Accumulate
-//                         (UnpackToDestFp32 accumulators; the Sigma x one starts from the reader's exact -n*k seed,
-//                         so it ends at S1' = Sigma (x - k)), then one exact copy into the FPU-readable chan CBs
+//   accumulate_moments  : [RM: tilize] -> per channel tile, elementwise fp32 DEST accumulators S += x - k and
+//                         Q += x*(x - k) over every tile row of the window, one SFPU column collapse at the end
+//                         (moments_rows, raw LLK) -> S1' = Sigma (x - k), T2 = Sigma x*(x - k) in the chan CBs
 //   collapse            : matmul(chan row [1 x W], map [W x 1]) -> 2 local partial tiles (row 0 = group lanes)
 //   combine (root)      : matmul(ones [1 x R], gathered [R x 2]) -> [S1', T2] replicated rows;
 //                         finalize chain (+ the group shift k) -> [rstd, mean]
@@ -34,6 +34,10 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/cb_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -57,9 +61,7 @@ constexpr uint32_t cb_output_rm = 1;  // sharded RM: the output shard (untilized
 // resident tail for pass 2, followed by the re-read head - exactly the pass-2 order.
 constexpr uint32_t cb_input_tiles = 2;
 constexpr uint32_t cb_input_keep = 3;
-constexpr uint32_t cb_x_squared = 4;
 constexpr uint32_t cb_output_tiles = 5;
-constexpr uint32_t cb_reduce_scaler = 6;
 constexpr uint32_t cb_sum_acc = 7;
 constexpr uint32_t cb_sumsq_acc = 8;
 constexpr uint32_t cb_chan_scale = 9;
@@ -74,8 +76,7 @@ constexpr uint32_t cb_ones_tiles = 17;
 constexpr uint32_t cb_group_sums = 18;
 constexpr uint32_t cb_stats_out = 19;
 constexpr uint32_t cb_group_stats = 20;
-constexpr uint32_t cb_pilot_rows = 22;   // shift k per channel (row 0), held for pass 1
-constexpr uint32_t cb_sum_seed = 23;     // -n*k per channel (row 0), the Sigma x accumulator's start
+constexpr uint32_t cb_pilot_rows = 22;   // -k per channel (row 0), held for pass 1
 constexpr uint32_t cb_group_shift = 24;  // root: k per group lane, rows replicated
 
 constexpr uint32_t W = get_compile_time_arg_val(0);
@@ -84,25 +85,20 @@ constexpr bool IS_RM = get_compile_time_arg_val(2) != 0;
 constexpr bool HAS_GAMMA = get_compile_time_arg_val(3) != 0;
 constexpr bool HAS_BETA = get_compile_time_arg_val(4) != 0;
 constexpr uint32_t R = get_compile_time_arg_val(5);
-constexpr uint32_t EXP_SBW = get_compile_time_arg_val(6);       // expand matmul out_subblock_w
-constexpr uint32_t OUT_CB_PAGES = get_compile_time_arg_val(7);  // cb_output_tiles capacity (alias group B)
+constexpr uint32_t EXP_SBW = get_compile_time_arg_val(6);  // expand matmul out_subblock_w
 // The input / output are L1 shards backing their CBs (TILE: the input ring and cb_output_tiles; RM: cb_input_rm
 // and cb_output_rm). Sharded RM untilizes each normalized chunk into the output shard.
-constexpr bool SHARDED = get_compile_time_arg_val(8) != 0;
+constexpr bool SHARDED = get_compile_time_arg_val(7) != 0;
 constexpr bool UNTILIZE_OUT = SHARDED && IS_RM;
 // One binary per role (the unit root combines and finalizes). Compile-time so the block loop is not unswitched on
 // it (two copies of the whole per-block body would not fit the kernel-config ring under the watcher build).
-constexpr bool IS_ROOT = get_compile_time_arg_val(9) != 0;
-// m copies of the W pilot tiles (host pilot_repeat, m | CHUNK_HT): pass 1's shift chain walks m tile rows as one
-// row of m*W tiles, so its DEST window fills on narrow slices too (the window only spans one walk row).
-constexpr uint32_t PILOT_REPEAT = get_compile_time_arg_val(10);
-constexpr uint32_t PILOT_TILES = PILOT_REPEAT * W;
+constexpr bool IS_ROOT = get_compile_time_arg_val(8) != 0;
 // Per-chunk device zones (perf_instrumentation.hpp): the host enables them only when every core's chunk count keeps
 // the zone executions inside the per-RISC marker budget (a long DRAM block would silently exhaust it).
-constexpr bool CHUNK_ZONES = get_compile_time_arg_val(11) != 0;
+constexpr bool CHUNK_ZONES = get_compile_time_arg_val(9) != 0;
 constexpr uint32_t T = CHUNK_HT * W;
-// Tiles per DEST window of the two-op per-chunk chains (pass-1 x*(x - k), pass-2 a*x - b'): each element runs
-// over the whole window, so its FPU init is paid once per window, not per tile. The chain clamps it to DEST.
+// Tiles per DEST window of the pass-2 chain a*x - b': each element runs over the whole window, so its FPU init is paid
+// once per window, not per tile. The chain clamps it to DEST.
 constexpr uint32_t CHAIN_BLOCK = DEST_AUTO_LIMIT;
 
 // b' lives in cb_chan_work when beta is present (5e writes it back in place), else in cb_chan_shift.
@@ -144,96 +140,128 @@ ALWI void skip_chunk(uint32_t cb) {
     cb_pop_front(cb, T);
 }
 
-// Pass-1 statistics of one chunk at the front of cb_input_tiles. Both moments accumulate into the
-// UnpackToDestFp32 accumulators (exact fp32 reload); chunk 0 of Sigma x reloads the -n*k seed instead, so the
-// accumulator ends at S1' = Sigma (x - k). publish_channel_moments() hands them to the FPU.
-ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
-    constexpr uint32_t x_cb = cb_input_tiles;
-    DataflowBuffer x_dfb(x_cb);
-    DataflowBuffer xsq_dfb(cb_x_squared);
-    DataflowBuffer scaler_dfb(cb_reduce_scaler);
-    DataflowBuffer sum_acc_dfb(cb_sum_acc);
-    DataflowBuffer sumsq_acc_dfb(cb_sumsq_acc);
-    DataflowBuffer pilot_dfb(cb_pilot_rows);
-    DataflowBuffer seed_dfb(cb_sum_seed);
+// ---------------------------------------------------------------------------------------------------------------
+// Pass-1 moments, "accumulate first, reduce once" (perf_experiments/pass1_moments_accumulate, candidate C2).
+//
+// RAW-LLK PATH (bypasses compute_kernel_lib::reduce<REDUCE_COL, Accumulate>, the eltwise_chain
+// x*(x - k) -> Float32 intermediate CB and the dest-reuse helper; measured: unet_rm_ip_16384x960 167.8 -> 107.0 us,
+// vae_tile_16384x512 54.6 -> 43.2 us, see changelog Perf 1 "Helper bypasses"). Mechanism: the FPU accumulates the two
+// moments ELEMENTWISE in fp32 DEST over every tile row of the window; the 32 rows of each accumulator are collapsed
+// once (SFPU column sum, fp32) at the end of the block:
+//   S   += x + (-k)        ELWADD, acc_to_dest, srcB = the pilot row (-k) broadcast    (exact: bf16 operands)
+//   D_i += x + (-k)        same MOP, into a zeroed DEST scratch tile -> d = x - k
+//   Q   += x * d           ELWMUL (native DEST accumulate on WH/BH) at the user's HiFi3, srcA = x (unpacked),
+//                          srcB = d moved DEST -> srcB (MOVD2B), exactly the baseline chain's x*(x - k) product
+// so S ends at S1' = Sigma (x - k) and Q at T2 = Sigma x*(x - k), the moments the finalize already consumes.
+// Why raw: the stock dest-reuse multiply (mul_reuse_dest_tiles) moves DEST[t] into srcB, ZEROACCs DEST[t] and
+// writes the product back to the SAME tile t. Here the MOVD2B row offset reaches the scratch tile D_i while the
+// MOP's destination counter walks the accumulator Q (no ZEROACC on Q: ELWMUL accumulates), and the ZEROACC clears
+// D_i so the next tile's D_i += x + (-k) starts from 0. Same instructions, same count as the stock face loop.
+// Keeping x*x out of the FPU matters: x*x at HiFi3 drops the srcA_lo x srcB_lo partial product (a ~1e-4 relative
+// one-sided bias, which at |mean| >> std cancels catastrophically in T2 - mean'(mean' + k)); x*d with d = x - k
+// a short-mantissa value on srcB is exact in that regime (candidate C1 measured that bias).
+// No helper expresses "several elementwise FPU accumulators in one DEST window over a strided walk, then an SFPU
+// column collapse": the reduce helper reloads/re-packs its accumulator per call, and the chain's DestAccumulation
+// sums along a walk row, not down a column.
+// DEST window (4 fp32 tiles, half-sync DEST_AUTO_LIMIT): one channel tile -> S (0), Q (1), D_0 (2), D_1 (3); rows
+// are walked two at a time so each pair costs one ELWADD init and one multiply init.
+// Across chunks (streamed DRAM / partially resident RM) the elementwise partials spill to the UnpackToDestFp32
+// accumulators (CB 7 S, CB 8 Q; exact reload); the last chunk packs the collapsed row-0 moments straight into the
+// FPU-readable chan CBs (9 / 10, the same bytes: in-place lockstep), which replaces the publish copy.
+constexpr uint32_t S_DST = 0;
+constexpr uint32_t Q_DST = 1;
+constexpr uint32_t D0_DST = 2;
+static_assert(DEST_AUTO_LIMIT >= 4, "C2 moments window needs 4 DEST tiles");
 
-    {
-        MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_wait_x");
-        cb_wait_front(x_cb, T);
-    }
-
-    // x*(x - k) -> cb_x_squared (Float32), the sequential intermediate of the second reduce. x - k (fp32 DEST)
-    // re-enters the FPU through the bf16 srcB the pilot left: exact whenever k/2 <= x <= 2k (Sterbenz), the
-    // offset-heavy regime the shift exists for; elsewhere |x - k| ~ std and its rounding is ordinary noise.
-    // Walk ceil(rows_valid/m) rows of m*W tiles (m | CHUNK_HT keeps a ragged chunk's rounded-up walk inside its
-    // nominal T pages; the extra tiles are pad, never reduced).
-    const uint32_t walk_rows = (rows_valid + PILOT_REPEAT - 1) / PILOT_REPEAT;
-    {
-        MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_xk_chain");
-        eltwise_chain(
-            IterationShape::grid(walk_rows, PILOT_TILES).block_size(CHAIN_BLOCK),
-            BinaryFpu<
-                BinaryFpuOp::Sub,
-                input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
-                input(cb_pilot_rows, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row)>{
-                x_dfb, pilot_dfb},
-            DestReuseBinary<
-                BinaryFpuOp::Mul,
-                input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
-                DestReuseType::DEST_TO_SRCB>{x_dfb},
-            PackTile<output(cb_x_squared, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{xsq_dfb});
-        push_pad(cb_x_squared, T - walk_rows * PILOT_TILES);
-        cb_wait_front(cb_x_squared, T);
-    }
-
-    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_reduce");
-    const auto shape = ReduceInputBlockShape::of(rows_valid, W);
-    reduce<
-        PoolType::SUM,
-        ReduceDim::REDUCE_COL,
-        x_cb,
-        cb_reduce_scaler,
-        cb_sum_acc,
-        ReduceInputPolicy::NoWaitNoPop,
-        ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Fast,
-        ReduceAlgorithm::ReduceTile>(
-        x_dfb,
-        scaler_dfb,
-        sum_acc_dfb,
-        shape,
-        ReduceInputMemoryLayout::contiguous(),
-        Accumulate(j == 0 ? seed_dfb : sum_acc_dfb, j == 0 ? 1 : j));
-    reduce<
-        PoolType::SUM,
-        ReduceDim::REDUCE_COL,
-        cb_x_squared,
-        cb_reduce_scaler,
-        cb_sumsq_acc,
-        ReduceInputPolicy::NoWaitNoPop,
-        ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Fast,
-        ReduceAlgorithm::ReduceTile>(
-        xsq_dfb, scaler_dfb, sumsq_acc_dfb, shape, ReduceInputMemoryLayout::contiguous(), Accumulate(sumsq_acc_dfb, j));
-
-    cb_pop_front(x_cb, T);
-    cb_pop_front(cb_x_squared, T);
+ALWI void add_bcast_rows_acc_init(uint32_t icb0, uint32_t icb1) {
+    state_configure(icb0, icb1, __builtin_LINE());
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW, MathFidelity::LoFi>(
+        icb0, icb1, 1 /*acc_to_dest*/)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
 
-// Per-channel moments [1 x W] -> the FPU-readable chan CBs (matmul in0 of the collapse). CopyTile from an
-// UnpackToDestFp32 CB is exact. One copy per block replaces a last-chunk variant of both reduces, which would
-// double the reduce instantiations (kernel text must fit the kernel-config ring).
-ALWI void publish_channel_moments() {
-    DataflowBuffer sum_acc_dfb(cb_sum_acc);
-    DataflowBuffer sumsq_acc_dfb(cb_sumsq_acc);
-    DataflowBuffer chan_scale_dfb(cb_chan_scale);
-    DataflowBuffer chan_work_dfb(cb_chan_work);
-    eltwise_chain(
-        IterationShape::tiles(W),
-        CopyTile<input(cb_sum_acc), Dst::D0>{sum_acc_dfb},
-        CopyTile<input(cb_sumsq_acc), Dst::D1>{sumsq_acc_dfb},
-        PackTile<output(cb_chan_scale), Dst::D0>{chan_scale_dfb},
-        PackTile<output(cb_chan_work), Dst::D1>{chan_work_dfb});
+#ifdef TRISC_MATH
+// Q += srcA * DEST[d]; DEST[d] := 0. Requires mul_reuse_dest_init<DEST_TO_SRCB> (HiFi3 face MOP + addr mods).
+// Mirrors _llk_math_eltwise_binary_with_dest_reuse_<ELWMUL, NONE, ..., DEST_TO_SRCB> face by face.
+template <uint32_t d>
+inline void math_mul_acc_from_dest_tile() {
+    static_assert(d > Q_DST && d < 4, "scratch tile must follow Q inside the 4-tile fp32 half");
+    constexpr uint32_t off = (d - Q_DST) * 64;  // DEST rows per 32x32 tile slot (set_dst_write_addr stride)
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(Q_DST);
+#pragma GCC unroll 0
+    for (uint32_t f = 0; f < 4; ++f) {
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, off + 0);
+        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, off + 4);
+        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, off + 8);
+        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, off + 12);
+        // fp32 DEST: 4 tiles per bank, block index = tile * 4 + face (as the stock dest-reuse ZEROACC).
+        TT_ZEROACC(p_zeroacc::CLR_16, 1 /*fp32*/, 0, ADDR_MOD_1, (d & 3) * 4 + f);
+        ckernel_template::run();
+    }
+    math::clear_dst_reg_addr();
+}
+#endif
+
+template <uint32_t d>
+ALWI void mul_x_by_dest_tile_acc(uint32_t x_cb, uint32_t x_idx) {
+    UNPACK((llk_unpack_A<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(x_cb, x_idx)));
+    MATH((math_mul_acc_from_dest_tile<d>()));
+}
+
+// rows tile rows of W tiles at the front of cb_input_tiles (row r, channel tile c at r*W + c).
+NOINLINE_BLOCK_OP void moments_rows(uint32_t rows, bool first, bool last) {
+    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_moments");
+    constexpr uint32_t x_cb = cb_input_tiles;
+    pack_reconfig_data_format(cb_sum_acc);  // every target (7, 8, 9, 10) is Float32
+    for (uint32_t c = 0; c < W; ++c) {
+        tile_regs_acquire();
+        if (!first) {
+            cb_wait_front(cb_sum_acc, 1);
+            cb_wait_front(cb_sumsq_acc, 1);
+            reconfig_data_format_srca(cb_sum_acc);
+            copy_init(cb_sum_acc);
+            copy_tile(cb_sum_acc, 0, S_DST);
+            copy_init(cb_sumsq_acc);
+            copy_tile(cb_sumsq_acc, 0, Q_DST);
+            cb_pop_front(cb_sum_acc, 1);
+            cb_pop_front(cb_sumsq_acc, 1);
+        }
+        reconfig_data_format(x_cb, cb_pilot_rows);
+        for (uint32_t r = 0; r < rows; r += 2) {
+            const uint32_t t0 = r * W + c;
+            const uint32_t t1 = t0 + W;
+            const bool two = r + 1 < rows;
+            add_bcast_rows_acc_init(x_cb, cb_pilot_rows);
+            add_tiles_bcast<BroadcastType::ROW>(x_cb, cb_pilot_rows, t0, c, S_DST);
+            add_tiles_bcast<BroadcastType::ROW>(x_cb, cb_pilot_rows, t0, c, D0_DST);
+            if (two) {
+                add_tiles_bcast<BroadcastType::ROW>(x_cb, cb_pilot_rows, t1, c, S_DST);
+                add_tiles_bcast<BroadcastType::ROW>(x_cb, cb_pilot_rows, t1, c, D0_DST + 1);
+            }
+            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(x_cb);
+            mul_x_by_dest_tile_acc<D0_DST>(x_cb, t0);
+            if (two) {
+                mul_x_by_dest_tile_acc<D0_DST + 1>(x_cb, t1);
+            }
+        }
+        if (last) {
+            sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+            sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(S_DST);
+            sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(Q_DST);
+        }
+        tile_regs_commit();
+        const uint32_t s_cb = last ? cb_chan_scale : cb_sum_acc;
+        const uint32_t q_cb = last ? cb_chan_work : cb_sumsq_acc;
+        cb_reserve_back(s_cb, 1);
+        cb_reserve_back(q_cb, 1);
+        tile_regs_wait();
+        pack_tile(S_DST, s_cb);
+        pack_tile(Q_DST, q_cb);
+        tile_regs_release();
+        cb_push_back(s_cb, 1);
+        cb_push_back(q_cb, 1);
+    }
 }
 
 // Pass-2 normalize of the chunk at the front of cb_input_keep: y = a*x - b' (a, b' row-mapped, held for the
@@ -326,21 +354,46 @@ void kernel_main() {
         // ---------------- accumulate_moments (pass 1) ----------------
         {
             MaybeDeviceZoneScope("c_pass1");
-            for (uint32_t j = 0; j < num_chunks; ++j) {
-                const uint32_t rows_valid = rows_valid_of(j);
+            // The pilot (-k) is built by the reader after its pass-1 credit pushes (sharded) / chunk 0 (DRAM): RM
+            // tilizes first, and the wait sits right before the first moments walk.
+            auto wait_pilot = [] {
+                MaybeDeviceZoneScope("c_wait_pilot");
+                cb_wait_front(cb_pilot_rows, W);
+            };
+            if (SHARDED && K == num_chunks) {
+                // The whole shard is (or becomes) resident: one window-major walk over all rows_core tile rows, so
+                // the accumulators never leave DEST (no spill / reload). RM: tilize every chunk first (the ring
+                // holds them contiguously: only the last chunk can be ragged, and its pad sits at its end).
                 if constexpr (IS_RM) {
-                    tilize_chunk(rows_valid);
+                    for (uint32_t j = 0; j < num_chunks; ++j) {
+                        tilize_chunk(rows_valid_of(j));
+                    }
                 }
-                if (blk > 0 && j == 0) {
-                    // Alias group B: the writer must have drained the previous block's output before x^2 lands.
-                    cb_reserve_back(cb_output_tiles, OUT_CB_PAGES);
-                }
-                accumulate_chunk(j, rows_valid);
-                if (j < first_resident) {
-                    skip_chunk(cb_input_keep);  // streamed head chunk: not held for pass 2
+                wait_pilot();
+                cb_wait_front(cb_input_tiles, num_chunks * T);
+                moments_rows(rows_core, true, true);
+                cb_pop_front(cb_input_tiles, num_chunks * T);
+            } else {
+                for (uint32_t j = 0; j < num_chunks; ++j) {
+                    const uint32_t rows_valid = rows_valid_of(j);
+                    if constexpr (IS_RM) {
+                        tilize_chunk(rows_valid);
+                    }
+                    {
+                        MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_wait_x");
+                        cb_wait_front(cb_input_tiles, T);
+                    }
+                    if (j == 0) {
+                        wait_pilot();
+                    }
+                    moments_rows(rows_valid, j == 0, j + 1 == num_chunks);
+                    cb_pop_front(cb_input_tiles, T);
+                    if (j < first_resident) {
+                        skip_chunk(cb_input_keep);  // streamed head chunk: not held for pass 2
+                    }
                 }
             }
-            cb_pop_front(cb_pilot_rows, PILOT_TILES);
+            cb_pop_front(cb_pilot_rows, W);
         }
         if (blk == 0) {
             // The map is resident for the whole kernel (matmul in1, NoWaitNoPop). It is first read here, so the reader
@@ -350,8 +403,6 @@ void kernel_main() {
         }
         {
             MaybeDeviceZoneScope("c_collapse");
-            publish_channel_moments();
-
             // ---------------- collapse_to_group_partials ----------------
             // [1 x W] per-channel row x [W x 1] map -> one tile; row 0 holds the G_core group lanes.
             matmul_with_map<false>(chan_scale_cb, map_cb, local_partials_cb, MatmulBlockShape::of(1, 1, 1, 1, W, 1));

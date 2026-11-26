@@ -49,8 +49,7 @@ CHUNK_TILES_TARGET = 32  # streaming quantum target (tiles per chunk)
 D_IN = 2  # TILE input stream depth (chunks)
 D_RM = 2  # RM stick CB depth (chunks)
 # DEST window of the compute's two-op per-chunk chains (fp32 DEST, half sync: the device DEST_AUTO_LIMIT).
-CHAIN_BLOCK_TILES = 4
-D_OUT = 2  # output CB depth (chunks); group B total = max(4 KB*T, D_OUT*T*2 KB)
+D_OUT = 2  # output tile ring depth (chunks)
 MAX_GROUP_LANES = 32  # group lanes in one tile row
 # Per-chunk device zones (perf_instrumentation.hpp MaybeDeviceZoneScopeIf) split each chunk's wait from its work.
 # They are opt-in (TUNING_OVERRIDES["chunk_zones"]): in a profiled build they cost about 0.9 us on a 25 us sharded
@@ -72,9 +71,7 @@ CB_INPUT_RM = 0
 CB_OUTPUT_RM = 1  # sharded RM: untilized output, backed on the output shard
 CB_INPUT_TILES = 2  # input ring, pass-1 view (alias group A)
 CB_INPUT_KEEP = 3  # input ring, pass-2 view (alias group A)
-CB_X_SQUARED = 4
 CB_OUTPUT_TILES = 5
-CB_REDUCE_SCALER = 6
 CB_SUM_ACC = 7
 CB_SUMSQ_ACC = 8
 CB_CHAN_SCALE = 9
@@ -90,8 +87,7 @@ CB_GROUP_SUMS = 18
 CB_STATS_OUT = 19
 CB_GROUP_STATS = 20
 CB_AFFINE_STAGING = 21  # reader-only staging: pilot row (step 0) / affine slices (step B), disjoint in time
-CB_PILOT_ROWS = 22  # shift k per channel (row 0, bf16), one per block, held for pass 1
-CB_SUM_SEED = 23  # -n*k per channel (row 0, Float32 unpacked to DEST): the Sigma x accumulator's start
+CB_PILOT_ROWS = 22  # -k per channel (row 0, bf16), one per block, held for pass 1
 CB_GROUP_SHIFT = 24  # unit root: k per group lane (Float32, rows replicated), read by the finalize
 
 NUM_CB_SLOTS = 64  # unpack_to_dest_mode vector length (covers WH 32 / BH 64)
@@ -146,16 +142,9 @@ def input_ring_pages(*, T, K_alloc, stream, is_rm):
     return K_alloc * T + int(stream) * (1 if is_rm else D_IN) * T
 
 
-def pilot_repeat(W, h):
-    """Copies of the W pilot tiles: the pass-1 shift chain walks m tile rows as one row of m*W tiles, so its
-    DEST window (CHAIN_BLOCK_TILES) also fills on narrow slices (W < 4). m divides h, so a ragged chunk's
-    rounded-up walk stays inside the chunk's nominal T pages."""
-    return _largest_divisor_at_most(h, _ceil_div(CHAIN_BLOCK_TILES, W))
-
-
-def group_b_bytes(T):
-    """Alias group B (x^2 Float32 pass-1 intermediate / D_OUT-deep bf16 output ring): one allocation."""
-    return max(F32_TILE_BYTES * T, D_OUT * T * BF16_TILE_BYTES)
+def output_ring_bytes(T):
+    """The D_OUT-deep bf16 output tile ring (interleaved output, and sharded RM's untilize source)."""
+    return D_OUT * T * BF16_TILE_BYTES
 
 
 def staging_bytes(*, W, map_period, is_rm, n_affine):
@@ -175,15 +164,14 @@ def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map
     bf16_pages = (
         (D_RM * T if is_rm and not sharded else 0)
         + (0 if tile_shard else input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm))
-        + 1  # reduce scaler
         + R  # ones tiles
-        + W * (1 + pilot_repeat(W, T // W) + hg + hb)  # map, pilot rows (m copies), gamma rows, beta rows
+        + W * (2 + hg + hb)  # map, pilot rows, gamma rows, beta rows
     )
-    # Sharded TILE: x^2 alone (its group-B partner, the output tiles, is the output shard).
-    group_b = F32_TILE_BYTES * T if tile_shard else group_b_bytes(T)
-    # 3W: alias groups E (sum acc / chan scale) and C' (sumsq acc / chan work / chan shift), the sum seed.
+    # Sharded TILE: the output tiles are the output shard.
+    out_ring = 0 if tile_shard else output_ring_bytes(T)
+    # 2W: alias groups E (sum acc / chan scale) and C (sumsq acc / chan work / chan shift).
     # 2R + 7: gathered partials, group D (2), stats out (2), group stats (2), group shift (1).
-    f32_bytes = group_b + F32_TILE_BYTES * (3 * W + 2 * R + 7)
+    f32_bytes = out_ring + F32_TILE_BYTES * (2 * W + 2 * R + 7)
     staging = staging_bytes(W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb)
     return BF16_TILE_BYTES * bf16_pages + f32_bytes + staging
 
@@ -673,8 +661,6 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     ring_views = [(CB_INPUT_TILES, bf16, BF16_TILE_BYTES), (CB_INPUT_KEEP, bf16, BF16_TILE_BYTES)]
     if sharded and not is_rm:
         cbs.append(shard_cb(input_tensor, ring_views))
-        # x^2 alone; the output tiles are the output shard.
-        cbs.append(_cb(F32_TILE_BYTES * T, cores, [(CB_X_SQUARED, f32, F32_TILE_BYTES)]))
         cbs.append(shard_cb(output_tensor, [(CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)]))
     else:
         cbs.append(
@@ -684,18 +670,10 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
                 ring_views,
             )
         )
-        # Alias group B: x^2 (pass 1) / output (pass 2), disjoint lifetimes.
-        cbs.append(
-            _cb(
-                group_b_bytes(T),
-                cores,
-                [(CB_X_SQUARED, f32, F32_TILE_BYTES), (CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)],
-            )
-        )
-    cbs.append(_cb(BF16_TILE_BYTES, cores, [(CB_REDUCE_SCALER, bf16, BF16_TILE_BYTES)]))
-    # Alias group E: the Sigma x accumulator (UnpackToDestFp32, pass 1) / the FPU-readable chan_scale. The publish
-    # copy reads accumulator tile i and packs chan tile i over it (in-place lockstep; every view returns to its
-    # base each block), so the accumulator costs no L1 of its own.
+        cbs.append(_cb(output_ring_bytes(T), cores, [(CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)]))
+    # Alias group E: the S1' spill accumulator (UnpackToDestFp32, multi-chunk pass 1) / the FPU-readable chan_scale.
+    # The last chunk reloads accumulator tile i and packs the collapsed chan tile i over it (in-place lockstep; every
+    # view returns to its base each block), so the accumulator costs no L1 of its own.
     cbs.append(
         _cb(
             W * F32_TILE_BYTES,
@@ -703,8 +681,8 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             [(CB_SUM_ACC, f32, F32_TILE_BYTES), (CB_CHAN_SCALE, f32, F32_TILE_BYTES)],
         )
     )
-    # Alias group C: the Sigma (x-k)^2 accumulator / chan_work / chan_shift, in-place lockstep hand-offs
-    # (publish, 5d/5e).
+    # Alias group C: the T2 spill accumulator / chan_work / chan_shift, in-place lockstep hand-offs (last pass-1 chunk,
+    # 5d/5e).
     cbs.append(
         _cb(
             W * F32_TILE_BYTES,
@@ -717,8 +695,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         )
     )
     cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GROUP_MAP, bf16, BF16_TILE_BYTES)]))
-    cbs.append(_cb(pilot_repeat(W, h) * W * BF16_TILE_BYTES, cores, [(CB_PILOT_ROWS, bf16, BF16_TILE_BYTES)]))
-    cbs.append(_cb(W * F32_TILE_BYTES, cores, [(CB_SUM_SEED, f32, F32_TILE_BYTES)]))
+    cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_PILOT_ROWS, bf16, BF16_TILE_BYTES)]))
     cbs.append(_cb(F32_TILE_BYTES, cores, [(CB_GROUP_SHIFT, f32, F32_TILE_BYTES)]))
     if hg:
         cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
@@ -748,7 +725,6 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
 
     reader_ct = [W, h, int(is_rm), hg, hb, R, plan.Cg, plan.Wt, plan.Ht, plan.gx, in_page_bytes, map_period]
     reader_ct.append(int(sharded))
-    reader_ct.append(pilot_repeat(W, h))
     # Per-chunk zones (CT): every core's chunk steps fit the marker budget.
     chunk_zones = int(
         bool(_tuning().get("chunk_zones"))
@@ -764,9 +740,8 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     )
 
     exp_sbw = _largest_divisor_at_most(W, 4)  # expand matmul out_subblock_w (<= DEST_AUTO_LIMIT fp32 half-sync)
-    out_cb_pages = group_b_bytes(T) // BF16_TILE_BYTES  # cb_output_tiles capacity (drain barrier)
 
-    # Compute is built once per role too (IS_ROOT is compile-time, CT 9): a runtime role flag lets O3 unswitch the
+    # Compute is built once per role too (IS_ROOT is compile-time, CT 8): a runtime role flag lets O3 unswitch the
     # block loop on it, emitting the whole per-block body twice; the root binary must fit the kernel-config ring
     # (also under the watcher / assert build).
     def compute_ct(is_root):
@@ -778,10 +753,8 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             hb,
             R,
             exp_sbw,
-            out_cb_pages,
             int(sharded),
             int(is_root),
-            pilot_repeat(W, h),
             chunk_zones,
         ]
 
@@ -880,7 +853,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         dst_full_sync_en=False,
     )
     unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CB_SLOTS
-    for idx in (CB_SUM_ACC, CB_SUMSQ_ACC, CB_GROUP_SUMS, CB_SUM_SEED, CB_GROUP_SHIFT):
+    for idx in (CB_SUM_ACC, CB_SUMSQ_ACC, CB_GROUP_SUMS, CB_GROUP_SHIFT):
         unpack_modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_config.unpack_to_dest_mode = unpack_modes
     compute_kernels = [

@@ -2,15 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// groupnorm_sc_N_1_HW_C_b reader (NCRISC, NoC0).
+// groupnorm_sc_N_1_HW_C_b reader (NCRISC; NoC0, NoC1 on the DRAM odd-column cores: program descriptor "NoC pairing").
 //
-// Once per kernel: reduce scaler (helper), group map (NoC zeros + 32 one-hot halfword stores per tile),
-// ones tiles on unit roots (one 64 B row by RISC-V, then NoC self-copies doubling to a tile).
+// Once per kernel: group map (NoC zeros + one-hot halfword stores, after block 0's last pass-1 push), ones tiles on
+// unit roots (one 64 B row by RISC-V, then NoC self-copies doubling to a tile).
 // Per block (one unit = image n, channel slice s, rows [row_start, row_start + rows_core)):
-//   pilot : image row 0 of the slice -> staging -> cb_pilot_rows (row 0: the shift k of each lane's group),
-//           cb_sum_seed (row 0: -n*k, exact, n = rows_core*32: the Sigma x accumulator starts there, so it ends at
-//           Sigma (x - k)) and, on the unit root, cb_group_shift (lane g = k of group g, rows replicated at step B);
-//           read together with chunk 0, so its latency hides under the first chunk's
+//   pilot : image row 0 of the slice -> staging -> cb_pilot_rows (row 0: -k, k the shift of each lane's group;
+//           pass 1 accumulates x + (-k)) and, on the unit root, cb_group_shift (lane g = +k of group g, rows
+//           replicated at step B); read together with chunk 0, built after a pass-1 credit push
 //   pass 1: chunks 0..B-1 -> the input ring (TILE: both views, lockstep) or cb_input_rm sticks (RM);
 //           compute keeps the last K chunks on the keep view
 //   affine: gamma / beta slices -> staging -> row 0 of faces 0/1 of W tiles (stall shadow of the combine)
@@ -30,7 +29,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
@@ -38,14 +36,12 @@ namespace {
 constexpr uint32_t cb_input_rm = 0;
 constexpr uint32_t cb_input_tiles = 2;  // input ring, pass-1 view (alias group A)
 constexpr uint32_t cb_input_keep = 3;   // input ring, pass-2 view (same bytes, pushed in lockstep)
-constexpr uint32_t cb_reduce_scaler = 6;
 constexpr uint32_t cb_group_map = 12;
 constexpr uint32_t cb_gamma_rows = 13;
 constexpr uint32_t cb_beta_rows = 14;
 constexpr uint32_t cb_ones_tiles = 17;
 constexpr uint32_t cb_affine_staging = 21;
 constexpr uint32_t cb_pilot_rows = 22;
-constexpr uint32_t cb_sum_seed = 23;
 constexpr uint32_t cb_group_shift = 24;
 
 constexpr uint32_t BF16_TILE_BYTES = 2048;
@@ -63,7 +59,7 @@ FORCE_INLINE uint32_t row0_lane(uint32_t l) { return (l >> 4) * 256 + (l & 15); 
 // row (16-aligned run) are contiguous elements.
 FORCE_INLINE uint32_t lane_elem(uint32_t v) { return (v >> 5) * 1024 + (v & 16) * 16 + (v & 15); }
 
-// Row-0 lanes [v, v1) <- val, one tight store loop per contiguous half-row run (the shift-rows / seed hot loop:
+// Row-0 lanes [v, v1) <- val, one tight store loop per contiguous half-row run (the shift-rows hot loop:
 // NCRISC is in-order, so per-lane index math - not the stores - set its cost). E = 1: one element per lane;
 // E = 2 (bf16 lane pairs in one word): v and v1 even.
 template <uint32_t E, typename T>
@@ -78,21 +74,6 @@ FORCE_INLINE void fill_lanes(volatile tt_l1_ptr T* base, uint32_t v, uint32_t v1
     }
 }
 
-// -(rows * 32 * k) as fp32 bits for a bf16 k, by integer arithmetic (no soft float): exact while the 8-bit
-// significand times rows fits 24 bits (rows < 2^16), truncated beyond. Zero / denormal k -> 0.
-FORCE_INLINE uint32_t neg_n_times_bf16(uint32_t k16, uint32_t rows) {
-    const uint32_t e = (k16 >> 7) & 0xFF;
-    if (e == 0) {
-        return 0;
-    }
-    const uint32_t p = ((k16 & 0x7F) | 0x80) * rows;  // value = p * 2^(e - 127 - 7 + 5)
-    uint32_t b = 7;                                   // msb of p (p >= 128)
-    while (b < 31 && (p >> (b + 1)) != 0) {
-        ++b;
-    }
-    const uint32_t m = (b <= 23 ? p << (23 - b) : p >> (b - 23)) & 0x7FFFFF;
-    return ((~k16 & 0x8000) << 16) | ((b + e - 2) << 23) | m;
-}
 }  // namespace
 
 void kernel_main() {
@@ -109,12 +90,9 @@ void kernel_main() {
     constexpr uint32_t IN_PAGE_BYTES = get_compile_time_arg_val(10);
     constexpr uint32_t P = get_compile_time_arg_val(11);  // MAP_PERIOD: channels per slice
     constexpr bool SHARDED = get_compile_time_arg_val(12) != 0;
-    // Pilot rows are emitted PILOT_REPEAT times (m copies of the W tiles): compute's pass-1 chain walks m tile
-    // rows as one row of m*W tiles so its DEST window fills on narrow slices.
-    constexpr uint32_t PILOT_TILES = get_compile_time_arg_val(13) * W;
     // Per-chunk zones only when the host found every chunk's zone executions inside the marker budget.
-    constexpr bool CHUNK_ZONES = get_compile_time_arg_val(14) != 0;
-    constexpr auto in_args = TensorAccessorArgs<15>();
+    constexpr bool CHUNK_ZONES = get_compile_time_arg_val(13) != 0;
+    constexpr auto in_args = TensorAccessorArgs<14>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -150,7 +128,7 @@ void kernel_main() {
     const uint32_t K = resident_chunks < num_chunks ? resident_chunks : num_chunks;
     const uint32_t first_resident = num_chunks - K;
     const uint32_t staging = get_write_ptr(cb_affine_staging);
-    // The prologue (shift rows, seed, scaler, group shift, SHARDED: the map) runs right after a chunk's credit push:
+    // The prologue (shift rows, group shift) runs right after a chunk's credit push:
     // SHARDED after the last pass-1 push (the chunks are resident, so compute gets every credit before any prologue
     // work), DRAM after chunk 0's (whose read the pilot rides with). RM compute tilizes meanwhile; TILE compute
     // waits only for the pilot rows, which are emitted first.
@@ -349,11 +327,9 @@ void kernel_main() {
 
             if (step == pro_step) {
                 // ---------------- Shift rows: lane v -> k = x[row 0, first channel of v's group] ----------------
-                // cb_pilot_rows (bf16): k, the srcB operand of pass 1's x - k, consumed with BroadcastDim::Row: math
-                // reads only srcB row 0 (faces 0/1), so rows 1..31 are never zeroed. cb_sum_seed (Float32, unpacked
-                // to DEST): -n*k in row 0; its rows 1..31 only reach rows 1..31 of the Sigma x accumulator, the chan
-                // row and the collapse output, whose row 0 alone is gathered - never zeroed either.
-                // cb_group_shift (root, Float32): k per group lane, 0 past G_CORE (rows replicated at step B).
+                // cb_pilot_rows (bf16): -k (sign bit flipped: exact), the srcB operand of pass 1's x + (-k), a row
+                // broadcast: the unpacker reads only row 0 (faces 0/1), so rows 1..31 are never zeroed.
+                // cb_group_shift (root, Float32): +k per group lane, 0 past G_CORE (rows replicated at step B).
                 // Lanes come in whole groups: P is a multiple of CG and every period starts on a group boundary.
                 volatile tt_l1_ptr uint16_t* sv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging);
                 // TILE staging holds rows 0-1 of faces 0/1 per tile: lane l < 16 at halfword l, else l + 16.
@@ -362,43 +338,26 @@ void kernel_main() {
                 };
                 {
                     MaybeDeviceZoneScope("r_shift_rows");
-                    cb_reserve_back(cb_pilot_rows, PILOT_TILES);
+                    cb_reserve_back(cb_pilot_rows, W);
                     const uint32_t pbase = get_write_ptr(cb_pilot_rows);
                     for (uint32_t v0 = 0; v0 < W * 32; v0 += CG) {
-                        const uint32_t k16 = stage(v0 % P);
-                        for (uint32_t c = 0; c < PILOT_TILES; c += W) {  // copy c/W of the W pilot tiles
-                            if constexpr (CG % 2 == 0) {
-                                // Even groups: lanes (v, v + 1), v even, share a group and one word of a face row.
-                                fill_lanes<2>(
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pbase + c * BF16_TILE_BYTES),
-                                    v0,
-                                    v0 + CG,
-                                    k16 | (k16 << 16));
-                            } else {
-                                fill_lanes<1>(
-                                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pbase + c * BF16_TILE_BYTES),
-                                    v0,
-                                    v0 + CG,
-                                    static_cast<uint16_t>(k16));
-                            }
+                        const uint32_t nk16 = stage(v0 % P) ^ 0x8000u;  // -k
+                        if constexpr (CG % 2 == 0) {
+                            // Even groups: lanes (v, v + 1), v even, share a group and one word of a face row.
+                            fill_lanes<2>(
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pbase),
+                                v0,
+                                v0 + CG,
+                                nk16 | (nk16 << 16));
+                        } else {
+                            fill_lanes<1>(
+                                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pbase),
+                                v0,
+                                v0 + CG,
+                                static_cast<uint16_t>(nk16));
                         }
                     }
-                    cb_push_back(cb_pilot_rows, PILOT_TILES);  // TILE compute's pass-1 chain starts here
-
-                    cb_reserve_back(cb_sum_seed, W);
-                    volatile tt_l1_ptr uint32_t* dv =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_sum_seed));
-                    for (uint32_t v0 = 0; v0 < W * 32; v0 += CG) {
-                        fill_lanes<1>(dv, v0, v0 + CG, neg_n_times_bf16(stage(v0 % P), rows_core));
-                    }
-                    cb_push_back(cb_sum_seed, W);
-                }
-
-                if (blk == 0) {
-                    MaybeDeviceZoneScope("r_scaler");
-                    dataflow_kernel_lib::
-                        prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>(
-                            1.0f);
+                    cb_push_back(cb_pilot_rows, W);  // compute's pass-1 moments walk starts here
                 }
 
                 if (is_root) {
