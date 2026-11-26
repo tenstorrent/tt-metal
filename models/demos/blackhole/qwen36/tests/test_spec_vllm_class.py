@@ -458,7 +458,8 @@ def test_spec_vllm_class_masked_verify(mesh_device, monkeypatch):
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     probe = PluginLayout.for_model(model, num_blocks=1)
     width = math.ceil(MAX_MODEL_LEN / probe.block_size)
-    layout = PluginLayout.for_model(model, num_blocks=width + probe.num_groups * (K + 1) + 8)
+    # Two extra GDN window sets per group: the reference verifies' scratch windows and the chained verify's own.
+    layout = PluginLayout.for_model(model, num_blocks=width + 3 * probe.num_groups * (K + 1) + 8)
     kv = cls.allocate_kv_cache_per_layer(layout.per_layer_specs)
     for enable_trace in (False, True):
         cls.warmup_model_prefill(enable_trace=enable_trace, kv_cache=kv, can_sample_on_device=True)
