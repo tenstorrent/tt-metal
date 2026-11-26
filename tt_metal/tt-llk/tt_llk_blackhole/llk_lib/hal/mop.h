@@ -290,17 +290,13 @@ struct cfg<detail::Template1Plan<HasEndOp>>
      * @param last: Iteration whose final inner op is replaced, values = <last_outer/last_inner>.
      * @param instruction: Encoded instruction issued instead.
      * @note Without a patch, both last-iteration ops repeat the last op of the inner loop body.
-     *       A last_inner patch needs an outer count above 1.
+     *       With an outer count of 1 a last_inner op is not issued until @ref update raises the count.
      */
     template <std::uint32_t Word>
     [[nodiscard]] constexpr cfg patch(const Field<Word> last, const std::uint32_t instruction) const
     {
         static_assert(Word == detail::LOOP0_LAST_WORD || Word == detail::LOOP1_LAST_WORD, "Template 1 MOP patch replaces last_outer or last_inner");
         hal::detail::require(inner_count != 0, "Template 1 MOP last-iteration ops are never issued with an empty inner loop");
-        if constexpr (Word == detail::LOOP1_LAST_WORD)
-        {
-            hal::detail::require(outer_count != 1, "Template 1 MOP last_inner op is never issued with an outer count of 1");
-        }
 
         cfg patched = *this;
         if constexpr (Word == detail::LOOP0_LAST_WORD)
