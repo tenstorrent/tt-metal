@@ -125,6 +125,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     const KernelRiscMaskMap& kernel_to_risc_mask,
+    tt::ARCH arch,
     detail::ProgramImpl& program_impl);
 
 void WireDFBAliases(const ProgramSpec& spec, const DFBNameToIdMap& dfb_name_to_id, detail::ProgramImpl& program_impl);

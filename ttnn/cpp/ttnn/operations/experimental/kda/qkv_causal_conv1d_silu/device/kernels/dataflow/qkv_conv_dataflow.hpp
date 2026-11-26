@@ -79,10 +79,17 @@ inline void read_tail_row(
     }
 }
 
+// write_tail's page map: the tail page a full tail's page goes to, or no_page to skip it.
+constexpr uint32_t no_page = ~0U;
+struct SamePage {
+    uint32_t operator()(uint32_t page) const { return page; }
+};
+
 // The mirror for a whole tail: its `history_rows` rows of `channel_tiles` tiles, row after row in local `scratch` at
 // byte `rows_offset`, into `tail`, one write per page. Token-paged pages are those rows. Channel-paged pages are first
-// gathered, through local reads, into as many bytes of `scratch` at `pages_offset`.
-template <uint32_t token_paged, uint32_t page_channels, typename Scratch, typename Tail>
+// gathered, through local reads, into as many bytes of `scratch` at `pages_offset`. Page p is written to tail page
+// page_base + page_map(p), or skipped where page_map returns no_page (an SP-sharded slab stores some pages only).
+template <uint32_t token_paged, uint32_t page_channels, typename Scratch, typename Tail, typename PageMap = SamePage>
 inline void write_tail(
     Noc& noc,
     const Scratch& scratch,
@@ -90,7 +97,8 @@ inline void write_tail(
     uint32_t channel_tiles,
     uint32_t rows_offset,
     uint32_t pages_offset,
-    uint32_t page_base = 0) {
+    uint32_t page_base = 0,
+    const PageMap& page_map = {}) {
     const uint32_t row_bytes = channel_tiles * tile_row_bytes;
     const uint32_t page_tiles = tail_page_tiles<token_paged, page_channels>(channel_tiles);
     const uint32_t pages = token_paged ? history_rows : channel_tiles / page_tiles;
@@ -112,12 +120,16 @@ inline void write_tail(
         pages_source = pages_offset;
     }
     for (uint32_t page = 0; page < pages; ++page) {
+        const uint32_t target = page_map(page);
+        if (target == no_page) {
+            continue;
+        }
         noc.async_write(
             scratch,
             tail,
             page_bytes,
             {.offset_bytes = pages_source + page * page_bytes},
-            {.page_id = page_base + page});
+            {.page_id = page_base + target});
     }
 }
 

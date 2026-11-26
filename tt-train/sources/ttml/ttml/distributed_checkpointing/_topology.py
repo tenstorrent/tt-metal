@@ -167,14 +167,6 @@ def replica_groups(chunks: Sequence[Chunk]) -> dict[tuple[int, ...], list[Chunk]
 
 def crc31(text: str) -> int:
     """A stable 31-bit hash of ``text``: zlib's CRC32 without its top bit, the same in every process, and small
-    enough for the C int that carries a hash between the ranks."""
-    return zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF
-
-
-def owner(key: str, holders: Sequence[tuple]) -> tuple:
-    """Which holder of a replicated box writes it: a stable hash of the key picks one of the holders in sorted order,
-    so the writes of replicated tensors spread over the devices and the ranks. The holders are ``(rank, mesh
-    coordinate)`` pairs (``_coordinator.merge_plan_parts``); on one process the rank is 0 throughout, so the pick is
-    the same coordinate a list of bare coordinates gives."""
-    ordered = sorted(holders)
-    return ordered[crc31(key) % len(ordered)]
+    enough for the C int that carries a hash between the ranks. A lone surrogate, which ``os.fsdecode`` makes of a
+    path's non-UTF-8 bytes on Linux, hashes as that byte, and valid text as its UTF-8."""
+    return zlib.crc32(text.encode("utf-8", errors="surrogateescape")) & 0x7FFFFFFF

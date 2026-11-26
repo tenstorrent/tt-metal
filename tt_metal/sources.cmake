@@ -70,6 +70,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
+    api/tt-metalium/experimental/kernel_config_buffer.hpp
     api/tt-metalium/experimental/operation_timeout.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
@@ -174,6 +175,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/kv_chunk_address_table.hpp
     api/internal/disaggregation/kv_chunk_table_cache.hpp
     api/internal/fabric.hpp
+    api/internal/fabric/inter_domain.hpp
     api/internal/graph_function_abort.hpp
     api/internal/l1_ecc_halt.hpp
     api/tt-metalium/workload/legacy/kernel_types.hpp

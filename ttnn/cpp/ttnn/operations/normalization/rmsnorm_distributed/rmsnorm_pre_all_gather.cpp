@@ -21,6 +21,7 @@ ttnn::Tensor rms_norm_pre_all_gather(
     bool fast_and_approximate_mode) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {

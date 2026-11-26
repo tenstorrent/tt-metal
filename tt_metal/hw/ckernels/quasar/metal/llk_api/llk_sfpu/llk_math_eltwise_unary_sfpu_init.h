@@ -18,6 +18,7 @@ void hardshrink_init();
 void heaviside_init();
 void i0_init();
 void isinf_isnan_init();
+void power_init();
 void softcap_init();
 void threshold_init();
 void tiled_prod_init();
@@ -55,6 +56,10 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         sfpu_op == SfpuType::isnan || sfpu_op == SfpuType::isfinite) {
         // _calculate_sfpu_isinf_isnan_ advances Dest through the ADDR_MOD_6 isinf_isnan_init programs.
         sfpu::isinf_isnan_init();
+    } else if constexpr (sfpu_op == SfpuType::power) {
+        // calculate_unary_power_iterative advances Dest through the ADDR_MOD_6 power_init programs
+        // (power_iterative_tile_init reaches it here; power_tile_init passes its own init).
+        sfpu::power_init();
     } else if constexpr (sfpu_op == SfpuType::softcap) {
         sfpu::softcap_init();
     } else if constexpr (sfpu_op == SfpuType::threshold) {

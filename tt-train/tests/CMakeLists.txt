@@ -45,6 +45,7 @@ set(SOURCES
     ops/newton_schulz_op_test.cpp
     ops/frobenius_normalize_test.cpp
     ops/k_split_gram_matmul_op_test.cpp
+    ops/all_gather_minimal_matmul_outer_dim_stripe_layout_test.cpp
     optimizers/adamw_fp32_parameter_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
@@ -59,6 +60,7 @@ set(SOURCES
     ops/positional_embedding_test.cpp
     ops/layernorm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
+    ops/distributed/all_gather_minimal_matmul_outer_dim_async_test.cpp
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
     ops/distributed/ring_sdpa_schedule_test.cpp
@@ -73,6 +75,7 @@ set(SOURCES
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
+    ops/rmsnorm_planner_test.cpp
     ops/polynorm_op_test.cpp
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp

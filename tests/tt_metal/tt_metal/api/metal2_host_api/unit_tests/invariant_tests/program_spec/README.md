@@ -73,6 +73,8 @@ struct ProgramSpec {
     //   kernels are the same set of kernels.
     // - Gen2: on each side, the data-movement kernels agree on whether implicit sync is disabled for it
     //   (via disable_dfb_implicit_sync_for or disable_dfb_implicit_sync_for_all).
+    // - Gen2: on each side, the compute kernels agree on what DFBs the SFPU pipeline handles
+    // (via sfpu_pipeline_consumed_dfbs or sfpu_pipeline_produced_dfbs), never relay DFBs.
     // - With P the PRODUCER kernels' num_threads and C the CONSUMER kernels' num_threads:
     //   - STRIDED consumers: num_entries % max(P, C) == 0 and num_entries / max(P, C) <= 65535.
     //   - ALL consumers: num_entries % P == 0 and num_entries / P <= 65535.

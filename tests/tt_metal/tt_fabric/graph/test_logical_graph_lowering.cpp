@@ -786,5 +786,227 @@ TEST(FabricGraphRouterInputs, PeerLayoutAcrossIntermesh) {
     EXPECT_EQ(pg.layouts[z].receivers[1][0].num_slots, 12u);
 }
 
+// ---------------------------------------------------------------- inter-domain perimeter
+
+UnusedLink unused(uint32_t chip, chan_id_t chan, uint64_t peer, bool in_domain = false, bool trained = true) {
+    return UnusedLink{
+        .node = FabricNodeId(MeshId{0}, chip),
+        .chan = chan,
+        .peer_asic = peer,
+        .peer_in_domain = in_domain,
+        .trained = trained};
+}
+
+std::vector<PerimeterPort> perimeter(
+    const std::string& mgd,
+    tt::tt_metal::ClusterType cluster,
+    const std::vector<UnusedLink>& links,
+    Topology topology = Topology::Mesh) {
+    MeshGraph mesh_graph(cluster, metal_mgd(mgd).string());
+    return perimeter_ports(links, ports_from_mesh_graph(mesh_graph, {}), mesh_graph, topology);
+}
+
+const auto kP150 = tt::tt_metal::ClusterType::P150;
+const auto kGalaxy = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
+
+TEST(FabricGraphPerimeter, OneChipDomain) {
+    const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, {unused(0, 9, 7), unused(0, 8, 7)});
+    ASSERT_EQ(p.size(), 2u);
+    for (uint32_t i = 0; i < 2; ++i) {
+        EXPECT_EQ(p[i].direction, PortDirection{RoutingDirection::N});
+        EXPECT_EQ(p[i].plane, i);
+        EXPECT_EQ(p[i].eth_chan, 8 + i);
+        EXPECT_TRUE(p[i].link_trained);
+    }
+}
+
+TEST(FabricGraphPerimeter, SidePerPeer) {
+    std::vector<UnusedLink> links;
+    for (chan_id_t c = 1; c <= 6; ++c) {
+        links.push_back(unused(0, c, 100 + c));
+    }
+    const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, links);
+    ASSERT_EQ(p.size(), 5u);
+    const RoutingDirection order[] = {
+        RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z};
+    for (uint32_t i = 0; i < 5; ++i) {
+        EXPECT_EQ(p[i].direction, PortDirection{order[i]});
+        EXPECT_EQ(p[i].eth_chan, i + 1);
+        EXPECT_EQ(p[i].plane, 0u);
+    }
+}
+
+TEST(FabricGraphPerimeter, FoldBackExcluded) {
+    const auto p = perimeter(
+        "single_bh_galaxy_mesh_graph_descriptor.textproto",
+        kGalaxy,
+        {unused(0, 0, 31, /*in_domain=*/true),
+         unused(0, 1, 200),
+         unused(3, 2, 28, /*in_domain=*/true),
+         unused(5, 3, 300)});
+    ASSERT_EQ(p.size(), 2u);
+    EXPECT_EQ(p[0].node, FabricNodeId(MeshId{0}, 0));
+    EXPECT_EQ(p[0].direction, PortDirection{RoutingDirection::N});
+    EXPECT_EQ(p[1].node, FabricNodeId(MeshId{0}, 5));
+    EXPECT_EQ(p[1].direction, PortDirection{RoutingDirection::Z});
+}
+
+TEST(FabricGraphPerimeter, DeadLinkRecorded) {
+    const auto p = perimeter(
+        "p150_mesh_graph_descriptor.textproto",
+        kP150,
+        {unused(0, 8, 7, /*in_domain=*/false, /*trained=*/false), unused(0, 9, 7)});
+    ASSERT_EQ(p.size(), 2u);
+    EXPECT_FALSE(p[0].link_trained);
+    EXPECT_TRUE(p[1].link_trained);
+}
+
+TEST(FabricGraphPerimeter, UntrainedFsdLinkKeepsTheCount) {
+    const std::vector<UnusedLink> links = {
+        unused(0, 9, 7), unused(0, 11, 7), unused(0, 10, 7, /*in_domain=*/false, /*trained=*/false)};
+    const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, links);
+    ASSERT_EQ(p.size(), 3u);
+    for (uint32_t i = 0; i < 3; ++i) {
+        EXPECT_EQ(p[i].direction, PortDirection{RoutingDirection::N});
+        EXPECT_EQ(p[i].plane, i);
+        EXPECT_EQ(p[i].eth_chan, 9 + i);
+        EXPECT_EQ(p[i].link_trained, i != 1);
+    }
+}
+
+TEST(FabricGraphPerimeter, AllDownPeerTakesItsSide) {
+    const std::vector<UnusedLink> links = {
+        unused(0, 5, 8), unused(0, 2, 7, false, false), unused(0, 3, 7, false, false)};
+    const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, links);
+    ASSERT_EQ(p.size(), 3u);
+    EXPECT_EQ(p[0].direction, PortDirection{RoutingDirection::N});
+    EXPECT_EQ(p[1].direction, PortDirection{RoutingDirection::N});
+    EXPECT_FALSE(p[0].link_trained);
+    EXPECT_FALSE(p[1].link_trained);
+    EXPECT_EQ(p[2].direction, PortDirection{RoutingDirection::E});
+    EXPECT_EQ(p[2].eth_chan, 5);
+    EXPECT_TRUE(p[2].link_trained);
+}
+
+TEST(FabricGraphPerimeter, TwoDimensionalOnly) {
+    for (const auto topology : {Topology::NeighborExchange, Topology::Linear, Topology::Ring}) {
+        EXPECT_ANY_THROW(perimeter("p150_mesh_graph_descriptor.textproto", kP150, {}, topology));
+    }
+    EXPECT_NO_THROW(perimeter("p150_mesh_graph_descriptor.textproto", kP150, {}, Topology::Torus));
+}
+
+TEST(FabricGraphPerimeter, NoLinksNoPorts) {
+    EXPECT_TRUE(perimeter("single_bh_galaxy_mesh_graph_descriptor.textproto", kGalaxy, {}).empty());
+}
+
+// ---------------------------------------------------------------- inter-domain lowering
+
+const auto kP300 = tt::tt_metal::ClusterType::P300;
+
+Lowered lower_with_perimeter(const std::vector<UnusedLink>& links) {
+    MeshGraph mesh_graph(kP300, metal_mgd("p300_mesh_graph_descriptor.textproto").string());
+    auto ports = ports_from_mesh_graph(mesh_graph, {});
+    const auto open = ports_from_perimeter(perimeter_ports(links, ports, mesh_graph, Topology::Mesh));
+    ports.insert(ports.end(), open.begin(), open.end());
+    auto vc_config = vc2_only();
+    vc_config.vc2_forwards = true;
+    const WiringOptions options{.topology = Topology::Mesh, .vc_config = vc_config};
+    std::shared_ptr<WiringRules> rules = stock_wiring_rules(ports, options);
+    auto graph = lower_to_logical(ports, *rules);
+    validate(graph, *rules, ValidationLimits{});
+    return Lowered{std::move(ports), std::move(graph), std::move(rules)};
+}
+
+const std::vector<UnusedLink> kQuietBoxSplit = {unused(0, 8, 7), unused(0, 9, 7), unused(1, 8, 9), unused(1, 9, 9)};
+
+TEST(FabricGraphInterDomain, PerimeterRouterShape) {
+    const auto [ports, g, rules] = lower_with_perimeter(kQuietBoxSplit);
+    for (uint32_t chip = 0; chip < 2; ++chip) {
+        for (uint32_t plane = 0; plane < 2; ++plane) {
+            const std::string id = "m0.c" + std::to_string(chip) + ".N.p" + std::to_string(plane);
+            const auto r = g.find_router(id);
+            ASSERT_TRUE(r.has_value()) << id;
+            const auto& router = g.routers[*r];
+            EXPECT_FALSE(router.peer.has_value());
+            EXPECT_TRUE(g.receiver(*r, 2).has_value()) << id;
+            for (const auto& e : g.edges) {
+                if (g.channels[e.from].router == *r && e.transport != Transport::Noc) {
+                    EXPECT_EQ(e.transport, Transport::Dynamic) << id;
+                }
+            }
+            const std::string side = chip == 0 ? "E" : "W";
+            const std::string mesh_router = "m0.c" + std::to_string(chip) + "." + side + ".p" + std::to_string(plane);
+            EXPECT_EQ(forwarding(g, id), (Names{side}));
+            EXPECT_TRUE(forwarding(g, mesh_router).empty());
+            EXPECT_EQ(forwarding(g, mesh_router, 2), (Names{"N"}));
+            EXPECT_TRUE(forwarding(g, id, 2).empty());
+        }
+    }
+    EXPECT_TRUE(g.routers[*g.find_router("m0.c0.E.p0")].peer.has_value());
+}
+
+TEST(FabricGraphInterDomain, DeadLinkNoRouter) {
+    const auto [ports, g, rules] =
+        lower_with_perimeter({unused(0, 8, 7), unused(0, 9, 7, /*in_domain=*/false, /*trained=*/false)});
+    EXPECT_TRUE(g.find_router("m0.c0.N.p0").has_value());
+    EXPECT_FALSE(g.find_router("m0.c0.N.p1").has_value());
+}
+
+TEST(FabricGraphInterDomain, DeadFirstPlaneLeavesPairingsAlone) {
+    const auto [ports, g, rules] =
+        lower_with_perimeter({unused(0, 8, 7, /*in_domain=*/false, /*trained=*/false), unused(0, 9, 7)});
+    const auto n1 = *g.find_router("m0.c0.N.p1");
+    bool n1_paired = false;
+    for (const auto& l : legacy_link_pairings(g, Topology::Mesh, {})) {
+        EXPECT_NE(l.a, l.b);
+        EXPECT_EQ(g.routers[l.a].port.node, g.routers[l.b].port.node);
+        EXPECT_EQ(g.routers[l.a].port.plane, l.link);
+        EXPECT_EQ(g.routers[l.b].port.plane, l.link);
+        n1_paired |= l.a == n1 || l.b == n1;
+    }
+    EXPECT_TRUE(n1_paired);
+}
+
+TEST(FabricGraphInterDomain, ValidationRejectsDynamicEdgeOffThePerimeter) {
+    auto [ports, g, rules] = lower_with_perimeter(kQuietBoxSplit);
+    EXPECT_TRUE(find_problems(g, *rules, ValidationLimits{}).empty());
+    const auto mesh_router = *g.find_router("m0.c0.E.p0");
+    for (auto& e : g.edges) {
+        if (e.transport == Transport::Eth && g.channels[e.from].router == mesh_router) {
+            e.transport = Transport::Dynamic;
+            break;
+        }
+    }
+    EXPECT_FALSE(find_problems(g, *rules, ValidationLimits{}).empty());
+}
+
+TEST(FabricGraphInterDomain, EmptyPerimeterIsANoOp) {
+    MeshGraph mesh_graph(kP300, metal_mgd("p300_mesh_graph_descriptor.textproto").string());
+    auto vc_config = vc2_only();
+    vc_config.vc2_forwards = true;
+    const auto with = lower_with_perimeter({});
+    const auto without =
+        lower_mesh_graph(mesh_graph, WiringOptions{.topology = Topology::Mesh, .vc_config = vc_config});
+    ASSERT_EQ(with.graph.routers.size(), without.graph.routers.size());
+    EXPECT_EQ(with.graph.channels.size(), without.graph.channels.size());
+    EXPECT_EQ(with.graph.edges.size(), without.graph.edges.size());
+}
+
+TEST(FabricGraphInterDomain, ChannelIndexing) {
+    const auto cg = lower_to_channels(lower_with_perimeter(kQuietBoxSplit).graph, Topology::Mesh);
+    EXPECT_EQ(index_of(cg, "m0.c0.N.p0", 0, "worker"), 0u);
+    EXPECT_NE(index_of(cg, "m0.c0.N.p0", 0, "E"), 0u);
+    EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "N"), 2u);
+    const auto& g = cg.logical;
+    for (RouterIndex r = 0; r < g.routers.size(); ++r) {
+        const bool perimeter = g.routers[r].port.capability == EdgeCapability::INTERDOMAIN;
+        EXPECT_EQ(g.receiver(r, 0).has_value(), !perimeter) << g.routers[r].id;
+        EXPECT_TRUE(g.receiver(r, 2).has_value()) << g.routers[r].id;
+        for (ChannelIndex c : g.routers[r].channels) {
+            EXPECT_FALSE(g.channels[c].vc == 2 && g.channels[c].injection) << g.routers[r].id;
+        }
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric::graph

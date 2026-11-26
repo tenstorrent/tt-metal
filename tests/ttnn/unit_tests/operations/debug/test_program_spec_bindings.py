@@ -55,7 +55,11 @@ FIELDS = {
     E.DataMovementHardwareConfig: {"config_1xx", "config_2xx"},
     E.ComputeHardwareConfig.Compute1XXConfig: {"bfp_pack_precision_mode"},
     E.ComputeHardwareConfig.Compute12XConfig: {"enable_pack_rvv"},
-    E.ComputeHardwareConfig.Compute2XXConfig: {"enable_unpack_rvv"},
+    E.ComputeHardwareConfig.Compute2XXConfig: {
+        "enable_unpack_rvv",
+        "sfpu_pipeline_consumed_dfbs",
+        "sfpu_pipeline_produced_dfbs",
+    },
     E.ComputeHardwareConfig: {
         "fpu_math_fidelity",
         "sfpu_precision_mode",
@@ -166,6 +170,9 @@ def test_defaults_are_the_header_defaults():
     assert not compute.enable_32_bit_dest and compute.double_buffer_dest
     assert compute.unpack_modes == {} and compute.config_1xx is None
     assert E.ComputeHardwareConfig.Compute1XXConfig().bfp_pack_precision_mode == E.Precision.Approximate
+    compute_2xx = E.ComputeHardwareConfig.Compute2XXConfig()
+    assert not compute_2xx.enable_unpack_rvv
+    assert compute_2xx.sfpu_pipeline_consumed_dfbs == [] and compute_2xx.sfpu_pipeline_produced_dfbs == []
 
     dm_1xx = E.DataMovementHardwareConfig.DataMovement1XXConfig(
         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0
@@ -427,7 +434,9 @@ def test_each_field_reads_back_what_it_was_given():
     sub_configs = {
         "config_1xx": E.ComputeHardwareConfig.Compute1XXConfig(bfp_pack_precision_mode=E.Precision.Precise),
         "config_12x": E.ComputeHardwareConfig.Compute12XConfig(enable_pack_rvv=True),
-        "config_2xx": E.ComputeHardwareConfig.Compute2XXConfig(enable_unpack_rvv=True),
+        "config_2xx": E.ComputeHardwareConfig.Compute2XXConfig(
+            enable_unpack_rvv=True, sfpu_pipeline_consumed_dfbs=["in"], sfpu_pipeline_produced_dfbs=["out"]
+        ),
     }
     for name, sub_config in sub_configs.items():
         compute = E.ComputeHardwareConfig(**{name: sub_config})
@@ -435,7 +444,9 @@ def test_each_field_reads_back_what_it_was_given():
     config_1xx = E.ComputeHardwareConfig(config_1xx=sub_configs["config_1xx"]).config_1xx
     assert same_member(config_1xx.bfp_pack_precision_mode, E.Precision.Precise)
     assert E.ComputeHardwareConfig(config_12x=sub_configs["config_12x"]).config_12x.enable_pack_rvv
-    assert E.ComputeHardwareConfig(config_2xx=sub_configs["config_2xx"]).config_2xx.enable_unpack_rvv
+    config_2xx = E.ComputeHardwareConfig(config_2xx=sub_configs["config_2xx"]).config_2xx
+    assert config_2xx.enable_unpack_rvv
+    assert (config_2xx.sfpu_pipeline_consumed_dfbs, config_2xx.sfpu_pipeline_produced_dfbs) == (["in"], ["out"])
 
     dm_1xx = E.DataMovementHardwareConfig.DataMovement1XXConfig(
         processor=ttnn.DataMovementProcessor.RISCV_1,
