@@ -15,6 +15,7 @@
 #include <ostream>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -165,13 +166,33 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
 CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreCoord> core_coords) {
-    std::vector<CoreRange> core_ranges;
-    core_ranges.reserve(core_coords.size());
-    for (const auto& core_coord : core_coords) {
-        core_ranges.push_back(CoreRange(core_coord));
+    // Gives the same ranges, in the same order, as merge_ranges() over single-core ranges, without its std::set churn
+    // or the O(n^2) validate_no_overlap(). Row-major order puts duplicates side by side and each row's x runs together.
+    const auto row_major = [](const CoreCoord& a, const CoreCoord& b) {
+        return std::tie(a.y, a.x) < std::tie(b.y, b.x);
+    };
+    std::vector<CoreCoord> cores(core_coords.begin(), core_coords.end());
+    if (!std::is_sorted(cores.begin(), cores.end(), row_major)) {
+        std::sort(cores.begin(), cores.end(), row_major);
     }
-    CoreRangeSet unmerged_set(std::move(core_ranges));
-    *this = unmerged_set.merge_ranges();
+    if (const auto dup = std::adjacent_find(cores.begin(), cores.end()); dup != cores.end()) {
+        TT_THROW("Cannot create CoreRangeSet because core {} is listed more than once", dup->str());
+    }
+    const auto run_breaks = [](const CoreCoord& a, const CoreCoord& b) { return b.y != a.y || b.x != a.x + 1; };
+    for (auto first = cores.begin(); first != cores.end();) {
+        const auto last = std::min(std::adjacent_find(first, cores.end(), run_breaks), std::prev(cores.end()));
+        // A run extends the rectangle ending on the row above with the same x span (CoreRange::merge's vertical rule).
+        const auto above = std::find_if(ranges_.begin(), ranges_.end(), [&](const CoreRange& r) {
+            return r.end_coord.y + 1 == first->y && r.start_coord.x == first->x && r.end_coord.x == last->x;
+        });
+        if (above != ranges_.end()) {
+            above->end_coord.y = first->y;
+        } else {
+            ranges_.emplace_back(*first, *last);
+        }
+        first = std::next(last);
+    }
+    std::sort(ranges_.begin(), ranges_.end());
 }
 
 void swap(CoreRangeSet& first, CoreRangeSet& second) noexcept { std::swap(first.ranges_, second.ranges_); }

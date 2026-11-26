@@ -17,6 +17,8 @@ groups must not interleave: the TP tests come first, the FSDP test last.
 import glob
 import os
 import random
+import secrets
+import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -32,6 +34,7 @@ import ttml
 import ttml.distributed_checkpointing as dcp
 from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.distributed_checkpointing import _load, _save
+from ttml.distributed_checkpointing._index import staging_dir
 from ttml.distributed_checkpointing._layouts import Pad, fused_segments
 from ttml.distributed_checkpointing._state_dict import collect_model
 from ttml.fsdp import _ShardedState
@@ -255,6 +258,25 @@ def test_incomplete_directory_and_existing_directory_are_refused(tp_mesh, tmp_pa
     assert dcp.is_complete(path)
 
 
+def test_save_refuses_a_staging_directory_it_did_not_create(tp_mesh, tmp_path, monkeypatch, expect_error):
+    """A staging directory that already exists belongs to another save of the same step that drew the same nonce, or
+    to one that died: the save is refused before writing anything, and the directory is left as it was."""
+    model, params, opt = fresh_tp(DIM)
+    path = str(tmp_path / "step_0000002")
+    monkeypatch.setattr(secrets, "randbits", lambda bits: 12345)
+    other = staging_dir(path, 12345)
+    os.makedirs(os.path.join(other, "data"))
+    with open(os.path.join(other, "data", "other_save.safetensors"), "w") as f:
+        f.write("another save's file")
+    with expect_error(dcp.CheckpointError, r"step_0000002\.partial-12345 already exists: another save of this step"):
+        dcp.save(path, model=model)
+    assert os.listdir(os.path.join(other, "data")) == ["other_save.safetensors"], "the other save's files are kept"
+    assert not os.path.exists(path)
+    shutil.rmtree(other)
+    dcp.save(path, model=model)
+    assert dcp.is_complete(path) and not os.path.exists(other)
+
+
 class _LoraQKV(AbstractModuleBase):
     def __init__(self, dim: int) -> None:
         super().__init__()
@@ -318,42 +340,47 @@ def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_pa
         return real_create(path, header, data_bytes)
 
     monkeypatch.setattr(_save, "create_file", failing_create)
-    with expect_error(OSError, "simulated EDQUOT"):
+    with expect_error(dcp.CheckpointError, r"^writing the shards failed: OSError: simulated EDQUOT$") as raised:
         dcp.save(str(tmp_path / "quota"), model=model, optimizer=opt)
+    assert type(raised.value.__cause__) is OSError
     monkeypatch.setattr(_save, "create_file", real_create)
     assert len(os.listdir("/proc/self/fd")) == open_fds
     assert os.listdir(tmp_path) == [], "the staging directory is removed"
 
 
 def test_failed_load_says_model_is_partly_restored(tp_mesh, tmp_path, monkeypatch, expect_error):
-    """A load that fails after placing tensors says the model is partly restored."""
+    """A load that fails after placing tensors says the model is partly restored and, the process holding its mesh
+    whole, that it can be loaded again: the restart a shared mesh needs is not asked for."""
     model, params, opt = fresh_tp(DIM)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model, optimizer=opt)
     real_place = _load._place
     calls = []
 
-    def place_then_fail(live, arrays, device):
+    def place_then_fail(live, *args):
         calls.append(live.key)
         if len(calls) == 2:
             raise RuntimeError("simulated device out of memory")
-        real_place(live, arrays, device)
+        real_place(live, *args)
 
     model2, _, opt2 = fresh_tp(DIM)
     monkeypatch.setattr(_load, "_place", place_then_fail)
     with expect_error(
         dcp.CheckpointError,
-        r"load failed at .* \(RuntimeError: simulated device out of memory\) after 1 of \d+ tensors were placed",
+        r"^the load failed at .* after 1 of \d+ tensors were placed \(the first: .*\); the model and optimizer are "
+        r"partly restored: load again or discard them\. The error: RuntimeError: simulated device out of memory$",
     ):
         dcp.load(path, model=model2, optimizer=opt2)
 
-    def fail(live, arrays, device):
+    def fail(live, *args):
         raise RuntimeError("simulated device out of memory")
 
     monkeypatch.setattr(_load, "_place", fail)
-    with expect_error(RuntimeError, "simulated device out of memory") as raised:
+    with expect_error(
+        dcp.CheckpointError, r"^reading and placing the shards failed: RuntimeError: simulated device out of memory$"
+    ) as raised:
         dcp.load(path, model=model2, optimizer=opt2)
-    assert type(raised.value) is RuntimeError, "nothing was placed: the error as it was raised"
+    assert type(raised.value.__cause__) is RuntimeError, "nothing was placed: no partly-restored note"
 
 
 def test_truncated_data_file_is_refused_first(tp_mesh, tmp_path, expect_error):

@@ -11,6 +11,12 @@
 //
 // A 2D multicast leaves every hop in one ETH direction, so on a 2D fabric whose SP axis turns the barrier and the
 // carry go to each other rank as a 2D unicast instead (unicast_peers).
+//
+// A history slab is SP-sharded: each rank holds only its slice of every Q/K/V branch of an entry. Only
+// the chronologically first rank reads the old tail, so after the entry barrier every other rank sends its slices of
+// the slot's old tail into that rank's exchange history rows and bumps its history semaphore; the first rank copies
+// its own slices there, waits for the others' and releases its convolution cores (history_ready), which read the old
+// tail from those rows. Each rank then writes back only its own slices of the replacement carry.
 
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/qkv_conv_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
@@ -61,9 +67,14 @@ void kernel_main() {
     constexpr uint32_t slab_scale = get_arg(args::slab_scale);
     constexpr uint32_t slab_offset = get_arg(args::slab_offset);
     constexpr uint32_t entry_pages = get_arg(args::entry_pages);
+    constexpr uint32_t peer_routes = get_arg(args::peer_routes);
+    static_assert(!slab || (sp_size > 1 && !token_paged), "a history slab is channel-paged and SP-sharded");
+    // Native tail pages per Q/K/V branch; a slab rank stores branch_pages / sp_size of each.
+    constexpr uint32_t branch_pages[3] = {get_arg(args::q_pages), get_arg(args::k_pages), get_arg(args::v_pages)};
     const uint32_t entry_semaphore = get_arg(args::entry_semaphore);
     const uint32_t predecessor_semaphore = get_arg(args::predecessor_semaphore);
     const uint32_t carry_semaphore = get_arg(args::carry_semaphore);
+    const uint32_t history_semaphore = get_arg(args::history_semaphore);
     const uint32_t sp_rank = get_arg(args::sp_rank);
     const uint32_t successor_chip = get_arg(args::successor_chip);
     const uint32_t successor_mesh = get_arg(args::successor_mesh);
@@ -82,7 +93,7 @@ void kernel_main() {
     const auto final_history = TensorAccessor(tensor::final_history);
     Semaphore staged(sem::staged);
     Semaphore predecessor_ready(sem::predecessor_ready);
-    Semaphore history_consumed(sem::history_consumed);
+    Semaphore history_ready(sem::history_ready);
 
     // Scratch, from an aligned base: a slot for the chronology scalars, then three outgoing rows and three carry rows.
     // Raw: base/offset arithmetic below feeds raw reads/writes into scratch; no handle form yet.
@@ -105,6 +116,46 @@ void kernel_main() {
         }
     };
 
+    // The slab: this rank's slices, as (branch, row) runs of whole pages' rows. Run (b, r) is the rank's
+    // channels of branch b in tail row r: native pages [native_page(b), + own_pages(b)) of the full row, stored pages
+    // [stored_page(b), + own_pages(b)) of the slab entry, each page holding history_rows rows of page_channels.
+    constexpr uint32_t page_row_bytes = page_channels * element_bytes;
+    const auto own_pages = [&](uint32_t b) { return branch_pages[b] / sp_size; };
+    const auto stored_page = [&](uint32_t b) {
+        uint32_t page = 0;
+        for (uint32_t i = 0; i < b; ++i) {
+            page += own_pages(i);
+        }
+        return page;
+    };
+    const auto native_page = [&](uint32_t b) {
+        uint32_t page = 0;
+        for (uint32_t i = 0; i < b; ++i) {
+            page += branch_pages[i];
+        }
+        return page + sp_rank * own_pages(b);
+    };
+    // Run (b, r) at byte offset run_offset(b, r) of a staging area: branch after branch, row after row.
+    const auto run_offset = [&](uint32_t b, uint32_t row) {
+        return (stored_page(b) * history_rows + row * own_pages(b)) * page_row_bytes;
+    };
+    // The slab entry's slices into `staging` (scratch), as runs.
+    const auto stage_own_slices = [&](uint32_t staging) {
+        for (uint32_t b = 0; b < 3; ++b) {
+            for (uint32_t i = 0; i < own_pages(b); ++i) {
+                for (uint32_t row = 0; row < history_rows; ++row) {
+                    noc.async_read(
+                        history,
+                        scratch,
+                        page_row_bytes,
+                        {.page_id = layer_carry.page_base + stored_page(b) + i, .offset_bytes = row * page_row_bytes},
+                        {.offset_bytes = offset_of(staging) + run_offset(b, row) + i * page_row_bytes});
+                }
+            }
+        }
+        noc.async_read_barrier();
+    };
+
     // The replacement carry, on the owner of the interval's final segment: its last valid rows, preceded by the
     // caller's history or the predecessor's outgoing rows when that segment holds fewer than three.
     const auto assemble_carry = [&]() {
@@ -116,6 +167,14 @@ void kernel_main() {
             if (from_layer_history && layer_carry.zeros) {
                 noc.async_write_zeros(scratch, row_bytes, {.offset_bytes = destination});
                 noc.write_zeros_l1_barrier();
+            } else if (from_layer_history && slab) {
+                // Gathered into this (the first) rank's history rows.
+                noc.async_read(
+                    exchange_buffer,
+                    scratch,
+                    row_bytes,
+                    {.page_id = history_page + position},
+                    {.offset_bytes = destination});
             } else if (from_layer_history) {
                 read_tail_row<token_paged, page_channels>(
                     noc, history, scratch, position, 0, channel_tiles, destination, layer_carry.page_base);
@@ -273,6 +332,49 @@ void kernel_main() {
             noc_async_writes_flushed();
         };
         const auto wait_for_arrival = [](uint32_t semaphore) { kda_counter::wait_and_consume(semaphore, 1); };
+        // Sharded slab: the staged slices (in the carry rows) into `first_rank`'s exchange history rows, then its
+        // history semaphore. On a 2D fabric through the peer's route; on 1D along the SP axis, forward when the
+        // forward range reaches it, else backward.
+        const auto send_slices_to_first_rank = [&](uint32_t first_rank) {
+            const uint32_t step = (first_rank + sp_size - sp_rank) % sp_size;
+            decltype(&connections.get(0).sender) sender;
+            uint32_t hops = 1;
+            if constexpr (peer_routes) {
+                sender = &route_to_peer(step - 1);
+            } else {
+                const bool forward = step <= forward_range;
+                sender = &connections.get(forward ? forward_connection : backward_connection).sender;
+                hops = forward ? step : sp_size - step;
+            }
+            for (uint32_t b = 0; b < 3; ++b) {
+                const uint32_t run_bytes = own_pages(b) * page_row_bytes;
+                for (uint32_t row = 0; row < history_rows; ++row) {
+                    for (uint32_t offset = 0; offset < run_bytes; offset += max_payload) {
+                        if constexpr (peer_routes) {
+                            route_to_peer(step - 1);
+                        }
+                        fabric_unicast_noc_unicast_write(
+                            sender,
+                            header,
+                            carry + run_offset(b, row) + offset,
+                            run_bytes - offset < max_payload ? run_bytes - offset : max_payload,
+                            tt::tt_fabric::NocUnicastCommandHeader{addrgen_detail::get_noc_address(
+                                exchange_buffer, history_page + row, native_page(b) * page_row_bytes + offset)},
+                            hops);
+                        noc_async_writes_flushed();
+                    }
+                }
+            }
+            if constexpr (peer_routes) {
+                route_to_peer(step - 1);
+            }
+            fabric_unicast_noc_unicast_atomic_inc(
+                sender,
+                header,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_address(history_semaphore), 1, true},
+                hops);
+            noc_async_writes_flushed();
+        };
 
         // Entry barrier: every other rank's arrival.
         multicast_increment(entry_semaphore);
@@ -282,6 +384,35 @@ void kernel_main() {
         noc.async_read_barrier();
 
         unicast_rows(outgoing, predecessor_page, predecessor_semaphore);
+        if constexpr (slab) {
+            if (!layer_carry.zeros) {
+                // The carry rows are free until the carry: stage this rank's slices there.
+                stage_own_slices(carry);
+                if (interval.first_rank == sp_rank) {
+                    for (uint32_t b = 0; b < 3; ++b) {
+                        for (uint32_t row = 0; row < history_rows; ++row) {
+                            noc.async_write(
+                                scratch,
+                                exchange_buffer,
+                                own_pages(b) * page_row_bytes,
+                                {.offset_bytes = offset_of(carry) + run_offset(b, row)},
+                                {.page_id = history_page + row, .offset_bytes = native_page(b) * page_row_bytes});
+                        }
+                    }
+                    noc.async_write_barrier();
+                    kda_counter::wait_and_consume(history_semaphore, sp_size - 1);
+                    for (uint32_t core = 0; core < num_convolution_cores; ++core) {
+                        history_ready.up(
+                            noc,
+                            get_arg_val<uint32_t>(convolution_core_args + 2 * core),
+                            get_arg_val<uint32_t>(convolution_core_args + 2 * core + 1),
+                            1);
+                    }
+                } else {
+                    send_slices_to_first_rank(interval.first_rank);
+                }
+            }
+        }
         wait_for_arrival(predecessor_semaphore);
         for (uint32_t core = 0; core < num_convolution_cores; ++core) {
             const uint32_t x = get_arg_val<uint32_t>(convolution_core_args + 2 * core);
@@ -301,12 +432,35 @@ void kernel_main() {
     }
     // The replacement carry, three full rows in scratch, goes out in history's layout; the outgoing rows have been
     // sent, so their scratch gathers its pages.
-    if constexpr (slab) {
-        history_consumed.wait_min(num_convolution_cores);
-    }
     if (layer_carry.writes) {
-        write_tail<token_paged, page_channels>(
-            noc, scratch, final_history, channel_tiles, offset_of(carry), offset_of(outgoing), layer_carry.page_base);
+        if constexpr (slab) {
+            // This rank's slices only: native page native_page(b) + i is stored page stored_page(b) + i.
+            write_tail<token_paged, page_channels>(
+                noc,
+                scratch,
+                final_history,
+                channel_tiles,
+                offset_of(carry),
+                offset_of(outgoing),
+                layer_carry.page_base,
+                [&](uint32_t page) -> uint32_t {
+                    for (uint32_t b = 0; b < 3; ++b) {
+                        if (page >= native_page(b) && page < native_page(b) + own_pages(b)) {
+                            return stored_page(b) + page - native_page(b);
+                        }
+                    }
+                    return no_page;
+                });
+        } else {
+            write_tail<token_paged, page_channels>(
+                noc,
+                scratch,
+                final_history,
+                channel_tiles,
+                offset_of(carry),
+                offset_of(outgoing),
+                layer_carry.page_base);
+        }
     }
     noc.async_write_barrier();
 }
