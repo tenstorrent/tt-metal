@@ -667,7 +667,7 @@ def test_interleaved_to_sharded_partial_rejects_slices_of_partial_tile_rows(devi
     with expect_error(RuntimeError, "multiple of 32 rows"):
         ttnn.interleaved_to_sharded_partial(
             input_tensor,
-            ttnn.CoreCoord(1, 1),
+            ttnn.CoreCoord(2, 1),
             [32, 64],
             2,
             0,
