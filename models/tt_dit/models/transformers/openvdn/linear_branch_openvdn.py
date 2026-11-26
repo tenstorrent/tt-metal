@@ -36,15 +36,12 @@ from . import linear_ops_openvdn as ops
 Range = tuple[int, int]
 
 
-def to_heads(x: ttnn.Tensor, num_frames: int, num_heads: int, partition=None) -> ttnn.Tensor:
-    """`[1, 1, F*S, H*d]` -> `[F, H, S, d]`. `partition` (frames on dim 0 -> this device's share) is applied in the
-    row-major frame layout, before the permute."""
+def to_heads(x: ttnn.Tensor, num_frames: int, num_heads: int) -> ttnn.Tensor:
+    """`[1, 1, F*S, H*d]` -> `[F, H, S, d]`."""
     rows, channels = x.shape[-2], x.shape[-1]
     per_frame, head_dim = rows // num_frames, channels // num_heads
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.reshape(x, [num_frames, per_frame, num_heads, head_dim])
-    if partition is not None:
-        x = partition(x)
     x = ttnn.permute(x, (0, 2, 1, 3))
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
@@ -261,13 +258,15 @@ class OpenVDNLinearBranch(Module):
         partition=None,
     ) -> ttnn.Tensor:
         """`prepare_linear_features`: `[1, 1, F*S, C]` raw bf16 -> `[F, H, S, d]` bf16. `frame_size=None` skips the
-        conv (the text chunk). `partition` (frames on dim 0 -> this device's share; see `to_heads`) is applied after
-        the conv, which needs the neighbouring frames, and returns `[f, H, S, d]` for the local frames."""
+        conv (the text chunk). `partition` (frames on dim 0 -> this device's share) is applied in the tiled head
+        layout (a row-major split measured ~70 ms slower), giving `[f, H, S, d]` for the local frames."""
         if frame_size is not None and proj in self.short_conv:
             x = self.conv(tokens, proj, num_frames, frame_size)
         else:
             x = ttnn.typecast(tokens, ttnn.float32)
-        x = to_heads(ttnn.silu(x), num_frames, self.num_local_heads, partition=partition)
+        x = to_heads(ttnn.silu(x), num_frames, self.num_local_heads)
+        if partition is not None:
+            x = partition(x)
         if proj != "v":
             x = l2_normalize(x)
         return ttnn.typecast(x, ttnn.bfloat16)
