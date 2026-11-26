@@ -23,13 +23,34 @@ batched matmuls (`spd_inverse`).
 from __future__ import annotations
 
 import math
+import os
+import time
 from collections.abc import Sequence
 
 import torch
+from loguru import logger
 
 import ttnn
 
 from ....utils import tensor
+
+_last_mark: list[float] = []
+
+
+def mark(device: ttnn.MeshDevice, name: str) -> None:
+    """With OPENVDN_SYNC_LOG=1: wait for the device and log the section's wall time since the previous mark (to place
+    a hang or time a section). With OPENVDN_PROFILE_FLUSH=1 also read the device profiler here, so no section
+    overflows its op buffer. Off by default: no sync."""
+    if os.environ.get("OPENVDN_SYNC_LOG") != "1":
+        return
+    ttnn.synchronize_device(device)
+    now = time.perf_counter()
+    elapsed = (now - _last_mark[0]) * 1e3 if _last_mark else 0.0
+    _last_mark[:] = [now]
+    logger.info(f"hybrid attention: {name} done ({elapsed:.1f} ms)")
+    if os.environ.get("OPENVDN_PROFILE_FLUSH") == "1":
+        ttnn.ReadDeviceProfiler(device)
+        _last_mark[:] = [time.perf_counter()]
 
 
 def compute_config(device: ttnn.MeshDevice) -> ttnn.DeviceComputeKernelConfig:

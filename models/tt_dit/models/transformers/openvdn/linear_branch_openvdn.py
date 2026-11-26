@@ -278,16 +278,24 @@ class OpenVDNLinearBranch(Module):
     ) -> ttnn.Tensor:
         """`_readout` over exactly the frames given. Inputs `[1, 1, F*S, *]` bf16; returns `[1, 1, F*S, H*d]` bf16."""
         per_frame = frame_size[0] * frame_size[1]
+        mark = lambda name: ops.mark(self.mesh_device, f"linear branch: {name}")  # noqa: E731
         query = self.features(q_raw, "q", num_frames, frame_size)
+        mark("q features")
         key = self.features(k_raw, "k", num_frames, frame_size)
+        mark("k features (conv)")
         value = self.features(v_raw, "v", num_frames, frame_size)
+        mark("v features (conv)")
 
         a, b = ops.frame_statistics(key, value, self.beta(xv, num_frames), config=self.config)
         alpha_rows = self.alpha(xv, num_frames)
         alpha = ops.rows_to_heads(alpha_rows, num_frames, self.num_local_heads, self.head_dim)
+        mark("frame statistics and alpha")
         transition, injection = ops.vdn_factor_apply(alpha, a, b, max_eig=1.0 + per_frame, config=self.config)
+        mark("inverse")
         prefix, suffix = ops.bidirectional_scan(transition, injection, text_state=text_state, config=self.config)
+        mark("scans")
         state = ops.gather_linear_state(prefix, suffix, alpha_rows, bounds, text_state=text_state, config=self.config)
+        mark("state gather")
 
         out = ops.split_matmul(query, ttnn.transpose(state, -2, -1), config=self.config)  # [F, H, S, d_v] fp32
         mean_square = ttnn.multiply(ttnn.sum(ttnn.multiply(out, out), dim=-1, keepdim=True), 1.0 / self.head_dim)
@@ -295,7 +303,9 @@ class OpenVDNLinearBranch(Module):
         out = from_heads(ttnn.multiply(out, self.norm_weight.data))
 
         gate = ttnn.sigmoid(self.gate_up(self.gate_down(xv)))
-        return ttnn.typecast(ttnn.multiply(out, ttnn.typecast(gate, ttnn.float32)), ttnn.bfloat16)
+        out = ttnn.typecast(ttnn.multiply(out, ttnn.typecast(gate, ttnn.float32)), ttnn.bfloat16)
+        mark("readout")
+        return out
 
     def forward(
         self,
@@ -315,6 +325,7 @@ class OpenVDNLinearBranch(Module):
         readout `[1, 1, F*S, H*d]` bf16 (before `to_out_linear`), zero on frames 0 and F-1 when `skip_ends`."""
         per_frame = frame_size[0] * frame_size[1]
         text_state = None if text is None else self.text_state(*text)
+        ops.mark(self.mesh_device, "linear branch: text state")
         if not skip_ends:
             return self.readout(
                 xv, q_raw, k_raw, v_raw, num_frames=num_frames, frame_size=frame_size, bounds=bounds, text_state=text_state

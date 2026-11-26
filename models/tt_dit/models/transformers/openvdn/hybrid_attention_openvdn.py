@@ -30,10 +30,8 @@ the conv and window, per-frame statistics gathered for the scans).
 from __future__ import annotations
 
 import dataclasses
-import os
 
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -168,6 +166,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         layout = self.layout
         padded_len = spatial_1BND.shape[2] * self.sp_factor
         assert layout is not None and layout.seq_len <= padded_len, "set .layout to the packed sequence"
+        self._mark("attention start")
         bounds = self.bounds(layout)
         full_cover = all(lo <= 0 and hi >= layout.num_frames - 1 for lo, hi in bounds)
         length = layout.seq_len
@@ -213,6 +212,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             )
         else:
             softmax_BHNE = self._window(layout)(q_BHNE, k_BHNE, v_BHNE)
+        self._mark("window softmax")
         softmax_1BND = ttnn.unsqueeze(ttnn.transformer.concatenate_heads(softmax_BHNE), 0)
 
         gate = ttnn.sigmoid(self.softmax_gate(x_1BND))  # [1, 1, N, local heads]
@@ -223,7 +223,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         # canonical inner order the column-parallel output projections expect.
         softmax_1BND = self._gather(softmax_1BND, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
         out = self.to_out(softmax_1BND, force_transpose=False, compute_kernel_config=self.mm_compute_kernel_config)
-        self._mark("window softmax and to_out")
+        self._mark("softmax gate, TP gather and to_out")
 
         if not full_cover:
             vs, ve = layout.video_start, layout.video_end
@@ -259,13 +259,11 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
 
         if addcmul_residual is not None:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
+        self._mark("attention end")
         return out
 
     def _mark(self, name: str) -> None:
-        """With OPENVDN_SYNC_LOG=1: wait for the device and log, to place a hang."""
-        if os.environ.get("OPENVDN_SYNC_LOG") == "1":
-            ttnn.synchronize_device(self.mesh_device)
-            logger.info(f"hybrid attention: {name} done")
+        ops.mark(self.mesh_device, name)
 
     def _gather(self, t: ttnn.Tensor, *, dim: int, mesh_axis: int, factor: int) -> ttnn.Tensor:
         if factor == 1:
