@@ -4,7 +4,6 @@
 # This library holds standalone Quasar (metal 2.0) copies of selected ops. Each op is a
 # near-identical clone of its original, isolated in the ttnn::prim::qsr (device) and
 # ttnn::operations::experimental::quasar (host) namespaces so it can coexist with the original.
-# (pool_generic uses ttnn::operations::pool::quasar for the host side.)
 # Nanobind sources (*_nanobind.cpp) are compiled with the python module via ttnn/sources.cmake.
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
@@ -15,9 +14,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     slice/slice.hpp
     transpose/transpose.hpp
     reshard/reshard.hpp
-    halo/halo.hpp
-    pool_generic/generic_pools.hpp
-    conv2d/conv2d.hpp
     matmul/matmul.hpp
     binary_ng/types.hpp
     binary/binary.hpp
@@ -36,7 +32,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     typecast/typecast.hpp
     padded_slice/padded_slice.hpp
     slice_write/slice_write.hpp
-    op_slicing/op_slicing.hpp
     common/thread_plan.hpp
     softmax/softmax.hpp
     batch_norm/batch_norm.hpp
@@ -44,14 +39,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     transformer/sdpa_decode/sdpa_decode.hpp
     transformer/sdpa/sdpa.hpp
     # Cloned from conv/pool/experimental/ccl/deepseek_prefill/kda/etc. (ttnn::*::qsr / experimental::quasar namespaces)
-    adaptive_pool/adaptive_pools.hpp
     cnn/convert_to_chw/convert_to_chw.hpp
     cnn/convert_to_hwc/convert_to_hwc.hpp
-    conv3d/conv3d.hpp
-    conv3d/device/conv3d_device_operation.hpp
-    conv3d/device/conv3d_device_operation_types.hpp
-    conv3d/device/conv3d_program_factory.hpp
-    conv3d/prepare_conv3d_weights.hpp
     deepseek_prefill/attn_res_block_mix/attn_res_block_mix.hpp
     deepseek_prefill/attn_res_block_stats/attn_res_block_stats.hpp
     deepseek_prefill/attn_res_gather_softmax/attn_res_gather_softmax.hpp
@@ -84,8 +73,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn.hpp
     deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache.hpp
     deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache.hpp
-    grid_sample/grid_sample.hpp
-    grid_sample/grid_sample_prepare_grid.hpp
     high_bw_all_gather/high_bw_all_gather.hpp
     indexer_score/device/indexer_score_device_operation.hpp
     indexer_score/device/indexer_score_device_operation_types.hpp
@@ -102,12 +89,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     kda/relay_affine_prefix/relay_affine_prefix.hpp
     kda/select_final_carry/select_final_carry.hpp
     kda/sigmoid_gated_rms_norm/sigmoid_gated_rms_norm.hpp
-    rotate/rotate.hpp
     topk_large_indices/device/topk_large_indices_device_operation.hpp
     topk_large_indices/device/topk_large_indices_device_operation_types.hpp
     topk_large_indices/device/topk_large_indices_program_factory.hpp
     topk_large_indices/topk_large_indices.hpp
-    upsample/upsample.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
@@ -156,9 +141,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     slice_write/device/slice_write_rm_sharded_input_program_factory.cpp
     slice_write/device/slice_write_rm_interleaved_program_factory.cpp
     slice_write/device/slice_write_tiled_sharded_input_program_factory.cpp
-    # op_slicing (quasar fork of the conv2d DRAM output-height-slicing driver; routes per-slice
-    # padded_slice / slice_write unconditionally through the quasar Metal-2 ops)
-    op_slicing/op_slicing.cpp
     slice/device/slice_program_factory_tile.cpp
     slice/device/slice_program_factory_tile_tensor_args.cpp
     # transpose
@@ -187,19 +169,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     move/device/move_overlap_program_factory.cpp
     move/device/move_program_factory.cpp
     move/device/move_sharded_program_factory.cpp
-    # halo (no nanobind; internal op)
-    halo/halo.cpp
-    halo/device/halo_device_operation.cpp
-    halo/device/untilize_with_halo_program_factory.cpp
-    # pool_generic
-    pool_generic/generic_pools.cpp
-    pool_generic/device/pool_op.cpp
-    pool_generic/device/pool_multi_core_program_factory.cpp
-    # conv2d
-    conv2d/conv2d.cpp
-    conv2d/device/conv2d_device_operation.cpp
-    conv2d/device/conv2d_op_sharded_program_factory.cpp
-    conv2d/device/conv2d_op_width_sharded_program_factory.cpp
     # binary_ng (device backend; no host op / no nanobind)
     binary_ng/device/binary_ng_device_operation.cpp
     binary_ng/device/binary_ng_metal_v2_factory.cpp
@@ -310,8 +279,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
 # own library upstream, so many define identically named file-local helpers (e.g. kernel_dir, make_cb). They are kept
 # out of unity batches here so those names do not collide.
 set(TTNN_OP_EXPERIMENTAL_QUASAR_CLONED_SRCS
-    adaptive_pool/adaptive_pool_utils.cpp
-    adaptive_pool/adaptive_pools.cpp
     cnn/convert_to_chw/convert_to_chw.cpp
     cnn/convert_to_chw/device/convert_to_chw_device_operation.cpp
     cnn/convert_to_chw/device/convert_to_chw_program_factory.cpp
@@ -319,13 +286,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_CLONED_SRCS
     cnn/convert_to_hwc/device/convert_to_hwc_device_operation.cpp
     cnn/convert_to_hwc/device/convert_to_hwc_program_factory.cpp
     cnn/convert_to_hwc/device/gather.cpp
-    conv1d/conv1d.cpp
-    conv3d/conv3d.cpp
-    conv3d/device/conv3d_device_operation.cpp
-    conv3d/device/conv3d_program_factory.cpp
-    conv3d/prepare_conv3d_weights.cpp
-    conv_transpose2d/conv_transpose2d.cpp
-    conv_transpose2d/prepare_conv_transpose2d_weights.cpp
     deepseek_prefill/attn_res_block_mix/attn_res_block_mix.cpp
     deepseek_prefill/attn_res_block_mix/device/attn_res_block_mix_device_operation.cpp
     deepseek_prefill/attn_res_block_mix/device/attn_res_block_mix_program_factory.cpp
@@ -425,12 +385,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_CLONED_SRCS
     deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache.cpp
     deepseek_prefill/zero_padded_kv_cache/device/zero_padded_kv_cache_device_operation.cpp
     deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache.cpp
-    grid_sample/device/grid_sample_bilinear_program_factory.cpp
-    grid_sample/device/grid_sample_device_operation.cpp
-    grid_sample/device/grid_sample_nearest_program_factory.cpp
-    grid_sample/device/grid_sample_utils.cpp
-    grid_sample/grid_sample.cpp
-    grid_sample/grid_sample_prepare_grid.cpp
     high_bw_all_gather/device/high_bw_all_gather_device_operation.cpp
     high_bw_all_gather/device/high_bw_all_gather_fabric_factory.cpp
     high_bw_all_gather/high_bw_all_gather.cpp
@@ -472,19 +426,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_CLONED_SRCS
     ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
     ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
     ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
-    rotate/device/rotate_bilinear_program_factory.cpp
-    rotate/device/rotate_device_operation.cpp
-    rotate/device/rotate_nearest_program_factory.cpp
-    rotate/rotate.cpp
     topk_large_indices/device/topk_large_indices_device_operation.cpp
     topk_large_indices/device/topk_large_indices_program_factory.cpp
-    upsample/device/upsample_bilinear_program_factory_multicore.cpp
-    upsample/device/upsample_common.cpp
-    upsample/device/upsample_device_operation.cpp
-    upsample/device/upsample_nearest_float_program_factory.cpp
-    upsample/device/upsample_program_factory_multicore_interleaved.cpp
-    upsample/device/upsample_program_factory_multicore_sharded.cpp
-    upsample/upsample.cpp
 )
 set_source_files_properties(
     ${TTNN_OP_EXPERIMENTAL_QUASAR_CLONED_SRCS}
@@ -508,8 +451,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     slice/slice_nanobind.cpp
     transpose/transpose_nanobind.cpp
     reshard/reshard_nanobind.cpp
-    pool_generic/generic_pools_nanobind.cpp
-    conv2d/conv2d_nanobind.cpp
     padded_slice/padded_slice_nanobind.cpp
     slice_write/slice_write_nanobind.cpp
     matmul/matmul_nanobind.cpp
@@ -532,12 +473,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     transformer/sdpa_decode/sdpa_decode_nanobind.cpp
     transformer/sdpa/sdpa_nanobind.cpp
     # Cloned from conv/pool/experimental/ccl/deepseek_prefill/kda/etc.
-    adaptive_pool/adaptive_pools_nanobind.cpp
     cnn/convert_to_chw/convert_to_chw_nanobind.cpp
     cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
-    conv1d/conv1d_nanobind.cpp
-    conv3d/conv3d_nanobind.cpp
-    conv_transpose2d/conv_transpose2d_nanobind.cpp
     deepseek_prefill/attn_res_block_mix/attn_res_block_mix_nanobind.cpp
     deepseek_prefill/attn_res_block_stats/attn_res_block_stats_nanobind.cpp
     deepseek_prefill/attn_res_gather_softmax/attn_res_gather_softmax_nanobind.cpp
@@ -569,7 +506,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.cpp
     deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.cpp
     deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.cpp
-    grid_sample/grid_sample_nanobind.cpp
     high_bw_all_gather/high_bw_all_gather_nanobind.cpp
     indexer_score/indexer_score_nanobind.cpp
     kda/affine_exclusive_scan/affine_exclusive_scan_nanobind.cpp
@@ -584,7 +520,5 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     kda/select_final_carry/select_final_carry_nanobind.cpp
     kda/sigmoid_gated_rms_norm/sigmoid_gated_rms_norm_nanobind.cpp
     ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.cpp
-    rotate/rotate_nanobind.cpp
     topk_large_indices/topk_large_indices_nanobind.cpp
-    upsample/upsample_nanobind.cpp
 )

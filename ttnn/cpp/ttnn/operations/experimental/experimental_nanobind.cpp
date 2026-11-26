@@ -8,10 +8,8 @@
 
 #include "ttnn/operations/generic/generic_op_nanobind.hpp"
 
-#include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
-#include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.hpp"
@@ -68,7 +66,6 @@
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/pirotski_matmul/pirotski_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routing_metadata/routing_metadata_nanobind.hpp"
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/router_front_end/router_front_end_nanobind.hpp"
-#include "ttnn/operations/experimental/modulated_deform_conv2d/modulated_deform_conv2d_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
@@ -173,10 +170,6 @@ void py_module(nb::module_& mod) {
     cnn::detail::bind_convert_to_chw(mod);
     cnn::detail::bind_convert_to_hwc(mod);
 
-    ttnn::operations::experimental::conv3d::detail::bind_conv3d(mod);
-    adaptive_pool::bind_adaptive_avg_pool2d_operation(mod);
-    adaptive_pool::bind_adaptive_max_pool2d_operation(mod);
-
     copy::detail::bind_typecast(mod);
 
     indexed_page_cache::detail::bind_experimental_indexed_page_cache_operations(mod);
@@ -238,7 +231,6 @@ void py_module(nb::module_& mod) {
     ttnn::experimental::nomic_embed_text_v2_moe::bind_pirotski_matmul(mod);
     ttnn::experimental::nomic_embed_text_v2_moe::bind_routing_metadata(mod);
     ttnn::experimental::nomic_embed_text_v2_moe::bind_router_front_end(mod);
-    modulated_deform_conv2d::detail::bind_modulated_deform_conv2d(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);

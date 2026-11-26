@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 
 // Copies the stride_w pixels of one chunk: pixel_size bytes from each source pixel, which are aligned_pixel_size apart,
 // packed back to back at dst. T is the widest unit that divides pixel_size, so every access stays aligned.

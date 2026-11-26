@@ -12,11 +12,6 @@
 # moving them), and transformer/ (one CMake target spanning multiple teams'
 # code — needs an actual target split before ownership can split too).
 
-# metalium-developers-convolutions
-add_subdirectory(conv)
-add_subdirectory(pool)
-add_subdirectory(sliding_window)
-
 # metalium-developers-ops-data-movement
 add_subdirectory(ccl)
 add_subdirectory(point_to_point)
@@ -57,7 +52,6 @@ target_link_libraries(
     INTERFACE
         TTNN::Ops::Bernoulli
         TTNN::Ops::CCL
-        TTNN::Ops::Conv
         TTNN::Ops::Core
         TTNN::Ops::Creation
         TTNN::Ops::DataMovement
@@ -73,12 +67,10 @@ target_link_libraries(
         TTNN::Ops::Matmul
         TTNN::Ops::Normalization
         TTNN::Ops::PointToPoint
-        TTNN::Ops::Pool
         TTNN::Ops::Prefetcher
         TTNN::Ops::Rand
         TTNN::Ops::Randn
         TTNN::Ops::Reduction
-        TTNN::Ops::SlidingWindow
         TTNN::Ops::Uniform
 )
 
@@ -98,7 +90,6 @@ target_sources(
     INTERFACE
         $<TARGET_OBJECTS:TTNN::Ops::Bernoulli>
         $<TARGET_OBJECTS:TTNN::Ops::CCL>
-        $<TARGET_OBJECTS:TTNN::Ops::Conv>
         $<TARGET_OBJECTS:TTNN::Ops::Core>
         $<TARGET_OBJECTS:TTNN::Ops::Creation>
         $<TARGET_OBJECTS:TTNN::Ops::DataMovement>
@@ -114,11 +105,9 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Matmul>
         $<TARGET_OBJECTS:TTNN::Ops::Normalization>
         $<TARGET_OBJECTS:TTNN::Ops::PointToPoint>
-        $<TARGET_OBJECTS:TTNN::Ops::Pool>
         $<TARGET_OBJECTS:TTNN::Ops::Prefetcher>
         $<TARGET_OBJECTS:TTNN::Ops::Rand>
         $<TARGET_OBJECTS:TTNN::Ops::Randn>
         $<TARGET_OBJECTS:TTNN::Ops::Reduction>
-        $<TARGET_OBJECTS:TTNN::Ops::SlidingWindow>
         $<TARGET_OBJECTS:TTNN::Ops::Uniform>
 )

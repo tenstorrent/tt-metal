@@ -517,16 +517,15 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceTileProgramFactory::create_p
     };
 
     // ---- Kernels ----
-    // The Metal 2.0 fork of sliding_window/halo's pack_untilize compute kernel. Its binding and argument
-    // names (dfb::src, dfb::out0, tiles_per_row, block_size, total_blocks) are the fork's interface,
-    // inherited here. The kernel packs alternate blocks into dfb::out0 / dfb::out1; without the fork's
-    // SEPARATE_OUT1 define both names are the one untilized DFB, as this factory always configured it.
-    // The legacy descriptor set only fp32_dest_acc_en = false and dst_full_sync_en = false (both their
-    // defaults), so the compute hardware config keeps every knob at its default: HiFi4, precise SFPU,
-    // 16-bit double-buffered Dest.
+    // Metal 2.0 pack_untilize compute kernel. Its binding and argument names (dfb::src, dfb::out0,
+    // tiles_per_row, block_size, total_blocks) are the kernel's interface, inherited here. The kernel packs alternate
+    // blocks into dfb::out0 / dfb::out1; without the kernel's SEPARATE_OUT1 define both names are the one untilized
+    // DFB, as this factory always configured it. The legacy descriptor set only fp32_dest_acc_en = false and
+    // dst_full_sync_en = false (both their defaults), so the compute hardware config keeps every knob at its default:
+    // HiFi4, precise SFPU, 16-bit double-buffered Dest.
     KernelSpec untilize_compute_kernel{
         .unique_id = COMPUTE,
-        .source = "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize_metal2.cpp",
+        .source = "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/compute/pack_untilize_metal2.cpp",
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {

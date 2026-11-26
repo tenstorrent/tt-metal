@@ -8,7 +8,7 @@
 #include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 
 // The host defines NON_ALIGNED, and binds the dfb::non_aligned scratch, only when the read window isn't
 // aligned to the source buffer; the aligned read path is compiled otherwise.

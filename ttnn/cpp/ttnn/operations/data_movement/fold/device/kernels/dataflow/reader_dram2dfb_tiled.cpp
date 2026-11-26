@@ -8,7 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t tiles_per_channel_dim = get_arg(args::tiles_per_channel_dim);

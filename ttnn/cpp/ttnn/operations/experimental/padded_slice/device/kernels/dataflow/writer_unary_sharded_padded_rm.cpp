@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 void kernel_main() {
     const uint32_t num_units = get_arg(args::num_units);
     const uint32_t num_elements_per_row = get_arg(args::num_elements_per_row);

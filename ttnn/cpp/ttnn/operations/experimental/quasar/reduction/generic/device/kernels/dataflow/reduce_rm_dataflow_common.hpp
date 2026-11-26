@@ -8,7 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include <cstdint>
 #include "api/tile_constants.h"
-#include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp"
 
 #define RM_DF_ALWI inline __attribute__((always_inline))
 

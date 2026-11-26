@@ -15,7 +15,7 @@
 #include <stdint.h>
 #include "api/tile_constants.h"  // tt::constants::TILE_HEIGHT
 #include "api/dataflow/dataflow_api.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 #include "sparse_sdpa_gather.hpp"  // dual-NoC trid-ring gather helper (shared with the writer)
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;

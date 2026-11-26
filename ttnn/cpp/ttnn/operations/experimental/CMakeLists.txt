@@ -16,8 +16,6 @@
 # active owner of those ops.
 
 # metalium-developers-convolutions
-add_subdirectory(adaptive_pool)
-add_subdirectory(conv3d)
 add_subdirectory(cnn)
 
 # metalium-developers-ops-data-movement
@@ -72,7 +70,6 @@ add_subdirectory(deepseek_moe_post_combine_tilize)
 add_subdirectory(dropout)
 add_subdirectory(fft)
 add_subdirectory(fused_msda)
-add_subdirectory(modulated_deform_conv2d)
 add_subdirectory(multi_scale_deformable_attn)
 add_subdirectory(nomic_embed_text_v2_moe/routed_combine)
 add_subdirectory(nomic_embed_text_v2_moe/grouped_matmul_w1)
@@ -96,8 +93,6 @@ add_library(TTNN::Ops::Experimental ALIAS ttnn_op_experimental_shared)
 target_link_libraries(
     ttnn_op_experimental_shared
     INTERFACE
-        TTNN::Ops::Experimental::AdaptivePool
-        TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::CNN
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::MoEGPT
@@ -129,7 +124,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::FusedMSDA
-        TTNN::Ops::Experimental::ModulatedDeformConv2d
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine
         TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmulW1
@@ -159,8 +153,6 @@ target_link_libraries(
 target_sources(
     ttnn_op_experimental_shared
     INTERFACE
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::AdaptivePool>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Conv3d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CNN>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CCL>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEGPT>
@@ -191,7 +183,6 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Dropout>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FFT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FusedMSDA>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::ModulatedDeformConv2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmulW1>

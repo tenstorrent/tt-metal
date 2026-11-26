@@ -44,7 +44,7 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "api/tensor/noc_traits.h"
-#include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/fixed_point_arithmetic.hpp>
 #include "ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/device/kernels/msda_tile_layout.hpp"
 
 namespace {

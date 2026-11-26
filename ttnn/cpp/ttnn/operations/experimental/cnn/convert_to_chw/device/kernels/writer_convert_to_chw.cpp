@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 
 constexpr uint32_t TILE_SIZE = 32;
 constexpr uint32_t ELEMENT_SIZE_BYTES = 2;

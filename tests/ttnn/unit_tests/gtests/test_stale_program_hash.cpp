@@ -28,7 +28,6 @@
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/device/pack_scaled_fp8_kv_cache_device_operation.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/per_token_cast_to_fp8_device_operation.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer.hpp"
-#include "ttnn/operations/pool/generic/device/pool_op.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -313,51 +312,6 @@ TEST_F(StaleProgramHashFixture, LlamaReduceScatterCreateHeadsSubdeviceIdSeparate
     EXPECT_NE(
         llama_hash(make_llama_attributes(kQkvOnGridA, kSubDevice0), input, packet_buffer),
         llama_hash(make_llama_attributes(kQkvOnGridA, kSubDevice1), input, packet_buffer));
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// 5. Pool2D: explicit ceil_pad_hw from the DRAM slicer
-// ---------------------------------------------------------------------------------------------------------------
-
-using ::ttnn::operations::pool::Pool2D;
-using ::ttnn::operations::sliding_window::SlidingWindowConfig;
-
-Pool2D::operation_attributes_t make_pool_attributes(const std::optional<std::pair<uint32_t, uint32_t>>& ceil_pad_hw) {
-    return Pool2D::operation_attributes_t{
-        .sliding_window_config_ =
-            SlidingWindowConfig{
-                .batch_size = 1,
-                .channels = 32,
-                .input_hw = {32, 32},
-                .window_hw = {3, 3},
-                .stride_hw = {2, 2},
-                .padding = {1, 1, 1, 1},
-                .ceil_pad_hw = ceil_pad_hw,
-                .num_cores_nhw = 1,
-                .num_cores_c = 1,
-                .core_range_set = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
-                .ceil_mode = true},
-        .pool_type_ = ::ttnn::operations::pool::Pool2DType::MAX_POOL2D,
-        .output_dtype_ = DataType::BFLOAT16,
-        .output_layout_ = Layout::ROW_MAJOR,
-        .memory_config_ = ttnn::L1_MEMORY_CONFIG,
-    };
-}
-
-TEST_F(StaleProgramHashFixture, Pool2DExplicitCeilPadSeparatesKeys) {
-    const auto input = make_tensor(device_, ttnn::Shape{1, 1, 32 * 32, 32}, DataType::BFLOAT16, Layout::ROW_MAJOR);
-    const auto computed = make_pool_attributes(std::nullopt);
-    ASSERT_EQ(computed.sliding_window_config_.get_ceil_pad_hw(), std::make_pair(1u, 1u));
-    EXPECT_NE(
-        Pool2D::compute_program_hash(computed, {input}),
-        Pool2D::compute_program_hash(make_pool_attributes(std::make_pair(0u, 0u)), {input}));
-}
-
-TEST_F(StaleProgramHashFixture, Pool2DCeilPadEqualToComputedSharesKey) {
-    const auto input = make_tensor(device_, ttnn::Shape{1, 1, 32 * 32, 32}, DataType::BFLOAT16, Layout::ROW_MAJOR);
-    EXPECT_EQ(
-        Pool2D::compute_program_hash(make_pool_attributes(std::nullopt), {input}),
-        Pool2D::compute_program_hash(make_pool_attributes(std::make_pair(1u, 1u)), {input}));
 }
 
 // ---------------------------------------------------------------------------------------------------------------
