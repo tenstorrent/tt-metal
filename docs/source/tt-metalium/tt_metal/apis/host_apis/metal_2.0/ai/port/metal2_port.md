@@ -463,7 +463,7 @@ pack_tile(0, dfb::out);
 DataflowBuffer  dfb_in(dfb::in);
 TensorAccessor  input(tensor::input);
 Semaphore       done(sem::done);
-GlobalSemaphore out_ready(global_sem::out_ready);   // CCL ops
+uint32_t out_ready_addr = GlobalSemaphore(global_sem::out_ready).address();   // CCL ops
 auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_binding(fabric::forward);   // CCL ops
 ```
 
@@ -1085,7 +1085,7 @@ Written during the inventory and planning steps; committed alongside the port fo
 
 (or "none")
 
-GlobalSemaphores (CCL ops): name, source (caller attribute / op-allocated), the kernels that read it, and how each kernel uses it (device-object method per [ccl_port.md](../shared/ccl_port.md#kernel-side-the-device-object)). Fabric connections: per worker kernel, the legacy helper (`append_fabric_connection_rt_args`, RPCM), the sides or routes, and the core → link assignment. (or "none")
+GlobalSemaphores (CCL ops): name, source (caller attribute / op-allocated), the kernels that read it, and where each kernel reads its address (replaced by `address()` per [ccl_port.md](../shared/ccl_port.md#kernel-side-the-device-object)). Fabric connections: per worker kernel, the legacy helper (`append_fabric_connection_rt_args`, RPCM), the sides or routes, and the core → link assignment. (or "none")
 
 ### Tensor accessors
 | host site (file:line) | originating Tensor | RTA slot (host) |

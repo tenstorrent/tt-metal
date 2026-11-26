@@ -130,7 +130,7 @@ Confirm **every kernel this op exercises** is Device 2.0 compliant — **regardl
 
   Three more kinds of call are sanctioned on the same grounds, and matter most for CCL kernels:
   - **A call the Device 2.0 migration kept on purpose**, marked `// Device 2.0 migration: legacy primitive retained: <reason>` or `// Device 2.0: legacy primitive retained, <reason>` (most often a precomposed `uint64_t` NoC address). The migration left it because Device 2.0 has no form for it. **Except a program semaphore by raw address** (`get_semaphore(id)` read or written through a pointer): marked or not, that is Device 1.0, because the Metal 2.0 port has no form for it either.
-  - **Raw `GlobalSemaphore` primitives** (`noc_semaphore_wait` / `_wait_min` / `_set` / `_inc`, a read through the pointer, `noc_semaphore_set_multicast(_loopback_src)` / `noc_semaphore_inc_multicast`, on an address the host fed from a `GlobalSemaphore`). The Metal 2.0 port converts them to the device `GlobalSemaphore` object ([Porting CCL ops](../shared/ccl_port.md#kernel-side-the-device-object)); whether every use converts is the [Appendix A](#globalsemaphore-address-used-outside-the-device-object--unsupported) question, not this gate's.
+  - **Raw `GlobalSemaphore` primitives** (`noc_semaphore_wait` / `_wait_min` / `_set` / `_inc`, a read through the pointer, `noc_semaphore_set_multicast(_loopback_src)` / `noc_semaphore_inc_multicast`, on an address the host fed from a `GlobalSemaphore`). The Metal 2.0 port takes the address from the device `GlobalSemaphore` object and leaves these calls as they are ([Porting CCL ops](../shared/ccl_port.md#kernel-side-the-device-object)).
   - **The fabric's device API**: packet headers, `fabric_*` sends, `WorkerToFabricEdmSender`, `FabricConnectionManager`, `RoutingPlaneConnectionManager`, and the helpers under `tt_metal/fabric/hw/inc/` such as `safe_get_noc_addr`. It is not Device 2.0 surface.
 
   Each sanction covers the call, not its arguments: an address generator, a CB-index free function or a raw program-semaphore address passed into a sanctioned call is still judged on its own.
@@ -615,7 +615,6 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
   |---|---|---|
   | GlobalCircularBuffer | RED / N/A | config-scoped — RED the offending factory, name the clean subset |
   | CBDescriptor `address_offset` (non-zero) | RED / N/A | runtime-team consultation (verbatim message) |
-  | GlobalSemaphore address outside the device object | RED / N/A | name what the address reaches @ `file:line` |
   | GlobalSemaphore in a compute kernel | RED / N/A | |
   | Caller GlobalSemaphore not re-applied on a cache hit | RED / N/A | routed to the op owner |
   | Fabric mux | RED / N/A | a mux-or-direct factory is RED whole |
@@ -823,22 +822,6 @@ Do not invent a workaround. Do not propose an alternative implementation. Do not
 - Python op authors using the nanobind-exposed `address_offset` parameter on `CBDescriptor` (`ttnn/cpp/ttnn-nanobind/program_descriptors.cpp`).
 
 If you find no concrete non-zero usage in the op being ported, this rule is green — that is the expected outcome for most ops today.
-
-### GlobalSemaphore address used outside the device object — UNSUPPORTED
-
-**Status**: Not yet supported. A `GlobalSemaphore` itself ports (see [Porting CCL ops](../shared/ccl_port.md#globalsemaphores)): the kernel binds it and uses the device object's methods, which cover the local and same-chip `noc_semaphore_*` primitives exactly. The device object has **no address accessor**, so a kernel that hands the semaphore's address, or a NoC address built from it, to anything else has no Metal 2.0 form. It would clear with a NoC-address getter on the device object (the analog of `TensorAccessor::get_noc_addr`), which does not exist today.
-
-**Recognition — definitely this feature** (refuse and report): in any kernel the factory binds, the GlobalSemaphore's address (the runtime arg fed from the host's `semaphore.address()`), or a NoC address built from it with `get_noc_addr` / `safe_get_noc_addr`, reaches:
-- a fabric packet header: `to_noc_unicast_atomic_inc(...)`, a `NocUnicastAtomicIncCommandHeader{...}` or `NocUnicastAtomicIncFusedCommandHeader{...}`, a scatter-write header;
-- a `fabric_*` call (`fabric_unicast_noc_unicast_atomic_inc`, `fabric_multicast_*_atomic_inc*`, `*_set_state`, `*_with_state`, `*_fused_*`);
-- a helper, in the op directory or outside it, e.g. `perform_atomic_fabric_write`, `fused_write_atomic_and_advance_local_read_address_for_fabric_write` (`ccl/common/kernels/minimal_ccl_common.hpp`);
-- arithmetic, a struct field, a comparison, or any call not in the [device-object table](../shared/ccl_port.md#kernel-side-the-device-object).
-
-**Recognition — false-positive guard**: the primitives in the device-object table (`noc_semaphore_wait` / `_wait_min` / `_set`, a read through the pointer, `noc_semaphore_inc` to another core on the same chip, the multicast set/inc with the semaphore as its own source) port. A **program** semaphore's address (`get_semaphore(id)`) in a packet header is a different construct and not this entry.
-
-**Action**: STOP at ProgramFactory granularity. Name each site `file:line` and say what the address reaches. Nearly every CCL writer kernel matches, so expect this to be the gate that fires.
-
-**Examples in the wild**: `experimental/ccl/all_to_all_async/device/kernels/interleaved_all_to_all_writer.cpp` (packet header and `perform_atomic_fabric_write`), `experimental/ccl/slice_reshard_async/device/kernels/minimal_default_writer.cpp`, `experimental/ccl/neighbor_pad_async/device/kernels/minimal_default_writer.cpp` (`*_with_state`).
 
 ### GlobalSemaphore in a compute kernel — UNSUPPORTED
 
