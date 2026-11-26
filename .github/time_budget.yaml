@@ -450,7 +450,8 @@ models:
     bh_galaxy: 470
     # 2385 -> 2463 (+78, PR #64830): K3.1 synthetic suite 47 (traced DSA replay 12 of it), K3.1 L24 / L24-128k
     # depth 45, K3 / K3.1 KV table rows 2 (94 min, 16 of it from existing headroom).
-    bh_sc1: 2463
+    # 2463 -> 2469 (+6): the Kimi-K3 KDA section bound 18 -> 24 min (18.1 min measured with an empty kernel cache).
+    bh_sc1: 2469
     bh_sc1_high_power: 500
     bh_sc4: 60
     wh_n150: 500
