@@ -31,9 +31,9 @@ void bind_sharded_to_interleaved(nb::module_& mod) {
         has the input's shape, layout and values. `output_dtype` converts a TILE input to another dtype.
 
         Args:
-            input_tensor (ttnn.Tensor): the sharded input tensor, see Memory Support. A TILE input must have 32x32 tiles. For a ROW_MAJOR input, the shard width in bytes must be a multiple of 16.
+            input_tensor (ttnn.Tensor): the input tensor, sharded with a 2D shard spec as Memory Support lists. A TILE input must have 32x32 tiles. For a ROW_MAJOR input, the shard width in bytes must be a multiple of 16.
             memory_config (ttnn.MemoryConfig, optional): interleaved memory configuration of the output, see Memory Support. Defaults to `None`, which gives an interleaved DRAM output.
-            output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. A TILE input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN when the dtype changes.
+            output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. A TILE input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN or -0.0 when the dtype changes.
 
         Returns:
             ttnn.Tensor: the interleaved output tensor, with the input's shape and layout.

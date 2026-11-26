@@ -307,9 +307,12 @@ def test_sharded_to_interleaved_docstring_blackhole_inputs(
     def read(tensor):
         return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
 
-    torch.manual_seed(0)
     interleaved = ttnn.from_torch(
-        torch.randn(_S2I_SHAPE) * 8, dtype=dtype, layout=layout, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        full_range_input(_S2I_SHAPE, dtype),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     input_tensor = ttnn.to_memory_config(interleaved, _s2i_sharded_memory_config(memory_layout, buffer_type))
     expected = read(interleaved)
