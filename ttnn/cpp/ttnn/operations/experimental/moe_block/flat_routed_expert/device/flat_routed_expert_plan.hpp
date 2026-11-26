@@ -57,10 +57,14 @@ struct FlatRoutedExpertPlan {
     bool gate_up_row_passes = false;     // gate/up runs a sub-block's K-blocks once a row tile (the x ring holds them)
     uint32_t sub_blocks_per_expert = 1;  // the capacity's sub-blocks (m rounded up to whole sub-blocks)
     uint32_t sub_blocks_per_chip = 1;    // experts_per_chip x sub_blocks_per_expert
-    uint32_t gate_up_k_blocks = 1;       // K-blocks (kKBlk tiles) over H
+    // K split: the gate/up cores of a column group split H's K-blocks in gate_up_k_split parts (1: none). Core j of
+    // weight slot r computes column group r x column_groups_per_weight_slot + j / k_split over K part j % k_split;
+    // the parts of a column group are partners (adjacent cores, one weight slot) that exchange their partial sums.
+    uint32_t gate_up_k_split = 1;
+    uint32_t gate_up_k_blocks = 1;       // K-blocks (kKBlk tiles) a gate/up core: over H / gate_up_k_split
     uint32_t weight_block_tiles = 1;     // a gate/up weight block: kKBlk x gate_up_weight_tiles_per_row
     uint32_t column_groups_per_weight_slot = 1;  // gate/up column groups a weight slot holds
-    uint32_t gate_up_cores_per_weight_slot = 1;  // gate/up cores reading a weight slot (as many as its column groups)
+    uint32_t gate_up_cores_per_weight_slot = 1;  // gate/up cores reading a weight slot (its column groups x k_split)
     uint32_t gate_up_weight_ring_blocks = 1;     // the gate/up weight ring: 2 expert slices (K-blocks)
     // half-width gate / up tiles (16-column units): a unit's weight tile holds [gate | up] of 16 columns (the
     // activation runs face-wise, glu_faces.hpp)

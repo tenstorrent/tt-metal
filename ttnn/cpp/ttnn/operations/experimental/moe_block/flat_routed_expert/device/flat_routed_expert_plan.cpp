@@ -66,8 +66,11 @@ uint32_t exp_env(const char* name) {
     return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
 }
 
-std::pair<uint32_t, bool> gu_dst(uint32_t np, uint32_t ht, uint32_t x_slots, bool units = false) {
-    // (np: the gate/up width in pairs; a units width w is w / 2 rounded up)
+std::pair<uint32_t, bool> gu_dst(uint32_t np, uint32_t ht, uint32_t x_slots, bool units = false, uint32_t ks = 1) {
+    // (np: the gate/up width in pairs; a units width w is w / 2 rounded up; ht: a core's K tiles (H / k split))
+    if (ks > 1) {  // (K split: a core of 2 pairs, one row tile a pass; the sub-block keeps MT_MAX row tiles)
+        return {MT_MAX * 2 * np, true};
+    }
     if (exp_env("FLAT_NO_ROW_PASSES") == 1) {
         return {4, false};
     }
@@ -290,12 +293,22 @@ FlatRoutedExpertPlan make_plan(
     bool found = false;
     const uint32_t tiles = 2 * p.intermediate_tiles, slots = p.dram_banks;
     TT_FATAL(slots >= 1, "flat_routed_expert: no DRAM banks");
-    for (uint32_t per = (tiles + 63) / 64; per <= 8 && !found; ++per) {
+    // (MEASUREMENT / WIP: FLAT_KS=2 - the K split, gate_up_k_split; pairs only)
+    const uint32_t ks = std::max(1u, exp_env("FLAT_KS"));
+    TT_FATAL(ks == 1 || ks == 2, "flat_routed_expert: k split {} (1 or 2)", ks);
+    p.gate_up_k_split = ks;
+    const uint32_t kt_core = p.hidden_tiles / ks;  // (a core's K tiles)
+    TT_FATAL(
+        p.hidden_tiles % (ks * kKBlk) == 0, "flat_routed_expert: H tiles {} over a k split {}", p.hidden_tiles, ks);
+    for (uint32_t per = (tiles * ks + 63) / 64; per <= 8 && !found; ++per) {
         if (tiles % per != 0 || (tiles / per) % slots != 0) {
             continue;
         }
         const uint32_t np = per / 2;
         const bool pairs = per % 2 == 0 && p.intermediate_tiles % np == 0 && (p.intermediate_tiles / np) % slots == 0;
+        if (ks > 1 && (!pairs || np % ks != 0)) {
+            continue;  // (the K split: whole pairs, each part ending with np / k_split h tiles)
+        }
         // (x_ring: a given ring size - the plan search grows the ring past a sub-block, below)
         std::vector<uint32_t> ring_sizes = {24u, 16u, 12u};
         if (x_ring != 0) {
@@ -303,11 +316,10 @@ FlatRoutedExpertPlan make_plan(
         }
         for (uint32_t xs : ring_sizes) {
             const uint32_t dst =
-                pairs ? gu_dst(np, p.hidden_tiles, xs).first : gu_dst((per + 1) / 2, p.hidden_tiles, xs, true).first;
+                pairs ? gu_dst(np, kt_core, xs, false, ks).first : gu_dst((per + 1) / 2, kt_core, xs, true).first;
             const uint32_t mt_ = std::min(dst / per, mt_max);
             // (a gate/up core's arena: the weight ring and the x ring)
-            if (mt_ >= 1 &&
-                2 * p.hidden_tiles * per * p.weight_tile_bytes + xs * mt_ * kKBlk * p.x_tile_bytes <= budget) {
+            if (mt_ >= 1 && 2 * kt_core * per * p.weight_tile_bytes + xs * mt_ * kKBlk * p.x_tile_bytes <= budget) {
                 p.gate_up_pairs_per_core = pairs ? np : 0;
                 p.units_per_core = pairs ? 0 : per;
                 p.half_width_gate_up = !pairs;
@@ -325,15 +337,15 @@ FlatRoutedExpertPlan make_plan(
         2 * p.intermediate_tiles,
         slots);
     p.gate_up_weight_tiles_per_row = p.units_per_core ? p.units_per_core : 2 * p.gate_up_pairs_per_core;
-    p.h_tiles_per_core = p.units_per_core ? (p.units_per_core + 1) / 2 : p.gate_up_pairs_per_core;
+    p.h_tiles_per_core = p.units_per_core ? (p.units_per_core + 1) / 2 : p.gate_up_pairs_per_core / ks;
     p.column_groups = p.units_per_core ? 2 * p.intermediate_tiles / p.units_per_core
                                        : p.intermediate_tiles / p.gate_up_pairs_per_core;
     // A split of fewer gate/up cores than the fixed rectangles' 64 (V4.1-Flash: 48), or units not exactly 64: shape the
     // rectangles to the split, so the cores left over do down work
-    const bool auto_shape = p.column_groups < 64 || (p.units_per_core && p.column_groups != 64);
+    const bool auto_shape = p.column_groups * ks < 64 || (p.units_per_core && p.column_groups != 64);
     if (auto_shape) {  // rectangles of exactly the split's cores (aw columns x hA + bw columns x hB)
         const uint32_t aw_max = east0 - a_x0, bw_cap = std::min<uint32_t>(4u, uint32_t(grid.x) - b_x0);
-        const uint32_t want = p.column_groups;
+        const uint32_t want = p.column_groups * ks;
         bool shaped = false;
         int best = 1 << 30;
         for (uint32_t aw = 4; aw <= aw_max; ++aw) {
@@ -365,7 +377,7 @@ FlatRoutedExpertPlan make_plan(
         p.gate_up_rectangles = {{2, 5, row0, row0 + 7}, {7, 10, row0, row0 + 7}};
     }
     std::tie(p.gate_up_dst_tiles, p.gate_up_row_passes) =
-        gu_dst((p.gate_up_weight_tiles_per_row + 1) / 2, p.hidden_tiles, p.x_ring_blocks, p.units_per_core != 0);
+        gu_dst((p.gate_up_weight_tiles_per_row + 1) / 2, kt_core, p.x_ring_blocks, p.units_per_core != 0, ks);
     const uint32_t mt_cap = std::min(p.gate_up_dst_tiles / p.gate_up_weight_tiles_per_row, MT_MAX);
     p.row_tiles_per_sub_block = std::min({mt_cap, mt_max, std::max(1u, p.max_tokens_per_expert / 32)});
     // the pieces a gate/up weight block is read as: the most (1 / 2 / 4) of at least 6 KB each. bfp4 16-column-unit
@@ -602,10 +614,10 @@ FlatRoutedExpertPlan make_plan(
     p.gate_up_weight_slots = n_slots;
     p.sub_blocks_per_expert = m_pad / (p.row_tiles_per_sub_block * 32);
     p.sub_blocks_per_chip = p.experts_per_chip * p.sub_blocks_per_expert;
-    p.gate_up_k_blocks = p.hidden_tiles / kKBlk;
+    p.gate_up_k_blocks = p.hidden_tiles / kKBlk / p.gate_up_k_split;
     p.weight_block_tiles = kKBlk * p.gate_up_weight_tiles_per_row;
     p.column_groups_per_weight_slot = p.column_groups / p.gate_up_weight_slots;
-    p.gate_up_cores_per_weight_slot = p.column_groups_per_weight_slot;
+    p.gate_up_cores_per_weight_slot = p.column_groups_per_weight_slot * p.gate_up_k_split;
     TT_FATAL(
         p.column_groups % p.gate_up_weight_slots == 0,
         "flat_routed_expert: {} gate/up column groups over {} weight slots",
@@ -653,24 +665,54 @@ FlatRoutedExpertPlan make_plan(
     // hops from its bank's anchor (the bank's optimal worker core, next to its endpoint) to the core, the direction its
     // reads' responses travel (exact on this chip: harvesting- and routing-aware); all pairs (slot, core) taken nearest
     // first rather than round-robin nearest (which left the last slots 15-21 hops)
+    // Placement units: a core, or with the K split (gate_up_k_split 2) a partner pair - horizontal neighbours across a
+    // rectangle's column pairs, vertical ones in an odd last column - placed together (one weight slot, one bank), in
+    // K part order. A unit's hops: its cores' sum. (per_slot holds unit indices.)
+    std::vector<std::vector<uint32_t>> units;
+    if (p.gate_up_k_split == 1) {
+        for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
+            units.push_back({ci});
+        }
+    } else {
+        std::map<std::pair<uint32_t, uint32_t>, uint32_t> at;
+        for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
+            at[{gu_all[ci].x, gu_all[ci].y}] = ci;
+        }
+        for (const auto& [x0, x1, y0, y1] : p.gate_up_rectangles) {
+            const uint32_t w = x1 - x0 + 1;
+            for (uint32_t i = 0; i < w / 2; ++i) {
+                const uint32_t x = x0 + 2 * i;
+                for (uint32_t y = y0; y <= y1; ++y) {
+                    units.push_back({at.at({x, y}), at.at({x + 1, y})});
+                }
+            }
+            if (w % 2 == 1) {
+                for (uint32_t y = y0; y + 1 <= y1; y += 2) {
+                    units.push_back({at.at({x1, y}), at.at({x1, y + 1})});
+                }
+            }
+        }
+    }
+    const uint32_t units_per_slot = p.column_groups_per_weight_slot;
     std::vector<std::vector<uint32_t>> per_slot(n_slots);
-    std::vector<bool> placed(gu_all.size(), false);
+    std::vector<bool> placed(units.size(), false);
     {
         const auto coord = flat_reference_coord(mesh_device);
         std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> pairs;  // (hops, slot, core)
         for (uint32_t r = 0; r < n_slots; ++r) {
             const Core anchor = opt.at(r);
-            for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
-                pairs.emplace_back(
-                    tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                        &mesh_device, coord, anchor, gu_all[ci], tt::tt_metal::NOC::NOC_0),
-                    r,
-                    ci);
+            for (uint32_t u = 0; u < units.size(); ++u) {
+                uint32_t h = 0;
+                for (uint32_t ci : units[u]) {
+                    h += tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                        &mesh_device, coord, anchor, gu_all[ci], tt::tt_metal::NOC::NOC_0);
+                }
+                pairs.emplace_back(h, r, u);
             }
         }
         std::sort(pairs.begin(), pairs.end());
         for (const auto& [h, r, ci] : pairs) {
-            if (!placed[ci] && per_slot[r].size() < p.gate_up_cores_per_weight_slot) {
+            if (!placed[ci] && per_slot[r].size() < units_per_slot) {
                 per_slot[r].push_back(ci);
                 placed[ci] = true;
             }
@@ -680,10 +722,12 @@ FlatRoutedExpertPlan make_plan(
         // every core waits for the whole expert, so the slowest bank paces the call, and nearest-first leaves the last
         // bank all the far cores the other banks did not take; min-max shares them out. The slots keep their cores'
         // count, so the weight layout does not change - only which core reads which slot.
-        std::vector<std::vector<uint32_t>> H(n_slots, std::vector<uint32_t>(gu_all.size()));
+        std::vector<std::vector<uint32_t>> H(n_slots, std::vector<uint32_t>(units.size()));
         for (uint32_t r = 0; r < n_slots; ++r) {
-            for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
-                H[r][ci] = bank_hops(r, gu_all[ci]);
+            for (uint32_t u = 0; u < units.size(); ++u) {
+                for (uint32_t ci : units[u]) {
+                    H[r][u] += bank_hops(r, gu_all[ci]);
+                }
             }
         }
         auto sum = [&](uint32_t r) {
@@ -732,13 +776,17 @@ FlatRoutedExpertPlan make_plan(
             std::swap(per_slot[w][bi], per_slot[bs][bj]);
         }
     }
+    std::vector<bool> used(gu_all.size(), false);
     for (uint32_t r = 0; r < n_slots; ++r) {
-        for (uint32_t ci : per_slot[r]) {
-            p.gate_up_cores.push_back(gu_all[ci]);
+        for (uint32_t u : per_slot[r]) {
+            for (uint32_t ci : units[u]) {  // (K part order: core j of the slot is part j % k_split)
+                p.gate_up_cores.push_back(gu_all[ci]);
+                used[ci] = true;
+            }
         }
     }
     for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
-        if (!placed[ci]) {
+        if (!used[ci]) {
             p.idle_gate_up_cores.push_back(gu_all[ci]);
         }
     }
@@ -824,7 +872,7 @@ FlatRoutedExpertPlan make_plan(
     p.down_arena_bytes = dn_bytes;
     p.relay_arena_bytes = relay_bytes;
     p.relay_stride = 1 + p.helper_relays_per_primary;
-    p.gate_up_weight_region_bytes = p.experts_per_chip * p.gate_up_k_blocks * p.column_groups_per_weight_slot *
+    p.gate_up_weight_region_bytes = p.experts_per_chip * p.gate_up_k_blocks * p.gate_up_cores_per_weight_slot *
                                     p.weight_block_tiles * p.weight_tile_bytes;
     // The down cores' weight blocks: each core's dram_banks positions (block k at position k % banks) in the bank(s)
     // nearest it, every bank the same down bytes (columns x positions). The down reads' rate is set by their NOC0

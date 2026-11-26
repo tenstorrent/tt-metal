@@ -57,10 +57,11 @@ def flat_weight_regions(W_l, lay):
     """One device's weights in the plan's per-core bank regions. W_l: per local expert (Wg [H, I], Wu [H, I],
     Wd [I, H]); lay: the plan's as_dict(). Returns (gate/up regions per weight slot, down regions per bank and down
     core), each a list of equal-size [tiles, 32, 32]:
-    * weight slot r (one a DRAM bank: bank_sharded puts it in bank r): per expert, per K-block of KBLK tiles, its
-      column_groups_per_weight_slot column groups' blocks (group r * column_groups_per_weight_slot + group):
-      [KBLK x (gate, up) x gate_up_pairs_per_core] tile pairs, or with 16-column units units_per_core unit tiles
-      [gate | up] of 16 columns each;
+    * weight slot r (one a DRAM bank: bank_sharded puts it in bank r): per expert, per K-block of KBLK tiles of a
+      core (gate_up_k_blocks of them), its gate_up_cores_per_weight_slot cores' blocks - core j: column group
+      r * column_groups_per_weight_slot + j // KS over K part j % KS (KS = gate_up_k_split; its K-block c is H's
+      K-block (j % KS) * gate_up_k_blocks + c): [KBLK x (gate, up) x gate_up_pairs_per_core] tile pairs, or with
+      16-column units units_per_core unit tiles [gate | up] of 16 columns each;
     * down core d: per expert, per K-block of down_k_block_tiles(down_columns_per_core[d]) tiles, its
       [K-block x down_columns_per_core[d]] columns from down_first_columns[d], over the banks of its bank pattern
       (down_bank_patterns[d]: block k at position k % dram_banks, the bank(s) nearest the core) from its slot
@@ -74,14 +75,18 @@ def flat_weight_regions(W_l, lay):
     T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]
     it = W_l[0][0].shape[1] // 32
     RG, NP = lay["column_groups_per_weight_slot"], lay["gate_up_pairs_per_core"]
+    KS = lay.get("gate_up_k_split", 1)
+    CPS, KB = lay.get("gate_up_cores_per_weight_slot", RG), lay["gate_up_k_blocks"]
+    assert KS == 1 or not nu, "the K split takes whole gate / up pairs"
     regions = []
     for r in range(lay["gate_up_weight_slots"]):
         p0 = r * RG
         blocks = []
         for e_, (Wg_t, Wu_t, _) in enumerate(T_l):
-            for c in range(lay["gate_up_k_blocks"]):
-                ks = slice(c * KBLK, (c + 1) * KBLK)
-                for pl in range(RG):
+            for c in range(KB):
+                for j in range(CPS):
+                    pl, kc = j // KS, (j % KS) * KB + c  # (the core's column group in the slot, its H K-block)
+                    ks = slice(kc * KBLK, (kc + 1) * KBLK)
                     if nu:
                         Ut = U_l[e_]
                         units = range((p0 + pl) * nu, (p0 + pl + 1) * nu)

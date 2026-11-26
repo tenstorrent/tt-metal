@@ -52,6 +52,8 @@ nb::dict plan_dict(const FlatRoutedExpertPlan& p) {
     d["row_tiles_per_sub_block"] = p.row_tiles_per_sub_block;
     d["x_ring_blocks"] = p.x_ring_blocks;
     d["column_groups_per_weight_slot"] = p.column_groups_per_weight_slot;
+    d["gate_up_cores_per_weight_slot"] = p.gate_up_cores_per_weight_slot;
+    d["gate_up_k_split"] = p.gate_up_k_split;
     d["units_per_core"] = p.units_per_core;
     d["gate_up_k_blocks"] = p.gate_up_k_blocks;
     d["down_core_count"] = p.down_cores.size();

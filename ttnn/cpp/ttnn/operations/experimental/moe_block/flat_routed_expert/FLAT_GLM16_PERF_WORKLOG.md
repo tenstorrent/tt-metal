@@ -132,6 +132,26 @@ FLAT_DN_NOC_SWAP=1 (down weight reads on NOC1, the h chain / y on NOC0; each RIS
 stalls everything (gate/up h wait 818 us). With the chains ordered by NOC0 hops: 821.7 / 1084.3 / 1469.3, still worse
 than 796.6 / 1055.9 / 1364.2. Not kept.
 
+## K split (WIP): gate/up K over partner cores
+
+Prior art: moe_fused_swiglu (main: K over KGROUPS grid rows, gate / up partials reduce-scattered per column on both
+NOCs, distributed SwiGLU) and ws_expert (mstaletovic/ep4-glx WORKLOG, 2026-11-16/17: 10 x 2 groups, x only to the
+partner, bf16 partials reduce-scattered down the column; fold + SwiGLU ~540 cyc a row, compute ceiling ~76%).
+Bench (one core, cyc a 32-row tile of gate/up work, 384 tile matmuls; kernels in the session scratch): today 1 pair x
+K 192 (custom_mm 2 x 2) 6173; K split 2 pairs x K 96 (custom_mm 1 x 4) 6164; + the fold of the partner's 2 partial
+tiles (dest-reuse add) + re-init + packing 2 partials and 1 h tile 6378 (+3.3%, ~+27 us at M 320). x a core halves
+(~33 -> ~16.5 MB a call at M 320), the partial exchange ~0.65 MB a core each way, one hop.
+
+Step 1 (plan + weight layout, FLAT_KS=2; kernels refuse it yet): gate_up_k_split; GLM-5.3 4x4: 32 column groups of 2
+pairs x 2 K parts = 64 cores, 4 groups / 8 cores a bank slot, 12 K-blocks a core (blocks of 8 K x 4 tiles), MT 4 in 4
+one-row passes. Partners: horizontal neighbours over a rectangle's column pairs, vertical ones in an odd last column
+(all 32 one hop apart), placed in a slot together (nearest-first + min-max on pair units). Core j of slot r: group
+r * groups a slot + j / 2, K part j % 2. Host check: every core's blocks rebuild its Wg / Wu slice exactly, every (K
+block, column) once; KS 1 unchanged (layout identical, GLM 4x4 accuracy / determinism pass).
+
+Next: x per K part (each part's own snake over its cores), the partial exchange + fold in the gate/up kernel, the h
+tile a core (group x 2 + part) into the down layout.
+
 ## NoC placement experiments (after the ablation)
 
 GLM 4x4 uniform, us (baseline 796.6 / 1055.9 / 1364.2 at M 80 / 320 / 480):

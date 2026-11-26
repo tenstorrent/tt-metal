@@ -185,6 +185,12 @@ FlatProgramHandles add_flat_routed_expert_program(
     const uint32_t x_bytes = XR * kKBlk * x_tile;  // an x block
     const uint32_t PIN = cfg.pin;
     TT_FATAL(NR == 2, "flat_routed_expert: two gate/up rectangles");
+    // (WIP: the K split's plan and weight layout exist; its kernels - the partners' partial exchange, the x per K
+    // part - do not yet)
+    TT_FATAL(
+        p.gate_up_k_split == 1,
+        "flat_routed_expert: gate_up_k_split {} has no kernels yet (FLAT_KS)",
+        p.gate_up_k_split);
 
     // ---- per-core pieces ----
     std::vector<uint32_t> head_xy, gu_xy;
@@ -686,7 +692,9 @@ FlatProgramHandles add_flat_routed_expert_program(
             for (uint32_t j = 0; j < p.gate_up_cores_per_weight_slot; ++j) {
                 const uint32_t ci = p.gate_up_core_index(r, j);
                 const CoreCoord gc = p.gate_up_cores[ci];
-                const uint32_t cg_ = r * p.column_groups_per_weight_slot + j;  // (the core's column group)
+                // (the core's column group; with the K split core j of the slot is K part j % k_split of group j /
+                // k_split)
+                const uint32_t cg_ = r * p.column_groups_per_weight_slot + j / p.gate_up_k_split;
                 Args a;
                 // the grant counter's semaphore id, column group, chain heads, GATH, h_all, head xy
                 a.lit(GRANT).lit(cg_).lit(head_xy.size()).lit(GATH).a(FlatAddr::Arena, p.down_h_offset);
@@ -701,7 +709,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                 gw.a(FlatAddr::GateUp)
                     .lit(r)
                     .lit(j * p.weight_block_tiles * w_tile)
-                    .lit(p.column_groups_per_weight_slot * p.weight_block_tiles * w_tile)
+                    .lit(p.gate_up_cores_per_weight_slot * p.weight_block_tiles * w_tile)
                     .a(FlatAddr::Arena, 0);
                 add_rt(kr, gc, a);
                 // x ring, predecessor (+ its free word's sem), successor, relay + this core's word there
