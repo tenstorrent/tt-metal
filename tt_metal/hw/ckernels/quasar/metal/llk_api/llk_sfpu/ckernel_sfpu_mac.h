@@ -22,7 +22,8 @@ namespace ckernel::sfpu {
 //
 // The lengths below are the instructions sfpi emits for mac_init()'s two-row body:
 //   6x SFPLOAD, 2x SFPMAD, [2x SFPSTOCHRND for bf16,] 2x SFPSTORE
-// Two rows per record, so each row's SFPMAD -> store chain fills the other's latency.
+// Row 1's SFPMAD (and rounding) fills row 0's SFPMAD -> store gap. Row 1's store advances Dest
+// through ADDR_MOD_6, so it must stay the last Dest access in the record.
 // The count is therefore a property of what sfpi emits for this arch, not of the source
 // below - if mac_init()'s body changes, or sfpi changes how it schedules the block,
 // re-check these against the generated kernel's disassembly.
@@ -30,6 +31,11 @@ inline constexpr int MAC_REPLAY_SLOT = 0;
 template <bool is_fp32_dest_acc_en>
 inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 10 : 12;
 
+/**
+ * @brief Program ADDR_MOD_6 and record the two-row replay body for @ref calculate_mac.
+ * @note Run it after any other SFPU op's init and immediately before calculate_mac: ADDR_MOD_6 and the
+ *       replay slots are shared with other ops.
+ */
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
 inline void mac_init() {
     // The second row's SFPSTORE of the recorded body advances Dest past both rows.

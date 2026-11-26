@@ -177,7 +177,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*only the SFPU result tile*/);
+    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
 
     // Declare the same dvalid client chain that UNPACK and MATH use.
     if constexpr (unpack_to_dest)

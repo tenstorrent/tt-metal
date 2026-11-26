@@ -50,6 +50,8 @@ _TENSIX_MNEMONICS = {
     0x84: "sfpmad",
     0x8E: "sfpstochrnd",
 }
+# MAC_REPLAY_SLOT of ckernel_sfpu_mac.h.
+_MAC_REPLAY_SLOT = 0
 # mac_init's two-row replay body; ckernel_sfpu_mac.h states the same counts as mac_replay_len.
 _MAC_RECORD_BODY = {
     DestAccumulation.Yes: Counter(sfpload=6, sfpmad=2, sfpstore=2),
@@ -117,13 +119,19 @@ def _tensix_instructions(math_elf) -> list:
 
 
 def _mac_record_windows(math_elf) -> list:
-    """(length, mnemonics) of every recording replay in the math ELF. A recording replay captures
-    the next ``length`` Tensix instructions."""
+    """(length, mnemonics) of every recording mac_init makes in the math ELF: a load-mode replay at
+    MAC_REPLAY_SLOT that does not execute while loading. It captures the next ``length`` Tensix
+    instructions."""
     tensix = _tensix_instructions(math_elf)
     windows = []
     for index, word in enumerate(tensix):
-        # TTREPLAY: load_mode is bit 0, the length bits 4..13.
-        if _TENSIX_MNEMONICS.get(word >> 24) != "ttreplay" or not word & 0x1:
+        if _TENSIX_MNEMONICS.get(word >> 24) != "ttreplay":
+            continue
+        # TTREPLAY: load_mode is bit 0, execute_while_loading bit 1, the length bits 4..13 and the
+        # start slot bits 14..23. A recording the compiler adds on its own executes while loading.
+        load_mode, execute_while_loading = word & 0x1, (word >> 1) & 0x1
+        start = (word >> 14) & 0x3FF
+        if not load_mode or execute_while_loading or start != _MAC_REPLAY_SLOT:
             continue
         length = (word >> 4) & 0x3FF
         body = [
