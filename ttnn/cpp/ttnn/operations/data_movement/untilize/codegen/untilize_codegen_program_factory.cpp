@@ -9,7 +9,7 @@
 #include <utility>
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
@@ -49,14 +49,18 @@ using untilize_codegen_detail::planning_tile_size;
 // byte size (a no-op for every in-scope tile size, each already a multiple of every supported
 // arch's DRAM alignment, but computed from the real device rather than a hardcoded arch
 // constant).
-uint32_t aligned_tile_page_size(uint32_t tile_bytes) {
-    uint32_t align = tt::tt_metal::hal::get_dram_alignment();
+uint32_t aligned_tile_page_size(uint32_t tile_bytes, uint32_t align) {
     return ((tile_bytes + align - 1) / align) * align;
 }
 
 CBDescriptor make_tile_cb(
-    uint32_t cb_id, tt::DataFormat fmt, uint32_t depth, uint32_t tile_bytes, const CoreRangeSet& cores) {
-    uint32_t page = aligned_tile_page_size(tile_bytes);
+    uint32_t cb_id,
+    tt::DataFormat fmt,
+    uint32_t depth,
+    uint32_t tile_bytes,
+    const CoreRangeSet& cores,
+    uint32_t dram_alignment) {
+    uint32_t page = aligned_tile_page_size(tile_bytes, dram_alignment);
     return CBDescriptor{
         .total_size = depth * page,
         .core_ranges = cores,
@@ -109,6 +113,7 @@ struct CommonArgs {
     uint32_t out_elem_size;
     bool fp32;
     uint32_t max_bct;
+    uint32_t dram_alignment;
     // Live L1 headroom, sampled once in create_descriptor -- see kUsableL1Note.
     uint64_t usable_l1;
 };
@@ -137,8 +142,9 @@ std::optional<ProgramDescriptor> build_main_split(const CommonArgs& a, uint32_t 
     uint32_t row_size_bytes = wt * TILE_WIDTH * a.out_elem_size;
 
     ProgramDescriptor desc;
-    desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, plan.cb_in_depth, a.in_tile_size, core_range));
-    desc.cbs.push_back(make_tile_cb(kCbOut, a.out_fmt, plan.cb_out_depth, a.out_tile_size, core_range));
+    desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, plan.cb_in_depth, a.in_tile_size, core_range, a.dram_alignment));
+    desc.cbs.push_back(
+        make_tile_cb(kCbOut, a.out_fmt, plan.cb_out_depth, a.out_tile_size, core_range, a.dram_alignment));
 
     KernelDescriptor reader = make_reader(core_range, a.in_buf, plan.read_batch);
 
@@ -198,8 +204,9 @@ std::optional<ProgramDescriptor> build_column_parallel(const CommonArgs& a, uint
     uint32_t full_stick_size = wt * TILE_WIDTH * a.out_elem_size;
 
     ProgramDescriptor desc;
-    desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, plan.cb_in_depth, a.in_tile_size, core_range));
-    desc.cbs.push_back(make_tile_cb(kCbOut, a.out_fmt, plan.cb_out_depth, a.out_tile_size, core_range));
+    desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, plan.cb_in_depth, a.in_tile_size, core_range, a.dram_alignment));
+    desc.cbs.push_back(
+        make_tile_cb(kCbOut, a.out_fmt, plan.cb_out_depth, a.out_tile_size, core_range, a.dram_alignment));
 
     KernelDescriptor reader = make_reader(core_range, a.in_buf, plan.read_batch);
 
@@ -269,8 +276,9 @@ std::optional<ProgramDescriptor> build_2d_column(
     uint32_t col_chunk_bytes = tpc * TILE_WIDTH * a.out_elem_size;
 
     ProgramDescriptor desc;
-    desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, plan.cb_in_depth, a.in_tile_size, core_range));
-    desc.cbs.push_back(make_tile_cb(kCbOut, a.out_fmt, plan.cb_out_depth, a.out_tile_size, core_range));
+    desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, plan.cb_in_depth, a.in_tile_size, core_range, a.dram_alignment));
+    desc.cbs.push_back(
+        make_tile_cb(kCbOut, a.out_fmt, plan.cb_out_depth, a.out_tile_size, core_range, a.dram_alignment));
 
     KernelDescriptor reader = make_reader(core_range, a.in_buf, plan.read_batch);
 
@@ -353,8 +361,8 @@ std::optional<ProgramDescriptor> build_with_unpadding(
     // dtype that is already RM-representable (bf16, int32, uint32; bf8_b has no RM form and is
     // cast to bf16 before it could reach this builder), so in and out CBs are the same dtype here,
     // unlike build_untilize_tile's bf8_b->bf16 repack.
-    desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, plan.cb_in_depth, a.in_tile_size, core_range));
-    desc.cbs.push_back(make_tile_cb(kCbOut, a.in_fmt, plan.cb_out_depth, a.in_tile_size, core_range));
+    desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, plan.cb_in_depth, a.in_tile_size, core_range, a.dram_alignment));
+    desc.cbs.push_back(make_tile_cb(kCbOut, a.in_fmt, plan.cb_out_depth, a.in_tile_size, core_range, a.dram_alignment));
 
     KernelDescriptor reader = make_reader(core_range, a.in_buf, plan.read_batch);
 
@@ -423,6 +431,7 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
 
     CommonArgs a{};
     a.device = input.device();
+    a.dram_alignment = tt::tt_metal::experimental::get_device_properties(*a.device).dram_alignment();
     DataType in_dtype = input.dtype();
     DataType out_dtype = output.dtype();
     a.fp32 = needs_dst_accum(in_dtype);

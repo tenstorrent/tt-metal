@@ -4,7 +4,7 @@
 
 #include "fold_device_op.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-metalium/utils/math.hpp>
 
@@ -57,9 +57,11 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     uint32_t pixels_per_dst_row = stride_h * width;
 
     // validate_fold keeps a row-major output in the input's dtype, so one element size covers both sides.
-    const uint32_t aligned_pixel_size = tt::align(shard_shape[1] * input.element_size(), hal::get_l1_alignment());
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*input.device()).node_local_mem_alignment();
+    const uint32_t aligned_pixel_size = tt::align(shard_shape[1] * input.element_size(), l1_alignment);
     const uint32_t aligned_dst_pixel_size =
-        tt::align(output.shard_spec()->shape[1] * input.element_size(), hal::get_l1_alignment());
+        tt::align(output.shard_spec()->shape[1] * input.element_size(), l1_alignment);
     TT_FATAL(
         stride_h * stride_w * pixel_size <= aligned_dst_pixel_size,
         "Fold (fast path): an output pixel ({} B) cannot hold {} input pixels of {} B.",

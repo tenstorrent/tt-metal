@@ -8,7 +8,7 @@
 #include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/mesh/allocator.hpp>
@@ -218,7 +218,8 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     // NOC transactions need to be aligned.
     // So, for bfloat16 dtype, we need at least 16/32 units per core (depending on alignment) to avoid unaligned
     // accesses.
-    const auto alignment = src_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
+    const auto props = tt::tt_metal::experimental::get_device_properties(device);
+    const auto alignment = src_is_dram ? props.dram_alignment() : props.node_local_mem_alignment();
     const auto min_red_dim_units_per_core = alignment / sizeof(bfloat16);
 
     // More cores shrink the scan but grow the serial merge, so cap near sqrt(scan_units)/2, rounded up to a pow2.

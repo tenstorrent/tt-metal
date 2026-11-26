@@ -12,7 +12,7 @@
 #include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 
@@ -122,7 +122,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
     CoreRangeSet default_grid(default_cores);
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(*device).dram_alignment();
 
     // `block_plan` reads live L1 occupancy. This runs only on a program-cache miss, and
     // compute_program_hash keys on `block_l1_fit`, so a hit never replays a plan sized for other L1.

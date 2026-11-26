@@ -49,7 +49,8 @@ std::optional<TileMappedLayout> tile_mapped_layout(
     uint32_t element_bytes,
     uint32_t tile_bytes,
     uint32_t num_cores,
-    uint64_t l1_budget);
+    uint64_t l1_budget,
+    uint32_t dram_alignment);
 
 // Whether the map for this reshape is within its size caps, i.e. tile_mapped_layout returns a layout for some budget.
 // Decided from a closed-form bound on segments per tile when that bound fits the caps, else by planning (memoized).
@@ -58,7 +59,8 @@ bool tile_mapped_within_caps(
     const ttnn::Shape& out_shape,
     uint32_t element_bytes,
     uint32_t tile_bytes,
-    uint32_t num_cores);
+    uint32_t num_cores,
+    uint32_t dram_alignment);
 
 // The full plan for a layout tile_mapped_layout returned with the same shapes, sizes and core count.
 TileMappedPlan build_tile_mapped_plan(
@@ -67,10 +69,12 @@ TileMappedPlan build_tile_mapped_plan(
     uint32_t element_bytes,
     uint32_t tile_bytes,
     uint32_t num_cores,
-    bool sliced);
+    bool sliced,
+    uint32_t dram_alignment);
 
 // Input CB depth (8, 4 or 1) that fits `l1_budget` beside one map page and one scratch tile, 0 when nothing fits.
 // The unsliced layout at depth 1 never needs more L1 than native's tiled reshape of the same shapes.
-uint32_t tile_mapped_input_depth(const TileMappedLayout& layout, uint32_t tile_bytes, uint64_t l1_budget);
+uint32_t tile_mapped_input_depth(
+    const TileMappedLayout& layout, uint32_t tile_bytes, uint64_t l1_budget, uint32_t dram_alignment);
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

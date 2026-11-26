@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <variant>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 using namespace tt::tt_metal;
 
@@ -396,7 +397,10 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     TT_FATAL(ttnn::is_device_tensor(input_tensor), "Unary: Unexpected tensor type {}", input_tensor.storage_type());
 
     const auto output_spec = compute_output_specs(attributes, tensor_args);
-    const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec);
+    const auto shard_specs = get_shard_specs(
+        input_tensor.tensor_spec(),
+        output_spec,
+        tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment());
     std::optional<uint32_t> src_shard_vol = std::nullopt;
     std::optional<uint32_t> dst_shard_vol = std::nullopt;
     if (shard_specs.has_value()) {

@@ -155,10 +155,12 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(attributes.sparse_grad == false, "Sparse gradient is not supported yet.");
 
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
-        auto check_shard_row = [](const TensorSpec& spec, uint32_t element_size, const char* role) {
+        const auto& device = *tensor_args.input_tensor.device();
+        auto check_shard_row = [&device](const TensorSpec& spec, uint32_t element_size, const char* role) {
             TT_FATAL(
-                !ttnn::operations::data_movement::has_subaligned_shard_row(spec.memory_config(), element_size) &&
-                    !ttnn::operations::data_movement::needs_interleaved_row_staging(spec),
+                !ttnn::operations::data_movement::has_subaligned_shard_row(
+                    device, spec.memory_config(), element_size) &&
+                    !ttnn::operations::data_movement::needs_interleaved_row_staging(device, spec),
                 "gather: ROW_MAJOR {} sharding (shard row of {} B) can't be moved by the native kernels: the shard "
                 "row is not a multiple of the buffer alignment, or the shard is one row high across several shard "
                 "columns. Reach this op through ttnn::gather, which moves such tensors to interleaved memory, rather "

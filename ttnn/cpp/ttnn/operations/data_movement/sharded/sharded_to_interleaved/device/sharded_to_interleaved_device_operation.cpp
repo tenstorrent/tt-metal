@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
@@ -60,7 +60,8 @@ std::pair<bool, std::string> ShardedToInterleavedDeviceOperation::validate_input
             "instead."};
     }
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        uint32_t l1_alignment = hal::get_l1_alignment();
+        uint32_t l1_alignment =
+            tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment();
         if ((*input_tensor.memory_config().shard_spec()).shape[1] * input_tensor.element_size() % l1_alignment != 0) {
             return {false, fmt::format("Shard page size must be aligned to {}B for L1 Tensor", l1_alignment)};
         }

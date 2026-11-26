@@ -6,7 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 using namespace tt::tt_metal;
 
@@ -39,7 +39,9 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
     }
 
     if (args.input_dtype != DataType::BFLOAT8_B && args.input_dtype != DataType::BFLOAT4_B) {
-        if ((shard_spec.shape[1] * tt::datum_size(act_df)) % hal::get_l1_alignment() != 0) {
+        const uint32_t l1_alignment =
+            tt::tt_metal::experimental::get_device_properties(*input.device()).node_local_mem_alignment();
+        if ((shard_spec.shape[1] * tt::datum_size(act_df)) % l1_alignment != 0) {
             return false;
         }
         size_t shard_size_in_bytes = shard_spec.shape[0] * shard_spec.shape[1] * tt::datum_size(act_df);
@@ -152,7 +154,8 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         out_memory_config.memory_layout());
 
     if (input_tensor.is_sharded()) {
-        const uint32_t l1_alignment = hal::get_l1_alignment();
+        const uint32_t l1_alignment =
+            tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment();
         const uint32_t page_size_bytes = input_tensor.mesh_buffer().page_size();
         TT_FATAL(
             page_size_bytes == input_tensor.mesh_buffer().aligned_page_size(),

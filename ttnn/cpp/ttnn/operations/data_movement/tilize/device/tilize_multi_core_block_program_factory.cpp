@@ -10,7 +10,7 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -51,7 +51,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                         a.dtype() == DataType::UINT8;
 
     const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(*a.device()).dram_alignment();
 
     // `make_block_plan` reads live L1 occupancy, so it is only valid on a program-cache miss -- which is
     // the only time this function runs.

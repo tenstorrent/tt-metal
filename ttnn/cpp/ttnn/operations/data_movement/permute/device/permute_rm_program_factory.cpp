@@ -5,7 +5,7 @@
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/utils/math.hpp>
@@ -21,9 +21,10 @@ uint32_t num_pages(const ttnn::Tensor& input_tensor) {
 }
 
 uint32_t page_size(const ttnn::Tensor& input_tensor) {
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input_tensor.device());
     auto BUFFER_ALIGNMENT = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                ? tt::tt_metal::hal::get_dram_alignment()
-                                : tt::tt_metal::hal::get_l1_alignment();
+                                ? props.dram_alignment()
+                                : props.node_local_mem_alignment();
     const auto& shape = input_tensor.logical_shape();  // in anticipation of RM padding
     return tt::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
 }
@@ -191,9 +192,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     // cb_in packs input rows back to back, as tilize requires. When a row is not a multiple of the input's NoC read
     // alignment (e.g. 32 B UINT8 rows vs 64 B BH DRAM), a row's L1 slot can sit at a different offset within an
     // alignment block than its source, so the reader bounces such rows through aligned scratchpad slots.
+    const auto read_props = tt::tt_metal::experimental::get_device_properties(*input_tensor.device());
     const uint32_t read_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                        ? tt::tt_metal::hal::get_dram_alignment()
-                                        : tt::tt_metal::hal::get_l1_alignment();
+                                        ? read_props.dram_alignment()
+                                        : read_props.node_local_mem_alignment();
     const bool bounce_misaligned_rows = !input_tensor.is_sharded() && (input_cb_page_size % read_alignment != 0);
     const ScratchpadSpecName BOUNCE_SP{"bounce"};
 

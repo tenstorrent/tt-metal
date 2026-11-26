@@ -24,7 +24,7 @@ struct UnaryShardSpecs {
 };
 
 std::optional<UnaryShardSpecs> get_shard_specs(
-    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec);
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec, uint32_t l1_alignment);
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 

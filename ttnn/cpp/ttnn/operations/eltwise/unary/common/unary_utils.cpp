@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-metalium/utils/work_split.hpp>
@@ -523,7 +523,7 @@ DramReadPlan get_dram_read_plan(
 }
 
 std::optional<UnaryShardSpecs> get_shard_specs(
-    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec) {
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec, uint32_t l1_alignment) {
     const bool input_sharded = input_spec.memory_config().is_sharded();
     const bool output_sharded = output_spec.memory_config().is_sharded();
 
@@ -541,12 +541,11 @@ std::optional<UnaryShardSpecs> get_shard_specs(
     // Each shard row is its own page, padded up to the L1 alignment, so the dense tile pages the
     // borrowed DFB walks only line up with the buffer when that padding is zero.
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        auto fits_borrowed_dfb = [](const tt::tt_metal::TensorSpec& spec) {
+        auto fits_borrowed_dfb = [l1_alignment](const tt::tt_metal::TensorSpec& spec) {
             const auto& shard = *get_shard_spec(spec);
             const auto tile_hw = spec.tile().get_tile_hw();
             const uint64_t shard_elements = static_cast<uint64_t>(shard.shape[0]) * shard.shape[1];
-            return shard_elements % tile_hw == 0 &&
-                   spec.compute_page_size_bytes() % tt::tt_metal::hal::get_l1_alignment() == 0;
+            return shard_elements % tile_hw == 0 && spec.compute_page_size_bytes() % l1_alignment == 0;
         };
 
         if ((input_sharded && !fits_borrowed_dfb(input_spec)) || (output_sharded && !fits_borrowed_dfb(output_spec))) {
@@ -746,6 +745,7 @@ tt::tt_metal::ShardSpec generate_output_shard_spec(
             static_cast<uint64_t>(padded_out_shape[-1]),
             compute_grid_size,
             memory_layout,
+            tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment(),
             ttnn::operations::data_movement::common::RmPageAlignmentMode::Lenient);
     }
     log_debug(tt::LogOp, "Unary: Generated shard spec over {} populated cores", spec.grid.num_cores());

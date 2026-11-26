@@ -15,7 +15,7 @@
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::prim {
@@ -93,8 +93,10 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
 
     // Each page is read from src into the CB and written from the CB to dst, so its CB slot must keep the
     // same alignment as the src/dst pages (64 B for DRAM on Blackhole), not just the L1 alignment.
-    const uint32_t page_alignment =
-        std::max({tt::tt_metal::hal::get_l1_alignment(), src_buffer->alignment(), dst_buffer->alignment()});
+    const uint32_t page_alignment = std::max(
+        {tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment(),
+         src_buffer->alignment(),
+         dst_buffer->alignment()});
 
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     const uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(

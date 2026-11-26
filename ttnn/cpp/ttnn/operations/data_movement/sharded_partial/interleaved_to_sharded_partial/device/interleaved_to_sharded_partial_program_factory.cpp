@@ -15,7 +15,7 @@
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/math.hpp>
 
@@ -51,6 +51,7 @@ void push_i2s_partial_cb_pair(
 
 ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     const InterleavedToShardedPartialParams& params, const Tensor& input, Tensor& output) {
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input.device());
     // Partial op behavior
     bool keep_l1_aligned = false;
 
@@ -126,7 +127,7 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
             input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
         // Adjust accordingly to l1 alignment, do it for all archs
         if (keep_l1_aligned) {
-            padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
+            padded_offset_bytes = tt::align(input_unit_size, props.node_local_mem_alignment());
         } else {
             padded_offset_bytes = tt::align(input_unit_size, input.mesh_buffer().alignment());
         }
@@ -166,8 +167,8 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
         all_cores,
         /*bound_buffer=*/dst_is_dram ? nullptr : dst_buffer);
 
-    uint32_t dram_alignment = hal::get_dram_alignment();
-    uint32_t l1_alignment = hal::get_l1_alignment();
+    uint32_t dram_alignment = props.dram_alignment();
+    uint32_t l1_alignment = props.node_local_mem_alignment();
     uint32_t num_trids = 4;
     if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || (is_blackhole || is_quasar) || keep_l1_aligned) {
         // scratchpad going to be used to align DRAM (64B) to L1 (16B)

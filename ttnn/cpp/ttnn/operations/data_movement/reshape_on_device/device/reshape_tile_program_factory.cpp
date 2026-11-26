@@ -5,7 +5,7 @@
 #include "reshape_tile_program_factory.hpp"
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -67,7 +67,8 @@ ttnn::device_operation::ProgramArtifacts ReshapeTileProgramFactory::create_progr
     Table<std::string, std::string> reader_defines;
 
     bool src0_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
-    uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input_tensor.device());
+    uint32_t alignment = src0_is_dram ? props.dram_alignment() : props.node_local_mem_alignment();
 
     // Wide-alignment scratch DFB: only needed when DRAM/L1 alignment exceeds a face's
     // worth of bytes (the reader uses it as a temporary aligned landing pad).

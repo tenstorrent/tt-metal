@@ -15,7 +15,7 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/device.hpp"
@@ -563,8 +563,8 @@ Tensor fold(
             // Match the alignment the TensorAccessor / noc_async_read_sharded pair will actually enforce for this
             // buffer type.
             const bool is_dram = processed_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
-            const uint32_t alignment =
-                is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
+            const auto props = tt::tt_metal::experimental::get_device_properties(*processed_tensor.device());
+            const uint32_t alignment = is_dram ? props.dram_alignment() : props.node_local_mem_alignment();
             return shard_row_bytes % alignment != 0;
         }();
         if (sub_alignment_wb_sharded_rm) {

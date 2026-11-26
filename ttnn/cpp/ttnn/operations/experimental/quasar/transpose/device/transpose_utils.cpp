@@ -10,6 +10,7 @@
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
@@ -167,6 +168,7 @@ ShardSpec generate_transpose_shard_spec(
             static_cast<uint64_t>(padded_out_shape[-1]),
             grid_size,
             memory_layout,
+            tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment(),
             ttnn::operations::data_movement::common::RmPageAlignmentMode::Lenient);
     }
     log_debug(

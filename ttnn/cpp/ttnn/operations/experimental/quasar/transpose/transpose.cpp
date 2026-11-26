@@ -125,7 +125,7 @@ inline Tensor permute_with_subaligned_output(
                             {.dims = prim_dims, .output_mem_config = effective_mc, .pad_value = pad_value},
                             {.input_tensor = a, .optional_output_tensor = std::nullopt})
                             .memory_config();
-        subaligned_output = has_subaligned_shard_row(*normalized_mc, a.element_size());
+        subaligned_output = has_subaligned_shard_row(*a.device(), *normalized_mc, a.element_size());
         // A caller's ND config stays ND; a default or specless output takes the derived spec.
         const bool explicit_nd = output_mem_config.has_value() && output_mem_config->nd_shard_spec().has_value();
         requested_mc = explicit_nd ? output_mem_config : normalized_mc;
@@ -241,7 +241,7 @@ inline Tensor transpose_(
     const auto launch_prim = [&](const auto& compute_output_spec, const auto& run) -> ttnn::Tensor {
         if (a.layout() == Layout::ROW_MAJOR && output_mem_constructed.is_sharded()) {
             const auto output_mc = compute_output_spec().memory_config();
-            if (has_subaligned_shard_row(output_mc, a.element_size())) {
+            if (has_subaligned_shard_row(*a.device(), output_mc, a.element_size())) {
                 const auto staged = run(MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1));
                 return reshard_staged_output(staged, output_mc);
             }
@@ -379,7 +379,8 @@ ttnn::Tensor transpose_impl(
         const auto& input_logical = input_tensor.logical_shape();
         const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
                                                                 input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
-        const bool subaligned_row = has_subaligned_shard_row(input_tensor.memory_config(), input_tensor.element_size());
+        const bool subaligned_row =
+            has_subaligned_shard_row(*input_tensor.device(), input_tensor.memory_config(), input_tensor.element_size());
         const uint32_t n1 = input_logical.get_normalized_index(dim1);
         const uint32_t n2 = input_logical.get_normalized_index(dim2);
         if (rm && in_sharded && (irregular_hw || subaligned_row)) {

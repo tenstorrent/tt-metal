@@ -10,7 +10,7 @@
 
 #include <fmt/core.h>
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -69,7 +69,8 @@ inline std::optional<std::string> tile_native_fold_rejection_reason(
     const uint64_t cb_bytes =
         static_cast<uint64_t>(tt::tile_size(in_df) + tt::tile_size(out_df)) * c_tiles * kFoldSrcCbDepthPerCTile;
     // Static budget keeps routing a pure function of inputs; real fragmentation still surfaces at CB alloc.
-    const uint64_t budget = tt::tt_metal::hal::get_max_worker_l1_unreserved_size();
+    const uint64_t budget = tt::tt_metal::experimental::get_device_properties(*input_tensor.device())
+                                .max_worker_node_local_mem_unreserved_size();
     if (scratch + cb_bytes + kFoldL1CodeStackReserveBytes >= budget) {
         return fmt::format("scratch={} B + CBs={} B exceed L1 budget ({} B)", scratch, cb_bytes, budget);
     }

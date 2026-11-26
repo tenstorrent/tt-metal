@@ -12,7 +12,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 
@@ -89,6 +89,7 @@ RollPlan compute_roll_plan(
 
     TT_FATAL(input.is_sharded() && output.is_sharded(), "Native sharded roll requires sharded input and output");
 
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input.device());
     const bool is_dram = input.memory_config().buffer_type() == BufferType::DRAM;
     const bool is_dram_rm = is_dram && input.layout() == Layout::ROW_MAJOR;
     // DRAM-RM mode uses full-shard L1 staging: read whole source shard(s) from DRAM into L1,
@@ -102,7 +103,7 @@ RollPlan compute_roll_plan(
         // For DRAM this is the DRAM alignment (64B on Blackhole, 32B on Wormhole), NOT the L1
         // alignment — using the wrong alignment here desyncs the staged layout from the actual
         // in-DRAM layout and corrupts the gather.
-        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        const uint32_t dram_alignment = props.dram_alignment();
         const uint32_t shard_size_check =
             (input.shard_spec().value().shape[0] *
              ((input.shard_spec().value().shape[1] * input.element_size() + dram_alignment - 1) / dram_alignment) *
@@ -219,12 +220,12 @@ RollPlan compute_roll_plan(
         return row_major_orient ? c : (c % grid_cols) * grid_rows + c / grid_cols;
     };
 
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t l1_alignment = props.node_local_mem_alignment();
     // Sharded buffers store one shard cell-row per page, padded up to the backing memory's
     // alignment. DRAM pages use the (larger) DRAM alignment — 64B on Blackhole, 32B on Wormhole —
     // whereas L1 pages use the L1 alignment. The row pitch must match whichever memory actually
     // holds the data, otherwise the staged copy and the host-computed offsets disagree.
-    const uint32_t page_alignment = is_dram ? tt::tt_metal::hal::get_dram_alignment() : l1_alignment;
+    const uint32_t page_alignment = is_dram ? props.dram_alignment() : l1_alignment;
     const uint32_t row_pitch_bytes =
         ((shard_cells_w * cell_size + page_alignment - 1) / page_alignment) * page_alignment;
 

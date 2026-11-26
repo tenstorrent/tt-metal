@@ -4,7 +4,7 @@
 #include "ttnn/operations/data_movement/repeat/device/repeat_utils.hpp"
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/mesh/mesh_device.hpp>
 
@@ -192,6 +192,7 @@ std::optional<ShardSpec> generate_repeat_shard_spec(
     }
     auto* device = input_tensor.device();
     auto compute_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t l1_alignment = tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment();
     if (compute_grid_size.x == 0 || compute_grid_size.y == 0) {
         return std::nullopt;
     }
@@ -220,7 +221,13 @@ std::optional<ShardSpec> generate_repeat_shard_spec(
 
     // RM WIDTH_SHARDED: shrink num_cores to the largest tensor_width divisor with L1-aligned page (else nullopt).
     auto adjusted = common::shrink_shard_for_rm_page_alignment(
-        spec, input_tensor.layout(), input_tensor.element_size(), tensor_width, compute_grid_size, memory_layout);
+        spec,
+        input_tensor.layout(),
+        input_tensor.element_size(),
+        tensor_width,
+        compute_grid_size,
+        memory_layout,
+        l1_alignment);
     if (adjusted.has_value()) {
         return adjusted;
     }
@@ -236,7 +243,7 @@ std::optional<ShardSpec> generate_repeat_shard_spec(
          .orientation_hint = orientation_hint,
          .input_orientation = input_orientation,
          .caller_tag = "Repeat (tile fallback)"});
-    const uint64_t l1_page_align = static_cast<uint64_t>(tt::tt_metal::hal::get_l1_alignment());
+    const uint64_t l1_page_align = static_cast<uint64_t>(l1_alignment);
     const uint64_t page_size_bytes =
         static_cast<uint64_t>(tile_spec.shape[1]) * static_cast<uint64_t>(input_tensor.element_size());
     if (page_size_bytes == 0 || (page_size_bytes % l1_page_align) != 0 || tensor_width % tile_spec.shape[1] != 0) {
