@@ -26,11 +26,12 @@ inline bool math_matmul_init_reuse_a = true;
 /**
  * @brief Program the matmul address-mod slots for the given tile shapes, transpose, and fidelity.
  *
- * Sets up the SrcA/SrcB/dest increments and the fidelity-phase reset mods (ADDR_MOD_5, plus ADDR_MOD_6 when
- * throttling). The increment pattern branches on the in0/in1 face geometry (16x32, 32x16, full 32x32) and transpose.
+ * Sets up the SrcA/SrcB/dest increments and the fidelity-phase reset mod (ADDR_MOD_5). ADDR_MOD_6, which the
+ * throttled MOP uses, is programmed by @ref _llk_math_matmul_ for the duration
+ * of each call. The increment pattern branches on the in0/in1 face geometry (16x32, 32x16, full 32x32) and transpose.
  *
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam THROTTLE_LEVEL: Non-zero adds the extra fidelity-clear address mod used by the throttled MOP.
+ * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; does not change the slots programmed here.
  * @param transpose: True to transpose in1 faces during the multiply.
  * @param in0_tile_r_dim: Row dimension of an in0 tile.
  * @param in0_tile_c_dim: Column dimension of an in0 tile.
@@ -97,18 +98,6 @@ inline void matmul_configure_addrmod(
             .fidelity = {.incr = 1, .clr = 0},
         }
             .set_with_bias<bias_write>(ADDR_MOD_5);
-    }
-
-    if constexpr (THROTTLE_LEVEL)
-    {
-        // reset all, including fidelity
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 1, .cr = 1},
-            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-            .dest     = {.incr = 0, .clr = 1, .cr = 1},
-            .fidelity = {.incr = 0, .clr = 1},
-        }
-            .set_with_bias<bias_write>(ADDR_MOD_6);
     }
 
     if ((is_in0_16x32 && (!is_in1_32x16)) || is_in0_32x16)
@@ -541,6 +530,25 @@ inline void matmul_configure_mop(
         }
     }
     tmp.program();
+}
+
+// ADDR_MOD_6 for the MVMUL that clears every counter, fidelity included: the throttled HiFi MOP's tile end.
+// The matmul call writes it and restores the SFPU invariant (dest += 2) before returning.
+inline void matmul_set_clear_all_addrmod()
+{
+    addr_mod_t {
+        .srca     = {.incr = 0, .clr = 1, .cr = 1},
+        .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+        .dest     = {.incr = 0, .clr = 1, .cr = 1},
+        .fidelity = {.incr = 0, .clr = 1},
+    }
+        .set_no_bias(ADDR_MOD_6);
+}
+
+// The ADDR_MOD_6 invariant of hw_configure (dest += 2); no Blackhole writer sets a bias on ADDR_MOD_6, so its bias word stays 0.
+inline void matmul_restore_addrmod_6()
+{
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set_no_bias(ADDR_MOD_6);
 }
 
 // Block the row MOP was programmed for (ct_dim << 16 | rt_dim); zero when the row_mop init fell back to the tile MOP.
@@ -1298,9 +1306,10 @@ __attribute__((always_inline, flatten)) inline void _llk_math_matmul_init_rows_(
 
 // The throttle switch of a running kernel (matmul_block_math_dynamic_throttle) re-programs only what the throttled MOP changes. The
 // throttled and the other form share ADDR_MOD_0, 1, 2 and 4 and the zero flag state, and the throttled MOP leaves ADDR_MOD_3 and 7, so
-// the switch writes ADDR_MOD_5 and 6, the replay buffer and the MOP. Only the throttle switch calls these; the inits above are unchanged.
+// the switch writes ADDR_MOD_5, the replay buffer and the MOP (ADDR_MOD_6 is the matmul call's). Only the throttle switch calls these;
+// the inits above are unchanged.
 
-// ADDR_MOD_5 and 6 of matmul_configure_addrmod
+// ADDR_MOD_5 of matmul_configure_addrmod
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form>
 inline void matmul_configure_addrmod_switch()
 {
@@ -1324,16 +1333,6 @@ inline void matmul_configure_addrmod_switch()
             .fidelity = {.incr = 1, .clr = 0},
         }
             .set_no_bias(ADDR_MOD_5);
-    }
-    if constexpr (THROTTLE_LEVEL)
-    {
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 1, .cr = 1},
-            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-            .dest     = {.incr = 0, .clr = 1, .cr = 1},
-            .fidelity = {.incr = 0, .clr = 1},
-        }
-            .set_no_bias(ADDR_MOD_6);
     }
 }
 
@@ -1567,6 +1566,8 @@ inline void _llk_math_matmul_uninit_()
  * @param rt_dim: Number of row tiles in the output block.
  * @note Call @ref _llk_math_matmul_init_ with matching template args before this
  *       function, and @ref _llk_math_matmul_uninit_ after it to restore modified state.
+ * @note With a MOP that ends on ADDR_MOD_6 (the throttled HiFi MOP at levels
+ *       1 to 3), programs ADDR_MOD_6 at entry and restores its dest += 2 invariant before returning, so SFPU ops can follow.
  * @note On the unpack thread, @ref _llk_unpack_AB_matmul_ must feed the operand tiles into SrcA/SrcB.
  */
 template <
@@ -1686,6 +1687,13 @@ inline void _llk_math_matmul_(
         }
     }
 
+    // the throttled HiFi MOP up to level 3 ends each tile on ADDR_MOD_6; the others never use it
+    constexpr bool throttle_mod6 = (THROTTLE_LEVEL > 0) && is_high_fidelity(math_fidelity) && !matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>();
+    if constexpr (throttle_mod6)
+    {
+        matmul_set_clear_all_addrmod();
+    }
+
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
         for (std::uint32_t rut = 0; rut < rut_dim; rut++)
@@ -1735,5 +1743,10 @@ inline void _llk_math_matmul_(
                 }
             }
         }
+    }
+
+    if constexpr (throttle_mod6)
+    {
+        matmul_restore_addrmod_6();
     }
 }

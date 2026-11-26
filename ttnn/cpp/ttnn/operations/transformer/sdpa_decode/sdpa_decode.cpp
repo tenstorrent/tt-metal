@@ -69,6 +69,7 @@ ttnn::Tensor scaled_dot_product_attention_decode(
             k_chunk_size);
     }
 
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
@@ -144,6 +145,7 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
         TT_FATAL(k_chunk_size % 32 == 0, "User provided k_chunk_size must be multiple of 32, got: {}", k_chunk_size);
     }
 
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
@@ -213,6 +215,7 @@ ttnn::Tensor flash_multi_latent_attention_decode(
             input_tensor_v.value().padded_shape()[-1],
             head_dim_v);
     }
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
@@ -278,6 +281,7 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
             head_dim_v);
     }
 
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
