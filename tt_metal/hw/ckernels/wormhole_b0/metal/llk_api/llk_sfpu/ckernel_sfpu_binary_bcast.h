@@ -406,27 +406,11 @@ sfpi_inline void _dual_broadcast_finish_() {
 // BCAST_COL add/sub/mul: two row bands per dual broadcast
 // ============================================================================
 //
-// The 8 row bands are processed in pairs (band k at RWC.Dst, band k+1 at
-// RWC.Dst + ROW_BAND_STRIDE). The two bcast col-0 slots are broadcast as the
-// two chains of the dual broadcast (band k: LREG_DUAL_A, band k+1:
-// LREG_DUAL_B), then each band:
-//   1. Loads its 4 data slots (band-relative immediates).
-//   2. Issues the 4 binops back-to-back; each writes a distinct LREG and
-//      reads the band's broadcast, so they pipeline without NOPs (SUB is
-//      SFPMAD(bcast, -1, data)).
-//   3. Streams out 4 SFPSTOREs; out_rel is 0 for the in-place API, which
-//      folds the stores to immediates.
-// The 4 loads / binops / stores each read a value written 4 instructions
-// earlier, past the 2-cycle latency. Per pair: 2 + 1 + 16 + 5 + 2 x 12 SFPU
-// ops, against 2 x 30 (+2 for SUB) for the serial broadcast with its SFPNOP
-// slots.
-//
-// Every pair replays the dual broadcast block that sfpu_bcast_col_init()
-// records into slots [0, 16), as the normalize variants do. Like the
-// LREG_MASK it depends on, the block must still be intact: re-run the COL
-// init after any op that rewrites the SFPU replay slots (ROW bcast, scalar
-// normalize, reduce, ...). Recording it per call instead would cost 16
-// RISC-issued instructions per tile.
+// Row bands go in pairs: one dual broadcast puts band k's col-0 value in
+// LREG_DUAL_A and band k+1's in LREG_DUAL_B, then each band loads, combines
+// and stores its 4 data slots without NOPs. The dual broadcast replays the
+// block sfpu_bcast_col_init() records into replay slots [0, 16): re-run the
+// COL init after any op that rewrites them.
 
 template <BinaryOp BINOP, std::uint32_t BCAST_LREG, std::uint32_t BAND_OFF>
 sfpi_inline void _col_bcast_binop_band_store_(std::uint32_t out_rel) {
@@ -733,9 +717,6 @@ sfpi_inline void _norm_centre_scale_store_band_rel_(std::uint32_t tile_rel) {
     TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, slot3);
 }
 
-// Point the math dest offset at the data tile.
-inline void _norm_col_tile_begin_(std::uint32_t dst_index_data) { _col_tile_begin_(dst_index_data); }
-
 // The normalize drivers walk RWC.Dst over the tile's 8 bands and, as on the
 // ROW and scalar paths, leave it at 48 and the dest base at the data tile for
 // the enclosing `_done_` / next `_start_` to reset.
@@ -751,7 +732,7 @@ inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
     const std::uint32_t mean_rel = _col_rel_tile_offset_(dst_index_mean, dst_index_data);
     const std::uint32_t inv_std_rel = _col_rel_tile_offset_(dst_index_inv_std, dst_index_data);
 
-    _norm_col_tile_begin_(dst_index_data);
+    _col_tile_begin_(dst_index_data);
     for (std::uint32_t half = 0; half < NUM_FACE_PAIRS; half++) {
         for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
             _norm_dual_broadcast_band_(mean_rel, inv_std_rel);
@@ -775,7 +756,7 @@ inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
     const std::uint32_t mean_rel = _col_rel_tile_offset_(dst_index_mean, dst_index_data);
     const std::uint32_t inv_std_rel = _col_rel_tile_offset_(dst_index_inv_std, dst_index_data);
 
-    _norm_col_tile_begin_(dst_index_data);
+    _col_tile_begin_(dst_index_data);
     for (std::uint32_t half = 0; half < NUM_FACE_PAIRS; half++) {
         for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
             _norm_dual_broadcast_band_(mean_rel, inv_std_rel);
@@ -809,7 +790,7 @@ inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
     const auto res_slot2 = _col_slot_rel_(residual_rel, 2);
     const auto res_slot3 = _col_slot_rel_(residual_rel, 3);
 
-    _norm_col_tile_begin_(dst_index_data);
+    _col_tile_begin_(dst_index_data);
     for (std::uint32_t half = 0; half < NUM_FACE_PAIRS; half++) {
         for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
             _norm_dual_broadcast_band_(mean_rel, inv_std_rel);
