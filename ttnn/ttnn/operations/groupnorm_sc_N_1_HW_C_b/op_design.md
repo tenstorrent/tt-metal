@@ -267,6 +267,8 @@ The RM variants of the residency pins are also required.
 
 `W = Wt_core` and `T = chunk_ht·W` (tiles); 2 KB = one bf16 tile page and 4 KB = one Float32 tile page. The full ledger, with axis accounting and sharing, is in `l1_ledger.md`.
 
+**Phase 0 plan.** Perf 1 deleted CBs 4, 11, 14, 23 and the group-sums use of 18; 6 is now the −1 tile, 18 the `[mean·rstd, e]` view, 13 the gamma + beta maps. The current map is `l1_ledger.md`; the current stage realization is "Perf 1 realization" below.
+
 | Semantic Name | Index | Page Size | Num Pages | Sizing rationale | Format | Producer | Consumer | Lifetime |
 |---------------|-------|-----------|-----------|------------------|--------|----------|----------|-----------|
 | `cb_input_rm` | 0 | 2 KB (tile-sized stick block) | `D_RM·T` (RM only) | Spans one chunk of `ht` rows × the `W` slice; streams over the chunks. | Float16_b | reader | compute | pass 1 + pass 2 (RM) |
@@ -308,6 +310,22 @@ The RM variants of the residency pins are also required.
 - **D** = {15, 18}: disjoint lifetimes, ordered by local CB credit on the root. The writer pops `cb_local_partials` before it waits on the gather semaphore, the gathered push follows, and compute packs `cb_group_sums` only after waiting on `cb_gathered_partials`. Non-root cores never touch 18.
 
 ## Block Operation Realization
+
+### Perf 1 realization (current; supersedes the Phase 0 rows below where they differ)
+
+The tables after this section are the Phase 0 plan. Perf 1 (`changelog.md` "Perf 1") replaced these stages; the CB
+map is `l1_ledger.md`. Raw-LLK sites carry a kernel-head justification comment with the measured win.
+
+| Stage | Realization (Perf 1) | CBs | Kernel site |
+|-------|----------------------|-----|-------------|
+| reader prologue | Pilot (`−k`, W pages: `stage(v0 mod P) ^ 0x8000`) read with chunk `pro_step` (`SHARDED ? B−1 : 0`); the group map is built after block 0's last pass-1 push; ones / group shift / affine maps at step B (the combine's stall shadow) | 22, 12, 17, 24, 13 | reader `r_block` |
+| `accumulate_moments` | **raw LLK** `moments_rows`: per channel tile, `S += x + (−k)` (`add_tiles_bcast<ROW>`, acc-to-dest) and `Q += x·(x − k)` (`mul_reuse_dest<DEST_TO_SRCB>` + `math_mul_acc_from_dest_tile`, MOVD2B + ZEROACC) elementwise in fp32 DEST over every tile row of the window, then one `sfpu_reduce<REDUCE_COL>` per accumulator. Multi-window blocks spill to the UnpackToDestFp32 accumulators (7, 8); the last window packs row 0 straight into the chan CBs (9, 10). Sharded `K == B`: one window. | 2/3 (or 0 → tilize), 22, 7, 8, 9, 10 | compute `moments_rows` |
+| collapse | `matmul_block` (helper), chan row `[1×W]` × map `[W×1]` → 2 local partial tiles | 9, 10, 12 → 15 | compute `collapse_with_map` |
+| combine (root) | gather (writer NoC + semaphore) → sender-sum `matmul_block(ones[1×R], gathered[R×2])` with a **raw SFPU PostComputeFn** (`FinalizeStats` / `gn_finalize_sfpu`): var, rstd and mean computed in the matmul's DEST window → `[rstd, mean]` → `ttnn.Mcast` | 15 → 16, 17, 24 → 19 → 20 | compute `FinalizeStats` |
+| expand | **raw LLK** `expand_matmul`: `a = rstd × gmap` → 9, `b' = [mean·rstd, e] × [gmap; bmap]` → 10 (`[mean·rstd, e]` from one `eltwise_chain` into the CB-18 view). The reader builds gmap (`[group lane × channel]`: `gamma[c]` at row `g(c)`) and bmap (row 0 = `−beta[c]`) as word copies. No affine: the group map, unpacked transposed. Every subblock is a full 4-tile DEST half; the last overlaps its predecessor and packs only its new tiles. | 20, 13 (or 12), 18 → 9, 10 | compute `expand_matmul` |
+| normalize | **raw compute API**: `y = (−1)·b' + x·a`, two accumulating `mul_tiles` into one DEST tile per output tile, `CHAIN_BLOCK` tiles per DEST window; `−1` is a compute-generated constant (CB 6). Sharded RM: `pack_untilize_dest` straight into the output shard (no output tile ring, no untilize pass). | 3, 9, 10, 6 → 5 / 1 | compute `normalize_chunk`, `normalize_untilize_chunk` |
+| NoC pairing (DRAM interleaved) | Odd grid columns run the reader on NoC1 and the writer on NoC0 (`swapped(wk)`: not sharded, not a root, `x % 2 == 1`), so both NoCs carry half of every phase's DRAM traffic. Residency solves `K = B` against the stream-free footprint first. | — | descriptor "NoC pairing" |
+
 
 | # | Block operation | Block shape | Helper? | Input CB (semantic name, pages, state) | Output CB (semantic name, pages) | CB state after |
 |---|-----------------|-------------|---------|----------------------------------------|----------------------------------|----------------|

@@ -155,3 +155,50 @@ def _bench_sharded(device, shape, G, grid, layout, eps, *, in_place):
     ttnn.deallocate(out, force=True)
     if not in_place:
         x.deallocate()
+
+
+# Guard set (Perf 1): one representative per kernel path x layout x placement for the affine paths the focus
+# benches (gamma + beta) do not run, plus an odd channels-per-group case (the reader's halfword affine-map path).
+GUARD_CASES = [
+    # name, shape, G, grid (None = DRAM interleaved), layout, in_place, affine
+    ("g_rm_ip_1024x1280_gonly", (1, 1, 1024, 1280), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, True, "gamma_only"),
+    ("g_rm_ip_1024x1280_none", (1, 1, 1024, 1280), 32, (8, 8), ttnn.ROW_MAJOR_LAYOUT, True, "no_affine"),
+    ("g_tile_oop_1024x1280_gonly", (1, 1, 1024, 1280), 32, (8, 8), ttnn.TILE_LAYOUT, False, "gamma_only"),
+    ("g_tile_oop_1024x1280_none", (1, 1, 1024, 1280), 32, (8, 8), ttnn.TILE_LAYOUT, False, "no_affine"),
+    ("g_dram_tile_4096x640_gonly", (1, 1, 4096, 640), 32, None, ttnn.TILE_LAYOUT, False, "gamma_only"),
+    ("g_dram_tile_4096x640_none", (1, 1, 4096, 640), 32, None, ttnn.TILE_LAYOUT, False, "no_affine"),
+    ("g_dram_rm_4096x640_gonly", (1, 1, 4096, 640), 32, None, ttnn.ROW_MAJOR_LAYOUT, False, "gamma_only"),
+    ("g_dram_rm_4096x640_none", (1, 1, 4096, 640), 32, None, ttnn.ROW_MAJOR_LAYOUT, False, "no_affine"),
+    ("g_dram_tile_16384x96_cg3", (1, 1, 16384, 96), 32, None, ttnn.TILE_LAYOUT, False, "gamma_beta"),
+]
+
+
+@pytest.mark.parametrize("name, shape, G, grid, layout, in_place, affine", GUARD_CASES, ids=[c[0] for c in GUARD_CASES])
+def test_bench_guard(device, name, shape, G, grid, layout, in_place, affine):
+    torch.manual_seed(0)
+    C = shape[-1]
+    if grid is None:
+        mem = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        from eval.golden_tests.groupnorm_sc_N_1_HW_C_b.helpers import block_shard_memory_config
+
+        mem = block_shard_memory_config(shape, grid, layout=layout, dtype=ttnn.bfloat16, device=device)
+    x = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem
+    )
+
+    def affine_row():
+        return ttnn.from_torch(
+            torch.randn((1, 1, 1, C), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+
+    g = affine_row() if affine in ("gamma_beta", "gamma_only") else None
+    b = affine_row() if affine == "gamma_beta" else None
+    out = groupnorm_sc_N_1_HW_C_b(x, G, gamma=g, beta=b, eps=1e-5, in_place=in_place)
+    ttnn.synchronize_device(device)
+    ttnn.deallocate(out, force=True)
+    if not in_place:
+        x.deallocate()

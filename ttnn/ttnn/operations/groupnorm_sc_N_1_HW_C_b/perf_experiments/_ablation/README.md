@@ -1,6 +1,12 @@
 # Perf 1 ablation (cumulative peel) — groupnorm_sc_N_1_HW_C_b
 
 `kernels/` are copies of the op's kernels at the start of Perf 1, with payload stubs behind defines.
+
+> **Stale after Perf 1.** These are the *pre-Perf-1* kernels (reduce/eltwise-chain moments, the x·(x−k) CB, the
+> chain finalize and expand, the seed and the scaler). The graduated op has a different CB map and raw-LLK stages
+> that `CKL_ELTWISE_CHAIN_SKIP_COMPUTE` / `SKIP_COMPUTE` do not reach (`moments_rows`, `FinalizeStats`,
+> `expand_matmul`, `normalize_chunk`). Round 2 must rebuild the kit from the current kernels (hand stubs for those
+> four sites) before trusting a peel; use this one only to reproduce the Perf 1 baseline breakdown.
 Every stub keeps the CB / semaphore protocol, so trip and transaction counts stay the same.
 
 | define | stubs |
