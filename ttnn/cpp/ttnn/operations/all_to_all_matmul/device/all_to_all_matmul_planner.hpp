@@ -46,7 +46,6 @@ constexpr uint32_t kMaxPacketHeaders = 12;          // packet header pool per da
 // (when packet_tiles <= slot_tiles), landing estimate "share", helper pick "pool", weight pace 0, output write
 // chunk 0, BLOCK_HEADS 1.
 constexpr bool kFencePerDest = true;
-constexpr uint32_t kWeightPaceCycles = 0;
 constexpr uint32_t kOutChunkTiles = 0;
 
 // Ring directions of a port.
@@ -72,6 +71,7 @@ struct MeshTopology {
     std::vector<tt::tt_metal::CoreCoord> port_cells;     // every chip's port cores, sorted (x, y), unique
     std::vector<tt::tt_metal::CoreCoord> compute_cells;  // grid minus port_cells, row-major (y outer, x inner)
     tt::tt_metal::CoreRangeSet compute_cores;            // compute_cells as merged rectangles
+    uint32_t payload_bytes = 0;  // tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), read once per mesh
 };
 
 // Routes (get_eth_forwarding_direction), links (get_forwarding_link_indices) and port placement: per (d, l), the

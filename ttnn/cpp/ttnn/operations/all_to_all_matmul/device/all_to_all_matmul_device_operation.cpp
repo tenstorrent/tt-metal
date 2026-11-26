@@ -8,7 +8,7 @@
 #include <fmt/format.h>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -81,7 +81,8 @@ void check_support(const AllToAllMatmulParams& attrs, const Tensor& input, const
     refuse_unless(attrs.num_links == 2, "num_links", attrs.num_links, "2");
 }
 
-PlanInputs plan_inputs_of(const AllToAllMatmulParams& attrs, const Tensor& input, const Tensor& weight) {
+PlanInputs plan_inputs_of(
+    const AllToAllMatmulParams& attrs, const MeshTopology& topology, const Tensor& input, const Tensor& weight) {
     const auto& x = input.logical_shape();
     const auto& w = weight.logical_shape();
     return PlanInputs{
@@ -93,7 +94,7 @@ PlanInputs plan_inputs_of(const AllToAllMatmulParams& attrs, const Tensor& input
         .N = w[3],
         .in_tile_bytes = static_cast<uint32_t>(input.buffer()->page_size()),
         .w_tile_bytes = static_cast<uint32_t>(weight.buffer()->page_size()),
-        .payload_bytes = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()),
+        .payload_bytes = topology.payload_bytes,
         .output_in_l1 = attrs.output_memory_config.buffer_type() == BufferType::L1,
         .fp32_dest_acc_en = attrs.fp32_dest_acc_en,
     };
@@ -111,7 +112,7 @@ void AllToAllMatmulDeviceOperation::validate_on_program_cache_miss(
     validate_scratch_placement(t);
     auto* mesh_device = t.input.device();
     const MeshTopology& topology = mesh_topology(mesh_device, attrs.cluster_axis, attrs.num_links);
-    const Plan& plan = solve_plan(topology, plan_inputs_of(attrs, t.input, t.weight));
+    const Plan& plan = solve_plan(topology, plan_inputs_of(attrs, topology, t.input, t.weight));
     const TensorSpec expected = scratch_spec(topology, plan, t.input.dtype());
     TT_FATAL(
         t.scratch->tensor_spec() == expected,

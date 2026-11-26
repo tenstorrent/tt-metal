@@ -32,7 +32,12 @@ std::string coord_str(const MeshCoordinate& c) { return fmt::format("({}, {})", 
 
 // The live-cluster link check of the Python's _check_caller_errors: every hop of every group (both directions) has
 // num_links usable links, and a Ring has its wrap. It reads only the mesh and the fabric, so it runs on the mesh's
-// first call per (mesh id, shape, cluster_axis, topology, num_links) and later calls read the verdict (empty: ok).
+// first call per (mesh id, shape, cluster_axis, topology, num_links) and later calls read the verdict (empty: ok),
+// with the fabric's max payload read on that same first call.
+struct LinkCheck {
+    std::string verdict;
+    uint32_t payload_bytes = 0;
+};
 using LinkCheckKey = std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, tt::tt_fabric::Topology, int32_t>;
 
 std::string check_links(MeshDevice* mesh, uint32_t cluster_axis, tt::tt_fabric::Topology topology, int32_t num_links) {
@@ -90,15 +95,22 @@ std::string check_links(MeshDevice* mesh, uint32_t cluster_axis, tt::tt_fabric::
     return {};
 }
 
-const std::string& link_verdict(
+const LinkCheck& link_check(
     MeshDevice* mesh, uint32_t cluster_axis, tt::tt_fabric::Topology topology, int32_t num_links) {
-    static ttsl::Indestructible<std::map<LinkCheckKey, std::string>> cache;
+    static ttsl::Indestructible<std::map<LinkCheckKey, LinkCheck>> cache;
     static std::mutex mutex;
     const LinkCheckKey key{mesh->id(), mesh->shape()[0], mesh->shape()[1], cluster_axis, topology, num_links};
     const std::lock_guard lock(mutex);
     auto it = cache.get().find(key);
     if (it == cache.get().end()) {
-        it = cache.get().emplace(key, check_links(mesh, cluster_axis, topology, num_links)).first;
+        it = cache.get()
+                 .emplace(
+                     key,
+                     LinkCheck{
+                         .verdict = check_links(mesh, cluster_axis, topology, num_links),
+                         .payload_bytes =
+                             static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes())})
+                 .first;
     }
     return it->second;
 }
@@ -158,9 +170,9 @@ void check_caller_errors(
     if (num_links < 1) {
         throw std::invalid_argument(fmt::format("all_to_all_matmul: num_links must be >= 1, got {}", num_links));
     }
-    const std::string& verdict = link_verdict(mesh, static_cast<uint32_t>(cluster_axis), topology, num_links);
-    if (!verdict.empty()) {
-        throw std::invalid_argument(verdict);
+    const LinkCheck& links = link_check(mesh, static_cast<uint32_t>(cluster_axis), topology, num_links);
+    if (!links.verdict.empty()) {
+        throw std::invalid_argument(links.verdict);
     }
     if (weight.layout() != Layout::TILE || weight.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED) {
         throw std::invalid_argument("all_to_all_matmul: weight must be TILE, interleaved");
@@ -168,7 +180,7 @@ void check_caller_errors(
     if (input.memory_config().buffer_type() != BufferType::DRAM) {
         throw std::invalid_argument("all_to_all_matmul: input must be DRAM interleaved");
     }
-    const auto payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    const uint32_t payload = links.payload_bytes;
     // The Python takes 2048 B for a non-TILE input (refused right after by the support check).
     const uint32_t tile_bytes =
         input.layout() == Layout::TILE ? static_cast<uint32_t>(input.buffer()->page_size()) : 2048u;
@@ -219,7 +231,7 @@ Tensor all_to_all_matmul(
         resolve_params(input_tensor, weight, cluster_axis, topology, num_links, memory_config, compute_kernel_config);
     MeshDevice* mesh = input_tensor.device();
     const a2a::MeshTopology& mesh_topo = a2a::mesh_topology(mesh, params.cluster_axis, params.num_links);
-    const a2a::Plan& plan = a2a::solve_plan(mesh_topo, a2a::plan_inputs_of(params, input_tensor, weight));
+    const a2a::Plan& plan = a2a::solve_plan(mesh_topo, a2a::plan_inputs_of(params, mesh_topo, input_tensor, weight));
     // Per-mesh global semaphores first, before this call allocates any L1 tensor (scratch, output).
     a2a::mesh_resources(mesh, mesh_topo, plan);
     if (scratch_tensor.has_value()) {
@@ -243,7 +255,7 @@ Tensor all_to_all_matmul_scratch_tensor(
         resolve_params(input_tensor, weight, cluster_axis, topology, num_links, memory_config, compute_kernel_config);
     MeshDevice* mesh = input_tensor.device();
     const a2a::MeshTopology& mesh_topo = a2a::mesh_topology(mesh, params.cluster_axis, params.num_links);
-    const a2a::Plan& plan = a2a::solve_plan(mesh_topo, a2a::plan_inputs_of(params, input_tensor, weight));
+    const a2a::Plan& plan = a2a::solve_plan(mesh_topo, a2a::plan_inputs_of(params, mesh_topo, input_tensor, weight));
     a2a::mesh_resources(mesh, mesh_topo, plan);
     return create_device_tensor(a2a::scratch_spec(mesh_topo, plan, input_tensor.dtype()), mesh);
 }

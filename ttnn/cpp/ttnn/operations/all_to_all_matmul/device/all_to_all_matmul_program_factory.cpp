@@ -76,7 +76,7 @@ ProgramDescriptor AllToAllMatmulProgramFactory::create_descriptor(
     const auto& coord = *mesh_dispatch_coordinate;
 
     const MeshTopology& topology = mesh_topology(mesh_device, attrs.cluster_axis, attrs.num_links);
-    const PlanInputs inputs = plan_inputs_of(attrs, input, weight);
+    const PlanInputs inputs = plan_inputs_of(attrs, topology, input, weight);
     const Plan& plan = solve_plan(topology, inputs);
     const MeshResources& res = mesh_resources(mesh_device, topology, plan);
     const ChipPlan& chip = plan.chips.at(coord);

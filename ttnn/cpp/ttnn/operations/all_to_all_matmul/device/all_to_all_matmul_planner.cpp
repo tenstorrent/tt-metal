@@ -658,7 +658,7 @@ Plan build_plan(const MeshTopology& topo, const PlanInputs& in) {
                     sw.m1 = e.m1;
                     sw.helper = e.helper;
                     sw.helper_slot = e.helper.has_value() ? helper_slot.at({coord, e.h}) : 0;
-                    sw.pace = 0;  // kWeightPaceCycles == 0
+                    sw.pace = 0;  // the source's weight pace was always 0
                     cw.slots.push_back(sw);
                 }
             }
@@ -783,6 +783,7 @@ const MeshTopology& mesh_topology(MeshDevice* mesh_device, uint32_t cluster_axis
 
     MeshTopology topo;
     topo.num_links = num_links;
+    topo.payload_bytes = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     for (const auto& grp : groups) {
         const auto G = static_cast<uint32_t>(grp.size());
         topo.G = G;

@@ -37,8 +37,10 @@ struct AllToAllMatmulDeviceOperation {
 // SUPPORTED of ttnn/ttnn/operations/all_to_all_matmul/all_to_all_matmul.py: throws UnsupportedAxisValue.
 void check_support(const AllToAllMatmulParams& attrs, const Tensor& input, const Tensor& weight);
 
-// What solve_plan reads from the call besides the topology.
-PlanInputs plan_inputs_of(const AllToAllMatmulParams& attrs, const Tensor& input, const Tensor& weight);
+// What solve_plan reads from the call besides the topology (the fabric payload comes from the topology's
+// per-mesh record).
+PlanInputs plan_inputs_of(
+    const AllToAllMatmulParams& attrs, const MeshTopology& topology, const Tensor& input, const Tensor& weight);
 
 }  // namespace ttnn::operations::all_to_all_matmul
 
