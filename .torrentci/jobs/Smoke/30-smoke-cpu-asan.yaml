@@ -35,7 +35,6 @@ jobs:
       - {name: GTEST_COLOR, value: 'yes'}
       - {name: TT_METAL_WATCHER_TEST_MODE, value: '1'}
       - {name: TT_LOGGER_LEVEL, value: warn}
-      - {name: TT_METAL_RUNTIME_ROOT, value: /usr/libexec/tt-metalium}
       - {name: LSAN_OPTIONS, value: "suppressions=/usr/share/tt-metalium/lsan.supp"}
     steps:
       - id: smoke-cpu
@@ -44,10 +43,6 @@ jobs:
         shell:
           run:
             - mkdir -p test-reports
-            # find: the UMD tree layout moves between UMD bumps.
             - >-
-              TT_METAL_MOCK_CLUSTER_DESC_PATH=$(find /usr/libexec/tt-metalium/tt_metal/third_party/umd
-              -path '*/cluster_descriptor_examples/wormhole_N150.yaml' -print -quit)
-              && echo "mock cluster: $TT_METAL_MOCK_CLUSTER_DESC_PATH"
-              && test -f "$TT_METAL_MOCK_CLUSTER_DESC_PATH" && export TT_METAL_MOCK_CLUSTER_DESC_PATH
-              && tt-metalium-validation-smoke --gtest_filter='*CPU_*' --gtest_output=xml:test-reports/
+              TT_METAL_MOCK_CLUSTER_DESC_PATH=/usr/libexec/tt-metalium/tt_metal/third_party/umd/descriptors/cluster_descriptor_examples/wormhole_N150.yaml
+              /usr/bin/tt-metalium-validation-smoke --gtest_filter='*CPU_*' --gtest_output=xml:test-reports/
