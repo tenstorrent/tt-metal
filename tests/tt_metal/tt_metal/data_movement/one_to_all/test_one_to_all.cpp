@@ -6,9 +6,9 @@
 // num_of_transactions times
 
 #include "device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
@@ -18,7 +18,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "test_one_to_all.hpp"
 
 namespace tt::tt_metal {

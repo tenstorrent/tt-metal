@@ -99,7 +99,9 @@ void kernel_main() {
                 cb_scale_bcast_fp32.wait_front(block_ht);
                 cb_scale_bcast_bf16.reserve_back(block_ht);
                 tile_regs_acquire();
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
                 copy_tile(cb_scale_bcast_fp32_id, 0, IDST0);
+                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(IDST0, cb_scale_bcast_bf16_id);
@@ -118,7 +120,9 @@ void kernel_main() {
                     cb_input_e4m3.wait_front(1);
                     cb_in_rm_fp32.reserve_back(1);
                     tile_regs_acquire();
+                    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
                     copy_tile(cb_input_e4m3_id, 0, IDST0);
+                    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                     tile_regs_commit();
                     tile_regs_wait();
                     pack_tile(IDST0, cb_in_rm_fp32_id);

@@ -203,9 +203,11 @@ FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output, DFBIdentity& id
                 const uint32_t b_tile = (first_row + row) * 2 * Vt + value;
                 tile_regs_acquire();
                 copy_init(carry_id);
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
                 if constexpr (Difference) {
                     copy_tile(carry_id, b_tile + Vt, 0);
                     copy_tile(carry_id, b_tile, 1);
+                    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                     sub_binary_tile_init();
                     sub_binary_tile(0, 1, 0);
                     if (first_row + row == value_block * Vt + value) {
@@ -213,6 +215,7 @@ FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output, DFBIdentity& id
                     }
                 } else {
                     copy_tile(carry_id, b_tile, 0);
+                    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                 }
                 tile_regs_commit();
                 tile_regs_wait();

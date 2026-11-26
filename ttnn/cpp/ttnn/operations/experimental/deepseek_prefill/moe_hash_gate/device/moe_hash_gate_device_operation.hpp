@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 // Reuse the router-affinity activation enum from moe_grouped_topk (no duplication).
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/moe_grouped_topk_device_operation.hpp"
 

@@ -14,9 +14,9 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"

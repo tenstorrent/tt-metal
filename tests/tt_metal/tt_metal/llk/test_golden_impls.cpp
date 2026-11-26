@@ -4,15 +4,15 @@
 
 #include <fmt/base.h>
 #include <cmath>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
 #include <algorithm>
 #include <limits>
 #include <set>
 
 #include <tt_stl/assert.hpp>
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "test_golden_impls.hpp"
 #include "tests/tt_metal/test_utils/packing.hpp"
 

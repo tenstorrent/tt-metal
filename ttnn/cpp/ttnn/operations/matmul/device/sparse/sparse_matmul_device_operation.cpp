@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
@@ -17,8 +18,8 @@
 
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 namespace {
 
@@ -636,6 +637,42 @@ SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::co
             operation_attributes.output_mem_config))};
 }
 
+// Zero-fills `output` in place. The fill must run on the sub-device that holds the matmul's cores: the
+// command queue only orders programs against earlier work on their own sub-device, so a fill on the default
+// (first) sub-device would race with the matmul writing the same buffer when the matmul is on sub-device >= 1
+// (#66852). A program must also sit within a single sub-device, so the fill is restricted to exactly the cores
+// the matmul factory uses: the first num_blocks_x cores (row-major) of the configured rectangle anchored at
+// (0,0) -- not the whole configured grid, which can be larger and straddle a sub-device boundary.
+static Tensor zero_fill_on_matmul_cores(
+    const Tensor& output, const Tensor& in1, const SparseMatmulDeviceOperation::operation_attributes_t& attrs) {
+    if (attrs.program_config.has_value()) {
+        if (const auto* pc = std::get_if<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+                &attrs.program_config.value())) {
+            const bool fill_supported = output.layout() == Layout::TILE &&
+                                        output.storage_type() == StorageType::DEVICE &&
+                                        (output.dtype() == DataType::BFLOAT8_B ||
+                                         output.dtype() == DataType::BFLOAT16 || output.dtype() == DataType::FLOAT32);
+            // Same rectangle the factory derives (see sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp).
+            const CoreCoord grid = pc->allowed_worker_cores.has_value()
+                                       ? pc->allowed_worker_cores->bounding_box().grid_size()
+                                       : pc->compute_with_storage_grid_size;
+            const uint32_t tile_w = in1.tensor_spec().tile().get_width();
+            if (fill_supported && grid.x > 0 && grid.y > 0 && pc->per_core_N > 0 && tile_w > 0) {
+                const uint32_t nt = in1.padded_shape()[-1] / tile_w;
+                const uint32_t num_blocks = ((nt - 1) / pc->per_core_N) + 1;  // num_blocks_y == 1 for sparse 1D
+                const CoreRangeSet rect(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+                if (num_blocks <= rect.num_cores()) {
+                    const CoreRangeSet matmul_cores =
+                        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids({0, 0}, num_blocks, rect, true);
+                    return ttnn::fill(output, 0.0f, std::nullopt, std::optional<Tensor>(output), matmul_cores);
+                }
+            }
+        }
+    }
+    return ttnn::zeros_like(
+        output, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::optional<Tensor>(output));
+}
+
 SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     SparseMatmulDeviceOperation::tensor_return_value_t output_tensors;
@@ -659,13 +696,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
         }
         if (!compact_output) {
             for (auto& output_tensor : output_tensors) {
-                output_tensor = ttnn::zeros_like(
-                    output_tensor,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    std::optional<Tensor>(output_tensor));
+                output_tensor = zero_fill_on_matmul_cores(output_tensor, input_tensors.at(1), operation_attributes);
             }
         }
         return output_tensors;
@@ -678,13 +709,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     }
     // Compact output requires a caller-supplied tensor, so this path is never compact.
     for (auto& output_tensor : output_tensors) {
-        output_tensor = ttnn::zeros_like(
-            output_tensor,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            std::optional<Tensor>(output_tensor));
+        output_tensor = zero_fill_on_matmul_cores(output_tensor, input_tensors.at(1), operation_attributes);
     }
     return output_tensors;
 }

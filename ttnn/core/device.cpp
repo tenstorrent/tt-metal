@@ -5,9 +5,9 @@
 #include "ttnn/device.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/cluster.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 namespace ttnn {
 
