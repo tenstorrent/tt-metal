@@ -350,7 +350,7 @@ tests/didt/ @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT @mbezuljTT @pavlepopovic
 
 # Deployment tests
 tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT
-tests/dram/ @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT @mbezuljTT
+tests/dram/ @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT @mbezuljTT @smohammadiTT @tcolacoTT @ctr-nradojevicTT
 
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core
@@ -444,7 +444,7 @@ ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-de
 ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/**/CMakeLists.txt @tenstorrent/metalium-developers-ds-prefill @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/deepseek/ @tenstorrent/cse-developer-ttnn
 ttnn/cpp/ttnn/operations/experimental/deepseek/**/CMakeLists.txt @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/diagnostics/ @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT @mbezuljTT
+ttnn/cpp/ttnn/operations/experimental/diagnostics/ @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT @mbezuljTT @smohammadiTT @tcolacoTT @ctr-nradojevicTT
 ttnn/cpp/ttnn/operations/experimental/experimental_nanobind.cpp @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ops-leads
 ttnn/cpp/ttnn/operations/experimental/fused_msda/ @ctr-mmicic @ctr-ikasic @ctr-mdukic
 ttnn/cpp/ttnn/operations/experimental/fused_msda/**/CMakeLists.txt @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/metalium-developers-infra
