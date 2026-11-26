@@ -471,12 +471,15 @@ void kernel_main() {
                 if (pos > 0) {
                     noc_async_write(tmpl, get_noc_addr(dst), pos);
                 }
-                noc_async_write(in_addr + src, get_noc_addr(dst + pos), len);
+                // The shard's sticks: a read of this core's own L1 by NoC address, so the transfer's local side is
+                // the stage row (the shard tail past its whole tile rows lies beyond the shard-backed CB).
+                noc_async_read(get_noc_addr(in_addr + src), dst + pos, len);
                 if (pos + len < TR_BYTES) {
                     noc_async_write(tmpl + pos + len, get_noc_addr(dst + pos + len), TR_BYTES - pos - len);
                 }
             }
             noc_async_write_barrier();
+            noc_async_read_barrier();
             cb_push_back(cb_rm_stage_in, n_staged * W);
         }
 
