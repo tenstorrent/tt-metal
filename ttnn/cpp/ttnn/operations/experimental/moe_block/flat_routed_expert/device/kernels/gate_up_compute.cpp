@@ -349,8 +349,10 @@ void kernel_main() {
                 compute_sub_block(first_block, first_slot, frees_weights, rows);
             }
             // (per sub-block: entry << 24 | sub-block << 16 | x wait (us), and the weight wait)
-            UNPACK((ZZ_EMIT("ZZ-GU-SBX", (entry << 24) | (sub_block << 16) | ((zz_x_wait - zz_x0) / 1350))));
-            UNPACK((ZZ_EMIT("ZZ-GU-SBW", (entry << 24) | (sub_block << 16) | ((zz_w_wait - zz_w0) / 1350))));
+            if (entry < 3) {  // (the first experts only: the profiler buffer)
+                UNPACK((ZZ_EMIT("ZZ-GU-SBX", (entry << 24) | (sub_block << 16) | ((zz_x_wait - zz_x0) / 1350))));
+                UNPACK((ZZ_EMIT("ZZ-GU-SBW", (entry << 24) | (sub_block << 16) | ((zz_w_wait - zz_w0) / 1350))));
+            }
         }
     }
     cb_pop_front(schedule_cb, 1);
