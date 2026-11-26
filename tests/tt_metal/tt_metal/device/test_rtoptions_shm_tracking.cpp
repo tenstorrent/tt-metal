@@ -51,4 +51,9 @@ TEST(RunTimeOptionsShmTracking, CPU_OneKeepsItOff) { EXPECT_FALSE(is_tracking_en
 
 TEST(RunTimeOptionsShmTracking, CPU_ZeroTurnsItOn) { EXPECT_TRUE(is_tracking_enabled("0")); }
 
-TEST(RunTimeOptionsShmTracking, CPU_OtherValuesKeepItOff) { EXPECT_FALSE(is_tracking_enabled("true")); }
+// The old parser turned tracking on for these values.
+TEST(RunTimeOptionsShmTracking, CPU_OtherValuesKeepItOff) {
+    for (const char* value : {"", "false", "true"}) {
+        EXPECT_FALSE(is_tracking_enabled(value)) << "value=\"" << value << "\"";
+    }
+}

@@ -2093,11 +2093,20 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // TT_METAL_SHM_TRACKING_DISABLED
         // Write per-device allocation stats to /dev/shm/tt_device_<chip_unique_id>_memory for memory monitor tools.
         // Only the exact value 0 enables tracking.
-        // Default: 1 (SHM tracking disabled)
+        // Default: unset (SHM tracking disabled)
         // Usage: export TT_METAL_SHM_TRACKING_DISABLED=0
-        case EnvVarID::TT_METAL_SHM_TRACKING_DISABLED:
-            this->shm_tracking_disabled = std::string_view(value) != "0";
+        case EnvVarID::TT_METAL_SHM_TRACKING_DISABLED: {
+            const std::string_view setting(value);
+            this->shm_tracking_disabled = setting != "0";
+            if (setting != "0" && setting != "1") {
+                log_warning(
+                    tt::LogMetal,
+                    "TT_METAL_SHM_TRACKING_DISABLED=\"{}\" is not 0 or 1. SHM tracking stays off. Set it to 0 to "
+                    "turn tracking on.",
+                    setting);
+            }
             break;
+        }
 
         // TT_METAL_SHM_VERBOSE
         // Enable verbose logging for SHM tracking.
