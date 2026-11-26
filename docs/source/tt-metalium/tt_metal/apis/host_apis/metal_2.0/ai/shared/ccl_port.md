@@ -12,8 +12,7 @@
 |---|---|---|
 | Caller-supplied `GlobalSemaphore` (in `operation_attributes_t`) | `GlobalSemaphoreParameter` + binding; on a cache hit, the translated override supplies it again | [GlobalSemaphores](#globalsemaphores) |
 | Op-allocated `GlobalSemaphore` (`WorkloadDescriptor::semaphores`) | `MeshWorkloadArtifacts::global_semaphores` | [Op-allocated](#op-allocated-globalsemaphores) |
-| Kernel reads the semaphore's address and uses the `noc_semaphore_*` primitives | `GlobalSemaphore sem(global_sem::<name>)` and its methods | [Kernel side](#kernel-side-the-device-object) |
-| Kernel builds a fabric packet (or calls a helper) with the semaphore's address | **Unsupported**: the device object hides its address | [Appendix A](../audit/metal2_audit.md#globalsemaphore-address-used-outside-the-device-object--unsupported) |
+| Kernel reads the semaphore's address from an argument (for `noc_semaphore_*`, fabric packet headers, helpers) | `GlobalSemaphore(global_sem::<name>).address()`; every use of the address unchanged | [Kernel side](#kernel-side-the-device-object) |
 | `append_fabric_connection_rt_args` (one sender, or `FabricConnectionManager` with present-flags) | `FabricConnectionsSpec` + `FabricConnectionBinding` | [Fabric connections](#fabric-connections) |
 | `append_routing_plane_connection_manager_rt_args` with one link per worker | the same, with several targets | [RoutingPlaneConnectionManager](#routingplaneconnectionmanager) |
 | RPCM with auto-selected or per-route links | **Unsupported** | [Appendix A](../audit/metal2_audit.md#routingplaneconnectionmanager-with-per-route-or-auto-selected-links--unsupported) |
@@ -49,7 +48,7 @@ run_params.global_semaphore_args = {
 
 - **One parameter per distinct semaphore**, named for its role (`out_ready`, `barrier`). The address RTA, its index constant (`kSenderWriterSemaphoreAddr`), and any `// smuggled-rta-ok` comment on it drop with it ([Dropped Plumbing](../port/metal2_port.md#dropped-plumbing)).
 - **A semaphore indexed out of a vector** (`semaphore.at(i)`) is still one parameter per element the kernel reads, each bound to `std::cref(semaphore.at(i))`. When the count isn't fixed per program, use one parameter per element of the count you were given; the count is already in the program hash, or the legacy op was wrong (record it, don't fix it).
-- **A semaphore the kernel selects at run time** (`get_common_arg_val<uint32_t>(semaphore_0 + direction)` over a contiguous block of address args) becomes one parameter per slot and an array of device objects indexed the same way: `GlobalSemaphore sems[] = {GlobalSemaphore(global_sem::sem_0), GlobalSemaphore(global_sem::sem_1)};` then `sems[direction]`. The selection expression is unchanged. Selection that isn't a plain index over the block has no mapping: stop.
+- **A semaphore the kernel selects at run time** (`get_common_arg_val<uint32_t>(semaphore_0 + direction)` over a contiguous block of address args) becomes one parameter per slot and an array of their addresses indexed the same way: `const uint32_t sem_addrs[] = {GlobalSemaphore(global_sem::sem_0).address(), GlobalSemaphore(global_sem::sem_1).address()};` then `sem_addrs[direction]`. The selection expression is unchanged. Selection that isn't a plain index over the block has no mapping: stop.
 - **An optional caller semaphore** (passed as address `0` plus a flag when absent) is a conditionally bound resource ([rule 6](../port/metal2_port.md#kernel-side-whitelist)): bind it only when present, and gate the kernel's uses on a host-emitted define (there is no `global_sem::get_token_if_present`). That makes presence a compile-time property, so it ports only if presence is already in the program hash (the default hash covers an `std::optional` attribute; check a custom hash). Otherwise stop.
 - **Only data-movement kernels bind a `GlobalSemaphore`.** A compute kernel that reads one is [Appendix A](../audit/metal2_audit.md#globalsemaphore-in-a-compute-kernel--unsupported).
 - **The argument is a non-owning reference,** resolved to the address when the run args are set. The object must outlive the program's executions, which a caller-supplied or parked semaphore does.
@@ -104,22 +103,19 @@ const auto& sem = artifacts.global_semaphores.back();
 
 ## Kernel side: the device object
 
-The kernel constructs a `GlobalSemaphore` from its binding token and replaces each use of the raw address with the matching method. Include `api/dataflow/global_semaphore.h`. Each method calls the legacy primitive with the same arguments on Wormhole and Blackhole (`semaphore_dm_impl.h`; `value()` adds a cache-invalidate fence on Blackhole, which is harmless), so the swap is mechanical:
+The kernel constructs a `GlobalSemaphore` from its binding token and takes the address from it. Every use of the address stays exactly as it is. Include `api/dataflow/global_semaphore.h`.
 
-| Legacy (`addr` = the semaphore's address, `ptr` = it cast to `volatile tt_l1_ptr uint32_t*`) | Metal 2.0 (`sem`) |
-|---|---|
-| `uint32_t addr = get_arg_val<uint32_t>(i);` (or a CRTA, or a named arg) | `GlobalSemaphore sem(global_sem::<name>);` |
-| `noc_semaphore_wait(ptr, v)` | `sem.wait(v)` |
-| `noc_semaphore_wait_min(ptr, v)` | `sem.wait_min(v)` |
-| `noc_semaphore_set(ptr, v)` | `sem.set(v)` |
-| `*ptr` (a read) | `sem.value()` |
-| `noc_semaphore_inc(get_noc_addr(x, y, addr), v)` | `sem.up(noc, x, y, v)` |
-| `noc_semaphore_set_multicast(addr, get_noc_multicast_addr(x0, y0, x1, y1, addr), n)` (source is the semaphore itself) | `sem.set_multicast(noc, x0, y0, x1, y1, n)` |
-| the same, `_loopback_src` | `sem.set_multicast<NocOptions::MCAST_INCL_SRC>(noc, x0, y0, x1, y1, n)` |
-| `noc_semaphore_inc_multicast(get_noc_multicast_addr(x0, y0, x1, y1, addr), v, n)` | `sem.inc_multicast(noc, x0, y0, x1, y1, v, n)` |
+```cpp
+// Legacy:
+uint32_t out_ready_addr = get_arg_val<uint32_t>(arg_idx++);
 
-- **`noc` is the NoC the legacy call used:** the kernel's `Noc` object when the legacy call took the default `noc_index`, or one built with the same id when it named one. The methods build the address and issue the operation on that one NoC; a legacy site that built the address for one NoC and issued on another has no mapping. Trailing arguments (`posted`, `linked`, `vc`) carry across where the method has them. A legacy call with a non-default argument the method lacks has no mapping.
-- **Anything else is unsupported**: the address (or a NoC address built from it) handed to a packet header (`to_noc_unicast_atomic_inc`, `NocUnicastAtomicIncCommandHeader`, `NocUnicastAtomicIncFusedCommandHeader`), a `fabric_*` call, a helper in or outside the op directory (`perform_atomic_fabric_write`, the `minimal_ccl_common.hpp` family), arithmetic, a struct field, or a comparison. The device object has no address accessor, and re-expressing a packet send through `sem.up(sender, …)` or `sem.write_and_up(…)` is not a syntax swap (it changes how the header is filled and which NoC the address is built for). The audit gates on it ([Appendix A](../audit/metal2_audit.md#globalsemaphore-address-used-outside-the-device-object--unsupported)). If you meet one mid-port, stop on that factory.
+// Metal 2.0:
+uint32_t out_ready_addr = GlobalSemaphore(global_sem::out_ready).address();
+```
+
+- **Change nothing downstream.** Packet headers, `fabric_*` calls, helpers in or outside the op directory, `noc_semaphore_*` on the address: all stay as legacy has them. `address()` returns the value the host's `GlobalSemaphore::address()` put in the legacy argument, so the kernel computes exactly what it did.
+- **Don't convert uses to the object's methods in the port.** The methods (`wait`, `up`, `set_multicast`, the fabric `up` overloads, …) are the form for new code, but converting is not a syntax swap: some add a fence or a barrier the legacy code didn't have, and the fabric ones fill packet headers differently. That's a separate, measured change, not port work.
+- **One construction per semaphore,** where the legacy kernel read the argument, keeping the legacy variable's name.
 - **Don't call `GlobalSemaphore(uint32_t)`** in a ported kernel. That constructor is for non-Metal-2.0 kernels, and reaching it means the address is still an argument.
 - **Program semaphores are separate.** A program `Semaphore` (`get_semaphore(id)`, `SemaphoreSpec`) ports per the recipe; only the `GlobalSemaphore` rows above change.
 
@@ -241,7 +237,6 @@ The program now fails at build time where legacy may have silently misrouted:
 
 Summarized here; the recognition signals are in [Appendix A](../audit/metal2_audit.md#appendix-a-metal-20-feature-compatibility).
 
-- **The semaphore address beyond the device object** (fabric packet headers, shared helpers). The most common CCL blocker: nearly every CCL writer kernel builds its remote increment from the address.
 - **Fabric mux**, in any form. A factory that chooses the mux or a direct connection at run time is gated whole: the port is one factory, and splitting it is a device-op change.
 - **Different links for the targets of one RPCM**, including auto-selected links.
 - **A `GlobalSemaphore` in a compute kernel.**
