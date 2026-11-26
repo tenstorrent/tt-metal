@@ -1,4 +1,8 @@
 #!/bin/bash
+# Exabox login node: no devices here; run on the reserved node (scripts/exabox/node-run).
+if [[ "$(hostname -f 2>/dev/null)" =~ ^slurm-login-0[1-3]\. ]] && [ -z "${XRUN_BYPASS:-}" ]; then
+    exec "$(dirname "$(readlink -f "$0")")/exabox/node-run" scripts/run_safe_pytest.sh "$@"
+fi
 # run_safe_pytest.sh - Cooperative device-aware test runner
 #
 # Uses flock to serialize device access across multiple agents/terminals.
@@ -55,6 +59,15 @@ WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 TRIAGE_LLM_DIR="${REPO_DIR}/generated/tt-triage"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
+# Splitting one host's chips between jobs with TT_VISIBLE_DEVICES (e.g. the two 2x2 halves of a 2x4 box): each split
+# gets its own lock and dirty flag, and a reset touches only its own boards (UMD ids, as TT_VISIBLE_DEVICES names
+# them; tt-smi runs without the variable so the ids are not renumbered).
+TT_SMI_RESET_TARGETS=()
+if [[ -n "${TT_VISIBLE_DEVICES:-}" ]]; then
+    LOCK_FILE="/tmp/tt-device.lock.${TT_VISIBLE_DEVICES//,/-}"
+    DIRTY_FLAG="/tmp/tt-device.dirty.${TT_VISIBLE_DEVICES//,/-}"
+    read -ra TT_SMI_RESET_TARGETS <<< "${TT_VISIBLE_DEVICES//,/ }"
+fi
 TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
 TRIAGE_LLM="${TRIAGE_LLM_DIR}/triage.csv"
 PROFILE_REPORTS_DIR="${REPO_DIR}/generated/profiler/reports"
@@ -146,7 +159,7 @@ if [[ "$SIM_MODE" == false ]]; then
     # --- Check if device needs reset from previous hang ---
     if [[ -f "$DIRTY_FLAG" ]]; then
         echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
-        if ! tt-smi -r; then
+        if ! env -u TT_VISIBLE_DEVICES tt-smi -r "${TT_SMI_RESET_TARGETS[@]}"; then
             echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed"
             exit 3
         fi
@@ -311,7 +324,7 @@ fi
 # assertion errors) and collection errors don't touch the device.
 if [[ "$IS_HANG" == true ]]; then
     echo "SAFE_PYTEST: Resetting device..."
-    if tt-smi -r; then
+    if env -u TT_VISIBLE_DEVICES tt-smi -r "${TT_SMI_RESET_TARGETS[@]}"; then
         sleep 2
         rm -f "$DIRTY_FLAG"
         echo "SAFE_PYTEST: Device reset complete"

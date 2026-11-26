@@ -97,6 +97,10 @@ def _galaxy_box() -> PerfBox:
 def detect_box(num_devices: int, matrix: bool = False) -> PerfBox | None:
     if not ttnn.device.is_blackhole():  # DSA ops are Blackhole-only; an 8-chip Wormhole T3K is not a LoudBox
         return None
+    if os.environ.get("MLA_PERF_RING4"):
+        # Half a LoudBox (TT_VISIBLE_DEVICES = one 2x2 half) opened as a 1x4 ring under torus XY: SP=1, TP=4 on a
+        # real ring, each chip doing Galaxy's per-chip work (chunk and cache scaled by SP/8).
+        return _scaled_box("LoudBox ring4", (1, 4), torus_xy_device_params)
     if num_devices == 32:
         return _galaxy_box()
     if num_devices == 8:

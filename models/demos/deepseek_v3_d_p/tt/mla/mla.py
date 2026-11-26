@@ -41,6 +41,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 )
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
+# A/B switch: run the early-Q reshard's all-to-all + wkv_b1 as the fused all_to_all_matmul op.
+MLA_EARLY_Q_FUSED_A2AMM = os.environ.get("MLA_EARLY_Q_FUSED_A2AMM", "") not in ("", "0", "false")
+
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
 
@@ -1658,6 +1661,9 @@ class ttMLA:
         """_q_stem after q_b_proj, for _early_q_reshard: one all-to-all heads -> sequence on the projected rows, the
         head split over all heads, wkv_b1 over all heads on this chip's 1/tp of the rows, then RoPE with the
         prefix, row-major (into L1 when it fits). Returns [1, H, S/(sp*tp), 576]."""
+        if MLA_EARLY_Q_FUSED_A2AMM:
+            prefix, rope_seq = self._q_stem_seq_sharded_fused(tt_q, seq_len_local)
+            return self._q_stem_seq_sharded_rope(prefix, rope_seq, rope_tensors, kv_actual_isl, metadata)
         # [1, 1, S/sp, H/tp*qk] -> [1, 1, S/(sp*tp), H*qk]: each TP rank's head columns are contiguous, so the
         # concatenation is in global head order.
         q_seq = ttnn.experimental.all_to_all_async_generic(
@@ -1679,6 +1685,50 @@ class ttMLA:
         # wkv_b1 holds every head here (replicate_wkv_b1).
         prefix = ttnn.linear(nope_seq, self.wkv_b1_weight, **self._early_q_wkv_b1_kwargs(seq_len_local))
         ttnn.deallocate(nope_seq)
+        return self._q_stem_seq_sharded_rope(prefix, rope_seq, rope_tensors, kv_actual_isl, metadata)
+
+    def _q_stem_seq_sharded_fused(self, tt_q, seq_len_local):
+        """The early-Q reshard with the fused all_to_all_matmul (MLA_EARLY_Q_FUSED_A2AMM=1): split this chip's heads
+        first, then nope goes heads -> sequence and through wkv_b1 in one op, rope through its own all-to-all.
+        Returns (prefix [1, H, S/(sp*tp), kv_lora], rope_seq [1, H, S/(sp*tp), qk_rope]), as the chain does."""
+        from ttnn.operations.all_to_all_matmul import all_to_all_matmul
+
+        nope, rope = ttnn.experimental.nlp_create_q_heads_split(
+            tt_q,
+            num_heads=self.num_heads // self.tp_factor,
+            split_head_dim=self.qk_nope_head_dim,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(tt_q)
+        # The chain's wkv_b1 settings: HiFi2, 16-bit DEST, output in L1 when it fits.
+        mm_memory_config = self._early_q_wkv_b1_kwargs(seq_len_local)["memory_config"]
+        compute_config = ttnn.ComputeConfigDescriptor()
+        compute_config.math_fidelity = ttnn.MathFidelity.HiFi2
+        compute_config.fp32_dest_acc_en = False
+        compute_config.math_approx_mode = False
+        prefix = all_to_all_matmul(
+            nope,
+            self.wkv_b1_weight,
+            cluster_axis=self.tp_axis,
+            topology=ttnn.Topology.Ring,
+            num_links=self.ccl_num_links,
+            memory_config=mm_memory_config,
+            compute_kernel_config=compute_config,
+        )
+        ttnn.deallocate(nope)
+        rope_seq = ttnn.experimental.all_to_all_async_generic(
+            rope,
+            in_dim=1,
+            out_dim=2,
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=self.tp_axis,
+        )
+        ttnn.deallocate(rope)
+        return prefix, rope_seq
+
+    def _q_stem_seq_sharded_rope(self, prefix, rope_seq, rope_tensors, kv_actual_isl, metadata):
+        """RoPE on rope_seq with the wkv_b1 prefix concatenated, row-major: the tail of _q_stem_seq_sharded."""
         if self._use_nope:
             # Identity rotation: the scalar start 0 indexes the one-slab table on every chunk, so no metadata.
             rope_kwargs = dict(

@@ -1,0 +1,17 @@
+#!/bin/bash
+# usage: node-run <script relative to the checkout> [args...]
+# Exabox login node (no devices, no builds): run a checkout script as a Slurm step on the reserved node
+# (srun --overlap inside the reservation job; never ssh). The environment is exported to the step, so
+# TT_VISIBLE_DEVICES and the flow's own variables reach the node. The checkout is on shared /data.
+# Overrides: NODE_JOB=<jobid>; NODE_HOST=<node> (default bh-lb-a10u24: the user's running job on that node).
+set -uo pipefail
+REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
+JOB="${NODE_JOB:-}"
+for _ in 1 2 3 4 5; do  # squeue intermittently fails with "Unexpected message received"
+    [ -n "$JOB" ] && break
+    JOB="$(squeue --me -h -t RUNNING -w "${NODE_HOST:-bh-lb-a10u24}" -o %i 2>/dev/null | head -1)"; [ -n "$JOB" ] || sleep 3
+done
+[ -n "$JOB" ] || { echo "node-run: no running reservation job (set NODE_JOB=<jobid>)" >&2; exit 2; }
+export XRUN_BYPASS=1 HOME="${NODE_HOME:-/data/$USER/nodehome}"
+mkdir -p "$HOME"
+exec srun --jobid="$JOB" --overlap -N1 --export=ALL bash -c 'cd "$0" && exec "$@"' "$REPO" "$@"
