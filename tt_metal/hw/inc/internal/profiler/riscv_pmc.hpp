@@ -7,7 +7,7 @@
 
 #pragma once
 
-// Plain TS_DATA so every row reaches profile_log_device.csv; 9090 and 9091 are the Tensix MMIO counters.
+// Plain TS_DATA so every row reaches profile_log_device.csv; 9090 is the Tensix MMIO counters.
 constexpr uint16_t RISCV_PMC_COUNTS_PROFILER_ID = 9092;  // (pmc4 << 32) | pmc3
 constexpr uint16_t RISCV_PMC_CYCLES_PROFILER_ID = 9093;  // (minstret << 32) | mcycle
 constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) | mhpmevent3
@@ -81,7 +81,7 @@ constexpr uint32_t marker_count = 5;
 constexpr uint32_t marker_count = 3;
 #endif
 constexpr uint32_t marker_words = PROFILER_L1_MARKER_UINT32_SIZE + 2;
-constexpr uint32_t reserved_words = marker_count * marker_words + DISPATCH_HEADROOM_SIZE;
+constexpr uint32_t reserved_words = marker_count * marker_words;
 
 // Holds back room for the markers so a kernel that fills the buffer does not drop them.
 inline __attribute__((always_inline)) void begin() {
@@ -92,23 +92,24 @@ inline __attribute__((always_inline)) void begin() {
     llk::perf::riscv::select_upper(PROFILE_RISCV_PMC_DM_EV5, PROFILE_RISCV_PMC_DM_EV6);
     llk::perf::riscv::zero_counters_upper();
 #endif
-    cycle_begin = llk::perf::riscv::read_mcycle();
-    instret_begin = llk::perf::riscv::read_minstret();
+    cycle_begin = llk::perf::riscv::read_csr<llk::perf::riscv::CSR_MCYCLE>();
+    instret_begin = llk::perf::riscv::read_csr<llk::perf::riscv::CSR_MINSTRET>();
 }
 
 // The selects are re-emitted so each capture is self-describing. No flush here: it needs noc_index.
 inline __attribute__((always_inline)) void end() {
-    const uint32_t pmc3 = llk::perf::riscv::read_counter3();
-    const uint32_t pmc4 = llk::perf::riscv::read_counter4();
+    using namespace llk::perf::riscv;
+    const uint32_t pmc3 = read_csr<CSR_MHPMCOUNTER3>();
+    const uint32_t pmc4 = read_csr<CSR_MHPMCOUNTER4>();
 #if defined(RISCV_PMC_UPPER)
-    const uint32_t pmc5 = llk::perf::riscv::read_counter5();
-    const uint32_t pmc6 = llk::perf::riscv::read_counter6();
+    const uint32_t pmc5 = read_csr<CSR_MHPMCOUNTER5>();
+    const uint32_t pmc6 = read_csr<CSR_MHPMCOUNTER6>();
 #endif
-    const uint32_t mcycle = llk::perf::riscv::read_mcycle();
-    const uint32_t minstret = llk::perf::riscv::read_minstret();
+    const uint32_t mcycle = read_csr<CSR_MCYCLE>();
+    const uint32_t minstret = read_csr<CSR_MINSTRET>();
 
     stackSize -= reserved_words;
-    if (!bufferHasRoom<DoingDispatch::DISPATCH>(marker_count * marker_words - 1)) {
+    if (!bufferHasRoom(marker_count * marker_words - 1)) {
         return;
     }
 

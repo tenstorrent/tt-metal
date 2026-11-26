@@ -397,14 +397,14 @@ extern "C" std::uint32_t _start1() {
             my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
             WAYPOINT("R");
-            RiscvPmcBegin();
             uintptr_t kernel_lma =
                 (kernel_config_base +
                  launch_msg->kernel_config.kernel_text_offset[hartid]);  // TODO verify if depends on kernel
+            RiscvPmcBegin();
             auto stack_free = reinterpret_cast<std::uint32_t (*)()>(kernel_lma)();
+            RiscvPmcEnd();
             record_stack_usage(stack_free);
             WAYPOINT("D");
-            RiscvPmcEnd();
             DEVICE_PRINT_KERNEL_FINISHED();
 
             // Signal completion
