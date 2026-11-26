@@ -33,7 +33,7 @@ void bind_tilize(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. Defaults to `None`, which uses the input tensor's memory configuration. A sharded output, including the default one for a sharded input, needs a shard shape that is a multiple of the tile shape. When the input and the output are HEIGHT_SHARDED, WIDTH_SHARDED or BLOCK_SHARDED in L1 with the same memory layout, ``tile`` is 32x32 and ``sub_core_grids`` is `None`, the output keeps the input's shard spec; otherwise it follows ``memory_config``.
-            dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype, or gives ``FLOAT32`` for a ``FP8_E4M3`` input. A ``BFLOAT16`` or ``FLOAT32`` input can give a ``BFLOAT16``, ``FLOAT32``, ``BFLOAT8_B`` or ``BFLOAT4_B`` output. For an integer input it must be `None` or the input's dtype.
+            dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype, or gives ``FLOAT32`` for a ``FP8_E4M3`` input. A ``BFLOAT16`` or ``FLOAT32`` input can give a ``BFLOAT16``, ``FLOAT32``, ``BFLOAT8_B`` or ``BFLOAT4_B`` output, and a ``FLOAT32`` input converted to ``BFLOAT16`` must not hold -0.0. For an integer input it must be `None` or the input's dtype.
             use_multicore (bool, optional): Whether to use multicore. Defaults to `True`. A sharded input needs `True`.
             use_low_perf (bool, optional): Whether to run on one core with one-tile buffers, which uses the least L1. It applies to ROW_MAJOR inputs other than ``UINT8`` on Blackhole. Defaults to `False`. A sharded input needs `False`.
             tile (ttnn.Tile, optional): Tile shape of the output. It must be 32 wide, with a height of 32, 16, 8, 4, 2 or 1. ``BFLOAT8_B`` and ``BFLOAT4_B`` outputs need a height of 32. Defaults to `ttnn.Tile((32, 32))`.
@@ -53,7 +53,7 @@ void bind_tilize(nb::module_& mod) {
                * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
                  - ROW_MAJOR
 
-            ``BFLOAT16`` input values must not be NaN. On Blackhole, ``BFLOAT16``, ``UINT16`` and ``UINT8`` inputs need a
+            ``BFLOAT16`` input values must not be NaN or -0.0. On Blackhole, ``BFLOAT16``, ``UINT16`` and ``UINT8`` inputs need a
             tile height of 2 or more, and a ``UINT8`` input must be in DRAM. On Quasar, the input must be a ROW_MAJOR
             ``BFLOAT16``, ``FLOAT32`` or ``INT32`` tensor, ``FLOAT32`` and ``INT32`` inputs need a tile height of 32, and
             the output must be ``BFLOAT16``, ``FLOAT32`` or ``INT32``.
