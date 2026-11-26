@@ -44,13 +44,19 @@ fixed inside a `PerfConfig` call: read the code for those (`perf-test`,
 - Cross-architecture files: `--cross-arch LEFT RIGHT --kind perf` or
   `--kind func`. Quasar stems drop a trailing `_quasar`. Wormhole and
   Blackhole share files, which are imported once per `CHIP_ARCH`.
-- Functions: strip `test_perf_`, `test_` or `perf_`, then a trailing
-  `_quasar`. One lumped wrapper cannot pair with several functional families;
-  split it.
+- Functions: strip `test_perf_`, `perf_test_`, `test_` or `perf_`, then a
+  trailing `_quasar` and `_perf` or `_test`. One lumped wrapper cannot pair
+  with several functional families; split it.
 - `CROSS_ARCH_FUNCTION_EXCEPTIONS` pairs a function that lives in a different
   module on the other side. Use it only for that. Two modules of one op whose
   stems differ (`pack_dest_bank` against `pack_l1_acc`) are a naming bug: rename
   the module (`perf-test`, "Renames").
+- A same-architecture `perf_<stem>.py` importing
+  `test_<different_stem>.py` is a naming defect, not a comparer exception.
+  Split or rename the functional module so directory discovery pairs it.
+- An explicitly named `perf_<op>_phases.py` phase microbenchmark is outside
+  functional/perf comparison. List it as intentionally perf-only; do not add
+  a fake functional file or patch discovery to hide it.
 
 **Axes**
 

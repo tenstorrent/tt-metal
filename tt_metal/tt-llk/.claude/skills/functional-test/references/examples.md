@@ -305,9 +305,11 @@ its normal operation family remains paired through
 | Quasar generated narrowing | `quasar/test_pack_quasar.py` | `quasar/perf_pack_quasar.py` | One generator creates functional and documented perf combinations |
 | Shared tile axis with perf packaging | `test_unpack_tilize.py` | `perf_unpack_tilize.py` | Shows a legitimate dimension-grid narrowing; inspect manually |
 
-Do not copy legacy separate sources such as `math_transpose_perf.cpp` or
-`block_max8_perf.cpp`. Do not use the orphan `unpack_tilize_perf.cpp`; the
-active pair uses `unpack_tilize_test.cpp`.
+Do not copy legacy defects such as the cross-stem tiny-tile import or
+`math_transpose_perf.cpp`. A dedicated phase source is allowed only for a
+documented `perf_<op>_phases.py` benchmark and does not replace normal paired
+coverage. The block-max8 cleanup inventory tracks the existing benchmark
+until it is renamed and paired coverage is added.
 
 ## Focused validation
 

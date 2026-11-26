@@ -70,7 +70,8 @@ CMake entry to add. Name every collected callable `test_*`.
 ### Python
 
 1. Start from a current test with the same pipeline and architecture, not a
-   legacy test with a separate perf kernel. Good patterns:
+   legacy test with a separate perf kernel unless it is an explicitly named
+   phase microbenchmark. Good paired patterns:
    `test_pack_l1_acc.py` / `perf_pack_l1_acc.py` and
    `quasar/test_pack_quasar.py` / `quasar/perf_pack_quasar.py`.
 2. Define an exported `OP_SWEEP` or one shared generator in the functional
@@ -152,6 +153,23 @@ measures the changed path.
   modes. Perf does not add its own rejection.
 - Follow `perf-test` for run types, measured loops, schemas, and split costs.
 
+### Phase microbenchmark
+
+A phase microbenchmark times internal subroutines or stages rather than the
+functional L1-to-L1 program. It is not paired perf coverage and is exceptional:
+
+- Name the module `perf_<op>_phases.py`, the callable
+  `test_perf_<op>_phases`, and the schema `perf_<op>_phases`.
+- Keep it out of functional/perf comparison and list it as intentionally
+  unmatched in the PR.
+- Add normal paired coverage separately when the operation itself needs perf
+  coverage; the paired path still shares its runner and `*_test.cpp`.
+- Use a dedicated `*_perf.cpp` only for an existing, documented phase
+  benchmark. Do not copy this pattern for a new operation without explicit
+  reviewer agreement.
+
+Follow `perf-test`, "Phase microbenchmarks", for schema and baseline handling.
+
 ### Intentionally functional-only
 
 Typical cases are harness/debug behavior, accuracy tests, state-machine
@@ -182,6 +200,7 @@ named and record the rationale.
 - [ ] Correct file/function names and architecture markers
 - [ ] Golden covers every functional value without weakened tolerances
 - [ ] One runner and C++ source per functional/perf pair
+- [ ] Any phase microbenchmark is separately named `_phases` and documented
 - [ ] Shared sweep/generator; canonical axis names
 - [ ] New function has a normalized perf peer or an explicit functional-only reason
 - [ ] Same skips, parameters, buffers, and `L1_TO_L1` loop in both modes
