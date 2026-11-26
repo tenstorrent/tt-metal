@@ -8,8 +8,8 @@
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 namespace tt::tt_fabric::bench {
 

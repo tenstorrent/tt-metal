@@ -3,17 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from .chip_architecture import quasar_variant
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
     FPU_BINARY_OPERATIONS,
     REDUCE_OPERATIONS,
     SFPU_BINARY_OPERATIONS,
+    SFPU_TERNARY_OPERATIONS,
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
@@ -29,6 +32,7 @@ from .llk_params import (
     MathFidelity,
     MathOperation,
     NarrowTile,
+    PackerReluType,
     PackUntilizeBenchmark,
     PerfRunType,
     ReduceOrder,
@@ -116,6 +120,17 @@ class MATMUL_ROW_MOP(TemplateParameter):
 
 
 @dataclass
+class ADDRMOD_CALLER_SCOPED(TemplateParameter):
+    """Scalar-block multiply: the kernel brackets its executes with the addrmod set/restore helpers."""
+
+    caller_scoped: bool = False
+
+    def convert_to_cpp(self) -> str:
+        scope = "CallerScoped" if self.caller_scoped else "PerCall"
+        return f"constexpr auto ADDRMOD_SCOPE = ckernel::AddrModScope::{scope};"
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 
@@ -145,6 +160,16 @@ class BROADCAST_TYPE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto BROADCAST_TYPE = ckernel::BroadcastType::{self.broadcast_type.value};"
+
+
+@dataclass
+class SEED_BROADCAST_TYPE(TemplateParameter):
+    """Broadcast type of the plain pass that seeds Dest before an ``ACC_TO_DEST`` broadcast pass."""
+
+    seed_broadcast_type: BroadcastType
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto SEED_BROADCAST_TYPE = ckernel::BroadcastType::{self.seed_broadcast_type.value};"
 
 
 @dataclass
@@ -182,6 +207,14 @@ class REUSE_DEST_TYPE(TemplateParameter):
 class EN_DEST_REUSE(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return "#define EN_DEST_REUSE"
+
+
+@dataclass
+class INP_FLOAT32(TemplateParameter):
+    """ttnn's float32-input tag: kernels that branch on it (erf, gelu, ...) build their float32 arm."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define INP_FLOAT32 1"
 
 
 @dataclass
@@ -230,6 +263,10 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
         constants.append(
             f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};"
         )
+    elif mathop in SFPU_TERNARY_OPERATIONS:
+        constants.append(
+            f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
+        )
     elif mathop in FPU_BINARY_OPERATIONS:
         constants.append(
             f"constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::{mathop.cpp_enum_value};"
@@ -255,10 +292,12 @@ class MATH_OP(TemplateParameter):
                 temp_header.append(
                     f"constexpr auto REDUCE_DIM = ckernel::ReduceDim::{self.mathop.cpp_enum_value};"
                 )
-                if self.pool_type:
-                    temp_header.append(
-                        f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
-                    )
+
+        # The pool applies to reduce ops, but kernels that take no mathop (multidim reduce) read it too.
+        if self.pool_type:
+            temp_header.append(
+                f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
+            )
 
         # Optional extra unary operation (used when both a binary and unary op
         # need to be present in the same kernel, e.g. binary-eltwise followed by
@@ -275,21 +314,6 @@ class MATH_OP(TemplateParameter):
             )
 
         return "\n".join(temp_header)
-
-
-@dataclass
-class SFPU_TERNARY_OP(TemplateParameter):
-    """Select the ternary SFPU op at compile time.
-
-    Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
-    ``sfpu_operations.h``. ``ternary_mathop.cpp_enum_value`` must match the
-    ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
-    """
-
-    ternary_mathop: MathOperation = None
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};"
 
 
 @dataclass
@@ -310,11 +334,49 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 class SFPU_CLOBBER_LREGS(TemplateParameter):
     """Fill the SFPU registers with garbage before the op's init (``clobber_sfpu_lregs()``).
 
-    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it.
+    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it. ``clobber_lregs`` is
+    also a perf CSV column, so a perf row states whether it clobbered; False emits nothing.
     """
 
+    clobber_lregs: bool = True
+
     def convert_to_cpp(self) -> str:
-        return "#define SFPU_CLOBBER_LREGS"
+        return "#define SFPU_CLOBBER_LREGS" if self.clobber_lregs else ""
+
+
+@dataclass
+class QUASAR_VARIANT(TemplateParameter):
+    """The Quasar part variant this build targets, recorded as a perf CSV column.
+
+    The variant comes from ``TT_METAL_QUASAR_VARIANT`` at import time and changes which formats
+    and register hints a test sweeps, but it is invisible in the parameter tuple. This reads the
+    same variable so rows from different variants stay distinguishable; it emits no code.
+    """
+
+    quasar_variant: str = field(default_factory=lambda: quasar_variant() or "quasar")
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
+class SFPLOADMACRO(TemplateParameter):
+    """Whether the SFPLOADMACRO fast paths are compiled in, recorded as a perf CSV column.
+
+    The switch itself is ``TT_METAL_DISABLE_SFPLOADMACRO=1``, which ``TestConfig`` turns into
+    ``-DDISABLE_SFPLOADMACRO`` for every kernel part. This reads the same variable, so a macro-ON
+    and a macro-OFF capture carry different values instead of averaging together; it emits no code
+    of its own.
+    """
+
+    sfploadmacro: str = field(
+        default_factory=lambda: (
+            "Off" if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1" else "On"
+        )
+    )
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
@@ -324,10 +386,19 @@ class SFPU_BINOP_MODE(TemplateParameter):
     Emits ``constexpr int SFPU_BINOP_MODE = <n>;`` consumed by
     ``sfpu_binop_scalar_{test,perf}.cpp``, matching the BINOP_MODE enum in
     ``ckernel_sfpu_binop_with_unary.h`` (ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4).
+    ``quasar/sfpu_binop_scalar_quasar_test.cpp`` also takes 5 and 6 for the int32 kernels.
     """
 
     # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
-    _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
+    _MODE = {
+        "ADD": 0,
+        "SUB": 1,
+        "MUL": 2,
+        "DIV": 3,
+        "RSUB": 4,
+        "add_int32": 5,
+        "sub_int32": 6,
+    }
 
     binop_mathop: MathOperation = None
 
@@ -465,6 +536,27 @@ class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
         if not self.max_min_sign_magnitude:
             return ""
         return "#define SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE 1"
+
+
+@dataclass
+class SFPU_POWER_ITERATIVE_EXPONENT(TemplateParameter):
+    """Exponent for power_iterative on Quasar; ``power_iterative_runtime`` has the harness pass it
+    through a volatile, so the kernel takes its runtime-exponent path."""
+
+    power_iterative_exponent: int = 3
+    power_iterative_runtime: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if self.power_iterative_exponent < 0:
+            raise ValueError(
+                f"power_iterative takes a non-negative exponent, got {self.power_iterative_exponent}"
+            )
+        lines = [
+            f"#define SFPU_POWER_ITERATIVE_EXPONENT {self.power_iterative_exponent}u"
+        ]
+        if self.power_iterative_runtime:
+            lines.append("#define SFPU_POWER_ITERATIVE_RUNTIME_EXPONENT 1")
+        return "\n".join(lines)
 
 
 @dataclass
@@ -1098,14 +1190,6 @@ class PERF_RUN_TYPE(TemplateParameter):
 
 
 @dataclass
-class REDUCE_POOL_TYPE(TemplateParameter):
-    reduce_pool_type: ReducePool
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.reduce_pool_type.value};"
-
-
-@dataclass
 class REDUCE_ORDER(TemplateParameter):
     """Order of the chained SFPU reduce passes in sfpu_reduce_multidim_test.cpp, all under one
     shared init_reduce (see ReduceOrder; the kernel names the values REDUCE_ORDER_*).
@@ -1245,6 +1329,7 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
     do_extra_scale: bool = False
     extra_scale: int = 0x3F800000
     output_tiles: int = 3
+    sanitize_output: bool = True
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1280,6 +1365,7 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
             f"constexpr bool GMG_DO_EXTRA_SCALE = {str(self.do_extra_scale).lower()};",
             f"constexpr std::uint32_t GMG_EXTRA_SCALE = {self.extra_scale};",
             f"constexpr std::uint32_t GMG_OUTPUT_TILES = {self.output_tiles};",
+            f"constexpr bool GMG_SANITIZE_OUTPUT = {str(self.sanitize_output).lower()};",
         ]
         return "\n".join(lines)
 
@@ -1405,14 +1491,6 @@ class TOPK_XL(TemplateParameter):
 class TOP32_RM(TemplateParameter):
     """Compile-time knobs for ``top32_rm_test.cpp`` (the DeepSeek top32_rm family).
 
-    ``row_elements``  length of the row being reduced to its top 32. The driver walks it in
-                      64-element chunks, so a value that is 32 (mod 64) is what reaches the
-                      ``num_faces=2`` tail path -- the same shape the Metal dev test covers
-                      with row=160.
-    ``datum_bytes``   L1 datum size of both operands, which is the only thing the driver
-                      needs to turn a chunk index into an address: one chunk is
-                      ``64 * datum_bytes`` bytes, and unpacker addresses count 16-byte words.
-                      Must match the format the stimuli are written in.
     ``top_min``       ``_bitonic_top32_merge_``'s template polarity. False (the consumer's
                       value) keeps the max half of each compare-exchange, i.e. a top-32.
     ``top32_mode``    0 walks the row in 64-element chunks through this family's own unpack
@@ -1430,13 +1508,10 @@ class TOP32_RM(TemplateParameter):
                       layer, and the only thing in the tree that calls those 7 entry points at
                       all. In the plain mode the unpack goes through
                       ``experimental/llk_unpack_A_top32_rm_api.h`` too, which picks its own
-                      branch (Float32 takes SrcA there, not unpack-to-dest, so those cells differ
-                      from their primitives-path namesakes) and the per-chunk L1 offset, so
-                      ``datum_bytes`` is then only the primitives' fallback for mode 1.
+                      branch (Float32 takes SrcA there, not unpack-to-dest) and applies the
+                      per-chunk L1 offsets used by the consumer.
     """
 
-    row_elements: int = 64
-    datum_bytes: int = 2
     top_min: bool = False
     via_wrappers: bool = False
     # Named for the constant it emits rather than bare `mode`: field names have to be unique
@@ -1445,25 +1520,15 @@ class TOP32_RM(TemplateParameter):
     top32_mode: int = 0
 
     def convert_to_cpp(self) -> str:
-        if self.row_elements % 32 != 0:
-            raise ValueError(
-                f"row_elements must be a multiple of 32, got {self.row_elements}"
-            )
         if self.top32_mode not in (0, 1):
             raise ValueError(
                 f"top32_mode must be 0 (plain) or 1 (pre-sorted), got {self.top32_mode}"
             )
-        if self.top32_mode == 1 and self.row_elements < 1024:
-            raise ValueError(
-                "the pre-sorted mode needs at least one whole 1024-element chunk, got "
-                f"{self.row_elements}"
-            )
         return "\n".join(
             [
-                f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
-                f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
                 f"constexpr bool TOP32_TOP_MIN = {str(self.top_min).lower()};",
                 f"constexpr std::uint32_t TOP32_MODE = {self.top32_mode}u;",
+                f"#define TOP32_PRE_SORTED_MODE {int(self.top32_mode == 1)}",
                 f"#define TOP32_VIA_WRAPPERS {int(self.via_wrappers)}",
             ]
         )
@@ -1566,6 +1631,16 @@ class MOE_GATE_TOPK(TemplateParameter):
             f"constexpr bool MOE_GATE_SCORES_INCLUDE_BIAS = {str(self.scores_include_bias).lower()};",
         ]
         return "\n".join(lines)
+
+
+@dataclass
+class MOE_GATE_TOPK_STIMULUS(TemplateParameter):
+    """Record stimulus-only MoE-gate settings in perf reports."""
+
+    spread_biased_scores: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
@@ -1700,6 +1775,45 @@ class LOOP_FACTOR(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t LOOP_FACTOR;", "I"
+
+
+@dataclass
+class TOP32_GEOMETRY(RuntimeParameter):
+    """Top32 row geometry: runtime in normal builds, generated constants in SoL."""
+
+    row_elements: int
+    datum_bytes: int
+    top32_result_stride: int = 0
+
+    def __post_init__(self):
+        if self.row_elements % 32 != 0:
+            raise ValueError(
+                f"row_elements must be a multiple of 32, got {self.row_elements}"
+            )
+        if self.datum_bytes not in (2, 4):
+            raise ValueError(f"datum_bytes must be 2 or 4, got {self.datum_bytes}")
+        if self.top32_result_stride not in (0, 2):
+            raise ValueError(
+                "top32_result_stride must be 0 (reuse outputs) or 2 "
+                f"(retain every repeat), got {self.top32_result_stride}"
+            )
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
+                f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
+                f"constexpr std::uint32_t TOP32_RESULT_STRIDE = {self.top32_result_stride}u;",
+            ]
+        )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return (
+            "std::uint32_t TOP32_ROW_ELEMENTS;\n"
+            "std::uint32_t TOP32_DATUM_BYTES;\n"
+            "std::uint32_t TOP32_RESULT_STRIDE;",
+            "III",
+        )
 
 
 @dataclass
@@ -1895,10 +2009,10 @@ class TILE_COUNT(RuntimeParameter):
 
 @dataclass
 class NUM_GUARD_TILES(RuntimeParameter):
-    count: int = 0
+    num_guard_tiles: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t NUM_GUARD_TILES = {self.count};"
+        return f"constexpr std::uint32_t NUM_GUARD_TILES = {self.num_guard_tiles};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t NUM_GUARD_TILES;", "I"
@@ -2226,6 +2340,20 @@ class RELU_CONFIG(RuntimeParameter):
 
 
 @dataclass
+class RELU_TYPE(TemplateParameter):
+    """The packer ReLU mode by name, recorded as a perf CSV column; it emits no code.
+
+    ``RELU_CONFIG`` packs the mode together with a threshold, so this states the mode on its own.
+    It is a template, not a runtime parameter, because every runtime field is serialised to L1.
+    """
+
+    relu_type: PackerReluType = PackerReluType.NoRelu
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
 class NUM_ROWS_TO_PACK(RuntimeParameter):
     num_rows_to_pack: int = 0
 
@@ -2544,13 +2672,13 @@ class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
 class ZERO_PAD_ROWS(TemplateParameter):
     """SFPU row bounds for _zero_pad_tile_."""
 
-    valid_rows: int = 0
-    total_rows: int = 32
+    zero_pad_valid_rows: int = 0
+    zero_pad_total_rows: int = 32
 
     def convert_to_cpp(self) -> str:
         return (
-            f"constexpr int ZERO_PAD_VALID_ROWS = {self.valid_rows};\n"
-            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.total_rows};"
+            f"constexpr int ZERO_PAD_VALID_ROWS = {self.zero_pad_valid_rows};\n"
+            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.zero_pad_total_rows};"
         )
 
 
@@ -2577,14 +2705,14 @@ class SPARSE_K_CONFIG(TemplateParameter):
 @dataclass
 class CLAMPED_SILU_PARAMS(TemplateParameter):
     clamped_silu_op: str = "GATE"
-    scalar0: float = 1.0
-    scalar1: float = 1.0
+    clamped_silu_scalar0: float = 1.0
+    clamped_silu_scalar1: float = 1.0
 
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.clamped_silu_scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.clamped_silu_scalar1)}u;"
         )
 
 

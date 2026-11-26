@@ -18,9 +18,9 @@
 #include <tt-metalium/workload/utils/table.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/optional_reference.hpp>
 #include <tt_stl/strong_type.hpp>
 
@@ -241,8 +241,9 @@ private:
  * @brief Replays @p command_list on @p cq.
  * @p cq must match the device and queue used to build the list.
  *
- * A tensor range is the DRAM footprint of a tensor bound to a recorded program, recorded when SetProgramRunArgs() or
- * UpdateProgramRunArgs() binds it, or when CommandList::update_args() patches it.
+ * A tensor range is the DRAM footprint of a tensor bound to a recorded program, recorded when
+ * Program::set_program_run_args() or Program::update_program_run_args() binds it, or when CommandList::update_args()
+ * patches it.
  *
  * @param cq                    Command queue to replay on.
  * @param command_list          Command list to replay.

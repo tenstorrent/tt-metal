@@ -7,8 +7,8 @@
 #include <enchantum/enchantum.hpp>
 #include <cstdint>
 #include <sys/types.h>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/program/program_impl.hpp"
 #include <algorithm>
 #include <array>
@@ -24,23 +24,23 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/float8.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 #include "llk_device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/int8.hpp"
 #include "tt_metal/test_utils/uint8.hpp"
@@ -48,8 +48,9 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "single_core_compute_runners.hpp"
 
@@ -411,7 +412,7 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     std::vector<std::uint32_t> src0_vec = test_config.src0_data.empty()
                                               ? create_arange_vector_of_bfloat16(input_dram_buffer_size, false)
@@ -443,7 +444,7 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
             node, {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}),
     });
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE});
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -593,11 +594,16 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     const TensorParamName IN_TENSOR{"in_tensor"};
     const TensorParamName OUT_TENSOR{"out_tensor"};
 
+    const Tile tile = Tile::from_face_grid(
+        test_config.tile_shape_in_faces_r,
+        test_config.tile_shape_in_faces_c,
+        {test_config.face_r_dim, constants::FACE_WIDTH});
     DataflowBufferSpec inp_data_dfb_spec{
         .unique_id = INP_DATA_DFB,
         .entry_size = test_config.input_single_tile_size,
-        .num_entries = std::max(2u, test_config.num_tiles_c),
+        .num_entries = test_config.num_tiles_r * test_config.num_tiles_c,
         .data_format_metadata = test_config.input_fmt,
+        .tile_format_metadata = tile,
     };
     const std::uint32_t scaler_tile_size = tt::datum_size(test_config.input_fmt) * 32 * 32;
     DataflowBufferSpec inp_scaler_dfb_spec{
@@ -609,8 +615,9 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = test_config.output_single_tile_size,
-        .num_entries = std::max(2u, test_config.num_tiles_c),
+        .num_entries = test_config.num_tiles_r * test_config.num_tiles_c,
         .data_format_metadata = test_config.output_fmt,
+        .tile_format_metadata = tile,
     };
 
     DataMovementHardwareConfig reader_hw_config;
@@ -737,7 +744,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     std::vector<std::uint32_t> src0_vec = create_random_vector_of_bfloat16(input_dram_buffer_size, 100, 42);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), src0_vec);
@@ -762,7 +769,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
         {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -1069,7 +1076,11 @@ static void run_quasar_tilize_untilize_test(
     const std::uint32_t num_faces = tile_shape_in_faces[0] * tile_shape_in_faces[1];
     const bool tiny_tile = (tile_shape_in_faces != std::array<std::uint32_t, 2>{2, 2} || face_r_dim != 16);
 
-    bool is_8bit_integer = (input_data_format == tt::DataFormat::Int8 || input_data_format == tt::DataFormat::UInt8);
+    // An 8-bit integer input is promoted to a 32-bit word in dest, so the golden needs expanding
+    // only when the pack writes that word out. A pack back down to 8 bits stays byte-packed.
+    const bool promotes_8bit_to_dest_width =
+        (input_data_format == tt::DataFormat::Int8 || input_data_format == tt::DataFormat::UInt8) &&
+        output_data_format == tt::DataFormat::Int32;
     std::uint32_t num_tiles = num_tiles_r * num_tiles_c;
     std::uint32_t input_single_tile_size = tt::tile_size(input_data_format);
     std::uint32_t output_single_tile_size = tt::tile_size(output_data_format);
@@ -1213,7 +1224,7 @@ static void run_quasar_tilize_untilize_test(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     std::vector<std::uint32_t> src_vec;
     if (input_data_format == tt::DataFormat::Int8) {
@@ -1270,7 +1281,7 @@ static void run_quasar_tilize_untilize_test(
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -1289,7 +1300,7 @@ static void run_quasar_tilize_untilize_test(
     auto golden = is_tilize ? ::unit_tests::compute::gold_standard_tilize(src_vec, golden_config)
                             : ::unit_tests::compute::gold_standard_untilize(src_vec, golden_config);
 
-    if (is_8bit_integer) {
+    if (promotes_8bit_to_dest_width) {
         // Int8/UInt8 in dest is promoted to Int32. Expand each byte to a uint32_t word.
         // Hardware uses sign-magnitude representation for Int8:
         //   bit 31 = sign (MSB of the byte), bits [6:0] = magnitude (lower 7 bits of the byte)
@@ -1560,22 +1571,26 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTileCr
 
 // Quasar Unpack TilizeA_B (tilize + reduce col max)
 // Quasar's unpack_tilizeA_B is only compatible with the reduce math kernel.
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarComputeUnpackTilizeA_B) {
-    for (bool dst_full_sync_en : {true, false}) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            for (tt::DataFormat input_data_format : {tt::DataFormat::Float16_b}) {
-                std::uint32_t tile_size = tt::tile_size(input_data_format);
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeA_B) {
+    std::vector<std::array<std::uint32_t, 3>> geometries = {
+        {2, 2, 16}, {2, 1, 16}, {1, 2, 16}, {1, 1, 16}, {1, 2, 8}, {1, 2, 4}, {1, 2, 2}, {1, 2, 1}};
+    tt::DataFormat input_data_format = tt::DataFormat::Float16_b;
+    for (auto& [faces_r, faces_c, face_r_dim] : geometries) {
+        std::uint32_t tile_datums = faces_r * faces_c * face_r_dim * tt::constants::FACE_WIDTH;
+        for (bool dst_full_sync_en : {true, false}) {
+            for (bool fp32_dest_acc_en : {true, false}) {
                 tt::DataFormat output_data_format =
                     fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-                std::uint32_t output_tile_size = tt::tile_size(output_data_format);
                 unit_tests::compute::tilize::TestConfig test_config = {
                     .dst_full_sync_en = dst_full_sync_en,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = tile_size,
-                    .output_single_tile_size = output_tile_size,
+                    .input_single_tile_size = tt::datum_size(input_data_format) * tile_datums,
+                    .output_single_tile_size = tt::datum_size(output_data_format) * tile_datums,
                     .num_tiles_r = 2,
                     .num_tiles_c = 10,
+                    .tile_shape_in_faces_r = faces_r,
+                    .tile_shape_in_faces_c = faces_c,
+                    .face_r_dim = face_r_dim,
                     .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A_B,
                     .input_fmt = input_data_format,
                     .output_fmt = output_data_format,
@@ -1619,6 +1634,175 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) 
                 /*fp32_dest_acc_en=*/true,
                 tt::DataFormat::Int8,
                 /*output_data_format=*/tt::DataFormat::Int32);
+        }
+    }
+}
+
+// Pack Untilize Int8 -> Int8, which no other test in this file exercises. Random byte stimuli keep
+// every datum distinct, so a pack that stopped short of the full tile or stepped the wrong face row
+// cannot pass on fill bytes alone.
+//
+// This runs on a 16-bit Dest, where the Dest datum is the Int8 itself. QuasarComputePackUntilizeInt8Dest32
+// covers the 32-bit Dest.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt8) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            run_quasar_tilize_untilize_test(
+                this->device(),
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/false,
+                tt::DataFormat::Int8,
+                /*output_data_format=*/tt::DataFormat::Int8);
+        }
+    }
+}
+
+// Pack Untilize Dst Int8 -> Int8 (tiles pre-loaded into dest via copy_tile)
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt8) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            run_quasar_tilize_untilize_test(
+                this->device(),
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE_DST,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/false,
+                tt::DataFormat::Int8,
+                /*output_data_format=*/tt::DataFormat::Int8);
+        }
+    }
+}
+
+// Int8 output on the strided pack path, over the geometries a tiny tile actually runs.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTileInt8) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
+    const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
+    for (auto& cfg : test_configs) {
+        for (const auto& geo : geometries) {
+            for (bool dst_full_sync_en : {true, false}) {
+                run_quasar_tilize_untilize_test(
+                    this->device(),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::UNTILIZE,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/false,
+                    tt::DataFormat::Int8,
+                    tt::DataFormat::Int8,
+                    /*tile_shape_in_faces=*/{geo[0], geo[1]},
+                    /*face_r_dim=*/geo[2]);
+            }
+        }
+    }
+}
+
+// Pack Untilize Dst tiny tile, Int8 output: tiles pre-loaded into dest via copy_tile.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTileInt8) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
+    const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
+    for (auto& cfg : test_configs) {
+        for (const auto& geo : geometries) {
+            for (bool dst_full_sync_en : {true, false}) {
+                run_quasar_tilize_untilize_test(
+                    this->device(),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::UNTILIZE_DST,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/false,
+                    tt::DataFormat::Int8,
+                    tt::DataFormat::Int8,
+                    /*tile_shape_in_faces=*/{geo[0], geo[1]},
+                    /*face_r_dim=*/geo[2]);
+            }
+        }
+    }
+}
+
+// Int8 out of a 32-bit Dest, which is the configuration a quantized model runs: the Dest datum is a
+// sign-magnitude word, so pack_src names Int32 and the packer gasket narrows back to Int8 at L1.
+// The round trip is lossless, so the golden is the plain untilize golden.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt8Dest32) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            run_quasar_tilize_untilize_test(
+                this->device(),
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/true,
+                tt::DataFormat::Int8,
+                /*output_data_format=*/tt::DataFormat::Int8);
+        }
+    }
+}
+
+// Pack Untilize Dst Int8 -> Int8 out of a 32-bit Dest (tiles pre-loaded into dest via copy_tile).
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt8Dest32) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            run_quasar_tilize_untilize_test(
+                this->device(),
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE_DST,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/true,
+                tt::DataFormat::Int8,
+                /*output_data_format=*/tt::DataFormat::Int8);
+        }
+    }
+}
+
+// The strided pack path at 32-bit Dest, which a quantized deformable-attention kernel writes its
+// output with. It is the only case here where the packer's input and output datum widths differ,
+// and each side's stride is scaled by a hardware-derived bytes-per-datum.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTileInt8Dest32) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
+    const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
+    for (auto& cfg : test_configs) {
+        for (const auto& geo : geometries) {
+            for (bool dst_full_sync_en : {true, false}) {
+                run_quasar_tilize_untilize_test(
+                    this->device(),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::UNTILIZE,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/true,
+                    tt::DataFormat::Int8,
+                    tt::DataFormat::Int8,
+                    /*tile_shape_in_faces=*/{geo[0], geo[1]},
+                    /*face_r_dim=*/geo[2]);
+            }
+        }
+    }
+}
+
+// UInt8 takes the same Int32 pack_src: Dest has no unsigned 32-bit format, so the byte rides in the
+// magnitude of a signed word with the sign clear.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeUInt8Dest32) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            run_quasar_tilize_untilize_test(
+                this->device(),
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/true,
+                tt::DataFormat::UInt8,
+                /*output_data_format=*/tt::DataFormat::UInt8);
         }
     }
 }
@@ -1703,8 +1887,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstToDest)
 // Quasar fast untilize: no dedicated fast-untilize LLK on Quasar, so fast_untilize_* (api/compute/experimental/
 // fast_untilize.h) forwards to the plain pack_untilize path -- this exercises that forwarding on real Quasar
 // single-card CI.
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarComputeFastUntilize) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastUntilize) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 4}, {2, 2}};
     for (auto num_tile : num_tiles) {
         unit_tests::compute::tilize::TestConfig test_config = {
@@ -1724,8 +1907,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarComputeFastUntilize)
 
 // Quasar fast tilize: no dedicated fast-tilize LLK on Quasar, so fast_tilize_* forwards to the plain
 // unpack_tilize path (tilize.h) -- this exercises that forwarding on real Quasar single-card CI.
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarComputeFastTilize) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastTilize) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 4}, {2, 2}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {false}) {

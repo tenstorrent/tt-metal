@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 
 // Blackhole and Quasar only: ckernel_sfpu_clamped_silu_glu.h is placed under those ckernel trees.
@@ -49,7 +50,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void clamped_silu_glu_tile(
-    uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+    std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -65,10 +66,7 @@ ALWI void clamped_silu_glu_tile(
  * Please refer to documentation for any_init.
  */
 ALWI void clamped_silu_glu_tile_init() {
-    // The SfpuType tag only selects whether eltwise_binary_sfpu_configure_addrmod programs
-    // ADDR_MOD_6, which it does for the integer-multiply, min/max and compare ops; a pure-sfpi
-    // binary op needs none of that, so `unused` is accurate rather than a placeholder. Matches
-    // llk_math_eltwise_binary_sfpu_swiglu_init, which passes `unused` for the same reason.
+    // The SfpuType tag selects no per-op init state, so `unused` is accurate.
     MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::clamped_silu_glu_init)));
 }
 

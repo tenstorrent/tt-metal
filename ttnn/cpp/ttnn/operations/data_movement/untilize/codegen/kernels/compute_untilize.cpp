@@ -16,7 +16,6 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/dataflow/circular_buffer.h"
 

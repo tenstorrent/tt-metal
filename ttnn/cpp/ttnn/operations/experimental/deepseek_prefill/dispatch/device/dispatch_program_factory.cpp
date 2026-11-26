@@ -9,16 +9,16 @@
 #include <unordered_set>
 #include <utility>
 #include <limits>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <ttnn/global_semaphore.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
@@ -427,7 +427,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // configs and topologies (any mesh shape) with fabric present. FABRIC_2D uses a portable
     // RoutingPlaneConnectionManager (not array-indexable) and is excluded; this is_2d_fabric gate mirrors
     // the kernel's FABRIC_2D #ifdef (same INVARIANT as the is_2d_fabric derivation further below).
-    const bool is_1d_fabric = !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool is_1d_fabric = !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device));
     const bool sparse_has_fabric = (operation_attributes.num_links > 0);
     // fp8_scaled_input is supported: it extends metadata to 3 routing fields + one word per
     // per-128-block scale, and because a group is one token fanned out to several chips, that scale tail
@@ -580,7 +580,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // injects based on the control plane's is_2D_routing_enabled(). If the two ever diverge, the host
     // pushes 2D-shaped args while the kernel compiles the 1D #else branch (or vice-versa) and arg
     // parsing corrupts.
-    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device));
     TT_FATAL(
         !is_2d_fabric || (operation_attributes.axis.has_value() && operation_attributes.axis.value() < 2),
         "FABRIC_2D dispatch requires cluster_axis 0 or 1; got {}",

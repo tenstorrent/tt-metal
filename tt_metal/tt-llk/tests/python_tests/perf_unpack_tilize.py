@@ -7,7 +7,7 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
-from test_unpack_tilize import unpack_tilize
+from test_unpack_tilize import UNPACK_TILIZE_TILE_DIMENSIONS, unpack_tilize
 
 _PERF_RUN_TYPES = [
     PerfRunType.L1_TO_L1,
@@ -17,8 +17,13 @@ _PERF_RUN_TYPES = [
 PERF_LOOP_FACTOR = 256
 
 
-def _input_dimensions(rt_dim, ct_dim):
-    return [rt_dim * TILE_DIMENSIONS[0], ct_dim * TILE_DIMENSIONS[1]]
+def _input_dimensions(max_rt_dim, max_ct_dim):
+    """Every [rows, cols] in elements from 1x1 up to max_rt_dim x max_ct_dim tiles."""
+    return [
+        [rt_dim * TILE_DIMENSIONS[0], ct_dim * TILE_DIMENSIONS[1]]
+        for rt_dim in range(1, max_rt_dim + 1)
+        for ct_dim in range(1, max_ct_dim + 1)
+    ]
 
 
 @pytest.mark.perf
@@ -31,8 +36,8 @@ def _input_dimensions(rt_dim, ct_dim):
             DataFormat.Fp8_e4m3,
         ]
     ),
-    rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
-    ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    input_dimensions=_input_dimensions(8, 8),
+    tile_dimensions=UNPACK_TILIZE_TILE_DIMENSIONS,
     run_types=[_PERF_RUN_TYPES],
     loop_factor=[PERF_LOOP_FACTOR],
     is_perf=[True],
@@ -40,8 +45,8 @@ def _input_dimensions(rt_dim, ct_dim):
 def test_perf_unpack_tilize_float(
     perf_report,
     formats,
-    rt_dim,
-    ct_dim,
+    input_dimensions,
+    tile_dimensions,
     run_types,
     loop_factor,
     is_perf,
@@ -57,9 +62,13 @@ def test_perf_unpack_tilize_float(
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip("Bfp8_b input not supported for unpack_tilize")
 
+    if formats.output_format == DataFormat.Bfp8_b and tile_dimensions != [32, 32]:
+        pytest.skip("Bfp8_b output format only works with 32x32 tiles (num_faces=4)")
+
     unpack_tilize(
         formats,
-        input_dimensions=_input_dimensions(rt_dim, ct_dim),
+        tile_dimensions=tile_dimensions,
+        input_dimensions=input_dimensions,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
@@ -70,8 +79,8 @@ def test_perf_unpack_tilize_float(
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
-    rt_dim=[1, 2],
-    ct_dim=[1, 2],
+    input_dimensions=_input_dimensions(2, 2),
+    tile_dimensions=UNPACK_TILIZE_TILE_DIMENSIONS,
     run_types=[_PERF_RUN_TYPES],
     loop_factor=[PERF_LOOP_FACTOR],
     is_perf=[True],
@@ -79,8 +88,8 @@ def test_perf_unpack_tilize_float(
 def test_perf_unpack_tilize_int(
     perf_report,
     formats,
-    rt_dim,
-    ct_dim,
+    input_dimensions,
+    tile_dimensions,
     run_types,
     loop_factor,
     is_perf,
@@ -88,7 +97,8 @@ def test_perf_unpack_tilize_int(
     unpack_tilize(
         formats,
         unpack_to_dest=True,
-        input_dimensions=_input_dimensions(rt_dim, ct_dim),
+        tile_dimensions=tile_dimensions,
+        input_dimensions=input_dimensions,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

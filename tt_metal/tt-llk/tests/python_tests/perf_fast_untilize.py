@@ -18,6 +18,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
+    NUM_GUARD_TILES,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -48,6 +49,7 @@ def test_perf_fast_untilize(
         runtimes=[
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),
+            NUM_GUARD_TILES(0),
         ],
         variant_stimuli=StimuliConfig(
             None,

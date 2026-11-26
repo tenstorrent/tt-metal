@@ -11,7 +11,7 @@
 // Switching a kernel's pack or unpack target Dataflow Buffer (DFB) without re-running the matching *_init
 // leaves the MOP aimed at the previous DFB, and the op silently touches the wrong buffer.
 //
-// This guard records, per TRISC and per TDMA engine, the DFB ID that engine's descriptor
+// This guard records, per TRISC and per BFD id (one fixed id per TDMA engine), the DFB ID that engine's descriptor
 // was last programmed from, and asserts at execute time that the caller's DFB matches.
 
 #include <cstdint>
@@ -24,16 +24,14 @@
 namespace llk_reinit_guard
 {
 
-inline constexpr std::uint8_t kNumEngines = static_cast<std::uint8_t>(ckernel::trisc::BfdResource::Count);
-
 #ifdef ENV_LLK_INFRA
 inline std::uint8_t* slots()
 {
-    static std::uint8_t s[kNumEngines] = {};
+    static std::uint8_t s[ckernel::trisc::BD_TABLE_NUM_ENTRIES] = {};
     return s;
 }
 #else
-extern thread_local std::uint8_t reinit_guard_slots[kNumEngines]; // defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc
+extern thread_local std::uint8_t reinit_guard_slots[ckernel::trisc::BD_TABLE_NUM_ENTRIES]; // defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc
 
 inline std::uint8_t* slots()
 {
@@ -41,14 +39,14 @@ inline std::uint8_t* slots()
 }
 #endif
 
-inline void note_programmed(const ckernel::trisc::BfdResource e, const std::uint32_t dfb)
+inline void note_programmed(const std::uint8_t bfd_id, const std::uint32_t dfb)
 {
-    slots()[static_cast<std::uint8_t>(e)] = static_cast<std::uint8_t>(dfb + 1);
+    slots()[bfd_id] = static_cast<std::uint8_t>(dfb + 1);
 }
 
-inline bool matches(const ckernel::trisc::BfdResource e, const std::uint32_t dfb)
+inline bool matches(const std::uint8_t bfd_id, const std::uint32_t dfb)
 {
-    return slots()[static_cast<std::uint8_t>(e)] == static_cast<std::uint8_t>(dfb + 1);
+    return slots()[bfd_id] == static_cast<std::uint8_t>(dfb + 1);
 }
 } // namespace llk_reinit_guard
 

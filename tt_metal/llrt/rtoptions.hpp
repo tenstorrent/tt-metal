@@ -27,8 +27,8 @@
 #include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
 #include "tt_target_device.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>  // For DispatchCoreConfig
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 
@@ -95,6 +95,7 @@ struct TargetSelection {
     std::string file_name;  // File name to write output to.
     bool one_file_per_risc = false;
     bool prepend_device_core_risc{};
+    bool tag_firmware{};  // Start each line that firmware printed with "[FW] ".
 };
 
 struct WatcherSettings {
@@ -289,7 +290,8 @@ class RunTimeOptions {
     bool skip_loading_fw = false;
 
     bool jit_analytics_enabled = false;
-    bool riscv_debug_info_enabled = false;
+    // TT_METAL_RISCV_DEBUG_INFO when set; unset, get_riscv_debug_info_enabled() picks the default.
+    std::optional<bool> riscv_debug_info_override;
     uint32_t watcher_debug_delay = 0;
 
     bool validate_kernel_binaries = false;
@@ -388,8 +390,16 @@ class RunTimeOptions {
     // Enable fabric VC2 (neighbour exchange, single-hop)
     bool enable_fabric_vc2 = false;
 
+    // Add a host_rdma sender channel to every fabric router's VC0 (host-initiated RDMA)
+    bool enable_fabric_host_rdma = false;
+
     // EXPERIMENTAL: Enable VC1 inter-mesh pass-through routing (A->B->C). Not deadlock-safe.
     bool enable_fabric_mesh_pass_through = false;
+
+    // EXPERIMENTAL: Build fabric routers from the fabric graph instead of the stock builder
+    bool fabric_graph_builder = false;
+
+    bool fabric_inter_domain = false;
 
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
@@ -576,6 +586,7 @@ public:
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+    void set_allocator_mode_hybrid(bool enable) { allocator_mode_hybrid = enable; }
 
     static bool get_trace_allocation_tracking_enabled();
     static bool get_trace_allocation_diagnostics_enabled();
@@ -671,6 +682,10 @@ public:
     void set_feature_prepend_device_core_risc(RunTimeDebugFeatures feature, bool prepend_device_core_risc) {
         feature_targets[feature].prepend_device_core_risc = prepend_device_core_risc;
     }
+    bool get_feature_tag_firmware(RunTimeDebugFeatures feature) const { return feature_targets[feature].tag_firmware; }
+    void set_feature_tag_firmware(RunTimeDebugFeatures feature, bool tag_firmware) {
+        feature_targets[feature].tag_firmware = tag_firmware;
+    }
     TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
     void set_feature_targets(RunTimeDebugFeatures feature, const TargetSelection& targets) {
         feature_targets[feature] = targets;
@@ -700,7 +715,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -708,7 +723,8 @@ public:
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
-            get_eth_ptp_trace());
+            get_eth_ptp_trace(),
+            get_simulator_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -812,9 +828,21 @@ public:
     bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
     void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
 
-    // Whether to compile with -g to include DWARF debug info in the binary.
-    bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
-    void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
+    // Whether to compile with -g to include DWARF debug info in the binary. TT_METAL_RISCV_DEBUG_INFO=0/1 decides
+    // when set. Unset, it follows the Inspector (tt-triage reads the debug info for hang callstacks), except on a
+    // simulator, where nothing reads it unless DPRINT is on (enum names and callstacks) or a debug tool can attach
+    // (TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS).
+    bool get_riscv_debug_info_enabled() const {
+        if (riscv_debug_info_override) {
+            return *riscv_debug_info_override;
+        }
+        if (get_simulator_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint) &&
+            !simulator_serve_over_sockets) {
+            return false;
+        }
+        return get_inspector_enabled();
+    }
+    void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_override = enable; }
 
     unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
@@ -966,9 +994,20 @@ public:
     bool get_enable_fabric_vc2() const { return enable_fabric_vc2; }
     void set_enable_fabric_vc2(bool enable) { enable_fabric_vc2 = enable; }
 
+    // Fabric host_rdma sender channel enable
+    bool get_enable_fabric_host_rdma() const { return enable_fabric_host_rdma; }
+    void set_enable_fabric_host_rdma(bool enable) { enable_fabric_host_rdma = enable; }
+
     // EXPERIMENTAL: Fabric VC1 inter-mesh pass-through enable (A->B->C). Not deadlock-safe.
     bool get_enable_fabric_mesh_pass_through() const { return enable_fabric_mesh_pass_through; }
     void set_enable_fabric_mesh_pass_through(bool enable) { enable_fabric_mesh_pass_through = enable; }
+
+    // EXPERIMENTAL: graph-based fabric builder
+    bool get_fabric_graph_builder() const { return fabric_graph_builder; }
+    void set_fabric_graph_builder(bool enable) { fabric_graph_builder = enable; }
+
+    bool get_fabric_inter_domain() const { return fabric_inter_domain; }
+    void set_fabric_inter_domain(bool enable) { fabric_inter_domain = enable; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
@@ -1019,7 +1058,7 @@ public:
         mock_cluster_desc_path =
             !resolved.empty()
                 ? resolved.string()
-                : (root / "tt_metal/third_party/umd/tests/cluster_descriptor_examples" / filename).string();
+                : (root / "tt_metal/third_party/umd/descriptors/cluster_descriptor_examples" / filename).string();
         // Mock mode always overrides the simulator: configure_mock_mode() is an explicit
         // request for a fully mocked environment, so libttsim must not be used even if
         // TT_METAL_SIMULATOR is set in the environment.
@@ -1118,6 +1157,7 @@ private:
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureTagFirmware(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFabricTelemetryEnv(const char* value);
     void HandleEnvVar(
         EnvVarID id, const char* value);  // Handle single env var (value usually non-null, see cpp for details)

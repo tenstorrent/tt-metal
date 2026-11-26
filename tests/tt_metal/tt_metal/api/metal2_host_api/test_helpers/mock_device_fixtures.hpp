@@ -12,7 +12,7 @@
 #include <memory>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
@@ -41,12 +41,12 @@ protected:
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
 };
 
-// ProgramSpec validation and lowering (MakeProgramFromSpec).
+// ProgramSpec validation and lowering (Program construction).
 class ProgramSpecTestQuasar : public MockMeshDeviceFixture<tt::ARCH::QUASAR> {};
 class ProgramSpecTestGen1 : public MockMeshDeviceFixture<tt::ARCH::WORMHOLE_B0> {};
 class ProgramSpecTestBlackhole : public MockMeshDeviceFixture<tt::ARCH::BLACKHOLE> {};
 
-// ProgramRunArgs (SetProgramRunArgs / UpdateProgramRunArgs / UpdateTensorArgs).
+// ProgramRunArgs (Program::set_program_run_args / Program::update_program_run_args / Program::update_tensor_args).
 class ProgramRunArgsTestQuasar : public MockMeshDeviceFixture<tt::ARCH::QUASAR> {};
 class ProgramRunArgsTestGen1 : public MockMeshDeviceFixture<tt::ARCH::WORMHOLE_B0> {};
 

@@ -11,8 +11,8 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "all_gather_device_operation_types.hpp"
 #include "ttnn/operations/ccl/all_gather/shared_with_host/all_gather_walk.hpp"
