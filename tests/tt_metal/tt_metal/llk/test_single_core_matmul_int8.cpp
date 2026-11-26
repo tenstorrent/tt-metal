@@ -281,8 +281,7 @@ bool single_tile_matmul_int8_quasar(
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP()
-            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+        GTEST_SKIP() << "Quasar runs QuasarMatmulInt8/LLKQuasarMatmulInt8Fixture instead";
     }
     ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(0)));
 }

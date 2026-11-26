@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_ring_balance_plan.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
@@ -16,6 +17,7 @@
 #include "internal/tt-1xx/cache.h"  // invalidate_l1_cache on every compute thread (plan records read from L1)
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
 
 // BH benefits from blocked pack at width 4; WH keeps the threshold at 8 because
@@ -546,16 +548,35 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
     if (apply_col_bias) {
         // Pooled entry: every member one contiguous run from column 0 with its own bias tile row (the same row for
-        // each of its Q tile rows), consumed one at a time (the reader pushes them in member order; the CB holds
-        // one row).
+        // each of its Q tile rows), consumed one at a time (the reader pushes them in member order). Only row 0 of
+        // each bias tile is read.
         for (uint32_t g = 0; g < n_slots; ++g) {
             ASSERT(n_runs[g] == 1 && run_col(g, 0) == 0);
             CircularBuffer(cb_pooled_bias).wait_front(Sk_chunk_t);
-            begin_mask_l1_accumulate<false>(cb_qkt_im, cb_pooled_bias);
+            configure_single_tile_pack(cb_qkt_im);
+            reconfig_data_format_srcb(cb_qkt_im, cb_pooled_bias);
+            unary_bcast_init<BroadcastType::ROW>(cb_pooled_bias);
+            PACK((llk_pack_reconfig_l1_acc(1)));
             for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                l1_acc_tile_run(cb_pooled_bias, 0, cb_qkt_im, sidx(g, r, 0), W[g]);
+                const uint32_t out_base = sidx(g, r, 0);
+                constexpr uint32_t kBatch = compute_kernel_lib::DEST_AUTO_LIMIT;
+                for (uint32_t i = 0; i < W[g]; i += kBatch) {
+                    const uint32_t batch = (W[g] - i) < kBatch ? (W[g] - i) : kBatch;
+                    tile_regs_acquire();
+                    for (uint32_t j = 0; j < batch; ++j) {
+                        unary_bcast<BroadcastType::ROW>(cb_pooled_bias, i + j, j);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t j = 0; j < batch; ++j) {
+                        pack_tile<true>(j, cb_qkt_im, out_base + i + j);
+                    }
+                    tile_regs_release();
+                }
             }
             end_mask_l1_accumulate();
+            unary_bcast_uninit<BroadcastType::ROW>(cb_pooled_bias);
+            reconfig_data_format_srcb(cb_pooled_bias, cb_qkt_im);
             CircularBuffer(cb_pooled_bias).pop_front(Sk_chunk_t);
         }
     }
@@ -1002,6 +1023,7 @@ template <
     bool pooled_route,
     uint32_t resident_slots,
     uint32_t plan_block_words,
+    uint32_t plan_header_words,
     uint32_t plan_rec_base,
     uint32_t num_q_passes,
     bool pair_steps,
@@ -1009,7 +1031,8 @@ template <
     bool has_block_counts,
     uint32_t cb_key_bias,
     uint32_t key_bias_tiles,
-    uint32_t cb_sum_identity>
+    uint32_t cb_sum_identity,
+    bool unit_table_on = false>
 void sdpa_ring_resident(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1026,7 +1049,8 @@ void sdpa_ring_resident(
     [[maybe_unused]] uint32_t& kb_pos,
     const bool is_last_ring_iter,
     const bool is_first_active_iter,
-    [[maybe_unused]] const volatile uint8_t* block_counts) {
+    [[maybe_unused]] const volatile uint8_t* block_counts,
+    [[maybe_unused]] const volatile uint32_t* unit_table = nullptr) {
     static_assert(resident_slots >= 1 && resident_slots <= 32, "resident state is tracked in a 32-bit mask");
     // The step reconfigures the unpacker/packer only around the Q@K^T and P@V matmuls (whose inputs may be block
     // float) and the Float32 output and sum slots, and otherwise assumes the intermediate format.
@@ -1064,7 +1088,8 @@ void sdpa_ring_resident(
     constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / kBlockTiles;
     constexpr uint32_t kBW = plan_block_words;
     static_assert(Sk_chunk_t % kBlockTiles == 0, "a piece holds whole blocks");
-    static_assert(kBW >= 1 && kBW + 3 <= 16, "the plan header holds the block words, the union bits and the flag");
+    static_assert(
+        kBW >= 1 && kBW + 3 <= plan_header_words, "the plan header holds the block words, the union bits and the flag");
     static_assert(kBlocksPerPiece <= 255 && Sk_chunk_t <= 255, "run tables are byte-indexed");
 
     // CB capacities, as the program factory allocates them for resident Q: the score
@@ -1141,7 +1166,14 @@ void sdpa_ring_resident(
             return plan_copy[i * kRec + w];
         }
     };
-    const auto res_head = [&](uint32_t i) -> uint32_t { return ((global_q_start + i) / num_q_chunks) % NH; };
+    // With load balancing, global_q_start and global_q_end are positions in the core's unit table.
+    const auto res_head = [&](uint32_t i) -> uint32_t {
+        if constexpr (unit_table_on) {
+            return (sparse_balance::unit_of(unit_table[global_q_start + i]) / num_q_chunks) % NH;
+        } else {
+            return ((global_q_start + i) / num_q_chunks) % NH;
+        }
+    };
     const auto union_lo = [&](uint32_t i) -> uint32_t { return plan_word(i, kBW); };
     const auto union_hi = [&](uint32_t i) -> uint32_t { return plan_word(i, kBW + 1); };
     // The same in every record of the iteration.

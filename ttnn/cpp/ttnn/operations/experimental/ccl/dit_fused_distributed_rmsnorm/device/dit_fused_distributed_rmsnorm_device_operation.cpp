@@ -566,8 +566,13 @@ Tensor dit_fused_distributed_rmsnorm(
     // Match composite ops' fused_rmsnorm_{pre,post}_allgather defaults so
     // both paths produce numerically equivalent output when the caller
     // omits compute_kernel_config: math_approx=false, fp32_dest_acc_en=true.
-    auto kernel_config_val = init_device_compute_kernel_config(
-        arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, false, true, false);
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto math_fidelity =
+        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
+    auto kernel_config_val =
+        init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, false, true, false);
 
     const uint32_t num_devices = ttnn::experimental::prim::dit_fused_norm_ring_size(mesh_device, cluster_axis);
 

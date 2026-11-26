@@ -27,6 +27,7 @@ def test_perf_eltwise_mul_scalar_block(
         block_layout,
         dest_acc,
         dest_sync,
+        addrmod_caller_scoped=False,
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,

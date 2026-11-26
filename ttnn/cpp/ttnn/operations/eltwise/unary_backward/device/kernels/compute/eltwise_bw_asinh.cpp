@@ -7,6 +7,8 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/asinh_bw.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -18,15 +20,12 @@ struct AsinhBw : ckl::BinaryOp<AsinhBw, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0
 };
 
 void kernel_main() {
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    compute_kernel_hw_startup(dfb::grad_out, dfb::grad_in);
 
-    constexpr auto dfb_grad_out_id = tt::CBIndex::c_0;
-    constexpr auto dfb_input_id = tt::CBIndex::c_1;
-    constexpr auto dfb_grad_in_id = tt::CBIndex::c_2;
-    const uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
-    DataflowBuffer dfb_grad_out(dfb_grad_out_id);
-    DataflowBuffer dfb_input(dfb_input_id);
-    DataflowBuffer dfb_grad_in(dfb_grad_in_id);
+    const uint32_t per_core_tile_cnt = get_arg(args::per_core_tile_cnt);
+    DataflowBuffer dfb_grad_out(dfb::grad_out);
+    DataflowBuffer dfb_input(dfb::input);
+    DataflowBuffer dfb_grad_in(dfb::grad_in);
 
     const auto shape = ckl::IterationShape::tiles(per_core_tile_cnt);
 
@@ -35,7 +34,7 @@ void kernel_main() {
         // dest[0] = input
         ckl::CopyTile<
             ckl::input(
-                dfb_input_id,
+                dfb::input,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
@@ -44,7 +43,7 @@ void kernel_main() {
         // dest[1] = grad_out
         ckl::CopyTile<
             ckl::input(
-                dfb_grad_out_id,
+                dfb::grad_out,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
@@ -52,7 +51,7 @@ void kernel_main() {
             ckl::Dst::D1>{dfb_grad_out},
         AsinhBw{},  // dest[0] = grad_out * d/dx asinh(input)
         ckl::PackTile<ckl::output(
-            dfb_grad_in_id,
+            dfb::grad_in,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Disabled)>{dfb_grad_in});
