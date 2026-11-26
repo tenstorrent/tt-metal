@@ -779,6 +779,21 @@ public:
     // finalize_offsets can compute dispatch sizes before Program::set_program_run_args fills values.
     void reserve_runtime_arg_buffers();
 
+    // Metal 2.0: a run of a kernel's runtime args words on one core whose values differ per device of the MeshDevice
+    // that the Program was built on (for example the args of a fabric connection).
+    struct DeviceSpecificRuntimeArgs {
+        KernelHandle kernel = 0;
+        CoreCoord core;
+        uint32_t first_word = 0;
+        uint32_t num_words = 0;
+        std::vector<uint32_t> values_in_range_order;  // [device index in the range][num_words]
+    };
+    // Metal 2.0: the runs of runtime args words whose values on some device of `range` differ from the Program's own
+    // runtime args, with the values of each device of `range`.
+    // precondition: the Program was built to run on each device of `range`.
+    std::vector<DeviceSpecificRuntimeArgs> device_specific_runtime_args(
+        const distributed::MeshCoordinateRange& range) const;
+
     bool program_run_args_initialized() const { return program_run_args_initialized_; }
     void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
 
