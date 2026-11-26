@@ -10,9 +10,10 @@ One MoE layer through the model adapter (TtMoEBlockFfn, the model's seeded rando
 * kimi_k3_1-4x4-sp1-2560: K3.1's production stage, one tray half (SP=4 on mesh axis 1), 2,560-token chunk, K3.1's
   L1_SMALL_SIZE. Run it through tests/run_4x4_stage_tests.sh; on the full Galaxy it skips.
 * glm53-8x4-5120: GLM-5.3 on one 8x4 Galaxy ([RING, RING]), 5,120-token chunk.
-* glm53-xy4-sp1-{2560,5120,10240}: GLM-5.3's 4x4 stage on the single-Galaxy [RING, RING] carve (SP=4 on mesh axis 1),
-  forwards of one, two and four 2,560-token chunks. Run them through tests/run_subtorus_4x4_tests.sh; on the full
-  Galaxy they skip.
+* glm53-xy4-sp1-2560 and glm53-xy4-sp1-{5120,10240}-packed-*: GLM-5.3's 4x4 stage on the single-Galaxy [RING, RING]
+  carve (SP=4 on mesh axis 1), forwards of one, two and four full 2,560-token chunks, the packed ones with their
+  forward metadata words on device as the runtime passes them. Run them through tests/run_subtorus_4x4_tests.sh; on
+  the full Galaxy they skip.
 
 Host time from measure_host (untraced fastest of 10 after 10 warm-up, traced one replay, CPU clock held), gated
 two-sided against TARGETS_MS ± MARGIN[mode]; the traced output must match the untraced one. Per-op device time of the
@@ -52,10 +53,18 @@ class MoEPerfCase:
     model: str  # block_cases.MODELS key
     mesh: str  # block_cases.MESHES key
     chunk: int  # tokens a forward (the whole mesh's)
+    forward_chunks: int = 1  # full chunks packed in the forward (above 1: with its metadata words)
+
+    @property
+    def chunks(self) -> tuple:
+        """the packed forward's (slot, start, end) chunks, as test_moe_block_models.BlockCase.chunks"""
+        c = self.chunk // self.forward_chunks
+        return tuple((k, k * c, (k + 1) * c) for k in range(self.forward_chunks)) if self.forward_chunks > 1 else ()
 
     @property
     def id(self) -> str:
-        return f"{self.model}-{self.mesh}-{self.chunk}"
+        packed = "-packed-" + "-".join(f"{e - s}@{s}" for _, s, e in self.chunks) if self.chunks else ""
+        return f"{self.model}-{self.mesh}-{self.chunk}{packed}"
 
     @property
     def sp_axis(self) -> int:
@@ -66,7 +75,7 @@ CASES = [
     MoEPerfCase("kimi_k3", "8x4", 5120),
     MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560),
     MoEPerfCase("glm53", "8x4", 5120),
-    *(MoEPerfCase("glm53", "xy4-sp1", chunk) for chunk in (2560, 5120, 10240)),
+    *(MoEPerfCase("glm53", "xy4-sp1", 2560 * f, forward_chunks=f) for f in (1, 2, 4)),
 ]
 # Host ms of one MoE layer forward (untraced, traced) by case id, on a 14 kW CI Galaxy (bh_sc1_high_power): untraced the
 # fastest run, traced the mean of the runs. A case without targets only reports.
@@ -74,11 +83,9 @@ TARGETS_MS = {
     "kimi_k3-8x4-5120": (2.38, 2.27),
     "kimi_k3_1-4x4-sp1-2560": (3.63, 3.54),
     # GLM-5.3: on one 14 kW Galaxy (bh-glx-120-b07u08), not yet re-centred on CI: each the mean over 3 runs of that run's
-    # number (fastest untraced sample, traced replay); the 10240 traced over 5 runs (one replay at 3.21)
+    # number (fastest untraced sample, traced replay). The carve's packed forwards report only, no targets yet.
     "glm53-8x4-5120": (1.36, 1.24),
     "glm53-xy4-sp1-2560": (1.61, 1.50),
-    "glm53-xy4-sp1-5120": (2.09, 1.97),
-    "glm53-xy4-sp1-10240": (3.20, 3.15),
 }
 
 
@@ -99,7 +106,9 @@ def _params():
 
 
 def _setup(case: MoEPerfCase, mesh_device):
-    """One MoE layer on the block (weights made on its first call) and its input on the device."""
+    """One MoE layer on the block (weights made on its first call), its input on the device, and the forward's call
+    kwargs (a packed forward: its metadata words, written before any trace)."""
+    from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import forward_words
     from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockFfnOptions, TtMoEBlockFfn
 
     m = MODELS[case.model]
@@ -123,7 +132,12 @@ def _setup(case: MoEPerfCase, mesh_device):
         # tokens (dim 2) over the SP axis, hidden (dim 3) over TP
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3) if sp_axis == 0 else (3, 2)),
     )
-    return ffn, x_tt
+    kwargs = {}
+    if case.chunks:
+        F = case.forward_chunks
+        meta = ffn._block(case.chunk, F)._meta_tensor(forward_words(list(case.chunks), F))
+        kwargs = dict(forward_metadata=meta, forward_chunks=F)
+    return ffn, x_tt, kwargs
 
 
 @skip_with_llk_assert("LLK assertions perturb kernel timing")
@@ -134,12 +148,12 @@ def _setup(case: MoEPerfCase, mesh_device):
 def test_moe_block_host_perf(request, case, mesh_device, device_params):
     label = f"{case.id} MoE block"
     require_high_power(f"{label} perf")
-    ffn, x_tt = _setup(case, mesh_device)
+    ffn, x_tt, kwargs = _setup(case, mesh_device)
 
     clock = hold_full_cpu_clock()
     request.addfinalizer(clock.restore)
     print(f"{label} host: {clock.status}")
-    untraced, traced, trace_pcc = measure_host(mesh_device, lambda: ffn(x_tt))
+    untraced, traced, trace_pcc = measure_host(mesh_device, lambda: ffn(x_tt, **kwargs))
     samples = {"untraced": untraced, "traced": traced}
     targets = dict(zip(MODES, TARGETS_MS.get(case.id, (None, None))))
 
@@ -156,6 +170,7 @@ def test_moe_block_host_perf(request, case, mesh_device, device_params):
                 "mesh": f"{shape[0]}x{shape[1]}",
                 "sp_axis": case.sp_axis,
                 "chunk_tokens": case.chunk,
+                "forward_chunks": case.forward_chunks,
                 "fabric": device_params["fabric_config"].name,
                 "weights": "random",
                 "mode": mode,

@@ -156,11 +156,11 @@ CASES = [
     # Kimi-K3.1's production stage (its runner's 4x4 manifests: SP=4 on mesh axis 1, one 2,560-token chunk a forward) on
     # K3.1's own config: K3's MoE, the mesh opened with K3.1's L1_SMALL_SIZE
     BlockCase("kimi_k3_1", "4x4-sp1", 2560),
-    # GLM-5.3's 4x4 stage on the [RING, RING] carve (run_subtorus_4x4_tests.sh): 2,560-token chunks, forwards of one,
-    # two and four chunks
+    # GLM-5.3's 4x4 stage on the [RING, RING] carve (run_subtorus_4x4_tests.sh): forwards of one, two and four full
+    # 2,560-token chunks, the packed ones with their metadata words (test_moe_block_host_perf's carve cases)
     BlockCase("glm53", "xy4-sp1", 2560),
-    BlockCase("glm53", "xy4-sp1", 5120),
-    BlockCase("glm53", "xy4-sp1", 10240),
+    BlockCase("glm53", "xy4-sp1", 5120, chunks=((0, 0, 2560), (1, 2560, 5120))),
+    BlockCase("glm53", "xy4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 5120), (2, 5120, 7680), (3, 7680, 10240))),
 ]
 
 
@@ -387,9 +387,7 @@ BLOCK_US = {
     "glm53-4x4-y-5120": (534.4, 320.2, 1178.1, 100.8),
     "glm53-8x4-10240": (395.9, 385.8, 1273.6, 78.2),
     "glm53-8x4-5120": (198.8, 212.4, 675.0, 50.7),  # (combine: 702 - 705 us on a capped Galaxy, 2026-11-19)
-    "glm53-xy4-sp1-10240": (855.2, 453.9, 1590.5, 136.5),  # (the [RING, RING] carve: 14 kW Galaxy, 2026-11-25)
-    "glm53-xy4-sp1-2560": (197.8, 137.5, 1068.1, 81.7),
-    "glm53-xy4-sp1-5120": (384.7, 255.9, 1218.8, 98.1),
+    "glm53-xy4-sp1-2560": (197.8, 137.5, 1068.1, 81.7),  # (the [RING, RING] carve: 14 kW Galaxy, 2026-11-25)
     "kimi_k3-4x4-sp1-10240": (2624.1, 478.4, 3106.9, 553.8),
     "kimi_k3-4x4-sp1-2560": (520.9, 157.2, 2748.1, 153.4),
     "kimi_k3-4x4-sp1-5120": (1103.6, 300.3, 2800.4, 260.8),

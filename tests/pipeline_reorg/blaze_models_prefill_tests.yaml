@@ -1003,8 +1003,13 @@
       models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 1 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k perf || exit $?
       models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 3 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k perf || exit $?
       # MoE block perf: host time of one layer on 8x4 @5120, then the carve's host time and per-op device time
-      # @2560/5120/10240 in one process (one seeded weight build for the six cases). ~5 min.
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k "glm53-8x4-5120" -vvv --tb=short || exit $?
+      # in forwards of one, two and four packed 2,560-token chunks, in one process (one seeded weight build for the six
+      # cases). ~5 min.
+      # (the 8x4 step fails when its one test does not pass: a skip, say; the carve wrapper checks its own six)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k "glm53-8x4-5120" -vvv --tb=short 2>&1 | tee /tmp/glm_moe_host_perf.out
+      status=${PIPESTATUS[0]}
+      [ "$status" -eq 0 ] || exit "$status"
+      grep -qE "[0-9]+ passed" /tmp/glm_moe_host_perf.out && ! grep -qE "[0-9]+ skipped" /tmp/glm_moe_host_perf.out || { echo "::error::glm_moe_host_perf: glm53-8x4-5120 did not pass (skipped?)"; exit 1; }
       models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 480 --expect 6 models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py::test_moe_block_perf -k "glm53" || exit $?
       export DS_PREFILL_REUSE_MODEL=1
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
