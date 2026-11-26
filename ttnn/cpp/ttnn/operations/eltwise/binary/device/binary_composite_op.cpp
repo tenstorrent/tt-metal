@@ -472,6 +472,8 @@ Tensor div_scalar_impl(
     if (!cast_after_rounding) {
         return rounded;
     }
+    // Release the FLOAT32 quotient before allocating the narrowed output, so only two tensors are live at once.
+    divided.reset();
     return narrow_rounded_quotient(rounded, result_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
@@ -680,6 +682,8 @@ Tensor div(
     if (!cast_after_rounding) {
         return rounded;
     }
+    // Release the FLOAT32 quotient before allocating the narrowed output, so only two tensors are live at once.
+    divided.reset();
     return narrow_rounded_quotient(rounded, result_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 

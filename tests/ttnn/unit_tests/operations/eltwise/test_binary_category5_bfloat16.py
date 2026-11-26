@@ -182,6 +182,23 @@ def test_divide_round_modes_near_integer(device, rounding_mode, layout):
 
 
 @pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+def test_divide_round_modes_float32_to_bfloat16(device, rounding_mode):
+    """float32 inputs with dtype=bfloat16: the float32 quotient is rounded before it is narrowed, so 386 / 3
+    floors to 128, not to the 129 a bfloat16 quotient rounds up to (#65791).
+    """
+    input_a = torch.tensor([[15.6875, 386.0, 4.9375, 7296.0]], dtype=torch.float32)
+    input_b = torch.tensor([[3.140625, 3.0, -0.129882812, -260.0]], dtype=torch.float32)
+    tt_a = ttnn.from_torch(input_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(input_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for rhs, torch_rhs in [(tt_b, input_b), (3.0, 3.0)]:
+        result = ttnn.divide(tt_a, rhs, rounding_mode=rounding_mode, dtype=ttnn.bfloat16)
+        assert result.dtype == ttnn.bfloat16
+        golden = torch.div(input_a, torch_rhs, rounding_mode=rounding_mode).bfloat16().float()
+        assert_equal(golden, ttnn.to_torch(result).float())
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
 @pytest.mark.parametrize("placement", ["row_major_sub_core_grids", "sharded_output_tensor"])
 def test_divide_round_modes_narrowing_placement(device, rounding_mode, placement):
     """The float32 quotient is narrowed to bfloat16 after rounding; that step
