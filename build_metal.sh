@@ -1,4 +1,8 @@
 #!/bin/bash
+# Exabox login node: never build here; build on the reserved node (scripts/exabox/node-run).
+if [[ "$(hostname -f 2>/dev/null)" =~ ^slurm-login-0[1-3]\. ]] && [ -z "${XRUN_BYPASS:-}" ]; then
+    exec "$(dirname "$(readlink -f "$0")")/scripts/exabox/node-run" ./build_metal.sh "$@"
+fi
 
 set -eo pipefail
 

@@ -1,4 +1,9 @@
 #!/bin/bash
+# Exabox login node: no devices here; run on the reserved node (scripts/exabox/node-run).
+# --no-precompile: precompile gave wrong device results on the exabox reserved node.
+if [[ "$(hostname -f 2>/dev/null)" =~ ^slurm-login-0[1-3]\. ]] && [ -z "${XRUN_BYPASS:-}" ]; then
+    exec "$(dirname "$(readlink -f "$0")")/exabox/node-run" scripts/run_safe_pytest.sh --no-precompile "$@"
+fi
 # run_safe_pytest.sh - Cooperative device-aware test runner
 #
 # Uses flock to serialize device access across multiple agents/terminals.
