@@ -1366,6 +1366,8 @@ def _run_case_impl(op, case, mesh_device, *, op_name=None, pcc=None):
 
 
 _L1_NEVER_FITS = re.compile(r"each bank needs to store (\d+) B, but bank size is (\d+) B")
+# The hybrid allocator words the same capacity failure differently (bank_manager.cpp, "after considering dependencies").
+_L1_NEVER_FITS_HYBRID = re.compile(r"\bL1 across \d+ banks \((\d+) B per bank\), bank size is (\d+) B")
 
 
 def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
@@ -1380,7 +1382,9 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
         return _run_case_impl(op, case, mesh_device, op_name=op_name, pcc=pcc)
     except RuntimeError as e:
         msg = str(e)
-        m = _L1_NEVER_FITS.search(msg)
-        if "Out of Memory" in msg and "L1 buffer" in msg and m and int(m.group(1)) > int(m.group(2)):
+        m = _L1_NEVER_FITS.search(msg) if "L1 buffer across " in msg else None
+        if m is None:
+            m = _L1_NEVER_FITS_HYBRID.search(msg)
+        if "Out of Memory" in msg and m is not None and int(m.group(1)) > int(m.group(2)):
             pytest.skip(f"needs {m.group(1)} B per L1 bank; this device's bank is {m.group(2)} B")
         raise
