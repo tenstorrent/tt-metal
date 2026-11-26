@@ -18,7 +18,13 @@
 //                                 later block      -> previous slot's last 3 body sticks (L1 -> L1)
 //                                 core-first, t0>0 -> RM: input rows t0-3..t0-1;
 //                                                     TILE: rows 29..31 of untilized tile-row t0/32-1
-//                    RM:   per tile-row 32 stick reads (+ halo on the first) -> ONE barrier -> push
+//                    RM:   per tile-row 32 stick reads (+ halo on the first) -> ONE barrier -> push.
+//                          Split reader (split_rows > 0): body rows [32 - split_rows, 32) of every
+//                          tile-row are read by the writer RISC on the other NoC, whose DRAM
+//                          endpoints are separate ports: decode is DRAM-request-rate-bound per port
+//                          (Refinement 2: ~12.5 ns per request per bank port). Per tile-row this
+//                          kernel posts the row's L1 destination to cb_split_requests, reads its own
+//                          rows, then waits for cb_split_done before pushing the rows.
 //                    TILE: per tile-row: issue the NEXT input tile-row's reads, then copy the
 //                          untilized tile-row (32 contiguous sticks) into the slot -> ONE barrier.
 //
@@ -41,6 +47,8 @@ constexpr uint32_t cb_rows = 0;
 constexpr uint32_t cb_tap_tiles = 1;
 constexpr uint32_t cb_input_tiles = 4;
 constexpr uint32_t cb_untilized_rows = 5;
+constexpr uint32_t cb_split_requests = 6;  // split reader: this kernel -> writer, one L1 row address per tile-row
+constexpr uint32_t cb_split_done = 7;      // split reader: writer -> this kernel, one token per tile-row
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
@@ -116,7 +124,8 @@ void kernel_main() {
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t history_page_channels = get_compile_time_arg_val(6);  // 0: token-paged history
-    constexpr auto input_args = TensorAccessorArgs<7>();
+    constexpr uint32_t split_rows = get_compile_time_arg_val(7);             // body rows per tile-row the writer reads
+    constexpr auto input_args = TensorAccessorArgs<8>();
     constexpr auto history_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto tap0_args = TensorAccessorArgs<history_args.next_compile_time_args_offset()>();
     constexpr auto tap1_args = TensorAccessorArgs<tap0_args.next_compile_time_args_offset()>();
@@ -131,6 +140,9 @@ void kernel_main() {
     constexpr uint32_t untilized_row_bytes = TILE_DIM * stick_bytes;  // one untilized tile-row = 32 sticks
     constexpr uint32_t first_row_push = TILE_DIM + HALO_ROWS;         // halo + first tile-row
     constexpr uint32_t tap_tiles_bytes = block_ch_tiles * tile_bytes;
+    constexpr uint32_t own_rows = TILE_DIM - split_rows;  // body rows [0, own_rows) are read here
+    static_assert(split_rows <= TILE_DIM, "split_rows is a row count inside one tile-row");
+    static_assert(split_rows == 0 || !tile_input, "the split reader is a ROW_MAJOR-regime lever");
 
     // ---- runtime args ----
     uint32_t arg = 0;
@@ -217,11 +229,16 @@ void kernel_main() {
         }
 
         if constexpr (!tile_input) {
-            // Body: per tile-row, 32 stick reads -> ONE barrier -> push.
+            // Body: per tile-row, own_rows stick reads -> ONE barrier -> [writer's rows landed] -> push.
             for (uint32_t m = 0; m < rows_this_block; ++m) {
                 const uint32_t token0 = (block_seq_start + m) * TILE_DIM;
                 const uint32_t dst = slot_base + (HALO_ROWS + TILE_DIM * m) * stick_bytes;
-                for (uint32_t i = 0; i < TILE_DIM; ++i) {
+                if constexpr (split_rows > 0) {
+                    cb_reserve_back(cb_split_requests, 1);
+                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_split_requests)) = dst;
+                    cb_push_back(cb_split_requests, 1);
+                }
+                for (uint32_t i = 0; i < own_rows; ++i) {
                     noc_async_read(
                         input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
                 }
@@ -229,6 +246,10 @@ void kernel_main() {
                     publish_taps_and_barrier();
                 } else {
                     noc_async_read_barrier();
+                }
+                if constexpr (split_rows > 0) {
+                    cb_wait_front(cb_split_done, 1);
+                    cb_pop_front(cb_split_done, 1);
                 }
                 cb_push_back(cb_rows, m == 0 ? first_row_push : TILE_DIM);
             }
