@@ -10,26 +10,30 @@
 // Compile-time args: K, NREAD, TensorAccessorArgs of the outputs. Runtime args: T, tokens address, landing address,
 // sampled address, positions address (0 = none: else the decode positions [1, 32] int32 ROW_MAJOR, one 128-B page,
 // get +1 on every active row < T (cur_pos >= 0) after the rows are written: the generator contract's in-trace advance).
-// Defines: TOPK_SEM (this core's semaphore, NREAD increments), TOPK_LAND_CB (NREAD pages), TOPK_OUT_CB (one 256-B row),
-// TOPK_PAGE. TOPK_FAB (TP mesh): the chip's K best per row are all-gathered over the mesh with Stage 14's in-program
-// fabric all-reduce (tt/fabric_ar.py): this core is the phase's only producer and consumer; chip q writes its
-// candidates into ITS column slot of a [T, 4096] bf16 partial (every other column 0: the sum over the chips is the
-// concatenation, exact), as small integers bf16 holds exactly (6 values per candidate: valid 1, key hi / lo byte, id
-// bits 12..17 / 6..11 / 0..5), adds the layers' producer count to both lanes' OWN_READY, waits for both lanes' result
-// signal, decodes every chip's candidates from the result and merges them -> identical rows on every chip. Runtime args
-// (TOPK_FAB) from index 5: rank, lane 0 / 1 NoC (x, y), own, lane sync, res, packed bytes per tile V, bytes of one
-// face's valid rows CH, n_prod. Defines: TOPK_FAB_SEM (the lanes' result signal, 2), TOPK_IMG_CB (2 x 64 x V bytes: the
-// packed partial of both lanes), TOPK_NCHIP.
-// TOPK_SAMPLE (device sampling, the serving contract's samples_in_decode_trace): runtime args at TOPK_SAMPLE_RT = the
-// sampler's params page (32 rows x {k, p (fp32 bits), 1 / temperature (fp32 bits), flags}) and its RNG page (32 rows x
-// a xoshiro128** state), one 512-B DRAM page each (TOPK_SAMPLE_CB: 1 KB scratch). A row with flags bit 0 draws its
-// token from its merged candidates (the K best: top_k 0 / > K = all K): weights exp((v_i - v_0) / temperature) over
-// the first min(k, n), top-p keeps the shortest prefix whose weight reaches p of the total (the first candidate
-// always), one uniform draw -> the drawn candidate is swapped into word 0 (the next token, the readback); the row's RNG
-// advances by one draw and the RNG page is written back. Rows without the flag (greedy: k = 1 / temperature 0) keep
-// word 0 = the argmax (ties: the lower id), bit-exact as without TOPK_SAMPLE. Only ACTIVE rows draw (decode position
+// Defines: TOPK_SEM (this core's semaphore, NREAD increments), TOPK_LAND_CB (NREAD pages), TOPK_OUT_CB (one 256-B row;
+// T with TOPK_SEL_FAST), TOPK_PAGE. TOPK_FAB (TP mesh): the chip's K best per row are all-gathered over the mesh with
+// Stage 14's in-program fabric all-reduce (tt/fabric_ar.py): this core is the phase's only producer and consumer; chip
+// q writes its candidates into ITS column slot of a [T, 4096] bf16 partial (every other column 0: the sum over the
+// chips is the concatenation, exact), as small integers bf16 holds exactly (6 values per candidate: valid 1, key hi /
+// lo byte, id bits 12..17 / 6..11 / 0..5), adds the layers' producer count to both lanes' OWN_READY, waits for both
+// lanes' result signal, decodes every chip's candidates from the result and merges them -> identical rows on every
+// chip. Runtime args (TOPK_FAB) from index 5: rank, lane 0 / 1 NoC (x, y), own, lane sync, res, packed bytes per tile
+// V, bytes of one face's valid rows CH, n_prod. Defines: TOPK_FAB_SEM (the lanes' result signal, 2), TOPK_IMG_CB (2 x
+// 64 x V bytes: the packed partial of both lanes), TOPK_NCHIP. TOPK_SAMPLE (device sampling, the serving contract's
+// samples_in_decode_trace): runtime args at TOPK_SAMPLE_RT = the sampler's params page (32 rows x {k, p (fp32 bits), 1
+// / temperature (fp32 bits), flags}) and its RNG page (32 rows x a xoshiro128** state), one 512-B DRAM page each
+// (TOPK_SAMPLE_CB: 1 KB scratch). A row with flags bit 0 draws its token from its merged candidates (the K best: top_k
+// 0 / > K = all K): weights exp((v_i - v_0) / temperature) over the first min(k, n), top-p keeps the shortest prefix
+// whose weight reaches p of the total (the first candidate always), one uniform draw -> the drawn candidate is swapped
+// into word 0 (the next token, the readback); the row's RNG advances by one draw and the RNG page is written back. Rows
+// without the flag (greedy: k = 1 / temperature 0) keep word 0 = the argmax (ties: the lower id), bit-exact as without
+// TOPK_SAMPLE. Only ACTIVE rows draw (decode position
 // >= 0 in the positions page, when one is given): an inactive row's RNG stream does not move while other rows decode
 // or prefill (TOPK_SAMPLE_CB: params, RNG, positions = 512 + 512 + 128 bytes).
+// TOPK_SEL_FAST (GLM53_HEAD_SELECT_FAST, opt-in): the same rows with fewer waits and decodes -- each row is staged in
+// its own page of TOPK_OUT_CB (T pages) and every row write is ordered by one barrier after the last row (instead of
+// one per row); TOPK_FAB's cross-chip merge keeps the chips in a heap and decodes a candidate's id only on a key tie or
+// a take. The rows, the sampler's draws and the RNG states are the knob-off ones.
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -216,6 +220,23 @@ FORCE_INLINE void write_row(
         }
     }
 #endif
+#if defined(TOPK_SEL_FAST)
+    // row r's own 256-B staging page of TOPK_OUT_CB (T pages): no wait between rows; the caller's write barrier after
+    // the last row orders every row write
+    const uint32_t stage = get_write_ptr(TOPK_OUT_CB) + r * 256;
+    volatile tt_l1_ptr uint32_t* row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
+    for (uint32_t w = 0; w < 64; ++w) {
+        row[w] = 0;
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        row[i] = ids[i];
+        row[32 + i] = keys[i];
+    }
+    noc_async_write_page(r, tok, stage);
+    if (has_smp) {
+        noc_async_write_page(r, smp, stage);
+    }
+#else
     volatile tt_l1_ptr uint32_t* row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(TOPK_OUT_CB));
     for (uint32_t w = 0; w < 64; ++w) {
         row[w] = 0;
@@ -229,6 +250,7 @@ FORCE_INLINE void write_row(
         noc_async_write_page(r, smp, get_write_ptr(TOPK_OUT_CB));
     }
     noc_async_write_barrier();
+#endif
 }
 
 }  // namespace
@@ -277,6 +299,9 @@ void kernel_main() {
         const uint32_t n = merge_readers(land, r, ids, keys);
         write_row(r, tok, smp, smp_addr != 0, ids, keys, n);
     }
+#if defined(TOPK_SEL_FAST)
+    noc_async_write_barrier();  // every row's staged writes (write_row waits for none)
+#endif
 #else
     // ---- the cross-chip gather: encode -> both lanes' own buffers -> OWN_READY += n_prod -> wait -> decode + merge
     uint32_t a = 5;
@@ -362,6 +387,81 @@ void kernel_main() {
         const uint32_t m = (b & 0x7fu) | 0x80u, e = ex - 127u;
         return e <= 7u ? m >> (7u - e) : (e < 31u ? m << (e - 7u) : 0u);
     };
+#if defined(TOPK_SEL_FAST)
+    // TOPK_SEL_FAST: the same K-way merge with fewer decodes -- a chip's list head is decoded to (valid, key) on load
+    // and its id only when a key ties or the head is taken; the live chips sit in a binary max-heap by (larger key,
+    // then the lower id), merge_readers' order. Ids are unique across the chips (disjoint vocab shards), so the order
+    // is total and the taken sequence is the linear scan's
+    constexpr uint32_t NO_ID = 0xffffffffu;  // "not decoded yet" (ids < 2^18)
+    for (uint32_t r = 0; r < T; ++r) {
+        uint32_t head[TOPK_NCHIP], hkey[TOPK_NCHIP], hid[TOPK_NCHIP], heap[TOPK_NCHIP];
+        uint32_t m = 0;
+        const RowAt ra = row_at(r);
+        auto load = [&](uint32_t q) -> bool {  // chip q's next candidate -> hkey (id deferred); false: q is exhausted
+            if (head[q] >= K) {
+                return false;
+            }
+            const uint32_t c0 = (q * K + head[q]) * FIELDS;
+            if (dec(ra, c0) != 1) {
+                return false;
+            }
+            hkey[q] = (dec(ra, c0 + 1) << 8) | dec(ra, c0 + 2);
+            hid[q] = NO_ID;
+            return true;
+        };
+        auto id_of = [&](uint32_t q) -> uint32_t {
+            if (hid[q] == NO_ID) {
+                const uint32_t c0 = (q * K + head[q]) * FIELDS;
+                hid[q] = (dec(ra, c0 + 3) << 12) | (dec(ra, c0 + 4) << 6) | dec(ra, c0 + 5);
+            }
+            return hid[q];
+        };
+        auto better_q = [&](uint32_t a, uint32_t b) -> bool {
+            return hkey[a] > hkey[b] || (hkey[a] == hkey[b] && id_of(a) < id_of(b));
+        };
+        auto sift = [&](uint32_t i) {  // heap[i] moves down to where no child's head is better than its own
+            const uint32_t x = heap[i];
+            while (true) {
+                uint32_t c = 2 * i + 1;
+                if (c >= m) {
+                    break;
+                }
+                if (c + 1 < m && better_q(heap[c + 1], heap[c])) {
+                    c = c + 1;
+                }
+                if (!better_q(heap[c], x)) {
+                    break;
+                }
+                heap[i] = heap[c];
+                i = c;
+            }
+            heap[i] = x;
+        };
+        for (uint32_t q = 0; q < TOPK_NCHIP; ++q) {
+            head[q] = 0;
+            if (load(q)) {
+                heap[m++] = q;
+            }
+        }
+        for (uint32_t i = m / 2; i-- > 0;) {
+            sift(i);
+        }
+        uint32_t n = 0;
+        while (n < K && m > 0) {
+            const uint32_t q = heap[0];
+            ids[n] = id_of(q);
+            keys[n] = hkey[q];
+            ++n;
+            ++head[q];
+            if (!load(q)) {
+                heap[0] = heap[--m];
+            }
+            sift(0);
+        }
+        write_row(r, tok, smp, smp_addr != 0, ids, keys, n);
+    }
+    noc_async_write_barrier();  // every row's staged writes (write_row waits for none)
+#else
     for (uint32_t r = 0; r < T; ++r) {
         // K-way merge over the chips' (descending) candidate lists; each list's head decoded once into hkey / hid
         // (hid ~0: no more candidates from that chip)
@@ -405,6 +505,7 @@ void kernel_main() {
         }
         write_row(r, tok, smp, smp_addr != 0, ids, keys, n);
     }
+#endif  // TOPK_SEL_FAST
 #endif
     MK_MARK();  // 3 (local) / 7 (gather): every row merged and written
 #if defined(TOPK_SAMPLE)

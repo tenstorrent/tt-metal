@@ -2656,6 +2656,101 @@ def accept_batch() -> bool:
     return _flag("GLM53_ACCEPT_BATCH")
 
 
+def head_select_fast() -> bool:
+    """GLM53_HEAD_SELECT_FAST (default 0): kernels/head/topk_select.cpp TOPK_SEL_FAST on every MkHead select core (the
+    plain head, the verify head, the MTP heads) -- a staging page per row with one write barrier for all rows, and TOPK_FAB's
+    cross-chip merge as a heap with each candidate's id decoded on a key tie or a take; the same rows"""
+    return _flag("GLM53_HEAD_SELECT_FAST")
+
+
+def topk_chip_merge(lists: list, k: int, heap: bool, stale_id: bool = False) -> list:
+    """topk_select.cpp TOPK_FAB's cross-chip merge of one row, line for line: lists[q] = chip q's candidates [(key, id)]
+    in descending order (a chip's slots past its list are invalid) -> the first k of the union by (larger key, then the
+    lower id). heap=False: the knob-off linear scan over the chips' heads. heap=True: TOPK_SEL_FAST -- an array heap of
+    the m live chips, sift(i), better_q comparing ids through id_of, which decodes a head's id on demand into hid (NO_ID
+    until then), load setting the next head's key and resetting hid. stale_id=True keeps the previous head's id in load
+    (a broken kernel, the test's negative control)"""
+    nq = len(lists)
+    head = [0] * nq
+    hkey = [0] * nq
+    hid = [None] * nq
+    out = []
+    if not heap:
+
+        def load_lin(q):
+            if head[q] >= k or head[q] >= len(lists[q]):
+                hkey[q], hid[q] = 0, None
+                return
+            hkey[q], hid[q] = lists[q][head[q]]
+
+        for q in range(nq):
+            load_lin(q)
+        for _ in range(k):
+            best = None
+            for q in range(nq):
+                if hid[q] is None:
+                    continue
+                if best is None or hkey[q] > hkey[best] or (hkey[q] == hkey[best] and hid[q] < hid[best]):
+                    best = q
+            if best is None:
+                break
+            out.append((hkey[best], hid[best]))
+            head[best] += 1
+            load_lin(best)
+        return out
+    NO_ID = -1
+
+    def load(q):
+        if head[q] >= k or head[q] >= len(lists[q]):
+            return False
+        hkey[q] = lists[q][head[q]][0]
+        if not stale_id:
+            hid[q] = NO_ID
+        return True
+
+    def id_of(q):
+        if hid[q] is None or hid[q] == NO_ID:
+            hid[q] = lists[q][head[q]][1]
+        return hid[q]
+
+    def better_q(a, b):
+        return hkey[a] > hkey[b] or (hkey[a] == hkey[b] and id_of(a) < id_of(b))
+
+    heap_ = [0] * nq
+    m = 0
+
+    def sift(i):
+        x = heap_[i]
+        while True:
+            c = 2 * i + 1
+            if c >= m:
+                break
+            if c + 1 < m and better_q(heap_[c + 1], heap_[c]):
+                c = c + 1
+            if not better_q(heap_[c], x):
+                break
+            heap_[i] = heap_[c]
+            i = c
+        heap_[i] = x
+
+    for q in range(nq):
+        head[q] = 0
+        if load(q):
+            heap_[m] = q
+            m += 1
+    for i in range(m // 2 - 1, -1, -1):
+        sift(i)
+    while len(out) < k and m > 0:
+        q = heap_[0]
+        out.append((hkey[q], id_of(q)))
+        head[q] += 1
+        if not load(q):
+            m -= 1
+            heap_[0] = heap_[m]
+        sift(0)
+    return out
+
+
 def spec_ctl_scratch(mode: str, groups: int, rings: int, batch: bool) -> tuple:
     """SpecCtl's CB 0 scratch bytes (before its 64-B alignment slack) and the SPEC_ACCEPT_BATCH value (None: no define):
     1 KB of single-user slots (2 KB with SPEC_GROUPS); with the batch, ACCEPT + 1 KB of token rows + 2 KB of ring pieces

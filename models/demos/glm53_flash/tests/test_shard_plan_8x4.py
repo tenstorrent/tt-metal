@@ -1219,6 +1219,31 @@ def test_agk_count_is_the_local_select_count(monkeypatch):
     monkeypatch.setenv("GLM53_ACCEPT_BATCH", "2")
     with expect_error(ValueError, "GLM53_ACCEPT_BATCH=2: 0 or 1"):
         SP.accept_batch()
+    # GLM53_HEAD_SELECT_FAST (topk_select.cpp TOPK_SEL_FAST): the kernel's heap merge (SP.topk_chip_merge mirrors it line
+    # for line: array heap, sift, ids decoded on demand) takes the linear scan's sequence (unique ids across the chips;
+    # key ties across chips included), and a load that keeps the previous head's id (the negative control) does not;
+    # the knob parses 0 / 1
+    rng, stale = random.Random(7), 0
+    for trial in range(200):
+        nchip, k = rng.choice([(32, 1), (32, 32), (8, 4), (32, 8)])
+        vocab = rng.sample(range(1 << 18), nchip * k)
+        lists = []
+        for q in range(nchip):
+            keys = [rng.randint(0, 3 if trial % 2 else 1 << 16) for _ in range(rng.randint(0, k))]
+            lists.append(sorted(((kk, vocab[q * k + j]) for j, kk in enumerate(keys)), key=lambda x: (-x[0], x[1])))
+        want = SP.topk_chip_merge(lists, k, heap=False)
+        assert SP.topk_chip_merge(lists, k, heap=True) == want, trial
+        stale += SP.topk_chip_merge(lists, k, heap=True, stale_id=True) != want
+    assert stale > 50, stale
+    monkeypatch.delenv("GLM53_HEAD_SELECT_FAST", raising=False)
+    assert not SP.head_select_fast()
+    monkeypatch.setenv("GLM53_HEAD_SELECT_FAST", "0")  # (an explicit 0: off)
+    assert not SP.head_select_fast()
+    monkeypatch.setenv("GLM53_HEAD_SELECT_FAST", "1")
+    assert SP.head_select_fast()
+    monkeypatch.setenv("GLM53_HEAD_SELECT_FAST", "2")
+    with expect_error(ValueError, "GLM53_HEAD_SELECT_FAST=2: 0 or 1"):
+        SP.head_select_fast()
     gen = torch.Generator().manual_seed(66)
     for p in (2051, 2052, 4095, 4096 + 127, 4096 + 128 + 3, 32767, 65535 - 128, 65535, 65535 + 129, 262143):
         keys = torch.randint(1, 1 << 31, ((p + 1) // 4,), generator=gen, dtype=torch.int64)
