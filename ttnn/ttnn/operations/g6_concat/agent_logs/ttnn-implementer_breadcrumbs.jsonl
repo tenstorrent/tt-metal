@@ -1,0 +1,3 @@
+{"event":"test_run","result":"pass","detail":"26/26 acceptance, --dev and plain","ts":"2026-11-26T19:49:45+00:00"}
+{"event":"perf_measure","case":"h_gather_16in (Qwen79)","baseline_ns":174718,"no_place_ns":155410,"no_stage_dram_ns":37621,"no_stage_no_place_ns":14725,"cores110_ns":174083,"cores55_ns":206930,"cores22_ns":345833,"classification":"bound by aggregate small (64B) DRAM request rate, not per-core issue; lever = fewer larger requests (design trade: bytes vs transactions)","ts":"2026-11-26T19:49:45+00:00"}
+{"event":"perf_measure","case":"page_relocation","detail":"h_aligned_rank3 66us ~430GB/s, outer_16x4096x1536 901us ~447GB/s: DRAM-bandwidth bound","ts":"2026-11-26T19:49:45+00:00"}
