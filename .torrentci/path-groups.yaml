@@ -36,7 +36,6 @@
 #   runtime-examples:  {changed: [cmake, tt-metalium, image]}
 #   ttnn-examples:     {changed: [cmake, tt-metalium, tt-nn, image]}
 #   build-docs:        {changed: [any-code, docs, image]}
-#   train-smoke:       {changed: [tt-train, image]}
 #   ci-build-image:    unconditional (a `needs` of the members on its image)
 path-groups:
   scans:
