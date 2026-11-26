@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <random>
 #include <tt-metalium/bfloat16.hpp>
@@ -11,6 +12,8 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/chunk_gated_delta_rule_composite.hpp"
+#include "test_utils/program_cache.hpp"
+#include "test_utils/relative_l2.hpp"
 
 namespace {
 
@@ -116,28 +119,17 @@ Reference recurrent_reference(const Case& c, const Inputs& in) {
     return ref;
 }
 
-double relative_rms(const std::vector<double>& expected, const std::vector<float>& actual) {
-    double diff = 0.0;
-    double norm = 0.0;
-    for (size_t i = 0; i < expected.size(); ++i) {
-        diff += (actual[i] - expected[i]) * (actual[i] - expected[i]);
-        norm += expected[i] * expected[i];
-    }
-    return std::sqrt(diff / norm);
+xt::xarray<float> to_float(const std::vector<double>& values, const xt::xarray<float>::shape_type& shape) {
+    xt::xarray<float> out = xt::xarray<float>::from_shape(shape);
+    std::copy(values.begin(), values.end(), out.begin());
+    return out;
 }
 
 // The bound of the Python tests on o and final_state, 2-3x the error measured on Blackhole.
-constexpr double kRelativeRmsMax = 8e-3;
+constexpr float kRelativeL2Max = 8e-3F;
 
-class ChunkGatedDeltaRuleFwCompositeTest : public ::testing::TestWithParam<Case> {
-protected:
-    static void SetUpTestSuite() {
-        ttml::autograd::ctx().open_device();
-    }
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
-    }
-};
+class ChunkGatedDeltaRuleFwCompositeTest : public ttml::test_utils::DeviceSuiteTest,
+                                           public ::testing::WithParamInterface<Case> {};
 
 TEST_P(ChunkGatedDeltaRuleFwCompositeTest, MatchesRecurrentReference) {
     using namespace ttml;
@@ -160,8 +152,11 @@ TEST_P(ChunkGatedDeltaRuleFwCompositeTest, MatchesRecurrentReference) {
 
     const auto result = ops::chunk_gated_delta_rule_fw_composite(q, k, v, g, beta, c.K, h0, c.chunk);
     const auto ref = recurrent_reference(c, in);
-    EXPECT_LE(relative_rms(ref.o, core::to_vector(result.output)), kRelativeRmsMax) << "o";
-    EXPECT_LE(relative_rms(ref.final_state, core::to_vector(result.final_state)), kRelativeRmsMax) << "final_state";
+    const auto o = core::to_xtensor(result.output);
+    const auto final_state = core::to_xtensor(result.final_state);
+    EXPECT_LE(test_utils::relative_l2(o, to_float(ref.o, o.shape())), kRelativeL2Max) << "o";
+    EXPECT_LE(test_utils::relative_l2(final_state, to_float(ref.final_state, final_state.shape())), kRelativeL2Max)
+        << "final_state";
 }
 
 INSTANTIATE_TEST_SUITE_P(
