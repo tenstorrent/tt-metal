@@ -44,8 +44,10 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 TRIAGE_OUT_DIR="${REPO_DIR}/generated/tt-triage"
 TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
-LOCK_FILE="/tmp/tt-device.lock"
-DIRTY_FLAG="/tmp/tt-device.dirty"
+# Chip scope: a checkout bound to one chip (.tt_chip_scope) locks and resets that chip only.
+[[ -f "${REPO_DIR}/.tt_chip_scope" ]] && source "${REPO_DIR}/.tt_chip_scope"
+LOCK_FILE="${TT_DEVICE_LOCK_FILE:-/tmp/tt-device.lock}"
+DIRTY_FLAG="${TT_DEVICE_DIRTY_FLAG:-/tmp/tt-device.dirty}"
 TRIAGE_LOG="/tmp/tt-probe-triage-$$.log"
 
 # --- Device-lock contention profiling (see run_safe_pytest.sh for details) ---
@@ -160,7 +162,7 @@ MISSING_TTEXALENS=false
 if [[ "$SIM_MODE" == false ]]; then
     if python3 -c "import ttexalens" 2>/dev/null; then
         mkdir -p "${TRIAGE_OUT_DIR}"
-        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
+        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} ${TT_DEVICE_TRIAGE_ARGS:-} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
     else
         # Defer the missing-tool warning to EXIT via trap — otherwise it gets
         # buried in probe output and users never see it.
@@ -209,6 +211,8 @@ fi
 
 # --- Acquire flock (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
+    # Chip scope: the machine lock is held shared, so a whole-machine run excludes this one and other chips do not.
+    if [[ -n "${TT_DEVICE_SHARED_LOCK_FILE:-}" ]]; then exec 8>>"$TT_DEVICE_SHARED_LOCK_FILE"; flock -s 8; fi
     exec 9>"$LOCK_FILE"
     echo "TT_PROBE: Waiting for device lock..."
     flock 9
@@ -217,7 +221,7 @@ if [[ "$SIM_MODE" == false ]]; then
 
     if [[ -f "$DIRTY_FLAG" ]]; then
         echo "TT_PROBE: Device dirty from previous run, resetting..."
-        if ! tt-smi -r; then
+        if ! tt-smi -r ${TT_DEVICE_RESET_ARGS:-}; then
             echo "TT_PROBE_ERROR: Device reset failed"
             exit 3
         fi
@@ -286,7 +290,7 @@ fi
 # --- Reset device (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
     echo "TT_PROBE: Resetting device..."
-    if tt-smi -r; then
+    if tt-smi -r ${TT_DEVICE_RESET_ARGS:-}; then
         sleep 2
         rm -f "$DIRTY_FLAG"
         echo "TT_PROBE: Device reset complete"
