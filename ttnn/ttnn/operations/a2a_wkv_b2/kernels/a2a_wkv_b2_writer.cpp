@@ -14,7 +14,6 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
@@ -48,10 +47,7 @@ void kernel_main() {
             const uint32_t mt0 = mb * mt_block;
             const uint32_t mt_rows = (Mt - mt0) < mt_block ? (Mt - mt0) : mt_block;
             const uint32_t block_tiles = mt_rows * Nt;
-            {
-                DeviceZoneScopedN("WPUB");
-                cb_wait_front(cb_out, tiles_published + block_tiles);
-            }
+            cb_wait_front(cb_out, tiles_published + block_tiles);
             if (local) {
                 uint32_t l1 = cb_base + tiles_published * out_tile_bytes;
                 const uint32_t tile0 = h_local * tiles_per_source_head + (my_pos * Mt + mt0) * Nt;

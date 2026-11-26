@@ -118,3 +118,52 @@
 - **Golden test progress**: 7 / 7 (`EVAL_CAPTURE_L1=0`, including `test_regression.py`: back-to-back bit-identity and trace replay). Acceptance 10 / 10.
 - **Issues encountered**: the two latent races above. Both passed every test under R1 timing and corrupted 1–3% of rows once the read stream changed timing. Under `--dev` (watcher) they did not reproduce.
 - **Tests added**: `probes/test_probe_errmap_heads.py` (error map by producing head / tx stream position, and bad-row content matching).
+
+## Refinement 3 — Remaining tail: sender topology and last-round drain (perf-flagged profile)
+- **Date**: 2026-11-26
+- **Headroom gate (verifier note)**: not met at the start. Per call was 94.4 µs (trace replay), against a reader end of 55.8 µs plus the 2.6 µs design drain. So the mux and the tail levers were built.
+- **Diagnosis (before building)**, from the eager device profile with temporary zones (`perf/timeline.py`, `perf/pub_times.py`, `perf/parse_zones.py`):
+  - **Send path.** The link-0 tx writer spent 36–42 µs in send for its 120 packets (about 0.32 µs each). Two ablations split that cost:
+    - fabric send stubbed: 10.7 µs;
+    - per-packet destination-address computation skipped: 27–33 µs, with the tx end 7–10 µs earlier.
+    So the 4 TensorAccessor lookups per packet sat on the serial send path.
+  - **Worker progress is very uneven** (`WPUB` zone per block): by core position, a worker's last block lands anywhere from ~24 to ~60 µs.
+    - The strict mt-major send order gates every round of a stream on its slowest head. The link-0 sender was idle from ~30 to ~46 µs, waiting for round 1.
+    - So the tail is the fabric send of late remote heads, not a last-round drain (the design's ~2.6 µs).
+- **What was done** (all levers are host knobs with one source of truth in `a2a_wkv_b2_program_descriptor.py`):
+  1. **Destination address table** (`cb_tx_addrs`, the tx writer). Every packet's tile NoC addresses are computed once, right after `announce_ready` (about 9 µs on the link-0 stream, while the destination starts and the first blocks are produced). The send loop only indexes the table.
+     - Measured 94.4 → **89.3 µs** per call.
+     - A lazy variant (fill while waiting for batches, catch up inline) measured 86 µs plus one 193 µs outlier run, so it was not kept.
+  2. **Ready-order send** (`TX_ORDER = "ready"`; `"strict"` keeps the old order and passes the acceptance tests, measured 93.3 µs with the R3 placement).
+     - The tx reader fills each batch with whatever packets are published, round-robin over the stream's heads. It sends a partial batch when a poll finds nothing more ready.
+     - Each batch carries a `cb_tx_meta` page `[k, code…]`, code = (mt block, head, packet); the writer indexes the address table with it.
+     - R1's ready-order attempt (108.8 µs, archived in `perf/experiment_ready_order/`) paid for per-packet address computation in the writer and waited for full batches; neither applies here.
+     - Measured 89.3 → **84.2 µs**.
+  3. **Head placement** (`HEAD_PLACEMENT = "by_stream"`; `"interleaved"` and `"rowmajor"` also available). Per chip, the local heads (no fabric send) go on the first core rows, which publish slowest. The remote destinations follow by ascending per-stream head count, so the neighbour chunks sit on the fastest rows. A core's heads stay consecutive (row-major fallback otherwise).
+     - Measured 84.2 → **82.1–82.6 µs** (4 runs; `interleaved` 82.7–82.8).
+  4. **R6 mux, built and parked** (`MUX_OVERFLOW_HEADS`, default 0 = the previous topology; `MUX_NUM_BUFFERS = 8`).
+     - The last x heads of each neighbour stream become a second stream on link 1. Link 1 is shared with the antipode stream through one fabric mux core per direction.
+     - Host side: `ttnn.experimental.fabric_mux` Config / client args / mux kernel `tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp`, fixed-address map on mux cores outside every CB range. The two mux cores share one kernel descriptor.
+     - Kernel side: the tx writer only swaps `DirectConn` for `MuxConn<N>` under `A2A_TX_MUX`.
+     - Peers are matched by (direction, link, slot).
+     - Correct on the first run (acceptance 10/10 at x = 4 and 6).
+     - Trace per call: x = 0 / 2 / 4 / 6 / 8 → 82.7 / 84.8 / 83.6 / 83.1 / 84.2 µs (separate mux kernels), then 82.0 µs at x = 6 with the mux kernels merged.
+     - Trace-replay device profile (`probes/probe_trace_profile.py` + `perf/trace_gaps.py`): device span per replay 71 → **63.5 µs** at x = 6, but the idle gap between back-to-back programs grows 11.5 → **17.5 µs**. The device win is spent on launch. Mux opt level O2 / Os / O3 did not change the gap.
+     - Parked at 0 because per call does not improve.
+- **Calculator prediction (before measuring)**: `/perf-calculator` loaded. No tool models the measured costs:
+  - `estimate.py` refuses fabric and L1-to-L1 schedules;
+  - `opgraph.py`'s ring builder has one sender per link and prices links at a rate, not per packet;
+  - none model the launch gap.
+  The predictions therefore came from the ablations: address table −7…−10 µs on the tx end (measured −5.1 µs per call); ready order, link 0 busy from first publish (~12 µs), expected tx end ≈ 60 µs (measured: busy from 23 µs at 0.36 µs per packet, end 65–75 µs, −5.1 µs per call); mux at x = 6, link 0 −30 packets ≈ −7 µs of device span (measured −7.5 µs of device span, but +6 µs launch gap). No `dm_estimates.json` record: no estimate exists for these schedules.
+- **Measured summary** (trace replay, µs per call): R2 94.4 → address table 89.3 → ready order 84.2 → placement **82.1–82.3** (final, 3 runs). Eager device profile, last tx BRISC: 80–89 → 70–75 µs. Worker reader end unchanged (~53–57 µs).
+- **Bottleneck now**:
+  - **Device span, ~71 µs.** The link-0 senders are busy from ~23 µs to the end at ~0.36 µs per 4,352 B packet (~12 GB/s). They are slower while the DRAM read stream is on (0.22 µs per packet without it): NoC contention on the source and landing sides.
+  - **The link-1 router.** It carries 120 packets (60 own plus 60 relayed) and still finishes about 10 µs earlier. So a single worker channel, not the Ethernet link, limits link 0, which is why the mux moves the device span.
+  - **Launch gap, 11.5 µs per program** in back-to-back trace replay (14% of per call), and 17.5 µs with the mux.
+- **Next** (not done here): find what the launch gap is made of (per fabric connection? the mux's router connection?) before turning the mux on. With that gap cut, `MUX_OVERFLOW_HEADS = 6` is worth about −7 µs. Also: an earlier first publish for the neighbour heads (the link-0 send starts at ~23 µs).
+- **Accuracy achieved**: PCC = 0.999907, relative RMS = 0.0177 (5 distributions, `test_a2a_wkv_b2_precision_baseline.py`), on attn [1,96,160,512] per chip → out [1,24,640,128]. Unchanged.
+- **Golden test progress**: 7 / 7 (`EVAL_CAPTURE_L1=0`, including `test_regression.py`). Acceptance 10 / 10.
+- **Issues encountered**: running the whole unit directory gives one setup ERROR, "Resource temporarily unavailable" in mesh discovery. It moves to a different test each run, and the R2 commit hits it too (27 passed, 1 error), so it is a node process/thread-limit flake, not this change. The new trace-profile probe is named `probes/probe_trace_profile.py` so the directory run does not collect it (one less mesh open).
+- **Tests added**:
+  - `probes/probe_trace_profile.py`, run explicitly: device profile of 6 back-to-back trace replays;
+  - parsers `perf/trace_gaps.py` (per-replay span and launch gap), `perf/timeline.py` (tx zone timeline) and `perf/pub_times.py` (worker publish times per block and core). They need temporary `DeviceZoneScopedN` zones: `TX_*` in the tx kernels, `WPUB` in the worker writer.

@@ -138,7 +138,7 @@ Levers from `op_design.md`'s perf lamps and the master.md data-movement entries 
 - **Bottleneck now**: the fabric_tx send path, not DRAM. The last tx BRISC ends at about 84–86 µs, against about 56 µs for the reader and 59 µs for compute. The reader is 27% above the 43.8 µs DRAM SOL.
 - **Next**: the sender topology (Refinement 3: more senders per link via the mux, last-round drain). Not done here because it is out of this refinement's scope.
 
-### [ ] Refinement 3 — Remaining tail: sender topology and last-round drain (perf-flagged profile)
+### [x] Refinement 3 — Remaining tail: sender topology and last-round drain (perf-flagged profile)
 
 **Type**: perf
 
@@ -157,3 +157,14 @@ Close what remains between the per-call time and the worker DRAM stream after Re
 **Verifier notes**: depends on Refinements 1 and 2 (it measures what they leave). Headroom gate: if, at the start of this refinement, the profiled per-call time is already within about 3 µs of the worker reader end plus the design drain, there is no headroom left on this region. Record the measurement and mark `[x]` without building the mux.
 
 **Done when**: either (a) measured per-call time on the flagged shape improves, with PCC ≥ 0.9995, golden and acceptance green and regression bit-identical; or (b) the headroom gate above is shown by measurement to be already met.
+
+**Outcome**: per call (trace replay) **94.4 → 82.1–82.3 µs**. Device profile: last tx BRISC 80–89 → 70–75 µs, worker reader end unchanged (~55 µs). PCC 0.999907; golden 7/7; acceptance 10/10. The headroom gate was not met at the start (94.4 vs 55.8 + 2.6 µs).
+- **What landed** (host knobs):
+  - a per-stream destination address table filled before the first send (94.4 → 89.3; the 4 TensorAccessor lookups per packet were on the serial send path);
+  - ready-order send, `TX_ORDER = "ready"`: the batch takes whatever is published and carries a meta page; this is needed because worker cores finish anywhere from ~24 to ~60 µs, so a strict mt-major stream is gated by its slowest head (89.3 → 84.2);
+  - local heads on the slowest core rows, `HEAD_PLACEMENT = "by_stream"` (84.2 → 82.3).
+- **R6 mux**: built and correct (`MUX_OVERFLOW_HEADS`, `ttnn.experimental.fabric_mux` + `MuxConn`), parked at 0. At 6 overflow heads the device span per replay drops 71 → 63.5 µs, but the launch gap between back-to-back programs grows 11.5 → 17.5 µs, so per call is flat (82.0 vs 82.7).
+- **Bottleneck now**:
+  - the link-0 worker channel, busy from ~23 µs to the end at ~0.36 µs per packet (NoC contention with the DRAM stream; 0.22 µs without it);
+  - an 11.5 µs launch gap per program (14% of per call).
+- **Next**: work out what the launch gap is made of before turning the mux on (~−7 µs of device span is waiting there), and get the neighbour heads' first publish earlier. Not done here: the gap is dispatch-side, outside this refinement's sender/tail scope.

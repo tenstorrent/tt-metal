@@ -8,7 +8,9 @@
 //   send_block     : per packet, one scatter write of up to tiles_per_packet tiles straight into
 //                    the destination's L1-interleaved output tiles (no receiver kernel). Packets are
 //                    consumed in the tx reader's batches (up to tx_batch packets, one whole batch
-//                    region of cb_tx_stage): issue every packet, one flush, one pop per batch.
+//                    region of cb_tx_stage + one cb_tx_meta page naming the batch's packets): issue
+//                    every packet, one flush, one pop per batch. Destination NoC addresses come from
+//                    addr_table, filled once before the first send (Refinement 3).
 //   announce_done  : fabric atomic inc with flush -> peer sem_done (after the last data packet)
 //   await_done     : local wait sem_done >= 1 (the peer's data has landed here), reset 0
 //
@@ -28,7 +30,6 @@
 #include <utility>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/ccl/ccl_helpers_dataflow.hpp"
 
 namespace {
@@ -51,7 +52,8 @@ void kernel_main() {
     constexpr uint32_t l1_alignment = get_compile_time_arg_val(7);
     constexpr uint32_t tx_batch = get_compile_time_arg_val(8);
     constexpr uint32_t cb_tx_addrs = get_compile_time_arg_val(9);
-    constexpr auto out_args = TensorAccessorArgs<10>();
+    constexpr uint32_t cb_tx_meta = get_compile_time_arg_val(10);
+    constexpr auto out_args = TensorAccessorArgs<11>();
 
     // tiles_per_packet is clamped on the host to the scatter cap (and the fabric payload); restated
     // here only as a guard, never as a second source of the packet size.
@@ -70,9 +72,24 @@ void kernel_main() {
 
     using namespace dataflow_kernel_lib::ccl;
 
-    // Fabric connection block first (built on the host by build_ccl_fabric_rt_args).
+    // Connection block first. Direct (one stream per (direction, link) router): built on the host by
+    // build_ccl_fabric_rt_args. Mux (R6, Refinement 3: several streams share one link): this stream is
+    // one client channel of the link's fabric mux core (ttnn.experimental.fabric_mux client args, after
+    // the output accessor's CT args); the stream code below is identical for both ConnT policies.
     size_t arg_idx = 0;
+#ifdef A2A_TX_MUX
+    constexpr uint32_t mux_ct = out_args.next_compile_time_args_offset();
+    constexpr uint8_t mux_num_buffers = get_compile_time_arg_val(mux_ct);
+    constexpr size_t mux_buffer_bytes = get_compile_time_arg_val(mux_ct + 1);
+    constexpr size_t mux_status_address = get_compile_time_arg_val(mux_ct + 2);
+    constexpr size_t mux_termination_address = get_compile_time_arg_val(mux_ct + 3);
+    constexpr uint32_t mux_num_clients = get_compile_time_arg_val(mux_ct + 4);
+    using ConnT = MuxConn<mux_num_buffers>;
+    FabricStreamSender<ConnT> sender(
+        ConnT(arg_idx, mux_buffer_bytes, mux_status_address, mux_termination_address, mux_num_clients), l1_alignment);
+#else
     FabricStreamSender<DirectConn> sender(arg_idx, /*is_forward=*/true, l1_alignment);
+#endif
 
     const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
@@ -100,31 +117,49 @@ void kernel_main() {
     auto stream = sender.open(route);
     auto inc_ch = stream.arm_inc(1);  // Val|Flush armed
 
+    // Packets arrive in the tx reader's order (strict or ready, see the tx reader); each batch's meta
+    // page names its packets as (mt block, head, packet) codes, which index addr_table: entry
+    // (mb, s, pp) sits at mb * num_heads * full_block_packets + s * packets_per_block(mb) + pp (only the
+    // last mt block can be ragged, so every earlier block has full_block_packets per head).
+    constexpr uint32_t full_block_packets = (mt_block * Nt + tiles_per_packet - 1) / tiles_per_packet;
+    constexpr uint32_t last_block_tiles = (Mt - (num_mt_blocks - 1) * mt_block) * Nt;
+    constexpr uint32_t packets_per_head =
+        (num_mt_blocks - 1) * full_block_packets + (last_block_tiles + tiles_per_packet - 1) / tiles_per_packet;
+    const uint32_t stream_packets = num_heads * packets_per_head;
+
+    // Destination address table (Refinement 3): every packet's tile NoC addresses, in table order
+    // (mt block, head, packet), filled once right after announce_ready (while the destination starts and
+    // the first blocks are produced), so the send loop does no TensorAccessor work.
+    tt_l1_ptr uint64_t* addr_table = reinterpret_cast<tt_l1_ptr uint64_t*>(get_write_ptr(cb_tx_addrs));
+    uint32_t filled = 0;                   // packets whose entries are written, in table order
+    uint32_t f_mb = 0, f_s = 0, f_pp = 0;  // table position of entry `filled`
+    auto fill_next = [&]() {
+        const uint32_t block_tiles = f_mb + 1 == num_mt_blocks ? last_block_tiles : mt_block * Nt;
+        const uint32_t h_local = get_arg_val<uint32_t>(heads_base + f_s);
+        const uint32_t tile0 =
+            h_local * tiles_per_source_head + (my_pos * Mt + f_mb * mt_block) * Nt + f_pp * tiles_per_packet;
+        const uint32_t chunks = (block_tiles - f_pp * tiles_per_packet) < tiles_per_packet
+                                    ? (block_tiles - f_pp * tiles_per_packet)
+                                    : tiles_per_packet;
+        tt_l1_ptr uint64_t* e = addr_table + filled * tiles_per_packet;
+        for (uint32_t c = 0; c < chunks; ++c) {
+            e[c] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(out, tile0 + c, 0);
+        }
+        ++filled;
+        if (++f_pp * tiles_per_packet >= block_tiles) {
+            f_pp = 0;
+            if (++f_s == num_heads) {
+                f_s = 0;
+                ++f_mb;
+            }
+        }
+    };
+
     // announce_ready / await_ready
     inc_ch.inc(peer_ready_noc);
 
-    // Destination address table (Refinement 3): every packet's tile NoC addresses, computed here while
-    // the first block is still being produced, so the send loop does no TensorAccessor work. Entry
-    // (stream packet index, chunk); the stream's packet order is the send loop's below.
-    tt_l1_ptr uint64_t* addr_table = reinterpret_cast<tt_l1_ptr uint64_t*>(get_write_ptr(cb_tx_addrs));
-    {
-        uint32_t e = 0;
-        for (uint32_t mb = 0; mb < num_mt_blocks; ++mb) {
-            const uint32_t mt0 = mb * mt_block;
-            const uint32_t mt_rows = (Mt - mt0) < mt_block ? (Mt - mt0) : mt_block;
-            const uint32_t block_tiles = mt_rows * Nt;
-            for (uint32_t s = 0; s < num_heads; ++s) {
-                const uint32_t h_local = get_arg_val<uint32_t>(heads_base + s);
-                const uint32_t tile_base = h_local * tiles_per_source_head + (my_pos * Mt + mt0) * Nt;
-                for (uint32_t p = 0; p < block_tiles; p += tiles_per_packet) {
-                    for (uint32_t c = 0; c < tiles_per_packet; ++c, ++e) {
-                        addr_table[e] = p + c < block_tiles ? tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                                  out, tile_base + p + c, 0)
-                                                            : 0;
-                    }
-                }
-            }
-        }
+    while (filled < stream_packets) {
+        fill_next();  // the whole address table, before the first batch can arrive
     }
     noc_semaphore_wait_min(sem_ready, 1);
     noc_semaphore_set(sem_ready, 0);
@@ -133,45 +168,43 @@ void kernel_main() {
     [[maybe_unused]] auto scatter_ring = arm_scatter_ring(
         stream, tile_bytes, tiles_per_packet > 1 ? tiles_per_packet : 2, std::make_index_sequence<hdr_ring>{});
 
-    uint32_t pkt = 0;  // stream packet index into addr_table
-    for (uint32_t mb = 0; mb < num_mt_blocks; ++mb) {
-        const uint32_t mt0 = mb * mt_block;
-        const uint32_t mt_rows = (Mt - mt0) < mt_block ? (Mt - mt0) : mt_block;
-        const uint32_t block_tiles = mt_rows * Nt;
-        const uint32_t packets_per_block = (block_tiles + tiles_per_packet - 1) / tiles_per_packet;
-        const uint32_t round_packets = num_heads * packets_per_block;
-        for (uint32_t q0 = 0; q0 < round_packets; q0 += tx_batch) {
-            const uint32_t k = (round_packets - q0) < tx_batch ? (round_packets - q0) : tx_batch;
-            {
-                DeviceZoneScopedN("TX_WAIT");
-                cb_wait_front(cb_tx_stage, batch_pages);
-            }
-            DeviceZoneScopedN("TX_SEND");
-            const uint32_t base = get_read_ptr(cb_tx_stage);
-            bool unicast_used = false;
-            for (uint32_t i = 0; i < k; ++i) {
-                const uint32_t q = q0 + i;
-                const uint32_t p = (q % packets_per_block) * tiles_per_packet;
-                const uint32_t chunks = (block_tiles - p) < tiles_per_packet ? (block_tiles - p) : tiles_per_packet;
-                const uint32_t l1 = base + i * packet_bytes;
-                const uint64_t* dst_addrs = addr_table + (pkt++) * tiles_per_packet;
-                if (chunks == 1) {
-                    if (unicast_used) {
-                        stream.flush();  // the unicast header is still being read by the previous tail packet
-                    }
-                    unicast_ch.write(dst_addrs[0], l1);
-                    unicast_used = true;
-                } else {
-                    const uint32_t r = i % hdr_ring;
-                    if (r == 0 && i != 0) {
-                        stream.flush();  // ring wraps inside the batch: its headers must have left L1
-                    }
-                    scatter_ring[r].write_scatter(dst_addrs, chunks, l1);
+    for (uint32_t sent = 0; sent < stream_packets;) {
+        cb_wait_front(cb_tx_meta, 1);
+        cb_wait_front(cb_tx_stage, batch_pages);
+        const uint32_t base = get_read_ptr(cb_tx_stage);
+        volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_tx_meta));
+        const uint32_t k = meta[0];
+        bool unicast_used = false;
+        for (uint32_t i = 0; i < k; ++i) {
+            const uint32_t code = meta[1 + i];
+            const uint32_t mb = code >> 16;
+            const uint32_t s = (code >> 8) & 0xFF;
+            const uint32_t pp = code & 0xFF;
+            const uint32_t block_tiles = mb + 1 == num_mt_blocks ? last_block_tiles : mt_block * Nt;
+            const uint32_t packets_per_block = (block_tiles + tiles_per_packet - 1) / tiles_per_packet;
+            const uint32_t p = pp * tiles_per_packet;
+            const uint32_t chunks = (block_tiles - p) < tiles_per_packet ? (block_tiles - p) : tiles_per_packet;
+            const uint32_t l1 = base + i * packet_bytes;
+            const uint32_t entry = mb * num_heads * full_block_packets + s * packets_per_block + pp;
+            const uint64_t* dst_addrs = addr_table + entry * tiles_per_packet;
+            if (chunks == 1) {
+                if (unicast_used) {
+                    stream.flush();  // the unicast header is still being read by the previous tail packet
                 }
+                unicast_ch.write(dst_addrs[0], l1);
+                unicast_used = true;
+            } else {
+                const uint32_t r = i % hdr_ring;
+                if (r == 0 && i != 0) {
+                    stream.flush();  // ring wraps inside the batch: its headers must have left L1
+                }
+                scatter_ring[r].write_scatter(dst_addrs, chunks, l1);
             }
-            stream.flush();  // every payload of the batch has left its L1 slot before the reader reuses it
-            cb_pop_front(cb_tx_stage, batch_pages);
         }
+        sent += k;
+        stream.flush();  // every payload of the batch has left its L1 slot before the reader reuses it
+        cb_pop_front(cb_tx_stage, batch_pages);
+        cb_pop_front(cb_tx_meta, 1);
     }
 
     // announce_done (flush: lands after every data packet of this stream)
