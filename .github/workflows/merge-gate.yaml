@@ -656,18 +656,10 @@ jobs:
         id: accept
         env:
           GH_TOKEN: ${{ github.token }}
+          TEAM_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           HEAD_REF: ${{ github.event.merge_group.head_ref }}
-        run: |
-          # The queue branch is gh-readonly-queue/<base>/pr-<number>-<sha>.
-          PR=$(echo "$HEAD_REF" | sed -nE 's#.*/pr-([0-9]+)-[0-9a-f]+$#\1#p')
-          ACCEPTED=false
-          if [ -n "$PR" ] && curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" \
-              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${PR}/labels?per_page=100" \
-              | python3 -c 'import json, sys; sys.exit("llk-perf-accept-regression" not in [l["name"] for l in json.load(sys.stdin)])'; then
-            ACCEPTED=true
-            echo "::notice::#${PR} has the llk-perf-accept-regression label, so an LLK perf regression does not block it."
-          fi
-          echo "accepted=${ACCEPTED}" >> "$GITHUB_OUTPUT"
+        # The queue branch is gh-readonly-queue/<base>/pr-<number>-<sha>.
+        run: .github/scripts/llk-perf-regression-accepted.sh "$(echo "$HEAD_REF" | sed -nE 's#.*/pr-([0-9]+)-[0-9a-f]+$#\1#p')"
       - name: Classify this entry's own changes
         id: classify
         env:
@@ -729,7 +721,8 @@ jobs:
       stage2_baseline_artifact: llk-perf-stage2-baseline
       # A measurement that did not complete, a missing baseline or a comparison that did not finish
       # fails the job, and blocks the merge. On Blackhole, so does a regression stage 2 confirms,
-      # unless the PR has the llk-perf-accept-regression label.
+      # unless a member of tenstorrent/regression-approve, not the PR author, gave the PR the
+      # llk-perf-accept-regression label (.github/scripts/llk-perf-regression-accepted.sh).
       fail_on_regression: ${{ matrix.arch == 'blackhole' && needs.llk-perf-merge-gate-changes.outputs.accepted != 'true' }}
       fail_without_baseline: true
       # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
