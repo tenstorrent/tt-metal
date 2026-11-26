@@ -43,6 +43,8 @@ from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_du
 
 # A/B switch: run the early-Q reshard's all-to-all + wkv_b1 as the fused all_to_all_matmul op.
 MLA_EARLY_Q_FUSED_A2AMM = os.environ.get("MLA_EARLY_Q_FUSED_A2AMM", "") not in ("", "0", "false")
+# Which fused op: "native" (C++ ttnn.all_to_all_matmul) or "generic" (the Python generic_op version).
+MLA_A2AMM_IMPL = os.environ.get("MLA_A2AMM_IMPL", "native")
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
@@ -1691,7 +1693,12 @@ class ttMLA:
         """The early-Q reshard with the fused all_to_all_matmul (MLA_EARLY_Q_FUSED_A2AMM=1): split this chip's heads
         first, then nope goes heads -> sequence and through wkv_b1 in one op, rope through its own all-to-all.
         Returns (prefix [1, H, S/(sp*tp), kv_lora], rope_seq [1, H, S/(sp*tp), qk_rope]), as the chain does."""
-        from ttnn.operations.all_to_all_matmul import all_to_all_matmul
+        if MLA_A2AMM_IMPL == "generic":
+            from ttnn.operations.all_to_all_matmul_generic import all_to_all_matmul
+        else:
+            from ttnn.operations.all_to_all_matmul import all_to_all_matmul
+
+            assert all_to_all_matmul is not None, "this build has no C++ ttnn.all_to_all_matmul (MLA_A2AMM_IMPL=generic)"
 
         nope, rope = ttnn.experimental.nlp_create_q_heads_split(
             tt_q,

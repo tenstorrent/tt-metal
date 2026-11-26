@@ -8,8 +8,8 @@ every source's chunk for all H = G*Hl heads, each head multiplied by its own (K,
 
     chunks[p] = chunk(x[p], G, dim=2);  a2a[q] = cat_p(chunks[p][q], dim=1);  out[q] = a2a[q] @ w   (per head)
 
-One ttnn.generic_op on a MeshProgramDescriptor per call (see all_to_all_matmul_program_descriptor.py and
-op_design.md): port cores send every remote quarter over the fabric straight into the L1 of the compute core that
+The operation is the native C++ ttnn.all_to_all_matmul (ttnn/cpp/ttnn/operations/all_to_all_matmul), one program
+per device per call; this module keeps the support contract and validate(). Port cores send every remote quarter over the fabric straight into the L1 of the compute core that
 multiplies it; compute cores read their weights from DRAM while the rows are in flight.
 """
 
@@ -131,7 +131,7 @@ def _check_caller_errors(input_tensor, weight, cluster_axis, topology, num_links
             hops.append((grp[-1], grp[0]))
         for a, b in hops:
             for s, d in ((a, b), (b, a)):
-                links = ttnn.get_forwarding_link_indices(mesh_device, _node(mesh_device, s), _node(mesh_device, d))
+                links = ttnn.get_forwarding_link_indices(_node(mesh_device, s), _node(mesh_device, d))
                 if len(links) == 0 and ring and (s, d) in ((grp[-1], grp[0]), (grp[0], grp[-1])):
                     raise ValueError(
                         f"all_to_all_matmul: Ring along cluster_axis={cluster_axis} has no wrap link "
@@ -198,32 +198,8 @@ def validate(
 # ---------------------------------------------------------------------------
 
 
-def all_to_all_matmul(
-    input_tensor: ttnn.Tensor,
-    weight: ttnn.Tensor,
-    *,
-    cluster_axis: int,
-    topology=Topology.Ring,
-    num_links: int = 2,
-    memory_config: ttnn.MemoryConfig | None = None,
-    compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
-) -> ttnn.Tensor:
-    validate(
-        input_tensor,
-        weight,
-        cluster_axis=cluster_axis,
-        topology=topology,
-        num_links=num_links,
-        memory_config=memory_config,
-        compute_kernel_config=compute_kernel_config,
-    )
-    from .all_to_all_matmul_program_descriptor import run
-
-    return run(
-        input_tensor,
-        weight,
-        cluster_axis=cluster_axis,
-        num_links=num_links,
-        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
-        compute_kernel_config=compute_kernel_config or default_compute_kernel_config(),
-    )
+# The registered C++ operation (ttnn/cpp/ttnn/operations/all_to_all_matmul): it checks this contract and refuses
+# with the same exceptions. all_to_all_matmul_scratch_tensor returns the landing scratch a call uses.
+# The C++ binding exists only in a build that includes ttnn/cpp/ttnn/operations/all_to_all_matmul.
+all_to_all_matmul = getattr(ttnn, "all_to_all_matmul", None)
+all_to_all_matmul_scratch_tensor = getattr(ttnn, "all_to_all_matmul_scratch_tensor", None)

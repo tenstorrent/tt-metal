@@ -107,6 +107,7 @@ def test_early_q_fused_ab(request, mesh_device, device_params, variant, case_nam
         "fabric": device_params["fabric_config"].name,
         "fabric_payload_bytes": model_fabric_payload(variant.name),
         "visible_devices": os.environ.get("TT_VISIBLE_DEVICES"),
+        "fused_impl": mla_module.MLA_A2AMM_IMPL,
         "rounds": ROUNDS,
         "best_ms": {f"{p}/{m}": min(v) for (p, m), v in samples.items() if v},
         "samples_ms": {f"{p}/{m}": v for (p, m), v in samples.items()},
@@ -126,3 +127,124 @@ def test_early_q_fused_ab(request, mesh_device, device_params, variant, case_nam
     assert not errors, f"paths failed: {errors}"
     for mode, value in pcc.items():
         assert value >= OUT_PCC, f"{mode}: fused layer output differs from the chain's (min per-device PCC {value:.6f})"
+
+
+# ============================================================================
+# Block A/B: only the early-Q reshard (q_b_proj output -> all-to-all -> head split -> wkv_b1 -> RoPE + concat), for
+# meshes where the whole layer cannot run with a TP ring, e.g. one 2x2 half of a LoudBox opened as a 1x4 ring (the
+# sparse layer's KVPE read-back is a full-mesh snake that needs both mesh dims > 1). Same built layer and weights.
+# ============================================================================
+from models.demos.deepseek_v3_d_p.tests.measure.timing import time_untraced  # noqa: E402
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced  # noqa: E402
+
+
+def _block_input(case, mesh_device, chunk):
+    """A q_b_proj-shaped input: [1, 1, chunk, H*qk] sharded sequence over SP and head columns over TP."""
+    import torch
+
+    mla = case.mla
+    qk = mla.qk_nope_head_dim + mla.qk_rope_head_dim
+    torch.manual_seed(0)
+    q = torch.randn(1, 1, chunk, mla.num_heads * qk, dtype=torch.float32).to(torch.bfloat16)
+    dims = (2, 3) if BOX.sp_axis == 0 else (3, 2)
+    return ttnn.from_torch(
+        q,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+    )
+
+
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, variant, case_name",
+    [p for p in gate_params() if not GATE_CASES.get(p.values[3], (None, True))[1]],
+    indirect=["mesh_device", "device_params", "variant"],
+)
+@pytest.mark.parametrize("scenario", ["warm"])
+def test_early_q_block_ab(request, mesh_device, device_params, variant, case_name, config_only, scenario):
+    chunk = BOX.chunk
+    cache = BOX.cache_tokens(SCENARIO_CACHE_TOKENS[scenario])
+    case = build_sparse_perf_case(
+        mesh_device,
+        variant,
+        config_only,
+        cache=cache,
+        chunk=chunk,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        sp_axis=BOX.sp_axis,
+    )
+    mla = case.mla
+    assert mla._early_q_reshard, f"{case_name}: this layer does not take the early-Q reshard path"
+    sp = tuple(mesh_device.shape)[BOX.sp_axis]
+    seq_len_local = chunk // sp
+    q_in = _block_input(case, mesh_device, chunk)
+    start = cache
+
+    def step():
+        # The stem consumes its input: both paths pay the same clone.
+        return mla._q_stem_seq_sharded(ttnn.clone(q_in), case.rope, start, seq_len_local, None)
+
+    samples = {(p, m): [] for p in PATHS for m in MODES}
+    outputs, errors = {}, {}
+    try:
+        for r in range(ROUNDS):
+            for path in PATHS:
+                _set_path(path)
+                for mode in MODES:
+                    if (path, mode) in errors:
+                        continue
+                    try:
+                        if mode == "untraced":
+                            s, out = time_untraced(step, lambda: ttnn.synchronize_device(mesh_device))
+                            outputs.setdefault((path, mode), _device_tensors(out))
+                            ttnn.deallocate(out)
+                        else:
+                            with TracedStep(mesh_device, step) as traced:
+                                traced.capture()
+                                s = time_traced(traced)
+                                outputs.setdefault((path, mode), _device_tensors(traced.output))
+                        samples[(path, mode)] += list(s)
+                    except Exception as e:  # noqa: BLE001
+                        errors[(path, mode)] = f"{type(e).__name__}: {e}"[:600]
+                        print(f"EARLY_Q_BLOCK {case_name} {path} {mode} round {r} FAILED: {errors[(path, mode)]}")
+    finally:
+        _set_path("chain")
+
+    pcc = {}
+    for mode in MODES:
+        a, b = outputs.get(("chain", mode)), outputs.get(("fused", mode))
+        if a is not None and b is not None:
+            pcc[mode] = min(comp_pcc(x, y, OUT_PCC)[1] for x, y in zip(a, b))
+    result = {
+        "kind": "block",
+        "case": case_name,
+        "box": BOX.name,
+        "mesh": f"{BOX.mesh[0]}x{BOX.mesh[1]}",
+        "scenario": scenario,
+        "chunk_tokens": chunk,
+        "fabric": device_params["fabric_config"].name,
+        "fabric_payload_bytes": model_fabric_payload(variant.name),
+        "visible_devices": os.environ.get("TT_VISIBLE_DEVICES"),
+        "fused_impl": mla_module.MLA_A2AMM_IMPL,
+        "rounds": ROUNDS,
+        "best_ms": {f"{p}/{m}": min(v) for (p, m), v in samples.items() if v},
+        "samples_ms": {f"{p}/{m}": v for (p, m), v in samples.items()},
+        "output_pcc_fused_vs_chain": pcc,
+        "errors": {f"{p}/{m}": e for (p, m), e in errors.items()},
+        "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    for mode in MODES:
+        c, f = result["best_ms"].get(f"chain/{mode}"), result["best_ms"].get(f"fused/{mode}")
+        if c and f:
+            result[f"delta_us_{mode}"] = 1000.0 * (f - c)
+            result[f"delta_pct_{mode}"] = 100.0 * (f - c) / c
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    with open(OUT_DIR / "results.jsonl", "a") as fh:
+        fh.write(json.dumps(result) + "\n")
+    print("EARLY_Q_BLOCK_RESULT " + json.dumps({k: result[k] for k in result if k != "samples_ms"}))
+    assert not errors, f"paths failed: {errors}"
+    for mode, value in pcc.items():
+        assert value >= OUT_PCC, f"{mode}: fused block output differs from the chain's (min per-device PCC {value:.6f})"
