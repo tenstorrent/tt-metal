@@ -10,6 +10,7 @@ from typing import Any, Optional, Union
 import torch
 from loguru import logger
 from safetensors import safe_open
+from safetensors.torch import save_file
 
 import ttnn
 from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _fp8_dequantize_state_dict
@@ -30,6 +31,13 @@ def read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> torch
             parts.append(f.get_slice(key)[max(start, s) - s : min(end, e) - s].to(torch.float32))
     assert parts, f"no shards overlap rows [{start}:{end}] in {tensor_dir}"
     return torch.cat(parts, dim=0)
+
+
+def write_sharded_rows(tensor_dir: Path, key: str, start: int, rows: torch.Tensor) -> None:
+    """Write `rows` as rows [start, start + len(rows)) of `key`: one rows_<s>_<e>.safetensors shard that
+    read_sharded_rows reads back."""
+    tensor_dir.mkdir(parents=True, exist_ok=True)
+    save_file({key: rows.contiguous()}, str(tensor_dir / f"rows_{start:08d}_{start + rows.shape[0]:08d}.safetensors"))
 
 
 def interleave_pe(pe: torch.Tensor) -> torch.Tensor:
