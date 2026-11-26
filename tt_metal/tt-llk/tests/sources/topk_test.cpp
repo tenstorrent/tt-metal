@@ -388,7 +388,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // by it or by an earlier call since the last fill.
                         const auto fill_replay_with_nops = []()
                         {
-                            lltt::record<lltt::NoExec>(0, 32);
+                            TTI_REPLAY(0, 32, 0, 1);
                             for (int slot = 0; slot < 32; ++slot)
                             {
                                 TTI_SFPNOP;
