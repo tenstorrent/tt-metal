@@ -165,11 +165,11 @@ def _groups(mesh_shape, cluster_axis):
 
 def _first_hop_dir(mesh, src, dst, nxt, prv):
     """FWD / BWD: the ring port whose connection carries the first hop of the fabric's route src -> dst."""
-    d = ttnn.get_eth_forwarding_direction(_node(mesh, src), _node(mesh, dst))
+    d = ttnn.get_eth_forwarding_direction(mesh, _node(mesh, src), _node(mesh, dst))
     if d is None:
         return None
     for port, nb in ((FWD, nxt), (BWD, prv)):
-        if d == ttnn.get_eth_forwarding_direction(_node(mesh, src), _node(mesh, nb)):
+        if d == ttnn.get_eth_forwarding_direction(mesh, _node(mesh, src), _node(mesh, nb)):
             return port
     return None
 
@@ -241,14 +241,14 @@ def _chip_maps(mesh, coord):
             maps[int(uid)] = (eth, t2p)
         _HARVEST_CACHE[id(mesh)] = (mesh, maps)
     node = _node(mesh, coord)
-    uid = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(node.mesh_id), int(node.chip_id)))
+    uid = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh, int(node.mesh_id), int(node.chip_id)))
     return _HARVEST_CACHE[id(mesh)][1][uid]
 
 
 def _eth_channel(mesh, src, dst, link):
     """The Ethernet channel of connection src -> dst on `link` (first word of its runtime args; host only)."""
     scratch = ttnn.ProgramDescriptor()
-    args = ttnn.setup_fabric_connection(_node(mesh, src), _node(mesh, dst), link, scratch, ttnn.CoreCoord(0, 0))
+    args = ttnn.setup_fabric_connection(mesh, _node(mesh, src), _node(mesh, dst), link, scratch, ttnn.CoreCoord(0, 0))
     return int(list(args)[0])
 
 
@@ -902,7 +902,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
                 peer = ch["next"] if d == FWD else ch["prev"]
                 args += list(
                     ttnn.setup_fabric_connection(
-                        _node(mesh, coord), _node(mesh, peer), ch["links"][d][l], program, ttnn.CoreCoord(px, py)
+                        mesh, _node(mesh, coord), _node(mesh, peer), ch["links"][d][l], program, ttnn.CoreCoord(px, py)
                     )
                 )
             port_sender_rt[px][py] = args
