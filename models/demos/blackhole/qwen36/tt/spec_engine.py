@@ -174,16 +174,18 @@ class DeferredVerify:
     ``supports_spec_device_mask``): its PendingVerify ``step``, the staged block (``tokens`` [B][T] and column-0
     ``positions`` [B], 0 for a padding row), the slots' M-RoPE deltas, the rows it runs, the verify row ``bucket`` it
     replayed (None: the B-user trace) and whether it may run as a one-enqueue step. The plugin holds it as the opaque
-    payload of ``decode_forward(defer_device_sampling=True)``."""
+    payload of ``decode_forward(defer_device_sampling=True)``. A ``chained`` one (supports_chained_spec_verify) was
+    staged by the chain program at submission: its PendingVerify holds the sampling plan of every row it draws."""
 
     step: PendingVerify
     tokens: list
     positions: list
     rope_deltas: list
-    start_pos: torch.Tensor
+    start_pos: torch.Tensor | None
     active: torch.Tensor
     bucket: int | None
     one_enqueue: bool
+    chained: bool = False  # the chain program staged the step: the drawing rows and valid drafts are fixed
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -1360,17 +1362,24 @@ class MTPSpecEngine:
         Returns VerifyResult."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
-        if defer_sampling and (spec_mode != "argmax_ids" or sampling is not None or predecessor is not None):
+        if defer_sampling and (spec_mode != "argmax_ids" or (sampling is not None) != (predecessor is not None)):
             raise ValueError(
-                "a verify with deferred sampling is an unchained argmax_ids verify whose sampling parameters come "
-                f"with sample_deferred: spec_mode={spec_mode!r}, sampling given={sampling is not None}, "
-                f"chained={predecessor is not None}"
+                "a verify with deferred sampling is an argmax_ids verify; a chained one takes its sampling parameters "
+                "now (its chain program writes the drawing rows' seeds), an unchained one with sample_deferred: "
+                f"spec_mode={spec_mode!r}, sampling given={sampling is not None}, chained={predecessor is not None}"
             )
         if predecessor is not None:
             if spec_mode != "argmax_ids" or not defer:
                 raise ValueError("a chained verify is an argmax_ids verify read later (defer)")
             return self._decode_chained(
-                predecessor, start_pos, num_valid_drafts, page_table, slot_remap, mamba_state, sampling
+                predecessor,
+                start_pos,
+                num_valid_drafts,
+                page_table,
+                slot_remap,
+                mamba_state,
+                sampling,
+                defer_sampling=defer_sampling,
             )
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
         if clean.shape[0] != self.B:
@@ -1423,7 +1432,9 @@ class MTPSpecEngine:
         """Whether a verify can also run the device acceptance and the drafter (MTPBlockEngine once captured)."""
         return False
 
-    def _decode_chained(self, predecessor, start_pos, num_valid_drafts, page_table, slot_remap, mamba_state, sampling):
+    def _decode_chained(
+        self, predecessor, start_pos, num_valid_drafts, page_table, slot_remap, mamba_state, sampling, **kw
+    ):
         raise NotImplementedError(f"{type(self).__name__} builds no chained verify")
 
     def _verify_split(self, tokens, positions, mi_prev, **kw):
@@ -2394,6 +2405,8 @@ class MTPBlockEngine(MTPSpecEngine):
                 )
             nv = new
         rows, masked = self._deferred_mask_rows(mask, payload.active, nv)
+        if payload.chained:
+            return self._sample_deferred_chained(payload, rows, masked, nv)
         positions = [int(p) if bool(a) else -1 for p, a in zip(payload.start_pos.tolist(), payload.active.tolist())]
         plan = sampling_plan(sampling, positions, T, masked=masked) if sampling is not None or any(masked) else None
         plan = plan if plan is not None and plan.any_sampled else None
@@ -2428,6 +2441,27 @@ class MTPBlockEngine(MTPSpecEngine):
         draws = [] if plan is None else [self.model._vfy_sampler.draws]
         step.reads = self._read_device0_async([self.model._vfy_ids_out, *draws])
         self._vfeed = self.model._vfy_rows_out
+        return step
+
+    def _sample_deferred_chained(self, payload, rows, masked, num_valid):
+        """sample_deferred of a chained DeferredVerify: the chain program fixed its drawing rows (every live row) and
+        its valid drafts, so a different count raises; the mask, sampler, step and drafter traces and the reads are
+        enqueued over the plan whose seeds its submission staged."""
+        step = payload.step
+        if not torch.equal(num_valid, step.num_valid):
+            raise ValueError(
+                f"a chained verify's valid drafts {num_valid.tolist()} at sampling differ from the "
+                f"{step.num_valid.tolist()} its chain program counted"
+            )
+        drawn = drawn_users(step.sample_plan, self.B, self.T)
+        if any(m and not d for m, d in zip(masked, drawn)):
+            raise ValueError(f"a token mask constrains rows {masked} the chained verify does not draw ({drawn})")
+        self._deferred = None
+        self.model.verify_enqueue_post(
+            sample_plan=step.sample_plan, bucket=payload.bucket, mask=rows if any(masked) else None
+        )
+        self.masked_steps += any(masked)
+        self._enqueue_step_and_drafter(step)
         return step
 
     def _deferred_mask_rows(self, mask, active, num_valid):
@@ -2650,7 +2684,17 @@ class MTPBlockEngine(MTPSpecEngine):
     # --------------------------------------------------------------------- #
     # Chained verify (vllm-tt-plugin supports_chained_spec_verify)
     # --------------------------------------------------------------------- #
-    def _decode_chained(self, predecessor, start_pos, num_valid_drafts, page_table, slot_remap, mamba_state, sampling):
+    def _decode_chained(
+        self,
+        predecessor,
+        start_pos,
+        num_valid_drafts,
+        page_table,
+        slot_remap,
+        mamba_state,
+        sampling,
+        defer_sampling=False,
+    ):
         """A verify that continues the unread ``predecessor``: each live row u of the block (placeholders from the
         runner) continues the predecessor's row ``slot_remap[u]`` (row u without a slot_remap): that row's last
         committed token at the device's count, then up to ``num_valid_drafts[u]`` of the drafts its drafter made, from
@@ -2659,7 +2703,10 @@ class MTPBlockEngine(MTPSpecEngine):
         with the seeds of the positions that count gives. Built on the device by the chain program when the
         predecessor ran the device acceptance and drafter and this verify's propose is decided for every count; else
         from the engine's own read and walk of the predecessor (_materialize). The slot_remap moves the per-slot state
-        once, after every check. Returns VerifyResult with a PendingVerify."""
+        once, after every check. Returns VerifyResult with a PendingVerify. ``defer_sampling`` (a token-masked chained
+        verify, vllm-tt-plugin supports_spec_device_mask): every live row draws, a greedy one with top-k 1, so any row
+        may take a token mask at sample_deferred; the chain program and the verify are enqueued and a DeferredVerify
+        is returned."""
         B, K, T = self.B, self.K, self.T
         if not self._pending or predecessor is not self._pending[-1] or predecessor.successor is not None:
             raise ValueError("spec_predecessor is not the engine's last verify still to propose")
@@ -2687,8 +2734,11 @@ class MTPBlockEngine(MTPSpecEngine):
         plan = seed_cand = None
         if sampling is not None:
             p0_prev = [int(predecessor.p0[src[u]]) if bool(active[u]) else -1 for u in range(B)]
-            plan, seed_cand = chained_sampling_plan(sampling, p0_prev, T)
+            masked = active.tolist() if defer_sampling else None
+            plan, seed_cand = chained_sampling_plan(sampling, p0_prev, T, masked=masked)
             plan = plan if plan.any_sampled else None
+        if defer_sampling and (plan is None or not self.mask_ready):
+            raise ValueError("a token-masked chained verify draws its live rows under the mask traces")
         if plan is not None and not self.sample_on_device:
             raise ValueError(
                 "a chained verify of a device-sampled step needs the verify sampler, which the engine prepares only "
@@ -2702,15 +2752,22 @@ class MTPBlockEngine(MTPSpecEngine):
             if int(upper.max()) + T > table_capacity(int(torch.as_tensor(page_table).shape[-1]), self.block_size):
                 raise ValueError(f"chained verify window from {upper.tolist()} past the paged KV capacity")
             self.remap_slots(src)
-            return VerifyResult(
-                "argmax_ids",
-                self._verify_chained(
-                    predecessor, src, active, hint, start_pos, page_table, mamba_state, plan, seed_cand
-                ),
+            step = self._verify_chained(
+                predecessor, src, active, hint, start_pos, page_table, mamba_state, plan, seed_cand, defer_sampling
             )
+            return step if defer_sampling else VerifyResult("argmax_ids", step)
         logger.debug(f"[spec_engine] chained verify built from a read predecessor: {reason}")
         self.materialized_steps += 1
-        return self._materialize(predecessor, src, active, hint, page_table, mamba_state, sampling)
+        return self._materialize(
+            predecessor,
+            src,
+            active,
+            hint,
+            page_table,
+            mamba_state,
+            None if defer_sampling else sampling,
+            defer_sampling,
+        )
 
     def _chain_nv(self, predecessor, src, active, hint):
         """Valid drafts of each chained row: the runner's cap, 0 where the predecessor's propose declines the row it
@@ -2788,13 +2845,25 @@ class MTPBlockEngine(MTPSpecEngine):
         return True
 
     def _verify_chained(
-        self, predecessor, src, active, hint, start_pos, page_table, mamba_state, sample_plan=None, seed_cand=None
+        self,
+        predecessor,
+        src,
+        active,
+        hint,
+        start_pos,
+        page_table,
+        mamba_state,
+        sample_plan=None,
+        seed_cand=None,
+        defer_sampling=False,
     ):
         """Stage the host rows, the ctrl candidates and the seed candidates, replay the chain trace, then the verify,
         [sampler,] step and drafter traces, and enqueue the reads. Runs after remap_slots(``src``): the per-slot state
         is in this verify's rows, the predecessor's is read at row src[u]. ``sample_plan``
         (spec_sample.chained_sampling_plan, or None): the drawing rows and their parameters; the chain program writes
-        their seeds from ``seed_cand``. The predecessor's propose fills the block's tokens and positions."""
+        their seeds from ``seed_cand``. The predecessor's propose fills the block's tokens and positions.
+        ``defer_sampling``: enqueue the chain and verify traces only and return a chained DeferredVerify; its
+        sample_deferred enqueues the mask, sampler, step and drafter traces and the reads."""
         B, T, model = self.B, self.T, self.model
         if self.verify_steps % ONE_ENQUEUE_LOG_EVERY == 0:
             self._log_one_enqueue_counts()
@@ -2847,8 +2916,9 @@ class MTPBlockEngine(MTPSpecEngine):
             inactive=(~active).tolist(),
             rope_deltas=list(self._rope_deltas),
             step_staged=True,
-            **({} if sample_plan is None else {"sample_plan": sample_plan}),
+            **({} if sample_plan is None or defer_sampling else {"sample_plan": sample_plan}),
             **({} if bucket is None else {"bucket": bucket}),
+            **({"post": False} if defer_sampling else {}),
         )
         step = PendingVerify(
             B,
@@ -2865,8 +2935,21 @@ class MTPBlockEngine(MTPSpecEngine):
         step.src = list(src)
         predecessor.successor = step
         self._pending.append(step)
-        self._enqueue_step_and_drafter(step)
         self.chained_steps += 1
+        if defer_sampling:
+            self._deferred = DeferredVerify(
+                step=step,
+                tokens=None,
+                positions=None,
+                rope_deltas=list(self._rope_deltas),
+                start_pos=None,
+                active=active.clone(),
+                bucket=bucket,
+                one_enqueue=True,
+                chained=True,
+            )
+            return self._deferred
+        self._enqueue_step_and_drafter(step)
         return step
 
     def _propose_from_read(self, pred):
@@ -2914,7 +2997,7 @@ class MTPBlockEngine(MTPSpecEngine):
         self._offered &= self._active  # a released slot leaves the offer, as the release after the propose does
         return m, acc, ctok, result
 
-    def _materialize(self, predecessor, src, active, hint, page_table, mamba_state, sampling):
+    def _materialize(self, predecessor, src, active, hint, page_table, mamba_state, sampling, defer_sampling=False):
         """Build a chained verify from the engine's own read of its predecessor (_propose_from_read), then verify the
         block on the host path: remap_slots(``src``) moves the per-slot state after the predecessor's propose, as in
         the drained order, and row u of the block continues the predecessor's row src[u]."""
@@ -2947,6 +3030,7 @@ class MTPBlockEngine(MTPSpecEngine):
             sampling=sampling,
             defer=True,
             keep_pending=True,
+            defer_sampling=defer_sampling,
         )
 
 

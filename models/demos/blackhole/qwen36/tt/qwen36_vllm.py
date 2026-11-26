@@ -672,6 +672,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # A verify submitted over the unread one before it builds its rows on the device (spec_chain): greedy rows, and
         # on a device-sampled step sampled rows, which draw with the seeds of the positions the device computes. Row i
         # continues the unread verify's row slot_remap[i], so a row the runner moved keeps chaining.
+        # With supports_spec_device_mask a chained verify may also defer its sampling: decode_forward(spec_predecessor=
+        # ..., defer_device_sampling=True, sampling_params=...) enqueues the chain program and the verify, every live
+        # row then draws, and sample_deferred_decode applies the step's token mask before the draws.
         "supports_chained_spec_verify": True,
         # A prefill may run while one verify it returned unread awaits its read and propose: prefill_forward first
         # settles what that propose needs from the device (MTPBlockEngine.prefill_over_pending).

@@ -176,21 +176,28 @@ def sampling_plan(sampling_params, positions, T, fresh_seed=_fresh_seed, masked=
     )
 
 
-def chained_sampling_plan(sampling_params, p0_prev, T, fresh_seed=_fresh_seed):
+def chained_sampling_plan(sampling_params, p0_prev, T, fresh_seed=_fresh_seed, masked=None):
     """The plan of a chained verify of ``len(p0_prev)`` users by T columns, whose column-0 positions the chain program
     computes on the device: p0_prev[u] + c for the c tokens the predecessor committed for user u, a negative
     p0_prev[u] for a user the verify does not run. Returns (plan, candidates). The plan's top-k, top-p, temperature
     and drawing rows do not depend on c; its seeds are None. ``candidates`` float32 [T * B, T]: row (c - 1) * B + u
     holds user u's seeds if the predecessor committed c tokens, for a seeded user the seeds ``sampling_plan`` gives
     its columns at p0_prev[u] + c, for an unseeded drawing user the same fresh seed per column at every c, 0 for a
-    user that draws nothing. Every seed is below 2**24, so float32 holds it exactly."""
+    user that draws nothing. Every seed is below 2**24, so float32 holds it exactly. ``masked[u]``: user u draws under a
+    token mask (sampling_plan); a greedy one draws with top-k 1, which reads no random state, and its candidates are
+    1."""
     B = len(p0_prev)
-    first = sampling_plan(sampling_params, [int(p) + 1 if int(p) >= 0 else -1 for p in p0_prev], T, fresh_seed)
+    first = sampling_plan(
+        sampling_params, [int(p) + 1 if int(p) >= 0 else -1 for p in p0_prev], T, fresh_seed, masked=masked
+    )
     candidates = torch.zeros(T * B, T, dtype=torch.float64)
     for u in range(B):
         if not first.sampled[u * T]:
             continue
-        seed = row_sampling(sampling_params, u)[3]
+        temp, k, _, seed = row_sampling(sampling_params, u)
+        if temp <= 0.0 or k == 1:
+            candidates[torch.arange(T) * B + u] = 1.0
+            continue
         for c in range(1, T + 1):
             for j in range(T):
                 candidates[(c - 1) * B + u, j] = (
