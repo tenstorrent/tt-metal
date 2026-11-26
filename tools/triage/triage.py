@@ -968,7 +968,9 @@ def _patch_risc_debug() -> None:
     More info at tt-exalens:#908
     """
 
+    from ttexalens.exceptions import RestrictedMemoryAccessError
     from ttexalens.hardware.baby_risc_debug import BabyRiscDebugHardware
+    from ttexalens.memory_access import create_l1_memory_access
     from triage_session import get_triage_session, is_affected_by_cont_bug
 
     original_hw_cont = BabyRiscDebugHardware.cont
@@ -985,6 +987,9 @@ def _patch_risc_debug() -> None:
         else original_hw_continue_without_debug(self)
     )
 
+    fence_mask = 0x707F
+    fence_match = 0x000F  # pause is a fence too
+
     def patched_halt(self):
         session = get_triage_session()
         risc_location = RiscLocation(self.risc_info.noc_block.location, self.risc_info.neo_id, self.risc_info.risc_name)
@@ -994,11 +999,16 @@ def _patch_risc_debug() -> None:
             session.add_halted_core(risc_location)
             if self.risc_info.noc_block.device.is_blackhole():
                 # A Blackhole core halted right after a fence (or pause) wedges on a debug memory read: tt-exalens#1332
-                location = self.risc_info.noc_block.location
                 risc_debug = self.risc_info.noc_block.get_risc_debug(self.risc_info.risc_name, self.risc_info.neo_id)
+                l1_mem_access = create_l1_memory_access(self.risc_info.noc_block.location)
+                instruction = bytearray(4)
                 for _ in range(4):
-                    instruction_address = risc_debug.get_l1().translate_to_noc_address(risc_debug.read_gpr(32) - 4)
-                    if instruction_address is None or location.noc_read32(instruction_address) & 0x707F != 0x000F:
+                    try:
+                        l1_mem_access.read(risc_debug.get_pc() - 4, instruction)
+                    except RestrictedMemoryAccessError:
+                        break
+                    # Keep stepping while the instruction before the PC is a fence or pause
+                    if int.from_bytes(instruction, "little") & fence_mask != fence_match:
                         break
                     risc_debug.step()
 
