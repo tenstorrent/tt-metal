@@ -263,6 +263,11 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["x_slot_free_sem"] = SFREE;
     options["x_indexed"] = t.token_index.has_value() ? 1 : 0;
     options["x_chain_pieces"] = x_pieces;
+    // x (the primaries' writes into the snake heads, the snake's forwarding) on unicast VC 3, its own: h is on 0, the
+    // weight read requests and the default writes on 1, row-major y on 2 (the combine sets none). Against VC 1 (P150):
+    // GLM-5.3 4x4 10240 1155.6 -> 1108.1 us (-4.1%), 8x4 10240 -4.0%, 8x4 5120 hot -2.2%, DSV4.1-Flash 10240 -1.4%; the
+    // short experts within +1% (GLM-5.3-Flash +1.0%, 4x4 7680 +0.9%).
+    options["x_vc"] = 3;
     options["x_credit_sem"] = 0;  // (an x primary relay's own)
     // the gate/up cores: the x receiver's consumed / end counts for the x forwarder (semaphores 2 / 3, free there)
     options["x_consumed_sem"] = 2;

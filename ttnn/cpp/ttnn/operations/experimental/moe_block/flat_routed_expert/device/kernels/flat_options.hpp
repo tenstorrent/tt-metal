@@ -60,6 +60,8 @@ constexpr uint32_t super_blocks_per_sub_block = get_named_compile_time_arg_val("
 constexpr uint32_t x_block_k_tiles = get_named_compile_time_arg_val("x_block_k_tiles");
 // x pieces a gate/up core's x block arrives in (the x arrival semaphore counts pieces)
 constexpr uint32_t x_chain_pieces = get_named_compile_time_arg_val("x_chain_pieces");
+// unicast VC of the x writes (the primaries' into the snake heads, the snake's forwarding): their own
+constexpr uint32_t x_vc = get_named_compile_time_arg_val("x_vc");
 // semaphore: the pieces of x that arrived in a gate/up core's x ring (on the head from the primary relay, else from the
 // predecessor); and the count of x blocks the core's successor freed (the forwarder's, on the predecessor)
 constexpr uint32_t x_arrived_sem = get_named_compile_time_arg_val("x_arrived_sem");
