@@ -45,10 +45,10 @@ class BCAST_LAYOUT(TemplateParameter):
 
 @dataclass
 class MM_THROTTLE_LEVEL(TemplateParameter):
-    level: int = 0
+    mm_throttle_level: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"#define MM_THROTTLE {self.level}"
+        return f"#define MM_THROTTLE {self.mm_throttle_level}"
 
 
 @dataclass
@@ -138,8 +138,8 @@ def run_bcast_layout(
             F.SFPU_DST_ROUNDING_MODE(),
             F.SIGN_MAGNITUDE_FORMAT(False),
             BCAST_LAYOUT(d, b, o, p, bcast_l_runtime),
-        ]
-        + ([MM_THROTTLE_LEVEL(mm_throttle)] if mm_throttle else []),
+            MM_THROTTLE_LEVEL(mm_throttle),
+        ],
         "runtimes": [
             F.TILE_COUNT(tile_cnt_A + tile_cnt_B),
             F.NUM_BLOCKS(num_blocks),

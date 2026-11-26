@@ -1694,6 +1694,7 @@ PERF_TEST_SCHEMAS = {
             "loop_factor",
             "marker",
             "mathop",
+            "mm_throttle_level",
             "num_blocks",
             "num_faces",
             "num_faces_A",
