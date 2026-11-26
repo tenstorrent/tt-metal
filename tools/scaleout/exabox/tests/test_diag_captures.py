@@ -121,6 +121,34 @@ class TestHscJudge(unittest.TestCase):
             said,
         )
 
+    def test_12_v_sag_warns_over_13_mohm_and_is_information_over_11_mohm(self):
+        self.f.run("stage-start")
+        now, rows = time.time() + 1, []
+        sagged = {(1, 0x40): (367, 800), (2, 0x40): (377, 760), (4, 0x40): (377, 752)}  # 11.47 V at 50 A; 11.78 V at 47.5, 47 A
+        for t in hsc.HSC_BUS:
+            for a in hsc.HSC_ADDRS:
+                v, i = sagged.get((t, a), (394, 2560))
+                rows += [f"{now:.0f}\t{t}\t{a:#04x}\t394\t160"] * 3 + [f"{now:.0f}\t{t}\t{a:#04x}\t{v}\t{i}"]
+        (self.f.d / "out" / "captures" / "vin.tsv").write_text("\n".join(rows) + "\n")
+        with mock.patch.object(captures, "log") as log:
+            out = self.f.run("stage-end")
+        self.assertEqual(
+            [ln for ln in out if "12 V sag" in ln],
+            [
+                "HSC WARN tray 1 (01:00.0-08:00.0) HSC 0x40: 12 V sag 16.9 mOhm during busbar (VIN 11.47 V at IOUT 50.0 A, "
+                "idle VIN 12.31 V), over 13.0 mOhm; WARN only, not a finding"
+            ],
+        )
+        said = [c.args[0] for c in log.call_args_list if "sag information" in c.args[0]]
+        self.assertEqual(
+            [ln.split(": 12 V sag ")[0] for ln in said],
+            [
+                "HSC sag information tray 2 (41:00.0-48:00.0) HSC 0x40",
+                "HSC sag information tray 4 (81:00.0-88:00.0) HSC 0x40",
+            ],
+        )
+        self.assertIn("over 11.0 mOhm: information only, not a warn", said[0])
+
     def test_new_latch_fails_once_naming_the_feed_and_a_stage_end_alone_judges_against_the_run_start(self):
         self.f.run("stage-start")
         self.f.set(2, 0x42, 0x79, "40 00")
