@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "pack_scaled_fp8_kv_cache_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"

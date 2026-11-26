@@ -7,7 +7,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "attn_res_gather_softmax_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"

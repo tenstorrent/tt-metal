@@ -9,7 +9,7 @@
 #include "per_token_cast_to_fp8_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim::qsr::per_token_cast_to_fp8 {
 
