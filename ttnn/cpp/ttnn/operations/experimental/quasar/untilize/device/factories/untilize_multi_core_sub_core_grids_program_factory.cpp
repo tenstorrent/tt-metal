@@ -9,16 +9,15 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -129,9 +128,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
 
     // ---- Compute (Metal 2.0 fork of untilize; uniform across all sub-core-grid cores) ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_config);

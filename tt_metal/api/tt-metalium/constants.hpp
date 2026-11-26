@@ -1,20 +1,15 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstdint>
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/constants.hpp> moved to <tt-metalium/data_formats/tile_constants.hpp>.
+// This forwarding header will be removed after 2027-03-05.
+#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
+// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
+#warning \
+    "<tt-metalium/constants.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/data_formats/tile_constants.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
+#endif
 
-namespace tt::constants {
-
-using std::uint32_t;
-
-constexpr uint32_t TILE_HEIGHT = 32;
-constexpr uint32_t TILE_WIDTH = 32;
-constexpr uint32_t TILE_HW = TILE_WIDTH * TILE_HEIGHT;
-constexpr uint32_t FACE_HEIGHT = 16;
-constexpr uint32_t FACE_WIDTH = 16;
-constexpr uint32_t FACE_HW = FACE_WIDTH * FACE_HEIGHT;
-
-}  // namespace tt::constants
+#include <tt-metalium/data_formats/tile_constants.hpp>  // IWYU pragma: export

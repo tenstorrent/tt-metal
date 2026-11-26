@@ -6,14 +6,13 @@
 
 #include <cstdint>
 #include <optional>
-#include <utility>
 #include <variant>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 
-#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
+#include "tt_metal/hw/inc/api/dataflow/dfb_access.h"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -57,12 +56,17 @@ struct DataflowBufferConfig {
     std::optional<Tile> tile = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
     std::optional<TensixScope> tensix_scope = std::nullopt;
+    // Quasar only: run the compute consumer / producer side on trisc3 instead of trisc0 / trisc2.
+    // Both may be set on one DFB.
+    bool unpack_on_trisc3 = false;
+    bool pack_on_trisc3 = false;
     // When true, the DFB borrows L1 memory from an externally managed buffer
     // instead of allocating its own L1 region. The actual base address must be
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
     bool borrows_memory = false;
     // When true, this local DFB is a CrossNode/PrefetcherPipe relay (borrowed ring +
-    // DM/TRISC credit bridge). Host binding generation emits RelayDFBBindingToken.
+    // DM/TRISC credit bridge). Host binding generation emits a RelayDFBBindingToken that
+    // carries both access patterns.
     bool is_relay = false;
 };
 

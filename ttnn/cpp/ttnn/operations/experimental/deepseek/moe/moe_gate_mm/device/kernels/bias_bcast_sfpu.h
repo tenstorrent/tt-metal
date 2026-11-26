@@ -33,7 +33,6 @@ namespace ckernel {
 #ifdef TRISC_MATH
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace sfpu {
@@ -72,7 +71,7 @@ inline void _add_bias_() {
     TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 128);
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_0, 128);
 
-    lltt::record<lltt::Exec>(0, 4 + 1 + 5 + 1 + 4);
+    TTI_REPLAY(0, 4 + 1 + 5 + 1 + 4, 1, 1);
     // Now load in the input, 4 rows at a time
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
     TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
@@ -98,12 +97,12 @@ inline void _add_bias_() {
 
     // Now do this 3 more times, to complete first two faces (16 rows)
     for (uint32_t i = 0; i < 3; ++i) {
-        lltt::replay(0, 15);
+        TTI_REPLAY(0, 15, 0, 0);
     }
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-    lltt::record<lltt::Exec>(15, 4 + 1 + 5 + 1 + 4);
+    TTI_REPLAY(15, 4 + 1 + 5 + 1 + 4, 1, 1);
     // Now load in the input, 4 rows at a time
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 32 + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 32 + 0);
@@ -129,7 +128,7 @@ inline void _add_bias_() {
 
     // Now do this 3 more times, to complete lower two faces (16 rows)
     for (uint32_t i = 0; i < 3; ++i) {
-        lltt::replay(15, 15);
+        TTI_REPLAY(15, 15, 0, 0);
     }
 }
 

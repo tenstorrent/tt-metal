@@ -7,7 +7,7 @@
 
 #include "moreh_sum_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -19,7 +19,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCFactory::c
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input = tensor_args.input;
     auto dim = operation_attributes.dim;

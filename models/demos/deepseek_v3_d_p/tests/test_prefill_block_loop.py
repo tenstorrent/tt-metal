@@ -34,7 +34,7 @@ from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, moe_fabric_payload
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -49,7 +49,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     get_4d_causal_mask,
     tokenize_prompt_to_isl,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 DSV3 = get_adapter("deepseek_v3_d_p")
 
@@ -107,7 +107,7 @@ def _ci_unsupported_param_combos(**params):
         for param in (
             pytest.param(
                 (2, 4),
-                fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.EMB_SIZE),
+                fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
                 2,
                 marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
                 id="fabric2d-mesh-2x4-2link",
@@ -232,6 +232,8 @@ def test_prefill_block_loop(
     logger.info(f"Loading layer {real_layer_idx} weights...")
     layer_raw = sub_state_dict(state_dict, f"model.layers.{real_layer_idx}.")
     layer_dequant = dequantize_state_dict(layer_raw, hf_config)
+    # BF16 tensors of the FP8 checkpoint can sit at odd mmap offsets, which from_torch cannot borrow.
+    layer_dequant = {k: v.clone() if v.data_ptr() % v.element_size() else v for k, v in layer_dequant.items()}
 
     # --- Build TT state dict for TtPrefillBlock ---
     layer_sd = {

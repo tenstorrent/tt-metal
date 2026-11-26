@@ -17,8 +17,9 @@
 #include <ttnn/distributed/distributed_tensor.hpp>
 
 #include "nanobind/nb_export_enum.hpp"
+#include "nanobind/nb_util.hpp"
 #include "serialization/serializable.hpp"
-#include "tt-metalium/distributed_context.hpp"
+#include "tt-metalium/mesh/multihost/distributed_context.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -33,6 +34,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_profiler.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -126,6 +128,36 @@ void py_module(nb::module_& m) {
         nb::arg("error_if_nonfinite") = false,
         "Clip gradients of parameters to a maximum norm. Returns the total norm after clipping.");
 
+    // Parameter precision (training_config.precision.master_dtype)
+    m.def(
+        "store_trainable_parameters_as",
+        [](const ttml::serialization::NamedParameters& parameters, ttnn::DataType dtype) {
+            ttml::core::store_trainable_parameters_as(parameters, dtype);
+        },
+        nb::arg("parameters"),
+        nb::arg("dtype"),
+        "Store every trainable bf16 or fp32 parameter in dtype (BFLOAT16 or FLOAT32). Call before creating the "
+        "optimizer.");
+
+    m.def(
+        "apply_precision_config",
+        [](nb::dict training_config, const ttml::serialization::NamedParameters& parameters) {
+            return ttml::core::apply_precision_config(ttml::nanobind::util::obj_to_yaml(training_config), parameters);
+        },
+        nb::arg("training_config"),
+        nb::arg("parameters"),
+        "Apply training_config.precision before creating the optimizer: precision.master_dtype to the parameters, "
+        "and precision.reduce_dtype (None when unset) as the dtype the gradient syncs sum in by default. Returns the "
+        "master dtype applied, or None.");
+
+    m.def(
+        "cast_fp32_gradients_to_bf16",
+        &ttml::core::cast_fp32_gradients_to_bf16,
+        nb::arg("parameters"),
+        "Replace every fp32 gradient of parameters with its bf16 cast; bf16 and missing gradients stay as they are. "
+        "With reduce_dtype float32 a gradient can be fp32 when the step starts: an optimizer whose math takes bf16 "
+        "gradients, such as one registered from Python, calls this first.");
+
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
         py_distributed.def("enable_fabric", &ttnn_fixed::distributed::enable_fabric);
@@ -157,6 +189,13 @@ void py_module(nb::module_& m) {
                 &ttnn::distributed::replicate_tensor_to_mesh_mapper),
             nb::arg("device"));
 
+        py_distributed.def(
+            "replicate_to_mesh_mapper",
+            &ttml::core::replicate_to_mesh_mapper,
+            nb::arg("device"),
+            "Mapper replicating a tensor on every mesh axis, with one placement per axis (ttnn's "
+            "replicate_tensor_to_mesh_mapper writes the collapsed `{N}, [Replicate]`).");
+
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
             "concat_mesh_to_tensor_composer",
@@ -183,15 +222,60 @@ void py_module(nb::module_& m) {
         // Synchronize gradients across devices for DDP
         py_distributed.def(
             "synchronize_gradients",
-            static_cast<void (*)(const ttml::serialization::NamedParameters&)>(
-                &ttml::core::distributed::synchronize_gradients),
-            nb::arg("parameters"));
-        py_distributed.def(
-            "synchronize_gradients",
-            static_cast<void (*)(const ttml::serialization::NamedParameters&, const std::vector<uint32_t>&)>(
+            static_cast<void (*)(const ttml::serialization::NamedParameters&, std::optional<ttnn::DataType>)>(
                 &ttml::core::distributed::synchronize_gradients),
             nb::arg("parameters"),
-            nb::arg("cluster_axes"));
+            nb::kw_only(),
+            nb::arg("reduce_dtype") = nb::none());
+        py_distributed.def(
+            "synchronize_gradients",
+            static_cast<void (*)(
+                const ttml::serialization::NamedParameters&,
+                const std::vector<uint32_t>&,
+                std::optional<ttnn::DataType>)>(&ttml::core::distributed::synchronize_gradients),
+            nb::arg("parameters"),
+            nb::arg("cluster_axes"),
+            nb::kw_only(),
+            nb::arg("reduce_dtype") = nb::none());
+        py_distributed.def(
+            "check_reduce_dtype",
+            &ttml::core::distributed::check_reduce_dtype,
+            nb::arg("reduce_dtype").none(),
+            "Raise ValueError unless reduce_dtype is None, BFLOAT16 or FLOAT32, the dtypes a gradient sum runs in.");
+        py_distributed.def(
+            "resolve_reduce_dtype",
+            &ttml::core::distributed::resolve_reduce_dtype,
+            nb::arg("reduce_dtype").none(),
+            "The dtype a gradient sum runs in: reduce_dtype once check_reduce_dtype accepts it, else the stored "
+            "training_config.precision.reduce_dtype (AutoContext.get_gradient_reduce_dtype), which may be None.");
+        py_distributed.def(
+            "reduce_scatter_route_dim",
+            [](const ttnn::Tensor& tensor,
+               const std::vector<uint32_t>& cluster_axes,
+               std::optional<ttnn::DataType> reduce_dtype) {
+                return ttml::core::distributed::reduce_scatter_route_dim(
+                    tensor, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()), reduce_dtype);
+            },
+            nb::arg("tensor"),
+            nb::arg("cluster_axes"),
+            nb::kw_only(),
+            nb::arg("reduce_dtype") = nb::none(),
+            "The tensor dim synchronize_tensor's fp32 reduce-scatter route scatters along for these arguments, or None "
+            "when the sum takes the all-reduce.");
+        py_distributed.def(
+            "synchronize_tensor",
+            [](const ttnn::Tensor& tensor,
+               const std::vector<uint32_t>& cluster_axes,
+               std::optional<ttnn::DataType> reduce_dtype) {
+                return ttml::core::distributed::synchronize_tensor(
+                    tensor, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()), reduce_dtype);
+            },
+            nb::arg("tensor"),
+            nb::arg("cluster_axes"),
+            nb::kw_only(),
+            nb::arg("reduce_dtype") = nb::none(),
+            "Average a tensor over the devices of cluster_axes. reduce_dtype=FLOAT32 sums in fp32 and casts the mean "
+            "back to the tensor's dtype; None or BFLOAT16 sums in the tensor's own dtype.");
 
         // Raw (non-autograd) CCL collectives on ttnn tensors.
         // Unlike ttml.ops.distributed.* these do NOT register graph nodes, so they can be
@@ -216,6 +300,15 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("cluster_axis") = nb::none(),
             "Raw all_reduce without autograd tracking. Returns a new ttnn::Tensor.");
+
+        py_distributed.def(
+            "is_sharded_on_axis",
+            &ttml::core::distributed::is_sharded_on_axis,
+            nb::arg("tensor"),
+            nb::arg("axis"),
+            "True when `tensor`'s TensorTopology is Shard on mesh axis `axis` of the mesh `tensor` is on; a collapsed "
+            "1-D label counts as its placement on every axis of size > 1. Raises for a host tensor, or for a label "
+            "that is neither per-axis nor a collapsed label covering the mesh.");
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
@@ -244,6 +337,7 @@ void py_module(nb::module_& m) {
                 // DistributedContext::send takes Span<std::byte> (non-const),
                 // but underlying MPI_Send treats it as readonly.
                 auto* ptr = reinterpret_cast<std::byte*>(const_cast<char*>(data.c_str()));
+                nb::gil_scoped_release release;
                 self.send(ttsl::Span<std::byte>(ptr, data.size()), DistRank{dest}, DistTag{tag});
             },
             nb::arg("data"),
@@ -252,13 +346,24 @@ void py_module(nb::module_& m) {
         py_dist_ctx.def(
             "recv",
             [](DistributedContext& self, std::size_t nbytes, int source, int tag) -> nb::bytes {
-                std::vector<std::byte> buffer(nbytes);
-                self.recv(ttsl::Span<std::byte>(buffer.data(), buffer.size()), DistRank{source}, DistTag{tag});
-                return nb::bytes(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+                auto result = nb::steal<nb::bytes>(PyBytes_FromStringAndSize(nullptr, static_cast<Py_ssize_t>(nbytes)));
+                if (!result.is_valid()) {
+                    throw nb::python_error();
+                }
+                auto* ptr = reinterpret_cast<std::byte*>(PyBytes_AsString(result.ptr()));
+                {
+                    nb::gil_scoped_release release;
+                    self.recv(ttsl::Span<std::byte>(ptr, nbytes), DistRank{source}, DistTag{tag});
+                }
+                return result;
             },
             nb::arg("nbytes"),
             nb::arg("source"),
             nb::arg("tag") = 0);
+        py_dist_ctx.def("duplicate", [](DistributedContext& self) -> std::shared_ptr<DistributedContext> {
+            nb::gil_scoped_release release;
+            return self.duplicate();
+        });
 
         // Bind SocketManager methods
         auto py_socket_manager =
@@ -302,8 +407,7 @@ void py_module(nb::module_& m) {
                     auto filled = self.recv(tensor.get_grad(), ctx, Rank{rank});
                     tensor.set_grad(filled);
                 } else {
-                    auto filled = self.recv(tensor.get_value(), ctx, Rank{rank});
-                    tensor.set_value(filled);
+                    self.recv_value(tensor, ctx, Rank{rank});
                 }
                 return tensor;
             },

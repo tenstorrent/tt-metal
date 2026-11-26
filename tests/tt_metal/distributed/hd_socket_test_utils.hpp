@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
@@ -24,9 +24,9 @@
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 #include <cstring>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 

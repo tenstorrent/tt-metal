@@ -79,6 +79,8 @@ The original sweep uses 256 experts. The partial-face regression covers counts
 from 16 through 240, with deliberately large inactive keys to exercise padding.
 Biased-payload cases use spread-out winning keys so normalized weights remain
 sensitive to payload swaps; 512/1024-expert cases place winners on every face.
+The negative-key sweep mirrors the partial-face keys below zero, so only a true
+-inf padding keeps the inactive experts out of the top-k.
 
 Configurations left uncovered
 -----------------------------
@@ -96,13 +98,20 @@ from helpers.golden_generators import (
     MoeGateTopkGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import MOE_GATE_NORMALIZE_PARAMS, MOE_GATE_TOPK
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    LOOP_FACTOR,
+    MOE_GATE_NORMALIZE_PARAMS,
+    MOE_GATE_TOPK,
+    MOE_GATE_TOPK_STIMULUS,
+    TILE_COUNT,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FACE_DIM = 16
 NUM_TOTAL_EXPERTS = 256  # one face of a 32x32 tile
@@ -220,7 +229,33 @@ def test_sfpu_generic_moe_gate_topk(
 def test_sfpu_generic_moe_gate_partial_face(
     num_total_experts, num_selected_experts, normalize
 ):
-    _check_moe_gate(num_selected_experts, True, normalize, True, num_total_experts)
+    _check_moe_gate(
+        num_selected_experts,
+        full_sort=True,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
+    )
+
+
+@blackhole_only
+@parametrize(
+    num_total_experts=[32, 64, 80],
+    num_selected_experts=[4, 12],
+    normalize=[False, True],
+)
+def test_sfpu_generic_moe_gate_partial_face_negative_keys(
+    num_total_experts, num_selected_experts, normalize
+):
+    """Every active key is negative, so the inactive-expert padding must be -inf."""
+    _check_moe_gate(
+        num_selected_experts,
+        full_sort=True,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
+        negative_keys=True,
+    )
 
 
 @blackhole_only
@@ -248,10 +283,10 @@ def test_sfpu_generic_moe_gate_biased_scores(
     """
     _check_moe_gate(
         num_selected_experts,
-        full_sort,
-        normalize,
-        True,
-        num_total_experts,
+        full_sort=full_sort,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
         scores_include_bias=scores_include_bias,
         generate_indices=generate_indices,
         spread_biased_scores=True,
@@ -270,10 +305,10 @@ def test_sfpu_generic_moe_gate_biased_scores_multiple_faces(
     """Copy biased payloads across all active faces before the global merge."""
     _check_moe_gate(
         num_selected_experts,
-        True,
-        normalize,
-        True,
-        num_total_experts,
+        full_sort=True,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
         scores_include_bias=True,
         spread_biased_scores=True,
     )
@@ -288,6 +323,12 @@ def _check_moe_gate(
     scores_include_bias=False,
     generate_indices=True,
     spread_biased_scores=False,
+    negative_keys=False,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     torch.manual_seed(0)
 
@@ -328,6 +369,10 @@ def _check_moe_gate(
             biased[:num_total_experts][lower_positions] = lower_keys
             biased[winner_positions] = winning_keys
         biased = biased.to(torch_format).to(torch.float32)
+    if negative_keys:
+        # Same distinct keys, mirrored below zero: -1.0 .. -3.984375. The raw
+        # scores (the payload) stay positive so normalization is unaffected.
+        biased[:num_total_experts] = -biased[:num_total_experts]
     # Without the SFPU's -inf padding these inactive experts would win.
     biased[num_total_experts:] = 1000.0
     scores = (
@@ -350,40 +395,49 @@ def _check_moe_gate(
     )
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
 
-    configuration = TestConfig(
-        "sources/sfpu_generic_moe_gate_topk_test.cpp",
-        formats,
-        templates=[
-            MOE_GATE_TOPK(
-                num_selected_experts=num_selected_experts,
-                num_total_experts=num_total_experts,
-                normalize=normalize,
-                zero_tail=zero_tail,
-                full_sort=full_sort,
-                generate_indices=generate_indices,
-                scores_include_bias=scores_include_bias,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_generic_moe_gate_topk_test.cpp",
+            formats=formats,
+            templates=[
+                DEST_SYNC(DestSync.Half),
+                MOE_GATE_TOPK(
+                    num_selected_experts=num_selected_experts,
+                    num_total_experts=num_total_experts,
+                    normalize=normalize,
+                    zero_tail=zero_tail,
+                    full_sort=full_sort,
+                    generate_indices=generate_indices,
+                    scores_include_bias=scores_include_bias,
+                ),
+                MOE_GATE_TOPK_STIMULUS(spread_biased_scores=spread_biased_scores),
+                MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
+            ],
+            runtimes=[LOOP_FACTOR(1), TILE_COUNT(1)],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=2,
+                tile_count_B=1,
+                tile_count_res=NUM_RESULT_TILES,
             ),
-            MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
-        ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=2,
-            tile_count_B=1,
-            tile_count_res=NUM_RESULT_TILES,
+            # Pinned, not swept: the kernel packs the expert id and the score into the LO16
+            # and HI16 of one DEST word, which only exists for a 16-bit DEST.
+            dest_acc=DestAccumulation.No,
+            unpack_to_dest=False,
         ),
-        # Pinned, not swept: the kernel packs the expert id and the score into the LO16
-        # and HI16 of one DEST word, which only exists for a 16-bit DEST.
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
     )
-
-    res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     score_words = res_tensor[:ELEMENTS_PER_TILE]
     index_words = res_tensor[ELEMENTS_PER_TILE : 2 * ELEMENTS_PER_TILE]
@@ -481,3 +535,14 @@ def _check_moe_gate(
         assert_odd_columns_untouched(
             result_indices, result_scores, payload, emitted_rows, generate_indices
         )
+
+
+@blackhole_only
+def test_sfpu_generic_moe_gate_topk_pack_formats_repeat():
+    _check_moe_gate(
+        4,
+        full_sort=True,
+        normalize=False,
+        zero_tail=True,
+        loop_factor=2,
+    )

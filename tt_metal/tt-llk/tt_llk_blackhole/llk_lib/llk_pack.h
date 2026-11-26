@@ -263,7 +263,7 @@ inline void _llk_pack_mop_config_(
         ckernel::ckernel_template tmp(
             MOP_OUTER_LOOP,
             MOP_INNER_LOOP,
-            lltt::replay_insn(0, replay_buf_len),
+            TT_OP_REPLAY(0, replay_buf_len, 0, 0),
             TT_OP_PACR(
                 p_pacr::CFG_CTXT_0,
                 p_pacr::NO_ROW_PAD_ZERO,
@@ -479,6 +479,7 @@ inline void _llk_pack_hw_configure_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
+    LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
 

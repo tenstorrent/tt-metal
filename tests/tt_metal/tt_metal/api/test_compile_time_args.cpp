@@ -6,8 +6,8 @@
 #include <unistd.h>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <map>
 #include <unordered_map>
 #include <numeric>
@@ -15,14 +15,14 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
@@ -36,7 +36,7 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord);
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -76,7 +76,7 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -131,7 +131,7 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgsExceedingArgvLimit) {
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 

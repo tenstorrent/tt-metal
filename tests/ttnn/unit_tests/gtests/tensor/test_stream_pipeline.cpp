@@ -42,23 +42,24 @@
 
 #include "gtest/gtest.h"
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -205,7 +206,7 @@ MeshWorkload build_relay_workload(
 
     MeshWorkload workload;
     for (const auto& coord : up.backing->tensor_topology().mesh_coords()) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(stage);
 
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
@@ -236,7 +237,7 @@ MeshWorkload build_relay_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = stage.get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(stage, coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(up.service_core(coord));
         CoreCoord down_svc_phys{0, 0};
         uint32_t down_counter_addr = 0;
@@ -444,7 +445,7 @@ void run_pipeline(
         const CoreRange recv_workers = last_recv.get_worker_cores();
         std::vector<uint32_t> rb;
         for (const auto& coord : last_recv.get_backing_tensor().tensor_topology().mesh_coords()) {
-            auto* device = stages[num_stages - 1]->get_device(coord);
+            auto* device = tt::tt_metal::internal::get_device(*stages[num_stages - 1], coord);
             for (const auto& wc : recv_workers) {
                 rb.clear();
                 tt::tt_metal::detail::ReadFromDeviceL1(device, wc, recv_md_addr, metadata_size_bytes, rb);

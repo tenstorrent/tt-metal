@@ -2,24 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <array>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <utility>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/muon_composite.hpp"
+#include "optimizers/no_op.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
+#include "test_utils/program_cache.hpp"
+#include "test_utils/random_data.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 using namespace ttml;
 
 // Every optimizer except fused AdamW only has a bf16 update. Given an fp32 parameter, they must fail at
 // construction instead of silently training a bf16 copy (fused SGD) or turning the parameter into bf16 through
-// set_value (AdamWFullPrecision and the composites).
+// set_value (the composites).
 class Bf16ParameterGuardTest : public ::testing::Test {
 public:
     static void SetUpTestSuite() {
@@ -63,10 +74,6 @@ TEST_F(Bf16ParameterGuardTest, MuonComposite) {
     expect_rejects_fp32_and_accepts_bf16<optimizers::MuonComposite>(optimizers::MuonConfig{});
 }
 
-TEST_F(Bf16ParameterGuardTest, AdamWFullPrecision) {
-    expect_rejects_fp32_and_accepts_bf16<optimizers::AdamWFullPrecision>(optimizers::AdamWFullPrecisionConfig{});
-}
-
 TEST_F(Bf16ParameterGuardTest, FusedAdamWAcceptsFp32Parameters) {
     EXPECT_NO_THROW({ optimizers::AdamW optimizer(parameters(ttnn::DataType::FLOAT32), optimizers::AdamWConfig{}); });
 }
@@ -76,4 +83,222 @@ TEST_F(Bf16ParameterGuardTest, MessageNamesTheParameterAndTheOptimizer) {
         [] { optimizers::SGD optimizer(parameters(ttnn::DataType::FLOAT32), optimizers::SGDConfig{}); },
         ::testing::ThrowsMessage<std::exception>(::testing::AllOf(
             ::testing::HasSubstr("SGD supports bf16 parameters only"), ::testing::HasSubstr("'theta'"))));
+}
+
+// With reduce_dtype float32 a parameter's gradient can reach these optimizers in fp32. Their update takes bf16
+// gradients, so each rounds an fp32 gradient to bf16 once at the start of its step: the step must be the one it takes
+// for the same gradient cast to bf16 beforehand, bit for bit, and the gradient left behind is that bf16 cast.
+class Fp32GradientIntoBf16OptimizerTest : public test_utils::DeviceSuiteTest {
+protected:
+    static constexpr std::array<uint32_t, 4> kShape = {1U, 1U, 64U, 128U};
+
+    // A bf16 parameter, the same values in every call, whose gradient is `grad`.
+    static serialization::NamedParameters parameter_with_grad(const ttnn::Tensor &grad) {
+        auto *device = &autograd::ctx().get_device();
+        const auto values = test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 11U);
+        auto theta = autograd::create_tensor(core::from_xtensor(values, device), true);
+        theta->set_grad(grad);
+        return {{"theta", theta}};
+    }
+
+    template <typename Optimizer, typename Config>
+    static void expect_the_step_of_the_bf16_cast(const Config &config) {
+        auto *device = &autograd::ctx().get_device();
+        const auto values = test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 12U);
+        const auto fp32_grad = core::from_xtensor<float, ttnn::DataType::FLOAT32>(values, device);
+        const auto bf16_grad = ttnn::typecast(fp32_grad, ttnn::DataType::BFLOAT16);
+        // Random fp32 values: the cast changes them, so a step that read the fp32 gradient would differ.
+        ASSERT_GT(test_utils::count_bit_mismatches(values, core::to_xtensor(bf16_grad)), 0U);
+
+        const auto fp32_parameters = parameter_with_grad(fp32_grad);
+        const auto bf16_parameters = parameter_with_grad(bf16_grad);
+        const auto before = core::to_xtensor(bf16_parameters.at("theta")->get_value());
+        Optimizer fp32_optimizer(fp32_parameters, config);
+        Optimizer bf16_optimizer(bf16_parameters, config);
+        fp32_optimizer.step();
+        bf16_optimizer.step();
+
+        const auto &fp32_theta = fp32_parameters.at("theta");
+        const auto &bf16_theta = bf16_parameters.at("theta");
+        const auto expected = core::to_xtensor(bf16_theta->get_value());
+        EXPECT_GT(test_utils::count_bit_mismatches(before, expected), 0U) << "the step must move the parameter";
+        EXPECT_EQ(test_utils::count_bit_mismatches(expected, core::to_xtensor(fp32_theta->get_value())), 0U);
+        ASSERT_EQ(fp32_theta->get_grad().dtype(), ttnn::DataType::BFLOAT16);
+        EXPECT_EQ(
+            test_utils::count_bit_mismatches(
+                core::to_xtensor(bf16_theta->get_grad()), core::to_xtensor(fp32_theta->get_grad())),
+            0U);
+    }
+};
+
+TEST_F(Fp32GradientIntoBf16OptimizerTest, Sgd) {
+    expect_the_step_of_the_bf16_cast<optimizers::SGD>(optimizers::SGDConfig{.lr = 0.1F, .momentum = 0.9F});
+}
+
+TEST_F(Fp32GradientIntoBf16OptimizerTest, SgdComposite) {
+    expect_the_step_of_the_bf16_cast<optimizers::SGDComposite>(
+        optimizers::SGDCompositeConfig{.lr = 0.1F, .momentum = 0.9F});
+}
+
+TEST_F(Fp32GradientIntoBf16OptimizerTest, MorehAdamW) {
+    expect_the_step_of_the_bf16_cast<optimizers::MorehAdamW>(optimizers::AdamWCompositeConfig{.lr = 0.05F});
+}
+
+TEST_F(Fp32GradientIntoBf16OptimizerTest, AdamWComposite) {
+    expect_the_step_of_the_bf16_cast<optimizers::AdamWComposite>(optimizers::AdamWCompositeConfig{.lr = 0.05F});
+}
+
+TEST_F(Fp32GradientIntoBf16OptimizerTest, MuonComposite) {
+    expect_the_step_of_the_bf16_cast<optimizers::MuonComposite>(optimizers::MuonConfig{.lr = 0.05F});
+}
+
+namespace {
+
+// The optimizers whose zero_grad used to install zeros: they update a parameter that got no gradient.
+using OptimizerFactory =
+    std::function<std::unique_ptr<optimizers::OptimizerBase>(const serialization::NamedParameters &)>;
+std::array<std::pair<const char *, OptimizerFactory>, 3> optimizers_updating_without_a_gradient() {
+    return {{
+        {"SGD",
+         [](const auto &p) {
+             return std::make_unique<optimizers::SGD>(p, optimizers::SGDConfig{.lr = 0.1F, .momentum = 0.9F});
+         }},
+        {"SGDComposite",
+         [](const auto &p) {
+             return std::make_unique<optimizers::SGDComposite>(
+                 p, optimizers::SGDCompositeConfig{.lr = 0.1F, .momentum = 0.9F});
+         }},
+        {"MuonComposite",
+         [](const auto &p) {
+             return std::make_unique<optimizers::MuonComposite>(p, optimizers::MuonConfig{.lr = 0.05F});
+         }},
+    }};
+}
+
+}  // namespace
+
+// zero_grad drops the gradients, so the next backward's first add stores its gradient as it comes. A parameter that
+// had a gradient and gets none is still updated (momentum, weight decay): step() gives it a zero gradient, the same
+// update as the zeros zero_grad used to install, bit for bit.
+TEST_F(Fp32GradientIntoBf16OptimizerTest, ZeroGradDropsGradientsAndStepStillUpdatesTheirParameters) {
+    auto *device = &autograd::ctx().get_device();
+    const auto grad = core::from_xtensor(test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 13U), device);
+    for (const auto &[name, make_optimizer] : optimizers_updating_without_a_gradient()) {
+        SCOPED_TRACE(name);
+        const auto cleared = parameter_with_grad(grad);
+        const auto zeroed = parameter_with_grad(grad);
+        auto cleared_optimizer = make_optimizer(cleared);
+        auto zeroed_optimizer = make_optimizer(zeroed);
+        cleared_optimizer->step();
+        zeroed_optimizer->step();
+        const auto after_first_step = core::to_xtensor(cleared.at("theta")->get_value());
+
+        cleared_optimizer->zero_grad();
+        EXPECT_FALSE(cleared.at("theta")->is_grad_initialized());
+        zeroed.at("theta")->set_grad(core::zeros_like(zeroed.at("theta")->get_value()));
+        cleared_optimizer->step();
+        zeroed_optimizer->step();
+
+        const auto expected = core::to_xtensor(zeroed.at("theta")->get_value());
+        EXPECT_GT(test_utils::count_bit_mismatches(after_first_step, expected), 0U) << "the second step must move it";
+        EXPECT_EQ(test_utils::count_bit_mismatches(expected, core::to_xtensor(cleared.at("theta")->get_value())), 0U);
+    }
+
+    const auto parameters = parameter_with_grad(grad);
+    optimizers::NoOp no_op(parameters);
+    no_op.zero_grad();
+    EXPECT_FALSE(parameters.at("theta")->is_grad_initialized());
+}
+
+// A trainer may call zero_grad more than once between two steps (GRPOTrainer does, after a step and before the next
+// backward). The second call finds no gradient to drop and must not forget the parameters the first one dropped: each
+// step without a gradient is still the step of a zero gradient, bit for bit, also after a step that installed zeros.
+TEST_F(Fp32GradientIntoBf16OptimizerTest, ZeroGradTwiceBetweenStepsStillUpdatesTheirParameters) {
+    auto *device = &autograd::ctx().get_device();
+    const auto grad = core::from_xtensor(test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 14U), device);
+    for (const auto &[name, make_optimizer] : optimizers_updating_without_a_gradient()) {
+        SCOPED_TRACE(name);
+        const auto cleared = parameter_with_grad(grad);
+        const auto zeroed = parameter_with_grad(grad);
+        auto cleared_optimizer = make_optimizer(cleared);
+        auto zeroed_optimizer = make_optimizer(zeroed);
+        cleared_optimizer->step();
+        zeroed_optimizer->step();
+
+        for (int round = 0; round < 2; ++round) {
+            SCOPED_TRACE(fmt::format("round {}", round));
+            const auto before = core::to_xtensor(cleared.at("theta")->get_value());
+            cleared_optimizer->zero_grad();
+            cleared_optimizer->zero_grad();
+            EXPECT_FALSE(cleared.at("theta")->is_grad_initialized());
+            zeroed.at("theta")->set_grad(core::zeros_like(zeroed.at("theta")->get_value()));
+            cleared_optimizer->step();
+            zeroed_optimizer->step();
+
+            const auto expected = core::to_xtensor(zeroed.at("theta")->get_value());
+            EXPECT_GT(test_utils::count_bit_mismatches(before, expected), 0U) << "the step must move the parameter";
+            EXPECT_EQ(
+                test_utils::count_bit_mismatches(expected, core::to_xtensor(cleared.at("theta")->get_value())), 0U);
+        }
+    }
+}
+
+// A parameter frozen after zero_grad() is not trained any more. Freezing drops its gradient, and step() must not give
+// it a zero one: momentum and weight decay would keep moving it, since zero_grad() leaves a frozen parameter alone.
+TEST_F(Fp32GradientIntoBf16OptimizerTest, AParameterFrozenAfterZeroGradIsLeftAlone) {
+    auto *device = &autograd::ctx().get_device();
+    const auto grad = core::from_xtensor(test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 15U), device);
+    for (const auto &[name, make_optimizer] : optimizers_updating_without_a_gradient()) {
+        SCOPED_TRACE(name);
+        const auto parameters = parameter_with_grad(grad);
+        const auto &theta = parameters.at("theta");
+        auto optimizer = make_optimizer(parameters);
+        optimizer->step();  // builds the state that would move the parameter without a gradient
+
+        optimizer->zero_grad();
+        theta->set_requires_grad(false);
+        const auto frozen = core::to_xtensor(theta->get_value());
+        for (int step = 0; step < 2; ++step) {
+            SCOPED_TRACE(fmt::format("step {} after freezing", step));
+            optimizer->step();
+            EXPECT_FALSE(theta->is_grad_initialized());
+            EXPECT_EQ(test_utils::count_bit_mismatches(frozen, core::to_xtensor(theta->get_value())), 0U);
+            optimizer->zero_grad();
+        }
+    }
+}
+
+// The AdamW family's zero_grad drops the gradients too, through the same loop, and its step leaves a parameter without
+// a gradient alone: no zero gradient is put back for it.
+TEST_F(Fp32GradientIntoBf16OptimizerTest, TheAdamWFamilyDropsGradientsAndSkipsAParameterWithoutOne) {
+    auto *device = &autograd::ctx().get_device();
+    const auto grad = core::from_xtensor(test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 16U), device);
+    const std::array<std::pair<const char *, OptimizerFactory>, 3> adamw_family = {{
+        {"AdamW",
+         [](const auto &p) { return std::make_unique<optimizers::AdamW>(p, optimizers::AdamWConfig{.lr = 0.05F}); }},
+        {"MorehAdamW",
+         [](const auto &p) {
+             return std::make_unique<optimizers::MorehAdamW>(p, optimizers::AdamWCompositeConfig{.lr = 0.05F});
+         }},
+        {"AdamWComposite",
+         [](const auto &p) {
+             return std::make_unique<optimizers::AdamWComposite>(p, optimizers::AdamWCompositeConfig{.lr = 0.05F});
+         }},
+    }};
+    for (const auto &[name, make_optimizer] : adamw_family) {
+        SCOPED_TRACE(name);
+        const auto parameters = parameter_with_grad(grad);
+        const auto &theta = parameters.at("theta");
+        const auto before = core::to_xtensor(theta->get_value());
+        auto optimizer = make_optimizer(parameters);
+        optimizer->step();
+        const auto after_first_step = core::to_xtensor(theta->get_value());
+        EXPECT_GT(test_utils::count_bit_mismatches(before, after_first_step), 0U) << "the step must move the parameter";
+
+        optimizer->zero_grad();
+        EXPECT_FALSE(theta->is_grad_initialized());
+        optimizer->step();
+        EXPECT_FALSE(theta->is_grad_initialized());
+        EXPECT_EQ(test_utils::count_bit_mismatches(after_first_step, core::to_xtensor(theta->get_value())), 0U);
+    }
 }

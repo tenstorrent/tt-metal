@@ -139,18 +139,26 @@
 // Address Gen
 /////////////////
 
-// Write to a address generator register
-#define ADDRGEN_WR_REG(cmdbuf, reg, val)                               \
-    {                                                                  \
-        ROCC_INSTRUCTION_S(1, (val), (((cmdbuf) * 32) + ((reg) / 8))); \
+// Write to an address generator register.
+// Quasar/Trinity: the addrgen register file is 0xC8 bytes (reads past it return X); reg <= 0xC0.
+// reg must be a compile-time constant (checked by the static_assert).
+#define ADDRGEN_WR_REG(cmdbuf, reg, val)                                            \
+    {                                                                               \
+        static_assert(                                                              \
+            (reg) / 8 < TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_REG_FILE_SIZE / 8, \
+            "addrgen register offset out of range");                                \
+        ROCC_INSTRUCTION_S(1, (val), (((cmdbuf) * 32) + ((reg) / 8)));              \
     }
 
-// Read from an address generator register
-#define ADDRGEN_RD_REG(cmdbuf, reg)                                     \
-    [&]() {                                                             \
-        uint64_t result;                                                \
-        ROCC_INSTRUCTION_D(1, result, (((cmdbuf) * 32) + ((reg) / 8))); \
-        return result;                                                  \
+// Read from an address generator register (same range rule as ADDRGEN_WR_REG)
+#define ADDRGEN_RD_REG(cmdbuf, reg)                                                 \
+    [&]() {                                                                         \
+        static_assert(                                                              \
+            (reg) / 8 < TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_REG_FILE_SIZE / 8, \
+            "addrgen register offset out of range");                                \
+        uint64_t result;                                                            \
+        ROCC_INSTRUCTION_D(1, result, (((cmdbuf) * 32) + ((reg) / 8)));             \
+        return result;                                                              \
     }()
 
 // Reset all address generator registers to a default value

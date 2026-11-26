@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"

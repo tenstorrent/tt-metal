@@ -9,7 +9,7 @@
 #include "all_to_all_dispatch_metadata_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
@@ -273,7 +273,8 @@ all_to_all_dispatch_metadata(
             .worker_mode = worker_mode,
             .mux_core_range_set = mux_core_range_set,
             .dispatch_algorithm = dispatch_algorithm,
-            .cross_device_semaphore = cross_device_semaphore},
+            .cross_device_semaphore = cross_device_semaphore,
+            .has_cross_device_semaphore = cross_device_semaphore.has_value()},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,

@@ -38,6 +38,12 @@ struct TransferAccess {
     static uint64_t shard(const Accessor& accessor, uint32_t shard_id, uint32_t offset, uint8_t noc) {
         return accessor.transfer_shard_noc_addr(shard_id, offset, noc);
     }
+    // For library code and for kernels that still address another core's or a DRAM bank's
+    // region by raw address; a kernel accessing its own local shard should hold a LocalTensorAccessor, which is noted.
+    template <typename Accessor>
+    static constexpr uint32_t bank_base(const Accessor& accessor) {
+        return accessor.bank_base_address;
+    }
 };
 // The NoC address of a page (or shard), for a library transfer path that records its own exact access for op-to-op R/W
 // inference (api/dataflow/buf_rw_note.h): the Noc API traits, the page iterators, the legacy page/shard free functions.

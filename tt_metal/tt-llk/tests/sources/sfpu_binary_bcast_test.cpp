@@ -68,8 +68,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                // SrcA plus a SrcB zerosrc dvalid every face, including dest_acc=No (tenstorrent/budabackend#1230).
-                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(src_handshake_iters /*iterations*/);
+                // SrcA plus a zeroed SrcB every face, including dest_acc=No, as _llk_unpack_A_ (BroadcastType::NONE) posts them.
+                _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(src_handshake_iters /*iterations*/);
             }
         }
         else
@@ -94,7 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "ckernel_sfpu.h"
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_binary_sfpu.h"
-#include "sfpu/ckernel_sfpu_binary_bcast.h"
+#include "llk_sfpu/ckernel_sfpu_binary_bcast.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
@@ -114,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
-            num_faces, formats.math);
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
         _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();
@@ -126,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (unpack_to_dest)
             {
@@ -140,7 +140,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters /*iterations*/);
+                _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(src_handshake_iters /*iterations*/);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -210,11 +210,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(RESULT_TILE, L1_ADDRESS(buffer_Res[0]));
+                // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                if constexpr (PERF_PACK_SECTION_RELEASE)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
             }
         }
         else

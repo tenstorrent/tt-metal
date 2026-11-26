@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <gtest/gtest.h>
 #include "common/multihost_test_tools.hpp"
 #include <thread>

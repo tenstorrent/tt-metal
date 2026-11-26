@@ -34,8 +34,7 @@ class KimiK3LayerSchedule:
         kv_slot_of_local: one entry per local layer — its rank-local KV slot, or `None` on a KDA
             layer, which writes no KV slab at all.
         num_mla_layers: how many of this rank's layers are MLA. This is what `ttMLA` must be given
-            as `layer_num`, and what the layer-ack channel must be configured with — not the model's
-            93, and not the rank's layer count.
+            as `layer_num` — not the model's 93, and not the rank's layer count.
     """
 
     first_layer_idx: int

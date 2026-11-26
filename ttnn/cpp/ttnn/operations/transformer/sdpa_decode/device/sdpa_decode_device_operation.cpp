@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -38,7 +38,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     }
     for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
-        TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
+        TT_FATAL(input_tensor.is_allocated(), "Operands to SDPA need to be allocated in buffers on device!");
         TT_FATAL(
             input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B ||
                 input_tensor.dtype() == DataType::BFLOAT4_B,
@@ -135,6 +135,35 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             q_shape_unpadded[2]);
     }
 
+    const uint32_t spec_pack_heads = operation_attributes.spec_pack_heads;
+    if (spec_pack_heads > 0) {
+        // Packed spec mode: each group's spec_T candidates x spec_pack_heads q rows go into one
+        // 32-row tile, candidate j on rows [j*S, j*S + spec_pack_heads), S even (see
+        // SdpaDecodeParams::spec_pack_heads). The reader gathers those row blocks out of the
+        // unpacked Q and the writer scatters the output rows back, both as face-row blocks.
+        TT_FATAL(spec_multi_pos, "spec_pack_heads={} requires spec_multi_pos_tiles > 0", spec_pack_heads);
+        const uint32_t pack_stride = spec_pack_heads + (spec_pack_heads % 2);
+        TT_FATAL(
+            spec_pack_heads <= tt::constants::FACE_HEIGHT,
+            "spec_pack_heads={} must be <= {} (the valid rows of a candidate row-tile must sit in its top faces)",
+            spec_pack_heads,
+            tt::constants::FACE_HEIGHT);
+        TT_FATAL(
+            spec_T * pack_stride <= tt::constants::TILE_HEIGHT,
+            "spec_pack_heads={}: {} candidates x {} packed rows do not fit one {}-row tile",
+            spec_pack_heads,
+            spec_T,
+            pack_stride,
+            tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            !operation_attributes.output_mem_config.is_sharded(),
+            "spec_pack_heads requires an interleaved output memory config, got {}",
+            operation_attributes.output_mem_config.memory_layout());
+        // The reader loads the sink's unpacked row-tile 0, so packed row j*S + h would get sink row j*S + h instead
+        // of row j*32 + h.
+        TT_FATAL(!tensor_args.attention_sink.has_value(), "spec_pack_heads is not supported with attention_sink");
+    }
+
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
     const auto Q_memcfg = input_tensors.at(0).memory_config();
     if (input_tensors.at(0).is_sharded()) {
@@ -168,10 +197,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
         TT_FATAL(
-            input_tensors.at(i).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            input_tensors.at(i).memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Input tensor {} buffer type must be DRAM but got {}",
             i,
-            input_tensors.at(i).buffer()->buffer_type());
+            input_tensors.at(i).memory_config().buffer_type());
     }
     // Output memconfig must be height sharded or DRAM
     if (operation_attributes.output_mem_config.is_sharded()) {
@@ -613,6 +642,9 @@ tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     if (input.is_sharded() && use_mla && operation_attributes.program_config.has_value()) {
         const uint32_t q_shard_height = input.memory_config().shard_spec()->shape[0];
         const uint32_t max_cores = operation_attributes.program_config->max_cores_per_head_batch;
+        // Output specs are computed before validate_on_program_cache_miss runs.
+        TT_FATAL(max_cores > 0, "max_cores_per_head_batch must be > 0");
+        TT_FATAL(B > 0, "SDPA decode batch size must be > 0");
         const uint32_t num_q_shards = input.memory_config().shard_spec()->grid.num_cores();
         const uint32_t num_groups = num_q_shards / max_cores;
         const uint32_t q_heads_parallel_factor = num_groups / B;
@@ -661,7 +693,8 @@ Tensor sdpa_decode(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    uint32_t spec_pack_heads) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -680,6 +713,7 @@ Tensor sdpa_decode(
             paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .spec_pack_heads = spec_pack_heads,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

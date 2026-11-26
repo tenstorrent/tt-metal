@@ -9,17 +9,18 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <string>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operation.hpp"
 
@@ -66,6 +67,13 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // SdpaDecodeParams::spec_multi_pos_tiles.
     const uint32_t spec_multi_pos_tiles = operation_attributes.spec_multi_pos_tiles;
     const bool spec_multi_pos = spec_multi_pos_tiles > 0;
+    // Packed spec mode (SdpaDecodeParams::spec_pack_heads): the group's Tg candidates x
+    // spec_pack_heads q rows share ONE q tile, candidate j on rows [j*S, j*S + heads). The
+    // compute then runs a single row-tile (PNHt = 1 below) and the reader / writer gather and
+    // scatter the rows (kernel defines SPEC_PACK_HEADS / SPEC_PACK_STRIDE, set only here).
+    const uint32_t spec_pack_heads = spec_multi_pos ? operation_attributes.spec_pack_heads : 0;
+    const bool spec_packed = spec_pack_heads > 0;
+    const uint32_t spec_pack_stride = spec_pack_heads + (spec_pack_heads % 2);
 
     // V tensor: use K if MLA (V is subset of K), otherwise require explicit V
     TT_FATAL(use_mla || tensor_args.v.has_value(), "V tensor must be provided when MLA is disabled.");
@@ -133,6 +141,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         S = page_table_tensor.value().padded_shape()[-1] * block_size;
         has_block_padding = original_block_size < TILE_HEIGHT;
     }
+    TT_FATAL(B > 0, "SDPA decode batch size must be > 0");
 
     // ========== Q Sharding & MLA Parallelization ==========
     // Q is "locally available" when sharded for MLA with data replicated across all worker cores.
@@ -167,7 +176,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t St = S / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
     const uint32_t vDHt = vDH / TILE_WIDTH;
-    const uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT;
+    // Q row-tiles per batch row. In packed spec mode the compute works on one packed row-tile.
+    const uint32_t PNHt_q = PNH / q_heads_parallel_factor / TILE_HEIGHT;
+    const uint32_t PNHt = spec_packed ? 1u : PNHt_q;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
 
     // ========== Grid & Core Configuration ==========
@@ -199,8 +210,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     TT_FATAL(num_cores_available >= B, "Cores available ({}) must be >= batch size ({})", num_cores_available, B);
 
     // ========== Core Allocation ==========
-    const uint32_t max_cores_per_head =
-        program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
+    const uint32_t max_cores_per_head = program_config.has_value()
+                                            ? program_config->max_cores_per_head_batch
+                                            : std::min<uint32_t>(num_cores_available, 1u << MAX_TREE_REDUCTION_ROUNDS);
     TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
@@ -261,14 +273,52 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // A core group can be laid out in either row-major or column-major order on the core grid.
     // By default core groups are laid out in row-major order. But when Q heads is parallelized,
     // column-major group indexing is used to keep batch groups spatially close for efficient K multicast along columns.
-    const bool use_col_major_group_indexing =
-        (q_heads_parallel_factor > 1) && (grid_size.y >= num_cores_per_head) && !on_subcoregrid && q_locally_available;
+    // Without replicated Q the reader fetches Q from the group's output core, so Q shards must already sit there.
+    auto col_major_layout_possible = [&]() -> bool {
+        if (q_heads_parallel_factor <= 1 || grid_size.y < num_cores_per_head || on_subcoregrid) {
+            return false;
+        }
+        if (q_locally_available) {
+            return true;
+        }
+        if (!is_q_sharded || num_heads_per_core != 1 || grid_size.x % num_cores_per_head != 0 ||
+            num_active_cores % num_cores_per_head != 0) {
+            return false;
+        }
+        const uint32_t groups = num_active_cores / num_cores_per_head;
+        const uint32_t groups_per_row = grid_size.x / num_cores_per_head;
+        if (groups != B || groups % groups_per_row != 0) {
+            return false;
+        }
+        const uint32_t rows = groups / groups_per_row;
+        if (rows % q_heads_parallel_factor != 0) {
+            return false;
+        }
+        const auto& shard_spec = input_tensor_q.memory_config().shard_spec().value();
+        const auto shard_cores =
+            corerange_to_cores(shard_spec.grid, B, shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        if (shard_cores.size() != B) {
+            return false;
+        }
+        for (uint32_t cb = 0; cb < B; ++cb) {
+            if (shard_cores[cb] != CoreCoord{(cb / rows) * num_cores_per_head, cb % rows}) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const bool use_col_major_group_indexing = col_major_layout_possible();
     uint32_t num_group_rows = 0;
     uint32_t num_group_cols = 0;
     uint32_t num_groups_total = 0;
     if (use_col_major_group_indexing) {
         num_groups_total = num_active_cores / num_cores_per_head;
         num_group_rows = grid_size.x / num_cores_per_head;
+        TT_FATAL(
+            num_group_rows > 0,
+            "grid_size.x ({}) must be at least num_cores_per_head ({}) for column major core groups",
+            grid_size.x,
+            num_cores_per_head);
         num_group_cols = num_groups_total / num_group_rows;
         TT_FATAL(
             num_group_cols % q_heads_parallel_factor == 0,
@@ -335,7 +385,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     auto get_col_major_group_idx = [&](uint32_t row_major_idx) -> uint32_t {
         uint32_t group_row = row_major_idx / num_group_rows;
         uint32_t group_col = row_major_idx % num_group_rows;
-        return (group_col * num_group_rows) + group_row;
+        return (group_col * num_group_cols) + group_row;
     };
 
     // Reducer cores (one per KV head group)
@@ -429,19 +479,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // Matmul block/subblock configuration for output (QK * V)
     uint32_t out_in0_block_w = Sk_chunk_t > 0 ? Sk_chunk_t : 0;
-    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    // The subblock width must divide vDHt for the same reason: vDHt / subblock_w truncates otherwise.
+    const uint32_t out_out_subblock_w = largest_divisor_at_most(vDHt, dst_size);
     // Same divisibility requirement as the QK subblock height above.
     const uint32_t out_out_subblock_h =
         (out_out_subblock_w == vDHt) ? largest_divisor_at_most(PNHt, dst_size / out_out_subblock_w) : 1;
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
-    // DHt granularity for compute loops (must be power of 2)
-    uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = static_cast<uint32_t>(std::log2(dht_granularity));
-    if (dht_granularity != (1u << log2_dht_granularity)) {
-        dht_granularity = 1;
-    }
+    // DHT_GRANULARITY chunks the vDHt-wide normalisation loops, so it must divide vDHt (and DHt).
+    const uint32_t dht_granularity = largest_divisor_at_most(std::gcd(DHt, vDHt), dst_size);
 
     // ========== Tile Counts for Circular Buffers ==========
     const uint32_t q_tiles = PNHt * DHt;
@@ -493,10 +540,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         TT_FATAL(!use_mla, "spec_multi_pos_tiles is not supported with MLA");
         TT_FATAL(!use_attention_mask, "spec_multi_pos_tiles is not supported with an explicit attention mask");
         TT_FATAL(
-            PNHt == spec_multi_pos_tiles,
+            PNHt_q == spec_multi_pos_tiles,
             "spec_multi_pos_tiles={} must equal PNHt={} (one 32-row Q tile per candidate)",
             spec_multi_pos_tiles,
-            PNHt);
+            PNHt_q);
         TT_FATAL(q_heads_parallel_factor == 1, "spec_multi_pos_tiles requires q_heads_parallel_factor == 1");
         TT_FATAL(num_heads_per_core == 1, "spec_multi_pos_tiles requires num_heads_per_core == 1");
         // The mask CB is now push/pop cycled (one block per masked chunk) instead of pushed
@@ -699,9 +746,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
         log_debug(
             tt::LogOp,
-            "spec_multi_pos: Tg={}, B={}, Sk_chunk_t_cb={}, cores/head={}, active cores={}, tree rounds={}, "
-            "intermed blocks={}, CB total={} B of {} B",
+            "spec_multi_pos: Tg={}, packed heads={}, B={}, Sk_chunk_t_cb={}, cores/head={}, active cores={}, "
+            "tree rounds={}, intermed blocks={}, CB total={} B of {} B",
             spec_multi_pos_tiles,
+            spec_pack_heads,
             B,
             Sk_chunk_t_cb_size,
             num_cores_per_head,
@@ -903,6 +951,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
     writer_desc.config = WriterConfigDescriptor{};
+
+    if (spec_packed) {
+        // Defines (not compile-time args) so the unpacked kernels build exactly as before.
+        const KernelDescriptor::Defines pack_defines = {
+            {"SPEC_PACK_HEADS", std::to_string(spec_pack_heads)},
+            {"SPEC_PACK_STRIDE", std::to_string(spec_pack_stride)},
+        };
+        reader_desc.defines = pack_defines;
+        writer_desc.defines = pack_defines;
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kernel_path + "compute/sdpa_flash_decode.cpp";

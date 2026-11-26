@@ -6,6 +6,10 @@
 
 #include <cstdint>
 
+#include "experimental/llk_custom_mm_common.h"
+#ifdef TRISC_PACK
+#include "experimental/llk_pack_custom_mm.h"
+#endif
 #include "llk_unpack_compressed.h"
 
 namespace compressed {
@@ -113,13 +117,13 @@ inline void _llk_unpack_AB_custom_mm_compressed_mop_config_() {
                 }
             });
 
-            const std::uint32_t ctx0_full = lltt::replay_insn(0, full_len);
-            const std::uint32_t ctx1_full = lltt::replay_insn(full_len, full_len);
-            const std::uint32_t ct_dim_2 = lltt::replay_insn(0, full_len + reuse_len);
-            const std::uint32_t ctx1_r_tail = lltt::replay_insn(full_len + reuse_len + 1, (ct_dim - 1) * reuse_len);
-            const std::uint32_t ctx0_r_tail = lltt::replay_insn(full_len + reuse_len - 2, (ct_dim - 1) * reuse_len);
-            const std::uint32_t first_half = lltt::replay_insn(0, 2 + (ct_dim / 2) * reuse_len);
-            const std::uint32_t second_half = lltt::replay_insn(full_len + reuse_len, (ct_dim / 2) * reuse_len);
+            const std::uint32_t ctx0_full = TT_OP_REPLAY(0, full_len, 0, 0);
+            const std::uint32_t ctx1_full = TT_OP_REPLAY(full_len, full_len, 0, 0);
+            const std::uint32_t ct_dim_2 = TT_OP_REPLAY(0, full_len + reuse_len, 0, 0);
+            const std::uint32_t ctx1_r_tail = TT_OP_REPLAY(full_len + reuse_len + 1, (ct_dim - 1) * reuse_len, 0, 0);
+            const std::uint32_t ctx0_r_tail = TT_OP_REPLAY(full_len + reuse_len - 2, (ct_dim - 1) * reuse_len, 0, 0);
+            const std::uint32_t first_half = TT_OP_REPLAY(0, 2 + (ct_dim / 2) * reuse_len, 0, 0);
+            const std::uint32_t second_half = TT_OP_REPLAY(full_len + reuse_len, (ct_dim / 2) * reuse_len, 0, 0);
             const std::uint32_t even_A0 = ct_dim == 2 ? ct_dim_2 : first_half;
 
             ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -180,11 +184,11 @@ inline void _llk_unpack_AB_custom_mm_compressed_mop_config_() {
                 }
             });
 
-            const uint32_t ctx0_full = lltt::replay_insn(0, full_len);
-            const uint32_t ctx1_full = lltt::replay_insn(full_len, full_len);
-            const uint32_t ct_dim_2 = lltt::replay_insn(0, full_len + reuse_len);
-            const uint32_t first_half = lltt::replay_insn(0, full_len - reuse_len + (ct_dim / 2) * reuse_len);
-            const uint32_t second_half = lltt::replay_insn(full_len + reuse_len, (ct_dim / 2) * reuse_len);
+            const uint32_t ctx0_full = TT_OP_REPLAY(0, full_len, 0, 0);
+            const uint32_t ctx1_full = TT_OP_REPLAY(full_len, full_len, 0, 0);
+            const uint32_t ct_dim_2 = TT_OP_REPLAY(0, full_len + reuse_len, 0, 0);
+            const uint32_t first_half = TT_OP_REPLAY(0, full_len - reuse_len + (ct_dim / 2) * reuse_len, 0, 0);
+            const uint32_t second_half = TT_OP_REPLAY(full_len + reuse_len, (ct_dim / 2) * reuse_len, 0, 0);
             const uint32_t even_A0 = ct_dim == 2 ? ct_dim_2 : first_half;
 
             ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -253,15 +257,15 @@ inline void llk_unpack_AB_custom_mm_compressed_init(const uint32_t operand0, con
  *            loop-count bug; ct_dim >= 12 exceeds the 32-insn buffer limit.
  * @tparam ct_dim  Output width in tiles. Compile-time for static_assert validation.
  */
-template <bool use_barrier = true, uint32_t ct_dim = 1, bool split_acc = false, bool dense_packing = false>
+template <
+    bool use_barrier = true,
+    uint32_t ct_dim = 1,
+    ckernel::CustomMmDestLayout dest_layout = ckernel::CustomMmDestLayout::Default>
 inline void custom_mm_compressed_block_init_short(
     const uint32_t in0_cb_id, const uint32_t in1_cb_id, const uint32_t out_cb_id) {
     llk_unpack_AB_custom_mm_compressed_init<use_barrier, ct_dim>(in0_cb_id, in1_cb_id);
-    MATH((llk_math_custom_mm_init<false, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
-    if constexpr (dense_packing) {
-        PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
-            (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
-    }
+    MATH((llk_math_custom_mm_init<false, dest_layout>(in0_cb_id, in1_cb_id, ct_dim)));
+    PACK((ckernel::_llk_pack_custom_mm_init_<dest_layout>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
 }  // namespace compressed

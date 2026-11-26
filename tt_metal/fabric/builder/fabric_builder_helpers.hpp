@@ -9,11 +9,12 @@
 #include <utility>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // RoutingDirection
 
 namespace tt::tt_fabric {
 
@@ -129,7 +130,7 @@ inline uint32_t get_downstream_sender_channel_for_vc(
         return 1;  // 1D: sender channel 1 for forwarding
     }
     const size_t compact = direction_compact_index(upstream_direction, downstream_direction);
-    return vc == 0 ? static_cast<uint32_t>(1 + compact) : static_cast<uint32_t>(compact);
+    return vc != 1 ? static_cast<uint32_t>(1 + compact) : static_cast<uint32_t>(compact);
 }
 
 // Helper function to determine perpendicular directions

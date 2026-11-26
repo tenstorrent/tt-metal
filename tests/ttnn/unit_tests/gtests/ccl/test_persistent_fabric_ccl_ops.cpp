@@ -16,12 +16,13 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -30,7 +31,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {

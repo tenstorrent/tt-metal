@@ -8,8 +8,9 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <utility>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
@@ -24,10 +25,11 @@ void validate_pool2d(
     const MemoryConfig& out_mem_config,
     const std::optional<const int32_t> /*divisor_override*/,
     const bool return_indices,
-    const Layout& output_layout) {
+    const Layout& output_layout,
+    const DataType& output_dtype) {
     // check the input tensor
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Pool2D input must be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Pool2D input must be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Pool2D input must be allocated in buffers on device!");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
 
@@ -50,6 +52,40 @@ void validate_pool2d(
             "Input HW {} will overflow uint32 indices max {}",
             input_h * input_w,
             std::numeric_limits<uint32_t>::max());
+
+        if (get_index_data_type(input_h, input_w) == DataType::INT32) {
+            // Int32 indices walk signed values (padding indices and wrap increments are negative).
+            const uint32_t in_h_padded =
+                input_h + sliding_window_config.get_pad_h() + sliding_window_config.get_ceil_pad_h();
+            const uint32_t in_w_padded =
+                input_w + sliding_window_config.get_pad_w() + sliding_window_config.get_ceil_pad_w();
+            TT_FATAL(
+                static_cast<uint64_t>(in_h_padded) * in_w_padded <= std::numeric_limits<int32_t>::max(),
+                "Padded input {}x{} exceeds the int32 index range",
+                in_h_padded,
+                in_w_padded);
+
+            const auto [kernel_h, kernel_w] = sliding_window_config.window_hw;
+            const FactoryParameters params = get_factory_parameters(
+                sliding_window_config.num_cores_c,
+                input.dtype(),
+                output_dtype,
+                kernel_h,
+                kernel_w,
+                sliding_window_config.channels,
+                pool_type,
+                return_indices,
+                input_h,
+                input_w,
+                output_layout);
+            TT_FATAL(
+                !params.is_large_kernel,
+                "return_indices with INT32 indices does not yet support windows of {}x{} (more than {} rows per "
+                "reduction)",
+                kernel_h,
+                kernel_w,
+                params.max_rows_for_reduction);
+        }
 
         TT_FATAL(output_layout == Layout::ROW_MAJOR, "Only ROW_MAJOR supported when return_indices is true");
     }
@@ -80,7 +116,8 @@ static void validate_pool2d_operation(
         op_attr.memory_config_,
         op_attr.divisor_override_,
         op_attr.return_indices_,
-        op_attr.output_layout_);
+        op_attr.output_layout_,
+        op_attr.output_dtype_);
 }
 
 void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
@@ -147,7 +184,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_dtype, op_attr.output_layout_, mem_config, output_shape, padded_output_shape));
 }
 
@@ -159,7 +196,7 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
             op_attr.sliding_window_config_.input_hw.first, op_attr.sliding_window_config_.input_hw.second);
 
         // the index output spec is the same as the input spec just with a different data type
-        tt::tt_metal::TensorLayout output_layout_ind(
+        tt::tt_metal::TensorLayout output_layout_ind = tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             index_dtype,
             output_spec_data.page_config(),
             output_spec_data.memory_config(),

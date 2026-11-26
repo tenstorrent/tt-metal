@@ -98,14 +98,21 @@ void kernel_main() {
 
     // wait for all other devices to finish dispatching their input tokens and metadata
     uint32_t my_device_offset = tokens_per_device * dispatch_index;
+    // Ring: dispatch_devices completion credits plus 1 local, for odd and even rings (see the writer's
+    // send_ring_completion_credit). Otherwise one credit per metadata packet.
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(22);
+    constexpr bool ring_completion = topology == tt::tt_fabric::Topology::Ring && axis != ReplicateGroup::NONE;
     if constexpr (write_page_by_page) {
         // if the writer is directly sending the metadata to its output buffer, we just wait for the semaphore to be set
-        noc_semaphore_wait((uint32_t*)global_semaphore_address, (token_end_idx - token_start_idx) * dispatch_devices);
+        noc_semaphore_wait(
+            (uint32_t*)global_semaphore_address,
+            ring_completion ? dispatch_devices + 1 : (token_end_idx - token_start_idx) * dispatch_devices);
         noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
     } else {
         // if the writer is sending the metadata to the intermediate buffer, we need to write our metadata to the final
         // buffer
-        noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
+        noc_semaphore_wait(
+            (uint32_t*)global_semaphore_address, ring_completion ? dispatch_devices + 1 : dispatch_devices);
         noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
 
         for (uint32_t t = token_start_idx; t < token_end_idx; t++) {

@@ -8,13 +8,13 @@
 #include <functional>
 #include <random>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using std::vector;
@@ -183,7 +183,7 @@ static bool test_sdpa_reduce_c(
 
     tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     CoreCoord core = {0, 0};
 

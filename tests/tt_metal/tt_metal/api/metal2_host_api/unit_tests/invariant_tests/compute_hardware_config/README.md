@@ -1,6 +1,6 @@
 # compute_hardware_config invariant tests
 
-Local invariants of `ComputeHardwareConfig` (`compute_hardware_config.hpp`). It has none of its own for now.
+Local invariants of `ComputeHardwareConfig` (`compute_hardware_config.hpp`). Their tests live in `../kernel_spec/hardware_config.cpp`. Rules that compare kernels are tested in `../program_spec/`.
 
 ## Listed invariants
 
@@ -25,7 +25,17 @@ struct ComputeHardwareConfig {
     };
     std::optional<Compute1XXConfig> config_1xx = std::nullopt;
 
-    struct Compute2XXConfig {};
+    struct Compute12XConfig {
+        bool enable_pack_rvv = false;
+    };
+    std::optional<Compute12XConfig> config_12x = std::nullopt;
+
+    struct Compute2XXConfig {
+        bool enable_unpack_rvv = false;
+
+        Group<DFBSpecName> sfpu_pipeline_consumed_dfbs;
+        Group<DFBSpecName> sfpu_pipeline_produced_dfbs;
+    };
     std::optional<Compute2XXConfig> config_2xx = std::nullopt;
 };
 ```

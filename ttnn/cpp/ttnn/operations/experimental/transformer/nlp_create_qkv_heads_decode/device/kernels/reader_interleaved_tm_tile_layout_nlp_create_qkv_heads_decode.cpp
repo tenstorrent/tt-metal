@@ -11,8 +11,9 @@
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "internal/local_mem/address_access.h"
 
 void kernel_main() {
     Noc noc;
@@ -70,10 +71,13 @@ void kernel_main() {
         // accommodate this rounding.
         // The staging scratch is a single-toucher (fill via NOC, drain via datamover) with no FIFO ops, so
         // on Quasar (Gen2, which forbids a DM self-loop DFB) it is a node-local Scratchpad; WH/BH keep the
-        // self-loop DFB. Both expose the same "aligned_scratch" accessor; only the base-pointer getter differs.
+        // self-loop DFB. Both expose the same "aligned_scratch" accessor; only how the base is obtained differs.
 #ifdef ARCH_QUASAR
         Scratchpad<uint8_t> aligned_scratch(scratch::aligned_scratch);
-        const uint32_t raw_scratch_base = aligned_scratch.get_base_address();
+        // Raw address needed: the base is rounded up to DRAM alignment and fed to tt_memmove, which takes raw L1
+        // addresses.
+        const uint32_t raw_scratch_base =
+            static_cast<uint32_t>(local_mem::detail::AddressAccess::address(aligned_scratch.local_mem()));
 #else
         DataflowBuffer dfb_aligned_scratch(dfb::aligned_scratch);
         const uint32_t raw_scratch_base = dfb_aligned_scratch.get_write_ptr();

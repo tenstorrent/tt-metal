@@ -6014,15 +6014,15 @@ SFPCAST:
           Instruction Modifier
             0x0: int32 -> fp32 (nearest even)
             0x1: int32 -> fp32 (stochastically)
-            0x2: int322s-> Sign Mag
-            0x3: int sign mag -> int32 2s
+            0x2: int sign mag -> int32 2s (sign mag -0 -> 0)
+            0x3: int32 2s -> Sign Mag (INT32_MIN saturates to 0xFFFFFFFF)
             0x4: fp32 -> int32 (nearest even)
             0x5: fp32 -> int32 (stochastically)
         fcov_point_bins:
           bins: [ {name: "int32_to_fp32_neven",  value: "0x0"},
                   {name: "int32_to_fp32_stoch",  value: "0x1"},
-                  {name: "int32_to_fsm",         value: "0x2"},
-                  {name: "int32_sm_to_int32",    value: "0x3"},
+                  {name: "int32_sm_to_int32",    value: "0x2"},
+                  {name: "int32_to_fsm",         value: "0x3"},
                   {name: "fp32_to_int32_neven",  value: "0x4"},
                   {name: "fp32_to_int32_stoch",  value: "0x5"} ]
 

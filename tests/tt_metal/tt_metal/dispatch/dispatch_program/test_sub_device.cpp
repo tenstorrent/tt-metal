@@ -3,46 +3,51 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <thread>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/runtime_args_data.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_test_utils.hpp"
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include "unit_tests_dispatch_utils.hpp"
 
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"
@@ -51,10 +56,51 @@
 namespace tt::tt_metal {
 
 constexpr uint32_t k_local_l1_size = 3200;
-const std::string k_coordinates_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
+const std::string k_coordinates_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates_2_0.cpp";
+const std::string k_syncer_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp";
+
+static tt_metal::Program create_blank_program(distributed::MeshDevice& mesh_device, const CoreRangeSet& cores) {
+    return make_single_kernel_program(
+        mesh_device,
+        "blank",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        cores,
+        {HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 0});
+}
+
+// Compile-time varargs lead a spec-built kernel's compile-time args, so get_compile_time_arg_val(0) reads the address.
+static KernelSpec make_counter_kernel_spec(uint32_t counter_address, DataMovementProcessor processor) {
+    return KernelSpec{
+        .unique_id = KernelSpecName{"local_counter_increment"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",
+        .num_threads = 1,
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = processor, .noc = static_cast<NOC>(processor)},
+            },
+        .advanced_options = experimental::KernelAdvancedOptions{.compile_time_varargs = {counter_address}},
+    };
+}
+
+static tt_metal::Program create_counter_program(
+    distributed::MeshDevice& mesh_device, const CoreRangeSet& cores, uint32_t counter_address) {
+    const KernelSpec counter_kernel = make_counter_kernel_spec(counter_address, DataMovementProcessor::RISCV_0);
+    const ProgramSpec spec{
+        .name = "local_counter_increment",
+        .kernels = {counter_kernel},
+        .work_units = {WorkUnitSpec{.name = "counter", .kernels = {counter_kernel.unique_id}, .target_nodes = cores}},
+    };
+    return Program(mesh_device, spec);
+}
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     auto mesh_device = devices_[0];
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "legacy circular buffers are not usable on Quasar: legacy kernels are rejected and Metal 2.0 "
+                        "programs take DFBs";
+    }
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
     SubDevice sub_device_1(std::array{sharded_cores_1});
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, k_local_l1_size);
@@ -78,7 +124,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
         .bottom_up = false,
     };
     auto global_buffer = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -86,9 +132,11 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
             .set_page_size(src0_cb_index, hal::get_l1_alignment());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, sharded_cores_1, cb_src0_config);
 
+    program.impl().prepare_ephemeral_allocation(mesh_device.get());
     program.impl().allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 4);
+    program.impl().prepare_ephemeral_allocation(mesh_device.get());
     program.impl().allocate_circular_buffers(mesh_device.get());
     EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     global_buffer.reset();
@@ -108,6 +156,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     EXPECT_THROW(program.impl().compile_and_allocate(mesh_device.get(), false), std::exception);
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
+    program.impl().prepare_ephemeral_allocation(mesh_device.get());
     program.impl().allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
     EXPECT_NO_THROW(program.impl().compile_and_allocate(mesh_device.get(), false));
@@ -117,9 +166,13 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
 }
 
 void test_sub_device_synchronization(distributed::MeshDevice* device) {
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
-    CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
+    const auto [sub_device_1_cores, sub_device_2_cores] = two_disjoint_core_sets(
+        *device,
+        CoreRange({0, 0}, {2, 2}),
+        CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}));
+    SubDevice sub_device_1(std::array{sub_device_1_cores});
+    SubDevice sub_device_2(std::array{sub_device_2_cores});
+    CoreRangeSet sharded_cores_1 = sub_device_1_cores;
 
     auto sharded_cores_1_vec = corerange_to_cores(sharded_cores_1, std::nullopt, true);
     uint32_t page_size_1 = 32;
@@ -194,18 +247,31 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceSynchronization) {
+    if (!has_at_least_worker_cores(*devices_[0], 2)) {
+        GTEST_SKIP();
+    }
     test_sub_device_synchronization(devices_[0].get());
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestMultiCQSubDeviceSynchronization) {
+    if (!has_at_least_worker_cores(*device_, 2)) {
+        GTEST_SKIP();
+    }
     test_sub_device_synchronization(device_.get());
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
     constexpr uint32_t k_num_iters = 5;
     auto mesh_device = devices_[0];
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    const auto [sub_device_1_cores, sub_device_2_cores] = two_disjoint_core_sets(
+        *mesh_device,
+        CoreRange({0, 0}, {2, 2}),
+        CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}));
+    SubDevice sub_device_1(std::array{sub_device_1_cores});
+    SubDevice sub_device_2(std::array{sub_device_2_cores});
     auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
     mesh_device->load_sub_device_manager(sub_device_manager);
 
@@ -241,6 +307,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
     constexpr uint32_t k_num_iters = 5;
     auto mesh_device = devices_[0];
+    if (!worker_grid(*mesh_device).contains(CoreRange({0, 0}, {6, 6}))) {
+        GTEST_SKIP();
+    }
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     // sub-device 3 and 4 are supersets of sub-device 1 and 2 respectively
@@ -310,12 +379,19 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.
 TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinates) {
     auto mesh_device = devices_[0];
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
     // Make 2 sub devices.
     // origin means top left.
     // for sub_device_1 = 0,0. so relative coordinates are the same as logical.
     // for sub_device_2 = 3,3. so relative coordinates are offset by x=3,y=3 from logical.
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {6, 6})})});
+    const auto [first_cores, second_cores] = two_disjoint_core_sets(
+        *mesh_device,
+        CoreRange({0, 0}, {2, 2}),
+        CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {6, 6})}));
+    SubDevice sub_device_1(std::array{first_cores});
+    SubDevice sub_device_2(std::array{second_cores});
 
     auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
     mesh_device->load_sub_device_manager(sub_device_manager);
@@ -324,27 +400,25 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
     const auto sub_device_2_cores = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{1});
 
     uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-    std::vector<uint32_t> compile_args{cb_addr};
 
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     // Start kernels on each sub device and verify their coordinates
-    Program program_1 = tt::tt_metal::CreateProgram();
-    tt::tt_metal::CreateKernel(
-        program_1,
+    Program program_1 = make_single_kernel_program(
+        *mesh_device,
+        "read_my_coordinates",
         k_coordinates_kernel_path,
         sub_device_1_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = compile_args});
-
-    Program program_2 = tt::tt_metal::CreateProgram();
-    tt::tt_metal::CreateKernel(
-        program_2,
+        {HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 0},
+        {{"results_addr", cb_addr}});
+    Program program_2 = make_single_kernel_program(
+        *mesh_device,
+        "read_my_coordinates",
         k_coordinates_kernel_path,
         sub_device_2_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = compile_args});
+        {HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 1},
+        {{"results_addr", cb_addr}});
 
     distributed::MeshWorkload mesh_workload_1;
     mesh_workload_1.add_program(device_range, std::move(program_1));
@@ -370,17 +444,29 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
 // configurations
 TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinatesSubDeviceSwitch) {
     auto mesh_device = devices_[0];
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
-    SubDevice sub_device_3(std::array{CoreRangeSet(CoreRange({4, 4}, {6, 6}))});
-    SubDevice sub_device_4(std::array{CoreRangeSet(std::vector{CoreRange({2, 2}, {2, 2}), CoreRange({3, 3}, {3, 3})})});
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    CoreRangeSet sub_device_1_cores = CoreRange({0, 0}, {2, 2});
+    CoreRangeSet sub_device_2_cores = CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})});
+    CoreRangeSet sub_device_3_cores = CoreRange({4, 4}, {6, 6});
+    CoreRangeSet sub_device_4_cores = CoreRangeSet(std::vector{CoreRange({2, 2}, {2, 2}), CoreRange({3, 3}, {3, 3})});
+    if (!worker_grid(*mesh_device).contains(CoreRange({0, 0}, {6, 6}))) {
+        std::tie(sub_device_1_cores, sub_device_2_cores) =
+            two_disjoint_core_sets(*mesh_device, sub_device_1_cores, sub_device_2_cores);
+        sub_device_3_cores = sub_device_2_cores;
+        sub_device_4_cores = sub_device_1_cores;
+    }
+    SubDevice sub_device_1(std::array{sub_device_1_cores});
+    SubDevice sub_device_2(std::array{sub_device_2_cores});
+    SubDevice sub_device_3(std::array{sub_device_3_cores});
+    SubDevice sub_device_4(std::array{sub_device_4_cores});
     std::vector<SubDeviceManagerId> sub_device_managers{
         mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size),
         mesh_device->create_sub_device_manager({sub_device_3, sub_device_4}, k_local_l1_size),
     };
 
     uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-    std::vector<uint32_t> compile_args{cb_addr};
 
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -389,15 +475,13 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
         mesh_device->load_sub_device_manager(sub_device_managers[i]);
         const auto sub_device_cores = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{i});
 
-        Program program = tt::tt_metal::CreateProgram();
-        tt::tt_metal::CreateKernel(
-            program,
+        Program program = make_single_kernel_program(
+            *mesh_device,
+            "read_my_coordinates",
             k_coordinates_kernel_path,
             sub_device_cores,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = compile_args});
+            {HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 0},
+            {{"results_addr", cb_addr}});
 
         distributed::MeshWorkload mesh_workload;
         mesh_workload.add_program(device_range, std::move(program));
@@ -423,8 +507,13 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
     constexpr uint32_t k_num_iters = 5;
     auto mesh_device = devices_[0];
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3}))});
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    const auto [sub_device_1_cores, sub_device_2_cores] =
+        two_disjoint_core_sets(*mesh_device, CoreRange({0, 0}, {2, 2}), CoreRange({3, 3}, {3, 3}));
+    SubDevice sub_device_1(std::array{sub_device_1_cores});
+    SubDevice sub_device_2(std::array{sub_device_2_cores});
     // Sub device IDs are swapped between the two sub device managers.
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
     auto sub_device_manager_2 = mesh_device->create_sub_device_manager({sub_device_2, sub_device_1}, k_local_l1_size);
@@ -434,7 +523,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-    CoreCoord core = {3, 3};
+    const CoreCoord core = sub_device_2_cores.ranges().front().start_coord;
     std::array<uint32_t, 1> unique_runtime_args = {101};
     std::array<uint32_t, 1> common_runtime_args = {201};
 
@@ -446,18 +535,30 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
 
             // Create fresh program for each iteration and set runtime args
             auto create_program_with_args = [&]() {
-                tt_metal::Program program = tt_metal::CreateProgram();
-                tt_metal::KernelHandle add_two_ints_kernel = tt_metal::CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/add_common_and_unique_rta.cpp",
-                    core,
-                    tt_metal::DataMovementConfig{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                        .noc = tt_metal::NOC::RISCV_0_default,
-                        .compile_args = {l1_unreserved_base}});
-
-                tt_metal::SetCommonRuntimeArgs(program, add_two_ints_kernel, common_runtime_args);
-                tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, unique_runtime_args);
+                const KernelSpecName kernel_name{"add_two_ints"};
+                const ProgramSpec spec{
+                    .name = "add_common_and_unique_rta",
+                    .kernels = {KernelSpec{
+                        .unique_id = kernel_name,
+                        .source = "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints_2_0.cpp",
+                        .num_threads = 1,
+                        .compile_time_args = {{"l1_address", l1_unreserved_base}},
+                        .runtime_arg_schema = {.runtime_arg_names = {"a"}, .common_runtime_arg_names = {"b"}},
+                        .hw_config =
+                            DataMovementHardwareConfig{
+                                .config_1xx =
+                                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+                            }}},
+                    .work_units = {WorkUnitSpec{
+                        .name = "add_two_ints", .kernels = {kernel_name}, .target_nodes = NodeCoord(core)}},
+                };
+                tt_metal::Program program = Program(*mesh_device, spec);
+                program.set_program_run_args(ProgramRunArgs{
+                    .kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+                        .kernel = kernel_name,
+                        .runtime_arg_values = MakeRuntimeArgsForSingleNode(core, {{"a", unique_runtime_args[0]}}),
+                        .common_runtime_arg_values = {{"b", common_runtime_args[0]}}}}});
                 return program;
             };
 
@@ -480,8 +581,13 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
 
 TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     auto mesh_device = device_;
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3}))});
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    const auto [sub_device_1_cores, sub_device_2_cores] =
+        two_disjoint_core_sets(*mesh_device, CoreRange({0, 0}, {2, 2}), CoreRange({3, 3}, {3, 3}));
+    SubDevice sub_device_1(std::array{sub_device_1_cores});
+    SubDevice sub_device_2(std::array{sub_device_2_cores});
     // Sub device IDs are swapped between the two sub device managers.
     auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
     mesh_device->load_sub_device_manager(sub_device_manager);
@@ -489,36 +595,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-    // Helper functions to create fresh programs each time
-    auto create_program_1 = [&]() {
-        tt_metal::Program program = tt_metal::CreateProgram();
-        // On sub device 1.
-        tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
-            CoreRangeSet(CoreRange({0, 0}, {2, 2})),
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-        return program;
-    };
-
-    auto create_program_2 = [&]() {
-        tt_metal::Program program = tt_metal::CreateProgram();
-        // On sub device 2.
-        tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
-            CoreRangeSet(CoreRange({3, 3}, {3, 3})),
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-        return program;
-    };
-
     distributed::MeshWorkload mesh_workload_1;
-    mesh_workload_1.add_program(device_range, create_program_1());
+    mesh_workload_1.add_program(device_range, create_blank_program(*mesh_device, sub_device_1_cores));
 
     distributed::MeshWorkload mesh_workload_2;
-    mesh_workload_2.add_program(device_range, create_program_2());
+    mesh_workload_2.add_program(device_range, create_blank_program(*mesh_device, sub_device_2_cores));
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_1, false);
     std::array sub_device_ids_for_event = {SubDeviceId{1}};
@@ -558,6 +639,419 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
 
     distributed::Finish(mesh_device->mesh_command_queue(0));
     distributed::Finish(mesh_device->mesh_command_queue(1));
+}
+
+// A trace replay moves the workers' go and launch state by an amount the host computes rather than observes (the
+// replay's reset go plus the traced program gos), and the next CQ to take ownership of the sub-device continues from
+// that state. Replay on one CQ, hand the sub-device to the other CQ (and back), and count how many times every core
+// actually ran: state the new owner gets wrong drops or repeats a go, leaving the count off (or hanging the wait).
+TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixTestSubDeviceCQOwnershipAfterTraceReplay) {
+    if (this->num_cqs_ != 2) {
+        GTEST_SKIP() << "This test must be run with TT_METAL_GTEST_NUM_HW_CQS=2";
+    }
+    CreateDevice(16384);
+    auto mesh_device = device_;
+
+    const CoreRange worker_range = worker_grid(*mesh_device).intersection(CoreRange({0, 0}, {2, 2})).value();
+    SubDevice sub_device(std::array{CoreRangeSet(worker_range)});
+    auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device}, k_local_l1_size);
+    mesh_device->load_sub_device_manager(sub_device_manager);
+
+    const uint32_t counter_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> zero = {0};
+        slow_dispatch::WriteToL1(*mesh_device, core, counter_addr, zero);
+    }
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, create_counter_program(*mesh_device, worker_range, counter_addr));
+
+    auto& cq0 = mesh_device->mesh_command_queue(0);
+    auto& cq1 = mesh_device->mesh_command_queue(1);
+    uint32_t expected_runs = 0;
+
+    // Compile and run once on CQ 0, then capture a trace of several launches on CQ 0.
+    distributed::EnqueueMeshWorkload(cq0, workload, false);
+    expected_runs += 1;
+    constexpr uint32_t k_programs_in_trace = 3;
+    auto trace_id = mesh_device->begin_mesh_trace(cq0);
+    for (uint32_t i = 0; i < k_programs_in_trace; i++) {
+        distributed::EnqueueMeshWorkload(cq0, workload, false);
+    }
+    mesh_device->end_mesh_trace(cq0, trace_id);
+
+    // Replay on CQ 0, then hand the sub-device to CQ 1, which continues from the state the replays left.
+    constexpr uint32_t k_replays = 2;
+    for (uint32_t i = 0; i < k_replays; i++) {
+        mesh_device->replay_mesh_trace(cq0, trace_id, false);
+        expected_runs += k_programs_in_trace;
+    }
+    distributed::Finish(cq0);
+    for (uint32_t i = 0; i < 2; i++) {
+        distributed::EnqueueMeshWorkload(cq1, workload, false);
+        expected_runs += 1;
+    }
+    distributed::Finish(cq1);
+
+    // And back: CQ 0 retakes the sub-device through the replay path, then CQ 1 retakes it right after that replay.
+    mesh_device->replay_mesh_trace(cq0, trace_id, false);
+    expected_runs += k_programs_in_trace;
+    distributed::Finish(cq0);
+    distributed::EnqueueMeshWorkload(cq1, workload, false);
+    expected_runs += 1;
+    distributed::Finish(cq1);
+
+    distributed::Synchronize(*mesh_device, std::nullopt);
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> counter;
+        slow_dispatch::ReadFromL1(*mesh_device, core, counter_addr, sizeof(uint32_t), counter);
+        EXPECT_EQ(counter[0], expected_runs) << "core " << core.str();
+    }
+    mesh_device->release_mesh_trace(trace_id);
+}
+
+// A trace captured on one CQ can be replayed on another. Its programs' workers must report done to the replaying CQ:
+// reporting to the capturing CQ's dispatcher leaves the replaying CQ waiting for completions that never arrive.
+// Capture on CQ 0, replay on CQ 1 and on CQ 0 in turn, and count how many times every core ran.
+TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixTestTraceReplayOnOtherCQ) {
+    if (this->num_cqs_ != 2) {
+        GTEST_SKIP() << "This test must be run with TT_METAL_GTEST_NUM_HW_CQS=2";
+    }
+    CreateDevice(16384);
+    auto mesh_device = device_;
+
+    const CoreRange worker_range = worker_grid(*mesh_device).intersection(CoreRange({0, 0}, {2, 2})).value();
+    const uint32_t counter_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> zero = {0};
+        slow_dispatch::WriteToL1(*mesh_device, core, counter_addr, zero);
+    }
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, create_counter_program(*mesh_device, worker_range, counter_addr));
+
+    auto& cq0 = mesh_device->mesh_command_queue(0);
+    auto& cq1 = mesh_device->mesh_command_queue(1);
+    uint32_t expected_runs = 0;
+
+    // Compile and run once on CQ 0, then capture a trace of several launches on CQ 0.
+    distributed::EnqueueMeshWorkload(cq0, workload, false);
+    expected_runs += 1;
+    constexpr uint32_t k_programs_in_trace = 3;
+    auto trace_id = mesh_device->begin_mesh_trace(cq0);
+    for (uint32_t i = 0; i < k_programs_in_trace; i++) {
+        distributed::EnqueueMeshWorkload(cq0, workload, false);
+    }
+    mesh_device->end_mesh_trace(cq0, trace_id);
+    distributed::Finish(cq0);
+
+    constexpr uint32_t k_rounds = 2;
+    for (uint32_t i = 0; i < k_rounds; i++) {
+        mesh_device->replay_mesh_trace(cq1, trace_id, false);
+        expected_runs += k_programs_in_trace;
+        distributed::Finish(cq1);
+        mesh_device->replay_mesh_trace(cq0, trace_id, false);
+        expected_runs += k_programs_in_trace;
+        distributed::Finish(cq0);
+    }
+
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> counter;
+        slow_dispatch::ReadFromL1(*mesh_device, core, counter_addr, sizeof(uint32_t), counter);
+        EXPECT_EQ(counter[0], expected_runs) << "core " << core.str();
+    }
+    mesh_device->release_mesh_trace(trace_id);
+}
+
+// A CQ that takes over a sub-device with an enqueue that sends the workers no go (an empty program) must still get the
+// done signals of its next program. Otherwise that program reports done to the previous owner and the CQ's finish
+// never completes.
+TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestCQOwnershipTakenByEmptyWorkload) {
+    auto mesh_device = device_;
+    auto& cq0 = mesh_device->mesh_command_queue(0);
+    auto& cq1 = mesh_device->mesh_command_queue(1);
+
+    distributed::MeshWorkload blank_workload;
+    blank_workload.add_program(device_range_, create_blank_program(*mesh_device, CoreRange({0, 0}, {0, 0})));
+    distributed::MeshWorkload empty_workload;
+    empty_workload.add_program(device_range_, tt_metal::CreateProgram(*mesh_device));
+
+    distributed::EnqueueMeshWorkload(cq0, blank_workload, false);
+    distributed::Finish(cq0);
+    distributed::EnqueueMeshWorkload(cq1, empty_workload, false);
+    distributed::EnqueueMeshWorkload(cq1, blank_workload, false);
+    distributed::Finish(cq1);
+}
+
+// A CQ that takes over a sub-device by waiting on the previous owner's event must not redirect the done signals of the
+// previous owner's still-running programs: a worker still running the previous owner's program would report done to
+// the new owner, and the previous owner's event would never complete. Block one core on CQ 0, hand the sub-device to
+// CQ 1 through an event, and give CQ 1 time to run ahead before releasing the core.
+TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestCQOwnershipHandoffBehindRunningProgram) {
+    auto mesh_device = device_;
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    auto& cq0 = mesh_device->mesh_command_queue(0);
+    auto& cq1 = mesh_device->mesh_command_queue(1);
+
+    const CoreCoord blocked_core{0, 0};
+    auto semaphore = CreateGlobalSemaphore(*mesh_device, CoreRangeSet(CoreRange(blocked_core, blocked_core)), 0);
+    tt_metal::Program program = create_single_kernel_program(
+        *mesh_device,
+        "syncer",
+        k_syncer_kernel_path,
+        CoreRangeSet(CoreRange(blocked_core, blocked_core)),
+        DataMovementProcessor::RISCV_0,
+        {{"sem_addr", semaphore.address()}});
+    distributed::MeshWorkload blocked_workload;
+    blocked_workload.add_program(device_range_, std::move(program));
+    const CoreRangeSet blank_cores =
+        two_disjoint_core_sets(*mesh_device, CoreRange(blocked_core, blocked_core), CoreRange({1, 1}, {1, 1})).second;
+    distributed::MeshWorkload blank_workload;
+    blank_workload.add_program(device_range_, create_blank_program(*mesh_device, blank_cores));
+
+    distributed::EnqueueMeshWorkload(cq0, blocked_workload, false);
+    auto event = cq0.enqueue_record_event_to_host();
+    cq1.enqueue_wait_for_event(event);
+    distributed::EnqueueMeshWorkload(cq1, blank_workload, false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_FALSE(distributed::EventQuery(event));
+
+    std::vector<uint32_t> release = {1};
+    slow_dispatch::WriteToL1(*mesh_device, blocked_core, semaphore.address(), release);
+    distributed::EventSynchronize(event);
+    distributed::Finish(cq1);
+    distributed::Finish(cq0);
+}
+
+// Switching sub-device managers moves cores the outgoing manager left unassigned into a sub-device whose go state the
+// switch's reset just touched. They must not take that reset as new work: acking it a second time would leave extra
+// counts in the sub-device's completion counter, letting a later wait for workers pass before they finish. Block one
+// core's program on a semaphore and check that an event recorded behind it does not complete until the core is
+// released.
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceSwitchToDefaultNoStrayResetAcks) {
+    auto mesh_device = devices_[0];
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    auto& cq = mesh_device->mesh_command_queue();
+
+    // Cores outside {0,0}-{2,2} (or outside the first worker, on a smaller grid) are unassigned under this manager.
+    const CoreRangeSet assigned_cores =
+        two_disjoint_core_sets(*mesh_device, CoreRange({0, 0}, {2, 2}), CoreRange({3, 3}, {3, 3})).first;
+    auto sub_device_manager =
+        mesh_device->create_sub_device_manager({SubDevice(std::array{assigned_cores})}, k_local_l1_size);
+    mesh_device->load_sub_device_manager(sub_device_manager);
+    mesh_device->clear_loaded_sub_device_manager();
+
+    const CoreCoord blocked_core{0, 0};
+    auto semaphore = CreateGlobalSemaphore(*mesh_device, CoreRangeSet(CoreRange(blocked_core, blocked_core)), 0);
+    tt_metal::Program program = create_single_kernel_program(
+        *mesh_device,
+        "syncer",
+        k_syncer_kernel_path,
+        CoreRangeSet(CoreRange(blocked_core, blocked_core)),
+        DataMovementProcessor::RISCV_0,
+        {{"sem_addr", semaphore.address()}});
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, std::move(program));
+
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    auto event = cq.enqueue_record_event_to_host();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_FALSE(distributed::EventQuery(event));
+
+    std::vector<uint32_t> release = {1};
+    slow_dispatch::WriteToL1(*mesh_device, blocked_core, semaphore.address(), release);
+    distributed::EventSynchronize(event);
+    distributed::Finish(cq);
+    mesh_device->remove_sub_device_manager(sub_device_manager);
+}
+
+// Single CQ: switching sub-device managers right behind a non-blocking trace replay must not disturb the replay. The
+// switch resets every worker's go state, and with one CQ nothing drains on the host first, so the reset has to be
+// ordered behind the replay on the device. The workers also move go rows (sub-device 0 -> sub-device 1) across the
+// switch. A reset that overtakes the replay is not reliably visible in the final count (the stray runs it causes can
+// replay already-consumed launch messages), so the test also samples a worker's go messages from the host while the
+// slow replay is still running: before the replay's programs have all run, none may hold a reset.
+TEST_F(UnitMeshCQTraceFixture, TensixTestSubDeviceSwitchBehindTraceReplay) {
+    CreateDevices(16384);
+    auto mesh_device = this->devices_[0];
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    auto& cq = mesh_device->mesh_command_queue();
+
+    const auto [worker_cores, other_cores] =
+        two_disjoint_core_sets(*mesh_device, CoreRange({0, 0}, {2, 2}), CoreRange({3, 3}, {3, 3}));
+    const CoreRange worker_range = worker_cores.bounding_box();
+    const CoreRange other_range = other_cores.bounding_box();
+    auto manager_a =
+        mesh_device->create_sub_device_manager({SubDevice(std::array{CoreRangeSet(worker_range)})}, k_local_l1_size);
+    auto manager_b = mesh_device->create_sub_device_manager(
+        {SubDevice(std::array{CoreRangeSet(other_range)}), SubDevice(std::array{CoreRangeSet(worker_range)})},
+        k_local_l1_size);
+    mesh_device->load_sub_device_manager(manager_a);
+
+    const uint32_t counter_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> zero = {0};
+        slow_dispatch::WriteToL1(*mesh_device, core, counter_addr, zero);
+    }
+
+    // A counter on RISCV_1, optionally alongside a delay on RISCV_0 so each launch stays on the workers a while.
+    auto make_counter_workload = [&](std::optional<uint32_t> delay_iters) {
+        const KernelSpec counter_kernel = make_counter_kernel_spec(counter_addr, DataMovementProcessor::RISCV_1);
+        const KernelSpecName delay_kernel_name{"delay"};
+        ProgramSpec spec{
+            .name = "local_counter_increment",
+            .kernels = {counter_kernel},
+            .work_units = {WorkUnitSpec{
+                .name = "counter", .kernels = {counter_kernel.unique_id}, .target_nodes = CoreRangeSet(worker_range)}},
+        };
+        if (delay_iters.has_value()) {
+            spec.kernels.push_back(KernelSpec{
+                .unique_id = delay_kernel_name,
+                .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/delay.cpp",
+                .num_threads = 1,
+                .runtime_arg_schema = {.runtime_arg_names = {"num_iterations"}},
+                .hw_config = DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+                }});
+            spec.work_units.front().kernels.push_back(delay_kernel_name);
+        }
+        tt_metal::Program program = Program(*mesh_device, spec);
+        if (delay_iters.has_value()) {
+            ProgramRunArgs::KernelRunArgs delay_run_args{.kernel = delay_kernel_name};
+            for (const CoreCoord& core : worker_range) {
+                AddRuntimeArgsForNode(delay_run_args.runtime_arg_values, core, {{"num_iterations", *delay_iters}});
+            }
+            program.set_program_run_args(ProgramRunArgs{.kernel_run_args = {std::move(delay_run_args)}});
+        }
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, std::move(program));
+        return workload;
+    };
+    constexpr uint32_t k_delay_iters = 5000000;  // long enough that the host samples the go message mid-replay
+    auto slow_workload = make_counter_workload(k_delay_iters);
+    auto workload_b = make_counter_workload(std::nullopt);
+    uint32_t expected_runs = 0;
+
+    // Compile under manager A, then capture several launches of the slow counter.
+    distributed::EnqueueMeshWorkload(cq, slow_workload, false);
+    expected_runs += 1;
+    constexpr uint32_t k_programs_in_trace = 4;
+    auto trace_id = mesh_device->begin_mesh_trace(cq);
+    for (uint32_t i = 0; i < k_programs_in_trace; i++) {
+        distributed::EnqueueMeshWorkload(cq, slow_workload, false);
+    }
+    mesh_device->end_mesh_trace(cq, trace_id);
+
+    // Under manager A the workers are in sub-device 0, whose go ring is the first one at GO_MSG. The switch's reset
+    // goes to the slot of the host's launch message write pointer, so the whole ring is probed.
+    const CoreCoord probe_core = worker_range.start_coord;
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t go_ring_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+    auto go_ring = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).create<dev_msgs::go_ring_t>();
+    uint32_t mid_replay_samples = 0;
+
+    constexpr uint32_t k_iters = 3;
+    for (uint32_t i = 0; i < k_iters; i++) {
+        mesh_device->replay_mesh_trace(cq, trace_id, false);
+        expected_runs += k_programs_in_trace;
+        mesh_device->load_sub_device_manager(manager_b);
+        // Read the go messages before the counter: the counter only grows, so a short count means the replay was
+        // still running when the go messages were read.
+        std::vector<uint32_t> go_words;
+        std::vector<uint32_t> counter;
+        slow_dispatch::ReadFromL1(*mesh_device, probe_core, go_ring_addr, go_ring.size(), go_words);
+        slow_dispatch::ReadFromL1(*mesh_device, probe_core, counter_addr, sizeof(uint32_t), counter);
+        std::memcpy(go_ring.data(), go_words.data(), go_ring.size());
+        if (counter[0] < expected_runs) {
+            mid_replay_samples++;
+            auto slots = go_ring.view().slot();
+            for (uint32_t slot = 0; slot < slots.size(); slot++) {
+                const uint32_t signal = slots[slot].signal();
+                EXPECT_TRUE(
+                    signal != dev_msgs::RUN_MSG_RESET_READ_PTR && signal != dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST)
+                    << "go message in slot " << slot << " reset while the replay was still running (signal " << signal
+                    << ", counter " << counter[0] << " of " << expected_runs << ")";
+            }
+        }
+        distributed::EnqueueMeshWorkload(cq, workload_b, false);
+        expected_runs += 1;
+        // The trace belongs to the manager it was captured under.
+        mesh_device->load_sub_device_manager(manager_a);
+    }
+    distributed::Finish(cq);
+    if (mid_replay_samples == 0) {
+        log_warning(tt::LogTest, "The go message was never sampled mid-replay; the ordering check did not run");
+    }
+
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> counter;
+        slow_dispatch::ReadFromL1(*mesh_device, core, counter_addr, sizeof(uint32_t), counter);
+        EXPECT_EQ(counter[0], expected_runs) << "core " << core.str();
+    }
+    mesh_device->release_mesh_trace(trace_id);
+}
+
+// A sub-device manager switch resets the workers' launch message slot, so whatever slot the workers are on when the
+// switch comes, they and the host must agree afterwards. Switch with the workers on every slot of the launch ring (and
+// past its end), moving them between sub-devices each time, and count how many times every core ran.
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceSwitchFromEveryLaunchSlot) {
+    auto mesh_device = devices_[0];
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    auto& cq = mesh_device->mesh_command_queue();
+
+    const auto [worker_cores, other_cores] =
+        two_disjoint_core_sets(*mesh_device, CoreRange({0, 0}, {2, 2}), CoreRange({3, 3}, {3, 3}));
+    const CoreRange worker_range = worker_cores.bounding_box();
+    const CoreRange other_range = other_cores.bounding_box();
+    auto manager_a =
+        mesh_device->create_sub_device_manager({SubDevice(std::array{CoreRangeSet(worker_range)})}, k_local_l1_size);
+    auto manager_b = mesh_device->create_sub_device_manager(
+        {SubDevice(std::array{CoreRangeSet(other_range)}), SubDevice(std::array{CoreRangeSet(worker_range)})},
+        k_local_l1_size);
+    mesh_device->load_sub_device_manager(manager_a);
+
+    const uint32_t counter_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> zero = {0};
+        slow_dispatch::WriteToL1(*mesh_device, core, counter_addr, zero);
+    }
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, create_counter_program(*mesh_device, worker_range, counter_addr));
+
+    // One more than the launch message ring depth, so the last round also wraps the ring.
+    constexpr uint32_t k_max_programs_before_switch = 9;
+    uint32_t expected_runs = 0;
+    for (uint32_t programs = 0; programs <= k_max_programs_before_switch; programs++) {
+        for (uint32_t i = 0; i < programs; i++) {
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+            expected_runs++;
+        }
+        mesh_device->load_sub_device_manager(manager_b);
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+        expected_runs++;
+        mesh_device->load_sub_device_manager(manager_a);
+    }
+    distributed::Finish(cq);
+
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> counter;
+        slow_dispatch::ReadFromL1(*mesh_device, core, counter_addr, sizeof(uint32_t), counter);
+        EXPECT_EQ(counter[0], expected_runs) << "core " << core.str();
+    }
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(manager_a);
+    mesh_device->remove_sub_device_manager(manager_b);
 }
 
 }  // namespace tt::tt_metal

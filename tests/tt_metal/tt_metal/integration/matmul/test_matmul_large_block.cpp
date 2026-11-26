@@ -7,9 +7,9 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <sys/types.h>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -21,21 +21,21 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -216,7 +216,7 @@ bool matmul_large_block(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = tt_metal::CreateProgram();
+    Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 

@@ -10,15 +10,15 @@
 #include <tt_stl/assert.hpp>
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/constants.hpp"
-#include "tt-metalium/host_buffer.hpp"
-#include "tt-metalium/math.hpp"
-#include "tt-metalium/shape.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include "tt-metalium/memory/buffer/host_buffer.hpp"
+#include "tt-metalium/utils/math.hpp"
+#include "tt-metalium/vocabulary/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <optional>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -29,8 +29,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/data_formats/bfloat4.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::operations::conv {
@@ -1275,6 +1275,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt) {
+    validate_conv_params(in_channels, out_channels, batch_size, kernel_size, stride, groups);
     DataType conv_output_dtype = output_dtype.value_or(input_dtype);
 
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);

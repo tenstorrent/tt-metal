@@ -13,14 +13,15 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "test_common.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
@@ -387,7 +388,7 @@ int main(int argc, char** argv) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     std::vector<CoreCoord> worker_logical_cores;
     auto grid_size = mesh_device->compute_with_storage_grid_size();
@@ -417,6 +418,7 @@ int main(int argc, char** argv) {
     test_params.buffer_size_bytes_header_only_channel = packet_header_size;
 
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         test_params.num_full_size_channels,
         test_params.num_header_only_channels,
         test_params.num_buffers_full_size_channel,
@@ -430,6 +432,7 @@ int main(int argc, char** argv) {
     };
 
     auto drainer_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         1,                         /* num_full_size_channels */
         0,                         /* num_header_only_channels */
         16,                        /* num_buffers_full_size_channel */

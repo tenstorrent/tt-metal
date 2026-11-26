@@ -9,7 +9,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include <cstdint>
 #include <utility>
 

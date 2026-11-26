@@ -15,14 +15,14 @@
 
 #include <benchmark/benchmark.h>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "hd_socket_test_utils.hpp"
 #include "leg_benchmark_common.hpp"
@@ -94,8 +94,7 @@ public:
             return;
         }
 
-        IDevice* const device = mesh_->get_devices().front();
-        const CoreCoord grid = device->compute_with_storage_grid_size();
+        const CoreCoord grid = mesh_->compute_with_storage_grid_size();
         grid_width_ = static_cast<uint32_t>(grid.x);
         grid_height_ = static_cast<uint32_t>(grid.y);
         if (cores_ == 0 || cores_ > grid_width_ * grid_height_ || cores_ > kProvisionedCores) {
@@ -103,8 +102,8 @@ public:
             return;
         }
 
-        const uint32_t l1_base = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
-        l1_ = L1MapUVA::compute(l1_base, static_cast<uint32_t>(device->l1_size_per_core()), page_bytes_, false);
+        const uint32_t l1_base = static_cast<uint32_t>(mesh_->allocator()->get_base_allocator_addr(HalMemType::L1));
+        l1_ = L1MapUVA::compute(l1_base, static_cast<uint32_t>(mesh_->l1_size_per_core()), page_bytes_, false);
         if (const std::string e = l1_.fits(page_bytes_); !e.empty()) {
             fail(state, e);
             return;
@@ -224,7 +223,7 @@ BENCHMARK_DEFINE_F(D2HLegFixture, Bandwidth)(benchmark::State& state) {
     const uint32_t page = tt_uva_frame_page_size(page_bytes_);
 
     for ([[maybe_unused]] auto _ : state) {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_);
         // sig_addr 0 selects the unsignalled tt_uva_put: no receiver kernel.
         auto sender = CreateKernel(
             program,

@@ -12,16 +12,15 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -242,10 +241,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         single_block_size_cliff_col * single_block_size / single_sub_block_size;
 
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
-        input_cb_data_format == tt::DataFormat::Float32) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
         ttnn::ComputeKernelConfig cfg{

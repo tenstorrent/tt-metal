@@ -33,6 +33,28 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
 }
 
+static bool has_empty_shards(const tt::tt_metal::TensorSpec& t, const tt::tt_metal::MemoryConfig& c) {
+    using namespace tt::tt_metal;
+    if (not c.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& shape = t.padded_shape();
+    const auto& spec = *c.shard_spec();
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(shape.rank()) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+    const uint64_t shards_h = (volume_except_last + spec.shape[0] - 1) / spec.shape[0];
+    const uint64_t shards_w = (shape[-1] + spec.shape[1] - 1) / spec.shape[1];
+    uint64_t num_shards = shards_h * shards_w;
+    if (c.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_shards = shards_h;
+    } else if (c.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        num_shards = shards_w;
+    }
+    return num_shards < spec.grid.num_cores();
+}
+
 // Check based on input specs and output memory config (two tensors, same shape and memory config).
 static bool is_native_L1_sharding(
     const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const tt::tt_metal::MemoryConfig& c) {
@@ -65,7 +87,7 @@ static bool is_native_L1_sharding(
     if (b.memory_config().is_sharded() && b.memory_config().buffer_type() == BufferType::L1) {
         return true;
     }
-    if (c.is_sharded() && c.buffer_type() == BufferType::L1) {
+    if (c.is_sharded() && c.buffer_type() == BufferType::L1 && !has_empty_shards(a, c)) {
         return true;
     }
     return false;
@@ -78,6 +100,10 @@ bool is_native_L1_sharding(
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     using namespace tt::tt_metal;
     if (!output_memory_config.is_sharded()) {
+        return false;
+    }
+    // The native path writes 2D shards; an ND-sharded output without a 2D shard spec goes through TensorAccessor.
+    if (!output_memory_config.shard_spec().has_value()) {
         return false;
     }
     // TST: predicate + false_spec
@@ -130,7 +156,8 @@ bool is_native_L1_sharding(
         if (false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1) {
             return true;
         }
-        if (output_memory_config.buffer_type() == BufferType::L1) {
+        if (output_memory_config.buffer_type() == BufferType::L1 &&
+            !has_empty_shards(predicate_spec, output_memory_config)) {
             return true;
         }
     }
@@ -609,6 +636,19 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
     return defines;
 }
 
+namespace {
+
+// Size a broadcast dimension takes: the extent that is not 1, which may be 0.
+// Taking the max instead would turn an empty dimension broadcast against 1 into 1.
+template <typename... Dims>
+uint32_t broadcast_dim(Dims... dims) {
+    uint32_t out = 1;
+    ((out = (dims != 1) ? static_cast<uint32_t>(dims) : out), ...);
+    return out;
+}
+
+}  // namespace
+
 // 2-tensor broadcast compatibility (used by both TTS and TST variants)
 // For TTS: checks predicate vs true tensor (false is scalar)
 // For TST: checks predicate vs false tensor (true is scalar)
@@ -644,12 +684,12 @@ TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, cons
         auto pred_h = predicate_shape[-2];  // height (second-to-last dimension)
         auto b_h = tensor_shape[-2];
 
-        auto max_h = std::max({pred_h, b_h});
-        auto max_w = std::max({pred_w, b_w});
-        bool pred_row_bcast = (pred_h == 1 && max_h > 1);
-        bool b_row_bcast = (b_h == 1 && max_h > 1);
-        bool pred_col_bcast = (pred_w == 1 && max_w > 1);
-        bool b_col_bcast = (b_w == 1 && max_w > 1);
+        auto bcast_h = broadcast_dim(pred_h, b_h);
+        auto bcast_w = broadcast_dim(pred_w, b_w);
+        bool pred_row_bcast = (pred_h == 1 && bcast_h != 1);
+        bool b_row_bcast = (b_h == 1 && bcast_h != 1);
+        bool pred_col_bcast = (pred_w == 1 && bcast_w != 1);
+        bool b_col_bcast = (b_w == 1 && bcast_w != 1);
 
         if (b_row_bcast && b_col_bcast) {
             return TernaryBroadcastType::SCALAR_B_BCAST;
@@ -663,8 +703,8 @@ TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, cons
         bool is_pred_col = (!pred_row_bcast && pred_col_bcast);
         bool is_b_row = (b_row_bcast && !b_col_bcast);
         bool is_b_col = (!b_row_bcast && b_col_bcast);
-        bool is_pred_full = (pred_h == max_h && pred_w == max_w);
-        bool is_b_full = (b_h == max_h && b_w == max_w);
+        bool is_pred_full = (pred_h == bcast_h && pred_w == bcast_w);
+        bool is_b_full = (b_h == bcast_h && b_w == bcast_w);
 
         bool pred_ok = is_pred_row || is_pred_col || is_pred_full;
         bool b_ok = is_b_row || is_b_col || is_b_full;
@@ -684,9 +724,9 @@ TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, cons
 
     if (!same_width) {
         // Check for column broadcast patterns (width dimension differs, heights same)
-        auto max_w = std::max(pred_w, tensor_w);
-        bool pred_col_broadcasted = (pred_w == 1 && max_w > 1);
-        bool tensor_col_broadcasted = (tensor_w == 1 && max_w > 1);
+        auto bcast_w = broadcast_dim(pred_w, tensor_w);
+        bool pred_col_broadcasted = (pred_w == 1 && bcast_w != 1);
+        bool tensor_col_broadcasted = (tensor_w == 1 && bcast_w != 1);
 
         // Column broadcast case: at least one tensor is broadcasting in width and heights are same
         if ((pred_col_broadcasted || tensor_col_broadcasted) && same_height) {
@@ -699,9 +739,9 @@ TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, cons
     // Check for row broadcast patterns (height dimension differs)
     if (!same_height) {
         // Check for row broadcast patterns: at least one tensor is broadcasting in height and widths are same
-        auto max_h = std::max(pred_h, tensor_h);
-        bool pred_row_broadcasted = (pred_h == 1 && max_h > 1);
-        bool tensor_row_broadcasted = (tensor_h == 1 && max_h > 1);
+        auto bcast_h = broadcast_dim(pred_h, tensor_h);
+        bool pred_row_broadcasted = (pred_h == 1 && bcast_h != 1);
+        bool tensor_row_broadcasted = (tensor_h == 1 && bcast_h != 1);
 
         log_debug(
             tt::LogOp,
@@ -754,24 +794,24 @@ TernaryBroadcastType get_broadcast_type(
         auto true_h = true_shape[-2];
         auto false_h = false_shape[-2];
 
-        auto max_h = std::max({pred_h, true_h, false_h});
-        auto max_w = std::max({pred_w, true_w, false_w});
+        auto bcast_h = broadcast_dim(pred_h, true_h, false_h);
+        auto bcast_w = broadcast_dim(pred_w, true_w, false_w);
 
-        bool pred_row_bcast = (pred_h == 1 && max_h > 1);
-        bool true_row_bcast = (true_h == 1 && max_h > 1);
-        bool false_row_bcast = (false_h == 1 && max_h > 1);
+        bool pred_row_bcast = (pred_h == 1 && bcast_h != 1);
+        bool true_row_bcast = (true_h == 1 && bcast_h != 1);
+        bool false_row_bcast = (false_h == 1 && bcast_h != 1);
 
-        bool pred_col_bcast = (pred_w == 1 && max_w > 1);
-        bool true_col_bcast = (true_w == 1 && max_w > 1);
-        bool false_col_bcast = (false_w == 1 && max_w > 1);
+        bool pred_col_bcast = (pred_w == 1 && bcast_w != 1);
+        bool true_col_bcast = (true_w == 1 && bcast_w != 1);
+        bool false_col_bcast = (false_w == 1 && bcast_w != 1);
 
         bool is_pred_scalar = (pred_row_bcast && pred_col_bcast);
         bool is_true_scalar = (true_row_bcast && true_col_bcast);
         bool is_false_scalar = (false_row_bcast && false_col_bcast);
 
-        bool is_pred_non_bcast = (pred_h == max_h && pred_w == max_w);
-        bool is_true_non_bcast = (true_h == max_h && true_w == max_w);
-        bool is_false_non_bcast = (false_h == max_h && false_w == max_w);
+        bool is_pred_non_bcast = (pred_h == bcast_h && pred_w == bcast_w);
+        bool is_true_non_bcast = (true_h == bcast_h && true_w == bcast_w);
+        bool is_false_non_bcast = (false_h == bcast_h && false_w == bcast_w);
 
         if ((is_pred_scalar || is_pred_non_bcast) && (is_true_scalar || is_true_non_bcast) &&
             (is_false_scalar || is_false_non_bcast)) {
@@ -808,10 +848,10 @@ TernaryBroadcastType get_broadcast_type(
 
     if (!same_height) {
         // Check for row broadcast patterns first (height dimension differs)
-        auto max_h = std::max({pred_h, true_h, false_h});
-        bool pred_row_broadcasted = (pred_h == 1 && max_h > 1);
-        bool true_row_broadcasted = (true_h == 1 && max_h > 1);
-        bool false_row_broadcasted = (false_h == 1 && max_h > 1);
+        auto bcast_h = broadcast_dim(pred_h, true_h, false_h);
+        bool pred_row_broadcasted = (pred_h == 1 && bcast_h != 1);
+        bool true_row_broadcasted = (true_h == 1 && bcast_h != 1);
+        bool false_row_broadcasted = (false_h == 1 && bcast_h != 1);
 
         // Row broadcast case: at least one tensor is broadcasting in height and widths are same
         if ((pred_row_broadcasted || true_row_broadcasted || false_row_broadcasted) &&
@@ -822,10 +862,10 @@ TernaryBroadcastType get_broadcast_type(
 
     if (!same_width) {
         // Check for column broadcast patterns (width dimension differs, heights same)
-        auto max_w = std::max({pred_w, true_w, false_w});
-        bool pred_col_broadcasted = (pred_w == 1 && max_w > 1);
-        bool true_col_broadcasted = (true_w == 1 && max_w > 1);
-        bool false_col_broadcasted = (false_w == 1 && max_w > 1);
+        auto bcast_w = broadcast_dim(pred_w, true_w, false_w);
+        bool pred_col_broadcasted = (pred_w == 1 && bcast_w != 1);
+        bool true_col_broadcasted = (true_w == 1 && bcast_w != 1);
+        bool false_col_broadcasted = (false_w == 1 && bcast_w != 1);
 
         // Column broadcast case: at least one tensor is broadcasting in width and heights are same
         if ((pred_col_broadcasted || true_col_broadcasted || false_col_broadcasted) &&
@@ -851,27 +891,9 @@ ttnn::Shape compute_broadcasted_output_ternary(
         auto dim_b = (i >= -rank_b) ? b_shape[i] : 1;
         auto dim_c = (i >= -rank_c) ? c_shape[i] : 1;
 
-        uint32_t max_dim = 1;
-        if (dim_a != 1) {
-            max_dim = std::max(max_dim, dim_a);
-        }
-        if (dim_b != 1) {
-            max_dim = std::max(max_dim, dim_b);
-        }
-        if (dim_c != 1) {
-            max_dim = std::max(max_dim, dim_c);
-        }
-
-        bool compatible = true;
-        if (dim_a != 1 && dim_a != max_dim) {
-            compatible = false;
-        }
-        if (dim_b != 1 && dim_b != max_dim) {
-            compatible = false;
-        }
-        if (dim_c != 1 && dim_c != max_dim) {
-            compatible = false;
-        }
+        const uint32_t out_dim = broadcast_dim(dim_a, dim_b, dim_c);
+        const bool compatible =
+            (dim_a == 1 || dim_a == out_dim) && (dim_b == 1 || dim_b == out_dim) && (dim_c == 1 || dim_c == out_dim);
 
         TT_FATAL(
             compatible,
@@ -894,7 +916,7 @@ ttnn::Shape compute_broadcasted_output_ternary(
                 dim_c);
         }
 
-        output_shape[i + largest_rank] = max_dim;
+        output_shape[i + largest_rank] = out_dim;
     }
     return ttnn::Shape(output_shape);
 }
@@ -931,6 +953,10 @@ tt::tt_metal::ShardSpec adjust_to_shape(
 
 tt::tt_metal::MemoryConfig compute_mem_config_actual(
     const Tensor& input_tensor, const ttnn::Shape& output_logical_shape) {
+    // An ND_SHARDED config has no 2D shard spec to adjust; its nd_shard_spec applies to any shape as is.
+    if (!input_tensor.memory_config().shard_spec().has_value()) {
+        return input_tensor.memory_config();
+    }
     const auto& padded_a_shape = input_tensor.padded_shape();
     const auto& padded_out_shape =
         input_tensor.tensor_spec().tensor_layout().compute_padded_shape(output_logical_shape);

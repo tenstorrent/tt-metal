@@ -3,22 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -59,9 +59,10 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     const auto& input_mesh_tensor = input.mesh_tensor();
     const auto& output_mesh_tensor = output.mesh_tensor();
 
-    tt::DataFormat input_dfb_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_dfb_data_format = get_untilize_with_unpadding_dfb_data_format(a.dtype(), a.device()->arch());
     uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
-    tt::DataFormat output_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_dfb_data_format =
+        get_untilize_with_unpadding_dfb_data_format(output.dtype(), a.device()->arch());
     uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
     const auto& input_shape = a.padded_shape();
@@ -143,7 +144,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         push_buffer_pair(cliffrow_set, BI_IN_CLIFFROW, BI_OUT_CLIFFROW);
     }
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // reader
 
@@ -155,6 +156,15 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         third_dim = log_shape[-3];
     } else if (log_shape.rank() >= 4) {
         third_dim = log_shape[-3] * log_shape[-4];
+    }
+
+    // A leading dim may be cropped (output dim -3 / -4 smaller than the input's). The writer emits output
+    // slabs contiguously; the reader maps each output slab (n, c) to input slab n * in_dim_c + c.
+    uint32_t out_dim_c = 1;
+    uint32_t in_dim_c = 1;
+    if (log_shape.rank() >= 4) {
+        out_dim_c = log_shape[-3];
+        in_dim_c = a.padded_shape()[-3];
     }
 
     uint32_t total_num_rows = output.logical_shape()[-2];
@@ -181,7 +191,9 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
             .compile_time_args =
                 {{"num_tiles_per_2d", num_tiles_2d},
                  {"third_dim", third_dim},
-                 {"total_tiles_per_row", total_tiles_per_row}},
+                 {"total_tiles_per_row", total_tiles_per_row},
+                 {"out_dim_c", out_dim_c},
+                 {"in_dim_c", in_dim_c}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
             .hw_config = ttnn::create_reader_datamovement_config(),
@@ -226,10 +238,6 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     uint32_t single_sub_block_size_cliff_col_wh =
         single_block_size_cliff_col * single_block_size / single_sub_block_size;
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
-    if (input_dfb_data_format == tt::DataFormat::Int32 || input_dfb_data_format == tt::DataFormat::UInt32 ||
-        input_dfb_data_format == tt::DataFormat::Float32) {
-        compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     const std::string compute_kernel_path(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh_metal2.cpp");
@@ -260,7 +268,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         // buffers would set it on the cliffrow set's input even when that set is empty -- a
         // buffer that exists on no core -- and would do so in the full-set kernels too.
         ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
+        if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
             compute_hw_config.unpack_modes = {{in_name, UnpackMode::UnpackToDest}};
         }
 

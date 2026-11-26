@@ -31,6 +31,7 @@ struct IndexType<false> {
 
 template <
     typename IndexType,
+    bool sign_magnitude,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t fill_c,
@@ -38,9 +39,8 @@ template <
     uint32_t row_stride,
     bool is_large_kernel,
     uint32_t sticks_per_chunk,
-    uint32_t in_idx_cb_id>
-void fill_indexes(uint32_t init_index) {
-    DataflowBuffer idx_cb(in_idx_cb_id);
+    typename IdxDFB>
+void fill_indexes(IdxDFB& idx_cb, uint32_t init_index) {
     volatile tt_l1_ptr IndexType* idx_ptr = reinterpret_cast<volatile tt_l1_ptr IndexType*>(idx_cb.get_write_ptr());
     uint32_t kernel_idx = 0;
 
@@ -50,6 +50,12 @@ void fill_indexes(uint32_t init_index) {
             if (!is_large_kernel || hw < sticks_per_chunk) {
                 volatile tt_l1_ptr IndexType* base_ptr = &idx_ptr[hw * TILE_WIDTH];
                 IndexType index = static_cast<IndexType>(init_index + kernel_idx);
+                // Int32 indices (Quasar) are added sign-magnitude: encode negative padding indices to match.
+                if constexpr (sign_magnitude) {
+                    if (static_cast<int32_t>(index) < 0) {
+                        index = 0x80000000u | static_cast<uint32_t>(-static_cast<int32_t>(index));
+                    }
+                }
 
                 for (uint32_t c = 0; c < fill_c; ++c) {
                     base_ptr[c] = index;
@@ -78,14 +84,21 @@ template <
     uint32_t up_left_wrap_inc,
     uint32_t intra_kernel_right_inc,
     uint32_t intra_kernel_down_left_wrap_inc,
-    uint32_t in_idx_cb_id,
-    uint32_t right_inc_cb_id,
-    uint32_t down_left_wrap_inc_cb_id,
-    uint32_t up_left_wrap_inc_cb_id,
-    uint32_t intra_kernel_right_inc_cb_id,
-    uint32_t intra_kernel_down_left_wrap_inc_cb_id,
-    bool indexes_32_bit>
-ALWI void initialize_return_indices_data() {
+    bool indexes_32_bit,
+    bool indexes_int32,
+    typename IdxDFB,
+    typename RightIncDFB,
+    typename DownLeftWrapIncDFB,
+    typename UpLeftWrapIncDFB,
+    typename IntraKernelRightIncDFB,
+    typename IntraKernelDownLeftWrapIncDFB>
+ALWI void initialize_return_indices_data(
+    IdxDFB& idx_cb,
+    RightIncDFB& right_inc_cb,
+    DownLeftWrapIncDFB& down_left_wrap_inc_cb,
+    UpLeftWrapIncDFB& up_left_wrap_inc_cb,
+    IntraKernelRightIncDFB& intra_kernel_right_inc_cb,
+    IntraKernelDownLeftWrapIncDFB& intra_kernel_down_left_wrap_inc_cb) {
     // since kernels can start in padded regions we need to have "indexes" in these regions
     // we choose a paradigm where we padding indexes must satisfy the following conditions:
     //   1. they are 1 less than the index to the right (whether it's padding or not)
@@ -127,18 +140,17 @@ ALWI void initialize_return_indices_data() {
     constexpr uint32_t row_stride = dilation_h * in_w - eff_kernel_w - (dilation_w - 1);
 
     // initialize the index CB
-    DataflowBuffer idx_cb(in_idx_cb_id);
     idx_cb.reserve_back(1);
     fill_indexes<
         typename IndexType<indexes_32_bit>::type,
+        indexes_int32,
         kernel_h,
         kernel_w,
         fill_c,
         column_stride,
         row_stride,
         is_large_kernel,
-        sticks_per_chunk,
-        in_idx_cb_id>(init_index);
+        sticks_per_chunk>(idx_cb, init_index);
     idx_cb.push_back(1);
 
     // initialize the increment CBs
@@ -147,6 +159,12 @@ ALWI void initialize_return_indices_data() {
     constexpr uint32_t inc_rows = is_large_kernel ? sticks_per_chunk : window_size_hw;
     if constexpr (indexes_32_bit) {
         auto fill_inc_32 = [&](auto& inc_cb, uint32_t inc) __attribute__((always_inline)) {
+            // Sign-magnitude, as for the indices (wrap and large-kernel increments are negative).
+            if constexpr (indexes_int32) {
+                if (static_cast<int32_t>(inc) < 0) {
+                    inc = 0x80000000u | static_cast<uint32_t>(-static_cast<int32_t>(inc));
+                }
+            }
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_cb.get_write_ptr());
             for (uint32_t k = 0; k < inc_rows; ++k) {
                 for (uint32_t c = 0; c < fill_c; ++c) {
@@ -155,28 +173,23 @@ ALWI void initialize_return_indices_data() {
             }
         };
 
-        DataflowBuffer right_inc_cb(right_inc_cb_id);
         right_inc_cb.reserve_back(1);
         fill_inc_32(right_inc_cb, right_inc);
         right_inc_cb.push_back(1);
 
-        DataflowBuffer down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
         down_left_wrap_inc_cb.reserve_back(1);
         fill_inc_32(down_left_wrap_inc_cb, down_left_wrap_inc);
         down_left_wrap_inc_cb.push_back(1);
 
-        DataflowBuffer up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
         up_left_wrap_inc_cb.reserve_back(1);
         fill_inc_32(up_left_wrap_inc_cb, up_left_wrap_inc);
         up_left_wrap_inc_cb.push_back(1);
 
         if constexpr (is_large_kernel) {
-            DataflowBuffer intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
             intra_kernel_right_inc_cb.reserve_back(1);
             fill_inc_32(intra_kernel_right_inc_cb, intra_kernel_right_inc);
             intra_kernel_right_inc_cb.push_back(1);
 
-            DataflowBuffer intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
             intra_kernel_down_left_wrap_inc_cb.reserve_back(1);
             fill_inc_32(intra_kernel_down_left_wrap_inc_cb, intra_kernel_down_left_wrap_inc);
             intra_kernel_down_left_wrap_inc_cb.push_back(1);
@@ -193,28 +206,23 @@ ALWI void initialize_return_indices_data() {
             }
         };
 
-        DataflowBuffer right_inc_cb(right_inc_cb_id);
         right_inc_cb.reserve_back(1);
         fill_inc(right_inc_cb, right_inc);
         right_inc_cb.push_back(1);
 
-        DataflowBuffer down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
         down_left_wrap_inc_cb.reserve_back(1);
         fill_inc(down_left_wrap_inc_cb, down_left_wrap_inc);
         down_left_wrap_inc_cb.push_back(1);
 
-        DataflowBuffer up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
         up_left_wrap_inc_cb.reserve_back(1);
         fill_inc(up_left_wrap_inc_cb, up_left_wrap_inc);
         up_left_wrap_inc_cb.push_back(1);
 
         if constexpr (is_large_kernel) {
-            DataflowBuffer intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
             intra_kernel_right_inc_cb.reserve_back(1);
             fill_inc(intra_kernel_right_inc_cb, intra_kernel_right_inc);
             intra_kernel_right_inc_cb.push_back(1);
 
-            DataflowBuffer intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
             intra_kernel_down_left_wrap_inc_cb.reserve_back(1);
             fill_inc(intra_kernel_down_left_wrap_inc_cb, intra_kernel_down_left_wrap_inc);
             intra_kernel_down_left_wrap_inc_cb.push_back(1);
@@ -249,8 +257,25 @@ template <
     uint32_t reader_id,
     uint32_t pack_tmp_cb_id,
     uint32_t pack_idx_tmp_cb_id,
-    uint32_t indexes_32_bit>
-ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
+    uint32_t indexes_32_bit,
+#if READER_ID == 0
+    typename InDFB>
+ALWI void read_kernel_with_top_left_index(InDFB& in_cb, uint32_t ind, uint32_t in_l1_read_base_addr) {
+#else
+    typename OutDFB,
+    typename OutIdxDFB,
+    typename PackTmpDFB,
+    typename PackIdxTmpDFB>
+ALWI void read_kernel_with_top_left_index(
+    OutDFB& out_cb,
+    OutIdxDFB& out_idx_cb,
+    PackTmpDFB& pack_tmp_cb,
+    PackIdxTmpDFB& pack_idx_tmp_cb,
+    uint32_t& out_offset,
+    uint32_t& out_idx_offset,
+    uint32_t ind,
+    uint32_t in_l1_read_base_addr) {
+#endif
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // MPWI requires 1 tile at a time for max reduction with indices
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 1;
@@ -259,18 +284,10 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for MPWI");
     constexpr uint32_t max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
 
-    // Each reader constructs only the CBs it drives (the others' dfb:: tokens are not bound on
+    // Each reader takes only the CBs it drives (the others' dfb:: tokens are not bound on
     // this reader). reader0 produces in_cb; reader1 produces out_cb/out_idx_cb and consumes
     // pack_tmp_cb/pack_idx_tmp_cb. The function is template-instantiated per reader, but the
     // preprocessor can't see the reader_id template arg, so the gate uses the READER_ID define.
-#if READER_ID == 0
-    DataflowBuffer in_cb(in_cb_id);
-#else
-    DataflowBuffer out_cb(out_cb_id);
-    DataflowBuffer out_idx_cb(out_idx_cb_id);
-    DataflowBuffer pack_tmp_cb(pack_tmp_cb_id);
-    DataflowBuffer pack_idx_tmp_cb(pack_idx_tmp_cb_id);
-#endif
     Noc noc;
     UnicastEndpoint self_ep;
 
@@ -343,16 +360,16 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                             uint32_t output_faces =
                                 c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
 
-                            out_cb.reserve_back(output_faces);
-                            out_idx_cb.reserve_back(output_faces);
-
+                            // The outputs are borrowed full-shard views with no consumer, so write by
+                            // offset instead of reserve/push: unconsumed credits hang the Quasar DFB
+                            // finish at kernel exit.
                             pack_tmp_cb.wait_front(1);
                             noc.async_read(
                                 self_ep,
                                 out_cb,
                                 output_faces * FACE_WIDTH * BYTES_PER_ELEM,
                                 experimental::local_addr(pack_tmp_cb.get_read_ptr()),
-                                {});
+                                {.offset_bytes = out_offset});
 
                             pack_idx_tmp_cb.wait_front(1);
                             constexpr uint32_t BYTES_PER_ELEM_IDX = indexes_32_bit ? 4 : 2;
@@ -361,13 +378,13 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                                 out_idx_cb,
                                 output_faces * FACE_WIDTH * BYTES_PER_ELEM_IDX,
                                 experimental::local_addr(pack_idx_tmp_cb.get_read_ptr()),
-                                {});
+                                {.offset_bytes = out_idx_offset});
                             noc.async_read_barrier();
                             pack_tmp_cb.pop_front(1);
                             pack_idx_tmp_cb.pop_front(1);
 
-                            out_cb.push_back(output_faces);
-                            out_idx_cb.push_back(output_faces);
+                            out_offset += output_faces * out_cb.get_entry_size();
+                            out_idx_offset += output_faces * out_idx_cb.get_entry_size();
                         }
                     }
 #endif
@@ -477,6 +494,7 @@ void kernel_main() {
     constexpr uint32_t intra_kernel_right_inc = get_arg(args::intra_kernel_right_inc);
     constexpr uint32_t intra_kernel_down_left_wrap_inc = get_arg(args::intra_kernel_down_left_wrap_inc);
     constexpr uint32_t indexes_32_bit = get_arg(args::indexes_32_bit);
+    constexpr bool indexes_int32 = get_arg(args::indexes_int32);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
@@ -490,12 +508,19 @@ void kernel_main() {
     // blocks reference reader0-only dfb:: tokens (clear_value_cb, in_cb, in_idx_cb, *_inc_cb,
     // in_scalar_cb) that are not declared in reader1's build.
 #if READER_ID == 0
-    {
-        DataflowBuffer clear_value_cb(clear_value_cb_id);
-        fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-        clear_value_cb.push_back(1);
-        clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_cb);
-    }
+    DataflowBuffer in_cb(in_cb_id);
+    DataflowBuffer clear_value_cb(clear_value_cb_id);
+    DataflowBuffer in_idx_cb(in_idx_cb_id);
+    DataflowBuffer right_inc_cb(right_inc_cb_id);
+    DataflowBuffer down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
+    DataflowBuffer up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
+    DataflowBuffer intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
+    DataflowBuffer intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
+    DataflowBuffer in_scalar_cb(in_scalar_cb_id_0);
+
+    fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+    clear_value_cb.push_back(1);
+    clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), in_cb, clear_value_cb);
 
     {
         initialize_return_indices_data<
@@ -514,13 +539,14 @@ void kernel_main() {
             up_left_wrap_inc,
             intra_kernel_right_inc,
             intra_kernel_down_left_wrap_inc,
-            in_idx_cb_id,
-            right_inc_cb_id,
-            down_left_wrap_inc_cb_id,
-            up_left_wrap_inc_cb_id,
-            intra_kernel_right_inc_cb_id,
-            intra_kernel_down_left_wrap_inc_cb_id,
-            indexes_32_bit>();
+            indexes_32_bit,
+            indexes_int32>(
+            in_idx_cb,
+            right_inc_cb,
+            down_left_wrap_inc_cb,
+            up_left_wrap_inc_cb,
+            intra_kernel_right_inc_cb,
+            intra_kernel_down_left_wrap_inc_cb);
     }
 
     // initialize the scalar CB (reader0-only: in_scalar_cb is reader0-driven in MPWI).
@@ -528,10 +554,16 @@ void kernel_main() {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
-        DataflowBuffer in_scalar_cb(in_scalar_cb_id_0);
         fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
         in_scalar_cb.push_back(1);
     }
+#else
+    DataflowBuffer out_cb(out_cb_id);
+    DataflowBuffer out_idx_cb(out_idx_cb_id);
+    DataflowBuffer pack_tmp_cb(pack_tmp_cb_id);
+    DataflowBuffer pack_idx_tmp_cb(pack_idx_tmp_cb_id);
+    uint32_t out_offset = 0;
+    uint32_t out_idx_offset = 0;
 #endif  // READER_ID == 0
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
@@ -597,7 +629,19 @@ void kernel_main() {
                 reader_id,
                 pack_tmp_cb_id,
                 pack_idx_tmp_cb_id,
-                indexes_32_bit>(ind, in_l1_read_base_addr);
+                indexes_32_bit>(
+#if READER_ID == 0
+                in_cb,
+#else
+                out_cb,
+                out_idx_cb,
+                pack_tmp_cb,
+                pack_idx_tmp_cb,
+                out_offset,
+                out_idx_offset,
+#endif
+                ind,
+                in_l1_read_base_addr);
         }
     }
 }  // kernel_main()

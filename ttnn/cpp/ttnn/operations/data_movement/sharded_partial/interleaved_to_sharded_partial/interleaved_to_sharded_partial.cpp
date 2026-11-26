@@ -5,8 +5,8 @@
 #include "ttnn/operation.hpp"
 #include "device/interleaved_to_sharded_partial_op.hpp"
 #include "interleaved_to_sharded_partial.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 using namespace tt::tt_metal;
 
@@ -21,6 +21,21 @@ Tensor interleaved_to_sharded_partial(
     tt::tt_metal::TensorMemoryLayout shard_scheme,
     tt::tt_metal::ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg) {
+    TT_FATAL(num_slices > 0, "num_slices must be greater than 0, got {}", num_slices);
+    TT_FATAL(num_slices <= UINT32_MAX, "num_slices must be at most UINT32_MAX, got {}", num_slices);
+    TT_FATAL(
+        input_tensor.padded_shape()[-1] > 0,
+        "Input tensor width must be greater than 0, got shape {}",
+        input_tensor.padded_shape());
+    TT_FATAL(
+        shard_shape[0] > 0 && shard_shape[1] > 0,
+        "shard_shape must be greater than 0 in both dims, got [{}, {}]",
+        shard_shape[0],
+        shard_shape[1]);
+    TT_FATAL(
+        shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED || shard_scheme == TensorMemoryLayout::WIDTH_SHARDED ||
+            shard_scheme == TensorMemoryLayout::BLOCK_SHARDED,
+        "Unsupported sharding scheme");
     bool row_wise = shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;
@@ -42,7 +57,7 @@ Tensor interleaved_to_sharded_partial(
                     case TensorMemoryLayout::BLOCK_SHARDED:
                         num_cores = tt::div_up(total_height, shard_shape[0]) * tt::div_up(total_width, shard_shape[1]);
                         break;
-                    default: TT_ASSERT(false, "Unsupported sharding scheme");
+                    default: TT_FATAL(false, "Unsupported sharding scheme");
                 }
                 grid_set = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
             } else if constexpr (std::is_same_v<GridType, CoreRangeSet>) {

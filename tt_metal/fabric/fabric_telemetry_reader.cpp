@@ -11,14 +11,14 @@
 #include "tt_metal/fabric/fabric_telemetry_converter.hpp"
 
 #include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/impl/context/metal_env_impl.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_stl/assert.hpp"
-#include "umd/device/types/core_coordinates.hpp"
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric {
 

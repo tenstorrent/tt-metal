@@ -72,8 +72,22 @@ def manual_seed(seed: int) -> None:
     _rng = np.random.default_rng(seed)
 
 
-def _get_device():
-    return ttml.autograd.AutoContext.get_instance().get_device()
+def get_rng_state() -> dict:
+    """The state of ttml.init's RNG, as its numpy bit generator's ``state`` dict (a PCG64's after ``manual_seed``), for
+    ``set_rng_state`` to put back, e.g. after restoring a checkpoint."""
+    return _rng.bit_generator.state
+
+
+def set_rng_state(state: dict) -> None:
+    """Continue ttml.init's RNG from ``state``, a dict ``get_rng_state`` returned. Like ``manual_seed`` this makes a new
+    generator; a state its bit generator refuses raises and leaves the current generator in place."""
+    global _rng
+    kind = getattr(np.random, str(state.get("bit_generator")), None)
+    if not (isinstance(kind, type) and issubclass(kind, np.random.BitGenerator)):
+        raise ValueError(f"not a numpy bit generator's state: bit_generator={state.get('bit_generator')!r}")
+    bit_generator = kind()
+    bit_generator.state = state
+    _rng = np.random.Generator(bit_generator)
 
 
 def _calculate_fan_in_and_fan_out(shape) -> tuple[int, int]:
@@ -204,18 +218,8 @@ def normal(mean: float = 0.0, std: float = 1.0):
 
 
 def _constant_materialize(shape, val, mapper=None):
-    if mapper is not None:
-        data = np.full(shape, val, dtype=np.float32)
-        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-    device = _get_device()
-    t = ttnn.full(
-        shape,
-        fill_value=val,
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.Layout.TILE,
-    )
-    return ttml.autograd.create_tensor(t)
+    data = np.full(shape, val, dtype=np.float32)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
 def constant(val: float):
@@ -231,17 +235,8 @@ def constant(val: float):
 
 
 def _zeros_materialize(shape, mapper=None):
-    if mapper is not None:
-        data = np.zeros(shape, dtype=np.float32)
-        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-    device = _get_device()
-    t = ttnn.zeros(
-        shape,
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.Layout.TILE,
-    )
-    return ttml.autograd.create_tensor(t)
+    data = np.zeros(shape, dtype=np.float32)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
 def zeros():
@@ -257,17 +252,8 @@ def zeros():
 
 
 def _ones_materialize(shape, mapper=None):
-    if mapper is not None:
-        data = np.ones(shape, dtype=np.float32)
-        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-    device = _get_device()
-    t = ttnn.ones(
-        shape,
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.Layout.TILE,
-    )
-    return ttml.autograd.create_tensor(t)
+    data = np.ones(shape, dtype=np.float32)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
 def ones():
@@ -498,6 +484,7 @@ __all__ = [
     "calculate_gain",
     "constant",
     "constant_",
+    "get_rng_state",
     "kaiming_normal",
     "kaiming_normal_",
     "kaiming_uniform",
@@ -507,6 +494,7 @@ __all__ = [
     "normal_",
     "ones",
     "ones_",
+    "set_rng_state",
     "uniform",
     "uniform_",
     "xavier_normal",

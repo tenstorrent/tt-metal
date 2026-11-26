@@ -1,0 +1,12 @@
+# Transpose of express_links_32x4_mesh_graph_descriptor.textproto. The 32-entry
+# express axis is dimension 1, so its chords run E/W rather than N/S.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [4, 32] dim_types: [RING, RING] }
+  host_topology   { dims: [1, 4] }
+  channels { count: 2 policy: RELAXED }
+  express_links { dim_idx: 1 pattern { start: 2 step: 4 } }
+  express_links { dim_idx: 1 pattern { start: 0 step: 8 } }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

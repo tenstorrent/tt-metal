@@ -286,9 +286,15 @@ inline __attribute__((always_inline)) void noc_increment_nonposted_writes_issued
     noc_nonposted_writes_num_issued[noc] += delta;
 }
 
-inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_at_count(uint32_t noc, uint32_t expected_count) {
+// Returns a checkpoint of the nonposted writes issued so far, for a later noc_nonposted_writes_sent_since.
+inline __attribute__((always_inline)) uint32_t noc_nonposted_writes_checkpoint(uint32_t noc) {
+    return noc_nonposted_writes_num_issued[noc];
+}
+
+// Returns true once every nonposted write issued before the checkpoint has been sent (wrap-around safe).
+inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint32_t noc, uint32_t checkpoint) {
     uint32_t sent = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
-    return (int32_t)(sent - expected_count) >= 0;
+    return (int32_t)(sent - checkpoint) >= 0;
 }
 
 inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr_coordinate(
@@ -561,6 +567,8 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(
 inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic_ret_val) {
     // Added for compatability with V2, no local cmd buffers in V1
 }
+
+inline __attribute__((always_inline)) void overlay_cmd_buff_restore_launch_state(uint32_t atomic_ret_val) {}
 
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #pragma GCC unroll 0

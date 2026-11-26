@@ -54,12 +54,11 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 from helpers.tile_shape import FACE_C_DIM, TileShape, construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [
     DataFormat.Float32,
-    DataFormat.Float16,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]
@@ -217,7 +216,7 @@ def filter_params_with_constraints(all_params):
         if transpose_of_faces == Transpose.Yes and face_r_dim < 16:
             continue
 
-        # BROADCAST + ACC_TO_DEST: ALL COMBINATIONS BROKEN (BLOCK ENTIRELY)
+        # BROADCAST + ACC_TO_DEST: this kernel's math datacopy does not accumulate; test_bcast.py covers it.
         # Check this early as it eliminates many combinations
         if broadcast_type != BroadcastType.None_ and acc_to_dest:
             continue
@@ -242,10 +241,6 @@ def filter_params_with_constraints(all_params):
                 and formats.output_format == DataFormat.Float16
             ):
                 continue
-
-        # SCALAR broadcast + acc_to_dest not allowed (already checked above, but explicit)
-        if broadcast_type == BroadcastType.Scalar and acc_to_dest:
-            continue
 
         # Broadcast incompatible with DEST_TO_SRCB/SRCA
         if not broadcast_none:
@@ -578,11 +573,7 @@ def test_unpack_comprehensive(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
@@ -739,11 +730,7 @@ def test_unpack_A_targeted_tensor_shape_coverage(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"

@@ -10,7 +10,6 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "lltt.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -29,8 +28,6 @@ constexpr std::uint32_t GCD_SETCC_MOD_EQ0 = 0x6;
 // imm12 bit 0 = 0: int32 compare (assembly.yaml). An fp32 compare would see operands above
 // 0x7F800000 as NaN.
 constexpr std::uint32_t GCD_SWAP_IMM12_INT32 = 0x0;
-constexpr std::uint32_t GCD_ENCC_IMM12_ENABLE = 0x1;
-constexpr std::uint32_t GCD_ENCC_MOD_SET_EN = 0x2;
 constexpr std::uint32_t GCD_ENCC_MOD_RESET_RESULT = 0x0;
 
 // LREG1 carries b and ends as the result; LREG0 and LREG2 ping-pong between -a and the working a.
@@ -95,11 +92,11 @@ inline void _emit_gcd_step_() {
 }
 
 inline void _record_gcd_replay_() {
-    lltt::record(GCD_REPLAY_START, GCD_REPLAY_LEN);
+    TTI_REPLAY(GCD_REPLAY_START, GCD_REPLAY_LEN, 0, 0, 0, 1);
     _emit_gcd_step_<GCD_LREG_A, GCD_LREG_TMP>();
     _emit_gcd_step_<GCD_LREG_TMP, GCD_LREG_A>();
 
-    lltt::record(GCD_PROLOGUE_START, GCD_PROLOGUE_LEN);
+    TTI_REPLAY(GCD_PROLOGUE_START, GCD_PROLOGUE_LEN, 0, 0, 0, 1);
     _emit_gcd_prologue_();
 }
 
@@ -116,7 +113,7 @@ inline void _calculate_gcd_sfp_rows_() {
         TTI_SFPCAST(GCD_LREG_B, GCD_LREG_B, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
     }
 
-    lltt::replay(GCD_PROLOGUE_START, GCD_PROLOGUE_LEN);
+    TTI_REPLAY(GCD_PROLOGUE_START, GCD_PROLOGUE_LEN, 0, 0, 0, 0);
 
     constexpr std::uint32_t STEIN_ITERATIONS = GCD_MAX_INPUT_BITS - 1;
     // The tail stops one instruction short: the final SFPIADD only updates a, which is discarded.
@@ -127,9 +124,9 @@ inline void _calculate_gcd_sfp_rows_() {
     static_assert(TAIL_LEN <= GCD_REPLAY_LEN, "tail must fit the recorded pair");
 
     for (std::uint32_t i = 0; i < FULL_PAIRS; i++) {
-        lltt::replay(GCD_REPLAY_START, GCD_REPLAY_LEN);
+        TTI_REPLAY(GCD_REPLAY_START, GCD_REPLAY_LEN, 0, 0, 0, 0);
     }
-    lltt::replay(GCD_REPLAY_START, TAIL_LEN);
+    TTI_REPLAY(GCD_REPLAY_START, TAIL_LEN, 0, 0, 0, 0);
 
     TTI_SFPENCC(0 /* imm12 */, GCD_ENCC_MOD_RESET_RESULT);  // re-enable retired lanes
 }
@@ -158,8 +155,6 @@ inline void calculate_gcd(
     const std::uint32_t in0_offset = dst_index_in0 * tile_stride;
     const std::uint32_t in1_offset = dst_index_in1 * tile_stride;
     const std::uint32_t out_offset = dst_index_out * tile_stride;
-
-    TTI_SFPENCC(GCD_ENCC_IMM12_ENABLE, GCD_ENCC_MOD_SET_EN);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

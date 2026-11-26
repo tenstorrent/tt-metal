@@ -45,6 +45,14 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.output_memory_config.is_sharded() == false, "Sharded implementation not supported yet");
     TT_FATAL(input_tensor.layout() == Layout::TILE, "The input must be in tiled format");
+    // The compute kernel unpacks every input as bfloat16; any other dtype hangs the device.
+    TT_FATAL(
+        input_tensor.dtype() == DataType::BFLOAT16 && expert_mask_tensor.dtype() == DataType::BFLOAT16 &&
+            topk_mask_tensor.dtype() == DataType::BFLOAT16,
+        "input, expert_mask and topk_mask must be BFLOAT16, got {}, {} and {}",
+        input_tensor.dtype(),
+        expert_mask_tensor.dtype(),
+        topk_mask_tensor.dtype());
 
     auto is_row_broadcastable_mask = [](const auto& shape, uint32_t expected_last_dim) {
         if (shape.rank() == 0 || shape[-1] != expected_last_dim) {

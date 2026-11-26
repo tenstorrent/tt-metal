@@ -5,8 +5,8 @@
 #include "create_qkv_heads_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "create_qkv_heads_program_factory.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -16,7 +16,7 @@ void CreateQKVHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||

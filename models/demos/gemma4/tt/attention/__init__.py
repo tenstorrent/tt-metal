@@ -176,6 +176,7 @@ class Gemma4Attention:
                 max_batch_size=max_batch_size,
                 max_seq_len=max_seq_len,
                 tensor_cache_path=tensor_cache_path,
+                mesh_config=mesh_config,
             )
         else:
             self.kv_cache = None
@@ -184,6 +185,12 @@ class Gemma4Attention:
         # Allocated lazily by the spec-decode driver (see tt/spec_decode.py);
         # None means packed_decode_forward falls back to the per-position loop.
         self.kv_staging = None
+
+        # The split-independent decode SDPA's persistent fp32 scratch (GEMMA4_SDPA_DECODE_SPLITFREE,
+        # custom_ops/sdpa_decode_splitfree): ONE per model, attached with the KV caches before any trace capture
+        # (Gemma4Model.attach_sdpa_splitfree_scratch: the model's own paged caches, or the vLLM generator's once
+        # the plugin has allocated them); None keeps the stock op.
+        self.sdpa_scratch = None
 
         # Trace-safe cross-chunk sliding-tail pool. The stash's runtime-allocated
         # clones can land on a live prefill trace's baked scratch, and an
@@ -272,9 +279,13 @@ class Gemma4Attention:
         valid_seq_len=None,
         sequential_kv_write=False,
         rope_presliced=False,
+        rope_prepared=None,
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        mm_attn_mask=None,
+        traced_short_bucket=False,
+        continuation=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -331,6 +342,7 @@ class Gemma4Attention:
         if is_decode:
             return decode_forward(
                 hidden_states=hidden_states,
+                sdpa_scratch=self.sdpa_scratch,
                 cos_cache=cos_cache,
                 sin_cache=sin_cache,
                 weights=self.weights,
@@ -346,6 +358,7 @@ class Gemma4Attention:
                 position_idx_cache=position_idx_cache,
                 sequential_kv_write=sequential_kv_write,
                 rope_presliced=rope_presliced,
+                rope_prepared=rope_prepared,
             )
         else:
             # Sliding-window layers under generator-level chunked prefill carry a
@@ -396,6 +409,9 @@ class Gemma4Attention:
                 chunk_page_table=chunk_page_table,
                 sliding_tail_in=self._get_sliding_tail(_req_key),
                 sliding_tail_end=tail_ends.get(_req_key),
+                mm_attn_mask=mm_attn_mask,
+                traced_short_bucket=traced_short_bucket,
+                continuation=continuation,
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
             # new one for the next chunk under this request's key.

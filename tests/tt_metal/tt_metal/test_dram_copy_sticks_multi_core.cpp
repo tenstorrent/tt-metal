@@ -8,9 +8,9 @@
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdlib>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -21,13 +21,13 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -49,7 +49,7 @@ TEST_F(UnitMeshFixture, DramCopySticksMultiCore) {
     bool pass = true;
 
     try {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(this->device());
         auto num_cores_c = 2;
         auto num_cores_r = 2;
         CoreCoord start_core = {0, 0};

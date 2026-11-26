@@ -5,8 +5,8 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -16,19 +16,19 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 
 namespace tt::tt_metal {
@@ -77,7 +77,7 @@ bool vecadd_multi_core(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     // designate 4 cores for utilization - cores (0,0), (0,1), (0,2), (0,3)
     CoreCoord start_core = {0, 0};

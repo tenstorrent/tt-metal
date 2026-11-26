@@ -30,8 +30,14 @@ Tensor from_flatbuffer(
 // be written at. Replicated buffers are deduplicated, so that the number of copies that need to be written out
 // from `buffers` is minimized.
 //
+// The shards are checked against the tensor topology first (verify_shards_match_topology); a caller that has run that
+// check on `tensor` already passes `verify_shards = false`.
+//
 // Only inline file storage (data stored in the same file) is currently supported.
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
-    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<SerializedTensorBuffer>& buffers);
+    const Tensor& tensor,
+    flatbuffers::FlatBufferBuilder& builder,
+    std::vector<SerializedTensorBuffer>& buffers,
+    bool verify_shards = true);
 
 }  // namespace ttnn

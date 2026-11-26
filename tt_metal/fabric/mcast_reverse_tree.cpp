@@ -15,6 +15,7 @@
 
 #include "hostdevcommon/fabric_common.h"
 #include "routing_2d_table_builder.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 
 namespace tt::tt_fabric {
 
@@ -197,34 +198,26 @@ std::optional<std::vector<std::uint16_t>> pack_mcast_reverse_tree(const McastRev
                 parent_edge_position));
         }
 
-        std::uint8_t output_code = 0;
-        if (tree.axis_dim == 0) {
-            switch (edge.parent_output) {
-                case RoutingDirection::N: output_code = Routing2DCodec::Y2_NORTH; break;
-                case RoutingDirection::S: output_code = Routing2DCodec::Y2_SOUTH; break;
-                case RoutingDirection::Z: output_code = Routing2DCodec::Y2_Z; break;
-                default:
-                    return fail(fmt::format(
-                        "edge into row {} leaves its parent {}, which the Y axis cannot encode",
-                        edge.child,
-                        dir_name(edge.parent_output)));
-            }
-        } else {
-            switch (edge.parent_output) {
-                case RoutingDirection::E: output_code = Routing2DCodec::X2_EAST; break;
-                case RoutingDirection::W: output_code = Routing2DCodec::X2_WEST; break;
-                default:
-                    return fail(fmt::format(
-                        "edge into row {} leaves its parent {}, which the X axis cannot encode -- X carries no express "
-                        "dimension",
-                        edge.child,
-                        dir_name(edge.parent_output)));
-            }
+        const Fabric2DAxis axis = tree.axis_dim == 0 ? Fabric2DAxis::Y : Fabric2DAxis::X;
+        std::uint8_t output_code = Routing2DCodec::INVALID_CODE;
+        switch (edge.parent_output) {
+            case RoutingDirection::N: output_code = Routing2DCodec::encode(axis, eth_chan_directions::NORTH); break;
+            case RoutingDirection::S: output_code = Routing2DCodec::encode(axis, eth_chan_directions::SOUTH); break;
+            case RoutingDirection::E: output_code = Routing2DCodec::encode(axis, eth_chan_directions::EAST); break;
+            case RoutingDirection::W: output_code = Routing2DCodec::encode(axis, eth_chan_directions::WEST); break;
+            case RoutingDirection::Z: output_code = Routing2DCodec::encode(axis, eth_chan_directions::Z); break;
+            default: break;
+        }
+        if (output_code == Routing2DCodec::INVALID_CODE) {
+            return fail(fmt::format(
+                "edge into row {} leaves its parent {}, which the {} axis cannot encode",
+                edge.child,
+                dir_name(edge.parent_output),
+                axis == Fabric2DAxis::Y ? "Y" : "X"));
         }
 
-        packed.push_back(static_cast<std::uint16_t>(
-            (static_cast<std::uint16_t>(edge.child) & 0x3F) | ((static_cast<std::uint16_t>(edge.parent) & 0x3F) << 6) |
-            (static_cast<std::uint16_t>(output_code) << 12)));
+        packed.push_back(Routing2DCodec::mcast_edge_pack(
+            static_cast<std::uint32_t>(edge.child), static_cast<std::uint32_t>(edge.parent), output_code));
     }
 
     return packed;
@@ -392,6 +385,42 @@ bool embed_mcast_reverse_trees(
                Routing2DCodec::mcast_tree_x_offset(y_size),
                "X",
                failure);
+}
+
+route_table_2d_t line_route_table_2d(const MeshGraph& mesh_graph, MeshId mesh_id, int my_y, int my_x) {
+    const auto shape = mesh_graph.get_mesh_shape(mesh_id);
+    const auto step = [&](int axis) {
+        return [&, axis](std::uint32_t cur, std::uint32_t dst) {
+            const int next = static_cast<int>(cur) + (dst > cur ? 1 : -1);
+            const auto direction = axis_edge_direction(mesh_graph, mesh_id, axis, 0, static_cast<int>(cur), next);
+            TT_FATAL(direction.has_value(), "Mesh M{} dim {} is missing the edge {}-{}", *mesh_id, axis, cur, next);
+            return builder::routing_direction_to_eth_direction(*direction);
+        };
+    };
+    route_table_2d_t table{};
+    TT_FATAL(
+        pack_2d_route_vectors(table.action_vectors, sizeof(table.action_vectors), shape[0], shape[1], step(0), step(1)),
+        "Mesh M{} shape {}x{} cannot use the 2D route table",
+        *mesh_id,
+        shape[0],
+        shape[1]);
+    std::string failure;
+    TT_FATAL(
+        embed_mcast_reverse_trees(
+            mesh_graph,
+            mesh_id,
+            derive_line_axis_topology(mesh_graph, mesh_id, 0),
+            derive_line_axis_topology(mesh_graph, mesh_id, 1),
+            my_y,
+            my_x,
+            table.mcast_trees,
+            &failure),
+        "Mesh M{} chip ({}, {}): {}",
+        *mesh_id,
+        my_y,
+        my_x,
+        failure);
+    return table;
 }
 
 }  // namespace tt::tt_fabric

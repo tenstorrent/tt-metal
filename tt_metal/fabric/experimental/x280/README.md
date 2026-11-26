@@ -23,9 +23,9 @@ work beside its Metal workloads:
 #include "x280/device/x280_runtime.hpp"
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <umd/device/warm_reset.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-umd/warm_reset.hpp>
 
 using tt::tt_metal::distributed::MeshDevice;
 

@@ -4,7 +4,7 @@
 
 #include "hc_sum_reduce_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -20,8 +20,7 @@ void HCSumReduceDeviceOperation::validate_on_program_cache_miss(
     // TODO: Uplift to support mixed precision
     TT_FATAL(
         input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to ssm_1d_sum_reduce need to be on device!");
-    TT_FATAL(
-        input_tensor_a.buffer() != nullptr, "Operands to ssm_1d_sum_reduce need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to ssm_1d_sum_reduce need to be allocated in buffers on device!");
 
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,

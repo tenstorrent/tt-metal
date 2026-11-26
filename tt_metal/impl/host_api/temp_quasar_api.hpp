@@ -8,9 +8,9 @@
 #include <set>
 #include <string>
 #include <variant>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 
 /**
  * The APIs in this file are for initial support of Quasar, our next-generation architecture.
@@ -80,6 +80,10 @@ struct QuasarComputeConfig {
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
+    // Opt-in: compile this kernel's TRISC0 binaries with the RISC-V Vector extension
+    // enabled; on Quasar the vector unit is wired to TRISC0 only.
+    // Needed by kernels that push data through the vector unit.
+    bool enable_trisc0_rvv = false;
 
     std::vector<uint32_t> compile_args;
 

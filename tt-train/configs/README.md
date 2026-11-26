@@ -19,19 +19,21 @@ Training hyperparameters and optimization settings.
 |-----------|------|---------|-------------|
 | `project_name` | str | "tt_train_nano_gpt" | Project name for tracking |
 | `seed` | int | 5489 | Random seed for reproducibility |
-| `model_save_interval` | int | 500 | Save model every N steps |
-| `batch_size` | int | 4 | Batch size for training |
+| `model_save_interval` | int | 0 | Save model every N steps; 0 disables periodic saves. The C++ `nano_gpt` runner still saves once at the end of training when `model_path` is set and MPI is off |
+| `batch_size` | int | 64 | Batch size for training |
 | `num_epochs` | int | 0 | Epoch cap; 0 = uncapped. One epoch is one pass over the corpus tokens: `ceil(num_epochs * corpus_tokens / (batch_size * gradient_accumulation_steps * seq_len))` optimizer steps. A run stops at whichever of `num_epochs`/`max_steps` comes first |
 | `max_steps` | int | 5000 | Step cap; 0 = uncapped. At least one of `max_steps`/`num_epochs` must be set |
 | `gradient_accumulation_steps` | int | 1 | Number of steps to accumulate gradients |
 | `model_config` | str | "" | Path to model configuration file |
 | `data_path` | str | "DATA_FOLDER/shakespeare.txt" | Path to training data |
 | `scheduler_type` | str | "identity" | Learning rate scheduler ("identity", "warmup_linear") |
-| `tokenizer_type` | str | "char" | Tokenizer type ("char" or "bpe") |
+| `tokenizer_type` | str | — | Does not select the tokenizer in `train.py` or the C++ `nano_gpt` runner, which pick it from `data_path`: plain text uses the character tokenizer, YAML is pre-tokenized. `train.py` still validates it through `ttml.common.config.TrainingConfig`, so it must be "char" or "bpe" (default "bpe"); any other value raises `ValueError`. The C++ `nano_gpt/3tier` example reads it (default "char") |
 
 An epoch is one pass over the corpus's *tokens* — `corpus_tokens / (global_batch * seq_len)` steps.
 
 Most configs run under both `examples/train/train.py` and the C++ `examples/nano_gpt` runner.
+The `seed`, `batch_size` and `max_steps` defaults apply to `train.py` only; the C++ `nano_gpt` runner
+requires all three in the YAML.
 
 ### LR Schedule Parameters
 Apply to `scheduler_type: warmup_linear`, and to `train.py` only — the C++ `nano_gpt` runner hardcodes
@@ -54,6 +56,14 @@ Optimizer is configured inline under `training_config.optimizer`. See [Optimizer
 | `use_clip_grad_norm` | bool | false | Enable gradient norm clipping |
 | `clip_grad_norm_max_norm` | float | 1.0 | Maximum gradient norm for clipping |
 
+### Precision Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `precision.master_dtype` | str | unset | Dtype trainable parameters (the master weights) are stored in: `"bfloat16"` or `"float32"`. `"float32"` gives fp32 master weights with fused `AdamW`; forward and backward still run in bf16. Not PyTorch FSDP2's `param_dtype`, which is the compute dtype. See [fp32 master weights](../docs/MIXED_PRECISION.md#fp32-master-weights). Unset keeps the model's dtype (bf16) |
+| `precision.reduce_dtype` | str | unset | Dtype gradients are summed in: `"float32"` sums them in fp32 across devices (the DDP sync writes a bf16 gradient's mean in bf16, FSDP keeps its mean shard in fp32) and over micro-batches, where a module parameter's gradient becomes fp32; `"bfloat16"` and unset keep the bf16 sums. See [Gradient reduction in fp32](../docs/MIXED_PRECISION.md#gradient-reduction-in-fp32) and [fp32 gradient accumulation](../docs/MIXED_PRECISION.md#fp32-gradient-accumulation) |
+
+Any other key under `precision`, or a `precision` that isn't a map, stops the run with an error. GRPO, and `SFTTrainer` given an optimizer dict, don't apply `precision` yet (a later PR covers them): they keep the model's dtype and the bf16 sums. In 2- and 3-tier training, the aggregators sum the workers' gradients in bf16 whatever `reduce_dtype` says.
+
 ### Example
 ```yaml
 training_config:
@@ -74,7 +84,7 @@ training_config:
     stochastic_rounding: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "configs/model_configs/tinyllama.yaml"
+  model_config: "configs/model_configs/tinyllama_bpe.yaml"
   data_path: "data/my_dataset.txt"
   scheduler_type: "warmup_linear"
   tokenizer_type: "bpe"
@@ -95,6 +105,7 @@ Device mesh and distributed training configuration.
 |-----------|------|---------|-------------|
 | `enable_ddp` | bool | false | Enable Distributed Data Parallelism |
 | `enable_tp` | bool | false | Enable Tensor Parallelism |
+| `enable_cp` | bool | false | Enable Context Parallelism (C++ `nano_gpt` runner only) |
 
 ### Constraints
 - DDP and TP can be combined on a 2D mesh (e.g. `mesh_shape: [4, 8]` with `enable_ddp: true` and `enable_tp: true`)
@@ -190,9 +201,9 @@ Optional configuration for pipeline parallelism:
 | `blocks_per_rank` | dict | Mapping of rank ID to number of blocks |
 
 ### Training Mode Effects
-- **Three-tier training**: When `enabled=true` and no pipeline_parallel_config
 - **Pipeline parallel**: When `enabled=true` and pipeline_parallel_config is provided
 - **Standard training**: When `enabled=false`
+- **Not supported**: `enabled=true` without pipeline_parallel_config stops `nano_gpt` with an error
 
 ### Constraints
 - Gradient clipping is not supported with multihost training
@@ -224,7 +235,7 @@ The main executable accepts these command line arguments:
 | `--multihost` | | Multihost config file path | "" (optional) |
 | `--name` | `-n` | Run name | "" |
 | `--add_time_to_name` | `-t` | Add timestamp to run name | true |
-| `--save_and_exit` | `-s` | Save model and exit (msgpack path) | "" |
+| `--save_and_exit` | `-s` | Save model and exit (directory path; must not already exist) | "" |
 | `--safetensors` | | Load model from safetensors path | "" |
 
 ## File Organization
@@ -245,8 +256,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 
 | Type | Description |
 |------|-------------|
-| `AdamW` | Fused AdamW — bf16 state, single custom kernel per step (default, recommended). Supports stochastic rounding. |
-| `AdamWFullPrecision` | AdamW with fp32 master weights and optimizer state; casts back to bf16 for the forward pass. Use when bf16 accumulation causes training instability. |
+| `AdamW` | Fused AdamW, a single custom kernel per step (default, recommended). Its state takes the parameters' dtype: bf16, or fp32 with `precision.master_dtype: float32` for fp32 master weights (use when bf16 accumulation causes training instability). Supports stochastic rounding for bf16 parameters. |
 | `MorehAdamW` | AdamW via `ttnn::moreh_adamw` — uses the Moreh team's kernel implementation. |
 | `AdamWComposite` | AdamW built from individual TTNN ops (no custom kernel). Supports Kahan summation. |
 | `SGD` | Fused SGD — bf16 state, single custom kernel per step (default, recommended). |
@@ -258,14 +268,14 @@ The optimizer is configured inline under `training_config.optimizer`.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `type` | str | — | Optimizer type (e.g. `"AdamW"`, `"MorehAdamW"`) |
-| `lr` | float | 3e-4 | Learning rate |
+| `lr` | float | 1e-3 | Learning rate |
 | `beta1` | float | 0.9 | Exponential decay rate for first moment |
 | `beta2` | float | 0.999 | Exponential decay rate for second moment |
 | `epsilon` | float | 1e-8 | Numerical stability constant |
 | `weight_decay` | float | 1e-2 | Weight decay coefficient |
 | `amsgrad` | bool | false | Use AMSGrad variant |
 | `stochastic_rounding` | bool | false | Enable stochastic rounding (AdamW only) |
-| `weight_decay_skip_1d` | bool | false | Skip weight decay on 1-D params (RMSNorm gains, biases). AdamW only; other types reject it. Under Muon, set it inside the nested `adamw:` section |
+| `param_groups` | list[dict] | [] | Parameter groups, see [Param groups](#param-groups) |
 | `kahan_summation` | bool | false | Enable Kahan summation (AdamWComposite only) |
 
 ### SGD Parameters
@@ -278,6 +288,53 @@ The optimizer is configured inline under `training_config.optimizer`.
 | `dampening` | float | 0.0 | Dampening for momentum |
 | `weight_decay` | float | 0.0 | Weight decay coefficient |
 | `nesterov` | bool | false | Enable Nesterov momentum |
+| `param_groups` | list[dict] | [] | Parameter groups, see [Param groups](#param-groups) |
+
+### Param groups
+
+Every optimizer takes `param_groups`: a list where each entry has `modules` plus the per-group
+options it overrides. A param joins the first group where any `/`-separated segment of its name is listed in
+`modules`, so module names like `tok_emb` and leaf names like `gamma`/`bias` both work. Params in no group use the
+top-level values. They form group 0, which always exists (empty if every param is grouped), so the listed groups are
+groups 1, 2, ... in order. LR schedulers drive every group from its own base LR.
+
+| Optimizer | Per-group options | Optimizer-wide only |
+|-----------|-------------------|---------------------|
+| `AdamW` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | `amsgrad`, `stochastic_rounding` |
+| `MorehAdamW` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | - |
+| `AdamWComposite` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | `amsgrad`, `kahan_summation` |
+| `SGD`, `SGDComposite` | `lr`, `momentum`, `dampening`, `weight_decay` | `nesterov` |
+| `MuonComposite` | `lr`, `momentum` | `ns_steps` |
+
+For `MuonWithAdamW`, set `param_groups` inside the nested `muon:` and `adamw:` sections.
+
+```yaml
+optimizer:
+  type: AdamW
+  lr: 0.0003
+  weight_decay: 0.1
+  param_groups:
+    - modules: [gamma, beta, bias]   # no weight decay on norm gains/betas and biases
+      weight_decay: 0.0
+```
+
+Matching is by name: list every name your model uses. RMSNorm models (Llama) have `gamma` only;
+LayerNorm models (GPT-2) also have `beta`. The Python `NanoGPT` model names its final norm `ln_f_gamma` /
+`ln_f_beta` (no `/` inside), so list those too. Hugging Face-style models (Qwen3) name norm gains `weight`, which
+every weight matrix also uses, so select their norms by module name instead (`input_layernorm`,
+`post_attention_layernorm`, `q_norm`, `k_norm`, ...). DeepSeek's `sparse_ep` MoE stores its routed experts as leaf
+tensors of the `ffn` module (`w_gate_0`, `w_up_0`, `w_down_0`, ... one per expert) rather than under an `experts`
+module, so list those leaf names to group them. A YAML group whose `modules` match no parameter is an error,
+unless the optimizer config sets `allow_empty_param_groups: true` — which `nano_gpt` and the Python
+`ttml.common.utils.create_optimizer` do automatically under pipeline parallelism, where each stage only holds its own
+params (e.g. `tok_emb` only on the first stage).
+
+Example configs in `training_configs/`:
+
+| Config | Shows |
+|--------|-------|
+| `training_shakespeare_nanogpt_char_param_groups.yaml` | AdamW (`nano_gpt`): no decay on norms/biases, separate LRs for the embeddings and the LM head, `beta2` for attention |
+| `training_shakespeare_nanollama3_char_muon_param_groups.yaml` | `MuonWithAdamW` (Python `train.py`): groups in both the `muon:` and `adamw:` sections |
 
 ### Example
 
@@ -333,7 +390,7 @@ training_config:
     stochastic_rounding: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "configs/model_configs/tinyllama.yaml"
+  model_config: "configs/model_configs/tinyllama_char.yaml"
   data_path: "data/shakespeare.txt"
   scheduler_type: "warmup_linear"
   tokenizer_type: "char"

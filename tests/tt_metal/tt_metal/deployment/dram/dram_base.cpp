@@ -23,7 +23,7 @@
 #include <dirent.h>
 #include <cstdlib>
 #include <string>
-#include <umd/device/types/telemetry.hpp>
+#include <tt-umd/types/telemetry.hpp>
 
 static bool get_dram_inject_tensix_heartbeat_stall_from_env_once() {
     const char* env = std::getenv("DRAM_TEST_INJECT_TENSIX_HEARTBEAT_STALL");
@@ -201,7 +201,12 @@ std::vector<DramBankWorkerAssignment> get_optimal_dram_bank_worker_assignments(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, tt_metal::NOC noc) {
     const uint32_t num_dram_channels = mesh_device->num_dram_channels();
 
-    std::vector<CoreCoord> optimal_workers = mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const auto bank_to_core = mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(
+        noc, distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims()));
+    std::vector<CoreCoord> optimal_workers(bank_to_core.size());
+    for (const auto& [bank, core] : bank_to_core) {
+        optimal_workers.at(bank) = core;
+    }
 
     TT_FATAL(
         optimal_workers.size() == num_dram_channels,
@@ -334,7 +339,7 @@ DramRunSummary run_dram_base_test(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,
@@ -466,7 +471,7 @@ DramRunSummary run_dram_multi_core_single_controller_test(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,
@@ -591,7 +596,7 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,
@@ -753,7 +758,7 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,
@@ -879,7 +884,7 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,
@@ -1043,7 +1048,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto brisc_kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,

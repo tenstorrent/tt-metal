@@ -4,7 +4,7 @@
 
 #include "conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <optional>
@@ -12,10 +12,10 @@
 #include <unordered_map>
 #include <vector>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/math.hpp>
-#include "tt-metalium/constants.hpp"
-#include "tt-metalium/hal.hpp"
-#include "tt-metalium/tt_backend_api_types.hpp"
+#include <tt-metalium/utils/math.hpp>
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include "tt-metalium/discovery/hal.hpp"
+#include "tt-metalium/data_formats/data_format.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 

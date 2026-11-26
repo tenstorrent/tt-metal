@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+
 #include "untilize_with_unpadding.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -77,8 +79,8 @@ Tensor untilize_with_unpadding(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
-                            input_tensor.dtype() == DataType::FLOAT32;
+    // UInt8 needs 32-bit Dest on WH/BH.
+    bool fp32_dest_acc_en = operations::data_movement::requires_32bit_dest(input_tensor.dtype());
 
     ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
@@ -88,6 +90,34 @@ Tensor untilize_with_unpadding(
     }
 
     if (input_shape.rank() > 4) {
+        // Ranks > 4 are run as 4D with dims 0..rank-4 collapsed into one. A crop of those dims maps to a
+        // prefix of the collapsed dim only if every collapsed dim outside the innermost cropped one ends
+        // at 0; anything else would silently select the wrong slabs. An empty input or output selects no
+        // slabs at all and goes through the empty path below, so it is not checked here.
+        // The check assumes every end is within the input: a dim whose end + 1 exceeds the input extent is not seen
+        // as cropped here, and squeeze_vector_shape then folds it into a larger prefix. Checking the ends against
+        // the input is separate work (#64045).
+        const bool empty =
+            input_tensor.logical_volume() == 0 ||
+            std::any_of(output_end_vector.begin(), output_end_vector.end(), [](uint32_t end) { return end + 1 == 0; });
+        const int extra_rank = static_cast<int>(input_shape.rank()) - 4;
+        int innermost_cropped = -1;
+        for (int i = 0; i <= extra_rank; ++i) {
+            if (output_end_vector[i] + 1 < input_shape[i]) {
+                innermost_cropped = i;
+            }
+        }
+        for (int i = 0; !empty && i < innermost_cropped; ++i) {
+            TT_FATAL(
+                output_end_vector[i] == 0,
+                "untilize_with_unpadding: for rank {} input, cropping leading dim {} requires every outer leading "
+                "dim to end at 0, but output_tensor_end[{}] = {} (input shape {})",
+                input_shape.rank(),
+                innermost_cropped,
+                i,
+                output_end_vector[i],
+                input_shape);
+        }
         output_end = squeeze_vector_shape(ttnn::Shape(std::move(output_end_vector)));
     } else {
         output_end = ttnn::Shape(std::move(output_end_vector));

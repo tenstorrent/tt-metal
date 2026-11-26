@@ -16,6 +16,7 @@ Owner:
 
 
 import os
+import re
 from dataclasses import dataclass
 from triage import ScriptConfig, log_check_risc, run_script, triage_field
 from callstack_provider import (
@@ -27,10 +28,11 @@ from callstack_provider import (
 )
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from run_checks import run as get_run_checks
+from rich.markup import escape
 from ttexalens.hardware.risc_debug import RiscDebug
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
-from ttexalens.elf import CallstackEntryVariable
+from ttexalens.elf import CallstackEntry, CallstackEntryVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
@@ -153,6 +155,20 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
         return "?"
 
 
+ASSERT_TRAP_FUNCTIONS = {"lightweight_assert_trap", "assert_and_hang"}
+
+
+def _is_assert_trap_frame(frame: CallstackEntry) -> bool:
+    return frame.function_name in ASSERT_TRAP_FUNCTIONS
+
+
+def _find_assert_frame(callstack: list[CallstackEntry]) -> CallstackEntry:
+    # The trap, when there is one, is the top frame and the ASSERT is the frame right below it.
+    if len(callstack) > 1 and _is_assert_trap_frame(callstack[0]):
+        return callstack[1]
+    return callstack[0]
+
+
 def dump_lightweight_asserts(
     risc_debug: RiscDebug,
     dispatcher_data: DispatcherData,
@@ -210,33 +226,34 @@ def dump_lightweight_asserts(
         arguments_and_locals = None
         assert_code = "?"
         if callstack_data.kernel_callstack_with_message.callstack:
-            fi = callstack_data.kernel_callstack_with_message.callstack[0].file_info
+            assert_frame = _find_assert_frame(callstack_data.kernel_callstack_with_message.callstack)
+            fi = assert_frame.file_info
             assert_code = extract_assert_code(
                 fi.file if fi is not None else None,
                 fi.line if fi is not None else None,
                 fi.column if fi is not None else None,
             )
             arguments_and_locals = ""
-            top_frame = callstack_data.kernel_callstack_with_message.callstack[0]
-            if len(top_frame.template_parameters) > 0:
+            if len(assert_frame.template_parameters) > 0:
                 arguments_and_locals += "\nTemplate parameters:\n"
-                arguments_and_locals += serialize_variables(top_frame.template_parameters, assert_code)
-                for var in top_frame.template_parameters:
-                    if var.name is not None:
-                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(top_frame.arguments) > 0:
+                arguments_and_locals += serialize_variables(assert_frame.template_parameters, assert_code)
+            if len(assert_frame.arguments) > 0:
                 arguments_and_locals += "\nRuntime arguments:\n"
-                arguments_and_locals += serialize_variables(top_frame.arguments, assert_code)
-                for var in top_frame.arguments:
-                    if var.name is not None:
-                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(top_frame.locals) > 0:
+                arguments_and_locals += serialize_variables(assert_frame.arguments, assert_code)
+            if len(assert_frame.locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
-                arguments_and_locals += serialize_variables(top_frame.locals, assert_code)
-                for var in top_frame.locals:
-                    if var.name is not None:
-                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if arguments_and_locals and " = ?" in arguments_and_locals:
+                arguments_and_locals += serialize_variables(assert_frame.locals, assert_code)
+            names = {
+                var.name
+                for var in (*assert_frame.template_parameters, *assert_frame.arguments, *assert_frame.locals)
+                if var.name
+            }
+            assert_code = re.sub(
+                r"(?<!\\)\b\w+",  # whole words that don't start with a backslash
+                lambda word: f"[info]{word.group()}[/]" if word.group() in names else word.group(),
+                escape(assert_code),  # so brackets in the source (buf[i]) are not read as Rich tags
+            )
+            if arguments_and_locals:
 
                 def _any_value_missing(vs: list[CallstackEntryVariable]) -> bool:
                     return any(v.value is None for v in vs)
@@ -244,9 +261,9 @@ def dump_lightweight_asserts(
                 if any(
                     _any_value_missing(vs)
                     for vs in (
-                        top_frame.template_parameters,
-                        top_frame.arguments,
-                        top_frame.locals,
+                        assert_frame.template_parameters,
+                        assert_frame.arguments,
+                        assert_frame.locals,
                     )
                 ):
                     arguments_and_locals += (

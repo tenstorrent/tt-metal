@@ -59,6 +59,9 @@ struct MulticastEndpoint {
 /**
  * @brief Wrapper around calculating noc address targeting a bank managed by the allocator (either DRAM or
  * L1) given bank id and address. This allows direct address to be supplied to NoC apis
+ *
+ * Legacy: takes an absolute bank address, for buffers not bound as a tensor. For a tensor use
+ * BankView(accessor) (api/tensor/noc_traits.h), which takes an offset into the tensor instead.
  */
 enum class AllocatorBankType { L1, DRAM };
 

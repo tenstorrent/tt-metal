@@ -4,7 +4,7 @@
 
 #include "nlp_concat_heads_decode_device_operation.hpp"
 #include <algorithm>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
@@ -26,7 +26,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
 
     // input tensor and shape
     TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,

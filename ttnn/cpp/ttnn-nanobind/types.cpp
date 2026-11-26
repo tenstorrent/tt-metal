@@ -22,8 +22,8 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 
-#include <tt-metalium/kernel_types.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 // NOLINTBEGIN(bugprone-unused-raii)
 // NOLINTBEGIN(misc-redundant-expression)

@@ -7,16 +7,15 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "tt_metal/distributed/host_ring_alias.hpp"
 #include "hostdevcommon/uva_layout.h"
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
-#include <internal/cluster_noc_helpers.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
@@ -127,7 +126,7 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
     im.fifo_bytes = static_cast<uint32_t>(fifo64);
     // Empty is legal, not malformed: a mesh whose slots are all remote has no local device
     // (mesh_device.cpp:839), and this leg needs one to write bytes_acked to.
-    const std::vector<IDevice*> devices = mesh->get_devices();
+    const auto devices = mesh->impl().get_devices();
     if (devices.empty()) {
         err = "D2HLeg::create: the mesh has no local device";
         return nullptr;

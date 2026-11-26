@@ -42,6 +42,12 @@ void MorehFoldOperation::validate_inputs(
     for (uint32_t i = 0; i < num_spatial_dims; ++i) {
         TT_FATAL(operation_attributes.stride[i] > 0, "Fold: stride must be greater than 0");
         TT_FATAL(operation_attributes.kernel_size[i] > 0, "Fold: kernel_size must be greater than 0");
+        TT_FATAL(operation_attributes.output_size[i] > 0, "Fold: output_size must be greater than 0");
+        TT_FATAL(
+            operation_attributes.output_size[i] + 2 * static_cast<uint64_t>(operation_attributes.padding[i]) >=
+                static_cast<uint64_t>(operation_attributes.dilation[i]) * (operation_attributes.kernel_size[i] - 1) + 1,
+            "Fold: dilated kernel size exceeds padded output_size in dim {}",
+            i);
     }
 
     uint32_t kernel_size_product = 1;
@@ -71,6 +77,12 @@ void MorehFoldOperation::validate_inputs(
         TT_FATAL(
             output_shape[output_rank - 1] == operation_attributes.output_size[1], "Fold: Invalid output shape size");
         TT_FATAL(output_rank == 4 || output_rank == 3, "Fold: Only support 4D and 3D output tensor");
+        // The program sizes and formats every element from the input dtype.
+        TT_FATAL(
+            tensor_args.output->dtype() == input.dtype(),
+            "Fold: output dtype ({}) must match the input dtype ({})",
+            tensor_args.output->dtype(),
+            input.dtype());
     }
 };
 

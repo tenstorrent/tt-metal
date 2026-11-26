@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <algorithm>
 #include <cmath>
 #include <numbers>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -129,11 +129,12 @@ void test_operation_infrastructure() {
         ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to_layout(Layout::TILE).to_device(device);
 
     auto mem_config = tt::tt_metal::MemoryConfig{};
+    const std::vector<EltwiseUnaryWithParam> op_chain = {EltwiseUnaryWithParam{UnaryOpType::SQRT}};
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        input_tensor, std::nullopt, std::optional<tt::tt_metal::MemoryConfig>(mem_config), std::nullopt);
+        op_chain, input_tensor, std::nullopt, std::optional<tt::tt_metal::MemoryConfig>(mem_config), std::nullopt);
 
     Op::operation_attributes_t op_args{
-        .op_chain = {EltwiseUnaryWithParam{UnaryOpType::SQRT}},
+        .op_chain = op_chain,
         .output_dtype = DataType::BFLOAT16,
         .memory_config = mem_config,
         .fp32_dest_acc_en = false,

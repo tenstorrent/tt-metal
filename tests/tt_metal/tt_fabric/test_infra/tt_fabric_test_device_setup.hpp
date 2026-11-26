@@ -10,8 +10,8 @@
 #include <string>
 #include <string_view>
 #include <memory>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -293,6 +293,7 @@ struct TestDevice {
 public:
     TestDevice(
         const MeshCoordinate& coord,
+        tt::tt_metal::distributed::MeshDevice& mesh_device,
         std::shared_ptr<IDeviceInfoProvider> device_info_provider,
         std::shared_ptr<IRouteManager> route_manager,
         const SenderMemoryMap* sender_memory_map = nullptr,

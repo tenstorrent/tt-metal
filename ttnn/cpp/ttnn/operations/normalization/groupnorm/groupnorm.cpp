@@ -11,7 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -362,7 +362,7 @@ Tensor group_norm(
             input_mask->storage_type() == StorageType::DEVICE,
             "Input mask must be on device, got storage type: {}",
             input_mask->storage_type());
-        TT_FATAL(input_mask->buffer() != nullptr, "Input mask must be allocated in buffers on device!");
+        TT_FATAL(input_mask->is_allocated(), "Input mask must be allocated in buffers on device!");
         TT_FATAL(input_tensor.device() == input_mask->device(), "Input and input mask tensors must be on same device");
     }
 

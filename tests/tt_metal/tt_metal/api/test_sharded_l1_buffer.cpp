@@ -3,30 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <algorithm>
 #include <iostream>
 #include <memory>
 #include <set>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "gtest/gtest.h"
 #include "llrt.hpp"
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 using namespace tt::tt_metal;
 
@@ -301,10 +301,6 @@ TEST_F(MeshDeviceFixtureWithL1Small, TestWidthShardReadWrite) {
 }
 
 TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        GTEST_SKIP() << fmt::format("Skipping {} because it is not supported in simulator", __func__);
-    }
-
     std::vector<CoreCoord> cores = {CoreCoord(1, 0), CoreCoord(1, 3), CoreCoord(1, 4), CoreCoord(6, 6),
                                     CoreCoord(6, 5), CoreCoord(6, 4), CoreCoord(6, 3), CoreCoord(6, 2),
                                     CoreCoord(6, 1), CoreCoord(6, 0), CoreCoord(5, 0), CoreCoord(5, 1),

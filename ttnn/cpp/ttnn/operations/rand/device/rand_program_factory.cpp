@@ -9,11 +9,11 @@
 #include <memory>
 #include <random>
 
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "rand_device_operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::rand {
 
@@ -230,7 +230,7 @@ void RandDeviceOperation::RandProgramFactory::override_runtime_arguments(
     const auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
     const std::uint32_t lower_bound_bits = std::bit_cast<std::uint32_t>(operation_attributes.lower_bound);
     const std::uint32_t upper_bound_bits = std::bit_cast<std::uint32_t>(operation_attributes.upper_bound);
-    const std::uint32_t out_addr = output.buffer()->address();
+    const std::uint32_t out_addr = output.mesh_buffer().address();
 
     const auto layout = rand_core_layout(ws);
     for (int i = 0; i < static_cast<int>(layout.size()); ++i) {

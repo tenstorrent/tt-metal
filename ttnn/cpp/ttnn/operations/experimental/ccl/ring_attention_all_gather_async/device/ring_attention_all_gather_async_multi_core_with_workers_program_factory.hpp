@@ -7,10 +7,11 @@
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include "kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/mesh_device_operation_adapter.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <cstdint>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <optional>
 #include <vector>
 
@@ -20,14 +21,60 @@ namespace ttnn::experimental::prim {
 // lockstep; override_runtime_arguments() re-applies the semaphore address at these positions.
 namespace ring_attention_all_gather_async_dynamic {
 inline constexpr uint32_t kReaderForwardKernelIdx = 0;
-inline constexpr uint32_t kWriterForwardKernelIdx = 1;
-inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
-inline constexpr uint32_t kWriterBackwardKernelIdx = 3;
 inline constexpr uint32_t kReaderSemaphoreArg = 2;
 inline constexpr uint32_t kWriterSemaphoreArg = 4;
 inline constexpr uint32_t kForwardSemaphoreIdx = 1;
 inline constexpr uint32_t kBackwardSemaphoreIdx = 0;
+// Sliding-window halo kernels carry semaphores[2] in reader arg 0 and writer arg 2.
+inline constexpr uint32_t kHaloReaderSemaphoreArg = 0;
+inline constexpr uint32_t kHaloWriterSemaphoreArg = 2;
+inline constexpr uint32_t kHaloSemaphoreIdx = 2;
+
+// One GlobalSemaphore address baked into a kernel's runtime args, with the cores that run that kernel.
+// The cores are recorded once at create time, so a cache hit writes only them.
+struct SemaphoreArgSlot {
+    uint32_t kernel_idx = 0;
+    uint32_t arg_idx = 0;
+    uint32_t semaphore_idx = 0;
+    std::vector<CoreCoord> cores;
+};
+
+// Cache-hit state of one program: its semaphore slots and the addresses they hold now. The caller's
+// semaphores are not in the program hash (a CCLManager pool hands out a different slot per call).
+struct SemaphoreArgPatch {
+    std::vector<SemaphoreArgSlot> slots;
+    std::vector<uint32_t> addresses;
+};
+
+// Records the cores of kernel_idx that have runtime args; each must reach arg_idx.
+void record_semaphore_arg_slot(
+    SemaphoreArgPatch& patch,
+    tt::tt_metal::Program& program,
+    uint32_t kernel_idx,
+    uint32_t arg_idx,
+    uint32_t semaphore_idx);
+
+// Records the out_ready slots of the four all-gather worker kernels starting at first_kernel_idx.
+void record_all_gather_semaphore_arg_slots(
+    SemaphoreArgPatch& patch, tt::tt_metal::Program& program, uint32_t first_kernel_idx);
+
+std::vector<uint32_t> semaphore_addresses(const std::vector<GlobalSemaphore>& semaphores);
+
+// Writes the current semaphore addresses into the recorded slots. Returns at once when they are unchanged.
+void apply_semaphore_arg_patch(
+    SemaphoreArgPatch& patch, tt::tt_metal::Program& program, const std::vector<GlobalSemaphore>& semaphores);
 }  // namespace ring_attention_all_gather_async_dynamic
+
+namespace detail {
+
+struct RingAttentionAllGatherAsyncDescriptorAdapterOperation {
+    using operation_attributes_t = RingAttentionAllGatherAsyncParams;
+    using tensor_args_t = RingAttentionAllGatherAsyncInputs;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+};
+
+}  // namespace detail
 
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
     using operation_attributes_t = RingAttentionAllGatherAsyncParams;
@@ -41,14 +88,34 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+};
+
+// Wraps the descriptor adapter to re-apply the out_ready semaphore addresses on cache hits through
+// the worker cores recorded at create time.
+struct RingAttentionAllGatherAsyncMeshWorkloadFactory {
+    using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
+        detail::RingAttentionAllGatherAsyncDescriptorAdapterOperation>::
+        DescriptorMeshWorkloadAdapter<RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory>;
+    struct shared_variables_t {
+        typename descriptor_adapter_t::shared_variables_t descriptor;
+        ring_attention_all_gather_async_dynamic::SemaphoreArgPatch semaphore_patch;
+    };
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const RingAttentionAllGatherAsyncParams& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const RingAttentionAllGatherAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+        cached_mesh_workload_t& cached_workload,
+        const RingAttentionAllGatherAsyncParams& operation_attributes,
+        const RingAttentionAllGatherAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 };
+
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<RingAttentionAllGatherAsyncMeshWorkloadFactory>);
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
@@ -58,6 +125,51 @@ struct RingAttentionRankMapping {
     ttnn::ccl::snake_ring::Orientation orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
+    // Full mesh only: number tensor ranks down the mesh columns (col * rows + row) instead of along the
+    // rows. Split-KV ring MLA with its sequence (SP) on mesh axis 1 lays the KV stripes out that way.
+    bool column_major_ranks = false;
+};
+
+// The kernels' full-mesh rank-mapping compile-time arg, in the kernels' own encoding
+// (ring_attention_rank_mapping.hpp).
+inline uint32_t rank_mapping_compile_time_arg(const RingAttentionRankMapping& mapping) {
+    if (!mapping.full_mesh) {
+        return ring_attention_all_gather::kAxisRankMapping;
+    }
+    return mapping.column_major_ranks ? ring_attention_all_gather::kColumnMajorRankMapping
+                                      : ring_attention_all_gather::kRowMajorRankMapping;
+}
+
+// sparse_ring_sdpa's cross-device load balancing, carried by the gather writers (kernels/ring_attention_balance.hpp).
+struct RingAttentionBalance {
+    tt::tt_metal::Buffer* table = nullptr;  // R cost pages per device
+    tt::tt_metal::Buffer* partner = nullptr;
+    tt::tt_metal::Buffer* q = nullptr;  // sent from q and mask, received into the import buffers (same layouts)
+    tt::tt_metal::Buffer* import_q = nullptr;
+    tt::tt_metal::Buffer* mask = nullptr;
+    tt::tt_metal::Buffer* import_mask = nullptr;
+    tt::tt_metal::Buffer* export_out = nullptr;  // sent from the export buffer into the home's output
+    tt::tt_metal::Buffer* out = nullptr;
+    // GlobalSemaphores on the balance core (the same address and NoC coordinates on every device).
+    uint32_t tables_arrived_addr = 0;
+    uint32_t imports_arrived_addr = 0;
+    uint32_t returns_arrived_addr = 0;
+    uint32_t tables_read_addr = 0;
+    CoreCoord balance_core_noc;
+    uint32_t heads = 0;
+    uint32_t q_blocks = 0;     // Q blocks per head (row blocks)
+    uint32_t q_row_tiles = 0;  // tile rows of Q / the output per head
+    uint32_t dht = 0;
+    uint32_t vdht = 0;
+    uint32_t block_tiles = 0;
+    uint32_t mask_rows = 0;  // mask rows per head
+    uint32_t mask_row_bytes = 0;
+    uint32_t table_page_bytes = 0;
+    uint32_t q_page_bytes = 0;
+    uint32_t out_page_bytes = 0;
+    // Set by the helper.
+    uint32_t writer_flag_semaphore = 0;
+    std::vector<CoreCoord> writer_cores_noc;
 };
 
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
@@ -260,7 +372,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
     // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
     bool partial_readiness_enabled = false,
-    RingAttentionRankMapping rank_mapping = {});
+    RingAttentionRankMapping rank_mapping = {},
+    RingAttentionBalance* balance = nullptr);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

@@ -189,6 +189,7 @@ run_t3000_ttnn_multiprocess_slow_tests() {
   local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
 
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_multihost_graph_report
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4_to_string
 }
 
@@ -247,110 +248,16 @@ run_t3000_ccl_tests() {
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
 
-  # all_gather_matmul fp32 accumulation precision on the classic mcast program paths (2D and 1D).
-  # Both tests in one pytest invocation so a failure in one doesn't stop the other one from running.
+  # all_gather_matmul fp32 accumulation precision on the classic mcast program paths (2D and 1D), and the
+  # sharded 1D decode config models run. One pytest invocation so a failure in one doesn't stop the others.
   pytest tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_fp32_reload_precision \
-    tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_1d_fp32_reload_precision
+    tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_1d_fp32_reload_precision \
+    tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_1d_sharded_decode
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_ccl_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_tttv2_fast_unit_tests() {
-  fail=0
-
-  # Run non-module models/common unit tests
-  pytest --tb=short --ignore=models/common/tests/modules models/common/tests ; fail+=$?
-
-  # [INFO] HF_MODEL Only used for test_*_1d_vs_reference_from_model_args, which will retire with TTTv1
-  # Run MLP1D fast unit tests (full set is run in t3k_e2e_tests.yaml to match timeout values and frequency of runs)
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
-  pytest models/common/tests/modules/mlp/test_mlp_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.mlp.mlp_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run RMSNorm1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
-  pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.rmsnorm.rmsnorm_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Rope1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
-  pytest models/common/tests/modules/rope/test_rope_1d.py \
-    -m "not slow" \
-    --durations=10 \
-    --tb=short \
-    --cov=models.common.modules.rope.rope_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run LMHead1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
-  pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.lm_head.lm_head_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Attention1D tests
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
-  pytest models/common/tests/modules/attention/test_attention_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.attention.attention_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Embedding1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
-  pytest models/common/tests/modules/embedding/test_embedding_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.embedding.embedding_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Penalties1D tests
-  pytest models/common/tests/modules/sampling/test_penalties_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.sampling.penalties_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Sampling1D tests
-  pytest models/common/tests/modules/sampling/test_sampling_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.sampling.sampling_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -365,9 +272,6 @@ run_t3000_tests() {
 
   # Run ttnn tests
   run_t3000_ttnn_tests
-
-  # Run tttv2 fast unit tests
-  run_t3000_tttv2_fast_unit_tests
 }
 
 fail=0

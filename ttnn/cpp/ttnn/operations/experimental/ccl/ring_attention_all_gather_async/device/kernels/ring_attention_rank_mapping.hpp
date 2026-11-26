@@ -14,14 +14,25 @@ namespace ttnn::ring_attention_all_gather {
 // as the last reader arg. Must stay equal to the reader kernel's kNumFixedCompileTimeArgs sentinel.
 constexpr uint32_t kReaderFixedCompileTimeArgCount = 23;
 constexpr uint32_t kWriterFixedCompileTimeArgCount = 24;
+// Runtime args of sparse_ring_sdpa's load-balancing block on the writer (ring_attention_balance.hpp).
+constexpr uint32_t kBalanceWriterArgCount = 34;
 
-template <bool FullMesh>
+// Values of the kernels' full-mesh rank-mapping compile-time arg. An axis ring keeps its transport order;
+// a full-mesh snake numbers tensor ranks row-major over the mesh, or column-major when the split-KV
+// cache runs its sequence (SP) along mesh axis 1 (see RingAttentionRankMapping).
+constexpr uint32_t kAxisRankMapping = 0;
+constexpr uint32_t kRowMajorRankMapping = 1;
+constexpr uint32_t kColumnMajorRankMapping = 2;
+
+template <uint32_t RankMapping>
 constexpr uint32_t tensor_rank_from_transport_rank(
     uint32_t transport_rank, uint32_t mesh_rows, uint32_t mesh_cols, ttnn::ccl::snake_ring::Orientation orientation) {
-    if constexpr (FullMesh) {
-        return ttnn::ccl::snake_ring::row_major_index(transport_rank, mesh_rows, mesh_cols, orientation);
-    } else {
+    static_assert(RankMapping <= kColumnMajorRankMapping, "unknown rank mapping");
+    if constexpr (RankMapping == kAxisRankMapping) {
         return transport_rank;
+    } else {
+        return ttnn::ccl::snake_ring::tensor_index(
+            transport_rank, mesh_rows, mesh_cols, orientation, RankMapping == kColumnMajorRankMapping);
     }
 }
 

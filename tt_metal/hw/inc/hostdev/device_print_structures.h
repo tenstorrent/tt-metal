@@ -66,7 +66,8 @@ namespace device_print_dispatch {
 struct NocLocationInputInfo {
     uint16_t x : 6;
     uint16_t y : 6;
-    uint64_t rw_ptr_addr : 52;
+    uint64_t rw_ptr_addr : 51;
+    uint64_t use_dram_alignment : 1;  // Set for DRISC L1, which the NOC reaches through the DRAM tile
     uint16_t buf_offset;
     uint16_t buf_size;
 } __attribute__((packed, aligned(4)));
@@ -77,11 +78,32 @@ static_assert(sizeof(NocLocationInputInfo) % 4 == 0, "NocLocationInputInfo must 
 struct DramStreamMessageHeader {
     uint16_t x : 6;
     uint16_t y : 6;
-    uint16_t align : 6;
+    uint16_t align : 6;  // Payload offset from the header in 4-byte words; offsets are always word multiples
     uint16_t buffer_wrapped : 1;
     uint16_t length : 13;
 } __attribute__((packed, aligned(4)));
 
 static_assert(sizeof(DramStreamMessageHeader) == 4, "DramStreamMessageHeader must be 4 bytes");
+
+// DRAM read/write pointer cell shared by the dispatch_s print aggregator and the host. The DRAM print ring starts one
+// DRAM alignment unit after it.
+struct DramRWHeader {
+    uint32_t wpos;  // Kernel writes: ring write position, or STARTING/DISABLED magic.
+    uint32_t rpos;  // Host writes: ring read position.
+    union {
+        struct {
+            uint32_t pass_count;     // Kernel bumps after each full pass; host await() waits on it.
+            uint32_t finished_flag;  // Kernel writes 1 in shutdown() right before exiting.
+        };
+        // Written only with wpos == DISABLED_MAGIC, when the aggregator never runs.
+        struct {
+            uint32_t provided_size;  // L1 cache buffer size the kernel was given.
+            uint32_t required_size;  // L1 cache buffer size it needed.
+        };
+    };
+};
+
+static_assert(sizeof(DramRWHeader) == 4 * sizeof(uint32_t), "DramRWHeader must be 16 bytes");
+static_assert(sizeof(DramRWHeader) <= 32, "DramRWHeader must fit in one DRAM alignment unit (32 B on Wormhole)");
 
 }  // namespace device_print_dispatch

@@ -4,7 +4,7 @@
 
 #include <tt-metalium/experimental/udm/mesh_program.hpp>
 #include <tt-metalium/experimental/udm/mesh_builder.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
@@ -18,8 +18,9 @@ public:
 
         // Create a program for each grid, keyed by mesh coordinate
         // Initialize all coords to has_kernel = false
+        auto* mesh_device = builder.mesh_device();
         for (const auto& grid : grids) {
-            programs_.emplace(grid.coord, tt::tt_metal::Program());
+            programs_.emplace(grid.coord, tt::tt_metal::CreateProgram(*mesh_device));
             has_kernel_.emplace(grid.coord, false);
         }
     }
