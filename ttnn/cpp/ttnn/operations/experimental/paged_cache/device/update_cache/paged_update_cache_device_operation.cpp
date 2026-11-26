@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 
 using namespace tt::tt_metal;
 
@@ -41,10 +42,13 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
     // Layout and data type validation
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor in non-fused update_cache must be tilized");
     TT_FATAL(cache_tensor.layout() == Layout::TILE, "Cache tensor in update_cache must be tilized");
+    // MX (Quasar) tiles are read, expanded to Float16_b by the unpacker for the row update (the intermediate DFBs are
+    // Float16_b) and packed back to MX; the kernels size entries with get_entry_size().
     TT_FATAL(
         cache_tensor.dtype() == DataType::FLOAT32 || cache_tensor.dtype() == DataType::BFLOAT16 ||
-            cache_tensor.dtype() == DataType::BFLOAT8_B || cache_tensor.dtype() == DataType::BFLOAT4_B,
-        "Data type of cache tensor must be FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
+            cache_tensor.dtype() == DataType::BFLOAT8_B || cache_tensor.dtype() == DataType::BFLOAT4_B ||
+            tt::tt_metal::is_mx(cache_tensor.dtype()),
+        "Data type of cache tensor must be FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or an MX format and is {}",
         cache_tensor.dtype());
 
     // Shape validation
