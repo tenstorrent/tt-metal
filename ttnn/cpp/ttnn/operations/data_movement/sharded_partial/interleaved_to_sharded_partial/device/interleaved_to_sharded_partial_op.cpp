@@ -39,6 +39,18 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
+    // Slices start at multiples of their row count, so a slice of partial tile rows would start mid-tile and
+    // copy the wrong rows.
+    {
+        const uint32_t total_rows = input_tensor.physical_volume() / input_tensor.padded_shape()[-1];
+        TT_FATAL(
+            (total_rows / num_slices) % tt::constants::TILE_HEIGHT == 0,
+            "Each slice must have a multiple of {} rows, but {} rows in {} slices give {} rows per slice",
+            tt::constants::TILE_HEIGHT,
+            total_rows,
+            num_slices,
+            total_rows / num_slices);
+    }
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.is_allocated(), "Operands to shard need to be allocated in buffers on device!");

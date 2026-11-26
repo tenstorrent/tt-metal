@@ -34,7 +34,7 @@ void bind_interleaved_to_sharded_partial(nb::module_& mod) {
             shard_orientation (ttnn.ShardOrientation): ``ROW_MAJOR`` or ``COL_MAJOR`` order of the shards on the cores.
 
         Keyword Args:
-            output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. An input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN when the dtype changes.
+            output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. An input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN or -0.0 when the dtype changes.
 
         Returns:
             ttnn.Tensor: the slice, of shape ``[1, 1, N*C*H / num_slices, W]``, in TILE layout and sharded in L1 with `shard_scheme`.

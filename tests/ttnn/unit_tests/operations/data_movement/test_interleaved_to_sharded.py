@@ -556,20 +556,23 @@ def test_interleaved_to_sharded_partial_keeps_logical_width(device, shape, grid,
 _I2S_PARTIAL_SHAPE = (2, 3, 64, 128)
 _I2S_PARTIAL_NUM_SLICES = 3
 _I2S_PARTIAL_SHARDS = {
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: ((32, 128), (2, 2)),
-    ttnn.TensorMemoryLayout.WIDTH_SHARDED: ((128, 64), (2, 1)),
-    ttnn.TensorMemoryLayout.BLOCK_SHARDED: ((64, 64), (2, 2)),
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: ((32, 128), {"ROW_MAJOR": (2, 2), "COL_MAJOR": (2, 2)}),
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED: ((128, 64), {"ROW_MAJOR": (2, 1), "COL_MAJOR": (1, 2)}),
+    # Shards of 64 x 32 on a non-square grid: 4 across the width in a ROW_MAJOR grid row, 4 down a COL_MAJOR column.
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED: ((64, 32), {"ROW_MAJOR": (4, 2), "COL_MAJOR": (2, 4)}),
 }
+_SHARD_ORIENTATIONS = [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR]
 
 
-def _i2s_partial_slices(input_tensor, memory_layout, buffer_type, output_dtype=None):
+def _i2s_partial_slices(
+    input_tensor, memory_layout, buffer_type, output_dtype=None, orientation=ttnn.ShardOrientation.ROW_MAJOR
+):
     """Copies every slice of ``input_tensor`` with ttnn.interleaved_to_sharded_partial, checks each against its rows of
     the input, and returns the slices. When ``output_dtype`` changes the dtype, zeros are compared by value."""
-    shard_shape, (grid_x, grid_y) = _I2S_PARTIAL_SHARDS[memory_layout]
+    shard_shape, grids = _I2S_PARTIAL_SHARDS[memory_layout]
+    grid_x, grid_y = grids[orientation.name]
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
-    memory_config = ttnn.MemoryConfig(
-        memory_layout, buffer_type, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    )
+    memory_config = ttnn.MemoryConfig(memory_layout, buffer_type, ttnn.ShardSpec(grid, shard_shape, orientation))
     rows = ttnn.to_torch(input_tensor).reshape(-1, _I2S_PARTIAL_SHAPE[-1])
     slice_height = rows.shape[0] // _I2S_PARTIAL_NUM_SLICES
     slices = []
@@ -581,7 +584,7 @@ def _i2s_partial_slices(input_tensor, memory_layout, buffer_type, output_dtype=N
             _I2S_PARTIAL_NUM_SLICES,
             slice_index,
             memory_layout,
-            ttnn.ShardOrientation.ROW_MAJOR,
+            orientation,
             output_dtype=output_dtype,
         )
 
@@ -605,12 +608,13 @@ def _i2s_partial_slices(input_tensor, memory_layout, buffer_type, output_dtype=N
     "buffer_type", docstring_interleaved_buffer_type_params(ttnn.interleaved_to_sharded_partial, label="Input")
 )
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.interleaved_to_sharded_partial))
+@pytest.mark.parametrize("orientation", _SHARD_ORIENTATIONS, ids=lambda o: o.name)
 def test_interleaved_to_sharded_partial_docstring_supported_inputs(
-    dtype, layout, buffer_type, memory_layout, output_buffer_type, device
+    orientation, dtype, layout, buffer_type, memory_layout, output_buffer_type, device
 ):
     """Copies every slice of an input of each dtype, layout and interleaved buffer type the
     ttnn.interleaved_to_sharded_partial docstring lists into each sharded output it lists, then writes the slices back
-    into a tensor of the input's shape with ttnn.sharded_to_interleaved_partial."""
+    into a tensor of the input's shape with ttnn.sharded_to_interleaved_partial, in both shard orientations."""
     check_readable(dtype, layout, buffer_type, memory_layout, output_buffer_type)
     memory_config = interleaved_memory_config(buffer_type)
     input_tensor = ttnn.from_torch(
@@ -627,7 +631,8 @@ def test_interleaved_to_sharded_partial_docstring_supported_inputs(
         device=device,
         memory_config=memory_config,
     )
-    for slice_index, sharded_slice in enumerate(_i2s_partial_slices(input_tensor, memory_layout, output_buffer_type)):
+    slices = _i2s_partial_slices(input_tensor, memory_layout, output_buffer_type, orientation=orientation)
+    for slice_index, sharded_slice in enumerate(slices):
         ttnn.sharded_to_interleaved_partial(sharded_slice, output_tensor, _I2S_PARTIAL_NUM_SLICES, slice_index)
 
     assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output_tensor))
@@ -651,3 +656,21 @@ def test_interleaved_to_sharded_partial_docstring_output_dtype(input_dtype, outp
         memory_config=interleaved_memory_config(buffer_type),
     )
     _i2s_partial_slices(input_tensor, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_dtype)
+
+
+def test_interleaved_to_sharded_partial_rejects_slices_of_partial_tile_rows(device, expect_error):
+    """96 rows in 2 slices give slices of 48 rows, against the ttnn.interleaved_to_sharded_partial docstring rule that
+    a slice has a multiple of 32 rows. The op raises instead of starting slice 1 in the middle of a tile row."""
+    input_tensor = ttnn.from_torch(
+        torch.ones(1, 1, 96, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "multiple of 32 rows"):
+        ttnn.interleaved_to_sharded_partial(
+            input_tensor,
+            ttnn.CoreCoord(1, 1),
+            [32, 64],
+            2,
+            0,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
