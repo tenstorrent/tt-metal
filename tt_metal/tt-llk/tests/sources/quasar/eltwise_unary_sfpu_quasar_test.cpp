@@ -17,6 +17,7 @@
 
 #include "cfg_defines.h"
 #include "ckernel_buf_desc.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -56,8 +57,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
-            // bank offset reset to 0 keeps every section at DEST tile 0.
+            // The to-dest placers carry no synchronization: in L1_TO_L1 a Dest loan from math brackets them and
+            // sets the section base, so every section starts at DEST tile 0.
             _llk_unpack_dest_init_();
             _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
         }
@@ -67,22 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
         }
 
-        // Program dest-dvalid CFG after HW configure so wait masks are the last
-        // writes before TILE_LOOP. UNPACK is only a dest client on UNP_DEST.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
-            }
-            else
-            {
-                // SrcA unpack is not a dest-dvalid client; do not inherit an
-                // UNP_DEST wait mask from a prior kernel on this device.
-                set_up_zero_dest_dvalid_handshake_for_unpack();
-            }
-        }
-        else
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             // CFG wait masks persist across run types on the same device.
             // Isolated/congested UNPACK must not inherit the L1_TO_L1 chain.
@@ -108,6 +94,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t section = 0; section < num_sections; ++section)
                 {
                     const std::uint32_t l1_tile_idx = section * section_tiles;
+                    if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    }
                     if constexpr (unpack_to_dest)
                     {
                         _llk_unpack_unary_operand_to_dest_block_(l1_tile_idx, 0 /*dst_tile_idx*/, section_tiles);
@@ -118,7 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                        _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                     }
                 }
             }
@@ -133,6 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
@@ -177,21 +168,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_sfpu_init_();
         test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
 
-        // Program dest-dvalid CFG after HW configure so wait masks are the last
-        // writes before TILE_LOOP.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            // The dvalid chain must match UNPACK exactly. On the FPU path T1 is
-            // both the datacopy producer and the SFPU producer.
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
-            }
-            else
-            {
-                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
-                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
-            }
+            _llk_math_pack_sync_init_<dest_sync>();
         }
         else
         {
@@ -216,16 +195,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
             {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_();
+                }
                 if constexpr (!unpack_to_dest)
                 {
                     for (std::uint32_t i = 0; i < section_tiles; ++i)
                     {
                         _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                    {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
-                    }
+                }
+                else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                 }
                 for (std::uint32_t i = 0; i < section_tiles; ++i)
                 {
@@ -256,7 +240,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
             // Drain every execution unit driven by T1 before PACK takes over.
@@ -303,19 +287,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
 
-        // Program dest-dvalid CFG after HW configure so wait masks are the last
-        // writes before TILE_LOOP.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            // Declare the same dvalid client chain that UNPACK and MATH use.
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-            else
-            {
-                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
+            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
         else
         {
@@ -331,10 +305,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
             {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
                 _llk_pack_(DST_INDEX, (pass % num_sections) * section_tiles /*tile index*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                     // Drain this bank's dest-waited pack before issuing the next.
                     // Queuing all LOOP_FACTOR packs into one tensix_sync makes the
                     // TILE_LOOP ZONE_END wall-clock read return 0 on long SFPU ops.

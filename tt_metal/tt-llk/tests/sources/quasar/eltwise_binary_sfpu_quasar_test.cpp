@@ -35,6 +35,7 @@ inline std::uint32_t binary_sfpu_tiles_per_block(const std::uint32_t src0_tile_i
 
 #include "cfg_defines.h"
 #include "ckernel_buf_desc.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -62,23 +63,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1 && unpack_to_dest)
         {
-            // DEST DVALID handshake: T0 is the producer. The producer differs
-            // per path: UNPACK for UNP_DEST and FPU for the datacopy path.
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
-            }
-            else
-            {
-                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
-            }
-        }
-        else if constexpr (unpack_to_dest)
-        {
-            // L1_TO_L1 may leave UNP_DEST waiting for inactive SFPU/PACK clients.
-            // Isolated/congested UNP_DEST execution must not inherit that chain.
+            // Isolated/congested UNP_DEST execution must not inherit a dest-dvalid wait mask.
             set_up_zero_dest_dvalid_handshake_for_unpack();
         }
 
@@ -98,8 +85,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
-            // bank offset reset to 0 keeps every section at DEST tile 0.
+            // The to-dest placers carry no synchronization: in L1_TO_L1 a Dest loan from math brackets them and
+            // sets the section base, so every section starts at DEST tile 0.
             _llk_unpack_dest_init_();
             _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
         }
@@ -126,6 +113,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t pass = 0; pass < num_passes; ++pass)
             {
                 const std::uint32_t l1_tile_idx = (pass % num_blocks) * tiles_per_block;
+                if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                }
                 if constexpr (unpack_to_dest)
                 {
                     _llk_unpack_unary_operand_to_dest_block_(l1_tile_idx, 0 /*dst_tile_idx*/, tiles_per_block);
@@ -136,7 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                 }
             }
         }
@@ -150,6 +141,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
@@ -187,17 +179,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            // DEST DVALID handshake. On the FPU path T1 is both the datacopy
-            // producer and the SFPU producer, so both clients are registered.
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
-            }
-            else
-            {
-                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
-                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
-            }
+            _llk_math_pack_sync_init_<dest_sync>();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -234,16 +216,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t pass = 0; pass < num_passes; ++pass)
             {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_();
+                }
                 if constexpr (!unpack_to_dest)
                 {
                     for (std::uint32_t i = 0; i < tiles_per_block; ++i)
                     {
                         _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                    {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
-                    }
+                }
+                else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                 }
                 test_utils::call_binary_sfpu_operation_quasar<
                     SFPU_BINARY_OP,
@@ -256,7 +243,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     BROADCAST_TYPE>(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX, math_format);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
             // Drain SFPU, FPU, and MOP queues before PACK takes over.
@@ -304,15 +291,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            // Declare the same dvalid client chain that UNPACK and MATH use.
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-            else
-            {
-                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
+            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
@@ -330,10 +309,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_blocks; ++pass)
             {
                 // One result tile per block.
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
                 _llk_pack_(DST_TILE_IDX, pass % num_blocks /*tile index*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }

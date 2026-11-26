@@ -119,10 +119,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        // Only end-to-end and math-isolate runs use the FPU→PACK dest-dvalid
-        // handshake.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
+            _llk_math_pack_sync_init_<dest_sync>();
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // Math isolate keeps the FPU→PACK dest-dvalid producer setup.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
@@ -162,11 +165,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                _llk_math_wait_for_dest_available_();
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
                     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(i, tensor_shape);
                 }
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();
@@ -204,7 +208,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
+            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
@@ -232,8 +236,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                _llk_packer_wait_for_math_done_();
                 _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, tensor_shape);
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
             }
         }
         _llk_pack_reduce_mask_clear_();

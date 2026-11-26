@@ -18,6 +18,7 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "ckernel_buf_desc.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -40,23 +41,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (unpack_to_dest)
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
-            // Only the end-to-end path uses the unpack→pack dest-dvalid
-            // handshake. Isolates deliberately have no consumer, so clear the
-            // persisted wait mask rather than leaving UNP_DEST blocked.
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+            if constexpr (unpack_to_dest)
             {
-                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
+                // Isolates have no consumer, so clear the persisted wait mask rather than leaving UNP_DEST blocked.
+                set_up_zero_dest_dvalid_handshake_for_unpack();
             }
             else
             {
-                set_up_zero_dest_dvalid_handshake_for_unpack();
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
-        }
-        else
-        {
-            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
         }
 
         unsigned l1_addr_16B;
@@ -123,12 +118,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
                 {
                     // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
-                    // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
-                    // ZEROACC to wipe subsequent tile rows after packing the first one.
+                    // Writing all tiles at once would cause pack's section done ZEROACC to wipe
+                    // subsequent tile rows after packing the first one.
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    }
                     _llk_unpack_unary_operand_to_dest_block_(block_rt * BLOCK_CT_DIM /*l1_tile_idx*/, 0 /*dst_tile_idx*/, BLOCK_CT_DIM);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                        _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                     }
                 }
             }
@@ -148,6 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
@@ -167,11 +167,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Every thread opens both zones even when it has no work here: the rendezvous waits for all four.
     {
         START_PERF_MEASURE("INIT")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            _llk_math_pack_sync_init_<dest_sync>();
+        }
         if constexpr (!unpack_to_dest)
         {
             // PACK_ISOLATE measures pack without the
             // FPU→PACK dest-dvalid handshake (WH/BH style).
-            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
@@ -221,12 +225,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
                     {
+                        _llk_math_wait_for_dest_available_();
                         for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
                         {
                             _llk_math_eltwise_unary_datacopy_(block_ct);
                         }
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            // Math owns each Dest section and lends it to the unpack-to-dest copy.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                {
+                    _llk_math_wait_for_dest_available_();
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -265,14 +284,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-            else
-            {
-                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
+            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
         constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
@@ -320,8 +332,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                 {
+                    _llk_packer_wait_for_math_done_();
                     _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external /*l1_tile_idx*/, tensor_shape);
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }

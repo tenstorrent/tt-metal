@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Parallel FPU matmul (TRISC0-2 -> buffer_C) + isolated SrcS SFPU exp (TRISC3 -> buffer_Res).
-// FPU path uses Dest dvalid {FPU, PACK}. SFPU path uses UNP_S/SrcS/PACK1 only (no Dest).
+// FPU path hands Dest to pack through the MATH_PACK semaphore. SFPU path uses UNP_S/SrcS/PACK1 only (no Dest).
 
 #include <cstdint>
 
@@ -115,7 +115,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            _llk_math_pack_sync_init_<dest_sync>();
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
@@ -149,11 +153,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // One Dest section per block of rt_block x CT_DIM output tiles.
             for (std::uint32_t loop = 0; loop < num_sections; loop++)
             {
+                _llk_math_wait_for_dest_available_();
                 for (std::uint32_t i = 0; i < KT_DIM; i++)
                 {
                     _llk_math_matmul_block_(CT_DIM, rt_block);
                 }
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();
@@ -272,7 +277,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
         const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces);
@@ -303,8 +308,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
+                    _llk_packer_wait_for_math_done_();
                     _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/);
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }

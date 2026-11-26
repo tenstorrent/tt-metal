@@ -18,6 +18,7 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "ckernel_buf_desc.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
@@ -41,23 +42,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (unpack_to_dest)
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
-            // UNP_DEST and PACK share DEST. Keep them on the producer/consumer
-            // chain whenever both run (L1_TO_L1); disabling the handshake lets
-            // both threads access the same DEST section and eventually timeout.
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-            {
-                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
-            }
-            else
+            if constexpr (unpack_to_dest)
             {
                 set_up_zero_dest_dvalid_handshake_for_unpack();
             }
-        }
-        else
-        {
-            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
+            else
+            {
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
+            }
         }
 
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
@@ -142,6 +136,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (unpack_to_dest)
                 {
+                    // UNP_DEST writes DEST only on a loan from math, which owns the section.
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    }
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
                         _llk_unpack_tilize_to_dest_set_src_offset_(tensor_shape, y * y_stride_external);
@@ -152,7 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                        _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                     }
                 }
                 else
@@ -176,6 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
@@ -196,11 +196,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Every thread opens both zones even when it has no work here: the rendezvous waits for all four.
     {
         START_PERF_MEASURE("INIT")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            _llk_math_pack_sync_init_<dest_sync>();
+        }
         if constexpr (!unpack_to_dest)
         {
-            // Only end-to-end and math-isolate runs use the FPU→PACK
-            // dest-dvalid handshake.
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+            // Math isolate keeps the FPU→PACK dest-dvalid producer setup.
+            if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
@@ -251,12 +254,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
+                    _llk_math_wait_for_dest_available_();
                     for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                     {
                         _llk_math_eltwise_unary_datacopy_(i);
                     }
-                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            // Math owns each Dest section and lends it to the unpack-to-dest tilize.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                _llk_math_wait_for_dest_available_();
+                _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();
@@ -293,8 +308,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            constexpr auto dest_producer = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_producer, dest_dvalid_client::PACK});
+            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
@@ -322,8 +336,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                _llk_packer_wait_for_math_done_();
                 _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, tensor_shape);
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();

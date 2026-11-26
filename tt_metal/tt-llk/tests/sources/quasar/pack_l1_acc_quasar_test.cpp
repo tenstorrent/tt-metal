@@ -17,6 +17,7 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "ckernel_buf_desc.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -41,18 +42,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (unpack_to_dest)
+        if constexpr (unpack_to_dest && PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-            {
-                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
-            }
-            else
-            {
-                // CFG persists across run types, so non-L1_TO_L1 runs must not
-                // inherit the unpack-to-dest handshake.
-                set_up_zero_dest_dvalid_handshake_for_unpack();
-            }
+            // CFG persists across run types, so isolates must not inherit a dest-dvalid wait mask.
+            set_up_zero_dest_dvalid_handshake_for_unpack();
         }
 
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
@@ -107,10 +100,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS); block++)
                 {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    }
                     _llk_unpack_unary_operand_to_dest_block_(block * OUTPUT_NUM_TILES_IN_BLOCK /*l1_tile_idx*/, 0 /*dst_tile_idx*/, OUTPUT_NUM_TILES_IN_BLOCK);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                        _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                     }
                 }
             }
@@ -133,6 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
@@ -151,15 +149,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
+    const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
 #endif
     // Every thread opens both zones even when it has no work here: the rendezvous waits for all four.
     {
         START_PERF_MEASURE("INIT")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            _llk_math_pack_sync_init_<dest_sync>();
+        }
         if constexpr (!unpack_to_dest)
         {
-            // Only end-to-end and math-isolate runs use the FPU→PACK
-            // dest-dvalid handshake.
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+            // Math isolate runs keep the FPU→PACK dest-dvalid producer setup.
+            if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
@@ -213,12 +215,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t block = 0; block < num_blocks; block++)
                     {
+                        _llk_math_wait_for_dest_available_();
                         for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                         {
                             _llk_math_eltwise_unary_datacopy_(tile);
                         }
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            // Math owns each Dest section and lends it to the unpack-to-dest copy.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS); block++)
+                {
+                    _llk_math_wait_for_dest_available_();
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -260,14 +277,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-            else
-            {
-                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
+            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
@@ -308,12 +318,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < output_num_blocks; block++)
                 {
+                    _llk_packer_wait_for_math_done_();
                     _llk_pack_set_l1_acc_<p_pacr::PACK0>(block == 0 ? false : true /*l1_acc_en*/);
                     for (std::uint32_t tile = 0; tile < output_tiles_in_block; tile++)
                     {
                         _llk_pack_(tile, tile, ckernel::DEFAULT_TENSOR_SHAPE);
                     }
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }

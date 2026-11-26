@@ -137,9 +137,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(NUM_TILES_IN_BLOCK);
     {
         START_PERF_MEASURE("INIT")
-        // End-to-end and math-isolate runs require FPU destination ownership.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
+            _llk_math_pack_sync_init_<dest_sync>();
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // Math isolate requires FPU destination ownership.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
@@ -189,11 +193,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
+                    _llk_math_wait_for_dest_available_();
                     for (std::uint32_t i = 0; i < tiles_in_block; ++i)
                     {
                         _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
                     }
-                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -235,7 +240,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
+            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
@@ -270,8 +275,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
+                    _llk_packer_wait_for_math_done_();
                     _llk_pack_(DST_INDEX, block * tiles_in_block /*start_l1_tile_idx*/, tensor_shape_A);
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }

@@ -18,6 +18,7 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "ckernel_buf_desc.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -42,22 +43,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (unpack_to_dest)
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-            {
-                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
-            }
-            else
+            if constexpr (unpack_to_dest)
             {
                 // Isolates have no unpack-to-DEST consumer pulse and must not
                 // inherit a handshake from a preceding run type.
                 set_up_zero_dest_dvalid_handshake_for_unpack();
             }
-        }
-        else
-        {
-            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
+            else
+            {
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
+            }
         }
 
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
@@ -90,8 +87,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            // Placer API under the dest-dvalid scheme set up above: the placers carry no synchronization, and the
-            // bank tile offset reset to 0 keeps every section at DEST tile 0, as the bare UNP_DEST MOP had it.
+            // The placers carry no synchronization: in L1_TO_L1 a Dest loan from math brackets them and sets the
+            // section base, so every section starts at DEST tile 0, as the bare UNP_DEST MOP had it.
             _llk_unpack_dest_init_();
             _llk_unpack_unary_operand_to_dest_init_(bfd_unpack, tensor_shape_A);
         }
@@ -131,12 +128,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (unpack_to_dest)
                     {
-                        // One section of tiles_in_block tiles at DEST tile 0, then the dest-dvalid hand-off to the packer.
+                        // One section of tiles_in_block tiles at DEST tile 0, on a loan from math.
+                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                        {
+                            _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                        }
                         _llk_unpack_unary_operand_to_dest_block_(
                             block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block, 1 /*l1_tile_stride*/, tensor_shape_A);
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
-                            _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                            _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                         }
                     }
                     else
@@ -154,6 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
@@ -178,11 +180,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Every thread opens both zones even when it has no work here: the rendezvous waits for all four.
     {
         START_PERF_MEASURE("INIT")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            _llk_math_pack_sync_init_<dest_sync>();
+        }
         if constexpr (!unpack_to_dest)
         {
-            // Only end-to-end and math-isolate runs use the FPU→PACK
-            // dest-dvalid handshake.
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+            // Math isolate keeps the FPU→PACK dest-dvalid producer setup.
+            if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
@@ -233,12 +238,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t block = 0; block < num_blocks; block++)
                     {
+                        _llk_math_wait_for_dest_available_();
                         for (std::uint32_t i = 0; i < tiles_in_block; ++i)
                         {
                             _llk_math_eltwise_unary_datacopy_(i);
                         }
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            // Math owns each Dest section and lends it to the unpack-to-dest copy.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block = 0; block < num_blocks; block++)
+                {
+                    _llk_math_wait_for_dest_available_();
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -279,14 +299,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-            else
-            {
-                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
+            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
@@ -321,8 +334,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
+                    _llk_packer_wait_for_math_done_();
                     _llk_pack_(0 /*start_math_dest_tile_idx*/, block * tiles_in_block /*start_l1_tile_idx*/, tensor_shape_A);
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
