@@ -14,8 +14,8 @@
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-umd/pcie/device_event_reader.hpp>
-#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd-workload/cluster_device_event_listener.hpp>
+#include <tt-umd/tt_device/device_event_reader.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -34,8 +34,6 @@ constexpr uint32_t l1_ecc_polls_per_clock_read = 1024;
 static_assert(std::has_single_bit(l1_ecc_polls_per_clock_read));
 // A released BRISC returns from the handler within its first few instructions.
 constexpr auto brisc_release_timeout = std::chrono::milliseconds(100);
-// One thread waits on each chip's events in turn, so a halt is seen within about this times the number of chips.
-constexpr auto event_read_timeout = std::chrono::milliseconds(10);
 constexpr size_t events_per_read = 16;
 // KMD's TT_EVENT_TYPE_FW_EVENTS_LOST: ARC dropped records before KMD read them; data[0] counts them.
 constexpr uint16_t fw_events_lost_event_type = 0x8000;
@@ -266,24 +264,31 @@ L1EccHaltEventListener::L1EccHaltEventListener(MetalContext& ctx, const std::set
     if (!l1_ecc_halt_enabled(ctx)) {
         return;
     }
+    const auto& driver = ctx.get_cluster().get_driver();
+    // The listener can't tell a chip whose firmware publishes no events, or whose KMD reports event support but lacks
+    // the ioctl, from one with no events yet, so a reader of each chip checks first.
+    std::set<ChipId> event_chip_ids;
     for (ChipId device_id : device_ids) {
-        umd::PCIDevice* pci_device = ctx.get_cluster().get_driver()->get_tt_device(device_id)->get_pci_device();
-        if (pci_device == nullptr) {
-            continue;
-        }
         try {
-            auto reader = std::make_unique<umd::DeviceEventReader>(pci_device->get_device_num());
-            if (reader->is_firmware_attached()) {
-                readers_.emplace_back(device_id, std::move(reader));
+            std::unique_ptr<umd::DeviceEventReader> reader = driver->get_tt_device(device_id)->create_event_reader();
+            if (reader != nullptr && reader->is_firmware_attached()) {
+                event_chip_ids.insert(device_id);
             }
         } catch (const std::exception& e) {
             log_debug(tt::LogMetal, "Chip {}: no device events from KMD: {}", device_id, e.what());
         }
     }
-    log_debug(tt::LogMetal, "L1 ECC halt events read from {} of {} chips", readers_.size(), device_ids.size());
-    if (!readers_.empty()) {
-        thread_ = std::thread([this] { run(); });
+    log_debug(tt::LogMetal, "L1 ECC halt events read from {} of {} chips", event_chip_ids.size(), device_ids.size());
+    if (event_chip_ids.empty()) {
+        return;
     }
+    try {
+        listener_ = driver->create_event_listener(event_chip_ids);
+    } catch (const std::exception& e) {
+        log_debug(tt::LogMetal, "No device event listener: {}", e.what());
+        return;
+    }
+    thread_ = std::thread([this] { run(); });
 }
 
 L1EccHaltEventListener::~L1EccHaltEventListener() {
@@ -291,24 +296,23 @@ L1EccHaltEventListener::~L1EccHaltEventListener() {
         return;
     }
     stop_.store(true, std::memory_order_release);
-    for (auto& [device_id, reader] : readers_) {
-        reader->cancel();
-    }
+    listener_->cancel();
     thread_.join();
 }
 
 void L1EccHaltEventListener::run() {
     try {
         while (!stop_.load(std::memory_order_acquire)) {
-            for (auto& [device_id, reader] : readers_) {
-                const umd::DeviceEventBatch batch = reader->read_for(events_per_read, event_read_timeout);
-                if (batch.lost != 0 || batch.device_reset) {
+            for (const umd::ChipEventBatch& chip_batch : listener_->read(events_per_read)) {
+                const ChipId device_id = chip_batch.chip_id;
+                const umd::DeviceEventBatch& batch = chip_batch.batch;
+                if (batch.lost != 0 || batch.device_lost) {
                     log_warning(
                         tt::LogMetal,
                         "Chip {}: {} device events lost{}; checking for L1 ECC halts",
                         device_id,
                         batch.lost,
-                        batch.device_reset ? " to a device reset" : "");
+                        batch.device_lost ? " to a device reset or removal" : "");
                     ctx_.set_l1_ecc_halt_event(true);
                 }
                 for (const umd::DeviceEvent& e : batch.events) {

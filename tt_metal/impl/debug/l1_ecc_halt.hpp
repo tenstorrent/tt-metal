@@ -8,7 +8,6 @@
 #include <memory>
 #include <set>
 #include <thread>
-#include <utility>
 #include <vector>
 
 #include <internal/l1_ecc_halt.hpp>
@@ -16,7 +15,7 @@
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::umd {
-class DeviceEventReader;
+class ClusterDeviceEventListener;
 }  // namespace tt::umd
 
 // Blackhole silicon: BRISC halts on an L1 DBE and writes l1_ecc_halt_slot_t::record. Waits detect halts through
@@ -66,7 +65,7 @@ private:
     void run();
 
     MetalContext& ctx_;
-    std::vector<std::pair<ChipId, std::unique_ptr<umd::DeviceEventReader>>> readers_;
+    std::unique_ptr<umd::ClusterDeviceEventListener> listener_;
     std::atomic<bool> stop_{false};
     std::thread thread_;
 };

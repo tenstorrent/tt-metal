@@ -28,8 +28,7 @@
 #include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-umd/pcie/device_event_reader.hpp>
-#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/tt_device/device_event_reader.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
 
 #include <tt-metalium/vocabulary/hal_types.hpp>
@@ -345,20 +344,14 @@ TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
     // Created before the halt, since a reader sees only the events that arrive after it. Null when KMD or ARC firmware
     // does not publish device events.
     std::unique_ptr<tt::umd::DeviceEventReader> events;
-    // Null for a chip reached only over Ethernet, which has no event path.
-    auto* pci_device = ctx.get_cluster().get_driver()->get_tt_device(test_target_.chip)->get_pci_device();
-    if (pci_device == nullptr) {
-        log_info(tt::LogTest, "No device events: chip {} has no PCIe device", test_target_.chip);
-    } else {
-        try {
-            events = std::make_unique<tt::umd::DeviceEventReader>(pci_device->get_device_num());
-            if (!events->is_firmware_attached()) {
-                events.reset();
-            }
-        } catch (const std::exception& e) {
+    try {
+        events = ctx.get_cluster().get_driver()->get_tt_device(test_target_.chip)->create_event_reader();
+        if (events != nullptr && !events->is_firmware_attached()) {
             events.reset();
-            log_info(tt::LogTest, "No device events from KMD: {}", e.what());
         }
+    } catch (const std::exception& e) {
+        events.reset();
+        log_info(tt::LogTest, "No device events from KMD: {}", e.what());
     }
 
     auto workload = single_core_workload(hang_kernel, {1});  // raises IRQ 3
