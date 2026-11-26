@@ -649,7 +649,10 @@ FlatProgramHandles add_flat_routed_expert_program(
                 .cat(dyn);
             add_rt(kr, dc, a);
             Args w;
-            w.a(FlatAddr::Down).lit(d % banks).lit(d * p.down_weight_region_bytes).cat(dyn);
+            w.a(FlatAddr::Down)
+                .lit(p.down_bank_pattern[d])
+                .lit(p.down_weight_slot[d] * p.down_weight_region_bytes)
+                .cat(dyn);
             if (y_nc) {
                 w.a(FlatAddr::Y).lit(p.down_first_columns[d]);
             }
