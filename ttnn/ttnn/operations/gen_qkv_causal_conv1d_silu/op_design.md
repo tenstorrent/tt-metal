@@ -157,6 +157,27 @@ Named boundary for "minimum": **DRAM/L1-bank traffic of the interleaved tensors 
 > after these: compute-only 109 µs, of which the precise SiLU is ~68 µs (compute without SiLU
 > 40.5 µs); dataflow-only 99 µs; full 130 µs.
 
+> **Refinement 2 as built (2026-11-26).** Two lamps below changed status, both plan knobs reported in
+> `Plan` and pinnable through `plan_limits`:
+> - "Reader issue rate at tiny `block_ch_tiles`" → **split reader built (ROW_MAJOR)**, but the
+>   mechanism is the DRAM side, not RISC issue: decode is request-rate-bound per DRAM bank
+>   *endpoint* (~12.5 ns / request / port), and NoC1 reaches every bank through a different endpoint
+>   than NoC0. The writer (BRISC, NoC1) reads body rows `[32 − split_rows, 32)` of each tile-row into
+>   the reader's `cb_rows` slot; handshake = `cb_split_requests` (reader → writer, the row's L1
+>   address) + `cb_split_done` (writer → reader). The writer serves every row through the end of the
+>   *next* block before waiting on an output tile-row (rows of the current block are required, the
+>   next block is the prefetch; deadlock-free because the next block's first request needs only
+>   blocks the writer has already drained). `SPLIT_READER_ROWS = 24` (8 / 24 balances NoC0's taps +
+>   history against NoC1). TILE regime: `split_rows = 0`.
+> - New knob `out_group_tiles` (DEST group = `cb_output_tiles` push = writer wait quantum): 1 when a
+>   core owns a single tile-row (the output is all tail: the writer stores tile c while SiLU runs on
+>   c + 1), else `min(w, DEST capacity)` (a 1-tile quantum caps the writer at one 2 KB write in
+>   flight and regressed 004 / 020).
+> - "Bank alignment" (`bank_stagger`) measured null on 001–003 (per-port totals, not order, bind);
+>   parked as `STAGGER_ROW_WALK = False`.
+> Measured (device kernel µs, R1 → R2): 001 8.26 → 6.03, 002 9.75 → 6.83, 003 12.99 → 9.86, 020
+> 73.7 → 59.5, 004 128.2 → 127.4 (medians, noise).
+
 Regime selection function (exact, host): `regime = "rm_staged_window" if input.layout == ttnn.ROW_MAJOR_LAYOUT else "tile_untilize_staged_window"`. The intra-regime paths that only some grids/shapes trigger (multi-block cores → L1 halo copy; core-first block with `t0 > 0` → DRAM halo / extra untilized tile-row; ragged last block) are pinned by `plan_limits` tests in the acceptance test (both regimes).
 
 ### Traffic ranking

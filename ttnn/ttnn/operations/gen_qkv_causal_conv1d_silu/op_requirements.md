@@ -78,7 +78,7 @@ This moves conv1d-012, conv1d-013, conv1d-018 and conv1d-019 from `xfail_expecte
 - The acceptance, supplementary and precision-baseline tests pass.
 - The device time of conv1d-001..004 does not regress.
 
-### [ ] Refinement 2 — Speed up the latency-bound flagged profiles (conv1d-001, -002, -003)
+### [x] Refinement 2 — Speed up the latency-bound flagged profiles (conv1d-001, -002, -003)
 
 **Type**: perf
 
@@ -96,6 +96,23 @@ This moves conv1d-012, conv1d-013, conv1d-018 and conv1d-019 from `xfail_expecte
 - All three stay at or below their target_us.
 - The golden suite is green.
 - No regression across the config-spanning guard set: one representative per kernel path × layout × placement — RM DRAM (004), TILE (005), L1 input (006), L1 output (010), fp32 DEST (011), and the Refinement 1 paths (012 channel-paged, 013 column-window, 018/019 TILE + L1).
+
+**Outcome**:
+- **Measured** (BH 11×10, device kernel µs, R1 → R2):
+  - Targets: 001 8.26 → 6.03 (−27%), 002 9.75 → 6.83 (−30%), 003 12.99 → 9.86 (−24%).
+  - Guard set: 004 128.2 → 127.4 (medians, noise), 005 6.91 → 6.58, 006 6.25 → 5.60, 010 10.41 → 7.25, 011 14.27 → 11.33, 012 19.65 → 15.64, 013 8.10 → 6.19, 018 3.54 → 3.57, 019 18.59 → 18.73, 020 73.7 → 59.5.
+  - Results are bit-identical to R1.
+- **Levers landed**:
+  - Split reader: the writer reads 24 of every 32 rows on NoC1, which reaches each DRAM bank through a second endpoint. Decode is DRAM-request-rate-bound per endpoint, at ~12.5 ns per request.
+  - `out_group_tiles = 1` for single-tile-row plans, so the writer stores tile c while SiLU runs on c + 1.
+- **Measured null or reverted**: `bank_stagger` was null and is parked. A lagged-pop writer regressed 004 and was reverted.
+- **Bottleneck now**:
+  - 001: the reader holds ~240 requests per bank port on banks 0–2 (~4.0 µs), then 1.5 µs of compute, mostly precise SiLU.
+  - 002 / 003: per-core compute (~1 µs per tile) on 80 of 110 cores.
+- **Next, and why not done here**:
+  - "Read wide, compute narrow" pairing for 001: w = 2 reads halve the requests (w = 2 alone measures 5.66 vs 5.86 µs but doubles compute). Not done: it is a cross-core scheme change worth ≤ ~0.7 µs.
+  - A request-aware `select_plan` term: −3.5% on 001, but offline it flips 5 golden plans, including multi-row cells where the request cost is uncalibrated.
+  - SiLU cost (Refinement 3) and non-uniform channel groups to use all 110 cores on 003.
 
 **Verifier notes**:
 - This comes after Refinement 1 because the reader addressing it adds sits on this same critical path; optimize the final reader.

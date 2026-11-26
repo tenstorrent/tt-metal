@@ -3,7 +3,10 @@
 
 """Refinement 2 perf harness (measurement only — DO NOT DELETE).
 
-Run with:  scripts/run_safe_pytest.sh --profile --no-py-zones --run-all "<this file>::test_variant[<id>]" ...
+Run with:  GQKV_PERF_R2=1 scripts/run_safe_pytest.sh --profile --no-py-zones --run-all \
+               "<this file>::test_variant[variant=<v>-case_id=<c>]" ...
+(skipped unless GQKV_PERF_R2=1: a measurement harness, not a regression test — the correctness of
+the knobs it sweeps is pinned by test_split_reader.py.)
 One GenericOpDeviceOperation row per test, in the order given; device kernel ns is read from
 generated/profiler/.logs/cpp_device_perf_report.csv (per-core detail: profile_log_device.csv).
 
@@ -14,6 +17,7 @@ checked against the float64 reference.
 """
 
 import importlib
+import os
 
 import pytest
 
@@ -23,12 +27,17 @@ from tests.ttnn.unit_tests.operations.gen_qkv_causal_conv1d_silu.test_gen_qkv_ca
     _run,
 )
 
+from tests.ttnn.unit_tests.operations.gen_qkv_causal_conv1d_silu.test_reader_addressing import (
+    GOLDEN_CASES,
+    _run_and_check,
+)
+
 op_module = importlib.import_module("ttnn.operations.gen_qkv_causal_conv1d_silu.gen_qkv_causal_conv1d_silu")
 desc_module = importlib.import_module(
     "ttnn.operations.gen_qkv_causal_conv1d_silu.gen_qkv_causal_conv1d_silu_program_descriptor"
 )
 
-CASES = {pc.id.split("_")[0]: pc.values[0] for pc in PHASE0_CASES}
+CASES = {pc.id.split("_")[0]: pc.values[0] for pc in PHASE0_CASES + GOLDEN_CASES}
 
 READER, WRITER, COMPUTE = desc_module.READER_KERNEL_INDEX, desc_module.WRITER_KERNEL_INDEX, 2
 
@@ -85,6 +94,7 @@ def _forced_plan(w):
     return select_plan
 
 
+@pytest.mark.skipif(os.environ.get("GQKV_PERF_R2") != "1", reason="perf harness: set GQKV_PERF_R2=1")
 @pytest.mark.parametrize(
     "case_id",
     [
@@ -99,6 +109,10 @@ def _forced_plan(w):
         "conv1d-014",
         "conv1d-016",
         "conv1d-020",
+        "conv1d-012",
+        "conv1d-013",
+        "conv1d-018",
+        "conv1d-019",
     ],
 )
 @pytest.mark.parametrize("variant", list(VARIANTS))
@@ -120,6 +134,15 @@ def test_variant(device, monkeypatch, case_id, variant):
 
         monkeypatch.setattr(op_module, "create_program_descriptor", create)
     case = CASES[case_id]
+    if w is not None and (sum(case["inputs"][1]) // 32) % w:
+        pytest.skip(f"block_ch_tiles {w} does not divide the channel tiles")
+    if case["inputs"][3] is not None:  # channel-paged history: [1, C/P, 3P] operands (run + check)
+        assert check, "channel-paged cells always check correctness"
+        with op_module.plan_limits(**limits):
+            _run_and_check(device, case)
+        print(f"PLAN {case_id} {variant}: {op_module.get_last_plan()}")
+        op_module._PROGRAM_CACHE.clear()
+        return
     with op_module.plan_limits(**limits):
         outputs, host, device_inputs = _run(device, case)
     print(f"PLAN {case_id} {variant}: {op_module.get_last_plan()}")

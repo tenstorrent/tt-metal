@@ -13,6 +13,8 @@ Every CB is bf16 data (`Float16_b`) under both DEST widths — see audit 2 below
 | `cb_window_tiles` | `TAP_COUNT·w·M` tile pages | `4·w·M_b` = capacity: the tilize helper and the MAC block op both own all three TRISCs, so the tilize pass produces the whole block before the MAC pass consumes it (sequential-helper intermediate) | `{token: spans → M, channel: spans → w, tap: spans → 4 windows, batch: spans → 1}` | Float16_b — exact copies of bf16 input (tilize = data movement); the fp32 accumulation never leaves DEST | compute (windowed tilize) | compute (conv_silu) | windowed_tilize_block → conv_silu_block, per block | Not aliased with `cb_rows` (concurrent: it is filled while the slot is read) nor `cb_output_tiles` (writer drains the previous block's tile-rows while this one is filled) nor `cb_untilized_rows` (the reader may still be copying the last untilized tile-rows when windowed tilize starts: overlapping lifetimes at the phase boundary). It exists only because the shift is a data-movement step before the MAC; the `tilize_fused_mac` deferred regime removes it |
 | `cb_output_tiles` | `OUT_DEPTH·w` tile pages | `w` being packed + `w` being written = `2·w` | `{token: streams → one tile-row at a time, channel: spans → w, tap: streams → reduced in DEST before pack, batch: spans → 1}` | Float16_b — the output ABI is bf16; the sum was rounded once at pack | compute | writer | conv_silu_block → store_block | This IS the pack-into-destination buffer (Rule 3.1): outputs are interleaved tensors on other banks, so no zero-copy is possible; depth 2 = double buffer against the writer |
 | `cb_input_tiles` (TILE regime) | `IN_DEPTH·w` tile pages | `w` being untilized + `w` landing = `2·w` | `{token: streams → one tile-row, channel: spans → w, tap: streams → n/a (raw input), batch: spans → 1}` | Float16_b — bf16 input tiles | reader | compute | load → untilize_rows_block | Not shared: concurrent with `cb_untilized_rows` and `cb_rows`; depth 2 = reader fetch of row j+1 during untilize of row j. Absent in the RM regime |
+| `cb_split_requests` (RM, `split_rows > 0`) | `SPLIT_HANDSHAKE_DEPTH` = 2 pages of 16 B | ≤ 1 (the reader posts tile-row j's request only after the writer signalled j − 1) + 1 slack | `{token: streams → one tile-row, channel: n/a (an L1 address), tap: n/a, batch: n/a}` | Float16_b nominal — holds one uint32 L1 address, never unpacked | reader | writer | per tile-row | Not shared: a second direction of the same handshake needs its own CB (single producer / single consumer); 32 B total. Absent when `split_rows = 0` and in the TILE regime |
+| `cb_split_done` (RM, `split_rows > 0`) | 2 pages of 16 B | ≤ 1 + 1 slack | `{token: streams → one token per tile-row, rest n/a}` | Float16_b nominal — a token, no payload | writer | reader | per tile-row | Not shared (reverse direction of `cb_split_requests`); the writer's rows land in the reader's `cb_rows` slot, so no data buffer is added |
 | `cb_untilized_rows` (TILE regime) | `UNTILIZED_DEPTH·w` tile pages (`w` pages = one tile-row = 32 sticks) | `w` being copied by the reader + `w` being packed = `2·w` | `{token: streams → one tile-row, channel: spans → w, tap: streams → n/a, batch: spans → 1}` | Float16_b — exact bf16 copy | compute (untilize) | reader (L1→L1 copy into `cb_rows`) | untilize_rows_block → load_rows_block | Cannot be folded into `cb_rows`: `cb_rows` needs a single producer and the halo sticks come from the reader, so the untilized body hops through the reader; aliasing it with `cb_window_tiles` rejected (lifetimes overlap at the phase boundary, see above). Absent in the RM regime |
 
 Audit notes:
@@ -44,9 +46,16 @@ footprint(w, M) = ROWS_DEPTH·(32·M + 3)·64·w          # cb_rows        — s
                 + w·2048                               # cb_tap_tiles   — scales with w only
                 + OUT_DEPTH·w·2048                     # cb_output_tiles — scales with w only
                 + [TILE] (IN_DEPTH + UNTILIZED_DEPTH)·w·2048   # TILE hop CBs — scale with w only
-    (depths 2)  = RM:   w·(12288·M + 6528) bytes
+                + [RM, split_rows > 0] 2·SPLIT_HANDSHAKE_DEPTH·16    # split-reader handshake — 64 B, constant
+    (depths 2)  = RM:   w·(12288·M + 6528) (+ 64) bytes
                   TILE: w·(12288·M + 14720) bytes
 ```
+
+> **Refinement 2 update (split reader, output push quantum).** `cb_layout(..., split_rows)` adds the
+> two 32 B handshake CBs only when the plan splits (ROW_MAJOR, `SPLIT_READER_ROWS = 24` by default):
+> 001's footprint goes 18,816 → 18,880 B. `out_group_tiles` changes the push / wait quantum of
+> `cb_output_tiles`, not its capacity (`OUT_DEPTH·w`): a tile-row's groups sum to `w`, so no
+> reservation straddles the ring end.
 
 > **Verifier update (single source).** The Capacity column is produced by exactly one function,
 > `cb_layout(block_ch_tiles, block_rows, regime)` in the program-descriptor module: `footprint()`
@@ -74,7 +83,7 @@ the DRAM-bound target 004 (T 4096, C 2560, 11×10 grid: w 16, G 5, U 22) and the
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| input (RM) | 1× + 3 sticks per core whose range starts at `t0 > 0` (004: 105 cores × 3 KiB = 315 KiB, +1.5%; 001: 0) | the whole core range streams once through `cb_rows`; later blocks' halo is copied from the previous slot in L1, only a core's first halo is re-read | none (core-local halo copies: 3 sticks per later block) |
+| input (RM) | 1× + 3 sticks per core whose range starts at `t0 > 0` (004: 105 cores × 3 KiB = 315 KiB, +1.5%; 001: 0). Refinement 2: same bytes, split by NoC — body rows `[0, 32 − split_rows)` on the reader (NoC0), `[32 − split_rows, 32)` on the writer (NoC1), i.e. 8 / 24 of every tile-row by default | the whole core range streams once through `cb_rows`; later blocks' halo is copied from the previous slot in L1, only a core's first halo is re-read | none (core-local halo copies: 3 sticks per later block; split-reader handshake: 2 × 16 B L1 tokens per tile-row, core-local) |
 | input (TILE) | 1× + one tile-row (`w` tiles) per core with `t0 > 0` | same; the halo needs rows 29..31 of the preceding tile-row | core-local: one L1→L1 copy of every untilized tile-row (1× input bytes, same core) |
 | history | 1× per channel (only the `t0 = 0` core of each group reads it). Requests: token-paged 3 per group; channel-paged (Refinement 1) 3 × (pages the group's channel slice spans) per group, each a contiguous 32-channel-aligned run (conv1d-012, P 160 vs 256-channel groups: ≤ 3 pages → ≤ 9 requests) | only the first tile-row needs it | none |
 | taps | **1× per channel** (implemented regime `tap_multicast_per_group`): only the slot-0 core of each channel group reads row 0 of its tap tiles (2 × 32 B per tap per channel tile) | reuse-shared across the token split; the group's sender multicasts the packed tap tiles to the other `cores_per_group − 1` cores | NoC multicast of `w·2048` B per group to ≤ 3 rectangles (004: 5 groups × 32 KiB); 0 DRAM |
@@ -92,6 +101,12 @@ the DRAM-bound target 004 (T 4096, C 2560, 11×10 grid: w 16, G 5, U 22) and the
 Totals (planner, per-core tap reads), 004: DRAM ≈ 20,480 KiB in + 20,480 KiB out + 15 KiB history + 440 KiB taps + 315 KiB halo
 = 41,730 KiB vs the 40,995 KiB minimum (+1.8%); cross-core NoC traffic 0. 001: 160 KiB + 160 KiB +
 15 KiB + 20 KiB = the minimum.
+
+> **Refinement 2 update (requests per DRAM port).** Decode-size calls are bound by DRAM request
+> *rate*, not bytes: ~12.5 ns per request per bank endpoint (001: halving every bank's stick reads
+> 8.35 → 6.35 µs; halving them on half the banks: no change). NoC0 and NoC1 reach each bank through
+> different endpoints, so the split reader adds a second port per bank: 001 per-bank-port requests
+> 480 → 240 (NoC0: 8 rows + taps + history; NoC1: 24 rows). DRAM crossings are unchanged.
 
 > Cheapest-traffic split considered: channel groups only (`cores_per_group = 1`) — 004: −735 KiB DRAM
 > (−1.8%: no halo re-reads, taps 1×), 0 cross-core. Implemented: channel groups × token ranges with
