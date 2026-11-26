@@ -12,3 +12,7 @@ crash_triage_hang.csv
 nd_report.log
   Built from the f-strings in tt_py_test_utils_common/op_test_base.py log_nd_cores/log_nd_core_summary
   (no real failing run with core mapping on /data yet). Devices 19 and 26 fail; device 18 passes.
+
+iteration_loop.log
+  didt_runner_runs/LOG_2026_11_26_12_00_bh-glx-110-c10u08_b45441987a7/nd/minimal/log: the "Starting iterations" line,
+  iterations 0, 1, 998, 999, and a traceback source line that also contains "Iteration =" (must not count).

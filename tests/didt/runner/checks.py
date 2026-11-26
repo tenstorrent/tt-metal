@@ -7,6 +7,7 @@
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
@@ -181,3 +182,33 @@ def gddr_result(r: Result, found: list[tuple[str, GddrEdc]], metal_by_bus: dict[
     status = worse if r.status in (Status.PASS, Status.WARN) else r.status
     reason = f"{'uncorrected' if uncorrected else 'corrected'} GDDR EDC on {len(found)} instance(s)"
     return Result(status, f"{r.reason}; {reason}" if r.reason else reason, r.details + lines)
+
+
+_LOOP_LINE = re.compile(
+    r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+) \| DEBUG +\| \S+ - (?:(Starting iterations)|Iteration = (\d+), done!)$"
+)
+
+
+def loop_seconds(log: Path) -> tuple[float, int] | None:
+    """op_test_base iteration loop: seconds from "Starting iterations" to the last "Iteration = N, done!" debug line,
+    and the iterations run. Streamed: a full-mesh log reaches several MB with the start near its middle."""
+    start = last = None
+    count = 0
+    try:
+        with open(log, errors="replace") as f:
+            for line in f:
+                if "Iteration" not in line and "Starting iterations" not in line:
+                    continue
+                m = _LOOP_LINE.match(line.rstrip("\n"))
+                if not m:
+                    continue
+                ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S.%f").timestamp()
+                if m.group(2):
+                    start, last, count = ts, None, 0
+                elif start is not None:
+                    last, count = ts, int(m.group(3)) + 1
+    except OSError:
+        return None
+    if start is None or last is None:
+        return None
+    return last - start, count

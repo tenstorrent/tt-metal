@@ -31,6 +31,19 @@ def _chips() -> list[Chip]:
 CHIPS = _chips()
 
 
+def _loop(start: str, end: str, iterations: int) -> str:
+    """op_test_base's own debug lines around the iteration loop."""
+    where = "tt_py_test_utils_common.op_test_base:run_op_test"
+    return (
+        f"2026-11-26 {start} | DEBUG    | {where}:276 - Starting iterations\n"
+        f"2026-11-26 {end} | DEBUG    | {where}:316 - Iteration = {iterations - 1}, done!\n"
+    )
+
+
+ORIGINAL_LOOP = _loop("12:01:00.000", "12:03:44.400", 1000)  # 164.4 s
+RERUN_LOOP = _loop("12:10:00.000", "12:12:50.000", 2486)  # 170.0 s
+
+
 class FakeShell:
     """Stands in for every command the runner launches. outcomes: attempt dir (relative to the run dir) ->
     pass | fail | hang | timeout | raise. Collect output mimics pytest: one missing id hides the whole listing."""
@@ -87,7 +100,7 @@ class FakeShell:
             log.write_text("chip 3 PASS\nchip 1 PASS\nall 2 chips passed\n")
             return 0
         if outcome == "fail":
-            log.write_text((TESTDATA / "nd_report.log").read_text())
+            log.write_text(ORIGINAL_LOOP + (TESTDATA / "nd_report.log").read_text())
             return 1
         if outcome == "r2r":
             log.write_text(
@@ -95,7 +108,7 @@ class FakeShell:
                 "=== 1 failed in 9.00s ===\n"
             )
             return 1
-        log.write_text("skipped windows: 0 -> []\n=== 1 passed in 9.00s ===\n")
+        log.write_text(RERUN_LOOP + "skipped windows: 0 -> []\n=== 1 passed in 9.00s ===\n")
         return 0
 
     def reset_cmds(self, rel):
@@ -437,7 +450,9 @@ def test_pin_core_nd_reruns_every_failing_device(tmp_path):
     p = pins[0]
     assert p["target"] == CHIPS[19].as_dict() and p["trigger"] == "nd"
     assert p["status"] == "WARN" and p["reason"] == "not reproduced on chip alone"
-    assert p["env"] == {"DIDT_DEVICE_ID": "19"}
+    # as long as the original loop ran, and at least twice its iterations
+    assert p["env"] == {"DIDT_DEVICE_ID": "19", "DIDT_MIN_LOOP_SECONDS": "164.4"}
+    assert p["loop"] == {"original_s": 164.4, "rerun_s": 170.0, "rerun_iterations": 2486}
     assert p["opts"] == ["--didt-workload-iterations=2000", "--determinism-check-interval=50", "--timeout=0"]
     assert p["iterations"] == {"--didt-workload-iterations": 2000}
     assert p["cores"]["first"][0]["x"] == 6 and p["cores"]["first"][0]["y"] == 8 and p["cores"]["rerun"] == []
@@ -445,6 +460,7 @@ def test_pin_core_nd_reruns_every_failing_device(tmp_path):
     (call,) = shell.workload_calls("nd/minimal_pin_core_dev19")
     assert call["cmd"].startswith("pytest " + shlex.quote(PIN_MINIMAL) + " --didt-workload-iterations=2000")
     assert call["env"]["DIDT_DEVICE_ID"] == "19" and "TT_MM_THROTTLE_PERF" not in call["env"]
+    assert call["env"]["DIDT_MIN_LOOP_SECONDS"] == "164.4"
     assert shell.reset_cmds("nd/minimal_pin_core_dev19") == ["tt-smi -glx_reset_auto"]
     # run.log shows the pin verdict, not the raw pytest result it was derived from
     assert "nd:minimal pin_core dev 19 result WARN not reproduced on chip alone" in (run_dir / "run.log").read_text()
@@ -468,6 +484,9 @@ def test_pin_core_after_hang_resets_with_tt_smi_r(tmp_path):
     assert p["trigger"] == "hang" and p["target"]["dev"] == 27 and p["status"] == "HANG"
     assert p["cores"]["first"][0] == {"x": 0, "y": 8, "translated": [1, 10]}
     assert shell.reset_cmds("nd/minimal_pin_core_dev27") == ["tt-smi -r"]
+    # the hung attempt logged no iteration loop: doubled iterations only, and say so
+    assert "DIDT_MIN_LOOP_SECONDS" not in p["env"] and p["loop"] == {}
+    assert any(d.startswith("WARNING original loop time unknown") for d in p["details"])
 
 
 def test_pin_core_reset_failure_aborts_the_run(tmp_path):

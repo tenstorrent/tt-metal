@@ -5,6 +5,7 @@
 """didt_runner run loop: collect gate, then per step reset -> run -> tt-smi -> classify, fallbacks on FAIL/HANG."""
 
 import json
+import math
 import os
 import shlex
 import shutil
@@ -23,6 +24,7 @@ from .checks import (
     collected_node_ids,
     gddr_edc,
     gddr_result,
+    loop_seconds,
     missing_node_ids,
     read_tail,
     sweep_skipped_windows,
@@ -50,6 +52,7 @@ HANG_TRIAGE = (
 ITER_OPT = "--didt-workload-iterations"
 ITER_ENV = ("TT_DET_SWEEP_ITERS", "TT_SWEEP_ITERS", "MATMUL_ITERS")
 DEVICE_ID_ENV = "DIDT_DEVICE_ID"
+MIN_LOOP_ENV = "DIDT_MIN_LOOP_SECONDS"
 IDENTITY = ("dev", "bdf", "tray", "asic", "asic_id", "kmd")
 # Triage on a wedged chip can hang too; the bound keeps the hook's `kill -9 $PPID` reachable so the step ends.
 TRIAGE_SECS = 1200
@@ -360,6 +363,17 @@ class Runner:
         elif step.pin_id in self.pin_missing:
             unsupported = f"pin id does not collect: {step.pin_id}"
         test = step.pin_id.split("::")[-1].split("[")[0] if step.pin_id else ""
+        # One chip iterates faster than the full mesh: the rerun loops at least as long as the original did, and at
+        # least twice its iterations.
+        original = loop_seconds(Path(first.log)) if first.log else None
+        loop_env, loop_notes = {}, []
+        if original:
+            loop_env[MIN_LOOP_ENV] = f"{math.ceil(original[0] * 10 - 1e-6) / 10:.1f}"
+        else:
+            loop_notes.append(
+                f"WARNING original loop time unknown (no iteration lines in {first.log or 'no log'}); "
+                "doubled iterations only"
+            )
         for t in targets:
             extra = {
                 "target": {k: t[k] for k in IDENTITY if k in t},
@@ -371,9 +385,10 @@ class Runner:
                 continue
             opts, env_iters, used = double_iterations(step.opts, step.env)
             extra["iterations"] = used
+            extra["loop"] = {"original_s": round(original[0], 1)} if original else {}
             a = Attempt(
                 fb.name,
-                {**env_iters, DEVICE_ID_ENV: str(t["dev"])},
+                {**env_iters, DEVICE_ID_ENV: str(t["dev"]), **loop_env},
                 opts,
                 Status.PENDING,
                 "",
@@ -394,7 +409,10 @@ class Runner:
                 self.note(f"ABORT {self.aborted}")
                 self.save()
                 return
+            if original and (rerun_loop := loop_seconds(Path(a.log))):
+                a.extra["loop"] |= {"rerun_s": round(rerun_loop[0], 1), "rerun_iterations": rerun_loop[1]}
             self._pin_result(step, a, t, test, used)
+            a.details += loop_notes
             self.note(f"{step.key} {fb.name} dev {t['dev']} result {a.status.value} {a.reason}")
             self.save()
 
