@@ -212,7 +212,7 @@
   budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
-# Inter-domain (graph builder, opt-in): two fabric domains, one process each, on linked chips. 2 chips: two
+# Inter-domain (graph builder, opt-in): two fabric domains, one process per mesh, on linked chips. 2 chips: two
 # 1-chip domains; 4 chips: two 1x2 domains. Device ids: two P300s, 0,1 on one board.
 - name: BH fabric inter-domain sanity
   cmd: |
@@ -221,6 +221,8 @@
     ./tests/tt_metal/tt_fabric/inter_domain/run_inter_domain_sanity.sh 0 1
     ./tests/tt_metal/tt_fabric/inter_domain/run_inter_domain_sanity.sh 0,1 2,3 tt_metal/fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
     ./tests/tt_metal/tt_fabric/inter_domain/run_inter_domain_sanity.sh 0,3 1,2 tt_metal/fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
+    # multi-mesh domains: two 1x1 meshes each, VC2 spans both as one 1x2
+    ./tests/tt_metal/tt_fabric/inter_domain/run_inter_domain_sanity.sh 0:1 2:3 tests/tt_metal/tt_fabric/inter_domain/mesh_graph_descriptors/dual_1x1_domain.textproto
   skus:
     bh_quietbox_2:
       timeout: 10
