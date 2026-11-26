@@ -268,7 +268,7 @@ def parallel_bidirectional_scan(
             d *= 2
         if text_state is None:
             return i
-        start = ttnn.repeat(text_state, ttnn.Shape([num_frames, 1, 1, 1]))
+        start = ttnn.repeat(text_state, (num_frames, 1, 1, 1))
         return ttnn.add(split_matmul(start, t, config=config), i)
 
     return run(False), run(True)

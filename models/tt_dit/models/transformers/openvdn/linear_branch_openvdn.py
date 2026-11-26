@@ -329,7 +329,7 @@ class OpenVDNLinearBranch(Module):
 
             def gather(t: ttnn.Tensor) -> ttnn.Tensor:  # local frames on dim 0 -> the F real ones, everywhere
                 t = all_gather(t, 0)
-                return t if t.shape[0] == num_frames else ttnn.slice(t, [0] * 4, [num_frames, *t.shape[1:]])
+                return t if t.shape[0] == num_frames else ttnn.slice(t, [0] * 4, [num_frames, *list(t.shape)[1:]])
 
         local = partition if partition is not None else (lambda t: t)
         query = self.features(q_raw, "q", num_frames, frame_size, partition=partition)
