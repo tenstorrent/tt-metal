@@ -237,8 +237,14 @@ Tensor dit_fused_distributed_groupnorm(
     const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation) {
     using OperationType = ttnn::experimental::prim::DitFusedDistributedGroupnormDeviceOperation;
 
-    auto kernel_config_val = init_device_compute_kernel_config(
-        mesh_device.arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, false, true, false);
+    const auto arch = mesh_device.arch();
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto math_fidelity =
+        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
+    auto kernel_config_val =
+        init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, false, true, false);
 
     const auto& mesh_view = mesh_device.get_view();
     const std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();

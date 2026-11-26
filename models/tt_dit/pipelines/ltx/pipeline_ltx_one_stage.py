@@ -102,7 +102,7 @@ class LTXOneStagePipeline(LTXPipeline):
         # Gemma is coresident-excluded with the DiT/VAE; load it only on a cache miss.
         cached = os.path.exists(self._device_embed_cache_path([prompt, neg]))
         if not cached:
-            self.gemma_encoder_pair.ensure_loaded()
+            self._prepare_gemma()
         enc = self.encode_prompts([prompt, neg])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         neg_v, neg_a = enc[1][0].float(), enc[1][1].float()

@@ -1726,14 +1726,20 @@ def _aliased_arg(name, spec, case, args):
     return args[0] if case["args"][0] == spec else None
 
 
-def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
+def run_case(op, case, mesh_device, *, op_name=None, pcc=None, before_inputs=None, before_op=None):
     """Materialize one captured call, run it, and check the result.
 
     ``op`` is the callable (``ttnn.linear``, or a small lambda for operators like
     ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
+
+    ``before_inputs()`` runs before any input is allocated and ``before_op(args, kwargs)`` runs right
+    before the op is called, with the materialized arguments. Both default to nothing; a test uses them
+    to shape the allocator state the op sees (``test_move_small_grid.py`` forces ``ttnn.move`` to relocate).
     """
     op_name = op_name or case["op"]
     torch_inputs: dict[str, torch.Tensor] = {}
+    if before_inputs is not None:
+        before_inputs()
 
     args = [_build_value(spec, mesh_device, case, op_name, str(i), torch_inputs) for i, spec in enumerate(case["args"])]
     kwargs = {}
@@ -1746,6 +1752,9 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     op = U.quasar_routed(op_name, op)
     for name, value in U.default_kwargs(op_name, mesh_device).items():
         kwargs.setdefault(name, value)
+
+    if before_op is not None:
+        before_op(args, kwargs)
 
     out = op(*args, **kwargs)
 

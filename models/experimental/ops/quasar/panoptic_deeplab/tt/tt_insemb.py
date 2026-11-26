@@ -11,6 +11,7 @@ from models.experimental.ops.quasar.panoptic_deeplab.tt.tt_upsample import (
 )
 from models.experimental.ops.quasar.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype
+from models.experimental.ops.quasar.panoptic_deeplab.tt import quasar_ops
 
 try:
     from tracy import signpost
@@ -187,7 +188,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         signpost("FINAL_UPSAMPLE_INSEMB_OFFSET_END")
 
         # Apply offset scaling
-        offset_logits = ttnn.mul(offset_logits, self.common_stride)
+        offset_logits = quasar_ops.op(offset_logits.device(), "mul")(offset_logits, self.common_stride)
         logger.debug(f"TtPanopticDeepLabInsEmbedHead offset upsample complete - shape: {offset_logits.shape}")
 
         logger.debug("TtPanopticDeepLabInsEmbedHead forward pass complete")

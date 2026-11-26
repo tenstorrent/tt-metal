@@ -75,6 +75,7 @@ ttnn::Tensor sparse_sdpa(
 
     // fp8 q/kv must be tilized through a 32-bit dest accumulator, so default fp32_dest_acc_en on for fp8.
     const bool any_fp8 = (kv.dtype() == ttnn::DataType::FP8_E4M3) || (q.dtype() == ttnn::DataType::FP8_E4M3);
+    ttnn::verify_numerical_configuration(q.device()->arch(), compute_kernel_config);
     auto kernel_config = init_device_compute_kernel_config(
         q.device()->arch(),
         compute_kernel_config,

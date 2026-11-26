@@ -25,6 +25,7 @@ using on-device token count accumulation.
 from __future__ import annotations
 
 import math
+from typing import Iterable
 import numpy as np
 import torch
 import ttnn
@@ -40,6 +41,11 @@ from .autograd_ops import (
     autograd_softmax,
     moe_routing_normalize,
 )
+
+
+# A tensor's own dtype: get_value()'s default (HALF) hands an FP32 tensor, such as the token counts, back as a
+# BF16 copy.
+NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 
 class Expert(AbstractModuleBase):
@@ -220,12 +226,18 @@ class MoE(AbstractModuleBase):
         )
 
         # On-device accumulator for token counts per expert [1, 1, 1, num_experts]
-        # Each forward adds to this; update_expert_bias reads and resets it.
+        # Each forward adds to this; update_expert_biases reads and resets it. FP32: it holds integer counts exactly
+        # (BF16 does so only up to 256), and their average over the devices keeps its fraction through the update's
+        # comparison with the mean.
         self._token_counts = Buffer(
             ttml.autograd.create_tensor(
-                ttnn.zeros(shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE)
+                ttnn.zeros(shape, device=device, dtype=ttnn.DataType.FLOAT32, layout=ttnn.Layout.TILE)
             )
         )
+        # Both buffers are replicated: one bias and one count per expert on every device. A ttnn op on them takes the
+        # topology of its other operand (the counts are summed from the routing activations, which are sharded over
+        # the batch), so prepare_routing_weights stores the counts with this one.
+        self._buffer_topology = self._expert_bias.tensor.get_value().tensor_topology()
 
         # Local expert-id vector [E] consumed by moe_group / moe_ungroup. It is
         # constant across forwards, so build it once here instead of per-step.
@@ -273,8 +285,9 @@ class MoE(AbstractModuleBase):
             routing_weights = scores
 
         mask_bs_flat = ttnn.reshape(expert_mask_all, [1, 1, B * S, self.num_experts])
-        batch_counts = ttnn.sum(mask_bs_flat, dim=-2, keepdim=True)
-        new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
+        batch_counts = ttnn.sum(ttnn.typecast(mask_bs_flat, ttnn.DataType.FLOAT32), dim=-2, keepdim=True)
+        new_counts = ttnn.add(self._token_counts.tensor.get_value(NATIVE), batch_counts)
+        new_counts.update_tensor_topology(self._buffer_topology)
         self._token_counts.tensor.set_value(new_counts)
 
         scores_for_routing = self.gather_topk_weights(routing_weights, topk_indices_u32) if gather_topk else None
@@ -433,31 +446,23 @@ class MoE(AbstractModuleBase):
 
         Returns the fraction of tokens for which each expert was selected,
         accumulated across all forward passes since the last
-        ``update_expert_bias`` (which resets ``_token_counts``). Shape:
+        ``update_expert_biases`` (which resets ``_token_counts``). Shape:
         ``(num_experts,)``, dtype ``float32``, values in ``[0, 1]``.
 
         Uses the self-normalising identity
         ``sum(counts) == n_activated * total_tokens`` so no batch-size /
         grad-accum bookkeeping is required at the call site.
         """
-        counts = ttnn.to_torch(self._token_counts.tensor.get_value())
+        counts = ttnn.to_torch(self._token_counts.tensor.get_value(NATIVE))
         counts_np = counts.float().cpu().numpy().flatten()
         total = float(counts_np.sum())
         if total <= 0.0:
             return np.zeros_like(counts_np, dtype=np.float32)
         return (counts_np * float(self.n_activated) / total).astype(np.float32)
 
-    def update_expert_bias(self, coeff: float = 0.001) -> None:
-        """Auxiliary-loss-free load balancing (DeepSeek-V3 style).
-
-        Reads accumulated token counts from device, computes bias adjustment
-        using sign(mean_count - expert_count), updates bias on device, and
-        resets the counter.
-
-        Call between training steps (e.g., every N steps).
-        """
-        counts_val = self._token_counts.tensor.get_value()
-
+    def _move_bias(self, counts_val: ttnn.Tensor, coeff: float) -> None:
+        """The bias update from ``counts_val``, this layer's ``[1, 1, 1, E]`` counts over the whole batch, and the reset
+        of the counts."""
         # Compute mean token count across experts: [1,1,1,num_experts] -> scalar
         mean_count = ttnn.mean(counts_val, dim=-1, keepdim=True)  # [1,1,1,1]
 
@@ -471,9 +476,38 @@ class MoE(AbstractModuleBase):
         delta = ttnn.subtract(delta, delta_mean)
 
         # Update bias
-        new_bias = ttnn.add(self._expert_bias.tensor.get_value(), delta)
+        bias = self._expert_bias.tensor.get_value()
+        new_bias = ttnn.add(bias, ttnn.typecast(delta, bias.dtype))
         self._expert_bias.tensor.set_value(new_bias)
 
         # Reset token counts
-        zeros = ttnn.zeros_like(counts_val)
+        zeros = ttnn.zeros_like(self._token_counts.tensor.get_value(NATIVE))
         self._token_counts.tensor.set_value(zeros)
+
+
+def update_expert_biases(layers: Iterable[MoE], coeff: float = 0.001) -> None:
+    """Auxiliary-loss-free load balancing (DeepSeek-V3 style) for every MoE layer in ``layers``: moves each expert's bias
+    by ``coeff * sign(mean_count - expert_count)``, centred on zero, from the token counts accumulated over the whole
+    batch since the last update, and resets the counts. Call between training steps (e.g., every N steps).
+
+    A bias is replicated, so every device must make the same update, from the counts of the whole batch, while a
+    device's ``_token_counts`` cover only the tokens it routed: every data-parallel axis ("dp" and "fsdp") gives each
+    device its own slice of the batch. The counts are therefore averaged over every mesh axis. Devices along an axis
+    that routed the same tokens (tensor or expert parallelism, or ``SparseMoEEP``'s batch gathered over "dp") hold equal
+    counts, which the average returns unchanged, and the average gives the update the same signs as the sum. The layers'
+    counts are stacked into one tensor first, so a model's MoE layers make one all-reduce per mesh axis per update
+    rather than one per layer and axis.
+    """
+    layers = list(layers)
+    if not layers:
+        return
+    stacked = [layer._token_counts.tensor.get_value(NATIVE) for layer in layers]
+    counts = stacked[0] if len(stacked) == 1 else ttnn.concat(stacked, dim=1)  # [1, L, 1, E]; dim 1 is not tiled
+    mesh = ttml.maybe_mesh()
+    axes = [] if mesh is None else [mesh.axis_index(name) for name in mesh.axis_names if mesh.axis_size(name) > 1]
+    if axes:
+        counts = ttml.core.distributed.synchronize_tensor(counts, axes, reduce_dtype=ttnn.DataType.FLOAT32)
+    num_experts = counts.shape[-1]
+    for i, layer in enumerate(layers):
+        own = counts if len(layers) == 1 else ttnn.slice(counts, [0, i, 0, 0], [1, i + 1, 1, num_experts])
+        layer._move_bias(own, coeff)

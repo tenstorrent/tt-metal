@@ -26,6 +26,7 @@ namespace tt::tt_metal {
 
 Program BuildProgram(
     distributed::MeshDevice& mesh_device,
+    const distributed::MeshCoordinateRange& devices,
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     [[maybe_unused]] MetalContext& metal_ctx) {
@@ -40,7 +41,7 @@ Program BuildProgram(
 
     // Step 2: Register resources with the Program
     const ProgramResources resources =
-        RegisterResources(mesh_device, spec, collected, risc_masks, metal_env, *program_impl);
+        RegisterResources(mesh_device, devices, spec, collected, risc_masks, metal_env, *program_impl);
 
     // Step 3: Construct Kernels and add them to the Program
     AddKernels(spec, collected, risc_masks, resources, hal, *program_impl);
