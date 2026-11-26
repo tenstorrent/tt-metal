@@ -7,13 +7,16 @@ The decode step of tencent/Hy4-preview on one Blackhole Galaxy (32 chips, 8x4 me
 from kernel sources and launched with `ttnn.generic_op` (kernels are JIT-compiled; nothing here needs a host C++
 change), replayed as one device trace. The ttnn-op decode in `../tt/` is the functional path and the comparison.
 
-State on 2026-11-23: one decode step of all 78 layers runs on the device as one trace, token ids in and token ids
+State on 2026-11-25: one decode step of all 78 layers runs on the device as one trace, token ids in and token ids
 out, with nothing from the host in between; it is bit-equal from replay to replay; its tokens are the reference's on
 the contexts checked (see "Accuracy"). The 21 full-indexer layers are chained into the step (the selection is made
 on the chips in every pass), and `model/decode_model.py` generates from an empty context: it appends its own rows
-and keys, so a conversation needs no prefill stack (a prompt is fed one token per pass). Not done: the prefill stack
-in front of that form at 78 layers, one set of expert weights for both, the MLP half and the full-indexer layer at
-16 rows.
+and keys, so a conversation needs no prefill stack (a prompt is fed one token per pass). Behind the prefill stack
+(`DecodeModel(stores=)`, `adopt_row`) the model is built on the stack's own caches and continues a prompt the stack
+prefilled; at 78 layers both weight sets are resident (the stack in its tp32 layout), prefill passes are replayed
+between decode steps and leave the decoding rows unchanged in every bit. Not done: a serving loop on that form,
+contexts beyond one 8,192-token frame in it, one set of expert weights for both, the MLP half and the full-indexer
+layer at 16 rows.
 
 ## Design
 1. Programs are non-persistent and run under fast dispatch inside one device trace, so they share the open device
@@ -54,6 +57,8 @@ in front of that form at 78 layers, one set of expert weights for both, the MLP 
 | MLP half at a union of 48 | 250 to 300 us |
 | embedding gather / LM head with greedy merge | 20 us / 189 us inside the step |
 | prefill pass by trace replay between decode replays (6 layers) | about 30 ms, then 30 us to restore the decode step's L1 state |
+| the same beside `DecodeModel` at 78 layers, both weight sets resident (the stack in tp32) | 520 ms a pass (one 4,096-token chunk), then 0.2 to 0.3 ms for the restore replay with its synchronize |
+| DRAM a chip with both resident at 78 layers | the stack 15.04 GB, the decode model 15.7 GB; 31.51 of 33.91 GB allocated with both traces captured |
 
 The step's time follows the expert union (about 2.2 us per expert per layer). With the 8 rows taken from different
 contexts (mean union 48.5) the 78-layer step is 46.2 ms, measured, tokens 8 of 8; eight unrelated conversations
@@ -80,6 +85,18 @@ scalar goes when the prefill pack rounds.
 From an empty context (`DecodeModel`: its own rows, rounded to nearest, no scalar; the selection of every full-indexer
 layer made on the chips): 29 of 32 on the same chat prompt, the three lost tokens the ones its host control loses
 with the same expert format, and 48 of 48 row tokens behind a 1,022-token context it wrote itself.
+
+Behind the prefill stack (`DecodeModel(stores=the stack's caches, append="truncate", latent_scale=1.0430)`: the
+prompt's rows and index keys are the stack's, the later ones this model's, every full-indexer layer selects on the
+chips over both; `model/tests/test_prefill_decode.py`), 78 layers: 29 of 32 on the same chat prompt with the same
+three tokens lost, and free-running generation gives the reference's first 20 tokens; 48 of 48 behind a 3,000-token
+prompt, where the picks of the 21 full-indexer layers share 1,967 to 2,036 of 2,048 positions with the reference's
+(the differences beyond its near-ties grow with depth, 0 at layer 0 to 71 at layer 77: the deep layers' keys are the
+stack's own arithmetic). The stack's pack cuts where this model's own append rounds, hence "truncate" and the scalar
+here until the stack's pack rounds. With both weight sets resident (`model/tests/test_prefill_beside_decode.py`,
+78 layers): 8 prefill passes replayed into another slot between the 32 decode steps of 7 rows leave those rows'
+logits equal in every bit to the same steps without them, and the conversation prefilled meanwhile joins on the
+eighth row with logits equal in every bit to the others'.
 
 ### RoPE pairing of the reference
 `modeling_hy_v4.py` rotates half-split pairs `(i, i+32)` of the checkpoint's 64 rope rows; vLLM's Hy4 implementation

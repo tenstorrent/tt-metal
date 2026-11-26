@@ -77,13 +77,15 @@ class DramReserve:
 
     def plug(self, limit=4096):
         """Take every free DRAM block. What cannot be taken (blocks below the allocator's granule) is reported."""
-        last = None
+        # (it ends when an allocation takes nothing: "the largest block is as large as the last one" is not that, since
+        # a deep model's build leaves many free blocks of ONE size between its tensors, and whatever stays free is
+        # where small tensors of ours land, outside the range: 89 of them at 78 layers, log e2e_bd_L78_P31_tp32)
         while len(self.plugs) < limit:
-            largest = dram_view(self.mesh)["largest"]
+            view = dram_view(self.mesh)
+            largest = view["largest"]
             page = PAGE_LARGE if largest >= 1 << 20 else PAGE_SMALL
-            if largest < page or largest == last and page == PAGE_SMALL:
+            if largest < page:
                 break
-            last = largest
             try:
                 self.plugs.append(_allocate(self.mesh, largest, page))
             except RuntimeError as e:  # (out of memory: thrown by the allocator on the host, nothing was sent)
@@ -91,6 +93,8 @@ class DramReserve:
                 if page == PAGE_SMALL:
                     break
                 self.plugs.append(_allocate(self.mesh, largest // 2, page))
+            if dram_view(self.mesh)["free"] >= view["free"]:
+                break
         self.left = dram_view(self.mesh)
         logger.info(
             f"HY4_MK11 reserve: ballast {self.size} B per bank at {self.address}; {len(self.plugs)} plugs; DRAM left free "
