@@ -109,6 +109,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                     }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && dest_sync == ckernel::DstSync::SyncHalf)
+                    {
+                        // Stands in for the loan's bank switch: production unpack takes each section's DEST bank from math.
+                        _llk_unpack_dest_section_advance_<is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }

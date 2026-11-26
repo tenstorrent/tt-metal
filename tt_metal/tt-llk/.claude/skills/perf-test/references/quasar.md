@@ -135,6 +135,10 @@ from `max_dest_tiles(dest_acc, dest_sync)`, which halves when `dest_acc=Yes`, so
   dvalids with no math consumer. When math is compiled out, `MATH_ISOLATE`
   measures an empty run: its metric is missing or is only zone overhead.
   Exclude it from analysis and say so; it is not a math cost.
+- `UNPACK_ISOLATE` with unpack-to-dest runs no loan (math is idle), but in
+  SyncHalf moves to the other DEST bank after each section
+  (`_llk_unpack_dest_section_advance_`): the bank switch production's unpack
+  gets from the loan.
 
 ## Stand-ins
 
