@@ -45,13 +45,13 @@ using namespace tt::tt_metal;
 using namespace tt::tt_fabric::internal;
 namespace fs = std::filesystem;
 
-constexpr uint32_t kNumPackets = 16;
+constexpr uint32_t kNumPackets = 4;  // per pair
 constexpr uint32_t kPacketSize = 1024;
 constexpr uint32_t kBytes = kNumPackets * kPacketSize;
 constexpr uint32_t kHeaderOffset = 0;
-constexpr uint32_t kSrcOffset = 4096;
-constexpr uint32_t kDstOffset = kSrcOffset + kBytes;
-const CoreCoord kCore{0, 0};
+constexpr uint32_t kSrcOffset = 4096;  // a sender's data, a pair after another
+constexpr uint32_t kDstOffset = 4096;  // on kCore, a slot per sending chip
+const CoreCoord kCore{0, 0};           // receives; the senders are on the cores after it
 
 std::optional<uint32_t> env_u32(const char* name) {
     const char* v = std::getenv(name);
@@ -64,6 +64,8 @@ struct PortInfo {
     uint64_t peer_asic = 0;
     uint32_t peer_chan = 0;
     InterDomainMetadata md;
+    uint32_t mesh = 0, chip = 0, plane = 0;
+    uint32_t action = 0;  // its link's direction bit
 };
 struct RxInfo {
     uint32_t x = 0, y = 0, addr = 0;
@@ -95,7 +97,8 @@ std::string to_text(const Side& s) {
     for (const auto& p : s.ports) {
         o << "port " << p.asic << " " << p.chan << " " << p.peer_asic << " " << p.peer_chan << " " << p.md.domain_id
           << " " << p.md.vc2_receiver_channel_addr << " " << p.md.vc2_receiver_channel_slots << " "
-          << p.md.max_packet_size_bytes << " " << p.md.layout_fingerprint << "\n";
+          << p.md.max_packet_size_bytes << " " << p.md.layout_fingerprint << " " << p.mesh << " " << p.chip << " "
+          << p.plane << " " << p.action << "\n";
     }
     for (const auto& [asic, r] : s.rx) {
         o << "rx " << asic << " " << r.x << " " << r.y << " " << r.addr << " " << r.mesh << " " << r.chip << "\n";
@@ -113,7 +116,8 @@ void from_text(const fs::path& path, Side& s) {
         if (kind == "port") {
             PortInfo p;
             in >> p.asic >> p.chan >> p.peer_asic >> p.peer_chan >> p.md.domain_id >> p.md.vc2_receiver_channel_addr >>
-                p.md.vc2_receiver_channel_slots >> p.md.max_packet_size_bytes >> p.md.layout_fingerprint;
+                p.md.vc2_receiver_channel_slots >> p.md.max_packet_size_bytes >> p.md.layout_fingerprint >> p.mesh >>
+                p.chip >> p.plane >> p.action;
             s.ports.push_back(p);
         } else if (kind == "rx") {
             uint64_t asic = 0;
@@ -128,8 +132,10 @@ void from_text(const fs::path& path, Side& s) {
     }
 }
 
-uint32_t pattern(uint32_t domain, uint64_t asic, uint32_t round, uint32_t i) {
-    return (domain << 24) ^ (round << 20) ^ static_cast<uint32_t>(asic * 2654435761u) ^ (i * 0x9E3779B9u);
+// what `from` sends `to`
+uint32_t pattern(uint32_t domain, uint64_t from, uint64_t to, uint32_t round, uint32_t i) {
+    return (domain << 24) ^ (round << 20) ^ static_cast<uint32_t>(from * 2654435761u) ^
+           static_cast<uint32_t>(to * 0x85EBCA77u) ^ (i * 0x9E3779B9u);
 }
 
 // a chip's slot: its index among its domain's chips
@@ -155,12 +161,17 @@ std::map<std::pair<FabricNodeId, chan_id_t>, uint64_t> packets_sent(
     return sent;
 }
 
-// Each domain is one process per mesh of the MGD; processes meet through files in TT_INTER_DOMAIN_DIR. Each domain
-// sends to every chip of the other from each exit chip over its cable, landing there, then VC2 across the peer's
-// domain. One send at a time, plus sends from the exit chip's mesh behind it (VC0 to the exit chip, then the cable); or
-// (all_at_once) every cable's sends together, then the packets each router sent checked against VC2's routes over the
-// domain's mesh (TT_METAL_FABRIC_TELEMETRY=1).
-void run(bool all_at_once) {
+// Each domain is one process per mesh, or per host of a mesh, of the MGD; processes meet through files in
+// TT_INTER_DOMAIN_DIR.
+//   - Sanity, AllPairs: every chip of each domain sends to every chip of the other, over a cable by the pair (so every
+//     cable carries some): from the exit chip straight onto it, from its mesh VC0 to the exit chip, from another mesh
+//     VC0 then VC1 across the meshes; landing on the peer's chip, then VC2 across its domain. A sending chip and cable
+//     at a time (Sanity), or all together (AllPairs).
+//   - Routes: from each exit chip to every chip of the other domain, all together, then the packets each router sent
+//     checked against VC2's routes over the domain's mesh (TT_METAL_FABRIC_TELEMETRY=1).
+enum class Mode { Sanity, AllPairs, Routes };
+void run(Mode mode) {
+    const bool all_at_once = mode != Mode::Sanity;
     const auto domain = env_u32("TT_INTER_DOMAIN_ID");
     const auto peer_domain = env_u32("TT_INTER_DOMAIN_PEER_ID");
     const char* dir_env = std::getenv("TT_INTER_DOMAIN_DIR");
@@ -177,16 +188,29 @@ void run(bool all_at_once) {
     const auto& mesh_graph = control_plane.get_mesh_graph();
     const auto meshes = mesh_graph.get_mesh_ids();
     const uint32_t my_mesh = *mesh->get_fabric_node_id(distributed::MeshCoordinate(0, 0)).mesh_id;
-    auto file = [&](uint32_t d, uint32_t m, const std::string& what) {
-        return dir / ("d" + std::to_string(d) + ".m" + std::to_string(m) + "." + what);
+    const auto my_rank = control_plane.get_local_host_rank_id_binding();
+    // a process: its domain, mesh and host rank
+    using Process = std::tuple<uint32_t, uint32_t, uint32_t>;
+    auto file = [&](const Process& p, const std::string& what) {
+        const auto& [d, m, r] = p;
+        return dir / fmt::format("d{}.m{}.r{}.{}", d, m, r, what);
     };
-    auto mine = [&](const std::string& what) { return file(*domain, my_mesh, what); };
-    // every process of domain d: each mesh's file
+    auto mine = [&](const std::string& what) { return file({*domain, my_mesh, *my_rank}, what); };
+    auto processes = [&](uint32_t d) {
+        std::set<Process> all;
+        for (MeshId m : meshes) {
+            for (const auto& r : mesh_graph.get_host_ranks(m).values()) {
+                all.emplace(d, *m, *r);
+            }
+        }
+        return all;
+    };
+    // every process of domain d: each one's file
     auto gather = [&](uint32_t d, const std::string& what) {
         Side all;
-        for (MeshId m : meshes) {
-            wait_file(file(d, *m, what));
-            from_text(file(d, *m, what), all);
+        for (const auto& p : processes(d)) {
+            wait_file(file(p, what));
+            from_text(file(p, what), all);
         }
         return all;
     };
@@ -194,7 +218,7 @@ void run(bool all_at_once) {
     std::map<uint64_t, distributed::MeshCoordinate> coord_of;
     std::map<uint64_t, IDevice*> device_of;
     std::map<uint64_t, tt::tt_fabric::FabricNodeId> node_of;
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh->shape())) {
+    for (const auto& coord : mesh_graph.get_coord_range(MeshId{my_mesh}, my_rank)) {
         const auto node = mesh->get_fabric_node_id(coord);
         const uint64_t asic = *tt::tt_metal::internal::get_chip_unique_id_from_fabric_node_id(*mesh, node);
         coord_of.emplace(asic, coord);
@@ -216,7 +240,11 @@ void run(bool all_at_once) {
             .chan = port.eth_chan,
             .peer_asic = port.peer_asic,
             .peer_chan = port.peer_chan,
-            .md = get_inter_domain_metadata(port, *domain)});
+            .md = get_inter_domain_metadata(port, *domain),
+            .mesh = *port.node.mesh_id,
+            .chip = port.node.chip_id,
+            .plane = port.plane,
+            .action = 1u << control_plane.routing_direction_to_eth_direction(port.direction)});
         EXPECT_EQ(get_inter_domain_state(port), InterDomainState::DRAIN);
     }
     for (const auto& [asic, dev] : device_of) {
@@ -234,39 +262,50 @@ void run(bool all_at_once) {
     const Side mine_all = gather(*domain, "meta");
     const Side peer = gather(*peer_domain, "meta");
 
+    // every cable of this domain (the lower domain's lowest channel where chips have several), and the port where
+    // this process has it
     struct Cable {
-        InterDomainPort port;
+        PortInfo exit;
         PortInfo peer;
+        std::optional<InterDomainPort> port;
         uint32_t rank = 0;
-        std::pair<uint64_t, uint64_t> chips;
     };
     std::map<std::pair<uint64_t, uint64_t>, Cable> cables;
-    for (size_t i = 0; i < ports.size(); ++i) {
-        const auto& p = me.ports[i];
+    for (const auto& p : mine_all.ports) {
         for (const auto& q : peer.ports) {
             if (q.asic != p.peer_asic || q.chan != p.peer_chan || q.peer_asic != p.asic || q.peer_chan != p.chan) {
                 continue;
             }
             const bool lower = *domain < *peer_domain;
             const uint32_t rank = lower ? p.chan : q.chan;
-            const auto key = lower ? std::pair{p.asic, q.asic} : std::pair{q.asic, p.asic};
-            auto it = cables.find(key);
+            auto it = cables.find({p.asic, q.asic});
             if (it == cables.end() || rank < it->second.rank) {
-                cables[key] = Cable{ports[i], q, rank, {p.asic, q.asic}};
+                cables[{p.asic, q.asic}] = Cable{p, q, std::nullopt, rank};
             }
         }
     }
-    ASSERT_FALSE(cables.empty() && !me.ports.empty()) << "no cable to domain " << *peer_domain;
-    const bool check_routes = all_at_once && MetalContext::instance().rtoptions().get_enable_fabric_telemetry();
+    for (auto& [_, cable] : cables) {
+        for (size_t i = 0; i < ports.size(); ++i) {
+            if (me.ports[i].asic == cable.exit.asic && me.ports[i].chan == cable.exit.chan) {
+                cable.port = ports[i];
+            }
+        }
+    }
+    ASSERT_FALSE(cables.empty()) << "no cable to domain " << *peer_domain;
+    const bool check_routes =
+        mode == Mode::Routes && MetalContext::instance().rtoptions().get_enable_fabric_telemetry();
 
-    const uint32_t region = static_cast<uint32_t>(peer.rx.size()) * kBytes;
+    const uint32_t region = static_cast<uint32_t>(peer.rx.size()) * kBytes;  // a slot per peer chip
     const uint32_t rounds = env_u32("TT_INTER_DOMAIN_ROUNDS").value_or(2);
     for (uint32_t round = 0; round < rounds; ++round) {
+        // both domains' processes: a mesh can send over another's cable
         auto step = [&](const std::string& what) {
             log_info(tt::LogTest, "domain {} mesh {} round {}: {}", *domain, my_mesh, round, what);
             write_file(mine(std::to_string(round) + "." + what), "");
-            for (MeshId m : meshes) {
-                wait_file(file(*peer_domain, *m, std::to_string(round) + "." + what));
+            for (uint32_t d : {*domain, *peer_domain}) {
+                for (const auto& p : processes(d)) {
+                    wait_file(file(p, std::to_string(round) + "." + what));
+                }
             }
         };
         for (const auto& [asic, dev] : device_of) {
@@ -276,18 +315,21 @@ void run(bool all_at_once) {
         step("ready");
 
         for (const auto& [_, cable] : cables) {
+            if (!cable.port) {
+                continue;
+            }
             log_info(
                 tt::LogTest,
                 "domain {}: cable {} chan {} {} plane {} to asic {} chan {}",
                 *domain,
-                cable.port.node,
-                cable.port.eth_chan,
-                cable.port.direction,
-                cable.port.plane,
+                cable.port->node,
+                cable.port->eth_chan,
+                cable.port->direction,
+                cable.port->plane,
                 cable.peer.asic,
                 cable.peer.chan);
-            connect_inter_domain(cable.port, *domain, cable.peer.md);
-            EXPECT_EQ(get_inter_domain_state(cable.port), InterDomainState::SERVICE_TRAFFIC);
+            connect_inter_domain(*cable.port, *domain, cable.peer.md);
+            EXPECT_EQ(get_inter_domain_state(*cable.port), InterDomainState::SERVICE_TRAFFIC);
         }
         // a cable router's worker credits and first stream registers (its receivers', then credits): idle now, and
         // again once its traffic has drained
@@ -310,54 +352,45 @@ void run(bool all_at_once) {
         };
         std::map<std::pair<uint64_t, uint64_t>, std::vector<uint32_t>> idle;
         for (const auto& [key, cable] : cables) {
-            idle[key] = at_rest(cable.port);
+            if (cable.port) {
+                idle[key] = at_rest(*cable.port);
+            }
         }
         const auto before = check_routes ? packets_sent(*mesh, node_of) : decltype(packets_sent(*mesh, node_of)){};
         step("connected");
 
-        // one worker per connection, sending to each of `to` in turn
+        // one worker per sending chip and cable, sending to each of `to` in turn
         struct Send {
             uint64_t from;
-            uint64_t via;
+            const Cable* cable;
             std::vector<uint64_t> to;
-            std::optional<FabricNodeId> behind;  // over VC0 to this exit chip first
-            uint32_t out_cable = 0;
-            std::function<void(Program&, const CoreCoord&, std::vector<uint32_t>&)> connect;
         };
         std::vector<Send> sends;
+        std::vector<const Cable*> by_index;
         for (const auto& [_, cable] : cables) {
-            const auto [exit_chip, peer_chip] = cable.chips;
-            const auto port = cable.port;
-            auto over_cable = [port](Program& program, const CoreCoord& core, std::vector<uint32_t>& args) {
-                append_inter_domain_connection_rt_args(port, program, core, args);
-            };
-            std::vector<uint64_t> all;
-            for (const auto& [to, _] : peer.rx) {
-                all.push_back(to);
-            }
-            if (all_at_once) {
-                sends.push_back(Send{exit_chip, peer_chip, all, std::nullopt, 0, over_cable});
-                continue;
-            }
-            for (uint64_t to : all) {
-                sends.push_back(Send{exit_chip, peer_chip, {to}, std::nullopt, 0, over_cable});
-            }
-            const auto exit = node_of.at(exit_chip);
-            for (const auto& [asic, dev] : device_of) {
-                const auto from = node_of.at(asic);
-                if (asic == exit_chip || from.mesh_id != exit.mesh_id) {
-                    continue;
+            by_index.push_back(&cable);
+        }
+        if (mode == Mode::Routes) {
+            for (const auto& [_, cable] : cables) {
+                if (cable.port) {
+                    Send send{cable.exit.asic, &cable, {}};
+                    for (const auto& [to, _] : peer.rx) {
+                        send.to.push_back(to);
+                    }
+                    sends.push_back(send);
                 }
-                sends.push_back(Send{
-                    asic,
-                    peer_chip,
-                    {peer_chip},
-                    exit,
-                    1u << control_plane.routing_direction_to_eth_direction(port.direction),
-                    [&mesh, from, exit, plane = port.plane](
-                        Program& program, const CoreCoord& core, std::vector<uint32_t>& args) {
-                        append_fabric_connection_rt_args(*mesh, from, exit, plane, program, core, args);
-                    }});
+            }
+        } else if (!by_index.empty()) {
+            for (const auto& [from, _] : device_of) {
+                std::map<const Cable*, Send> by_cable;
+                uint32_t d = 0;
+                for (const auto& [to, _] : peer.rx) {
+                    const Cable* cable = by_index[(slot_of(mine_all, from) + d++) % by_index.size()];
+                    by_cable.try_emplace(cable, Send{from, cable, {}}).first->second.to.push_back(to);
+                }
+                for (auto& [_, send] : by_cable) {
+                    sends.push_back(std::move(send));
+                }
             }
         }
         Side sent;
@@ -366,12 +399,14 @@ void run(bool all_at_once) {
         for (auto& send : sends) {
             IDevice* dev = device_of.at(send.from);
             const uint32_t base = dev->allocator()->get_base_allocator_addr(HalMemType::L1);
-            const uint32_t k = all_at_once ? cores_used[send.from]++ : 0;
+            const uint32_t k = 1 + (all_at_once ? cores_used[send.from]++ : 0);
             const auto grid = dev->compute_with_storage_grid_size();
             const CoreCoord core{k % grid.x, k / grid.x};
-            std::vector<uint32_t> data(kBytes / 4);
-            for (uint32_t i = 0; i < data.size(); ++i) {
-                data[i] = pattern(*domain, send.from, round, i);
+            std::vector<uint32_t> data;
+            for (uint64_t to : send.to) {
+                for (uint32_t i = 0; i < kBytes / 4; ++i) {
+                    data.push_back(pattern(*domain, send.from, to, round, i));
+                }
             }
             tt::tt_metal::detail::WriteToDeviceL1(dev, core, base + kSrcOffset, data);
             Program single = CreateProgram();
@@ -384,33 +419,49 @@ void run(bool all_at_once) {
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = NOC::RISCV_0_default,
                     .defines = {{"FABRIC_2D", "1"}}});
+            const auto& exit = send.cable->exit;
+            // onto the cable here; to the exit chip, on this mesh; or toward the exit's mesh
+            const uint32_t route = send.from == exit.asic ? 0 : exit.mesh == my_mesh ? 1 : 2;
             std::vector<uint32_t> args = {
                 base + kSrcOffset,
                 base + kHeaderOffset,
                 kNumPackets,
                 kPacketSize,
-                send.behind.has_value(),
-                send.behind ? send.behind->chip_id : 0,
-                send.behind ? *send.behind->mesh_id : 0,
-                send.out_cable};
+                route,
+                exit.chip,
+                exit.mesh,
+                exit.action};
             args.push_back(static_cast<uint32_t>(send.to.size()));
             for (uint64_t to : send.to) {
                 const auto& rx = peer.rx.at(to);
                 args.insert(
                     args.end(), {rx.x, rx.y, rx.addr + slot_of(mine_all, send.from) * kBytes, rx.mesh, rx.chip});
-                sent.sent.emplace(send.from, send.via, to);
+                sent.sent.emplace(send.from, send.cable->peer.asic, to);
             }
-            send.connect(program, core, args);
+            if (route == 0) {
+                append_inter_domain_connection_rt_args(*send.cable->port, program, core, args);
+            } else {
+                append_fabric_connection_rt_args(
+                    *mesh,
+                    node_of.at(send.from),
+                    FabricNodeId(MeshId{exit.mesh}, exit.chip),
+                    exit.plane,
+                    program,
+                    core,
+                    args);
+            }
             SetRuntimeArgs(program, kernel, core, args);
             if (!all_at_once) {
                 log_info(
                     tt::LogTest,
-                    "domain {}: send {} -> {} via {}{}",
+                    "domain {}: {} sends {} via {} ({})",
                     *domain,
                     send.from,
-                    send.to.front(),
-                    send.via,
-                    send.behind ? " behind" : "");
+                    send.to.size(),
+                    send.cable->peer.asic,
+                    route == 0   ? "on the exit chip"
+                    : route == 1 ? "this mesh"
+                                 : "another mesh");
                 distributed::MeshWorkload workload;
                 workload.add_program(distributed::MeshCoordinateRange(coord_of.at(send.from)), std::move(single));
                 distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, true);
@@ -447,7 +498,7 @@ void run(bool all_at_once) {
                 }
                 wrong = 0;
                 for (uint32_t i = 0; i < kBytes / 4; ++i) {
-                    wrong += got[i] != pattern(*peer_domain, from, round, i);
+                    wrong += got[i] != pattern(*peer_domain, from, to, round, i);
                 }
                 if (wrong == 0) {
                     break;
@@ -456,17 +507,19 @@ void run(bool all_at_once) {
                     // each wrong packet: stale (zero or last round's), or whose data it holds
                     std::map<std::string, uint32_t> kinds;
                     for (uint32_t p = 0; p < kBytes / 4; p += 256) {
-                        if (got[p] == pattern(*peer_domain, from, round, p)) {
+                        if (got[p] == pattern(*peer_domain, from, to, round, p)) {
                             continue;
                         }
                         std::string kind = "other";
-                        if (got[p] == 0 || (round > 0 && got[p] == pattern(*peer_domain, from, round - 1, p))) {
+                        if (got[p] == 0 || (round > 0 && got[p] == pattern(*peer_domain, from, to, round - 1, p))) {
                             kind = "stale";
                         }
                         for (const auto& [asic, _] : peer.rx) {
-                            for (uint32_t j = 0; j < kBytes / 4; j += 256) {
-                                if (got[p] == pattern(*peer_domain, asic, round, j)) {
-                                    kind = fmt::format("asic {} packet {}", asic, j / 256);
+                            for (const auto& [dst, _] : mine_all.rx) {
+                                for (uint32_t j = 0; j < kBytes / 4; j += 256) {
+                                    if (got[p] == pattern(*peer_domain, asic, dst, round, j)) {
+                                        kind = fmt::format("asic {} to asic {} packet {}", asic, dst, j / 256);
+                                    }
                                 }
                             }
                         }
@@ -485,6 +538,10 @@ void run(bool all_at_once) {
                                  << " words wrong";
         }
         log_info(tt::LogTest, "domain {} mesh {} round {}: checked {} sends", *domain, my_mesh, round, checked);
+        if (mode != Mode::Routes) {
+            EXPECT_EQ(checked, device_of.size() * peer.rx.size())
+                << "round " << round << ": every peer chip to each here";
+        }
 
         if (check_routes) {
             // VC2 over the domain's mesh, Y then X from the landing chip: the packets each of this process's routers
@@ -560,10 +617,13 @@ void run(bool all_at_once) {
 
         // no error handling yet: each cable's router drains, its worker credited back and nothing left to land, first
         for (const auto& [key, cable] : cables) {
-            while (at_rest(cable.port) != idle.at(key)) {
+            if (!cable.port) {
+                continue;
+            }
+            while (at_rest(*cable.port) != idle.at(key)) {
                 ASSERT_LT(std::chrono::steady_clock::now(), deadline)
-                    << "cable " << cable.port.node << " never drained: ["
-                    << fmt::format("{}", fmt::join(at_rest(cable.port), ",")) << "], at rest ["
+                    << "cable " << cable.port->node << " never drained: ["
+                    << fmt::format("{}", fmt::join(at_rest(*cable.port), ",")) << "], at rest ["
                     << fmt::format("{}", fmt::join(idle.at(key), ",")) << "]";
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
@@ -571,8 +631,10 @@ void run(bool all_at_once) {
         step("drained");
 
         for (const auto& [_, cable] : cables) {
-            disconnect_inter_domain(cable.port);
-            EXPECT_EQ(get_inter_domain_state(cable.port), InterDomainState::DRAIN);
+            if (cable.port) {
+                disconnect_inter_domain(*cable.port);
+                EXPECT_EQ(get_inter_domain_state(*cable.port), InterDomainState::DRAIN);
+            }
         }
         step("done");
     }
@@ -580,9 +642,11 @@ void run(bool all_at_once) {
     SetFabricConfig(FabricConfig::DISABLED);
 }
 
-TEST(InterDomain, Sanity) { run(/*all_at_once=*/false); }
+TEST(InterDomain, Sanity) { run(Mode::Sanity); }
 
-TEST(InterDomain, AllAtOnce) { run(/*all_at_once=*/true); }
+TEST(InterDomain, AllPairs) { run(Mode::AllPairs); }
+
+TEST(InterDomain, AllAtOnce) { run(Mode::Routes); }
 
 }  // namespace
 }  // namespace tt::tt_fabric::inter_domain_test
