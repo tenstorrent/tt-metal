@@ -33,10 +33,10 @@ void bind_interleaved_to_sharded(nb::module_& mod) {
         Args:
             input_tensor (ttnn.Tensor): the interleaved input tensor, on device. A TILE input must have 32x32 tiles.
             sharded_memory_config (ttnn.MemoryConfig): sharded memory configuration of the output, see Memory Support. For a TILE input, the shard height and width must be multiples of 32. For a ROW_MAJOR input, the shard width in bytes must be a multiple of 16.
-            output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. A TILE input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN when the dtype changes.
+            output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. A TILE input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN or -0.0 when the dtype changes.
 
         Keyword Args:
-            keep_l1_aligned (bool, optional): Defaults to `False`.
+            keep_l1_aligned (bool, optional): Defaults to `False`. The output's shards are L1-aligned for either value.
             preallocated_output (ttnn.Tensor, optional): Tensor to write the output into, on the input's device. It must have the input's shape and layout, the output dtype and `sharded_memory_config` as its memory configuration. Defaults to `None`.
 
         Returns:

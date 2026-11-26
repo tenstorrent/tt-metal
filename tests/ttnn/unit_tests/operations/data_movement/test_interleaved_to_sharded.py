@@ -518,9 +518,8 @@ def test_interleaved_to_sharded_docstring_blackhole_inputs(
     def read(tensor):
         return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
 
-    torch.manual_seed(0)
     input_tensor = ttnn.from_torch(
-        torch.randn(_I2S_SHAPE) * 8,
+        full_range_input(_I2S_SHAPE, dtype),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -556,7 +555,7 @@ def test_interleaved_to_sharded_docstring_blackhole_inputs(
 @pytest.mark.parametrize("input_dtype, output_dtype", _docstring_output_dtype_pairs(ttnn.interleaved_to_sharded))
 def test_interleaved_to_sharded_docstring_output_dtype(input_dtype, output_dtype, buffer_type, device):
     """Converts a TILE input between every two dtypes the ttnn.interleaved_to_sharded output_dtype line names, with a
-    memory config and from a core grid. The input values are exact in both dtypes, so the output keeps them. Zeros are
+    memory config, into a preallocated output of the output dtype and from a core grid. The input values are exact in both dtypes, so the output keeps them. Zeros are
     compared by value."""
     check_readable(input_dtype, output_dtype, buffer_type)
     input_tensor = ttnn.from_torch(
@@ -580,6 +579,13 @@ def test_interleaved_to_sharded_docstring_output_dtype(input_dtype, output_dtype
             output_dtype,
         ),
     ]
+    preallocated_output = ttnn.allocate_tensor_on_device(
+        input_tensor.shape, output_dtype, ttnn.TILE_LAYOUT, device, memory_config
+    )
+    outputs.append(
+        ttnn.interleaved_to_sharded(input_tensor, memory_config, output_dtype, preallocated_output=preallocated_output)
+    )
+    outputs.append(preallocated_output)
 
     expected = ttnn.to_torch(input_tensor)
     for output in outputs:
