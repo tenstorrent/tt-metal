@@ -5,17 +5,21 @@
 #include "dram_counters.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <utility>
 
+#include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/program.hpp>
+#include <internal/service/service_core_manager.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_paths.hpp"
@@ -26,6 +30,7 @@
 namespace tt::tt_metal::dram_counters {
 
 namespace dc = llk::perf::dram;
+using llk::perf::noc::NocCounter;
 
 namespace {
 
@@ -36,11 +41,25 @@ constexpr auto kCalibrationGap = std::chrono::milliseconds(20);
 
 // One read counter and the two write data counters are enough for a traffic number; fewer registers means fewer
 // reads, and every read of a tile is itself counted by it.
-constexpr dc::DramCounter kCaptured[] = {
-    dc::DramCounter::NIU_SLV_RD_DATA_WORD_SENT,
-    dc::DramCounter::NIU_SLV_NONPOSTED_WR_DATA_WORD_RECEIVED,
-    dc::DramCounter::NIU_SLV_POSTED_WR_DATA_WORD_RECEIVED,
+struct Captured {
+    NocCounter counter;
+    const char* name;
+    bool read;
 };
+constexpr Captured kCaptured[] = {
+    {NocCounter::SLV_RD_DATA_WORD_SENT, "SLV_RD_DATA_WORD_SENT", true},
+    {NocCounter::SLV_NONPOSTED_WR_DATA_WORD_RECEIVED, "SLV_NONPOSTED_WR_DATA_WORD_RECEIVED", false},
+    {NocCounter::SLV_POSTED_WR_DATA_WORD_RECEIVED, "SLV_POSTED_WR_DATA_WORD_RECEIVED", false},
+};
+
+const Captured* captured(NocCounter counter) {
+    for (const Captured& c : kCaptured) {
+        if (c.counter == counter) {
+            return &c;
+        }
+    }
+    return nullptr;
+}
 
 std::optional<dc::Arch> arch_of(tt::ARCH arch) {
     switch (arch) {
@@ -54,7 +73,7 @@ std::optional<dc::Arch> arch_of(tt::ARCH arch) {
 struct Pending {
     Reading before;
     uint64_t program_id = 0;
-    bool overlapped = false;
+    uint32_t flags = 0;
 };
 
 struct Controller {
@@ -66,27 +85,44 @@ struct Controller {
 };
 
 struct DeviceState {
+    std::mutex mutex;
     bool disabled = false;
     bool initialized = false;
     std::vector<Controller> controllers;  // empty unless the controller capture is on and found its registers
     bool controller_open = false;
+    std::filesystem::path controller_state;  // where the firmware values wait while the controllers are open
     Plan plan;
     Coupling coupling;
     std::vector<std::pair<uint32_t, uint32_t>> tiles;  // translated x, y
     std::vector<uint32_t> tile_noc0_y;                 // selects the NIU register instance of the tile
-    std::vector<uint32_t> tile_reads;  // register reads issued to each tile so far
+    std::vector<uint32_t> tile_reads;                  // register reads issued to each tile so far
     std::vector<double> idle_per_pair;
     std::vector<double> idle_per_second;
     std::optional<Pending> pending;
-    uint64_t launch_seq = 0;
 };
 
-std::mutex g_mutex;
+std::mutex g_devices_mutex;
 // Contexts can share chip ids, so the state is per context and chip.
-std::map<std::pair<int, ChipId>, DeviceState> g_devices;
+std::map<std::pair<int, ChipId>, std::unique_ptr<DeviceState>> g_devices;
+// The files and the launch sequence are shared by every device and context of the process.
+std::mutex g_log_mutex;
 bool g_traffic_started = false;
 bool g_idle_started = false;
 bool g_controller_started = false;
+std::atomic<uint64_t> g_launch_seq{0};
+
+DeviceState* state_of(MetalContext& ctx, ChipId chip, bool create) {
+    std::lock_guard<std::mutex> lock(g_devices_mutex);
+    const auto key = std::make_pair(ctx.get_context_id().get(), chip);
+    auto it = g_devices.find(key);
+    if (it == g_devices.end()) {
+        if (!create) {
+            return nullptr;
+        }
+        it = g_devices.emplace(key, std::make_unique<DeviceState>()).first;
+    }
+    return it->second.get();
+}
 
 uint32_t read_one(MetalContext& ctx, ChipId chip, DeviceState& st, size_t tile, uint64_t addr, uint32_t& index) {
     uint32_t value = 0;
@@ -95,36 +131,24 @@ uint32_t read_one(MetalContext& ctx, ChipId chip, DeviceState& st, size_t tile, 
     return value;
 }
 
-Reading read_all(MetalContext& ctx, ChipId chip, DeviceState& st) {
-    const Plan& plan = st.plan;
-    Reading reading;
-    reading.values.reserve(plan.reading_size());
-    reading.tile_reads.reserve(plan.reading_size());
-    reading.time = std::chrono::steady_clock::now();
-    for (size_t t = 0; t < st.tiles.size(); t++) {
-        for (uint32_t noc = 0; noc < plan.num_nocs; noc++) {
-            for (size_t c = 0; c < plan.counters.size(); c++) {
-                uint32_t index = 0;
-                reading.values.push_back(read_one(
-                    ctx, chip, st, t, dc::niu_address(plan.arch, noc, st.tile_noc0_y[t], plan.offsets[c]), index));
-                reading.tile_reads.push_back(index);
-            }
-        }
-    }
-    return reading;
-}
-
-// Only the write counters: what the settle loop watches. It never waits on a read counter.
-std::vector<uint32_t> read_writes(MetalContext& ctx, ChipId chip, DeviceState& st) {
+// The captured counters that keep(slot) selects, in Reading order; the read index of each goes to tile_reads if given.
+template <typename Keep>
+std::vector<uint32_t> read_counters(
+    MetalContext& ctx, ChipId chip, DeviceState& st, Keep keep, std::vector<uint32_t>* tile_reads = nullptr) {
     const Plan& plan = st.plan;
     std::vector<uint32_t> values;
+    values.reserve(plan.reading_size());
     for (size_t t = 0; t < st.tiles.size(); t++) {
         for (uint32_t noc = 0; noc < plan.num_nocs; noc++) {
             for (size_t c = 0; c < plan.counters.size(); c++) {
-                if (is_write_counter(plan.counters[c])) {
-                    uint32_t index = 0;
-                    values.push_back(read_one(
-                        ctx, chip, st, t, dc::niu_address(plan.arch, noc, st.tile_noc0_y[t], plan.offsets[c]), index));
+                if (!keep(c)) {
+                    continue;
+                }
+                uint32_t index = 0;
+                values.push_back(read_one(
+                    ctx, chip, st, t, dc::niu_address(plan.arch, noc, st.tile_noc0_y[t], plan.regs[c]), index));
+                if (tile_reads != nullptr) {
+                    tile_reads->push_back(index);
                 }
             }
         }
@@ -132,12 +156,24 @@ std::vector<uint32_t> read_writes(MetalContext& ctx, ChipId chip, DeviceState& s
     return values;
 }
 
+Reading read_all(MetalContext& ctx, ChipId chip, DeviceState& st) {
+    Reading reading;
+    reading.time = std::chrono::steady_clock::now();
+    reading.values = read_counters(ctx, chip, st, [](size_t) { return true; }, &reading.tile_reads);
+    return reading;
+}
+
+// What the settle loop watches. It never waits on a read counter.
+std::vector<uint32_t> read_writes(MetalContext& ctx, ChipId chip, DeviceState& st) {
+    return read_counters(ctx, chip, st, [&](size_t c) { return is_write_counter(st.plan.counters[c]); });
+}
+
 double median(std::vector<double> v) {
     std::sort(v.begin(), v.end());
     return v[v.size() / 2];
 }
 
-// Words per own read that a back-to-back read of the read counter of the first tile adds, per NoC.
+// Words per own read that back-to-back reads of a tile's read counter add, per tile and NoC.
 Coupling measure_coupling(MetalContext& ctx, ChipId chip, DeviceState& st) {
     const Plan& plan = st.plan;
     size_t read_slot = 0;
@@ -146,24 +182,27 @@ Coupling measure_coupling(MetalContext& ctx, ChipId chip, DeviceState& st) {
             read_slot = c;
         }
     }
-    Coupling coupling(plan.num_nocs, 0);
-    for (uint32_t noc = 0; noc < plan.num_nocs; noc++) {
-        const uint64_t addr = dc::niu_address(plan.arch, noc, st.tile_noc0_y[0], plan.offsets[read_slot]);
-        uint32_t first_index = 0, last_index = 0;
-        const uint32_t first = read_one(ctx, chip, st, 0, addr, first_index);
-        uint32_t last = first;
-        for (int i = 0; i < kCouplingReads; i++) {
-            last = read_one(ctx, chip, st, 0, addr, last_index);
-        }
-        const double per_read = double(uint32_t(last - first)) / double(last_index - first_index);
-        coupling[noc] = per_read >= 0.5 ? 1u : 0u;
-        if (per_read > 0.05 && std::abs(per_read - 1.0) > 0.05) {
-            log_warning(
-                tt::LogMetal,
-                "TT_METAL_PROFILE_DRAM_COUNTERS: reading a DRAM tile NIU read counter on NoC {} adds {:.2f} words per "
-                "read, expected 0 or 1; other traffic probably ran during the measurement",
-                noc,
-                per_read);
+    Coupling coupling(st.tiles.size() * plan.num_nocs, 0);
+    for (size_t t = 0; t < st.tiles.size(); t++) {
+        for (uint32_t noc = 0; noc < plan.num_nocs; noc++) {
+            const uint64_t addr = dc::niu_address(plan.arch, noc, st.tile_noc0_y[t], plan.regs[read_slot]);
+            uint32_t first_index = 0, last_index = 0;
+            const uint32_t first = read_one(ctx, chip, st, t, addr, first_index);
+            uint32_t last = first;
+            for (int i = 0; i < kCouplingReads; i++) {
+                last = read_one(ctx, chip, st, t, addr, last_index);
+            }
+            const double per_read = double(uint32_t(last - first)) / double(last_index - first_index);
+            coupling[t * plan.num_nocs + noc] = per_read >= 0.5 ? 1u : 0u;
+            if (per_read > 0.05 && std::abs(per_read - 1.0) > 0.05) {
+                log_warning(
+                    tt::LogMetal,
+                    "TT_METAL_PROFILE_DRAM_COUNTERS: reading the read counter of DRAM tile {} on NoC {} adds {:.2f} "
+                    "words per read, expected 0 or 1; other traffic probably ran during the measurement",
+                    t,
+                    noc,
+                    per_read);
+            }
         }
     }
     return coupling;
@@ -177,8 +216,7 @@ std::vector<double> window_words(const DeviceState& st, const Reading& a, const 
     return out;
 }
 
-// Two terms of the drift left after the own reads are removed: a cost per snapshot pair, and a rate in time that is
-// the traffic of other agents.
+// The drift left after the own reads are removed: a cost per snapshot pair and a rate in time.
 void calibrate_idle(MetalContext& ctx, ChipId chip, DeviceState& st) {
     std::vector<std::vector<double>> tight, spaced;
     std::vector<double> tight_seconds, spaced_seconds;
@@ -219,7 +257,7 @@ std::filesystem::path log_path(std::string_view name) {
     return dir / name;
 }
 
-// The first write of a process starts a fresh file.
+// The first write of a process starts a fresh file. Callers hold g_log_mutex.
 std::ofstream open_log(std::string_view name, std::string_view header, bool& started) {
     std::ofstream out(log_path(name), started ? std::ios::app : std::ios::trunc);
     if (!started) {
@@ -246,7 +284,8 @@ Coordinates locate(const Plan& plan, size_t index) {
 }
 
 void write_idle_log(ChipId chip, const DeviceState& st) {
-    std::ofstream out = open_log(IDLE_LOG, IDLE_HEADER, g_idle_started);
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    std::ofstream out = open_log(IDLE_LOG, dc::IDLE_HEADER, g_idle_started);
     for (size_t i = 0; i < st.idle_per_pair.size(); i++) {
         if (st.idle_per_pair[i] == 0.0 && st.idle_per_second[i] == 0.0) {
             continue;
@@ -266,6 +305,56 @@ uint32_t controller_read(MetalContext& ctx, ChipId chip, const Controller& c, ui
 
 void controller_write(MetalContext& ctx, ChipId chip, const Controller& c, uint64_t addr, uint32_t value) {
     ctx.get_cluster().write_reg(&value, tt_cxy_pair(chip, c.tile.first, c.tile.second), addr);
+}
+
+// One file per card in the temp directory, so a later process finds what a process that died with the controllers
+// open could not put back.
+std::filesystem::path controller_state_path(MetalContext& ctx, ChipId chip) {
+    const auto& ids = ctx.get_cluster().get_unique_chip_ids();
+    const auto it = ids.find(chip);
+    if (it == ids.end()) {
+        return {};
+    }
+    return std::filesystem::temp_directory_path() / fmt::format("tt_metal_dram_controller_{:016x}.state", it->second);
+}
+
+void save_controller_state(const DeviceState& st) {
+    if (st.controller_state.empty()) {
+        return;
+    }
+    std::ofstream out(st.controller_state, std::ios::trunc);
+    for (const Controller& c : st.controllers) {
+        out << c.tile.first << " " << c.tile.second << " " << c.saved_interval << " " << c.saved_axi_control << "\n";
+    }
+}
+
+// Puts back the firmware values a crashed process left in the state file. A controller whose interval is no longer
+// the capture's was reinitialized since (a card reset) and is left alone.
+void recover_controllers(MetalContext& ctx, ChipId chip, dc::Arch arch, const std::filesystem::path& path) {
+    std::error_code ec;
+    if (path.empty() || !std::filesystem::exists(path, ec)) {
+        return;
+    }
+    const dc::ControllerLayout l = dc::controller_layout_for(arch);
+    std::ifstream in(path);
+    Controller c;
+    uint32_t restored = 0;
+    while (in >> c.tile.first >> c.tile.second >> c.saved_interval >> c.saved_axi_control) {
+        if (controller_read(ctx, chip, c, l.register_window | l.interval) == CONTROLLER_INTERVAL) {
+            controller_write(ctx, chip, c, l.register_window | l.interval, c.saved_interval);
+            controller_write(ctx, chip, c, l.register_window | l.axi_control, c.saved_axi_control);
+            restored++;
+        }
+    }
+    std::filesystem::remove(path, ec);
+    if (restored != 0) {
+        log_warning(
+            tt::LogMetal,
+            "TT_METAL_PROFILE_DRAM_COUNTERS: restored {} memory controllers of device {} that an earlier process left "
+            "in the capture state",
+            restored,
+            chip);
+    }
 }
 
 // Not every tile of a channel reaches the controller registers, so each channel uses the first tile that does.
@@ -302,19 +391,21 @@ void disable_controllers(DeviceState& st, const std::exception& e) {
     st.controller_open = false;
 }
 
-// Starts one interval per controller with its clock gating off. A controller is marked open once the firmware's
-// values are saved, so a failure part way never writes back values that were not read.
+// Starts one interval per controller with its clock gating off. The firmware values go to the state file before
+// anything is written, and a controller is marked open once its values are saved.
 void open_controllers(MetalContext& ctx, ChipId chip, DeviceState& st) {
     const dc::ControllerLayout l = dc::controller_layout_for(st.plan.arch);
-    st.controller_open = true;
     for (Controller& c : st.controllers) {
         c.saved_interval = controller_read(ctx, chip, c, l.register_window | l.interval);
         c.saved_axi_control = controller_read(ctx, chip, c, l.register_window | l.axi_control);
+    }
+    save_controller_state(st);
+    st.controller_open = true;
+    for (Controller& c : st.controllers) {
         c.open = true;
         controller_write(
             ctx, chip, c, l.register_window | l.axi_control, c.saved_axi_control & ~l.axi_dynamic_gate_bits);
         controller_write(ctx, chip, c, l.register_window | l.interval, 0);
-        controller_read(ctx, chip, c, l.register_window | l.interval_done);
         controller_write(ctx, chip, c, l.register_window | l.interval, CONTROLLER_INTERVAL);
     }
 }
@@ -325,6 +416,13 @@ void restore_controller(MetalContext& ctx, ChipId chip, const dc::ControllerLayo
     controller_write(ctx, chip, c, l.register_window | l.axi_control, c.saved_axi_control);
 }
 
+void forget_controller_state(DeviceState& st) {
+    std::error_code ec;
+    if (!st.controller_state.empty()) {
+        std::filesystem::remove(st.controller_state, ec);
+    }
+}
+
 // Puts the firmware's values back on every open controller without reading the counts, after a failure.
 void abandon_controllers(MetalContext& ctx, ChipId chip, DeviceState& st) {
     if (!st.controller_open) {
@@ -332,6 +430,7 @@ void abandon_controllers(MetalContext& ctx, ChipId chip, DeviceState& st) {
     }
     st.controller_open = false;
     const dc::ControllerLayout l = dc::controller_layout_for(st.plan.arch);
+    bool all_restored = true;
     for (Controller& c : st.controllers) {
         if (!c.open) {
             continue;
@@ -339,6 +438,7 @@ void abandon_controllers(MetalContext& ctx, ChipId chip, DeviceState& st) {
         try {
             restore_controller(ctx, chip, l, c);
         } catch (const std::exception& e) {
+            all_restored = false;
             log_warning(
                 tt::LogMetal,
                 "TT_METAL_PROFILE_DRAM_CONTROLLER: restoring memory controller {} of device {} failed ({})",
@@ -347,9 +447,13 @@ void abandon_controllers(MetalContext& ctx, ChipId chip, DeviceState& st) {
                 e.what());
         }
     }
+    if (all_restored) {
+        forget_controller_state(st);
+    }
 }
 
-// Writing a zero interval latches the counts of the interval in progress.
+// Writing a zero interval latches the counts of the interval in progress. The completion flag is the firmware's and
+// is never read; a window as long as the shortest interval is flagged as possibly wrapped.
 void close_controllers(
     MetalContext& ctx,
     ChipId chip,
@@ -363,25 +467,33 @@ void close_controllers(
     }
     const dc::ControllerLayout l = dc::controller_layout_for(st.plan.arch);
     const dc::ControllerTable table = dc::controller_table(st.plan.arch);
-    std::ofstream out = open_log(CONTROLLER_LOG, CONTROLLER_HEADER, g_controller_started);
+    const uint32_t row_flags = flags | (elapsed_ns >= CONTROLLER_INTERVAL_MIN_NS ? FLAG_INTERVAL_WRAPPED : 0u);
+    std::vector<std::pair<const Controller*, std::vector<uint32_t>>> counts;
     for (Controller& c : st.controllers) {
         if (!c.open) {
             continue;
         }
-        const bool wrapped = controller_read(ctx, chip, c, l.register_window | l.interval_done) != 0;
         controller_write(ctx, chip, c, l.register_window | l.interval, 0);
-        const uint32_t row_flags = flags | (wrapped ? FLAG_INTERVAL_WRAPPED : 0u);
+        std::vector<uint32_t> values(table.size);
         for (size_t i = 0; i < table.size; i++) {
-            const uint32_t value = controller_read(ctx, chip, c, l.register_window | table.data[i].address);
-            if (value != 0) {
-                out << chip << "," << program_id << "," << seq << "," << row_flags << "," << elapsed_ns << ","
-                    << c.channel << "," << c.tile.first << "," << c.tile.second << "," << table.data[i].name << ","
-                    << value << "\n";
-            }
+            values[i] = controller_read(ctx, chip, c, l.register_window | table.data[i].address);
         }
         restore_controller(ctx, chip, l, c);
+        counts.emplace_back(&c, std::move(values));
     }
     st.controller_open = false;
+    forget_controller_state(st);
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    std::ofstream out = open_log(CONTROLLER_LOG, dc::CONTROLLER_HEADER, g_controller_started);
+    for (const auto& [c, values] : counts) {
+        for (size_t i = 0; i < table.size; i++) {
+            if (values[i] != 0) {
+                out << chip << "," << program_id << "," << seq << "," << row_flags << "," << elapsed_ns << ","
+                    << c->channel << "," << c->tile.first << "," << c->tile.second << "," << table.data[i].name << ","
+                    << values[i] << "\n";
+            }
+        }
+    }
 }
 
 bool prepare(MetalContext& ctx, ChipId chip, DeviceState& st) {
@@ -416,6 +528,18 @@ bool prepare(MetalContext& ctx, ChipId chip, DeviceState& st) {
     st.tiles = std::move(tiles);
     st.tile_noc0_y = std::move(noc0_y);
     st.tile_reads.assign(st.tiles.size(), 0);
+    if (dc::controller_layout_for(st.plan.arch).register_window != 0) {
+        st.controller_state = controller_state_path(ctx, chip);
+        try {
+            recover_controllers(ctx, chip, st.plan.arch, st.controller_state);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "TT_METAL_PROFILE_DRAM_COUNTERS: restoring the memory controllers of device {} failed ({})",
+                chip,
+                e.what());
+        }
+    }
     try {
         st.coupling = measure_coupling(ctx, chip, st);
         if (rt.get_profiler_dram_counters_calibrate()) {
@@ -449,40 +573,30 @@ bool prepare(MetalContext& ctx, ChipId chip, DeviceState& st) {
     return true;
 }
 
-// Returns the launch sequence number of the rows.
-uint64_t write_launch(
-    DeviceState& st, ChipId chip, const Pending& pending, const Reading& after, bool settled, uint32_t extra_flags) {
-    const uint64_t elapsed_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(after.time - pending.before.time).count();
-    const uint32_t flags = launch_flags(pending.overlapped, settled, extra_flags);
-    const std::vector<Delta> deltas = diff(st.plan, st.coupling, pending.before, after);
-    std::ofstream out = open_log(TRAFFIC_LOG, TRAFFIC_HEADER, g_traffic_started);
-    const uint64_t seq = st.launch_seq++;
-    for (const Delta& d : deltas) {
-        out << chip << "," << pending.program_id << "," << seq << "," << flags << "," << elapsed_ns << ","
-            << st.tiles[d.tile].first << "," << st.tiles[d.tile].second << "," << d.noc << ","
-            << counter_name(d.counter) << "," << d.words << "," << d.self_words << "\n";
-    }
-    if (deltas.empty()) {
-        out << chip << "," << pending.program_id << "," << seq << "," << flags << "," << elapsed_ns
-            << ",-1,-1,-1,NONE,0,0\n";
-    }
-    return seq;
+bool service_active(MetalContext& ctx, ChipId chip) {
+    return !ctx.get_service_core_manager().claimed_cores(chip).empty();
 }
 
-// The controller interval of a closed launch shares its sequence number, flags and elapsed time.
-void close_launch_controllers(
-    MetalContext& ctx,
-    ChipId chip,
-    DeviceState& st,
-    const Pending& pending,
-    const Reading& after,
-    uint64_t seq,
-    bool settled,
-    uint32_t extra_flags) {
-    const uint32_t flags = launch_flags(pending.overlapped, settled, extra_flags);
+// Writes the traffic rows of one launch and closes its controller interval under the same sequence number.
+void close_launch(
+    MetalContext& ctx, ChipId chip, DeviceState& st, const Pending& pending, const Reading& after, uint32_t flags) {
     const uint64_t elapsed_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(after.time - pending.before.time).count();
+    const std::vector<Delta> deltas = diff(st.plan, st.coupling, pending.before, after);
+    const uint64_t seq = g_launch_seq++;
+    {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        std::ofstream out = open_log(TRAFFIC_LOG, dc::TRAFFIC_HEADER, g_traffic_started);
+        for (const Delta& d : deltas) {
+            out << chip << "," << pending.program_id << "," << seq << "," << flags << "," << elapsed_ns << ","
+                << st.tiles[d.tile].first << "," << st.tiles[d.tile].second << "," << d.noc << ","
+                << counter_name(d.counter) << "," << d.words << "," << d.self_words << "\n";
+        }
+        if (deltas.empty()) {
+            out << chip << "," << pending.program_id << "," << seq << "," << flags << "," << elapsed_ns
+                << ",-1,-1,-1,NONE,0,0\n";
+        }
+    }
     try {
         close_controllers(ctx, chip, st, pending.program_id, seq, flags, elapsed_ns);
     } catch (const std::exception& e) {
@@ -506,19 +620,18 @@ uint32_t launch_flags(bool overlapped, bool settled, uint32_t extra_flags) {
 
 std::optional<Plan> make_plan(dc::Arch arch, uint32_t num_tiles) {
     const dc::Layout layout = dc::layout_for(arch);
-    const dc::Table niu = dc::niu_table(arch);
-    if (layout.niu_base == 0 || layout.word_bytes == 0 || niu.size == 0) {
+    if (layout.niu_base == 0 || layout.word_bytes == 0) {
         return std::nullopt;
     }
     Plan plan;
     plan.arch = arch;
     plan.num_tiles = num_tiles;
     plan.num_nocs = layout.num_nocs;
-    for (const dc::DramCounter wanted : kCaptured) {
-        for (size_t i = 0; i < niu.size; i++) {
-            if (niu.data[i].first == wanted) {
-                plan.counters.push_back(wanted);
-                plan.offsets.push_back(niu.data[i].second);
+    for (const Captured& wanted : kCaptured) {
+        for (const auto& entry : llk::perf::noc::noc_counters) {
+            if (entry.counter == wanted.counter) {
+                plan.counters.push_back(wanted.counter);
+                plan.regs.push_back(entry.reg);
             }
         }
     }
@@ -528,21 +641,28 @@ std::optional<Plan> make_plan(dc::Arch arch, uint32_t num_tiles) {
     return plan;
 }
 
-bool is_read_counter(dc::DramCounter counter) {
-    return counter == dc::DramCounter::NIU_SLV_RD_DATA_WORD_SENT || counter == dc::DramCounter::NIU_SLV_RD_REQ_RECEIVED;
+bool is_read_counter(NocCounter counter) {
+    const Captured* c = captured(counter);
+    return c != nullptr && c->read;
 }
 
-bool is_write_counter(dc::DramCounter counter) {
-    return counter == dc::DramCounter::NIU_SLV_NONPOSTED_WR_DATA_WORD_RECEIVED ||
-           counter == dc::DramCounter::NIU_SLV_POSTED_WR_DATA_WORD_RECEIVED;
+bool is_write_counter(NocCounter counter) {
+    const Captured* c = captured(counter);
+    return c != nullptr && !c->read;
+}
+
+std::string counter_name(NocCounter counter) {
+    const Captured* c = captured(counter);
+    return c != nullptr ? c->name : "UNDEF";
 }
 
 uint32_t self_words(const Plan& plan, const Coupling& coupling, const Reading& before, const Reading& after, size_t i) {
     const Coordinates at = locate(plan, i);
-    if (!is_read_counter(plan.counters[at.slot]) || static_cast<size_t>(at.noc) >= coupling.size()) {
+    const size_t link = size_t(at.tile) * plan.num_nocs + at.noc;
+    if (!is_read_counter(plan.counters[at.slot]) || link >= coupling.size()) {
         return 0;
     }
-    return coupling[at.noc] * (after.tile_reads[i] - before.tile_reads[i]);
+    return coupling[link] * (after.tile_reads[i] - before.tile_reads[i]);
 }
 
 std::vector<Delta> diff(const Plan& plan, const Coupling& coupling, const Reading& before, const Reading& after) {
@@ -578,26 +698,13 @@ IdleFit fit_idle(double tight_words, double tight_seconds, double spaced_words, 
     return fit;
 }
 
-std::string counter_name(dc::DramCounter counter) {
-    switch (counter) {
-        case dc::DramCounter::NIU_SLV_RD_REQ_RECEIVED: return "NIU_SLV_RD_REQ_RECEIVED";
-        case dc::DramCounter::NIU_SLV_RD_DATA_WORD_SENT: return "NIU_SLV_RD_DATA_WORD_SENT";
-        case dc::DramCounter::NIU_SLV_NONPOSTED_WR_REQ_RECEIVED: return "NIU_SLV_NONPOSTED_WR_REQ_RECEIVED";
-        case dc::DramCounter::NIU_SLV_POSTED_WR_REQ_RECEIVED: return "NIU_SLV_POSTED_WR_REQ_RECEIVED";
-        case dc::DramCounter::NIU_SLV_NONPOSTED_WR_DATA_WORD_RECEIVED: return "NIU_SLV_NONPOSTED_WR_DATA_WORD_RECEIVED";
-        case dc::DramCounter::NIU_SLV_POSTED_WR_DATA_WORD_RECEIVED: return "NIU_SLV_POSTED_WR_DATA_WORD_RECEIVED";
-        case dc::DramCounter::UNDEF: break;
-    }
-    return "UNDEF";
-}
-
 void begin_program(MetalContext& ctx, IDevice& device, const Program& program) {
     if (!ctx.rtoptions().get_profiler_dram_counters_enabled()) {
         return;
     }
     const ChipId chip = device.id();
-    std::lock_guard<std::mutex> lock(g_mutex);
-    DeviceState& st = g_devices[{ctx.get_context_id().get(), chip}];
+    DeviceState& st = *state_of(ctx, chip, true);
+    std::lock_guard<std::mutex> lock(st.mutex);
     try {
         if (!prepare(ctx, chip, st)) {
             return;
@@ -605,9 +712,9 @@ void begin_program(MetalContext& ctx, IDevice& device, const Program& program) {
         const bool overlapped = st.pending.has_value();
         if (overlapped) {
             // The earlier program is still in flight: close it at this instant, its number includes the new program.
-            const Reading now = read_all(ctx, chip, st);
-            const uint64_t seq = write_launch(st, chip, *st.pending, now, true, FLAG_OVERLAPPED);
-            close_launch_controllers(ctx, chip, st, *st.pending, now, seq, true, FLAG_OVERLAPPED);
+            const Pending earlier = *st.pending;
+            st.pending.reset();
+            close_launch(ctx, chip, st, earlier, read_all(ctx, chip, st), earlier.flags | FLAG_OVERLAPPED);
         }
         // The controller register writes go before the tile snapshot so the tile counters never see them.
         if (!st.controllers.empty()) {
@@ -618,23 +725,27 @@ void begin_program(MetalContext& ctx, IDevice& device, const Program& program) {
                 disable_controllers(st, e);
             }
         }
-        st.pending = Pending{read_all(ctx, chip, st), program.get_runtime_id(), overlapped};
+        const uint32_t flags = launch_flags(overlapped, true, service_active(ctx, chip) ? FLAG_SERVICE_ACTIVE : 0u);
+        st.pending = Pending{read_all(ctx, chip, st), program.get_runtime_id(), flags};
     } catch (const std::exception& e) {
         abandon_controllers(ctx, chip, st);
         disable_after_failure(st, e);
     }
 }
 
-void end_pending(MetalContext& ctx, ChipId chip) {
+void end_pending(MetalContext& ctx, ChipId chip, std::optional<uint64_t> program_id) {
     if (!ctx.rtoptions().get_profiler_dram_counters_enabled()) {
         return;
     }
-    std::lock_guard<std::mutex> lock(g_mutex);
-    auto it = g_devices.find({ctx.get_context_id().get(), chip});
-    if (it == g_devices.end() || !it->second.pending) {
+    DeviceState* found = state_of(ctx, chip, false);
+    if (found == nullptr) {
         return;
     }
-    DeviceState& st = it->second;
+    DeviceState& st = *found;
+    std::lock_guard<std::mutex> lock(st.mutex);
+    if (!st.pending || (program_id && st.pending->program_id != *program_id)) {
+        return;
+    }
     const Pending pending = *st.pending;
     st.pending.reset();
     try {
@@ -647,9 +758,9 @@ void end_pending(MetalContext& ctx, ChipId chip) {
             settled = next == last;
             last = std::move(next);
         }
-        const Reading after = read_all(ctx, chip, st);
-        const uint64_t seq = write_launch(st, chip, pending, after, settled, 0u);
-        close_launch_controllers(ctx, chip, st, pending, after, seq, settled, 0u);
+        const uint32_t flags =
+            pending.flags | launch_flags(false, settled, service_active(ctx, chip) ? FLAG_SERVICE_ACTIVE : 0u);
+        close_launch(ctx, chip, st, pending, read_all(ctx, chip, st), flags);
     } catch (const std::exception& e) {
         abandon_controllers(ctx, chip, st);
         disable_after_failure(st, e);
@@ -658,11 +769,21 @@ void end_pending(MetalContext& ctx, ChipId chip) {
 
 void release(MetalContext& ctx) {
     const int context = ctx.get_context_id().get();
-    std::lock_guard<std::mutex> lock(g_mutex);
-    for (auto& [key, st] : g_devices) {
-        if (key.first == context && st.controller_open && st.pending) {
-            // A program nobody waited for still holds the controllers: hand them back to the firmware.
-            close_launch_controllers(ctx, key.second, st, *st.pending, st.pending->before, st.launch_seq++, false, 0u);
+    std::lock_guard<std::mutex> devices_lock(g_devices_mutex);
+    for (auto& [key, state] : g_devices) {
+        if (key.first != context || !state->pending) {
+            continue;
+        }
+        DeviceState& st = *state;
+        std::lock_guard<std::mutex> lock(st.mutex);
+        const Pending pending = *st.pending;
+        st.pending.reset();
+        // A program nobody waited for: close it now, so its rows and the controllers end like any other launch.
+        try {
+            close_launch(
+                ctx, key.second, st, pending, read_all(ctx, key.second, st), pending.flags | FLAG_NOT_FINISHED);
+        } catch (const std::exception&) {
+            abandon_controllers(ctx, key.second, st);
         }
     }
     std::erase_if(g_devices, [context](const auto& entry) { return entry.first.first == context; });

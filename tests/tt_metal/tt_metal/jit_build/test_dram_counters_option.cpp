@@ -80,14 +80,16 @@ namespace tt::tt_metal::dram_counters {
 namespace {
 
 namespace dc = llk::perf::dram;
+using llk::perf::noc::NocCounter;
 
 TEST(DramCountersPlan, BlackholeCapturesThreeCountersPerNoc) {
     const auto plan = make_plan(dc::Arch::BLACKHOLE, 21);
     ASSERT_TRUE(plan.has_value());
     EXPECT_EQ(plan->num_nocs, 2u);
     ASSERT_EQ(plan->counters.size(), 3u);
-    EXPECT_EQ(plan->counters[0], dc::DramCounter::NIU_SLV_RD_DATA_WORD_SENT);
-    EXPECT_EQ(plan->offsets[0], 0x2CCu);
+    EXPECT_EQ(plan->counters[0], NocCounter::SLV_RD_DATA_WORD_SENT);
+    EXPECT_EQ(plan->regs[0], 0x33u);
+    EXPECT_EQ(counter_name(plan->counters[0]), "SLV_RD_DATA_WORD_SENT");
     EXPECT_EQ(plan->reading_size(), 21u * 2u * 3u);
     EXPECT_TRUE(is_read_counter(plan->counters[0]));
     EXPECT_TRUE(is_write_counter(plan->counters[1]));
@@ -105,21 +107,15 @@ TEST(DramCountersFlags, OverlapAndSettleBitsAreIndependent) {
 TEST(DramCountersPlan, QuasarHasNoMap) { EXPECT_FALSE(make_plan(dc::Arch::QUASAR, 8).has_value()); }
 
 TEST(DramCountersLayout, BlackholeAddressIsTheWorkerOne) {
-    const auto niu = dc::niu_table(dc::Arch::BLACKHOLE);
-    ASSERT_EQ(niu.size, 6u);
-    EXPECT_EQ(niu.data[1].first, dc::DramCounter::NIU_SLV_RD_DATA_WORD_SENT);
     for (uint32_t y : {0u, 1u, 2u, 11u}) {
-        EXPECT_EQ(dc::niu_address(dc::Arch::BLACKHOLE, 0, y, niu.data[1].second), 0xFFB202CCull);
-        EXPECT_EQ(dc::niu_address(dc::Arch::BLACKHOLE, 1, y, niu.data[1].second), 0xFFB302CCull);
+        EXPECT_EQ(dc::niu_address(dc::Arch::BLACKHOLE, 0, y, 0x33), 0xFFB202CCull);
+        EXPECT_EQ(dc::niu_address(dc::Arch::BLACKHOLE, 1, y, 0x33), 0xFFB302CCull);
     }
     EXPECT_EQ(dc::layout_for(dc::Arch::BLACKHOLE).word_bytes, 64u);
 }
 
 TEST(DramCountersLayout, WormholeDramTileInstances) {
-    const auto niu = dc::niu_table(dc::Arch::WORMHOLE);
-    ASSERT_EQ(niu.size, 6u);
-    const uint32_t rd = niu.data[1].second;
-    EXPECT_EQ(rd, 0x2CCu);
+    const uint32_t rd = 0x33;
     EXPECT_EQ(dc::niu_address(dc::Arch::WORMHOLE, 0, 1, rd), 0x1000802CCull);
     EXPECT_EQ(dc::niu_address(dc::Arch::WORMHOLE, 0, 2, rd), 0x1000902CCull);
     EXPECT_EQ(dc::niu_address(dc::Arch::WORMHOLE, 0, 0, rd), 0x1000A02CCull);
@@ -153,10 +149,10 @@ TEST(DramCountersDiff, WrapsAndSkipsZero) {
     const auto deltas = diff(*plan, none, before, after);
     ASSERT_EQ(deltas.size(), 2u);
     EXPECT_EQ(deltas[0].noc, 0);
-    EXPECT_EQ(deltas[0].counter, dc::DramCounter::NIU_SLV_NONPOSTED_WR_DATA_WORD_RECEIVED);
+    EXPECT_EQ(deltas[0].counter, NocCounter::SLV_NONPOSTED_WR_DATA_WORD_RECEIVED);
     EXPECT_EQ(deltas[0].words, 7u);
     EXPECT_EQ(deltas[1].noc, 1);
-    EXPECT_EQ(deltas[1].counter, dc::DramCounter::NIU_SLV_POSTED_WR_DATA_WORD_RECEIVED);
+    EXPECT_EQ(deltas[1].counter, NocCounter::SLV_POSTED_WR_DATA_WORD_RECEIVED);
     EXPECT_EQ(deltas[1].words, 5u);
 }
 
@@ -211,8 +207,13 @@ TEST(DramCountersController, CountersAreDistinctMonitorRegisters) {
         EXPECT_TRUE(names.insert(table.data[i].name).second) << table.data[i].name;
         EXPECT_EQ(table.data[i].address & 3u, 0u);
         EXPECT_NE(table.data[i].address, l.interval);
-        EXPECT_NE(table.data[i].address, l.interval_done);
     }
+}
+
+TEST(DramCountersController, CommandSizeAndShortestInterval) {
+    EXPECT_EQ(dc::controller_layout_for(dc::Arch::BLACKHOLE).command_bytes, 64u);
+    // The interval cannot run out before about 2.1 s, so shorter windows are never flagged.
+    EXPECT_GT(CONTROLLER_INTERVAL_MIN_NS, 2'000'000'000ull);
 }
 
 TEST(DramCountersController, FirstPortWithEveryAxiResetReleasedAnswers) {
