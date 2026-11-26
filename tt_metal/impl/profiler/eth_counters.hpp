@@ -97,10 +97,11 @@ void add_register_deltas(const Plan& plan, const Reading& before, const Reading&
 std::string counter_name(llk::perf::eth::EthCounter counter);
 
 // Hooks, no-ops unless TT_METAL_PROFILE_ETH_COUNTERS is set. begin_program snapshots before the go signal of a
-// slow-dispatch program; end_pending closes the program in flight once its cores are idle.
+// slow-dispatch program; end_pending closes the program in flight once its cores are idle, only that program when
+// program_id is given.
 void begin_run(MetalContext& ctx, IDevice& device);
 void end_run(MetalContext& ctx, IDevice& device);
 void begin_program(MetalContext& ctx, IDevice& device, const Program& program);
-void end_pending(MetalContext& ctx, ChipId chip);
+void end_pending(MetalContext& ctx, ChipId chip, std::optional<uint64_t> program_id = std::nullopt);
 
 }  // namespace tt::tt_metal::eth_counters

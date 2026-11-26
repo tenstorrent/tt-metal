@@ -492,13 +492,13 @@ void begin_program(MetalContext& ctx, IDevice& device, const Program& program) {
     }
 }
 
-void end_pending(MetalContext& ctx, ChipId chip) {
+void end_pending(MetalContext& ctx, ChipId chip, std::optional<uint64_t> program_id) {
     if (!ctx.rtoptions().get_profiler_eth_counters_enabled()) {
         return;
     }
     std::lock_guard<std::mutex> lock(g_mutex);
     auto it = g_devices.find({ctx.get_context_id().get(), chip});
-    if (it == g_devices.end() || !it->second.pending) {
+    if (it == g_devices.end() || !it->second.pending || (program_id && it->second.pending->program_id != *program_id)) {
         return;
     }
     DeviceState& st = it->second;

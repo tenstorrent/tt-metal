@@ -458,7 +458,7 @@ void WaitProgramDone(IDevice& device, const Program& program) {
     llrt::internal_::wait_for_idle(metal_ctx, device.id(), program.impl().logical_cores());
     // Internal programs launched with force_slow_dispatch are waited on here too; they close nothing.
     dram_counters::end_pending(metal_ctx, device.id(), program.get_runtime_id());
-    eth_counters::end_pending(metal_ctx, device.id());
+    eth_counters::end_pending(metal_ctx, device.id(), program.get_runtime_id());
 }
 
 void LaunchProgramAsync(
