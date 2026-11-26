@@ -1849,6 +1849,33 @@ def test_group_norm_rejects_tile_input_with_inplace(device, expect_error):
         ttnn.group_norm(input_tensor, num_groups=num_groups, inplace=True)
 
 
+@pytest.mark.parametrize("input_type", ["tile", "row_major", "row_major_sharded"])
+@pytest.mark.parametrize("C, num_groups", [(4, 1), (40, 5)])
+def test_group_norm_channels_not_multiple_of_32(device, input_type, C, num_groups, expect_error):
+    # Only ROW_MAJOR sharded input supports C that is not a multiple of 32.
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 1024, C, dtype=torch.bfloat16)
+
+    if input_type != "row_major_sharded":
+        layout = ttnn.TILE_LAYOUT if input_type == "tile" else ttnn.ROW_MAJOR_LAYOUT
+        tt_x = ttnn.from_torch(x, layout=layout, device=device)
+        with expect_error(RuntimeError, "must be a multiple of the tile width"):
+            ttnn.group_norm(tt_x, num_groups=num_groups, inplace=False)
+        return
+
+    core_grid = ttnn.CoreGrid(y=1, x=8)
+    sharded = ttnn.create_sharded_memory_config(
+        (1024 // 8, C), core_grid, ttnn.ShardStrategy.HEIGHT, use_height_and_width_as_shard_shape=True
+    )
+    tt_x = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded)
+    out = ttnn.group_norm(tt_x, num_groups=num_groups, memory_config=sharded, core_grid=core_grid, inplace=False)
+
+    expected = torch.nn.functional.group_norm(x.float().permute(0, 3, 1, 2), num_groups).permute(0, 2, 3, 1)
+    assert_numeric_metrics(
+        expected, ttnn.to_torch(out).float(), pcc_threshold=0.999, rtol=0.02, atol=0.06, frobenius_threshold=0.015
+    )
+
+
 def test_group_norm_rejects_host_input_mask(device, expect_error):
     # TILE layout: a ROW_MAJOR interleaved input is rejected earlier (it is unsupported
     # on the non-sharded path), which would pre-empt the host-input-mask check this test
