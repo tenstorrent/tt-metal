@@ -287,13 +287,13 @@ unit_tests_debug_tools:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_api:
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S/ImplicitSyncFalse"
     config: 2x3_DISPATCH
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S/ImplicitSyncFalse"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S/ImplicitSyncTrue"
     config: 2x3_DISPATCH
     back2back: true
     env:
@@ -305,19 +305,151 @@ unit_tests_api:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx4A/ImplicitSyncFalse"
-    config: 2x3_DISPATCH
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
   - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB4Sx1S/ImplicitSyncTrue"
     config: 2x3_DISPATCH
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB_RingPressure_3Sx3S/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB2Sx4S/ImplicitSyncTrue"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest1xDFB2Sx4S/ImplicitSyncTrue"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest1xDFB2Sx4A/ImplicitSyncFalse"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB3Sx1A/ImplicitSyncFalse"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB2Bx2B_blk4_impl"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB2Bx2B_blk3_e24"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB1Bx4B_blk4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB2Bx2B_blk4_entry2048"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB2Sx2B4_impl"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB2Bx4A_blk4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB2Bx4S_blk4_impl"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB1Sx1B4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.TensixDMTest1xDFB2Sx2B4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTensixTest1xDFB1Sx1B4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.TensixDMTest1xDFB1Bx1B_blk4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.TensixDMTest1xDFB4Bx4B_blk4_impl"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB1Bx2S_blk2_e4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.TensixDMTest1xDFB2Bx2S_blk4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTensixTest1xDFB1Bx2A_blk4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTensixTest1xDFB4Bx4S_blk4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTensixDMTest2xDFB_Threaded_R4C4W2_2_0"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.A1Blocked_DMTensixDM_BLOCKED_1B_blk4"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.A1Blocked_DMTensixDM_BLOCKED_2B_blk4_impl"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.TensixBlockedOut_DMTensixDM_2Bx2A_blk4"
     config: 2x3_DISPATCH
     back2back: true
     env:
@@ -335,31 +467,91 @@ unit_tests_api:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB1Sx1S/ImplicitSyncTrue"
+  - filter: "UnitMeshAnyDispatchFixture.HalfGrid16Plus16DFBsOnDevice"
     config: 2x3_DISPATCH
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB2Sx4S/ImplicitSyncTrue"
+  - filter: "UnitMeshAnyDispatchFixture.Pack22DFBsUseSharedTCSlotPool"
     config: 2x3_DISPATCH
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB6Sx2A/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.MultiCoreDMTest2Core_1Sx1S/ImplicitSyncTrue"
     config: 2x3_DISPATCH
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest1xDFB1Sx1S/ImplicitSyncTrue"
+  - filter: "UnitMeshFixture.D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy"
     config: 2x3_DISPATCH
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest4xDFB_1Sx1S/ImplicitSyncFalse"
+  - filter: "UnitMeshFixture.MultiCoreDFB_1P1C_Strided_ImplicitSync"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB_RingPressure_4Sx4A/ImplicitSyncTrue"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB_RingPressure_3Sx3S/ImplicitSyncTrue"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB_RingPressure_4Sx1S_2_0"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.D1_2_0_LongImplicitSync_PostCounterWrap"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest1xDFB_RingPressure_2Sx4S/ImplicitSyncTrue"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.B3_2_0_TailCreditRace_RepeatedImplicitSync_DMDM"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.D2_2_0_AllDMsConcurrent_6Sx2S_ImplicitOn"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.ImplicitWritePendingAckIsNotNewData"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.ImplicitReadPendingPostReservesFreeSlot"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.ImplicitReadAvailability_1Producer2Consumer_2TC"
     config: 2x3_DISPATCH
     back2back: true
     env:
@@ -377,12 +569,6 @@ unit_tests_api:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "UnitMeshFixture.DMTest1xDFB2Sx4SConfig"
-    config: 2x3_DISPATCH
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
   - filter: "UnitMeshFixture.DFBReentryOverridePreservesTcAndRecomputesTxn"
     config: 2x3_DISPATCH
     back2back: true
@@ -395,24 +581,269 @@ unit_tests_api:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.MultiCoreDMTest2Core_1Sx1S/ImplicitSyncTrue"
+  - filter: "UnitMeshFixture.DFBReentryNumEntriesViolatesTxnDivisorFails"
     config: 2x3_DISPATCH
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  # Don't enable yet. Attempt to run all DFB tests.
-  # - filter: "*DFB*:-*MultiCore*"
-  #   config: 1x3
-  #   back2back: true
-  #   env:
-  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+  - filter: "UnitMeshFixture.DFBReentryEntrySizeRingExtentFails"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  # - filter: "*DFB*MultiCore*"
-  #   config: 2x3
-  #   back2back: true
-  #   env:
-  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+  - filter: "UnitMeshFixture.DFBReentryEntrySizeExceedsUint16Fails"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.BorrowedMemoryDMDM2Sx4S"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.BorrowedMemoryDMDM1Sx1S_SizeOverrideExceedsBackingFails"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.AliasDFBDataFlow2Sx4S"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.AliasDFBAlloc3Way"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.AliasDFBAgreedGroupResize"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.AliasDFBBorrowedMemoryDataFlow1Sx1S"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.AliasDFBAllocSecondarySkipped"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.BorrowedMemoryDMTensix2Sx4B"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DFBKernelExitUnevenProducersDMTensix"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DFBKernelExitFullBatchThenPartialDMDM"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.IntraPackerRemapperPairsTopDownConfig"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.MaxEightIntraPerNeoConfig"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.TensixIntraTest1xDFB4Sx4S"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.C2_2_0_DMTriscSelfLoopDM_DoubleRelu"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DataflowBufferExtentApis_2Sx4A_ConsumerEachTC"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DataflowBufferReadTileValue"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshAnyDispatchFixture.ZeroMemoryApiBatchedL1"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.B6_AllProducer_Rejected_2_0"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.B8_FiveAllConsumers_Rejected_2_0"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.B10_Blocked_Rejected_2_0"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DirectApi_BlockedAll_ImplicitBroadcastProducer_rejected"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DfbSerializeGlobalHeader1Sx1S"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DfbSerializeBlockedInitEntries"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DfbSerializeTxnCentricImplicitSync1Sx1S"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB2Sx4SConfig"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB2Sx4BConfig"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DfbSerializeGlobalHeaderGappedDeviceSlots"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshAnyDispatchFixture.TensixDFBConfigFollowsSemaphoresWithoutCBRegion"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "UnitMeshFixture.DMTest1xDFB1Bx4B_blk4_impl_2_0"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.PrefetcherPipe_MultiDM_2P2R_1S1R"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.AllocatorSpaceTakesItsL1FromTheAllocator"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.PrefetcherPipeSpace_ConfigRejects"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.DefaultL1SourceFollowsSenderType"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.PrefetcherPipe_StaleCommitRejected"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.ProgramRunArgs_SameObjectMultiplePrograms"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.PrefetcherPipe_SenderRelayReceiver_SameProgram_1S1R"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.PrefetcherPipe_RelayDFB_Parallel_STRIDED_1P2C"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.PrefetcherPipe_MultiDM_2P_RelayProducers2_Consumers2_ALL_1S1R"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.PrefetcherPipe_MultiDM_RelayProducers2_Consumers2_Backpressure"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.PrefetcherPipe_MultiDM_2P_RelayProducers2_Consumers2_Batch2"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 # Fast Dispatch (Dispatch Engine) tests
   - filter: "*QuasarCRTASharedL1Address*"
@@ -448,6 +879,14 @@ unit_tests_api:
     back2back: true
 
   - filter: "UnitMeshAnyDispatchFixture.BorrowedMemoryDMDM1Sx1S_UpdateAddress"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "PrefetcherPipeFixture.PrefetcherPipe_CrossSubDevice_ResizePadWaitsForRoom"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "UnitMeshAnyDispatchFixture.IdleCoreStaleLaunchSlot_DMDM"
     config: 2x3_DISPATCH
     back2back: true
 
