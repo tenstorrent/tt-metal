@@ -14,8 +14,10 @@ in the released checkpoints' configuration: short conv on K and V, `vdn_solve`, 
     scans      forward and reverse over frames, then the boundary gather            (`linear_ops_openvdn`)
     readout    q . state, RMSNorm over head_dim, times a low-rank sigmoid gate
 
-Single device for now (no tensor or sequence parallel). Correct first, not fast: the spatial conv is 25 exact shift
-matmuls, and the layout changes go through row-major reshapes and permutes.
+Tensor parallel by head (`tp_mesh_axis`): every per-channel and per-head parameter is sharded on that axis, so each
+device runs the branch for its own heads, the same canonical heads H3's fused QKV hands it. No sequence parallel here:
+the caller passes the whole sequence. Correct first, not fast: the spatial conv is 25 exact shift matmuls, and the
+layout changes go through row-major reshapes and permutes.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ import torch
 
 import ttnn
 
-from ....layers.linear import Linear
+from ....layers.linear import ColParallelLinear, Linear
 from ....layers.module import Module, Parameter
 from ....utils import tensor
 from . import linear_ops_openvdn as ops
@@ -110,35 +112,45 @@ class OpenVDNLinearBranch(Module):
         head_dim: int,
         mesh_device: ttnn.MeshDevice,
         short_conv: Sequence[str] = ("k", "v"),
+        tp_mesh_axis: int | None = None,
     ) -> None:
+        """`num_heads` is the global head count; with `tp_mesh_axis` each device holds and runs
+        `num_heads / mesh_device.shape[tp_mesh_axis]` of them (`num_local_heads`)."""
         super().__init__()
+        tp_factor = 1 if tp_mesh_axis is None else tuple(mesh_device.shape)[tp_mesh_axis]
+        assert num_heads % tp_factor == 0, f"{num_heads} heads must divide across TP={tp_factor}"
         self.hidden_size = hidden_size
         self.num_heads = num_heads
+        self.num_local_heads = num_heads // tp_factor
         self.head_dim = head_dim
         self.inner_dim = num_heads * head_dim
+        self.local_inner_dim = self.num_local_heads * head_dim
         self.mesh_device = mesh_device
         self.short_conv = tuple(short_conv)
         self.config = ops.compute_config(mesh_device)
         taps = self.KERNEL * self.KERNEL
         channels = self.inner_dim
+        tp = tp_mesh_axis
 
-        def fp32(shape):
-            return Parameter(total_shape=shape, device=mesh_device, dtype=ttnn.float32)
+        def fp32(shape, mesh_axes=None):
+            return Parameter(total_shape=shape, device=mesh_device, dtype=ttnn.float32, mesh_axes=mesh_axes)
 
         # Spatial taps as columns [C, 1] (they scale the transposed [C, S] frames), temporal taps as rows [1, C].
         for proj in self.short_conv:
-            setattr(self, f"{proj}_sp", fp32([taps, 1, channels, 1]))
-            setattr(self, f"{proj}_tm", fp32([self.KERNEL, 1, 1, channels]))
+            setattr(self, f"{proj}_sp", fp32([taps, 1, channels, 1], [None, None, tp, None]))
+            setattr(self, f"{proj}_tm", fp32([self.KERNEL, 1, 1, channels], [None, None, None, tp]))
 
         linear = dict(mesh_device=mesh_device, compute_kernel_config=self.config)
-        self.beta_proj = Linear(hidden_size, num_heads, bias=False, **linear)
+        col = dict(mesh_device=mesh_device, compute_kernel_config=self.config, mesh_axis=tp)
+        self.beta_proj = ColParallelLinear(hidden_size, num_heads, bias=False, **col)
         # alpha's two projections run fp32-grade (split operands), on bf16 weights.
         self.alpha_down = Parameter(total_shape=[hidden_size, head_dim], device=mesh_device)
-        self.alpha_up = Parameter(total_shape=[head_dim, channels], device=mesh_device)
-        self.alpha_dt_bias = fp32([1, 1, 1, channels])
-        self.alpha_scale = fp32([1, 1, 1, channels])  # exp(A_log), repeated over each head's channels
+        self.alpha_up = Parameter(total_shape=[head_dim, channels], device=mesh_device, mesh_axes=[None, tp])
+        self.alpha_dt_bias = fp32([1, 1, 1, channels], [None, None, None, tp])
+        # exp(A_log), repeated over each head's channels
+        self.alpha_scale = fp32([1, 1, 1, channels], [None, None, None, tp])
         self.gate_down = Linear(hidden_size, head_dim, bias=False, **linear)
-        self.gate_up = Linear(head_dim, channels, bias=True, **linear)
+        self.gate_up = ColParallelLinear(head_dim, channels, bias=True, **col)
         self.norm_weight = fp32([1, 1, 1, head_dim])
 
         self._shifts: dict[tuple[int, int], list[ttnn.Tensor]] = {}
@@ -218,7 +230,7 @@ class OpenVDNLinearBranch(Module):
             x = self.conv(tokens, proj, num_frames, frame_size)
         else:
             x = ttnn.typecast(tokens, ttnn.float32)
-        x = to_heads(ttnn.silu(x), num_frames, self.num_heads)
+        x = to_heads(ttnn.silu(x), num_frames, self.num_local_heads)
         if proj != "v":
             x = l2_normalize(x)
         return ttnn.typecast(x, ttnn.bfloat16)
@@ -272,7 +284,7 @@ class OpenVDNLinearBranch(Module):
 
         a, b = ops.frame_statistics(key, value, self.beta(xv, num_frames), config=self.config)
         alpha_rows = self.alpha(xv, num_frames)
-        alpha = ops.rows_to_heads(alpha_rows, num_frames, self.num_heads, self.head_dim)
+        alpha = ops.rows_to_heads(alpha_rows, num_frames, self.num_local_heads, self.head_dim)
         transition, injection = ops.vdn_factor_apply(alpha, a, b, max_eig=1.0 + per_frame, config=self.config)
         prefix, suffix = ops.bidirectional_scan(transition, injection, text_state=text_state, config=self.config)
         state = ops.gather_linear_state(prefix, suffix, alpha_rows, bounds, text_state=text_state, config=self.config)
@@ -308,7 +320,10 @@ class OpenVDNLinearBranch(Module):
                 xv, q_raw, k_raw, v_raw, num_frames=num_frames, frame_size=frame_size, bounds=bounds, text_state=text_state
             )
         zeros = ttnn.zeros(
-            [1, 1, per_frame, self.inner_dim], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device
+            [1, 1, per_frame, self.local_inner_dim],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
         )
         if num_frames <= 2:
             return ttnn.concat([zeros] * num_frames, dim=2)

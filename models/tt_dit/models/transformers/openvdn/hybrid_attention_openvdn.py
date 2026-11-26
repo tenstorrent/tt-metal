@@ -19,7 +19,12 @@ branch reads come out of `to_qkv` in that order. The branch is equivariant to it
 parameter is permuted the same way: the K conv taps and alpha's `up` rows and `dt_bias` (`_prepare_torch_state`).
 q . state and the readout are unchanged, and V is not permuted.
 
-Single device for now: tensor and sequence parallel are not implemented (the H3 base supports both).
+Tensor parallel by head, as H3: each device projects, normalises and attends with its own heads (the softmax gate,
+the linear branch and its gates are sharded the same way), then the outputs are gathered on TP for the column-parallel
+`to_out` and `to_out_linear`. Sequence parallel by gathering: the SP-fractured rows are all-gathered, every device
+computes the whole (logical, unpadded) sequence for its heads, and `mesh_partition` hands each device its rows back.
+That repeats the attention work on every SP device; correct first, and the place to start for stage 4 (frame halo for
+the conv and window, per-frame statistics gathered for the scans).
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ import torch
 
 import ttnn
 
-from ....layers.linear import Linear
+from ....layers.linear import ColParallelLinear
 from ....utils import tensor
 from ..minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, rope_channel_permutation
 from . import linear_ops_openvdn as ops
@@ -42,7 +47,8 @@ from .window_softmax_openvdn import WindowLayout, WindowSoftmax
 @dataclasses.dataclass(frozen=True)
 class HybridLayout:
     """The packed sequence as the hybrid attention sees it (`SequenceLayout` in the model repo): video rows
-    contiguous and frame-major from `video_start`, the prompt rows at `[text_start, text_start + text_len)`."""
+    contiguous and frame-major from `video_start`, the prompt rows at `[text_start, text_start + text_len)`.
+    `seq_len` is the logical length; rows past it (the SP pad tail) take no part."""
 
     seq_len: int
     video_start: int
@@ -74,8 +80,8 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        if self.parallel_config.tensor_parallel.factor != 1 or self.use_ring or self.vsa_config is not None:
-            raise NotImplementedError("OpenVDN hybrid attention runs on one device for now (no TP, SP or VSA)")
+        if self.vsa_config is not None or not self.is_sequence_parallel:
+            raise NotImplementedError("OpenVDN hybrid attention: no VSA, and the sequence must be SP-fractured")
         if anchor_frames not in ("none", "both"):
             raise NotImplementedError(f"anchor_frames={anchor_frames!r}; the released checkpoints use 'both'")
         self.radius = radius
@@ -86,17 +92,22 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
 
         mesh_device = self.mesh_device
         config = ops.compute_config(mesh_device)
+        self.tp_factor = self.parallel_config.tensor_parallel.factor
+        self.sp_factor = self.parallel_config.sequence_parallel.factor
+        tp_axis = self.tp_mesh_axis if self.tp_factor > 1 else None
         self.linear_attention = OpenVDNLinearBranch(
-            hidden_size=self.hidden_size, num_heads=self.num_heads, head_dim=self.head_dim, mesh_device=mesh_device
+            hidden_size=self.hidden_size,
+            num_heads=self.num_heads,
+            head_dim=self.head_dim,
+            mesh_device=mesh_device,
+            tp_mesh_axis=tp_axis,
         )
-        self.to_out_linear = Linear(
-            self.inner_dim, self.hidden_size, bias=False, mesh_device=mesh_device, compute_kernel_config=config
-        )
+        col = dict(mesh_device=mesh_device, mesh_axis=tp_axis, compute_kernel_config=config)
+        # Column-parallel like `to_out`: TP-gathered readout in, TP-fractured hidden out.
+        self.to_out_linear = ColParallelLinear(self.inner_dim, self.hidden_size, bias=False, **col)
         # Per head, broadcast over head_dim through a 0/1 expansion matmul (exact: one nonzero per output).
-        self.softmax_gate = Linear(
-            self.hidden_size, self.num_heads, bias=True, mesh_device=mesh_device, compute_kernel_config=config
-        )
-        expand = torch.repeat_interleave(torch.eye(self.num_heads), self.head_dim, dim=1)
+        self.softmax_gate = ColParallelLinear(self.hidden_size, self.num_heads, bias=True, **col)
+        expand = torch.repeat_interleave(torch.eye(self.n_local_heads), self.head_dim, dim=1)
         self.gate_expand = tensor.from_torch(expand.reshape(1, 1, *expand.shape), device=mesh_device)
         self.gate_config = config
         self._windows: dict[HybridLayout, WindowSoftmax] = {}
@@ -147,20 +158,22 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         addcmul_gate: ttnn.Tensor | None = None,
         cu_window_seqlens: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        """spatial_1BND: `[1, 1, N, hidden]` on one device. Returns the attention output (or, with the addcmul pair,
-        `residual + output * gate`). `logical_n` and `cu_window_seqlens` are not used: the layout fixes the mask."""
+        """spatial_1BND: `[1, 1, N_local, hidden / TP]`, fractured N on SP (padded to the SP alignment) and hidden on
+        TP, as `MiniMaxH3Attention` takes it; rope tables fractured the same way on SP. Returns the attention output
+        (or, with the addcmul pair, `residual + output * gate`) in the same distribution. `logical_n` and
+        `cu_window_seqlens` are not used: `.layout` (with its logical `seq_len`) fixes the mask."""
         assert (addcmul_residual is None) == (addcmul_gate is None), "addcmul residual/gate come as a pair"
         layout = self.layout
-        assert layout is not None and layout.seq_len == spatial_1BND.shape[2], "set .layout to the packed sequence"
+        padded_len = spatial_1BND.shape[2] * self.sp_factor
+        assert layout is not None and layout.seq_len <= padded_len, "set .layout to the packed sequence"
         bounds = self.bounds(layout)
         full_cover = all(lo <= 0 and hi >= layout.num_frames - 1 for lo, hi in bounds)
+        length = layout.seq_len
 
+        # Projections, QK norm and RoPE on the local rows, exactly as H3 does them.
+        x_1BND = self._gather(spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
-            spatial_1BND,
-            force_transpose=False,
-            use_persistent_buffer=self.use_persistent_ccl_buffers,
-            persistent_buffer_rows=self.ag_row_capacity,
-            **self._agmm_kwargs(self._qkv_pins, self.hidden_size, 3 * self.inner_dim, spatial_1BND),
+            x_1BND, force_transpose=False, compute_kernel_config=self.mm_compute_kernel_config
         )
         norm_kwargs = dict(
             num_heads_per_device=self.n_local_heads,
@@ -173,6 +186,17 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
         v_BHNE, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             v_1BNF, num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
+        )
+
+        # The whole logical sequence on every SP device, for this device's heads.
+        def whole(t: ttnn.Tensor) -> ttnn.Tensor:
+            t = self._gather(t, dim=2, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor)
+            if t.shape[2] == length:
+                return t
+            return ttnn.slice(t, [0, 0, 0, 0], [t.shape[0], t.shape[1], length, t.shape[3]])
+
+        x_1BND, q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE = (
+            whole(t) for t in (x_1BND, q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE)
         )
 
         if full_cover:
@@ -188,39 +212,54 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             softmax_BHNE = self._window(layout)(q_BHNE, k_BHNE, v_BHNE)
         softmax_1BND = ttnn.unsqueeze(ttnn.transformer.concatenate_heads(softmax_BHNE), 0)
 
-        gate = ttnn.sigmoid(self.softmax_gate(spatial_1BND))  # [1, 1, N, H]
+        gate = ttnn.sigmoid(self.softmax_gate(x_1BND))  # [1, 1, N, local heads]
         gate = ttnn.matmul(gate, self.gate_expand, compute_kernel_config=self.gate_config)
         softmax_1BND = ttnn.multiply(softmax_1BND, gate)
 
-        out = self.to_out(
-            softmax_1BND,
-            force_transpose=False,
-            use_persistent_buffer=self.use_persistent_ccl_buffers,
-            persistent_buffer_rows=self.ag_row_capacity,
-            **self._agmm_kwargs(self._out_pins, self.inner_dim, self.hidden_size, softmax_1BND),
-        )
+        # Each device holds canonical heads [d * n_local, (d+1) * n_local), so gathering on TP rebuilds the
+        # canonical inner order the column-parallel output projections expect.
+        softmax_1BND = self._gather(softmax_1BND, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
+        out = self.to_out(softmax_1BND, force_transpose=False, compute_kernel_config=self.mm_compute_kernel_config)
 
         if not full_cover:
             vs, ve = layout.video_start, layout.video_end
             text = None
             if self.enable_text_state and layout.text_len:
                 ts, te = layout.text_start, layout.text_start + layout.text_len
-                text = tuple(rows_slice(t, ts, te) for t in (spatial_1BND, k_1BNF, v_1BNF))
+                text = tuple(rows_slice(t, ts, te) for t in (x_1BND, k_1BNF, v_1BNF))
             readout = self.linear_attention(
-                *(rows_slice(t, vs, ve) for t in (spatial_1BND, q_1BNF, k_1BNF, v_1BNF)),
+                *(rows_slice(t, vs, ve) for t in (x_1BND, q_1BNF, k_1BNF, v_1BNF)),
                 num_frames=layout.num_frames,
                 frame_size=(layout.frame_height, layout.frame_width),
                 bounds=bounds,
                 skip_ends=self.anchor_frames == "both",
                 text=text,
             )
+            readout = self._gather(readout, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
             video = ttnn.add(rows_slice(out, vs, ve), self.to_out_linear(readout))
             pieces = [rows_slice(out, 0, vs)] if vs else []
             pieces.append(video)
-            if ve < layout.seq_len:
-                pieces.append(rows_slice(out, ve, layout.seq_len))
+            if ve < length:
+                pieces.append(rows_slice(out, ve, length))
             out = ttnn.concat(pieces, dim=2) if len(pieces) > 1 else video
+
+        # Back to the padded length, then each SP device keeps its own rows.
+        if length < padded_len:
+            tail = ttnn.zeros(
+                [1, 1, padded_len - length, out.shape[3]],
+                dtype=out.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+            )
+            out = ttnn.concat([out, tail], dim=2)
+        if self.sp_factor > 1:
+            out = ttnn.mesh_partition(out, dim=2, cluster_axis=self.sp_mesh_axis)
 
         if addcmul_residual is not None:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         return out
+
+    def _gather(self, t: ttnn.Tensor, *, dim: int, mesh_axis: int, factor: int) -> ttnn.Tensor:
+        if factor == 1:
+            return t
+        return self.ccl_manager.all_gather(t, dim=dim, mesh_axis=mesh_axis, use_hyperparams=False)
