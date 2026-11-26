@@ -201,7 +201,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
     if constexpr (!unpack_to_dest)
     {
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     }
     {
         START_PERF_MEASURE("INIT")
@@ -213,8 +213,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
-
-            DataFormat math_format = static_cast<DataFormat>(formats.math);
 
             _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
