@@ -8,16 +8,6 @@
 #undef CFG_STATE_SIZE
 #define CFG_STATE_SIZE 93
 
-#undef ALU_ACC_CTRL_INT8_math_enabled_ADDR32
-#undef ALU_ACC_CTRL_INT8_math_enabled_SHAMT
-#undef ALU_ACC_CTRL_INT8_math_enabled_MASK
-#undef ALU_ACC_CTRL_INT8_math_enabled_RMW
-#define ALU_ACC_CTRL_INT8_math_enabled_INT32_dest_ADDR32 2
-#define ALU_ACC_CTRL_INT8_math_enabled_INT32_dest_SHAMT  10
-#define ALU_ACC_CTRL_INT8_math_enabled_INT32_dest_MASK   0x400
-#define ALU_ACC_CTRL_INT8_math_enabled_INT32_dest_RMW \
-    ALU_ACC_CTRL_INT8_math_enabled_INT32_dest_ADDR32, ALU_ACC_CTRL_INT8_math_enabled_INT32_dest_SHAMT, ALU_ACC_CTRL_INT8_math_enabled_INT32_dest_MASK
-
 #undef THCON_UNPACKER0_REG0_SELF_CHECK_EN_ADDR32
 #undef THCON_UNPACKER0_REG0_SELF_CHECK_EN_SHAMT
 #undef THCON_UNPACKER0_REG0_SELF_CHECK_EN_MASK
