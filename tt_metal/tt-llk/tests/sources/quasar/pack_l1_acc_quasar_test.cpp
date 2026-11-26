@@ -167,6 +167,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const DataFormat math_format = static_cast<DataFormat>(formats.math);
             _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
+            // copy_init's ALU config, before the datacopy init.
+            _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         }

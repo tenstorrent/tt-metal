@@ -163,7 +163,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                // Datacopy and binary share math's bank0 instruction buffer.
+                // Datacopy and binary share math's bank0 instruction buffer; each init runs its ALU config first.
+                const DataFormat math_format = static_cast<DataFormat>(formats.math);
+                _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
                 _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                     num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
                 for (int i = 0; i < num_total_tiles; ++i)
@@ -171,8 +173,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_eltwise_unary_datacopy_(i);
                 }
 
-                const DataFormat math_format     = static_cast<DataFormat>(formats.math);
                 const DataFormat dest_src_format = ckernel::math::dest_src_format<is_fp32_dest_acc_en>(math_format);
+                _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
                 _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(
                     REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? dest_src_format : math_format,
                     REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCB ? dest_src_format : math_format,
