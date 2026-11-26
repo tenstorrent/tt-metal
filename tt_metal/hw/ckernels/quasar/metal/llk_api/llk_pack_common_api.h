@@ -161,13 +161,14 @@ inline void llk_pack_dest_init() {
 /**
  * @brief Configure packer ReLU at runtime from a packed uint32.
  * @param config Packed uint32: bits [1:0] = ReluType, bits [31:16] = threshold.
+ * @note DST_ACCUM_MODE stands for a 32-bit pack src: true for every float output except Fp8_e4m3 (16-bit pack src).
  */
 TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
-    _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(ckernel::ReluConfig::from_packed(config));
+    _llk_pack_relu_config_<p_pacr::PACK0, DST_ACCUM_MODE>(ckernel::ReluConfig::from_packed(config));
 }
 
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
-    _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(relu_config);
+    _llk_pack_relu_config_<p_pacr::PACK0, DST_ACCUM_MODE>(relu_config);
 }
 
 /**

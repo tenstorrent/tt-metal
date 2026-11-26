@@ -178,6 +178,18 @@ unit_tests_legacy:
     config: 2x3_DISPATCH
     back2back: true
 
+  - filter: "*PackReluZeroFp32Dest"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*PackReluMinThresholdFp32Dest"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*PackReluMaxThresholdFp32Dest"
+    config: 2x3_DISPATCH
+    back2back: true
+
   - filter: "*QuasarTraceMultipleReplaysAcrossCQs"
     config: 2x3_DISPATCH
     back2back: true
