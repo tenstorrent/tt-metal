@@ -325,7 +325,8 @@ def test_conv2d_auto_sliced_vae_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 3135000  # Measured: ~3.135ms on main (avg of 3 runs)
+    # mean of 5 wh_n300_civ2 runs 2026-11-26 on 5 runners (3084691-3092577 ns)
+    expected_duration_ns = 3087697
 
     # Log the performance result
     print(
