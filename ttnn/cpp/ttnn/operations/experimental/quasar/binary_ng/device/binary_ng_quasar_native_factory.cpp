@@ -914,20 +914,25 @@ ProgramArtifacts create_native_artifacts(
     }
     // A staging ring, like a post ring, holds one batch per compute thread: each thread expands a batch into its own
     // tile counter, and the binary op reads it.
+    // The expansion rings of an MX operand hold Float16_b: an MX ring would quantize the expanded tile again.
+    const tt::DataFormat a_ring_df = is_mx(a_dtype) ? tt::DataFormat::Float16_b : a_df;
+    const tt::DataFormat b_ring_df = is_mx(b_dtype) ? tt::DataFormat::Float16_b : b_df;
+    const uint32_t a_ring_bytes = static_cast<uint32_t>(a_tile.get_tile_size(a_ring_df));
+    const uint32_t b_ring_bytes = static_cast<uint32_t>(b_tile.get_tile_size(b_ring_df));
     if (stage_a) {
         dfbs.push_back(
-            make_dfb(STAGE_LHS, a_tile_bytes, compute_threads * num_tiles_per_cycle, a_df, a_tile, std::nullopt));
+            make_dfb(STAGE_LHS, a_ring_bytes, compute_threads * num_tiles_per_cycle, a_ring_df, a_tile, std::nullopt));
     }
     if (stage_b) {
         dfbs.push_back(
-            make_dfb(STAGE_RHS, b_tile_bytes, compute_threads * num_tiles_per_cycle, b_df, b_tile, std::nullopt));
+            make_dfb(STAGE_RHS, b_ring_bytes, compute_threads * num_tiles_per_cycle, b_ring_df, b_tile, std::nullopt));
     }
     // A held ring holds two entries per compute thread: each thread expands its new page before it pops the old one.
     if (held_a) {
-        dfbs.push_back(make_dfb(HELD_LHS, a_tile_bytes, 2 * compute_threads, a_df, a_tile, std::nullopt));
+        dfbs.push_back(make_dfb(HELD_LHS, a_ring_bytes, 2 * compute_threads, a_ring_df, a_tile, std::nullopt));
     }
     if (held_b) {
-        dfbs.push_back(make_dfb(HELD_RHS, b_tile_bytes, 2 * compute_threads, b_df, b_tile, std::nullopt));
+        dfbs.push_back(make_dfb(HELD_RHS, b_ring_bytes, 2 * compute_threads, b_ring_df, b_tile, std::nullopt));
     }
 
     // --- Dataflow defines. SRC_SHARDED[_B]/DST_SHARDED select the BORROWED (publish/drain a resident

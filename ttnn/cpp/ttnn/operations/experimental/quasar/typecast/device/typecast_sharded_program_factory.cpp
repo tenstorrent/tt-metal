@@ -59,7 +59,8 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     // Use dimension-based tile count if either input or output is block format
     bool is_block_format =
         (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B ||
-         output.dtype() == DataType::BFLOAT8_B || output.dtype() == DataType::BFLOAT4_B);
+         output.dtype() == DataType::BFLOAT8_B || output.dtype() == DataType::BFLOAT4_B || is_mx(input.dtype()) ||
+         is_mx(output.dtype()));
 
     if (is_block_format) {
         // For block formats, calculate tile count based on element dimensions

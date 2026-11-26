@@ -136,7 +136,7 @@ Tensor untilize_with_unpadding(
     // The prim emits BFLOAT16 for a BFLOAT8_B input, so size the output CB estimate and the pending
     // output buffer by the output dtype rather than the input dtype. A BFLOAT8_B ROW_MAJOR TensorSpec
     // cannot be constructed, so get_pending_l1_output_reservation would otherwise reserve nothing.
-    const DataType output_dtype = operations::data_movement::untilize_output_dtype(input_tensor.dtype());
+    const DataType output_dtype = ttnn::operations::experimental::quasar::untilize_output_dtype(input_tensor.dtype());
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
