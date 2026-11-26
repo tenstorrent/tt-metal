@@ -835,9 +835,6 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             # A device-sampling launch also prepares the verify sampler (spec_sample.VerifySampler).
             eng.sample_on_device = bool(kwargs.get("can_sample_on_device", False))
             eng.prepare_decode()
-            if eng.sample_on_device and getattr(self.model[0], "_vfy_penalties", None) is None:
-                # This mesh's verify has no vocab-sharded logits for the penalties: penalty rows go to the host.
-                self.model_capabilities = {**type(self).model_capabilities, "supports_spec_device_penalties": False}
 
     def _ensure_ready(self, kv_cache=None):
         eng = self._engine()
