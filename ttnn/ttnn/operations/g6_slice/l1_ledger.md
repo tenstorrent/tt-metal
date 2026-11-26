@@ -1,48 +1,49 @@
-# L1 Ledger: g6_slice
+# L1 Ledger: g6_slice (Phase 0)
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md` → Blocking Model.
-Block axes: the four output axes `lead_0, lead_1, out_tile_row, out_tile_col` fold into the
-**flattened output-tile axis** (`flat`), block extent `block_tiles`; R2 adds the per-tile source
-footprint `src` (≤ `src_per_out_cap` tiles).
-
-There is no compute kernel and no DEST: every page is a raw-byte copy in the input dtype, so the
-page-format audit (DEST width) does not apply — formats are the input dtype by ABI (bit-exact copy).
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes and knobs: `op_design.md` → *Blocking Model*. Budget: 1,347,776 B per core (BB-05), shared with any L1-resident share of out (none in Phase 0: out is in DRAM).
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_output_tiles` | `cb_output_depth · block_tiles` (Phase 0: `2 · block_tiles`) | `2 · block_tiles` (block k draining in the writer while block k+1 fills in the reader) | `{lead_0: streams, lead_1: streams, out_tile_row: streams, out_tile_col: streams, flat: spans → block_tiles, src: streams (R2: filled from staging, one output tile per source footprint)}` | input dtype (bf16 Phase 0), page = `input_tensor.buffer_page_size()` | reader | writer | whole kernel | The only cross-RISC buffer. No input CB exists: R1 reads x pages straight into this CB (pack-into-destination, Rule 3.1); capacity above one block is the double-buffer (depth) decision. |
-| `cb_source_tiles` (R2 only; absent in R1) | `cb_source_depth · src_per_out_cap · block_tiles` (Phase 0: `1 · src_per_out_cap · block_tiles`) | `src_per_out_cap · block_tiles` (the whole block's source tiles are live from the read barrier until the block is assembled) | `{lead_0: streams, lead_1: streams, out_tile_row: streams, out_tile_col: streams, flat: spans → block_tiles, src: spans → src_per_out_cap}` | input dtype | reader | reader (scratch, no push) | `load_block` → end of `assemble_block`, every block | Cannot alias `cb_output_tiles`: concurrent lifetime (assemble reads staging while writing output slots, and the writer drains the other output half). Cannot be avoided: DRAM read alignment forbids reading sub-tile row runs directly into output positions (Mechanism caps). Transform-in-place impossible: output tile ≠ any single source tile. |
+| `cb_src_stage` | `stage_depth_blocks · block_tiles · src_slots` | `stage_depth_blocks · block_tiles · src_slots` — at peak the writer still holds block k (waiting on its flush) while the reader has block k+1 in flight; capacity = live set | `{lead0: streams, lead1: streams, tile_row: streams, tile_col: streams, out_page: spans → block_tiles, src_slot: spans → src_slots}` | x's storage format, page = `x.buffer_page_size()` (bfloat16 tile, 2048 B). Dataflow-only payload: never unpacked, never through DEST, so audit 2 does not apply (no `fp32_dest_acc_en` — there is no compute kernel) | reader | writer | whole program (every block) | No other buffer exists to share with. Considered and taken: **pack into destination** — in R1 the staged source page is the output page, so there is no separate output CB; **no intermediate** — R2 writes the selected row runs straight from the staged source page to out in DRAM (L1→DRAM writes only need offsets equal mod 16, which 32-B face rows satisfy), so there is no assembly buffer; **transform in place** — R3 assembles each output page in slot 0 of its own staged source group in raster order (the source position is always later in raster order than the destination, so nothing is overwritten before it is read) and writes slot 0, so there is no scratch tile. The depth-2 gap over one block is the read/write overlap (double buffering), not idle space |
 
 ## Symbol table
 
-| Symbol | Bound | Predicate establishing it |
-|--------|-------|---------------------------|
-| `page_size` | 2048 B (bf16 tile) in Phase 0; ≤ 4096 B (fp32/int32 tile) in TARGET | dtype ∈ TARGET, TILE layout |
-| `block_tiles` | `1 ≤ block_tiles ≤ min(core_tiles_max, block_tiles_l1_max)` | host computes `block_tiles = max(1, min(core_tiles_max, block_tiles_l1_max))` |
-| `block_tiles_l1_max` | `floor((L1_BUDGET_BYTES − out_l1_bytes_per_core) / ((cb_output_depth + cb_source_depth·src_per_out_staging) · page_size))`; bf16 Phase 0: 329 (R1), 164 (R2 rows), 109 (R2 rows+cols) | definition |
-| `L1_BUDGET_BYTES` | `min(1347776, device allocatable CB bytes per core)` | BB-05 |
-| `out_l1_bytes_per_core` | 0 (Phase 0, out in DRAM); R4: `ceil(out_pages / num_l1_banks) · page_size`; R5: shard bytes (16384 B production) | memory_config |
-| `core_tiles_max` | `ceil(total_out_tiles / num_cores_used)` | `split_work_to_cores` |
-| `src_per_out_cap` | 1, 2 or 4 = `(1+[o_h≠0])·(1+[o_w≠0])`; `src_per_out_staging = 0` in R1, `= src_per_out_cap` in R2 | regime predicate (op_design Regimes) |
-| `cb_output_depth`, `cb_source_depth` | 2, 1 (Phase 0) | host constants |
+| Symbol | Bound | Established by |
+|--------|-------|----------------|
+| `page_bytes` | 2048 (bfloat16, Phase 0); ≤ 4096 in TARGET (float32 / int32 / uint32) | SUPPORTED `dtype`; `x.buffer_page_size()` |
+| `src_slots` | R1: 1; R2: 1 or 2; R3: 2 or 4 | `select_regime` and the slot predicates in `op_design.md` (*Axes*, `src_slot` row) |
+| `block_tiles` | `1 ≤ block_tiles ≤ max(1, min(core_pages_max, BLOCK_BYTES_CAP // (page_bytes · src_slots)))` | host derivation from `BLOCK_BYTES_CAP = 64 KiB` and the work split |
+| `stage_depth_blocks` | 2 | host constant (single source) |
+| `core_pages_max` | `ceil(tensor_out_pages / num_cores)` | `ttnn.split_work_to_cores` |
+
+No whole-op dimension appears in any capacity: `tensor_out_pages`, `M`, `N` enter only through `core_pages_max`, which `block_tiles` is clamped *below*, never sized *to*.
 
 ## Total per-core footprint
 
-```
-L1_op = page_size · block_tiles · (cb_output_depth + cb_source_depth · src_per_out_staging)
-      ≤ L1_BUDGET_BYTES − out_l1_bytes_per_core        (by construction of block_tiles_l1_max)
-```
+`L1_op = stage_depth_blocks · block_tiles · src_slots · page_bytes`
 
-Scales with: `block_tiles` (both terms), `cb_output_depth` (output term), `src_per_out_cap` (R2 staging term only). No term scales with any tensor dimension except through the bounded `block_tiles ≤ core_tiles_max`. Phase 0 worst case: R1 bf16 `2048 · 329 · 2 = 1347584 B`; R2 rows `2048 · 164 · 4 = 1343488 B`; R2 rows+cols `2048 · 109 · 6 = 1339392 B` — all ≤ 1347776 B. Every golden INPUTS shape fits (the footprint is independent of the shape beyond the cap).
+- scales with `block_tiles` (knob `BLOCK_BYTES_CAP`) and `stage_depth_blocks`; `src_slots` is fixed by the regime and `block_tiles` shrinks to compensate, so `block_tiles · src_slots · page_bytes ≤ max(BLOCK_BYTES_CAP, src_slots · page_bytes)`.
+- Phase 0 bound: `2 · 64 KiB = 131,072 B` (R1, R2 and R3 alike, bfloat16) ≤ 1,347,776 B. Every golden INPUTS shape fits.
+- Refinements add: `cb_begin_scratch` (one aligned starts page, ≤ 64 B, `R1-dev`); for `l1_interleaved` out, the core's share `ceil(out_pages / num_l1_banks) · page_bytes`; for `l1_width_sharded`, the output shard itself (backed in place; x's shard is the model's and is not counted).
 
 ## Data-movement budget
 
+Chosen split: contiguous `out_page` ranges over the full grid (output-owner). Phase 0 has no cross-core traffic.
+
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| x | R1: the selected tiles once (x_sel). R2 production (77 cases, `M_{r-2}=1`): x_sel once. R2 general: ≤ `src_per_out_cap` · x_sel (shared source tiles re-read per output tile) | every output tile reads only its own source page(s), straight into L1; no tile row is read whole (rule 5) | none |
-| out | once | written from `cb_output_tiles` | none |
-| starts (device form, R7) | one 4·r-byte page per working core | every core needs the begin before its first page id | none (R8: 1 read + one 4 B multicast) |
+| x (R1) | each page holding a selected element: once. Unselected pages: never | output-owner split; each output page has exactly one source page | 0 |
+| x (R2) | each selected face-row band: once (64 B envelope on Blackhole) | bands of neighbouring output tile rows are disjoint; only the selected rows are read | 0 |
+| x (R3) | each needed source page: ≤ 2 (≤ 4 with a row shift) | neighbouring output tiles share a source column; no residency across pages (deferred `R3_reuse`; no production case) | 0 |
+| out | each page once (R1, R3 whole pages); R2 only the selected rows | writer owns its contiguous output range | 0 |
+| starts tensor (refinement) | one aligned page per core | every core needs the same begin word (deferred `R1-dev-bcast`) | 0 |
 
-Totals, perf-focus case p1 `(16,4096,8704) → (16,4096,4352)` bf16: DRAM read 570425344 B, DRAM write 570425344 B, cross-core 0 B, L1-local copies 0 B (R1). Row-shift flagged case 587 `(16,4096,1280)` row 4095: DRAM read 1310720 B (640 tiles), write 1310720 B, L1-local assemble 1310720 B.
+Totals, by case:
 
-> Cheapest-traffic split considered: flattened contiguous output-tile split (R1/R2) — 0 B delta against the minimum on every golden INPUTS case. Implemented: the same split. The implemented split is also the cheapest. For shifted shapes outside INPUTS (multi-row row shifts, column shifts) the cheaper split is R3 (rectangular blocks with source reuse), saving up to `(src_per_out_cap − 1) · x_sel` DRAM read bytes and adding nothing; deferred because no INPUTS case re-reads a byte under R2, and R2's staging CB and slot addressing stay intact under R3 (only the block shape changes).
+| Case | DRAM read | DRAM written | Cross-core |
+|------|-----------|--------------|------------|
+| p1 (703): `(16, 4096, 8704)` cols 4352..8704, R1, 278,528 pages | 570,425,344 B | 570,425,344 B | 0 |
+| 587: `(16, 4096, 1280)` row 4095, R2, 640 pages | 81,920 B | 40,960 B | 0 |
+| 1183: `(1, 1, 16, 62080)` row 7, R2, 1940 pages | 248,320 B | 124,160 B | 0 |
+
+> Cheapest-traffic split considered: output-owner (`out_page` ranges) — the minimum for R1 and R2 at DRAM read granularity, 0 B cross-core. Implemented: output-owner. It is the cheapest split; the only traffic above the minimum is R3's source-column re-read (≤ 2×/4×), which serves no production case and is the deferred `R3_reuse` row.

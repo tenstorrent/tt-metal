@@ -1,25 +1,22 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_slice (Phase 0: bfloat16, TILE, DRAM interleaved, host begins, unit steps).
+"""Acceptance test for g6_slice (Phase 0: bfloat16, TILE, DRAM interleaved, host-list begins, unit steps).
 
-Immutable spec for the implementer. Cases are production calls of the golden case list
-(eval/golden_tests/g6_slice/scenarios.py, ids in the comments) plus the cases the spec's
-rules require (BB-22): the two-input-tile row shift, a begin inside a tile of the last dim
-(Shape handling: "a begin may lie anywhere inside a tile of the last two dims"), repeated
-calls with different begins (BB-07 cache key), the refusal of a step > 1 and the host-side
-ValueError checks. Grading is bit-exact (helpers.TOLERANCES[bfloat16] == "exact").
+Shapes are production cases of eval/golden_tests/g6_slice/scenarios.py (id in the test id) plus the
+cases the contract requires (BB-22). Grading is bit-exact (helpers.TOLERANCES["bfloat16"] == "exact").
 """
 
 import pytest
 import torch
-
 import ttnn
+
 from ttnn.operations.g6_slice import g6_slice
 
 
-def pytorch_g6_slice(x, starts, ends, steps=None):
-    steps = steps or [1] * x.dim()
+def torch_g6_slice(x, starts, ends, steps=None):
+    """PyTorch basic indexing x[starts[0]:ends[0]:steps[0], ...]."""
+    steps = [1] * x.dim() if steps is None else steps
     return x[tuple(slice(b, e, s) for b, e, s in zip(starts, ends, steps))]
 
 
@@ -27,12 +24,7 @@ def _bits(t):
     return t.contiguous().view(torch.int16)
 
 
-def _make_input(shape):
-    torch.manual_seed(42)
-    return torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
-
-
-def _to_device(torch_x, device):
+def _to_device(device, torch_x):
     return ttnn.from_torch(
         torch_x,
         dtype=ttnn.bfloat16,
@@ -42,116 +34,143 @@ def _to_device(torch_x, device):
     )
 
 
-def _check(out, x_dev, expected):
-    assert out.dtype == ttnn.bfloat16
-    assert out.layout == ttnn.TILE_LAYOUT
-    assert out.memory_config() == x_dev.memory_config()
+def _random_input(shape):
+    torch.manual_seed(42)
+    return torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
+
+
+def _make_input(device, shape):
+    torch_x = _random_input(shape)
+    return torch_x, _to_device(device, torch_x)
+
+
+def _check(out, x, expected):
+    assert out.dtype == x.dtype
+    assert out.layout == x.layout
+    assert out.memory_config() == x.memory_config()
     assert tuple(out.shape) == tuple(expected.shape)
     actual = ttnn.to_torch(out)
     assert tuple(actual.shape) == tuple(expected.shape)
-    assert torch.equal(_bits(actual), _bits(expected)), "output differs bitwise from x[slices]"
+    diff = _bits(actual) != _bits(expected)
+    assert not bool(diff.any()), f"{int(diff.sum())} of {diff.numel()} elements differ bitwise"
+    return actual
 
 
-# (shape, starts, ends, steps) -- steps None means the call passes no steps.
+# (label, shape, starts, ends, steps). Regime per op_design.md: R1 page copy, R2 row band, R3 column shift.
 CASES = [
-    # --- regime R1: begins on tile boundaries -----------------------------------------
-    pytest.param((1, 256), [0, 0], [1, 196], [1, 1], id="c182_rank2_w_partial"),
-    pytest.param((32, 2560), [0, 0], [1, 2560], [1, 1], id="c192_rank2_one_row"),
-    pytest.param((16, 32, 12), [9, 0, 0], [16, 32, 12], [1, 1, 1], id="c1155_dim0_w12"),
-    pytest.param((2, 128, 64), [1, 0, 0], [2, 128, 64], [1, 1, 1], id="c1405_dim0"),
-    pytest.param((1, 256, 128), [0, 0, 0], [1, 196, 128], [1, 1, 1], id="c181_h_partial_end"),
-    pytest.param((1, 2304, 3072), [0, 0, 0], [1, 2048, 3072], [1, 1, 1], id="c179_rows_multi_block"),
-    pytest.param((8, 1, 4160), [0, 0, 4128], [8, 1, 4140], [1, 1, 1], id="c1732_12_cols"),
-    pytest.param((1, 64, 4160), [0, 0, 4128], [1, 64, 4140], [1, 1, 1], id="c1454_12_cols_tall"),
-    pytest.param((8, 1, 4160), [0, 0, 2560], [8, 1, 4096], [1, 1, 1], id="c1734_last_dim"),
-    pytest.param((1, 64, 3584), [0, 0, 2048], [1, 64, 3584], [1, 1, 1], id="c1442_last_dim"),
-    pytest.param((2, 1, 128, 256), [1, 0, 0, 0], [2, 1, 128, 256], [1, 1, 1, 1], id="c1394_rank4_dim0"),
-    pytest.param((2, 1, 128, 256), [1, 0, 0, 64], [2, 1, 128, 256], [1, 1, 1, 1], id="c1400_rank4_dim0_and_w"),
-    pytest.param((1, 8, 1, 256), [0, 0, 0, 64], [1, 8, 1, 256], [1, 1, 1, 1], id="c1714_rank4_h1"),
-    pytest.param((1, 1, 64, 256), [0, 0, 0, 64], [1, 1, 64, 256], [1, 1, 1, 1], id="c1443_rank4_w"),
-    pytest.param((1, 1, 256, 256), [0, 0, 192, 0], [1, 1, 193, 256], [1, 1, 1, 1], id="c232_row_on_tile_edge"),
-    pytest.param((1, 32, 64, 2048), [0, 0, 0, 1024], [1, 32, 64, 2048], None, id="no_steps_rank4"),
-    # --- regime R2: dim r-2 begin inside a tile (row shift) ---------------------------
-    pytest.param((1, 31, 5120), [0, 30, 0], [1, 31, 5120], [1, 1, 1], id="c1459_row30_of_31"),
-    pytest.param((1, 1, 256, 256), [0, 0, 196, 0], [1, 1, 197, 256], [1, 1, 1, 1], id="c191_row196"),
-    pytest.param((16, 4096, 1280), [0, 4095, 0], [16, 4096, 1280], [1, 1, 1], id="c587_row4095_offset31"),
-    # rule case: rows 17..81 -> 3 output tile rows, each from two input tiles
-    pytest.param((1, 1, 128, 64), [0, 0, 17, 0], [1, 1, 82, 64], None, id="rule_two_input_tiles"),
-    # --- regime R2: begins inside a tile of both last dims (row + column shift) -------
-    pytest.param((1, 1, 96, 128), [0, 0, 3, 5], [1, 1, 70, 120], None, id="rule_row_and_col_shift"),
+    # R1 — tile-aligned begins, M[-2] >= 32
+    ("p819_cols_nonsquare", (1, 3844, 3584), (0, 0, 2048), (1, 3844, 3584), (1, 1, 1)),
+    ("p654_lead_dim", (16, 4096, 64), (15, 0, 0), (16, 4096, 64), (1, 1, 1)),
+    ("p621_rank4_dims_m4_m1", (16, 1, 4096, 256), (15, 0, 0, 64), (16, 1, 4096, 256), (1, 1, 1, 1)),
+    ("p1443_multi_tile", (1, 1, 64, 256), (0, 0, 0, 64), (1, 1, 64, 256), (1, 1, 1, 1)),
+    ("p705_w12_lead_dim", (16, 4096, 12), (9, 0, 0), (16, 4096, 12), (1, 1, 1)),
+    ("p179_rows_aligned", (1, 2304, 3072), (0, 0, 0), (1, 2048, 3072), (1, 1, 1)),
+    ("p181_rows_196", (1, 256, 128), (0, 0, 0), (1, 196, 128), (1, 1, 1)),
+    # R2 — begin of dim r-2 inside a tile, or M[-2] < 32
+    ("p1478_single_tile", (1, 31, 4160), (0, 0, 4128), (1, 31, 4140), (1, 1, 1)),
+    ("p587_row_offset31", (16, 4096, 1280), (0, 4095, 0), (16, 4096, 1280), (1, 1, 1)),
+    ("p1183_row_offset7", (1, 1, 16, 62080), (0, 0, 7, 0), (1, 1, 8, 62080), (1, 1, 1, 1)),
+    ("p213_row_offset25", (1, 1, 256, 256), (0, 0, 217, 0), (1, 1, 218, 256), (1, 1, 1, 1)),
+    ("p815_last_row_partial_tile", (1, 3844, 5120), (0, 3843, 0), (1, 3844, 5120), (1, 1, 1)),
+    ("p1171_one_row_input", (16, 1, 4160), (0, 0, 2560), (16, 1, 4096), (1, 1, 1)),
+    ("p1434_rows_0_5", (1, 1, 8, 62080), (0, 0, 0, 0), (1, 1, 5, 62080), (1, 1, 1, 1)),
+    ("p192_rank2_row0", (32, 2560), (0, 0), (1, 2560), (1, 1)),
+    ("p182_rank2_w196", (1, 256), (0, 0), (1, 196), (1, 1)),
+    # Contract: one output tile draws its rows from two input tiles (rows 17..81).
+    ("rule_two_tiles", (1, 1, 128, 64), (0, 0, 17, 0), (1, 1, 82, 64), (1, 1, 1, 1)),
+    # Contract: a begin inside a tile of both last dims (R3).
+    ("rule_begin_in_tile_both_dims", (1, 1, 64, 128), (0, 0, 17, 5), (1, 1, 50, 69), (1, 1, 1, 1)),
 ]
 
 
-@pytest.mark.parametrize("shape, starts, ends, steps", CASES)
-def test_g6_slice(device, shape, starts, ends, steps):
-    torch_x = _make_input(shape)
-    x_dev = _to_device(torch_x, device)
-    expected = pytorch_g6_slice(torch_x, starts, ends, steps)
-    out = g6_slice(x_dev, starts, ends) if steps is None else g6_slice(x_dev, starts, ends, steps)
-    _check(out, x_dev, expected)
+@pytest.mark.parametrize("label,shape,starts,ends,steps", CASES, ids=[c[0] for c in CASES])
+def test_g6_slice(device, label, shape, starts, ends, steps):
+    torch_x, x = _make_input(device, shape)
+    out = g6_slice(x, list(starts), list(ends), list(steps))
+    _check(out, x, torch_g6_slice(torch_x, starts, ends, steps))
+
+
+def test_g6_slice_no_steps(device):
+    torch_x, x = _make_input(device, (1, 1, 64, 256))
+    out = g6_slice(x, [0, 0, 0, 64], [1, 1, 64, 256])
+    _check(out, x, torch_g6_slice(torch_x, (0, 0, 0, 64), (1, 1, 64, 256)))
 
 
 def test_g6_slice_negative_and_clamped_bounds(device):
-    """PyTorch semantics: negative begins/ends count from the end, an end beyond N is clamped."""
-    shape = (2, 96, 160)
-    torch_x = _make_input(shape)
-    x_dev = _to_device(torch_x, device)
-    starts, ends = [-1, -64, 32], [5, 96, 10_000]
-    expected = torch_x[-1:5, -64:96, 32:10_000]
-    _check(g6_slice(x_dev, starts, ends, [1, 1, 1]), x_dev, expected)
+    """A negative begin counts from the end of its dim; an end beyond N_d is clamped (PyTorch)."""
+    torch_x, x = _make_input(device, (1, 1, 256, 256))
+    starts, ends = [0, 0, -39, -192], [1, 1, -38, 100000]
+    out = g6_slice(x, starts, ends, [1, 1, 1, 1])
+    _check(out, x, torch_g6_slice(torch_x, starts, ends))
 
 
-def test_g6_slice_same_shape_different_begins(device):
-    """Two calls on one x that differ only in begins (both halves, then a row shift) must each
-    return their own slice: the begins are not baked into a cached program (BB-07)."""
-    shape = (2, 128, 512)
-    torch_x = _make_input(shape)
-    x_dev = _to_device(torch_x, device)
-    for starts, ends in (
-        ([0, 0, 256], [2, 128, 512]),
-        ([0, 0, 0], [2, 128, 256]),
-        ([0, 0, 256], [2, 128, 512]),
-        ([0, 37, 0], [2, 38, 512]),
-        ([0, 63, 0], [2, 64, 512]),
-    ):
-        expected = pytorch_g6_slice(torch_x, starts, ends)
-        _check(g6_slice(x_dev, starts, ends, [1, 1, 1]), x_dev, expected)
+def test_g6_slice_nan_inf_copied(device):
+    torch_x = _random_input((1, 1, 256, 256))
+    torch_x[0, 0, 217, 0] = float("nan")
+    torch_x[0, 0, 217, 255] = float("inf")
+    x = _to_device(device, torch_x)
+    starts, ends = (0, 0, 217, 0), (1, 1, 218, 256)
+    out = g6_slice(x, list(starts), list(ends), [1, 1, 1, 1])
+    _check(out, x, torch_g6_slice(torch_x, starts, ends))
 
 
-def test_g6_slice_repeat_bit_identical(device):
-    """BB-06: the same call twice gives bit-identical outputs."""
-    shape = (1, 64, 4160)
-    torch_x = _make_input(shape)
-    x_dev = _to_device(torch_x, device)
-    first = ttnn.to_torch(g6_slice(x_dev, [0, 0, 2560], [1, 64, 4096], [1, 1, 1]))
-    second = ttnn.to_torch(g6_slice(x_dev, [0, 0, 2560], [1, 64, 4096], [1, 1, 1]))
+def test_g6_slice_two_begins_one_input(device):
+    """Two calls on one x that differ only in begins (cases 621, 622): both bit-exact."""
+    torch_x, x = _make_input(device, (16, 1, 4096, 256))
+    for starts, ends in (((15, 0, 0, 64), (16, 1, 4096, 256)), ((15, 0, 0, 0), (16, 1, 4096, 64))):
+        out = g6_slice(x, list(starts), list(ends), [1, 1, 1, 1])
+        _check(out, x, torch_g6_slice(torch_x, starts, ends))
+
+
+def test_g6_slice_repeat_is_cached_and_identical(device):
+    """BB-06 / BB-07: a repeated call returns identical values and builds no new program."""
+    torch_x, x = _make_input(device, (1, 1, 256, 256))
+    starts, ends = (0, 0, 217, 0), (1, 1, 218, 256)
+    expected = torch_g6_slice(torch_x, starts, ends)
+    first = _check(g6_slice(x, list(starts), list(ends), [1, 1, 1, 1]), x, expected)
+    entries = device.num_program_cache_entries()
+    second = _check(g6_slice(x, list(starts), list(ends), [1, 1, 1, 1]), x, expected)
+    assert device.num_program_cache_entries() == entries
     assert torch.equal(_bits(first), _bits(second))
 
 
-def test_g6_slice_step_above_one_is_refused(device, expect_error):
-    """step_mode "strided" is not supported: a support refusal (NotImplementedError)."""
-    x_dev = _to_device(_make_input((1, 1, 64, 64)), device)
+def _begins_tensor(device, values, dtype=ttnn.uint32):
+    return ttnn.from_torch(
+        torch.tensor(values, dtype=torch.int32),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def test_g6_slice_validation(device, expect_error):
+    _, x = _make_input(device, (1, 1, 64, 256))
+    bad_calls = [
+        lambda: g6_slice(x, [0, 0, 0], [1, 1, 64], [1, 1, 1]),  # length != rank
+        lambda: g6_slice(x, [0, 0, 0, 0], [1, 1, 64, 256], [1, 1, 0, 1]),  # step < 1
+        lambda: g6_slice(x, [0, 0, 10, 0], [1, 1, 10, 256], [1, 1, 1, 1]),  # empty dim
+        lambda: g6_slice(x, [0, 0, 0, 0], [1, 1, 64, 256], slice_dim=2, num_devices=2),  # list begins
+    ]
+    starts_t = _begins_tensor(device, [0, 0, 0, 0])
+    bad_calls += [
+        lambda: g6_slice(x, starts_t, starts_t, num_devices=2),  # num_devices without slice_dim
+        lambda: g6_slice(x, starts_t, starts_t, slice_dim=2),  # slice_dim without num_devices
+        lambda: g6_slice(x, starts_t, starts_t, [1, 1, 1, 1], slice_dim=2, num_devices=2),  # steps with tensors
+        lambda: g6_slice(x, starts_t, starts_t, slice_dim=4, num_devices=2),  # slice_dim out of range
+        lambda: g6_slice(x, starts_t, starts_t, slice_dim=2, num_devices=3),  # 64 % 3 != 0
+    ]
+    int_t = _begins_tensor(device, [0, 0, 0, 0], dtype=ttnn.int32)
+    bad_calls.append(lambda: g6_slice(x, int_t, int_t, slice_dim=2, num_devices=2))  # not uint32
+    short_t = _begins_tensor(device, [0, 0, 0])
+    bad_calls.append(lambda: g6_slice(x, short_t, short_t, slice_dim=2, num_devices=2))  # shape != (r,)
+    for call in bad_calls:
+        with expect_error((ValueError, RuntimeError), ""):
+            call()
+
+
+def test_g6_slice_strided_refused(device, expect_error):
+    """step_mode "strided" is outside TARGET: validate() refuses it (UnsupportedAxisValue)."""
+    _, x = _make_input(device, (1, 1, 64, 64))
     with expect_error(NotImplementedError, ""):
-        g6_slice(x_dev, [0, 0, 0, 0], [1, 1, 64, 64], [1, 1, 2, 1])
-
-
-@pytest.mark.parametrize(
-    "starts, ends, steps, kwargs",
-    [
-        pytest.param([0, 0], [1, 64, 64], None, {}, id="starts_wrong_length"),
-        pytest.param([0, 0, 0], [1, 64], None, {}, id="ends_wrong_length"),
-        pytest.param([0, 0, 0], [1, 64, 64], [1, 1], {}, id="steps_wrong_length"),
-        pytest.param([0, 0, 0], [1, 64, 64], [1, 0, 1], {}, id="step_zero"),
-        pytest.param([0, 10, 0], [1, 10, 64], None, {}, id="empty_dim"),
-        pytest.param([0, 0, 0], [1, 64, 64], None, {"slice_dim": 1, "num_devices": 2}, id="slice_dim_with_lists"),
-        pytest.param([0, 0, 0], [1, 64, 64], None, {"slice_dim": 1}, id="slice_dim_without_num_devices"),
-        pytest.param([0, 0, 0], [1, 64, 64], None, {"num_devices": 2}, id="num_devices_without_slice_dim"),
-    ],
-)
-def test_g6_slice_invalid_arguments(device, expect_error, starts, ends, steps, kwargs):
-    x_dev = _to_device(_make_input((1, 64, 64)), device)
-    with expect_error((ValueError, RuntimeError), ""):
-        if steps is None:
-            g6_slice(x_dev, starts, ends, **kwargs)
-        else:
-            g6_slice(x_dev, starts, ends, steps, **kwargs)
+        g6_slice(x, [0, 0, 0, 0], [1, 1, 64, 64], [1, 1, 2, 1])
