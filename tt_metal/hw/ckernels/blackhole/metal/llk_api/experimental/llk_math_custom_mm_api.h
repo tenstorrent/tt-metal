@@ -48,12 +48,13 @@ inline void llk_math_custom_mm_impl(
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim,
-    const std::uint32_t in1_num_faces) {
+    const std::uint32_t in1_num_faces,
+    const std::uint32_t rt_dim = 1) {
     LLK_ASSERT(
-        (custom_mm_fits_dest<DST_SYNC_MODE, layout>(dst_index, ct_dim)),
-        "custom_mm: dst_index + ct_dim output tiles overrun the DEST sync region");
+        (custom_mm_fits_dest<DST_SYNC_MODE, layout>(dst_index, rt_dim * ct_dim)),
+        "custom_mm: dst_index + rt_dim * ct_dim output tiles overrun the DEST sync region");
 
-    _llk_math_custom_mm_<layout, finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim, in1_num_faces);
+    _llk_math_custom_mm_<layout, finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim, in1_num_faces, rt_dim);
 }
 
 template <CustomMmDestLayout layout = CustomMmDestLayout::Default, bool finalize = custom_mm_split_acc(layout)>
@@ -62,7 +63,8 @@ inline void llk_math_custom_mm(
     const std::uint32_t operand1,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t rt_dim = 1) {
     SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandB_id = get_operand_id(operand0);
@@ -70,5 +72,6 @@ inline void llk_math_custom_mm(
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
     const std::uint32_t operandA_num_faces = get_operand_num_faces(operandA_id);
 
-    llk_math_custom_mm_impl<layout, finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim, operandA_num_faces);
+    llk_math_custom_mm_impl<layout, finalize>(
+        operandB_face_r_dim, dst_index, kt_dim, ct_dim, operandA_num_faces, rt_dim);
 }
