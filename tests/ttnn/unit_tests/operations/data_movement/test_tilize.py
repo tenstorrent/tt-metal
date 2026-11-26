@@ -1436,50 +1436,48 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
     device.disable_and_clear_program_cache()
 
 
-_ARCH_RULE = re.compile(
-    r"On (Blackhole|Quasar), an? ``(\w+)`` input (must be in DRAM and )?needs a tile height of (\d+)( or more)?\."
-)
-
-
-def _docstring_arch_rule(dtype):
-    """The ttnn.tilize docstring's rule for ``dtype`` on this architecture, as (DRAM only, allowed tile height check).
-
-    The rules are sentences such as "On Blackhole, a ``UINT8`` input must be in DRAM and needs a tile height of 2 or
-    more." A dtype without a rule for this architecture gets (False, any height). A sentence for an architecture that
-    mentions tiles but doesn't match this form fails the test, so a reworded rule is caught here and not on the device.
-    """
-    doc = " ".join(ttnn.tilize.__doc__.split())
-    sentences = re.findall(r"On (?:Blackhole|Quasar), [^.]*\btile[^.]*\.", doc)
-    unreadable = [sentence for sentence in sentences if not _ARCH_RULE.fullmatch(sentence)]
-    assert not unreadable, f"the test can't read these architecture rules in the ttnn.tilize docstring: {unreadable}"
-    arch = "Blackhole" if is_blackhole() else "Quasar" if is_quasar() else None
-    for rule_arch, name, dram, height, or_more in _ARCH_RULE.findall(doc):
-        if rule_arch == arch and getattr(ttnn.DataType, name) == dtype:
-            height = int(height)
-            return bool(dram), (lambda h: h >= height) if or_more else (lambda h: h == height)
-    return False, lambda h: True
-
-
 def _docstring_tile_heights():
     """The tile heights the ``tile`` line of the ttnn.tilize docstring lists."""
     line = next(line for line in ttnn.tilize.__doc__.splitlines() if line.strip().startswith("tile ("))
     return [int(height) for height in re.findall(r"\d+", line.split("height of", 1)[1].split(".", 1)[0])]
 
 
+def _architecture_xfail(dtype, buffer_type, tile_height):
+    """None for an input the ttnn.tilize docstring supports on this architecture, else (reason, run) for an xfail.
+
+    The docstring's architecture rules: on Blackhole, BFLOAT16, UINT16 and UINT8 inputs need a tile height of 2 or
+    more, and a UINT8 input must be in DRAM; on Quasar, a FLOAT32 input needs a tile height of 32. An input outside a
+    rule runs and is expected to fail, except a UINT8 input in L1 on Blackhole and a FLOAT32 input on Quasar, which
+    don't run.
+    """
+    if is_blackhole():
+        if dtype == ttnn.uint8 and buffer_type != ttnn.BufferType.DRAM:
+            return "the docstring asks for UINT8 inputs in DRAM on Blackhole", False
+        if dtype in (ttnn.bfloat16, ttnn.uint16, ttnn.uint8) and tile_height < 2:
+            return f"the docstring asks for a tile height of 2 or more for {dtype} inputs on Blackhole", True
+    if is_quasar() and dtype == ttnn.float32 and tile_height != 32:
+        return "the docstring asks for a tile height of 32 for FLOAT32 inputs on Quasar", False
+    return None
+
+
+@pytest.mark.parametrize("tile_height", _docstring_tile_heights())
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.tilize))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.tilize))
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96), (1, 1, 64, 2048)], ids=["default", "wide"])
-def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, device):
+def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, tile_height, device, request):
     """Runs every dtype, layout and interleaved buffer type the ttnn.tilize docstring lists, with each tile height its
     ``tile`` line lists.
 
-    BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value. A dtype with an architecture
-    rule in the docstring (e.g. UINT8 on Blackhole) runs only where and with the tile heights that rule allows.
+    BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value. An input that the docstring's
+    architecture rules leave out is an xfail on that architecture (see ``_architecture_xfail``).
     """
     check_readable(dtype, layout, buffer_type)
-    dram_only, tile_height_allowed = _docstring_arch_rule(dtype)
-    if dram_only and buffer_type != ttnn.BufferType.DRAM:
-        pytest.skip(f"the docstring asks for {dtype} inputs in DRAM on this architecture")
+    xfail = _architecture_xfail(dtype, buffer_type, tile_height)
+    if xfail:
+        reason, run = xfail
+        if not run:
+            pytest.xfail(reason)
+        request.applymarker(pytest.mark.xfail(reason=reason, strict=False))
     memory_config = interleaved_memory_config(buffer_type)
     input_tensor = ttnn.from_torch(
         full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16),
@@ -1488,13 +1486,10 @@ def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, de
         device=device,
         memory_config=memory_config,
     )
-    tile_heights = [height for height in _docstring_tile_heights() if tile_height_allowed(height)]
-    assert 32 in tile_heights
-    for tile_height in tile_heights:
-        output = ttnn.tilize(input_tensor, tile=ttnn.Tile((tile_height, 32)))
+    output = ttnn.tilize(input_tensor, tile=ttnn.Tile((tile_height, 32)))
 
-        assert output.layout == ttnn.TILE_LAYOUT
-        assert output.dtype == dtype
-        assert list(output.tile.tile_shape) == [tile_height, 32]
-        assert output.memory_config() == memory_config
-        assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.dtype == dtype
+    assert list(output.tile.tile_shape) == [tile_height, 32]
+    assert output.memory_config() == memory_config
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)

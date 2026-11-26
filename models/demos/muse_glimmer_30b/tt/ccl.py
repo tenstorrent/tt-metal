@@ -56,7 +56,7 @@ class MuseCCL:
         self.mesh_device = mesh_device
         self.tp = int(mesh_device.shape[1])
         self.cluster_axis = 1
-        self.ring = self.tp > 1 and ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING
+        self.ring = self.tp > 1 and ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_1D_RING
         if topology is None:
             topology = ttnn.Topology.Ring if self.ring else default_topology(self.tp)
         self.topology = topology

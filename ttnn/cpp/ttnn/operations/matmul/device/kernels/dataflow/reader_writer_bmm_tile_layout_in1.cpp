@@ -9,6 +9,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#ifdef BATCH_BROADCAST
+#include "ttnn/operations/matmul/device/kernels/dataflow/batch_broadcast_offset.hpp"
+#endif
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -113,6 +116,12 @@ void kernel_main() {
 
 #if not defined IN1_SHARDED or not defined OUT_SHARDED
     uint32_t m_block = start_m_block;
+#ifdef BATCH_BROADCAST
+    uint32_t out_batch = get_arg(args::start_batch);
+    constexpr auto batch_dims = get_arg(args::batch_dims);
+    constexpr auto in1_batch_strides = get_arg(args::in1_batch_strides);
+    in1_tensor_start_tile_id += batch_broadcast_offset(out_batch, batch_dims, in1_batch_strides);
+#endif
     for (uint32_t b = 0; b < batch; ++b) {
         const bool last_m_block_of_batch = m_block + 1 == m_blocks_per_batch;
 #ifndef IN1_SHARDED
@@ -143,9 +152,17 @@ void kernel_main() {
 
             dfb_in1.push_back(in1_block_num_tiles);
         }
+#ifdef BATCH_BROADCAST
+        if (last_m_block_of_batch) {
+            in1_tensor_start_tile_id += batch_broadcast_offset(out_batch + 1, batch_dims, in1_batch_strides) -
+                                        batch_broadcast_offset(out_batch, batch_dims, in1_batch_strides);
+            ++out_batch;
+        }
+#else
         if (bcast_B == 0 && last_m_block_of_batch) {
             in1_tensor_start_tile_id += KtNt;
         }
+#endif
 #endif  // IN1_SHARDED
 
 #ifndef OUT_SHARDED

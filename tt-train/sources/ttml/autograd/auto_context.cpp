@@ -66,12 +66,14 @@ void AutoContext::reset_graph() {
 }
 
 void AutoContext::open_device(
-    const tt::tt_metal::distributed::MeshShape& mesh_shape, const std::vector<int>& device_ids) {
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    const std::vector<int>& device_ids,
+    std::size_t num_command_queues) {
     if (m_device) {
         throw std::runtime_error("open_device was called after the device was created.");
     }
     m_mesh_shape = mesh_shape;
-    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids);
+    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids, num_command_queues);
 }
 
 void AutoContext::close_profiler() {
@@ -82,6 +84,10 @@ void AutoContext::close_device() {
     // The CCL semaphores are L1 buffers of the mesh being closed; the next mesh allocates its own, and a set kept
     // from this one would point at addresses the next mesh hands out to other buffers.
     m_ccl_resources.reset();
+    // The intra-mesh sockets hold buffers of the mesh being closed too.
+    if (m_socket_manager) {
+        m_socket_manager->clear_intra_mesh_sockets();
+    }
     m_device_constants.clear();
     // Its axes and sizes were derived from the mesh being closed.
     m_parallelism_context.reset();
@@ -237,6 +243,17 @@ ParallelismContext::ParallelismContext(
             m_tp_axis = axis++;
             m_num_tp_devices = mesh_shape[m_tp_axis.value()];
         }
+    }
+
+    // ring_shift pairs even and odd devices, so CP needs an even ring of at least 2. Check it at setup rather than
+    // at the first ring step.
+    if (m_cp_axis.has_value()) {
+        TT_FATAL(
+            m_num_cp_devices >= 2U && m_num_cp_devices % 2U == 0U,
+            "Context parallelism needs an even CP axis of at least 2 devices (mesh shape {}, CP axis {} has {})",
+            mesh_shape,
+            m_cp_axis.value(),
+            m_num_cp_devices);
     }
 }
 

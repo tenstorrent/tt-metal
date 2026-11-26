@@ -113,6 +113,8 @@ def _build_pipeline(
         dit_parallel_config=pipeline.parallel_config,
         traced=pipeline._traced,
     )
+    pipeline.residency.register(pipeline.tt_mel_decoder, pipeline._audio_adapter.mel_decoder_spec)
+    pipeline.residency.register(pipeline.tt_vocoder_with_bwe, pipeline._audio_adapter.vocoder_spec)
     return pipeline, parallel_config
 
 

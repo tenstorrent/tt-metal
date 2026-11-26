@@ -10,10 +10,10 @@
 #include <unistd.h>
 
 #include "context/context_descriptor.hpp"
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"

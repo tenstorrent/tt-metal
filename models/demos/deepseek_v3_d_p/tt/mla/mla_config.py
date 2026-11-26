@@ -651,6 +651,32 @@ MLA_MATMUL_CONFIG = {
     },
 }
 
+# Kimi-K3 output gate fused with its TP all-gather (all_gather_minimal_matmul_async, gathering K): the same
+# sigmoid(hidden @ g_proj) as the g_proj entry above, on the grid beside the fabric-mux column. Measured on Galaxy 8x4
+# (K = 7168 gathered from 1792 per chip, N = 3072): 170.8 us device against 230.9 for the gather + g_proj. K blocks of
+# 14 tiles beat 8 (173.0) and 28 (174.3); fp32 dest costs ~7 us over bf16 and tightens the result against an fp32
+# golden (PCC 0.99999 vs 0.99993, max abs error 0.008 vs 0.028 for the unfused gate). On a 4x4 stage (TP over a line)
+# the gather dominates: ~295 us against 315.
+MLA_AGMM_CONFIG = {
+    "g_proj": {
+        640: {
+            **_K3_TAGS,
+            "config": {
+                "M_block_size": 2,
+                "K_block_size": 14,
+                "N_block_size": 9,
+                "subblock_h": 1,
+                "subblock_w": 3,
+                "compute_with_storage_grid_size": COMPUTE_GRID,
+            },
+            "fused_activation": ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4.0, 0.0),
+            "fp32_dest_acc": True,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        },
+    },
+}
+
 
 # The chunked-prefill 5k-chunk candidates, shared by every SP that splits a 5120 chunk (see 640 / 1280).
 _CHUNKED_5K_SDPA = [

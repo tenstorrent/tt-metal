@@ -6,7 +6,7 @@
 #include "ttnn/core.hpp"
 
 #include <memory>
-#include "tt-metalium/distributed.hpp"
+#include "tt-metalium/execution/distributed.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device_operation_detail.hpp"
 #include "ttnn/distributed/types.hpp"

@@ -36,8 +36,9 @@ def processor() -> KimiK3VisionProcessor:
     return KimiK3VisionProcessor(media_proc_cfg=cfg)
 
 
-# (height, width): unresized, odd sizes the padding rounds up, and resized by the side limit (7168 px).
-@pytest.mark.parametrize("hw", [(1024, 1024), (20, 33), (48, 49), (1080, 1920), (300, 8000), (1, 1)])
+# (height, width): unresized, odd sizes the padding rounds up, resized by the side limit (7168 px), and the
+# largest grid HF makes (510x132 patches, over `in_patch_limit` after the padding).
+@pytest.mark.parametrize("hw", [(1024, 1024), (20, 33), (48, 49), (1080, 1920), (300, 8000), (1, 1), (7377, 1889)])
 def test_prepare_matches_hf(processor, hw):
     media = KimiK3Media(MEDIA_CONFIG)
     array = random_array(*hw)
@@ -105,8 +106,6 @@ def test_constructor_loads_the_tokenizer(expect_error):
         ("image", np.zeros((28, 28, 3), np.float32), "uint8"),
         ("image", np.zeros((28, 28), np.uint8), "uint8"),
         ("image", random_array(0, 28), "non-empty"),
-        # 258 x 258 patches after the 28 px padding: over 65,536, rejected rather than shrunk.
-        ("image", np.zeros((3590, 3590, 3), np.uint8), "image 3590x3590: grid 258x258 exceeds"),
     ],
 )
 def test_prepare_rejects(expect_error, kind, array, message):

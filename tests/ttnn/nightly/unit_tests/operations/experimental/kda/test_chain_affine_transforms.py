@@ -39,12 +39,15 @@ class _Case:
 # A single device is a one-rank sequence-parallel mesh, so every chain here has one step; the mesh tests in
 # test_sp_contract.py cover chronological order across ranks.
 _STEPS = 1
-_PRODUCTION_PERF_MARGIN = 0.05
 _SMALL_CASE = _Case("bh2-k32-v64", batch_heads=2, key_dim=32, value_dim=64)
 _PRODUCTION_PERF_CASE = _Case("p1-bh24-k128-v128", batch_heads=24, key_dim=128, value_dim=128)
-# Complement-form [E | B] input with one state read: the base's 25,000 ns scaled by the PR/base median ratio (+2.0%) of
-# 3 interleaved rounds on a Galaxy (bh-glx-120-c03u08) 2026-11-04; a noisy op.
-_PRODUCTION_PERF_EXPECTED_DURATION_NS = 25_500
+# Stopgap. Measured on one code version on the CI IOMMU P150 runners: 21 single-interval readings (6 repeats in one
+# process on each of 3 hosts, plus 3 single runs) have mean 24,406 ns and SD 861 ns. The noise is per measurement:
+# repeats on one host vary with SD 840-1,175 ns while the host means agree within about 200 ns. A normal model at that
+# SD needs +/-8.2% for under 2% false failures, rounded up to 9%; +/-5% fails 3 of the 21 readings. The proper fix is
+# to time several intervals and gate their median.
+_PRODUCTION_PERF_EXPECTED_DURATION_NS = 24_400
+_PRODUCTION_PERF_MARGIN = 0.09
 
 
 def _chain_affine_transforms_ops(

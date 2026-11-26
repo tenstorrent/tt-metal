@@ -11,9 +11,9 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE
 from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import DEST_SYNC, TemplateParameter
+from helpers.test_variant_parameters import DEST_SYNC, TILE_COUNT, TemplateParameter
 
 pytestmark = [skip_for_quasar, skip_for_wormhole]
 
@@ -27,18 +27,18 @@ HALF_TILE_ELEMENTS = ELEMENTS_PER_TILE // 2
 @dataclass
 class Packing(TemplateParameter):
     pack_k: int
-    half: int
-    alias: int
+    topk_score_half: int
+    topk_pack_alias: int
 
     def convert_to_cpp(self):
         return (
             f"constexpr std::uint32_t PACK_K = {self.pack_k};\n"
-            f"constexpr std::uint32_t PACK_HALF = {self.half};\n"
-            f"constexpr std::uint32_t PACK_ALIAS = {self.alias};"
+            f"constexpr std::uint32_t PACK_HALF = {self.topk_score_half};\n"
+            f"constexpr std::uint32_t PACK_ALIAS = {self.topk_pack_alias};"
         )
 
 
-@parametrize(
+TOPK_PACK_SUPPLIED_INDICES_SWEEP = dict(
     case=[(512, 0), (512, 1), (1024, 0), (2048, 0)],
     alias_sync=[
         (0, DestSync.Full),
@@ -48,7 +48,18 @@ class Packing(TemplateParameter):
         (2, DestSync.Half),
     ],
 )
-def test_topk_pack_supplied_indices(case, alias_sync):
+
+
+@parametrize(**TOPK_PACK_SUPPLIED_INDICES_SWEEP)
+def test_topk_pack_supplied_indices(
+    case,
+    alias_sync,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     alias, dest_sync = alias_sync
     k, half = case
     tiles = (k + ELEMENTS_PER_TILE - 1) // ELEMENTS_PER_TILE
@@ -63,24 +74,37 @@ def test_topk_pack_supplied_indices(case, alias_sync):
     ids[::11] = SENTINEL_ID
     ids[1:5] = torch.tensor([0, INDEX_MASK, INDEX_MASK + 1, SCORE_MASK])
     formats = InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32)
-    config = TestConfig(
-        "sources/topk_pack_supplied_indices_test.cpp",
-        formats,
-        templates=[Packing(k, half, alias), DEST_SYNC(dest_sync)],
-        variant_stimuli=StimuliConfig(
-            scores,
-            DataFormat.UInt32,
-            ids,
-            DataFormat.UInt32,
-            DataFormat.UInt32,
-            tile_count_A=tiles,
-            tile_count_B=tiles,
-            tile_count_res=tiles,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/topk_pack_supplied_indices_test.cpp",
+            formats=formats,
+            # Normalize by the score and ID tiles staged into Dest.
+            templates=[
+                Packing(k, half, alias),
+                DEST_SYNC(dest_sync),
+            ],
+            runtimes=[TILE_COUNT(tile_cnt=2 * tiles)],
+            variant_stimuli=StimuliConfig(
+                scores,
+                DataFormat.UInt32,
+                ids,
+                DataFormat.UInt32,
+                DataFormat.UInt32,
+                tile_count_A=tiles,
+                tile_count_B=tiles,
+                tile_count_res=tiles,
+            ),
+            unpack_to_dest=True,
+            dest_acc=DestAccumulation.Yes,
         ),
-        unpack_to_dest=True,
-        dest_acc=DestAccumulation.Yes,
     )
-    result = torch.tensor(config.run().result, dtype=torch.int64)[
+    if is_perf:
+        return
+    result = torch.tensor(outcome.result, dtype=torch.int64)[
         : tiles * ELEMENTS_PER_TILE
     ]
     expected = torch.full_like(scores, PACKED_PADDING)
@@ -90,3 +114,11 @@ def test_topk_pack_supplied_indices(case, alias_sync):
     assert torch.equal(result, expected), torch.where(result != expected)[0][
         :16
     ].tolist()
+
+
+def test_topk_pack_supplied_indices_repeats():
+    test_topk_pack_supplied_indices(
+        (512, 1),
+        (1, DestSync.Half),
+        loop_factor=2,
+    )

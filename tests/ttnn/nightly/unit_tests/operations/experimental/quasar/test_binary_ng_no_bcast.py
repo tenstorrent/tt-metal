@@ -308,6 +308,24 @@ def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
     _run(device, "divide", mem_config, dtype_tt, shape, pcc=0.99)
 
 
+@pytest.mark.parametrize("layout", ["interleaved", "height"])
+def test_no_bcast_sfpu_rsub_fp32(device, layout):
+    # fp32 rsub routes the SFPU compute kernel (rsub_binary_tile, b - a), on interleaved and sharded. Exact: the
+    # golden is torch's fp32 b - a on the device's operands, with a 0 ULP bound.
+    if layout == "interleaved":
+        mem_config = ttnn.DRAM_MEMORY_CONFIG
+        shape = _INTERLEAVED_SHAPE
+    else:
+        # Shard over the device's whole compute grid rather than a fixed one: a small emulator grid (two L1 banks
+        # on emu-quasar 2x3_DISPATCH) has no bank on the cores a fixed four-core column would ask for.
+        grid = device.compute_with_storage_grid_size()
+        num_cores = grid.x * grid.y
+        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (grid.x - 1, grid.y - 1))})
+        mem_config = _height_sharded_config(_HEIGHT_SHARD, core_grid)
+        shape = (num_cores * _HEIGHT_SHARD[0], _HEIGHT_SHARD[1])
+    _run(device, "rsub", mem_config, ttnn.float32, shape)
+
+
 # (a_mem, b_mem, out_mem) permutations beyond the uniform III / SSS already covered by
 # test_no_bcast_interleaved / test_no_bcast_sharded. The id encodes the layout of each operand:
 #   I = DRAM-interleaved (NoC), IL1 = L1-interleaved (NoC), H/B/W = height/block/width sharded. The

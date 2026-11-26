@@ -39,7 +39,7 @@ static void write(const std::string& path, const std::string& content) {
 }
 
 static void write_deploy(const std::string& path, const std::vector<std::string>& hosts,
-                         const std::string& node_type = "WH_GALAXY_Y_TORUS") {
+                         const std::string& node_type = "WH_GALAXY") {
     std::string s;
     for (const auto& h : hosts) {
         s += "hosts { host: \"" + h + "\" node_type: \"" + node_type + "\" }\n";
@@ -139,8 +139,8 @@ TEST(MergeTest, RealBaseWithExtension_AllNodesSequential) {
     std::filesystem::copy(k5NodeCabling, cdir + "a.textproto");
     write(cdir + "b.textproto", R"(
 graph_templates { key: "5_wh_galaxy_y_torus_superpod" value {
-  children { name: "node6" node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" } }
-  children { name: "node7" node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" } }
+  children { name: "node6" node_ref { node_descriptor: "WH_GALAXY" } }
+  children { name: "node7" node_ref { node_descriptor: "WH_GALAXY" } }
 }}
 root_instance { template_name: "5_wh_galaxy_y_torus_superpod"
   child_mappings { key: "node6" value { host_id: 0 } }
@@ -169,12 +169,12 @@ TEST(MergeTest, SharedNodesCollapse_NoDuplication) {
     std::filesystem::copy(k5NodeCabling, cdir + "a.textproto");
     write(cdir + "b.textproto", R"(
 graph_templates { key: "5_wh_galaxy_y_torus_superpod" value {
-  children { name: "node1" node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" } }
-  children { name: "node2" node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" } }
-  children { name: "node3" node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" } }
-  children { name: "node4" node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" } }
-  children { name: "node5" node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" } }
-  children { name: "node6" node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" } }
+  children { name: "node1" node_ref { node_descriptor: "WH_GALAXY" } }
+  children { name: "node2" node_ref { node_descriptor: "WH_GALAXY" } }
+  children { name: "node3" node_ref { node_descriptor: "WH_GALAXY" } }
+  children { name: "node4" node_ref { node_descriptor: "WH_GALAXY" } }
+  children { name: "node5" node_ref { node_descriptor: "WH_GALAXY" } }
+  children { name: "node6" node_ref { node_descriptor: "WH_GALAXY" } }
 }}
 root_instance { template_name: "5_wh_galaxy_y_torus_superpod"
   child_mappings { key: "node1" value { host_id: 0 } }
@@ -258,17 +258,17 @@ static void write_single_node_cabling(
         "  child_mappings { key: \"" + node + "\" value { host_id: " + std::to_string(hid) + " } }\n}\n");
 }
 
-// File A declares WH_GALAXY, file B declares WH_GALAXY_Y_TORUS - disjoint same-arch templates.
+// File A declares WH_GALAXY, file B declares N300_LB - disjoint same-arch templates.
 // Pre-PR this failed as "structural mismatch"; post-PR the templates union and merge succeeds.
 TEST(HeterogeneousMergeTest, DisjointSameArchTemplates_Merge) {
     auto dir = tmp_dir("hetero_disjoint");
     std::string cdir = dir + "c/";
     std::filesystem::create_directories(cdir);
     write_single_node_cabling(cdir + "a.textproto", "node1", "WH_GALAXY");
-    write_single_node_cabling(cdir + "b.textproto", "node2", "WH_GALAXY_Y_TORUS");
+    write_single_node_cabling(cdir + "b.textproto", "node2", "N300_LB");
     write(dir + "dep.textproto",
         "hosts{host:\"node1\" node_type:\"WH_GALAXY\"}\n"
-        "hosts{host:\"node2\" node_type:\"WH_GALAXY_Y_TORUS\"}\n");
+        "hosts{host:\"node2\" node_type:\"N300_LB\"}\n");
 
     CablingGenerator gen(cdir, dir + "dep.textproto");
     const auto hosts = gen.generate_factory_system_descriptor().hosts();
@@ -372,11 +372,11 @@ TEST(HeterogeneousMergeTest, PlaceholderNamesWithRealHostnames_FallsBackToFullDe
     std::filesystem::create_directories(cdir);
     std::filesystem::copy(k5NodeCabling, cdir + "a.textproto");
     write(dir + "dep.textproto",
-        "hosts{host:\"wh-glx-a03u02\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
-        "hosts{host:\"wh-glx-a03u08\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
-        "hosts{host:\"wh-glx-a03u14\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
-        "hosts{host:\"wh-glx-a04u02\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
-        "hosts{host:\"wh-glx-a04u08\" node_type:\"WH_GALAXY_Y_TORUS\"}\n");
+        "hosts{host:\"wh-glx-a03u02\" node_type:\"WH_GALAXY\"}\n"
+        "hosts{host:\"wh-glx-a03u08\" node_type:\"WH_GALAXY\"}\n"
+        "hosts{host:\"wh-glx-a03u14\" node_type:\"WH_GALAXY\"}\n"
+        "hosts{host:\"wh-glx-a04u02\" node_type:\"WH_GALAXY\"}\n"
+        "hosts{host:\"wh-glx-a04u08\" node_type:\"WH_GALAXY\"}\n");
 
     CablingGenerator gen(cdir, dir + "dep.textproto");
     const auto hosts = gen.generate_factory_system_descriptor().hosts();

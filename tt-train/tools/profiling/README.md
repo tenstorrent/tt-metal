@@ -63,7 +63,7 @@ Override default llama 8B templates for a different model:
 ./tt-train/tools/profiling/run_experiments.sh \
   --partition bh_pod_4x32_B45 \
   --name tinyllama \
-  --model-template tt-train/configs/model_configs/tinyllama.yaml \
+  --model-template tt-train/configs/model_configs/tinyllama_bpe.yaml \
   --training-template tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml \
   --max-steps 12
 ```
