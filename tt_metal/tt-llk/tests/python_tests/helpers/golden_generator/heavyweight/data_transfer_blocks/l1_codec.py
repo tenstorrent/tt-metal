@@ -12,13 +12,15 @@ A thin dispatch over the real codecs in :mod:`helpers.pack` and
 hand L1 buffers to each other the way the hardware does.
 """
 
+import functools
 import inspect
-from typing import Callable, Dict, FrozenSet, List, Optional, Sequence, Union
+from typing import Callable, Dict, FrozenSet, Optional, Sequence, Union
 
 import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import format_tile_sizes
 from helpers.pack import (
+    TILE_BATCH_PACKERS,
     pack_bfp2_b,
     pack_bfp4_b,
     pack_bfp8_b,
@@ -71,6 +73,29 @@ PACKERS: Dict[DataFormat, Callable] = {
 }
 
 
+@functools.lru_cache(maxsize=None)
+def _accepted_parameters(fn: Callable) -> frozenset:
+    return frozenset(inspect.signature(fn).parameters)
+
+
+#: Formats where a datum is one fixed-width field and a tile is nothing but its
+#: datums, so packing a run of tiles is one call on the whole run.
+FIXED_WIDTH_L1_FORMATS: FrozenSet[DataFormat] = frozenset(
+    {
+        DataFormat.Float32,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Fp8_e4m3,
+        DataFormat.Int32,
+        DataFormat.UInt32,
+        DataFormat.Int16,
+        DataFormat.UInt16,
+        DataFormat.Int8,
+        DataFormat.UInt8,
+    }
+)
+
+
 def _call_accepted(fn: Callable, tensor: torch.Tensor, **kwargs):
     """Call `fn` passing only the keyword arguments it declares.
 
@@ -80,7 +105,7 @@ def _call_accepted(fn: Callable, tensor: torch.Tensor, **kwargs):
     Matches on **name**: rename a packer's parameter and the call quietly falls
     back to that parameter's default.
     """
-    accepted = inspect.signature(fn).parameters
+    accepted = _accepted_parameters(fn)
     return fn(tensor, **{k: v for k, v in kwargs.items() if k in accepted})
 
 
@@ -133,7 +158,7 @@ def pack_to_l1(
     use_srcs: bool = False,
     dest_acc: bool = False,
     twos_complement: bool = False,
-) -> List[int]:
+) -> bytearray:
     """Lay `tensor` out in L1 as `l1_format`, returning the bytes.
 
     This is where precision is lost for the block-scaled formats. The bytes
@@ -165,7 +190,17 @@ def pack_to_l1(
             f"the tensor has {flat.numel()}."
         )
 
-    packed: List[int] = []
+    # Every tile at once where the format allows it. Both shortcuts produce the
+    # bytes the loop below would: blocks and datums are packed independently
+    # of which tile they sit in.
+    whole = flat[: tile_count * per_tile]
+    batch_packer = None if use_srcs else TILE_BATCH_PACKERS.get(l1_format)
+    if tile_count and batch_packer is not None:
+        return bytearray(batch_packer(whole, num_faces, face_r_dim, tile_count))
+    if tile_count and l1_format in FIXED_WIDTH_L1_FORMATS:
+        return bytearray(_call_accepted(packer, whole, twos_complement=twos_complement))
+
+    packed = bytearray()
     for tile in range(tile_count):
         chunk = flat[tile * per_tile : (tile + 1) * per_tile]
         tile_bytes = _call_accepted(
@@ -218,7 +253,8 @@ def unpack_from_l1(
         # unpack_res_tiles would reach a bare dict lookup and raise KeyError
         # with nothing but the format name in it.
         raise ValueError(_no_codec_message(l1_format))
-    packed = list(packed)
+    if not isinstance(packed, (bytes, bytearray)):
+        packed = bytes(packed)
     if tile_stride_bytes is None:
         tile_stride_bytes = tile_bytes_for(
             l1_format, num_faces, face_r_dim, use_srcs, dest_acc

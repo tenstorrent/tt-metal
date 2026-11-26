@@ -27,11 +27,11 @@ from ..storage import (
     truncate_mantissa,
 )
 from .fidelity import (
+    OperandSplit,
+    PhaseMemo,
     fidelity_phases,
-    flush_pre_carry_denormals,
     min_normal_exponent,
-    operand_halves,
-    resolve_non_finite,
+    pre_carry_dead_lanes,
     warn_unmodelled_split,
 )
 from .pack import UnmodelledHardwareWarning
@@ -144,18 +144,30 @@ class Fpu:
         warn_unmodelled_split(op_name, self.l1.name)
 
     def operand_halves(
-        self, srcA: torch.Tensor, srcB: torch.Tensor, phase: int
+        self,
+        srcA: torch.Tensor,
+        srcB: torch.Tensor,
+        phase: int,
+        memo: Optional[PhaseMemo] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """The slice of each operand this architecture's multiplier takes.
 
         Non-finite operands are carried on the first phase and zeroed on the rest.
+
+        Every phase splits the same two operands, so pass a `memo` to split
+        them once per multiply and not once per phase.
         """
-        if self.multiplier_srcA_bits is not None:
-            # Dropped before the split, so the bits the multiplier cannot reach
-            # are missing from both halves and no fidelity recovers them.
-            srcA = truncate_mantissa(srcA, self.multiplier_srcA_bits)
-        a, b = operand_halves(srcA, srcB, self.mantissa_split, phase)
-        return resolve_non_finite(a, b, srcA, srcB, phase)
+        slots = memo.slots(srcA, srcB) if memo is not None else {}
+        split = slots.get("split")
+        if split is None:
+            reach = srcA
+            if self.multiplier_srcA_bits is not None:
+                # Dropped before the split, so the bits the multiplier cannot
+                # reach are missing from both halves and no fidelity recovers
+                # them.
+                reach = truncate_mantissa(srcA, self.multiplier_srcA_bits)
+            split = slots["split"] = OperandSplit(reach, srcB, self.mantissa_split)
+        return split.halves(phase)
 
     def flush_pre_carry(
         self,
@@ -163,6 +175,7 @@ class Fpu:
         srcA: torch.Tensor,
         srcB: torch.Tensor,
         dest_format: Optional[DataFormat],
+        memo: Optional[PhaseMemo] = None,
     ) -> torch.Tensor:
         """Zero a lane product whose exponent lands below Dest's lowest normal.
 
@@ -172,9 +185,16 @@ class Fpu:
         """
         if dest_format is None:
             return product
-        return flush_pre_carry_denormals(
-            product, srcA, srcB, min_normal_exponent(dest_format)
-        )
+        min_exponent = min_normal_exponent(dest_format)
+        if min_exponent is None:
+            return product
+        # Which lanes flush depends on the operands, not on the phase.
+        slots = memo.slots(srcA, srcB) if memo is not None else {}
+        dead = slots.get(("dead", min_exponent))
+        if dead is None:
+            dead = pre_carry_dead_lanes(srcA, srcB, min_exponent)
+            slots[("dead", min_exponent)] = dead
+        return torch.where(dead, torch.zeros_like(product), product)
 
     def partial_product(
         self,
@@ -182,6 +202,7 @@ class Fpu:
         srcB: torch.Tensor,
         phase: int,
         dest_format: Optional[DataFormat] = None,
+        memo: Optional[PhaseMemo] = None,
     ) -> torch.Tensor:
         """One fidelity phase of a multiply: window, multiply, flush.
 
@@ -189,9 +210,13 @@ class Fpu:
         device multiplies. A matmul does not use this, because it needs the halves
         unmultiplied, to arrange into matrices and slice a K face first.
         """
-        a, b = self.operand_halves(srcA, srcB, phase)
+        a, b = self.operand_halves(srcA, srcB, phase, memo)
         return self.flush_pre_carry(
-            self.elementwise(MathOperation.Elwmul, a, b), srcA, srcB, dest_format
+            self.elementwise(MathOperation.Elwmul, a, b),
+            srcA,
+            srcB,
+            dest_format,
+            memo,
         )
 
     # ------------------------------------------------------------------

@@ -12,7 +12,8 @@ sits beside :mod:`.fpu`. See `README.md`, "units/fidelity.py in full".
 """
 
 import warnings
-from typing import Optional, Tuple
+from functools import lru_cache
+from typing import Dict, Optional, Tuple
 
 import torch
 from helpers.format_config import DataFormat
@@ -126,6 +127,71 @@ def resolve_non_finite(
     )
 
 
+class OperandSplit:
+    """Both operands of one multiply, split once into the halves phases pick from.
+
+    Every phase multiplies the original srcA and srcB, so the four halves and
+    the non-finite lanes are the same for all of them. :meth:`halves` gives
+    what :func:`operand_halves` followed by :func:`resolve_non_finite` would,
+    without redoing the split per phase.
+    """
+
+    def __init__(
+        self, srcA: torch.Tensor, srcB: torch.Tensor, split: Tuple[int, int]
+    ) -> None:
+        a_bits, b_bits = split
+        self._a = dict(zip(("hi", "lo"), split_mantissa(srcA, a_bits)))
+        self._b = dict(zip(("hi", "lo"), split_mantissa(srcB, b_bits)))
+        self._srcA = srcA.float()
+        self._srcB = srcB.float()
+        self._bad_a = ~torch.isfinite(self._srcA)
+        self._bad_b = ~torch.isfinite(self._srcB)
+        self._any_bad = bool(self._bad_a.any()) or bool(self._bad_b.any())
+
+    def halves(self, phase: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """The slice of each operand that fidelity `phase` multiplies."""
+        a_half, b_half = PHASE_OPERAND_HALVES[phase]
+        a, b = self._a[a_half], self._b[b_half]
+        if not self._any_bad:
+            return a, b
+        # Carried raw on phase 0 and zeroed after it. See resolve_non_finite.
+        if phase == 0:
+            return (
+                torch.where(self._bad_a, self._srcA, a),
+                torch.where(self._bad_b, self._srcB, b),
+            )
+        return (
+            torch.where(self._bad_a, torch.zeros_like(a), a),
+            torch.where(self._bad_b, torch.zeros_like(b), b),
+        )
+
+
+class PhaseMemo:
+    """What the phases of one multiply share, kept from one phase to the next.
+
+    Holds one operand pair. A different pair, or the same tensors changed in
+    place, starts it over, so a stale entry is never read.
+    """
+
+    def __init__(self) -> None:
+        self._pair = None
+        self._slots: Dict = {}
+
+    def slots(self, srcA: torch.Tensor, srcB: torch.Tensor) -> Dict:
+        """The cache for this operand pair, emptied if the pair is a new one."""
+        versions = (srcA._version, srcB._version)
+        pair = self._pair
+        if (
+            pair is None
+            or pair[0] is not srcA
+            or pair[1] is not srcB
+            or pair[2] != versions
+        ):
+            self._pair = (srcA, srcB, versions)
+            self._slots = {}
+        return self._slots
+
+
 def ieee_exponent(values: torch.Tensor) -> torch.Tensor:
     """The exponent an IEEE float stores for each value.
 
@@ -136,6 +202,7 @@ def ieee_exponent(values: torch.Tensor) -> torch.Tensor:
     return exponent - 1
 
 
+@lru_cache(maxsize=None)
 def min_normal_exponent(dest_format: DataFormat) -> Optional[int]:
     """Lowest exponent the Dest format holds as a normal, or None if integer.
 
@@ -173,9 +240,20 @@ def flush_pre_carry_denormals(
     """
     if min_exponent is None:
         return product
+    dead = pre_carry_dead_lanes(srcA, srcB, min_exponent)
+    return torch.where(dead, torch.zeros_like(product), product)
+
+
+def pre_carry_dead_lanes(
+    srcA: torch.Tensor, srcB: torch.Tensor, min_exponent: int
+) -> torch.Tensor:
+    """Lanes whose product the pre-carry rule flushes.
+
+    Depends on the operands alone, not on the phase, so one multiply needs it
+    once however many phases it runs.
+    """
     # A non-finite operand stores an all-ones exponent field, so its lane can
     # never land below the floor. Without this guard frexp's exponent-0 reads
     # as ~2^-1 and Inf * b flushes to zero for any small |b|.
     pre_carry = ieee_exponent(srcA) + ieee_exponent(srcB)
-    dead = (pre_carry < min_exponent) & ~non_finite_lanes(srcA, srcB)
-    return torch.where(dead, torch.zeros_like(product), product)
+    return (pre_carry < min_exponent) & ~non_finite_lanes(srcA, srcB)

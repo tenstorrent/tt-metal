@@ -60,6 +60,7 @@ from .storage import (  # noqa: F401
     truncate_mantissa,
     truncate_src_mantissa,
 )
+from .units.fidelity import PhaseMemo
 from .units.pack import UnmodelledHardwareWarning  # noqa: F401
 from .units.pack_effects import PackEdgeMask
 
@@ -73,6 +74,9 @@ class DataTransferBlocks:
 
     def __init__(self, arch: ArchGolden) -> None:
         self.arch = arch
+        # The units are shared between goldens and hold no state, so what the
+        # phases of one multiply share is kept here, per set of blocks.
+        self._phase_memo = PhaseMemo()
 
     # ------------------------------------------------------------------
     # L1 -> registers
@@ -281,7 +285,7 @@ class DataTransferBlocks:
         self, srcA: torch.Tensor, srcB: torch.Tensor, phase: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """The slice of each operand this multiplier takes on `phase`."""
-        return self.arch.fpu.operand_halves(srcA, srcB, phase)
+        return self.arch.fpu.operand_halves(srcA, srcB, phase, self._phase_memo)
 
     def fpu_partial_product(
         self,
@@ -291,7 +295,9 @@ class DataTransferBlocks:
         dest_format: Optional[DataFormat] = None,
     ) -> torch.Tensor:
         """One fidelity phase of a multiply: window, multiply, flush."""
-        return self.arch.fpu.partial_product(srcA, srcB, phase, dest_format)
+        return self.arch.fpu.partial_product(
+            srcA, srcB, phase, dest_format, self._phase_memo
+        )
 
     def fpu_warn_split_unmodelled(self, op_name: str) -> None:
         """Say so when a multiply here falls back to the exact product.
