@@ -137,8 +137,8 @@ def test_dram_group_norm_vae_two_pass_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # mean of 3 wh_n300_civ2 runs 2026-11-24 on 3 runners (1136361-1138926 ns)
-    expected_duration_ns = 1137305
+    # mean of 3 wh_n300_civ2 runs 2026-11-26 on 3 runners (1101886-1104502 ns)
+    expected_duration_ns = 1103537
 
     # Log the performance result
     print(
