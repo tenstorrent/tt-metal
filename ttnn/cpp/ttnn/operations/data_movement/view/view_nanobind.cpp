@@ -17,7 +17,33 @@ namespace ttnn::operations::data_movement {
 
 namespace {
 
+// ttnn::view rebuilds the padded shape from the logical shape, so a TILE input padded past the next tile multiple
+// would read the wrong tiles. The docstring leaves such inputs out; reject them at the Python entry, without
+// changing ttnn::view for the ops that call it internally.
+void check_tile_padding(const ttnn::Tensor& tensor) {
+    const auto& logical = tensor.logical_shape();
+    if (tensor.layout() != ttnn::TILE_LAYOUT || logical.rank() < 2) {
+        return;
+    }
+    const auto& padded = tensor.padded_shape();
+    const auto tile = tensor.tensor_spec().tile();
+    const auto round_up = [](uint32_t value, uint32_t multiple) {
+        return (value + multiple - 1) / multiple * multiple;
+    };
+    TT_FATAL(
+        padded[-2] == round_up(logical[-2], tile.get_height()) && padded[-1] == round_up(logical[-1], tile.get_width()),
+        "view needs a TILE tensor padded only up to the next tile multiple, but shape {} is padded to {}",
+        logical,
+        padded);
+}
+
+ttnn::Tensor view_shape_wrapper(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape) {
+    check_tile_padding(input_tensor);
+    return ttnn::view(input_tensor, shape);
+}
+
 ttnn::Tensor view_shape_vector_wrapper(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int32_t>& shape) {
+    check_tile_padding(input_tensor);
     return ttnn::view(input_tensor, shape);
 }
 
@@ -61,9 +87,6 @@ void bind_view(nb::module_& mod) {
         // Bind first overload: view(Tensor, ttsl::SmallVector<int32_t>)
         ttnn::overload_t(&view_shape_vector_wrapper, nb::arg("input_tensor"), nb::arg("shape")),
         // Bind second overload: view(Tensor, ttsl::SmallVector<int32_t>)
-        ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, const ttnn::Shape&>(&ttnn::view),
-            nb::arg("input_tensor"),
-            nb::arg("shape")));
+        ttnn::overload_t(&view_shape_wrapper, nb::arg("input_tensor"), nb::arg("shape")));
 }
 }  // namespace ttnn::operations::data_movement

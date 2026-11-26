@@ -216,9 +216,8 @@ def test_view_docstring_blackhole_inputs(dtype, layout, buffer_type, device):
     check_readable(dtype, layout, buffer_type)
     if not is_blackhole():
         pytest.skip("the docstring lists these dtypes for Blackhole")
-    torch.manual_seed(0)
     input_tensor = ttnn.from_torch(
-        torch.rand((2, 3, 50, 70)) * 2 - 1,
+        full_range_input((2, 3, 50, 70), dtype),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -234,3 +233,12 @@ def test_view_docstring_blackhole_inputs(dtype, layout, buffer_type, device):
     assert output.buffer_address() == input_tensor.buffer_address()
     expected = ttnn.to_torch(ttnn.to_dtype(input_tensor.cpu(), ttnn.float32)).reshape(300, 70)
     assert_exact(expected, ttnn.to_torch(ttnn.to_dtype(output.cpu(), ttnn.float32)))
+
+
+def test_view_rejects_over_padded_tile_input(device, expect_error):
+    """A TILE input padded past the next multiple of 32 is outside the ttnn.view docstring. The op raises instead of
+    returning a view that reads the wrong tiles."""
+    input_tensor = ttnn.from_torch(torch.ones(2, 16, 64), dtype=ttnn.bfloat16, device=device)
+    over_padded = ttnn.tilize_with_val_padding(input_tensor, [2, 64, 64], 0.0)
+    with expect_error(RuntimeError, "padded only up to the next tile multiple"):
+        ttnn.view(over_padded, (1, 2, 16, 64))
