@@ -107,15 +107,8 @@ inline constexpr bool _zero_comp_tests_negative_() {
 /**
  * @brief Lanes of @c v that receive the written (non-default) result for COMP_MODE, tested against zero.
  *
- * Every format reads identically here: Quasar loads signed integers as sign-magnitude and floats as
- * IEEE, both with the sign in bit 31, so the element is zero for exactly two words, +0 (0x00000000)
- * and -0 (0x80000000), and -0 counts as zero, matching IEEE (-0.0 == 0).
- *
- * The sign modes are integer compares of the raw word, whose two's-complement order puts -0 at
- * INT32_MIN, below every negative element, and +0 below every positive one:
- *  - strictly positive is @c v>0, one compare;
- *  - strictly negative is @c v<0 with -0 excluded by @c v>neg_zero, two compares.
- * eqz/nez test the magnitude @c setsgn(v,0) (sign bit cleared, so ±0 -> 0) against zero.
+ * Every format has its sign in bit 31, so zero is the two words +0 and -0. The sign modes are integer
+ * compares of the raw word, where -0 (0x80000000) is INT32_MIN, below every negative element.
  *
  * gtez/ltez return their strict complement (ltz/gtz) predicate; the loop defaults those lanes' result
  * to 1 and writes 0 here (see @ref _zero_comp_writes_zero_).
@@ -123,8 +116,9 @@ inline constexpr bool _zero_comp_tests_negative_() {
  * @note Do NOT use @c abs(vInt) for the magnitude — that is two's-complement abs and leaves
  *       sign-magnitude -0 (0x80000000) unchanged (nonzero), breaking eqz(-0). Clearing the sign bit
  *       (SFPSETSGN with sign=0) is the correct, format-agnostic primitive.
- * @note The compares must stay integer ones (@c vInt operands): a float compare is false for a NaN,
- *       which is an ordinary non-zero element here, as is any Int32 whose magnitude reads as one.
+ * @note The compares must stay integer ones (@c vInt operands): a float compare would misread an Int32
+ *       whose magnitude has a NaN bit pattern. A float NaN is therefore signed like any other element,
+ *       as before this predicate was reworked; tt-metal#55273 tracks returning 0 for it.
  *
  * @tparam COMP_MODE: Comparison-to-zero mode, values =
  *         <equal_zero/not_equal_zero/less_than_zero/greater_than_zero/greater_than_equal_zero/less_than_equal_zero>
@@ -237,6 +231,8 @@ inline void calculate_zero_comp() {
     for (int d = 0; d < ITERATIONS; d++) {
         const sfpi::vInt bits = traits::load();
 
+        // TODO(tt-metal#67405): gtz/lez can store sfpi::mask(bits > 0) & one once ttsim models the
+        // mask form of SFPGT/SFPLE.
         traits::template store<false /*INCR*/>(default_result);
         v_if(_zero_comp_pred_<COMP_MODE>(bits, neg_zero)) { traits::store(taken_result); }
         v_endif;

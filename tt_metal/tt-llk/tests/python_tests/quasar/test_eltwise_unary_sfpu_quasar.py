@@ -1028,9 +1028,7 @@ def _edge_patterns(*tables) -> tuple:
 
 
 # Comparison-to-zero edge inputs as raw bits, per float input format: (signed view dtype, bit width,
-# patterns). The heaviside and float-class runs together: both zeros, the smallest and largest
-# denormal, the smallest normal, the largest finite, both infinities, the smallest and largest NaN
-# payload and a quiet NaN, and +/-1.0, each of either sign.
+# patterns). The heaviside and float-class runs together.
 _ZERO_COMP_EDGE_BITS = {
     fmt: (
         _HEAVISIDE_EDGE_BITS[fmt][0],
@@ -1064,17 +1062,10 @@ def prepare_zero_comp_edge_inputs(
 def zero_comp_expected(
     mathop: MathOperation, src: torch.Tensor, variant: QuasarSfpuVariant
 ) -> torch.Tensor:
-    """
-    calculate_zero_comp on the bits that reach the SFPU: 1.0 where the comparison holds, else 0.0.
+    """calculate_zero_comp on the bits that reach the SFPU: 1.0 where the comparison holds, else 0.0.
 
-    An element is zero when everything but its sign bit is clear, so -0.0 equals zero. Any other
-    element, a denormal, an infinity or a NaN included, is negative with its sign bit set and
-    positive with it clear. A float compare would differ on exactly the NaNs: every ordering
-    compare of a NaN is false, so gtz and ltz would read 0 and lez and gez 1.
-
-    Unpack-to-Dest delivers the input bits unchanged. The 32-bit-Dest FPU datacopy is an ELWADD (see
-    _drops_zero_and_nan_sign): it clears the sign of a negative NaN, and ttsim also has it flush a
-    denormal to zero, so there every NaN is positive and a denormal is zero.
+    A NaN is signed like any other element: that is what the kernel does today, not a contract;
+    tt-metal#55273 tracks returning 0 for it, and its fix changes the NaN lanes here.
     """
     int_dtype, width, _ = _ZERO_COMP_EDGE_BITS[variant.formats.input_format]
     flat = src.flatten().contiguous()
@@ -1082,6 +1073,7 @@ def zero_comp_expected(
     sign_set = bits < 0
     is_zero = (bits & ((1 << (width - 1)) - 1)) == 0
     if variant.uses_fpu:
+        # The 32-bit-Dest FPU datacopy is an ELWADD (see _drops_zero_and_nan_sign).
         is_denormal = flat.to(torch.float32).abs() < torch.finfo(torch.float32).tiny
         is_zero = is_zero | is_denormal
         sign_set = sign_set & ~torch.isnan(flat)
