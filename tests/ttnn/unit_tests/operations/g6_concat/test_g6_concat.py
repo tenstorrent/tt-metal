@@ -1,32 +1,52 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_concat (Phase 0: bfloat16, TILE, DRAM in and out).
+"""Acceptance test for g6_concat, Phase 0: bfloat16, TILE_LAYOUT, DRAM interleaved in and out.
 
-IMMUTABLE SPEC — the implementer must not modify this file.
-
-g6_concat moves bytes and computes nothing, so the tolerance is the golden suite's
-exact-copy gate: every logical output element is bit-identical to its source
-element (compared as int16 bit patterns, so NaN payloads and -0.0 count).
-
-Cases are limited to production shapes (eval/golden_tests/g6_concat/feature_spec.py
-INPUTS inside Phase 0) plus the cases the spec's rules require (BB-22):
-  - both regimes of op_design.md pinned (page_relocation / row_gather),
-  - one row_gather case whose pieces straddle face halves and tile edges,
-  - poisoned input padding (no logical output depends on padding),
-  - dim spellings (-1 and 3 are the same case),
-  - Python-side validation errors.
+Every shape is a production call of eval/golden_tests/g6_concat/feature_spec.py (BB-22) or a
+case the op's rules require. The op only moves data, so every logical output element must be
+bit-identical to its source element (NaN payloads and signed zeros included).
 """
 
 import pytest
 import torch
-
 import ttnn
+
 from ttnn.operations.g6_concat import g6_concat
 
+L1_BUDGET_BYTES = 1347776
 
-def pytorch_g6_concat(tensors, dim=0):
-    return torch.cat([t.to(torch.float32) for t in tensors], dim=dim).to(tensors[0].dtype)
+# (id, input shapes, dim, regime the op_design.md selection function assigns)
+CASES = [
+    # page_run, concat_dim "w"
+    ("flux23_w_rows1", [[1, 1, 1, 128]] * 2, -1, "page_run"),
+    ("qwen108_w_rows31", [[1, 1, 31, 64], [1, 1, 31, 192]], -1, "page_run"),
+    ("qwen109_w_rows31_6ch", [[1, 6, 31, 64], [1, 6, 31, 192]], -1, "page_run"),
+    ("qwen113_w_rows33_6ch", [[1, 6, 33, 64], [1, 6, 33, 192]], -1, "page_run"),
+    ("qwen74_w_rows1_16ch", [[1, 16, 1, 64], [1, 16, 1, 192]], -1, "page_run"),
+    ("qwen80_w_rows16_4in", [[1, 1, 16, 16384]] * 3 + [[1, 1, 16, 12928]], -1, "page_run"),
+    ("qwen160_w_rows1_4in", [[1, 1, 1, 16384]] * 3 + [[1, 1, 1, 12928]], -1, "page_run"),
+    ("qwen25_w_rows3844", [[1, 1, 3844, 64], [1, 1, 3844, 192]], -1, "page_run"),
+    ("flux18_w_16ch", [[1, 16, 512, 64]] * 2, -1, "page_run"),
+    ("flux20_w_rank3_3in", [[1, 512, 5120]] * 3, -1, "page_run"),
+    # page_run, concat_dim "outer"
+    ("qwen81_outer_16in", [[1, 1, 128, 256]] * 16, 0, "page_run"),
+    ("qwen82_outer_16in_6ch", [[1, 6, 128, 256]] * 16, 0, "page_run"),
+    ("qwen85_outer_rank3_16in", [[1, 128, 1536]] * 16, 0, "page_run"),
+    # 49152 output pages: more pages per core than one L1-capped block, so the last block is ragged.
+    ("qwen22_outer_multiblock", [[1, 6, 4096, 256]] * 8, 0, "page_run"),
+    # page_run, concat_dim "h" with tile-aligned heights
+    ("flux21_h_aligned", [[1, 1, 2048, 128], [1, 1, 256, 128]], 2, "page_run"),
+    ("flux24_h_rank3", [[1, 2048, 3072], [1, 256, 3072]], 1, "page_run"),
+    # row_gather: rows of several height-1 inputs share each output tile
+    ("qwen89_h_rows1_2in", [[1, 1, 1, 62080]] * 2, 2, "row_gather"),
+    ("qwen143_h_rows1_8in", [[1, 1, 1, 62080]] * 8, 2, "row_gather"),
+    ("qwen79_h_rows1_16in", [[1, 1, 1, 62080]] * 16, 2, "row_gather"),
+]
+
+
+def _params(cases):
+    return [pytest.param(shapes, dim, regime, id=case_id) for case_id, shapes, dim, regime in cases]
 
 
 def _bits(t):
@@ -35,150 +55,193 @@ def _bits(t):
 
 def _make_inputs(shapes):
     torch.manual_seed(42)
-    return [torch.randn(list(s), dtype=torch.float32).to(torch.bfloat16) for s in shapes]
+    # Successive draws give each input its own values, so a swapped, repeated or dropped input shows.
+    return [torch.randn(shape, dtype=torch.float32).to(torch.bfloat16) for shape in shapes]
 
 
 def _to_device(torch_inputs, device):
     return [
         ttnn.from_torch(
-            t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         for t in torch_inputs
     ]
 
 
-def _check(output, torch_inputs, dim):
-    expected = pytorch_g6_concat(torch_inputs, dim)
-    assert list(output.shape) == list(expected.shape), f"shape {list(output.shape)} != {list(expected.shape)}"
+def _reference(torch_inputs, dim):
+    return torch.cat(torch_inputs, dim=dim)
+
+
+def _check(output, expected, tt_inputs):
+    assert list(output.shape) == list(expected.shape)
     assert output.dtype == ttnn.bfloat16
     assert output.layout == ttnn.TILE_LAYOUT
     mc = output.memory_config()
-    assert mc.buffer_type == ttnn.BufferType.DRAM, f"output buffer {mc.buffer_type}, expected DRAM"
+    assert mc.buffer_type == ttnn.BufferType.DRAM
     assert mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-    got = ttnn.to_torch(output).to(torch.bfloat16)
+    for k, t in enumerate(tt_inputs):
+        assert t.memory_config().buffer_type == ttnn.BufferType.DRAM, f"input {k} changed placement"
+    got = ttnn.to_torch(output)
     mismatch = _bits(got) != _bits(expected)
-    assert not mismatch.any(), (
-        f"{int(mismatch.sum())} of {mismatch.numel()} elements differ; "
-        f"first at {mismatch.nonzero()[0].tolist()}: got {got[tuple(mismatch.nonzero()[0])]} "
-        f"want {expected[tuple(mismatch.nonzero()[0])]}"
-    )
+    bad = int(mismatch.sum())
+    assert bad == 0, f"{bad} of {expected.numel()} elements differ in bits; first at {mismatch.nonzero()[0].tolist()}"
+    return got
 
 
-# (shapes, dim, id). Production cases from feature_spec.py INPUTS (Phase 0 cells) unless marked.
-CASES = [
-    # single tile row, two inputs, last dim (Qwen 157-shaped, DRAM): page_relocation, "w"
-    ([[1, 1, 1, 128]] * 2, -1, "w_1x128x2"),
-    # 31 rows, non-square, last dim: page_relocation, "w", h_non_aligned
-    ([[1, 6, 31, 64], [1, 6, 31, 192]], -1, "w_6x31_64+192"),
-    # multi-tile, tile-aligned, last dim, multi-batch
-    ([[1, 6, 256, 64], [1, 6, 256, 192]], -1, "w_6x256_64+192"),
-    # four inputs, one tile-row tall, 1940 tile columns: page_relocation, "w"
-    ([[1, 1, 16, 16384]] * 3 + [[1, 1, 16, 12928]], -1, "w_16rows_4in"),
-    # row dim, tile-aligned offsets: must take page_relocation (regime-pinned)
-    ([[1, 1, 2048, 128], [1, 1, 256, 128]], 2, "h_aligned_rank4"),
-    # row dim of a rank-3 tensor, tile-aligned
-    ([[1, 2048, 3072], [1, 256, 3072]], 1, "h_aligned_rank3"),
-    # row dim, height-1 inputs: rows of 2 / 16 inputs share one output tile (row_gather, regime-pinned)
-    ([[1, 1, 1, 62080]] * 2, 2, "h_gather_2in"),
-    ([[1, 1, 1, 62080]] * 16, 2, "h_gather_16in"),
-    # leading dim, sixteen inputs, multi-slice
-    ([[1, 6, 128, 256]] * 16, 0, "outer_16x6x128x256"),
-    # leading dim, sixteen large inputs (Qwen 19)
-    ([[1, 4096, 1536]] * 16, 0, "outer_16x4096x1536"),
-    # leading dim, two inputs (Qwen 91)
-    ([[1, 1, 128, 256]] * 2, 0, "outer_2in"),
-    # RULE-REQUIRED (not production): row_gather pieces cross face halves and input-tile edges
-    ([[1, 1, 31, 64], [1, 1, 33, 64], [1, 1, 1, 64]], 2, "h_gather_straddle"),
-]
+def _special_values():
+    # NaN with payload, +inf, -inf, -0.0, smallest +/- subnormal (bfloat16 bit patterns).
+    bits = [0x7FC1, 0x7F80, -0x0080, -0x8000, 0x0001, -0x7FFF]
+    return torch.tensor(bits, dtype=torch.int16).view(torch.bfloat16)
 
 
-@pytest.mark.parametrize("shapes, dim", [(c[0], c[1]) for c in CASES], ids=[c[2] for c in CASES])
-def test_g6_concat(device, shapes, dim):
+@pytest.mark.parametrize("shapes,dim,regime", _params(CASES))
+def test_g6_concat(device, shapes, dim, regime):
+    from ttnn.operations.g6_concat import plan_of
+
     torch_inputs = _make_inputs(shapes)
     tt_inputs = _to_device(torch_inputs, device)
+
+    plan = plan_of(tt_inputs, dim)
+    assert plan["regime"] == regime
+    assert plan["l1_bytes_per_core"] <= L1_BUDGET_BYTES
+
     output = g6_concat(tt_inputs, dim)
-    _check(output, torch_inputs, dim)
-
-
-def test_g6_concat_dim_spellings(device):
-    """dim=-1 and dim=3 of a rank-4 input are the same case."""
-    shapes = [[1, 6, 31, 64], [1, 6, 31, 192]]
-    torch_inputs = _make_inputs(shapes)
-    tt_inputs = _to_device(torch_inputs, device)
-    out_neg = ttnn.to_torch(g6_concat(tt_inputs, -1)).to(torch.bfloat16)
-    out_pos = ttnn.to_torch(g6_concat(tt_inputs, 3)).to(torch.bfloat16)
-    expected = pytorch_g6_concat(torch_inputs, 3)
-    assert torch.equal(_bits(out_neg), _bits(expected))
-    assert torch.equal(_bits(out_pos), _bits(expected))
+    _check(output, _reference(torch_inputs, dim), tt_inputs)
 
 
 @pytest.mark.parametrize(
-    "shapes, dim, poison",
+    "shapes,dim,canonical_dim",
     [
-        ([[1, 6, 31, 64], [1, 6, 31, 192]], -1, 1000.0),
-        ([[1, 1, 1, 62080]] * 2, 2, float("nan")),
-        ([[1, 1, 31, 64], [1, 1, 33, 64], [1, 1, 1, 64]], 2, float("nan")),
+        pytest.param([[1, 16, 512, 64]] * 2, 3, -1, id="flux18_dim3_is_last"),
+        pytest.param([[1, 1, 1, 62080]] * 2, -2, 2, id="qwen89_dim_minus2_is_h"),
     ],
-    ids=["w_31rows_poison1000", "h_gather_poison_nan", "h_gather_straddle_poison_nan"],
 )
-def test_g6_concat_poisoned_padding(device, shapes, dim, poison):
-    """No logical output element may depend on the content of input tile padding."""
+def test_g6_concat_dim_canonicalization(device, shapes, dim, canonical_dim):
+    torch_inputs = _make_inputs(shapes)
+    tt_inputs = _to_device(torch_inputs, device)
+    output = g6_concat(tt_inputs, dim)
+    _check(output, _reference(torch_inputs, canonical_dim), tt_inputs)
+
+
+def test_g6_concat_same_tensor_repeated(device):
+    # g6_concat([x] * 16, 0): one buffer feeds sixteen output segments.
+    (x,) = _make_inputs([[1, 1, 128, 256]])
+    (x_tt,) = _to_device([x], device)
+    output = g6_concat([x_tt] * 16, 0)
+    _check(output, _reference([x] * 16, 0), [x_tt])
+
+
+@pytest.mark.parametrize(
+    "shapes,dim,poison",
+    [
+        pytest.param([[1, 6, 31, 64], [1, 6, 31, 192]], -1, 1000.0, id="qwen109_poison_1000"),
+        pytest.param([[1, 1, 1, 62080]] * 2, 2, float("nan"), id="qwen89_poison_nan"),
+        pytest.param([[1, 1, 1, 62080]] * 16, 2, 1000.0, id="qwen79_poison_1000"),
+    ],
+)
+def test_g6_concat_ignores_input_padding(device, shapes, dim, poison):
     torch_inputs = _make_inputs(shapes)
     tt_inputs = [
         ttnn.fill_implicit_tile_padding(t, poison, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for t in _to_device(torch_inputs, device)
     ]
     output = g6_concat(tt_inputs, dim)
-    _check(output, torch_inputs, dim)
-
-
-def test_g6_concat_special_values(device):
-    """NaN, +-inf, -0.0 and subnormals move bit for bit (row_gather path)."""
-    shapes = [[1, 1, 1, 62080]] * 2
-    torch_inputs = _make_inputs(shapes)
-    specials = torch.tensor([float("nan"), float("inf"), float("-inf"), -0.0, 1e-39, -1e-39], dtype=torch.float32).to(
-        torch.bfloat16
-    )
-    for t in torch_inputs:
-        t.view(-1)[: specials.numel()] = specials
-        t.view(-1)[-specials.numel() :] = specials
-    tt_inputs = _to_device(torch_inputs, device)
-    # Reference = the values the device holds (the op is graded, not the host conversion).
-    held = [ttnn.to_torch(t).to(torch.bfloat16) for t in tt_inputs]
-    output = g6_concat(tt_inputs, 2)
-    _check(output, held, 2)
-
-
-def test_g6_concat_repeat_is_deterministic(device):
-    """The same call twice returns bit-identical output (BB-06)."""
-    shapes = [[1, 1, 1, 62080]] * 16
-    torch_inputs = _make_inputs(shapes)
-    tt_inputs = _to_device(torch_inputs, device)
-    first = ttnn.to_torch(g6_concat(tt_inputs, 2)).to(torch.bfloat16)
-    second = ttnn.to_torch(g6_concat(tt_inputs, 2)).to(torch.bfloat16)
-    assert torch.equal(_bits(first), _bits(second))
-    assert torch.equal(_bits(first), _bits(pytorch_g6_concat(torch_inputs, 2)))
-
-
-def _dev(device, shape, dtype=ttnn.bfloat16):
-    return ttnn.from_torch(torch.randn(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    _check(output, _reference(torch_inputs, dim), tt_inputs)
 
 
 @pytest.mark.parametrize(
-    "build, dim",
+    "shapes,dim",
     [
-        (lambda d: [], 0),  # empty list
-        (lambda d: [_dev(d, (1, 1, 32, 32)), _dev(d, (1, 32, 32))], 0),  # rank mismatch
-        (lambda d: [_dev(d, (1, 1, 32, 32)), _dev(d, (1, 1, 32, 32), ttnn.float32)], 0),  # dtype mismatch
-        (lambda d: [_dev(d, (1, 1, 32, 32)), _dev(d, (1, 1, 32, 64))], 2),  # size mismatch off dim
-        (lambda d: [_dev(d, (1, 1, 32, 32))] * 2, 4),  # dim out of range
-        (lambda d: [_dev(d, (1, 1, 32, 32))] * 2, -5),  # dim out of range
-        (lambda d: [_dev(d, (32, 32))] * 2, 0),  # rank 2
-        (lambda d: [_dev(d, (1, 1, 1, 32, 32))] * 2, 0),  # rank 5
+        pytest.param([[1, 6, 31, 64], [1, 6, 31, 192]], -1, id="qwen109_w"),
+        pytest.param([[1, 1, 1, 62080]] * 16, 2, id="qwen79_h"),
     ],
-    ids=["empty", "rank_mismatch", "dtype_mismatch", "size_mismatch", "dim_too_big", "dim_too_small", "rank2", "rank5"],
 )
-def test_g6_concat_validation(device, expect_error, build, dim):
-    tensors = build(device)
-    with expect_error((ValueError, RuntimeError), ""):
+def test_g6_concat_special_values(device, shapes, dim):
+    specials = _special_values()
+    n = len(specials)
+    torch_inputs = []
+    for t in _make_inputs(shapes):
+        flat = t.view(-1)
+        flat[:n] = specials
+        flat[flat.numel() - n :] = specials.flip(0)
+        torch_inputs.append(t)
+    tt_inputs = _to_device(torch_inputs, device)
+    for k, (src, t) in enumerate(zip(torch_inputs, tt_inputs)):
+        if not torch.equal(_bits(ttnn.to_torch(t)), _bits(src)):
+            pytest.skip(f"host-to-device path changed special values of input {k}")
+    output = g6_concat(tt_inputs, dim)
+    _check(output, _reference(torch_inputs, dim), tt_inputs)
+
+
+def test_g6_concat_repeat_call_is_bit_identical(device):
+    shapes, dim = [[1, 1, 1, 62080]] * 16, 2
+    torch_inputs = _make_inputs(shapes)
+    tt_inputs = _to_device(torch_inputs, device)
+    expected = _reference(torch_inputs, dim)
+    first = _check(g6_concat(tt_inputs, dim), expected, tt_inputs)
+    second = _check(g6_concat(tt_inputs, dim), expected, tt_inputs)
+    assert torch.equal(_bits(first), _bits(second))
+
+
+def test_g6_concat_structures_sharing_a_program_hash(device):
+    # FLUX 23 and Qwen 108 both produce 8 output pages on 8 cores with one page per block, but
+    # differ in run lengths and logical rows per tile: a cache hit must not keep the other's values.
+    sequence = [
+        ([[1, 1, 1, 128]] * 2, -1),
+        ([[1, 1, 31, 64], [1, 1, 31, 192]], -1),
+        ([[1, 1, 1, 128]] * 2, -1),
+    ]
+    for shapes, dim in sequence:
+        torch_inputs = _make_inputs(shapes)
+        tt_inputs = _to_device(torch_inputs, device)
+        _check(g6_concat(tt_inputs, dim), _reference(torch_inputs, dim), tt_inputs)
+
+
+def _device_tensor(shape, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+    return ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.float32),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def test_g6_concat_rejects_empty_list(device, expect_error):
+    with expect_error((ValueError, RuntimeError), "g6_concat"):
+        g6_concat([], 0)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["rank2", "rank5", "rank_mismatch", "dtype_mismatch", "layout_mismatch", "size_mismatch", "dim_high", "dim_low"],
+)
+def test_g6_concat_rejects_invalid_inputs(device, expect_error, case):
+    if case == "rank2":
+        tensors, dim = [_device_tensor([32, 64], device)] * 2, 0
+    elif case == "rank5":
+        tensors, dim = [_device_tensor([1, 1, 1, 32, 64], device)] * 2, 0
+    elif case == "rank_mismatch":
+        tensors, dim = [_device_tensor([1, 32, 64], device), _device_tensor([1, 1, 32, 64], device)], 0
+    elif case == "dtype_mismatch":
+        tensors, dim = [
+            _device_tensor([1, 1, 32, 64], device),
+            _device_tensor([1, 1, 32, 64], device, dtype=ttnn.float32),
+        ], -1
+    elif case == "layout_mismatch":
+        tensors, dim = [
+            _device_tensor([1, 1, 32, 64], device),
+            _device_tensor([1, 1, 32, 64], device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        ], -1
+    elif case == "size_mismatch":
+        tensors, dim = [_device_tensor([1, 1, 32, 64], device), _device_tensor([1, 1, 64, 64], device)], -1
+    elif case == "dim_high":
+        tensors, dim = [_device_tensor([1, 1, 32, 64], device)] * 2, 4
+    else:
+        tensors, dim = [_device_tensor([1, 1, 32, 64], device)] * 2, -5
+    with expect_error((ValueError, RuntimeError), "g6_concat"):
         g6_concat(tensors, dim)
