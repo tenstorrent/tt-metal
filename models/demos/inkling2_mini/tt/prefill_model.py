@@ -875,7 +875,11 @@ class Inkling2Prefill:
         kc = ttnn.typecast(k, ring.dtype) if k.dtype != ring.dtype else k
         if n < t:
             old = _bf16(_rows(ring, o, o + t))
-            new = ttnn.add(old, ttnn.multiply(ttnn.subtract(_bf16(k), old), b["valid"]))
+            # k where valid, else old: products by 1 / 0 and a sum with an exact zero, so the real rows are k bit for
+            # bit (old + (k - old) * valid rounded them by the slots' old contents: the decode then depended on what
+            # an earlier request or the launch's captures had left in the ring)
+            v = b["valid"]
+            new = ttnn.add(ttnn.multiply(_bf16(k), v), ttnn.multiply(old, ttnn.rsub(v, 1.0)))
             kc = ttnn.typecast(new, ring.dtype) if ring.dtype != ttnn.bfloat16 else new
         ttnn.fill_cache(ring, kc, 0, update_idx=o)
 
