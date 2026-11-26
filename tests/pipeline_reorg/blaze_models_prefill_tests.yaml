@@ -481,10 +481,10 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K3-2.8T, Kimi-K3.1) MoE block perf 8x4 5k, 4x4 2.5k"
+- name: "(Kimi-K3-2.8T, Kimi-K3.1) MoE block perf 8x4 5k, 4x4 [RING, RING] carve 2.5k"
   # Host time (test_moe_block_host_perf) and per-op device time (test_moe_block_perf) of one MoE block layer: K3 on 8x4 at
-  # 5,120 tokens, K3.1's 4x4 stage (top tray half) at 2,560. Stops at the first failure; a run that passes no test
-  # (skipped) fails too.
+  # 5,120 tokens, K3.1's 4x4 stage (the [RING, RING] carve) at 2,560. Stops at the first failing step; a step that passes no
+  # test (skipped) fails too.
   # Tagged k3_mla_perf: the dispatch is at GitHub's 25-input limit, so that checkbox selects every K3 perf leg.
   fabric_profile: torus_xy
   cmd: |
@@ -502,15 +502,14 @@
       }
       gated python3 -m pytest $T/perf/test_moe_block_host_perf.py -k "kimi_k3-8x4-5120" -vvv --tb=short
       gated python3 -m pytest $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3-8x4-5120 and not weka and not real" -vvv --tb=short
-      gated $T/run_4x4_stage_tests.sh --half top -- $T/perf/test_moe_block_host_perf.py -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
-      gated $T/run_4x4_stage_tests.sh --half top -- $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
+      $T/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 2 $T/perf/test_moe_block_host_perf.py $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3_1-xy4-sp1-2560" || exit $?
     '
   test_type: k3_moe_perf
   test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
-      # The job takes ~13 min (four ~1 min pytest runs plus fabric bring-up and the 4x4 binding); 20 leaves 1.5x.
+      # The job takes ~13 min (three pytest runs, four tests, plus fabric bring-up); 20 leaves 1.5x.
       timeout: 20
       tier: 2
       release_ready: false
