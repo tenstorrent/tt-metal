@@ -63,7 +63,11 @@ def write(path: Path, header: dict, steps: list[StepState], current: str | None)
     doc = {k: header[k] for k in HEADER_KEYS} | {"current": current, "steps": [_step(s) for s in steps]}
     path = Path(path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".status.", suffix=".tmp")
+    umask = os.umask(0)
+    os.umask(umask)
     try:
+        # mkstemp creates the file owner-only; status.json is read by others on the shared filesystem.
+        os.fchmod(fd, 0o666 & ~umask)
         with os.fdopen(fd, "w") as f:
             json.dump(doc, f, indent=1)
         os.replace(tmp, path)

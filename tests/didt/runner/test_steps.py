@@ -60,6 +60,8 @@ class FakeShell:
         script = "test_mm_mcast_write_ack_failure.py" in cmd and not cmd.startswith("pytest")
         if outcome == "raise":
             raise OSError("disk full")
+        if outcome == "interrupt":
+            raise KeyboardInterrupt
         if outcome == "timeout":
             log.write_text(f"\nTIMEOUT after {timeout}s\n")
             return 124
@@ -72,6 +74,11 @@ class FakeShell:
             work = Path(env["MCAST_ACK_WORK_DIR"])
             (work / "chip3" / "cache").mkdir(parents=True)
             (work / "chip3" / "pytest.log").write_text("1 passed\n")
+            if outcome == "build":
+                log.write_text(
+                    "chip 12 FAIL: TT_THROW: trisc0 build failed. Log: /tmp/x.s: Assembler messages:\nchip 1 PASS\n"
+                )
+                return 1
             if outcome == "fail":
                 log.write_text("chip 3 FAIL: HUNG chip 3 (runtime id 0): BusDeviceFunction=0000:04:00.0\nchip 1 PASS\n")
                 return 1
@@ -89,11 +96,11 @@ class FakeShell:
         ]
 
 
-def _run(tmp_path, only=None, skip=(), co=False, **fake):
+def _run(tmp_path, only=None, skip=(), co=False, snap=None, **fake):
     run_dir = tmp_path / "LOG_2026_11_26_12_00_host_abcdef12345"
     run_dir.mkdir()
     shell = FakeShell(run_dir, **fake)
-    rc = run(CFG, run_dir, CHIPS, set(only) if only else None, set(skip), co, shell=shell)
+    rc = run(CFG, run_dir, CHIPS, set(only) if only else None, set(skip), co, shell=shell, snap=snap)
     doc = json.loads((run_dir / "status.json").read_text())
     return rc, {s["key"]: s for s in doc["steps"]}, doc, shell, run_dir
 
@@ -185,6 +192,15 @@ def test_write_ack_hang_names_chip(tmp_path):
     _, steps, _, _, _ = _run(tmp_path, only=["nd:mcast-ack-duty"], outcomes={"nd/mcast-ack-duty": "fail"})
     s = steps["nd:mcast-ack-duty"]
     assert s["status"] == "FAIL" and s["devices"] == [{**CHIPS[3].as_dict(), "hung": True}]
+
+
+def test_write_ack_other_failure_keeps_chip_reason(tmp_path):
+    _, steps, _, _, _ = _run(tmp_path, only=["nd:mcast-ack"], outcomes={"nd/mcast-ack": "build"})
+    s = steps["nd:mcast-ack"]
+    assert s["devices"] == [CHIPS[12].as_dict()]
+    assert s["details"] == [
+        "device 12 bdf=0000:45:00.0 tray=2 asic=5: TT_THROW: trisc0 build failed. Log: /tmp/x.s: Assembler messages:"
+    ]
 
 
 def test_core_sweep_without_window_line_fails(tmp_path):
@@ -294,3 +310,89 @@ def test_cli_help_has_sbatch_note(capsys):
         pass
     out = capsys.readouterr().out
     assert "--propagate=NONE" in out and "sg slurmusers" in out
+
+
+def test_runner_env_drops_device_selection_and_throttle(tmp_path, monkeypatch):
+    # dev = rank among ALL the host's chips, and the first attempt must run unthrottled.
+    for k, v in {"TT_VISIBLE_DEVICES": "3", "TT_METAL_VISIBLE_DEVICES": "3", "TT_MM_THROTTLE_PERF": "5"}.items():
+        monkeypatch.setenv(k, v)
+    _, _, _, shell, _ = _run(tmp_path, only=["nd:minimal"], outcomes={"nd/minimal": "fail"})
+    first = shell.workload_calls("nd/minimal")[0]["env"]
+    assert not {"TT_VISIBLE_DEVICES", "TT_METAL_VISIBLE_DEVICES", "TT_MM_THROTTLE_PERF"} & set(first)
+    assert shell.workload_calls("nd/minimal_throttle")[0]["env"]["TT_MM_THROTTLE_PERF"] == "5"
+    assert all("TT_VISIBLE_DEVICES" not in c["env"] for c in shell.calls)
+
+
+def test_chip_lost_at_reset_joins_on_new_snapshot(tmp_path):
+    # tray 4 asic 2 (0000:82:00.0) gone after the reset: chip 20 is now 0000:86:00.0, not 0000:85:00.0
+    chips31 = [c for c in CHIPS if c.bdf != "0000:82:00.0"]
+    chips31 = [Chip(i, c.bdf, c.tray, c.asic, c.asic_id, c.kmd) for i, c in enumerate(chips31)]
+
+    class Hung20(FakeShell):
+        def __call__(self, cmd, log, env, cwd, timeout):
+            rc = super().__call__(cmd, log, env, cwd, timeout)
+            if log.name == "log":
+                log.write_text("chip 20 FAIL: HUNG chip 20 (runtime id 0): BusDeviceFunction=0000:86:00.0\n")
+                return 1
+            return rc
+
+    run_dir = tmp_path / "r"
+    run_dir.mkdir()
+    run(CFG, run_dir, CHIPS, {"nd:mcast-ack"}, set(), False, shell=Hung20(run_dir), snap=lambda: chips31)
+    doc = json.loads((run_dir / "status.json").read_text())
+    (s,) = [s for s in doc["steps"] if s["key"] == "nd:mcast-ack"]
+    assert s["devices"][0]["dev"] == 20 and s["devices"][0]["bdf"] == "0000:86:00.0"
+    assert "chip set changed after reset: 31 chips, 32 at run start; gone 0000:82:00.0" in s["details"]
+    assert len(doc["chips"]) == 32
+
+
+def test_interrupt_marks_attempt_and_reraises(tmp_path):
+    run_dir = tmp_path / "r"
+    run_dir.mkdir()
+    shell = FakeShell(run_dir, outcomes={"nd/minimal": "interrupt"})
+    try:
+        run(CFG, run_dir, CHIPS, {"nd:minimal", "nd:ff1"}, set(), False, shell=shell)
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise AssertionError("interrupt swallowed")
+    doc = json.loads((run_dir / "status.json").read_text())
+    steps = {s["key"]: s for s in doc["steps"]}
+    assert doc["current"] is None
+    assert steps["nd:minimal"]["status"] == "FAIL" and steps["nd:minimal"]["reason"] == "interrupted"
+    assert steps["nd:ff1"]["status"] == "PENDING"
+
+
+def test_sh_interrupt_kills_the_process_group(tmp_path, monkeypatch):
+    import subprocess
+
+    pid_file = tmp_path / "pid"
+    real_wait, calls = subprocess.Popen.wait, []
+
+    def wait(self, timeout=None):
+        calls.append(timeout)
+        if len(calls) == 1:
+            for _ in range(50):
+                if pid_file.is_file() and pid_file.read_text().strip():
+                    break
+                time.sleep(0.1)
+            raise KeyboardInterrupt
+        return real_wait(self, timeout)
+
+    monkeypatch.setattr(subprocess.Popen, "wait", wait)
+    try:
+        sh(f"sleep 30 & echo $! > {pid_file}; wait", tmp_path / "log", dict(os.environ), tmp_path, None)
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise AssertionError("interrupt swallowed")
+    pid = int(pid_file.read_text())
+    time.sleep(0.2)
+    status = Path(f"/proc/{pid}/status")
+    assert not status.is_file() or "zombie" in status.read_text()
+
+
+def test_triage_hook_is_time_bounded(tmp_path):
+    _, _, _, shell, _ = _run(tmp_path, only=["nd:minimal"])
+    hook = shell.workload_calls("nd/minimal")[0]["env"]["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"]
+    assert re.match(r"timeout \d+ \S+/python \S+/tools/tt-triage.py ", hook) and hook.endswith("; kill -9 $PPID")
