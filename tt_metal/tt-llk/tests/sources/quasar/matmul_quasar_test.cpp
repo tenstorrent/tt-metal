@@ -26,6 +26,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_matmul.h"
 #include "params.h"
 
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -90,6 +93,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    // From L1, so run_kernel keeps nothing live for this call.
+    extern const volatile struct RuntimeParams __runtime_args_start[];
+    const std::uint32_t unpack_A_src = __runtime_args_start[0].formats.unpack_A_src;
+    const std::uint32_t unpack_B_src = __runtime_args_start[0].formats.unpack_B_src;
+#else
+    const std::uint32_t unpack_A_src = formats.unpack_A_src;
+    const std::uint32_t unpack_B_src = formats.unpack_B_src;
+#endif
+    // As llk_unpack_AB_matmul_uninit: an MxFp4 operand's unpacker goes back to the Float16_b table format.
+    if (static_cast<DataFormat>(unpack_B_src) == DataFormat::MxFp4)
+    {
+        _llk_unpack_reconfig_data_format_src_<ckernel::p_unpacr::UNP_A, false>(unpack_B_src, static_cast<std::uint32_t>(DataFormat::Float16_b));
+    }
+    if (static_cast<DataFormat>(unpack_A_src) == DataFormat::MxFp4)
+    {
+        _llk_unpack_reconfig_data_format_src_<ckernel::p_unpacr::UNP_B, false>(unpack_A_src, static_cast<std::uint32_t>(DataFormat::Float16_b));
+    }
 }
 
 #endif
@@ -99,6 +126,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -183,6 +213,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
@@ -193,6 +229,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_matmul.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -260,6 +299,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
