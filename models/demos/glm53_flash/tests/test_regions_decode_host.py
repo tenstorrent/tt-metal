@@ -218,7 +218,7 @@ def test_common_args_within_limit():
     p = R.plan_regions_stream(K, 256, H, banks=8)
     ca = p.common_args(72)
     assert ca["gate_up"] == 144 and ca["down"] == 72 and max(ca["gate_up"], ca["down"]) <= ca["limit"]
-    hdr = PKG.parents[2] / "tt_metal" / "api" / "tt-metalium" / "kernel_types.hpp"
+    hdr = PKG.parents[2] / "tt_metal" / "api" / "tt-metalium" / "workload" / "legacy" / "kernel_types.hpp"
     if hdr.exists():  # pin the limit to the runtime's constant when the tree is around
         m = re.search(r"max_runtime_args\s*=\s*(\d+)", hdr.read_text())
         assert m and int(m.group(1)) == R.MAX_RUNTIME_ARGS, (m and m.group(1), R.MAX_RUNTIME_ARGS)
