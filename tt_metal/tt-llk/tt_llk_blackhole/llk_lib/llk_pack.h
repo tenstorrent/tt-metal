@@ -263,7 +263,7 @@ inline void _llk_pack_mop_config_(
         ckernel::ckernel_template tmp(
             MOP_OUTER_LOOP,
             MOP_INNER_LOOP,
-            lltt::replay_insn(0, replay_buf_len),
+            TT_OP_REPLAY(0, replay_buf_len, 0, 0),
             TT_OP_PACR(
                 p_pacr::CFG_CTXT_0,
                 p_pacr::NO_ROW_PAD_ZERO,

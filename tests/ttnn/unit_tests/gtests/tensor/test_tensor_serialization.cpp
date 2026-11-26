@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/cleanup.hpp>

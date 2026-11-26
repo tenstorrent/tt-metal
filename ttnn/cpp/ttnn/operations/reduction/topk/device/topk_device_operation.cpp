@@ -11,7 +11,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt_stl/assert.hpp>
-#include "tt-metalium/allocator.hpp"
+#include "tt-metalium/mesh/allocator.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 

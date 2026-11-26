@@ -32,7 +32,6 @@ namespace ckernel {
 #ifdef TRISC_MATH
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace sfpu {
@@ -69,7 +68,7 @@ inline void _top2_calculate_top2_() {
 
     //-------------------------------------------------------------------------
     // Group 0
-    lltt::record<lltt::Exec>(0, 14);
+    TTI_REPLAY(0, 14, 1, 1);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
     // Load 4 tile rows into LREG4-7
@@ -94,15 +93,15 @@ inline void _top2_calculate_top2_() {
     TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
 
     //-------------------------------------------------------------------------
-    lltt::replay(0, 14);  // Group 1
-    lltt::replay(0, 14);  // Group 2
-    lltt::replay(0, 14);  // Group 3
+    TTI_REPLAY(0, 14, 0, 0);  // Group 1
+    TTI_REPLAY(0, 14, 0, 0);  // Group 2
+    TTI_REPLAY(0, 14, 0, 0);  // Group 3
     //-------------------------------------------------------------------------
     // We are now reading in bottom two faces
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
-    lltt::record<lltt::Exec>(14, 6);
+    TTI_REPLAY(14, 6, 1, 1);
 
     // Group 4
     TTI_SFPTRANSP(0, 0, 0, 0);
@@ -113,19 +112,19 @@ inline void _top2_calculate_top2_() {
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    lltt::replay(6, 8);
+    TTI_REPLAY(6, 8, 0, 0);
 
     // Group 5
-    lltt::replay(14, 6);
-    lltt::replay(6, 8);
+    TTI_REPLAY(14, 6, 0, 0);
+    TTI_REPLAY(6, 8, 0, 0);
 
     // Group 6
-    lltt::replay(14, 6);
-    lltt::replay(6, 8);
+    TTI_REPLAY(14, 6, 0, 0);
+    TTI_REPLAY(6, 8, 0, 0);
 
     // Group 7
-    lltt::replay(14, 6);
-    lltt::replay(6, 8);
+    TTI_REPLAY(14, 6, 0, 0);
+    TTI_REPLAY(6, 8, 0, 0);
 
     // Store Results
     // Sum of top-2: LREG0 = LREG0 + LREG1

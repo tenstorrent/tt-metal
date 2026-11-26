@@ -4,16 +4,16 @@
 
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
-#include <system_mesh.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
 #include <algorithm>
 #include <cstddef>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "mesh_coord.hpp"
-#include "shape_base.hpp"
+#include "tt-metalium/vocabulary/mesh_coord.hpp"
+#include "tt-metalium/vocabulary/shape_base.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/distributed/system_mesh_translation_map.hpp"

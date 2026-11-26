@@ -8,7 +8,6 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -47,7 +46,7 @@ inline void _init_reduce_max_col_subblock_4x2_() {
 
     // ***********************************************************
     // Record replay buffer
-    lltt::record<lltt::NoExec>(0, 8);
+    TTI_REPLAY(0, 8, 0, 1);
 
     TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG4 /*lreg_src_c*/, p_sfpu::LREG2 /*lreg_dest*/, 1 /*instr_mod1*/);
@@ -94,7 +93,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
     for (std::uint32_t i = 0; i < block_height; i++) {
 #pragma GCC unroll 8
         for (int j = 0; j < 8; j++) {
-            lltt::replay(0, 8);
+            TTI_REPLAY(0, 8, 0, 0);
 
             if (j % 4 == 3) {
                 TTI_INCRWC(0, 10, 0, 0);
@@ -120,7 +119,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
     for (std::uint32_t i = 0; i < block_height; i++) {
 #pragma GCC unroll 8
         for (int j = 0; j < 8; j++) {
-            lltt::replay(0, 8);
+            TTI_REPLAY(0, 8, 0, 0);
 
             if (j % 4 == 3) {
                 TTI_INCRWC(0, 10, 0, 0);

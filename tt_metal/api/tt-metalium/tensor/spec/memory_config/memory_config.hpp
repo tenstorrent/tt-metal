@@ -4,7 +4,13 @@
 
 #pragma once
 
-// DEPRECATED-FORWARDING-HEADER: <tt-metalium/tensor/spec/memory_config/memory_config.hpp> moved to <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>.
-// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/tensor/spec/memory_config/memory_config.hpp> moved to
+// <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>. This forwarding header will be removed after
+// 2027-03-05.
+#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
+// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
+#warning \
+    "<tt-metalium/tensor/spec/memory_config/memory_config.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
+#endif
 
 #include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>  // IWYU pragma: export

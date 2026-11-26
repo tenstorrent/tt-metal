@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -13,17 +14,17 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -32,7 +33,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <gmock/gmock.h>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "../metal2_host_api/test_helpers/test_helpers.hpp"
@@ -1377,6 +1378,121 @@ TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1SConfig) {
     validate_intra_tensix_dfb(program, logical_core, config);
 }
 
+// trisc3 as the unpacker, the packer or both of a DFB: the tensix_trisc_mask the host derives and
+// writes into every participating hart's init entry flags, and the cases it rejects.
+TEST_F(UnitMeshFixture, DfbTrisc3RoleMask) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "trisc3 DFB endpoints require Quasar";
+    }
+    struct Case {
+        const char* name;
+        uint16_t producer_risc_mask;
+        uint16_t consumer_risc_mask;
+        bool pack_on_trisc3 = false;
+        bool unpack_on_trisc3 = false;
+        bool intra = false;
+        bool rejected = false;  // the trisc3 side is a DM endpoint, so finalize throws
+        uint8_t expected_mask = 0;
+    };
+    // bit 2 = DM2, bit 8 = Neo0.
+    const Case cases[] = {
+        {.name = "DM->trisc0",
+         .producer_risc_mask = 0x4,
+         .consumer_risc_mask = 0x100,
+         .expected_mask = DFB_TRISC_ROLE_CONSUMER_T0},
+        {.name = "DM->trisc3",
+         .producer_risc_mask = 0x4,
+         .consumer_risc_mask = 0x100,
+         .unpack_on_trisc3 = true,
+         .expected_mask = DFB_TRISC_ROLE_CONSUMER_T3},
+        {.name = "trisc2->DM",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x4,
+         .expected_mask = DFB_TRISC_ROLE_PRODUCER_T2},
+        {.name = "trisc3->DM",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x4,
+         .pack_on_trisc3 = true,
+         .expected_mask = DFB_TRISC_ROLE_PRODUCER_T3},
+        {.name = "intra trisc3->trisc0",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x100,
+         .pack_on_trisc3 = true,
+         .intra = true,
+         .expected_mask = static_cast<uint8_t>(DFB_TRISC_ROLE_PRODUCER_T3 | DFB_TRISC_ROLE_CONSUMER_T0)},
+        {.name = "intra trisc2->trisc3",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x100,
+         .unpack_on_trisc3 = true,
+         .intra = true,
+         .expected_mask = static_cast<uint8_t>(DFB_TRISC_ROLE_PRODUCER_T2 | DFB_TRISC_ROLE_CONSUMER_T3)},
+        {.name = "intra trisc3->trisc3",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x100,
+         .pack_on_trisc3 = true,
+         .unpack_on_trisc3 = true,
+         .intra = true,
+         .expected_mask = static_cast<uint8_t>(DFB_TRISC_ROLE_PRODUCER_T3 | DFB_TRISC_ROLE_CONSUMER_T3)},
+        {.name = "DM producer with pack_on_trisc3",
+         .producer_risc_mask = 0x4,
+         .consumer_risc_mask = 0x100,
+         .pack_on_trisc3 = true,
+         .rejected = true},
+        {.name = "DM consumer with unpack_on_trisc3",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x4,
+         .unpack_on_trisc3 = true,
+         .rejected = true},
+    };
+    const CoreCoord logical_core = CoreCoord(0, 0);
+    for (const Case& c : cases) {
+        SCOPED_TRACE(c.name);
+        experimental::dfb::DataflowBufferConfig config{
+            .entry_size = 1024,
+            .num_entries = 4,
+            .producer_risc_mask = c.producer_risc_mask,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = c.consumer_risc_mask,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::STRIDED,
+            .enable_producer_implicit_sync = false,
+            .enable_consumer_implicit_sync = false,
+            .tensix_scope = c.intra
+                                ? std::optional<experimental::dfb::TensixScope>(experimental::dfb::TensixScope::INTRA)
+                                : std::nullopt,
+            .unpack_on_trisc3 = c.unpack_on_trisc3,
+            .pack_on_trisc3 = c.pack_on_trisc3};
+
+        Program program = CreateProgram();
+        experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+        if (c.rejected) {
+            EXPECT_THROW(program.impl().finalize_dataflow_buffer_configs(), std::runtime_error);
+            continue;
+        }
+        program.impl().finalize_dataflow_buffer_configs();
+        program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
+        program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
+
+        const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+        ASSERT_EQ(dfbs.size(), 1u);
+        EXPECT_EQ(dfbs[0]->tensix_trisc_mask, c.expected_mask);
+
+        // Every participating hart's entry carries the same tensix_trisc_mask; check the Neo0 hart.
+        std::vector<uint8_t> buf(8192, 0);
+        const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf);
+        ASSERT_GT(nbytes, 0u);
+        const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+        constexpr uint8_t neo0_hart = ::dfb::TENSIX_RISC_OFFSET;
+        ASSERT_EQ(ghdr->participation_mask[neo0_hart], 1u);
+        const auto* entry =
+            reinterpret_cast<const dfb_hart_init_entry_t*>(buf.data() + ghdr->hart_blob_offset[neo0_hart]);
+        EXPECT_EQ(entry->flags & DFB_HART_FLAG_TRISC_MASK, c.expected_mask);
+        const bool neo_produces = (c.producer_risc_mask & (1u << neo0_hart)) != 0;
+        EXPECT_EQ((entry->flags & DFB_HART_FLAG_IS_PRODUCER) != 0, neo_produces);
+    }
+}
+
 // Run args for the minimal spec's two kernels (both declare empty RTA schemas, so empty arg sets).
 inline ProgramRunArgs MakeMinimalRunArgs(const NodeCoord& node) {
     auto kernel_args = [&](const char* name) {
@@ -1447,6 +1563,49 @@ TEST_F(UnitMeshFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
 
     // Threshold recomputed for the new num_entries (threshold = num_entries / num_txn_ids).
     EXPECT_EQ(dfb->producer_txn_descriptor.num_entries_to_process_threshold, threshold_before * 2);
+}
+
+// Max bytes per NoC packet on this device. Quasar's overlay splits a NoC transaction into packets of at most this
+// size, and the per-transaction-id tiles-to-process counter that raises the implicit-sync ISR counts one per packet,
+// so the host programs the ISR threshold in packets.
+static uint32_t noc_max_bytes_in_packet(distributed::MeshDevice& mesh_device) {
+    return MetalContext::instance(mesh_device.impl().get_context_id()).hal().get_noc_max_bytes_in_packet();
+}
+
+// entry_size override on a finalized DFB recomputes the implicit-sync threshold for the new NoC packets per entry,
+// preserving the TC assignment and transaction ids; shrinking back to one packet restores the original threshold.
+TEST_F(UnitMeshFixture, DFBReentryEntrySizeOverrideRecomputesPacketThreshold) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB transaction IDs / tile counters require Quasar";
+    }
+    const NodeCoord node{0, 0};
+    ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
+    Program program(this->device(), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    ASSERT_TRUE(dfb->config.enable_producer_implicit_sync);
+    const uint32_t entry_size_before = dfb->config.entry_size;
+    const uint32_t packet_bytes = noc_max_bytes_in_packet(this->device());
+    ASSERT_LE(entry_size_before, packet_bytes);  // one packet per entry before the override
+    const dfb_txn_id_descriptor_t before = dfb->producer_txn_descriptor;
+    ASSERT_GT(before.num_txn_ids, 0u);
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 2 * packet_bytes});
+    ASSERT_NO_THROW(program.set_program_run_args(params));
+    {
+        const dfb_txn_id_descriptor_t& after = dfb->producer_txn_descriptor;
+        EXPECT_EQ(after.num_txn_ids, before.num_txn_ids);
+        EXPECT_TRUE(std::equal(before.txn_ids, before.txn_ids + before.num_txn_ids, after.txn_ids));
+        EXPECT_EQ(after.num_entries_to_process_threshold, before.num_entries_to_process_threshold * 2);
+        EXPECT_EQ(after.num_entries_per_txn_id, before.num_entries_per_txn_id);
+        EXPECT_EQ(after.num_entries_per_txn_id_per_tc, before.num_entries_per_txn_id_per_tc);
+    }
+
+    params.dfb_run_overrides.back().entry_size = entry_size_before;
+    ASSERT_NO_THROW(program.set_program_run_args(params));
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_entries_to_process_threshold, before.num_entries_to_process_threshold);
 }
 
 // On re-entry the txn-id count is preserved, so a num_entries override that breaks the preserved divisor
@@ -1617,7 +1776,8 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
              .endpoint_type = DFBEndpointType::PRODUCER,
              .access_pattern = p.pap,
              .block_size = p.pap == DFBAccessPattern::BLOCKED ? p.block_size : 0u}};
-        k.compile_time_args = {{"num_entries_per_producer", per_producer}};
+        k.compile_time_args = {
+            {"num_entries_per_producer", per_producer}, {"producer_on_trisc3", 0u}, {"producer_stamp_base", 0u}};
         return k;
     };
 
@@ -1649,7 +1809,7 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
              .endpoint_type = DFBEndpointType::CONSUMER,
              .access_pattern = p.cap,
              .block_size = p.cap == DFBAccessPattern::BLOCKED ? p.block_size : 0u}};
-        k.compile_time_args = {{"num_entries_per_consumer", per_consumer}};
+        k.compile_time_args = {{"num_entries_per_consumer", per_consumer}, {"consumer_on_trisc3", 0u}};
         // Declared so the kernel source stays compilable; these probes never launch, and the
         // kernel's digest reporting is only consumed by run_single_dfb_program_2_0.
         k.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
@@ -2112,6 +2272,99 @@ TEST_F(UnitMeshFixture, B4_CachedThreshold_Config_2_0) {
         const auto& d = dfbs[0];
         EXPECT_EQ(d->producer_txn_descriptor.num_entries_to_process_threshold, 9u);
         EXPECT_EQ(d->consumer_txn_descriptor.num_entries_to_process_threshold, 27u);
+    }
+}
+
+// B4 with multi-packet entries: the cached threshold counts NoC packets, so it is B4's value times the packets per
+// entry (a partial trailing packet counts). Credits (num_entries_per_txn_id) and the txn-id count stay in entries.
+TEST_F(UnitMeshFixture, B4_CachedThreshold_CountsNocPackets_Config_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Implicit sync (and therefore threshold caching) is Quasar-only";
+    }
+    using namespace m2_config_test_helpers;
+    const uint32_t packet_bytes = noc_max_bytes_in_packet(this->device());
+    ASSERT_GT(packet_bytes, 1024u);
+
+    struct Case {
+        uint32_t entry_size;
+        uint32_t packets_per_entry;
+    };
+    const std::vector<Case> cases = {
+        {packet_bytes, 1},         // exactly one packet
+        {packet_bytes + 1024, 2},  // a partial trailing packet still counts
+        {4 * packet_bytes, 4},
+    };
+
+    // 1S(DM)x1S(DM), num_entries=16, 2 txn ids: producer/consumer threshold = 8 transactions.
+    for (const Case& c : cases) {
+        SCOPED_TRACE("1Sx1S DM-DM, entry_size=" + std::to_string(c.entry_size));
+        M2ConfigDFBParams p{
+            .producer_type = M2PorCType::DM,
+            .consumer_type = M2PorCType::DM,
+            .num_producers = 1,
+            .num_consumers = 1,
+            .entry_size = c.entry_size,
+            .num_entries = 16,
+            .implicit_sync = true,
+        };
+        Program program = build_single_dfb_program_2_0(this->device(), p);
+        program.impl().finalize_dataflow_buffer_configs();
+        auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
+        ASSERT_EQ(dfbs.size(), 1u);
+        const auto& d = dfbs[0];
+        ASSERT_EQ(d->producer_txn_descriptor.num_txn_ids, 2u);
+        ASSERT_EQ(d->consumer_txn_descriptor.num_txn_ids, 2u);
+        EXPECT_EQ(d->producer_txn_descriptor.num_entries_to_process_threshold, 8u * c.packets_per_entry);
+        EXPECT_EQ(d->consumer_txn_descriptor.num_entries_to_process_threshold, 8u * c.packets_per_entry);
+        EXPECT_EQ(d->producer_txn_descriptor.num_entries_per_txn_id, 8u);
+        EXPECT_EQ(d->consumer_txn_descriptor.num_entries_per_txn_id, 8u);
+    }
+}
+
+// BLOCKED sides move a whole block per NoC transaction, so the packets come from the block's bytes,
+// ceil(block_size * entry_size / packet), not block_size times the packets of one entry.
+// 1B(DM)x1B(DM), block 4, num_entries=16, 2 txn ids: 8 entries = 2 transactions per txn id.
+TEST_F(UnitMeshFixture, B4_CachedThreshold_BlockedCountsPacketsPerBlock_Config_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Implicit sync (and therefore threshold caching) is Quasar-only";
+    }
+    using namespace m2_config_test_helpers;
+    const uint32_t packet_bytes = noc_max_bytes_in_packet(this->device());
+    ASSERT_EQ(packet_bytes % 4u, 0u);
+
+    struct Case {
+        uint32_t entry_size;
+        uint32_t packets_per_block;
+    };
+    const std::vector<Case> cases = {
+        {packet_bytes / 4, 1},      // exactly one packet per block
+        {3 * packet_bytes / 8, 2},  // 1.5 packets per block; one entry is under a packet (per-entry count: 4)
+        {4 * packet_bytes, 16},     // a block past the NoC max burst, 16 packets
+    };
+    for (const Case& c : cases) {
+        SCOPED_TRACE("1Bx1B DM-DM blk4, entry_size=" + std::to_string(c.entry_size));
+        M2ConfigDFBParams p{
+            .producer_type = M2PorCType::DM,
+            .consumer_type = M2PorCType::DM,
+            .num_producers = 1,
+            .num_consumers = 1,
+            .entry_size = c.entry_size,
+            .num_entries = 16,
+            .pap = DFBAccessPattern::BLOCKED,
+            .cap = DFBAccessPattern::BLOCKED,
+            .implicit_sync = true,
+            .block_size = 4,
+        };
+        Program program = build_single_dfb_program_2_0(this->device(), p);
+        program.impl().finalize_dataflow_buffer_configs();
+        auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
+        ASSERT_EQ(dfbs.size(), 1u);
+        const auto& d = dfbs[0];
+        for (const dfb_txn_id_descriptor_t* desc : {&d->producer_txn_descriptor, &d->consumer_txn_descriptor}) {
+            ASSERT_EQ(desc->num_txn_ids, 2u);
+            EXPECT_EQ(desc->num_entries_to_process_threshold, 2u * c.packets_per_block);
+            EXPECT_EQ(desc->num_entries_per_txn_id, 8u);
+        }
     }
 }
 

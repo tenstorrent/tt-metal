@@ -50,9 +50,11 @@ SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * SWEEP_TILE_COUNT]
 _LOG_TAIL = ". The failing lanes are in the ULP-budget log above."
 
 
-def run_sweep(mathop, formats, approx_mode, dest_acc, node):
-    """One variant on hardware over the whole swept input. Returns ``(src, golden,
-    result)``. Records the build for *node* under ``--ulp-variants``."""
+def run_sweep(mathop, key, node):
+    """The variant *key* names on hardware over the whole swept input. Returns ``(src,
+    golden, result)``. Records the build for *node* under ``--ulp-variants``."""
+    formats = InputOutputFormat(key.input_format, key.output_format)
+    approx_mode, dest_acc = key.approx_mode, key.dest_acc
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=SWEEP_DIMENSIONS,
@@ -93,12 +95,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc, node):
     # Built before run(), which a --compile-producer session skips out of.
     configuration.prepare()
     ulp_affected.record_built(
-        node,
-        mathop,
-        ulp_sweep.cell_key(
-            formats.input_format, formats.output_format, approx_mode, dest_acc
-        ),
-        f"{configuration.test_name}/{configuration.variant_id}",
+        node, mathop, key, f"{configuration.test_name}/{configuration.variant_id}"
     )
     result = configuration.run().result
     assert len(result) == len(
@@ -130,18 +127,14 @@ def _skip_measured(cell, why):
 )
 @pytest.mark.parametrize("mathop", _sweep_ops(), ids=lambda op: op.name)
 def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc, request):
-    formats = InputOutputFormat(in_fmt, out_fmt)
-    cell = (
-        f"{mathop.name} {in_fmt.name}->{out_fmt.name} approx={approx_mode.name} "
-        f"dest_acc={dest_acc.name}"
-    )
-    arch = get_chip_architecture()
+    key = ulp_sweep.cell_key(in_fmt, out_fmt, approx_mode, dest_acc)
+    cell = ulp_affected.describe(mathop, key)
     variant = dict(
         output_format=out_fmt,
         input_format=in_fmt,
         approx_mode=approx_mode,
         dest_acc=dest_acc,
-        arch=arch,
+        arch=get_chip_architecture(),
     )
     contract = accuracy_contract(mathop, **variant)
     domains, floor_atol = domains_of(mathop, **variant)
@@ -150,30 +143,23 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc, re
         d.ulp is not None and d.ulp <= ceiling for d in domains
     )
 
-    src, golden, result = run_sweep(
-        mathop, formats, approx_mode, dest_acc, request.node.nodeid
-    )
+    src, golden, result = run_sweep(mathop, key, request.node.nodeid)
 
-    mask = ulp_sweep.ranked_mask(mathop, src, golden, result, in_fmt, out_fmt, dest_acc)
-    lanes_kw = dict(approx_mode=approx_mode, dest_acc=dest_acc)
-    overflowed = ulp_sweep.nonfinite_failures(
-        mathop, src, golden, result, in_fmt, out_fmt, **lanes_kw
+    swept = ulp_sweep.Swept(
+        src, golden, result, in_fmt, out_fmt, dest_acc, mathop, approx_mode
     )
-    if not ulp_sweep.EMIT:
-        # An excused lane that agrees again means the tracked defect is gone from this
-        # cell; the entry has to go with it, or its lanes stay ungated.
-        stale = ulp_sweep.stale_excuses(
-            mathop, src, golden, result, in_fmt, out_fmt, **lanes_kw
-        )
-        assert not stale, (
-            f"{cell}: no lane the _KNOWN_NONFINITE_LANES entry for "
-            f"{', '.join(f'#{entry.issue}' for entry in stale)} names disagrees with "
-            "the golden any more; drop the entry so those lanes are gated again"
-        )
+    mask, overflowed = swept.ranked, swept.nonfinite_failures
+    # An excused lane that agrees again means the tracked defect is gone from this
+    # cell; the entry has to go with it, or its lanes stay ungated.
+    assert ulp_sweep.EMIT or not swept.stale_excuses, (
+        f"{cell}: no lane the _KNOWN_NONFINITE_LANES entry for "
+        f"{', '.join(f'#{entry.issue}' for entry in swept.stale_excuses)} names "
+        "disagrees with the golden any more; drop the entry so those lanes are gated "
+        "again"
+    )
     distance = ulp_distance(golden, result, flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
     stats = ulp_stats(distance, mask)
     lanes = int(mask.sum())
-    key = ulp_sweep.cell_key(in_fmt, out_fmt, approx_mode, dest_acc)
 
     # The overflow verdict first: an all-non-finite cell has `lanes == 0` too, and only
     # this verdict carries the lane count the headroom report reads back.
@@ -201,8 +187,8 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc, re
         raise AssertionError(f"{cell}: {why}")
 
     # Each lane's input as the kernel received it, for the domains.
-    x = ulp_sweep.received_inputs(src, in_fmt, out_fmt, dest_acc).to(torch.float64)
-    present = ~ulp_sweep.padding_lanes(src, in_fmt)
+    x = swept.received.to(torch.float64)
+    present = ~swept.padding
 
     if ulp_sweep.EMIT:
         floor = ulp_sweep.near_zero_floor(golden, result, distance, mask, out_fmt)

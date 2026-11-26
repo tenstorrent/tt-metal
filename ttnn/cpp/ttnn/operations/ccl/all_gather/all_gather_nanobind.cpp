@@ -11,7 +11,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>  // for tt::tt_fabric::Topology
 #include "all_gather.hpp"
 

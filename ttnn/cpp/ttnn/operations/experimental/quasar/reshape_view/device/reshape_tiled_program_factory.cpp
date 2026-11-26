@@ -9,12 +9,12 @@
 #include <numeric>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "ttnn/operations/experimental/quasar/reshape_view/device/hostdevcommon/common.hpp"
 
 namespace ttnn::prim::qsr {

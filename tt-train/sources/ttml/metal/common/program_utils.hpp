@@ -9,9 +9,9 @@
 #include <cstdint>
 #include <map>
 #include <string>
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/work_split.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <type_traits>
 #include <utility>
 #include <vector>

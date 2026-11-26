@@ -9,9 +9,9 @@
 #include <ostream>
 #include <tuple>
 
-#include <tt-metalium/tensor/tensor_types.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include <nlohmann/json_fwd.hpp>
 
 namespace ttsl::json {

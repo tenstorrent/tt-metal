@@ -17,10 +17,10 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn {
 

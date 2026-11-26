@@ -15,6 +15,7 @@
 
 #include "hostdevcommon/fabric_common.h"
 #include "routing_2d_table_builder.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 
 namespace tt::tt_fabric {
 
@@ -384,6 +385,42 @@ bool embed_mcast_reverse_trees(
                Routing2DCodec::mcast_tree_x_offset(y_size),
                "X",
                failure);
+}
+
+route_table_2d_t line_route_table_2d(const MeshGraph& mesh_graph, MeshId mesh_id, int my_y, int my_x) {
+    const auto shape = mesh_graph.get_mesh_shape(mesh_id);
+    const auto step = [&](int axis) {
+        return [&, axis](std::uint32_t cur, std::uint32_t dst) {
+            const int next = static_cast<int>(cur) + (dst > cur ? 1 : -1);
+            const auto direction = axis_edge_direction(mesh_graph, mesh_id, axis, 0, static_cast<int>(cur), next);
+            TT_FATAL(direction.has_value(), "Mesh M{} dim {} is missing the edge {}-{}", *mesh_id, axis, cur, next);
+            return builder::routing_direction_to_eth_direction(*direction);
+        };
+    };
+    route_table_2d_t table{};
+    TT_FATAL(
+        pack_2d_route_vectors(table.action_vectors, sizeof(table.action_vectors), shape[0], shape[1], step(0), step(1)),
+        "Mesh M{} shape {}x{} cannot use the 2D route table",
+        *mesh_id,
+        shape[0],
+        shape[1]);
+    std::string failure;
+    TT_FATAL(
+        embed_mcast_reverse_trees(
+            mesh_graph,
+            mesh_id,
+            derive_line_axis_topology(mesh_graph, mesh_id, 0),
+            derive_line_axis_topology(mesh_graph, mesh_id, 1),
+            my_y,
+            my_x,
+            table.mcast_trees,
+            &failure),
+        "Mesh M{} chip ({}, {}): {}",
+        *mesh_id,
+        my_y,
+        my_x,
+        failure);
+    return table;
 }
 
 }  // namespace tt::tt_fabric

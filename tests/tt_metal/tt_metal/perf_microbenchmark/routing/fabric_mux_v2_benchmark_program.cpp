@@ -12,14 +12,14 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"

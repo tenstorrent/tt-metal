@@ -42,7 +42,6 @@ namespace ckernel {
 #ifdef TRISC_MATH
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace sfpu {
@@ -438,18 +437,18 @@ inline void _top8_merge_sorted_8_() {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     if constexpr (replay) {
-        lltt::replay(0, 16);
+        TTI_REPLAY(0, 16, 0, 0);
         TTI_SFPTRANSP(0, 0, 0, 0);
         _top8_bitonic_merge_8_rows_();
         TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(16, 16);
+        TTI_REPLAY(16, 16, 0, 0);
     } else {
-        lltt::record<lltt::Exec>(0, 16);
+        TTI_REPLAY(0, 16, 1, 1);
         _load_sorted_group_();
         TTI_SFPTRANSP(0, 0, 0, 0);
         _top8_bitonic_merge_8_rows_();
         TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::record<lltt::Exec>(16, 16);
+        TTI_REPLAY(16, 16, 1, 1);
         _store_sorted_group_();
     }
 }
@@ -467,21 +466,21 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
     //-------------------------------------------------------------------------
     // PHASE 1: Sort all 4 groups using replay buffer
     //-------------------------------------------------------------------------
-    lltt::record<lltt::Exec>(0, 8);
+    TTI_REPLAY(0, 8, 1, 1);
     _load_input_group_();
     TTI_SFPTRANSP(0, 0, 0, 0);
     _add_row_indices_();
-    lltt::record<lltt::Exec>(8, 24);
+    TTI_REPLAY(8, 24, 1, 1);
     _top8_bitonic_sort_8_rows_();
     TTI_SFPTRANSP(0, 0, 0, 0);
     _store_sorted_group_();
 
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
 
-    lltt::replay(0, 8);
+    TTI_REPLAY(0, 8, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _add_row_indices_();
-    lltt::replay(8, 24);
+    TTI_REPLAY(8, 24, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _store_sorted_group_();
 
@@ -491,19 +490,19 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
 
-    lltt::replay(0, 8);
+    TTI_REPLAY(0, 8, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _add_row_indices_();
-    lltt::replay(8, 24);
+    TTI_REPLAY(8, 24, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _store_sorted_group_();
 
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
 
-    lltt::replay(0, 8);
+    TTI_REPLAY(0, 8, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _add_row_indices_();
-    lltt::replay(8, 24);
+    TTI_REPLAY(8, 24, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _store_sorted_group_();
 
@@ -514,11 +513,11 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
 
     // Group 1
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 8, 0, 0, p_setrwc::SET_D);
-    lltt::record<lltt::Exec>(0, 9);
+    TTI_REPLAY(0, 9, 1, 1);
     _top8_load_indices_();
     TTI_SFPTRANSP(0, 0, 0, 0);
     _top8_add_group_offset_to_indices_<1>();
-    lltt::record<lltt::Exec>(9, 9);
+    TTI_REPLAY(9, 9, 1, 1);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _top8_store_indices_();
 
@@ -529,15 +528,15 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
 
     // Group 2
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
-    lltt::replay(0, 9);
+    TTI_REPLAY(0, 9, 0, 0);
     _top8_add_group_offset_to_indices_<2>();
-    lltt::replay(9, 9);
+    TTI_REPLAY(9, 9, 0, 0);
 
     // Group 3
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
-    lltt::replay(0, 9);
+    TTI_REPLAY(0, 9, 0, 0);
     _top8_add_group_offset_to_indices_<3>();
-    lltt::replay(9, 9);
+    TTI_REPLAY(9, 9, 0, 0);
 
     //-------------------------------------------------------------------------
     // PHASE 3: Sequential merge all 4 groups into final top-8

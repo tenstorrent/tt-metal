@@ -18,6 +18,8 @@ layernorm tests (see ``MIX_PRECISION_TEST_IDS``).
 import torch
 import ttnn
 
+from tt_py_test_utils_common.determinism_report import assert_deterministic
+
 # ---------------------------------------------------------------------------
 # Shared test_id x gamma/beta dtype grid for the mix-precision layernorm tests.
 #
@@ -80,14 +82,16 @@ MIX_PRECISION_TEST_ID_NAMES = tuple(
 def _run_twice(op, *args, **kwargs):
     output1 = op(*args, **kwargs)
     output2 = op(*args, **kwargs)
-    assert torch.equal(ttnn.to_torch(output1), ttnn.to_torch(output2))
+    assert_deterministic(op, args, kwargs, output1, output2, lambda: op(*args, **kwargs))
     return output1
 
 
 def _run_twice_in_place(op, input_tensor, *args, **kwargs):
     output1 = op(ttnn.clone(input_tensor), *args, **kwargs)
     output2 = op(ttnn.clone(input_tensor), *args, **kwargs)
-    assert torch.equal(ttnn.to_torch(output1), ttnn.to_torch(output2))
+    assert_deterministic(
+        op, (input_tensor, *args), kwargs, output1, output2, lambda: op(ttnn.clone(input_tensor), *args, **kwargs)
+    )
     return output1
 
 

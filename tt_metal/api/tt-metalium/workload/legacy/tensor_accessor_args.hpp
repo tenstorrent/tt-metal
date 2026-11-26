@@ -5,9 +5,9 @@
 #pragma once
 
 #include <memory>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include <tt_stl/optional_reference.hpp>
 

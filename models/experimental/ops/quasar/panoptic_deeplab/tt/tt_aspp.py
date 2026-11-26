@@ -6,10 +6,11 @@ from math import floor
 import ttnn
 from loguru import logger
 
-from models.tt_cnn.tt.builder import TtConv2d
+from models.experimental.ops.quasar.panoptic_deeplab.tt.quasar_ops import TtConv2d
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.ops.quasar.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype, uses_20_core_path
+from models.experimental.ops.quasar.panoptic_deeplab.tt import quasar_ops
 
 try:
     from tracy import signpost
@@ -176,7 +177,7 @@ class TtASPP(LightweightModule):
             logger.info(f"  Flattening input for global pooling: {x.shape} -> (1, 1, {H*W}, {C})")
             x_for_pooling = ttnn.reshape(x, (1, 1, H * W, C))
 
-        pooled = ttnn.avg_pool2d(
+        pooled = quasar_ops.op(self.device, "avg_pool2d")(
             input_tensor=x_for_pooling,
             batch_size=N,
             input_h=H,
@@ -303,7 +304,7 @@ class TtASPP(LightweightModule):
             logger.info(f"  Flattening input for global pooling: {x_l1.shape} -> (1, 1, {H*W}, {C})")
             x_for_pooling = ttnn.reshape(x_l1, (1, 1, H * W, C))
 
-        pooled = ttnn.avg_pool2d(
+        pooled = quasar_ops.op(self.device, "avg_pool2d")(
             input_tensor=x_for_pooling,
             batch_size=N,
             input_h=H,

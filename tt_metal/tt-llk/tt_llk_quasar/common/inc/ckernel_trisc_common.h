@@ -105,6 +105,17 @@ static std::uint32_t dest_register_offset = 0;
 extern thread_local std::uint32_t dest_register_offset;
 #endif
 
+// Tile-shape index (log2 Dest rows per tile) recorded by the last math init (_set_tile_shape_idx_gpr_) and read by the
+// per-tile Dest addressing (_set_dst_write_addr_by_rows_, get_dest_max_tiles, _llk_math_matmul_block_). Kept in TRISC
+// local memory because a RISC-V read of the TILE_SHAPE_IDX GPR stalls the math thread on every tile. Per TRISC like
+// dest_register_offset (tt-llk#1678): ENV_LLK_INFRA uses a plain static; the metal build defines it in
+// tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
+#ifdef ENV_LLK_INFRA
+static std::uint32_t dest_tile_shape_idx = 0;
+#else
+extern thread_local std::uint32_t dest_tile_shape_idx;
+#endif
+
 /**
 * @brief Check divisibility by power of 2
 * @param value: input value to check divisibility
@@ -155,8 +166,8 @@ constexpr std::uint32_t get_dest_max_tiles()
 
 /**
  * @brief Maximum number of tiles that fit in the math destination region, at the per-tile stride
- * the last math init programmed into the TILE_SHAPE_IDX GPR. Only valid for ops that address dest
- * by rows (_set_dst_write_addr_by_rows_) and whose init programs the GPR.
+ * the last math init recorded with _set_tile_shape_idx_gpr_ (dest_tile_shape_idx). Only valid for ops that
+ * address dest by rows (_set_dst_write_addr_by_rows_) and whose init calls _set_tile_shape_idx_gpr_.
  *
  * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
  * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
@@ -167,7 +178,7 @@ inline std::uint32_t get_dest_max_tiles()
 {
     constexpr std::uint32_t DEST_REGISTER_SIZE = get_dest_max_tiles<SYNC_MODE, EN_32BIT_DEST, DstTileShape::Tile32x32>()
                                                  << get_dest_tile_size_log2(DstTileShape::Tile32x32);
-    return DEST_REGISTER_SIZE >> ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
+    return DEST_REGISTER_SIZE >> dest_tile_shape_idx;
 }
 
 /**
@@ -289,26 +300,12 @@ inline void _update_dest_register_offset_()
 // Semaphores mapping and trisc space -> tensix space conversion
 struct semaphore
 {
-    // The math thread is the middleman, for regular unpack and for unpack_to_dest.
-    // When unpacking to dest, math thread doesn't produce data, it just bridges UNPACK_MATH -> MATH_PACK.
-    // Packer only listens on MATH_PACK, so something has to translate the unpack completion into a
-    // pack-visible event. Math being the forwarder is also what makes future fused ops cheap:
-    // SFPU/FPU work slots in between the UNPACK_MATH get and the MATH_PACK post.
-    // UNPACK_MATH carries data-ready from unpack to math; MATH_PACK carries it from math to pack and, as in the
-    // regular path, throttles math behind pack (math stalls on its max). Neither gates the unpacker. What keeps the
-    // unpacker from overwriting a DEST bank the packer still reads is UNPACK_PACK: unpack posts it per section written,
-    // pack gets it per section released, and unpack stalls on its max (= number of DEST banks). Two separate counters
-    // cannot express that sum.
-    //
-    // Keep pairwise naming with producer_consumer direction:
-    // - MATH_PACK = math->pack
-    // - UNPACK_MATH = unpack->math
-    // - UNPACK_PACK = unpack->pack
-    // - PACK_UNPACK = pack->unpack
-    constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
-    constexpr static std::uint32_t UNPACK_PACK = 3; // unpack -> pack: DEST sections unpacked and not yet released by pack
-    constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
-    constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
+    constexpr static std::uint32_t MATH_PACK      = 1; // math <-> pack sync on Dest
+    constexpr static std::uint32_t MATH_UNPACK    = 3; // math <-> unpack sync for borrowing Dest
+    constexpr static std::uint32_t MATH_SFPU      = 4; // math <-> sfpu sync for borrowing Dest
+    constexpr static std::uint32_t PACK_UNPACK    = 5; // pack <-> unpack sync for borrowing Dest
+    constexpr static std::uint32_t PACK_SFPU      = 6; // pack <-> sfpu sync for borrowing Dest
+    constexpr static std::uint32_t PACK_UNPACK_L1 = 7; // pack <-> unpack sync on L1 memory
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {

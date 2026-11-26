@@ -17,7 +17,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
@@ -32,7 +32,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "hostdev/debug_ring_buffer_common.h"
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -604,21 +604,21 @@ void WatcherDeviceReader::Dump(FILE* file) {
             }
         }
 
-        // Clear all pause flags
+        // Unpause each one by flipping its bit of unpause. Only the host writes that word, so reading it back and
+        // writing it can't undo anything the device wrote; the device clears its own flag once it sees the change.
         for (const auto& [virtual_core, processor_index] : dump_data.paused_cores) {
             auto programmable_core_type = llrt::get_core_type(env, device_id, virtual_core);
             auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
-            auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
             uint64_t addr =
                 hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
-                dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status);
-
-            // Clear only the one flag that we saved, in case another one was raised on device
+                dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status) +
+                dev_msgs_factory.offset_of<dev_msgs::debug_pause_msg_t>(dev_msgs::debug_pause_msg_t::Field::unpause);
+            uint32_t unpause = 0;
             env.get_cluster().read_core(
-                pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
-            pause_data.view().flags()[processor_index] = 0;
+                &unpause, sizeof(unpause), {static_cast<size_t>(device_id), virtual_core}, addr);
+            unpause ^= 1u << processor_index;
             env.get_cluster().write_core(
-                pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
+                &unpause, sizeof(unpause), {static_cast<size_t>(device_id), virtual_core}, addr);
         }
     }
     fflush(f);
@@ -1061,11 +1061,16 @@ void WatcherDeviceReader::Core::DumpPauseStatus() const {
     const auto& hal = reader_.env.get_hal();
     // Just record which cores are paused, printing handled at the end.
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
+    uint32_t unpause = pause_status.unpause();
     for (uint32_t processor_index = 0; processor_index < num_processors; processor_index++) {
         auto pause = pause_status.flags()[processor_index];
-        if (pause == 1) {
-            dump_data_.paused_cores.insert({virtual_coord_, processor_index});
-        } else if (pause > 1) {
+        if (pause == 1 || pause == 2) {
+            // Paused until its unpause bit changes from pause - 1. If it already has, we let it go in an earlier
+            // dump and it hasn't cleared its flag yet.
+            if (((unpause >> processor_index) & 1) == static_cast<uint32_t>(pause - 1)) {
+                dump_data_.paused_cores.insert({virtual_coord_, processor_index});
+            }
+        } else if (pause > 2) {
             string error_reason = fmt::format(
                 "Watcher data corruption, pause state on core {} unknown code: {}.\n", virtual_coord_.str(), pause);
             log_warning(tt::LogMetal, "{}: {}", core_str_, error_reason);

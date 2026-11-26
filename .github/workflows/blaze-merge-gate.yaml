@@ -182,6 +182,25 @@ jobs:
                 [ "$e" = workflow_dispatch ] && [ "$t" = "$(relay_title)" ]
             }
 
+            # relay_run_is_ours_wait ID: relay_run_is_ours with retries, for a run
+            # that may have just been created. Right after the dispatch GitHub can
+            # answer 404 for the new run, or show it before its run name is set.
+            # 12 tries, LOOKUP_SLEEP seconds apart (default 5, about 60 seconds).
+            # After the last miss it prints what it read, for the log.
+            relay_run_is_ours_wait() {
+              local try state
+              for try in $(seq 1 12); do
+                relay_run_is_ours "$1" && return 0
+                if [ "$try" -lt 12 ]; then
+                  sleep "${LOOKUP_SLEEP:-5}" &
+                  wait $!
+                fi
+              done
+              state=$(relay_run_state "$1" 2>&1) || true
+              echo "::warning::run $1 as read last: ${state:-nothing read}"
+              return 1
+            }
+
             # find_relay_run: prints the id of the oldest relay run with the run name of
             # this tt-metal run that was created after DISPATCH_AT (ISO time, taken 30
             # seconds before the dispatch call). A re-run of this tt-metal run keeps the
@@ -336,7 +355,7 @@ jobs:
             done
           fi
           [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::the relay was started, but its run was not found within 2 minutes"; exit 1; }
-          relay_run_is_ours "$run_id" || { echo "::error::run ${run_id} is not the relay run this job started"; exit 1; }
+          relay_run_is_ours_wait "$run_id" || { echo "::error::run ${run_id} is not the relay run this job started"; exit 1; }
 
           url="https://github.com/${RELAY_REPO}/actions/runs/${run_id}"
           echo "RELAY_RUN_ID=${run_id}" >>"$GITHUB_ENV"
@@ -735,7 +754,7 @@ jobs:
             echo "no relay run of this job found: nothing to cancel"
             exit 0
           fi
-          if ! relay_run_is_ours "$run_id"; then
+          if ! relay_run_is_ours_wait "$run_id"; then
             echo "::warning::run ${run_id} is not the relay run this job started; not cancelled"
             exit 0
           fi
