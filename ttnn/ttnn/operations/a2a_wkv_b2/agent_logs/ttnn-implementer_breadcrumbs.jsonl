@@ -3,3 +3,5 @@
 {"event":"test_run","result":"pass","detail":"R1 final: 102.5 us/call (was 131.5); golden 7/7, acceptance 10/10, precision 5/5; tx tail 54.5->25 us","ts":"2026-11-26T17:47:09+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"perf-calculator","args":"","ts":"2026-11-26T17:52:36+00:00"}
 {"event":"test_run","result":"pass","detail":"R2 final: reader end 60.5->55.8 us, 103.3->93.9 us/call (READ_NOC_SPLIT=halves + W overlap); fixed tx header-reuse race and program-semaphore launch race; golden 7/7, acceptance 10/10","ts":"2026-11-26T18:25:36+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"perf-calculator","args":"","ts":"2026-11-26T18:35:56+00:00"}
+{"event":"hypothesis","detail":"R3 baseline 94.4 us/call; link-0 tx writer SEND 36-42 us for 120 packets; ablation stub fabric send -> SEND 10.7 us; ablation skip dst-address calc -> SEND 27-33 us, tx end -7..-10 us. Per-packet TensorAccessor address computation is serial on the send path; precompute into an L1 table off the critical path.","ts":"2026-11-26T18:35:56+00:00"}

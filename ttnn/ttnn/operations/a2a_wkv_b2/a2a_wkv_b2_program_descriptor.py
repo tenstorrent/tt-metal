@@ -52,6 +52,7 @@ CB_ATTN_RM = 1
 CB_ATTN_TILED = 2
 CB_OUT = 3
 CB_TX_STAGE = 4
+CB_TX_ADDRS = 5  # fabric_tx writer: per-packet destination NoC address table (scratch, not a FIFO)
 
 TILE = 32
 
@@ -224,6 +225,13 @@ def create_mesh_program_descriptor(
     # ---------------- streams & cores ----------------
     streams = _ring_streams(n, hpc)
     num_streams = len(streams)
+    # fabric_tx writer's destination address table: one entry (8 B NoC address) per tile slot of every
+    # packet of the largest stream, in send order (same packet count derivation as the tx kernels).
+    addr_entry_bytes = 8
+    packets_per_head = sum(
+        _div_up(min(mt_block, Mt - mb * mt_block) * Nt, tiles_per_packet) for mb in range(num_mt_blocks)
+    )
+    max_stream_packets = max(len(s["heads"]) for s in streams) * packets_per_head
     per_dir = max(sum(1 for s in streams if s["dir"] == d) for d in (+1, -1))
     assert per_dir == num_links, "validate() guarantees num_links == streams per direction"
 
@@ -289,6 +297,7 @@ def create_mesh_program_descriptor(
 
         # ---------------- CBs ----------------
         cbs = [
+            cb(CB_TX_ADDRS, ttnn.uint32, addr_entry_bytes * tiles_per_packet, max_stream_packets),
             cb(CB_WEIGHT, ttnn.bfloat8_b, w_tile_bytes, Kt * Nt),
             cb(CB_ATTN_RM, ttnn.bfloat16, attn_tile_bytes, ATTN_RM_DEPTH * mt_block * Kt),
             cb(CB_ATTN_TILED, ttnn.bfloat16, attn_tile_bytes, mt_block * Kt),
@@ -365,6 +374,7 @@ def create_mesh_program_descriptor(
         tx_reader_ct = [CB_TX_STAGE, CB_OUT, Mt, Nt, mt_block, tiles_per_packet, out_tile_bytes]
         tx_reader_ct += [TX_BATCH, max_stream_heads]
         tx_writer_ct = [CB_TX_STAGE, Mt, Nt, mt_block, tiles_per_packet, out_tile_bytes, n, l1_alignment, TX_BATCH]
+        tx_writer_ct += [CB_TX_ADDRS]
         tx_writer_ct += out_ct_accessor
         tx_reader_rt = ttnn.RuntimeArgs()
         tx_writer_rt = ttnn.RuntimeArgs()

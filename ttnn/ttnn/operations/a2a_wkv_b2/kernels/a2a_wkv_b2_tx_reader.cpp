@@ -27,6 +27,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_tx_stage = get_compile_time_arg_val(0);
@@ -64,7 +65,10 @@ void kernel_main() {
 
         for (uint32_t q0 = 0; q0 < round_packets; q0 += tx_batch) {
             const uint32_t k = (round_packets - q0) < tx_batch ? (round_packets - q0) : tx_batch;
-            cb_reserve_back(cb_tx_stage, batch_pages);
+            {
+                DeviceZoneScopedN("TX_RSV");
+                cb_reserve_back(cb_tx_stage, batch_pages);
+            }
             const uint32_t base = get_write_ptr(cb_tx_stage);
 
             // 1. publish check (slot i's first word is the poll scratch for packet i).
@@ -80,6 +84,7 @@ void kernel_main() {
                 }
             }
             if (polled) {
+                DeviceZoneScopedN("TX_POLL");
                 noc_async_read_barrier();
                 for (uint32_t i = 0; i < k; ++i) {
                     const uint32_t s = (q0 + i) / packets_per_block;
