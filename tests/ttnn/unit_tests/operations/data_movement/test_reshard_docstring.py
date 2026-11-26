@@ -23,7 +23,9 @@ WIDTH = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 BLOCK = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 
 # The Memory Support item that limits ROW_MAJOR reshards.
-_ROW_MAJOR_ITEM = "ROW_MAJOR: the input and output must have the same memory layout, and both be HEIGHT_SHARDED when either is in DRAM"
+_ROW_MAJOR_ITEM = (
+    "ROW_MAJOR: any memory layouts in L1; when either is in DRAM, this page documents HEIGHT_SHARDED input and output"
+)
 
 # _SHAPE has 2 * 2 * 64 = 256 rows of width 128. Shard shape and core grid size (x, y) of each memory layout, for the
 # input and for the output: they differ, so a reshard between two equal placements still moves the data. Every shard
@@ -72,17 +74,17 @@ def _unreadable(op, error, arity):
 
 
 def _row_major_pair_documented(input_layout, input_buffer, output_layout, output_buffer):
-    """The ROW_MAJOR item: the same memory layout on both sides, HEIGHT_SHARDED when either side is in DRAM."""
-    if input_layout != output_layout:
-        return False
-    return input_layout == HEIGHT or ttnn.BufferType.DRAM not in (input_buffer, output_buffer)
+    """The ROW_MAJOR item: any memory layouts in L1, HEIGHT_SHARDED on both sides when either side is in DRAM."""
+    if ttnn.BufferType.DRAM not in (input_buffer, output_buffer):
+        return True
+    return input_layout == HEIGHT and output_layout == HEIGHT
 
 
 def _docstring_reshard_params(op, dtype_layout_params=docstring_dtype_layout_params):
     """One ``pytest.param(dtype, layout, input_placement, output_placement)`` per row of the op's dtype/layout table
     and per pair of a placement on its ``- Input:`` and one on its ``- Output:`` Memory Support item. While the
-    docstring has the ROW_MAJOR item, ROW_MAJOR pairs keep the memory layout, and are HEIGHT_SHARDED when either side
-    is in DRAM. ``dtype_layout_params`` reads the dtypes and layouts, by default from the table."""
+    docstring has the ROW_MAJOR item, a ROW_MAJOR pair with a side in DRAM is HEIGHT_SHARDED on both sides. ``dtype_layout_params`` reads the dtypes and layouts, by default from the table.
+    """
     try:
         inputs = _sharded_placements(op.__doc__, "Input")
         outputs = _sharded_placements(op.__doc__, "Output")

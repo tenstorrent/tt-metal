@@ -47,7 +47,7 @@ void bind_reshard(nb::module_& mod) {
         Memory Support:
             - Input: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
             - Output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
-            - ROW_MAJOR: the input and output must have the same memory layout, and both be HEIGHT_SHARDED when either is in DRAM
+            - ROW_MAJOR: any memory layouts in L1; when either is in DRAM, this page documents HEIGHT_SHARDED input and output
         )doc";
 
     ttnn::bind_function<"reshard">(
