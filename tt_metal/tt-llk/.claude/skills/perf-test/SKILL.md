@@ -51,6 +51,9 @@ Related skills, in the order work usually needs them:
 3. A run type hangs or reports implausible numbers: **Repair**.
 4. Tile sizes, dimensions or other sweep axes change: **Python**, then
    `perf-coverage`.
+5. A phase microbenchmark exists: first add or repair normal paired coverage.
+   If the phase benchmark remains, give its module, callable, source, and
+   schema explicit `_phases` names and validate it separately.
 
 Finish every workflow with **Validate**.
 
@@ -67,7 +70,8 @@ alone: it reads only `@parametrize`. Values set inside the test body
 
 | Area | Typical drift |
 |---|---|
-| Sources | a separate `[op]_perf.cpp` next to `[op]_test.cpp` |
+| Sources | a separate `[op]_perf.cpp` next to `[op]_test.cpp`; this is a defect unless it is an explicitly named, documented phase microbenchmark |
+| Classification | a custom-zone phase benchmark presented as if it were functional L1-to-L1 perf |
 | Sweep | perf-only values or axes, a different format set, hand-picked block shapes instead of the functional `input_dimensions` |
 | Python checks | perf-only rejections (`perf does not support tilize`, `perf requires dest_index=0`) |
 | Runtimes | perf omits a runtime functional emits (`NUM_FACES`, `NUM_BLOCKS`), or passes a different value |
@@ -174,11 +178,17 @@ Rules:
   builds by the number of run types.
 - Functional-only regression tests, such as a forced block shape, may stay
   unmatched. Name them in the PR.
+- An explicitly named phase microbenchmark may keep standalone `PerfConfig`
+  and a dedicated source, but it does not satisfy paired coverage. Name every
+  artifact `*_phases`, keep normal paired perf beside it, and list the
+  microbenchmark as intentionally unmatched.
 
 ## 3. Kernel: same INIT, same buffers, isolates as slices
 
-Merge `[op]_perf.cpp` into `[op]_test.cpp` and delete it. Include `counters.h`,
-`perf.h` and `profiler.h`. Open the setup scope with
+For paired perf, merge `[op]_perf.cpp` into `[op]_test.cpp` and delete it.
+An explicitly named phase microbenchmark is the only exception and remains a
+separate published family, not the operation's perf coverage. Include
+`counters.h`, `perf.h` and `profiler.h`. Open the setup scope with
 `START_PERF_MEASURE("INIT")` and the repeated work with
 `START_PERF_MEASURE("TILE_LOOP")`, each ending with `PROFILER_SYNC()`. The
 macro opens the profiler zone and, in counter builds, the counter window; a
@@ -371,6 +381,24 @@ schema for the target architecture:
   the shared warehouse;
 - keep configuration, timing and provenance columns in their existing
   sections.
+
+### Phase microbenchmarks
+
+A phase microbenchmark reports custom internal zones instead of the
+functional `L1_TO_L1` program:
+
+- Use `perf_<op>_phases.py`, `test_perf_<op>_phases`,
+  `<op>_phases_perf.cpp`, and schema key `perf_<op>_phases`.
+- Keep architecture markers and report provenance explicit.
+- Do not pair it in `compare_test_and_perf.py`, add a fake functional module,
+  or use it as evidence that the operation has perf coverage.
+- Add the normal `perf_<op>.py` pair separately when operation perf is
+  required.
+- Treat renaming as a schema/baseline migration. If the old name is reused by
+  the new paired test, it cannot also be a `test_name_aliases` source; re-pin
+  the phase baseline and state the history break.
+- Do not introduce this pattern for a new operation without explicit reviewer
+  agreement.
 
 ### Renames
 

@@ -15,6 +15,7 @@ routes to the focused skill; it does not replace those skills.
 |---|---|---|
 | Add or edit `test_*.py` or `sources/*_test.cpp` | `functional-test` | Correct result against a golden; explicitly preserve, improve, or exclude perf coverage |
 | Add, edit, repair, or review `perf_*.py` or measured kernel paths | `perf-test`, then `perf-coverage` | Perf measures the functional program |
+| Unify a legacy `*_perf.cpp` or retain a phase microbenchmark while adding paired perf | `functional-test`, `perf-test`, `perf-coverage` | Paired path shares runner/kernel; phase path uses explicit `_phases` names and is not comparer coverage |
 | Choose a Quasar functional sweep | `functional-test`, then `quasar-test-coverage` | Representative shapes, Dest overflow, formats, and fidelity |
 | Run a device or simulator test | `run-test` | Never invoke `pytest` directly |
 | Add a fuser case | `.claude/CLAUDE.md`, "The Fuser Is the Reference" | Add YAML or a new op; do not weaken existing reference data or validation |
@@ -63,6 +64,10 @@ Every functional change has exactly one outcome:
 An existing perf pair makes the change paired unless the new function is an
 explicit regression-only exception. Do not silently reduce existing perf
 coverage.
+
+A phase microbenchmark is a separate published family, not a third functional
+outcome. It has no functional golden, uses explicit `_phases` naming, is
+excluded from sweep pairing, and does not replace normal paired perf coverage.
 
 ## 4. Validate through the owning skills
 

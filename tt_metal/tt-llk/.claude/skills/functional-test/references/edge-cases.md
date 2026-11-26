@@ -25,6 +25,7 @@ Quasar. Override it only when the behavior under test is the boot mode.
 | Fuser | Add a new YAML case, or register a genuinely new op under the rules in `.claude/CLAUDE.md` | Add functions to `test_fused.py`, edit existing YAML/goldens, loosen validation, or change the fuser to make a kernel pass |
 | Hardware-free | Put harness/tool checks under `tests/hardware_free/`; run `tests/run_hardware_free.sh` | Put them in `python_tests/`, where card jobs collect them |
 | SFPU accuracy | Follow `tests/SFPU_ULP.md` and the accuracy budgets | Treat accuracy `--mode perf` as a normal same-stem `perf_*.py` pair |
+| Phase microbenchmark | Name it `perf_<op>_phases.py` / `test_perf_<op>_phases`, keep a dedicated phase source only for an existing documented benchmark, and list it as intentionally unmatched | Present it as paired coverage, share the functional stem without paired L1-to-L1 perf, or copy the pattern for a new operation |
 | Out-of-tree | Import only from `tt_llk_harness`, version exported surface changes, and keep the contract fixture green | Reach into `helpers` from an external suite |
 | Debug/hang/profiler regression | Keep it separately named and functional-only when it has no useful published measurement | Add a meaningless perf row merely to satisfy filename symmetry |
 
@@ -39,15 +40,17 @@ Quasar. Override it only when the behavior under test is the boot mode.
   then the Quasar suffix and trailing `_perf`/`_test`. A module containing
   several functional families needs several paired perf functions, not one
   lumped wrapper.
-- Legacy exceptions exist:
-  - `perf_pack_tiny_tile_reconfig.py` imports a function from
-    `test_pack_tiny_tile_block.py`; whole-directory discovery reports a stem
-    mismatch, so compare explicit paths.
-  - Some old perf modules select `math_transpose_perf.cpp` or
-    `block_max8_perf.cpp`. Do not copy this pattern; new work shares the
-    functional source.
-  - `sources/unpack_tilize_perf.cpp` is not the active source. The live pair
-    uses `unpack_tilize_test.cpp`.
+- Legacy cleanup inventory:
+  1. **Stem mismatch:** `perf_pack_tiny_tile_reconfig.py` imports from
+     `test_pack_tiny_tile_block.py`. Split out
+     `test_pack_tiny_tile_reconfig.py`; do not add a comparer exception.
+  2. **Separate perf kernel defect:** `perf_transpose_dest.py` selects
+     `math_transpose_perf.cpp`. Merge the measured path into
+     `transpose_dest_test.cpp` and share the Python runner.
+  3. **Phase benchmark plus missing paired perf:** `perf_block_max8.py`
+     selects `block_max8_perf.cpp` for custom phase zones. Add paired coverage
+     on both functional kernels and retain the zones only under `_phases`
+     module/callable/source naming.
 - When renaming a module, function, axis, or perf column, follow the rename
   checklist in `perf-test`; pairing, schemas, baselines, split costs, and
   hard-coded IDs can all depend on it.
