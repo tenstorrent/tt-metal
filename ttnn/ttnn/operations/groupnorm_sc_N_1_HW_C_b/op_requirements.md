@@ -181,7 +181,7 @@
   - The DRAM planner shares the stream-slot undercount (`flux1_dram_1048576x64` could be fully resident): R10.
   - 16384×960 is chunk-limited by the Float32 x·(x−k) intermediate: R8.
 
-### [ ] Refinement 3 — ragged shard geometries (padded last row/column, shards straddling images, groups straddling core columns)
+### [x] Refinement 3 — ragged shard geometries (padded last row/column, shards straddling images, groups straddling core columns)
 
 **Goal**: add `"ragged"` to `SUPPORTED["shard_fit"]` for both `in_place` values. This covers three geometry cases:
 - **Padded last shard row or column**, e.g. RM 586×40 with a last row of 580, or RM 512×112 with a last column of 80.
@@ -200,6 +200,18 @@
 **Done when**:
 - Every `BLOCK_SHARDED, shard_fit=ragged` cell passes in both `in_place` modes. Today that is 33 + 33 `xfail_expected` cells.
 - R1/R2 cells and the sharded perf cases do not regress.
+
+**Outcome**: Done (2026-11-26).
+- `SUPPORTED["shard_fit"] = ["none", "even", "ragged"]`, both `in_place` values. The statistic unit is a column cluster (the whole grid width when `sw % Cg ≠ 0`) × an image band (core rows split only at image boundaries).
+  - **Padded edges:** TILE uses whole valid tiles; RM uses a lane mask after the column collapse plus k-filled staged partial tile rows.
+  - **Straddled images:** one gather / mcast round with per-image slots and stats (`NU`, `NSEG`).
+  - **Straddled groups:** a one-level 2-D fan-in in the unit's lane space, with the pilot from the column holding each group's first channel.
+  - Sharded RM walks one op-word path for even and ragged shards.
+- **Slice.** 66/66 ragged golden cells, 234 even sharded and 60 interleaved cells pass `--dev` and plain. `test_regression.py` 43/43 and the unit directory pass `--dev` and plain.
+- **Speed.** Even sharded and DRAM perf cases are within noise of the pre-R3 op (−2.3% … +1.4%, same-session A/B). Ragged shards run 1.12–4.41× faster than the same tensors through the DRAM path. Details are in `changelog.md`.
+- **Findings.**
+  - RM whole-width units with `sw % 32 ≠ 0` are `W`-bound (7×8 RM: `k = 4` → `W = 23` in one tile row, 2× its TILE twin).
+  - The RM image-straddle root waits on the image-mixed core row's pass 1 (4.2 µs): R8 leads.
 
 ### [ ] Refinement 4 — fp32 input (DRAM interleaved), fp32 γ/β, and TILE-layout γ/β
 

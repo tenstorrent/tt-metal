@@ -1,0 +1,2 @@
+case                                    base              op
+unet_rm_ip_1024x640             8,659           8,856  +2.3%

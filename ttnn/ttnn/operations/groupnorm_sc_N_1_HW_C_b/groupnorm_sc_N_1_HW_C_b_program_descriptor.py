@@ -105,7 +105,7 @@ NUM_CB_SLOTS = 64  # unpack_to_dest_mode vector length (covers WH 32 / BH 64)
 OP_STAGED = 1 << 16  # RM: one tile row staged by the reader (partial / image-mixed), tilized from CB_RM_STAGE_IN
 OP_SEG_END = 1 << 17  # the last ring piece of an image segment (pass 1 collapses, pass 2 drops its a / b')
 OP_SKIP = 1 << 18  # RM: the shard FIFOs step over a staged tile-row position (W pages, no data)
-PILOT_SLOT_BYTES = 16  # sharded pilot: one 16 B NoC read per group lane (the lane's k sample)
+PILOT_SLOT_BYTES = 16  # sharded TILE pilot: one 16 B NoC read per group lane (the lane's k sample)
 
 
 def _ceil_div(a, b):
@@ -163,12 +163,15 @@ def output_ring_bytes(T):
     return D_OUT * T * BF16_TILE_BYTES + 2 * OUT_SEQ_PAGES * OUT_SEQ_PAGE_BYTES
 
 
-def staging_bytes(*, W, map_period, is_rm, n_affine, sharded=False):
+def staging_bytes(*, W, map_period, is_rm, n_affine, sharded=False, pilot_cols=1):
     """Reader staging: the pilot (interleaved TILE: rows 0-1 of faces 0/1 per tile; interleaved RM: the slice of
-    stick 0; sharded: one 16 B slot per group lane, then - RM - the k stick built over it) or the n_affine
-    gamma/beta slices (P channels from a 64 B-aligned start), whichever is larger. Disjoint in time."""
-    if sharded:
-        pilot = max(MAX_GROUP_LANES * PILOT_SLOT_BYTES, map_period * 2 if is_rm else 0)
+    stick 0; sharded TILE: one 16 B slot per group lane; sharded RM: one 16 B-aligned span of stick 0 per source
+    column (pilot_cols of the unit), then the k stick built over it) or the n_affine gamma/beta slices (P channels
+    from a 64 B-aligned start), whichever is larger. Disjoint in time."""
+    if sharded and is_rm:
+        pilot = max(map_period * 2, pilot_cols * (_align_up(map_period * 2, 16) + 16))
+    elif sharded:
+        pilot = MAX_GROUP_LANES * PILOT_SLOT_BYTES
     else:
         pilot = map_period * 2 if is_rm else W * 128
     affine = n_affine * (_align_up(map_period * 2, 64) + 64)
@@ -191,6 +194,7 @@ def footprint_bytes(
     stage_pages=0,
     NU=1,
     NSEG=1,
+    pilot_cols=1,
 ):
     """Per-core static L1 footprint of every CB (l1_ledger.md "Per-core footprint"). Sharded: the input
     sticks (RM) / the input ring (TILE) and the output (RM sticks / TILE tiles) are the shards, not static CBs.
@@ -218,7 +222,9 @@ def footprint_bytes(
     # Per image of the unit: gathered partials (2R), stats out (2), group stats (2) + e (1). Per segment of the
     # core: local partials (2). Group shift (1). NU = NSEG = 1: 2W + 2R + 8.
     f32_bytes = out_ring + F32_TILE_BYTES * (2 * W + 2 * R * NU + 2 * NSEG + 4 * NU + 2)
-    staging = staging_bytes(W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb, sharded=sharded)
+    staging = staging_bytes(
+        W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb, sharded=sharded, pilot_cols=pilot_cols
+    )
     return BF16_TILE_BYTES * bf16_pages + f32_bytes + staging
 
 
@@ -295,6 +301,7 @@ class GroupNormPlan:
     col_mask: bool = False  # RM padded last column: SFPU lane mask after the column collapse
     mcast_row_major: bool = False  # unit = whole grid width x band rows (groups straddle core columns)
     ring_pages: int = 0  # RM ops path: the tilized ring holds every piece's tile rows
+    pilot_cols: int = 1  # sharded: core columns of a statistic unit (the RM pilot's span reads, one per column)
 
 
 def _evaluate_gx(gx, *, N, Ht, S, span_tiles, gps, P, chunk_target, is_rm, has_gamma, has_beta, l1_budget):
@@ -648,7 +655,16 @@ def _plan_sharded(input_tensor, num_groups, *, has_gamma, has_beta, in_place, tu
     rows_full = [v // tr for v in vrows]  # whole tile rows of each core row (TILE: its valid tile rows)
     cap = rows_nominal if tuning.get("chunk_tiles_target") is None else max(1, int(tuning["chunk_tiles_target"]) // W)
     fp_common = dict(
-        W=W, R=R, is_rm=is_rm, has_gamma=has_gamma, has_beta=has_beta, map_period=sw, sharded=True, NU=NU, NSEG=NSEG
+        W=W,
+        R=R,
+        is_rm=is_rm,
+        has_gamma=has_gamma,
+        has_beta=has_beta,
+        map_period=sw,
+        sharded=True,
+        NU=NU,
+        NSEG=NSEG,
+        pilot_cols=cl_cols,
     )
     col_mask = is_rm and vcols[-1] < sw
 
@@ -765,6 +781,7 @@ def _plan_sharded(input_tensor, num_groups, *, has_gamma, has_beta, in_place, tu
         col_mask=col_mask,
         mcast_row_major=not split_cols,
         ring_pages=max(ring_rows) * W if (is_rm and ops_path) else 0,
+        pilot_cols=cl_cols,
     )
     for y in range(gy):
         yb = y - y % bh
@@ -930,7 +947,9 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     # [rstd, mean*rstd] per image of the unit (multicast from the unit root) + e = 1.0 (page 2*NU, written once by the
     # writer): the expand's in0.
     cbs.append(_cb((2 * NU + 1) * F32_TILE_BYTES, cores, [(CB_GROUP_STATS, f32, F32_TILE_BYTES)]))
-    stage = staging_bytes(W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb, sharded=sharded)
+    stage = staging_bytes(
+        W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb, sharded=sharded, pilot_cols=plan.pilot_cols
+    )
     cbs.append(_cb(stage, cores, [(CB_AFFINE_STAGING, bf16, stage)]))
     has_stage = plan.stage_pages > 0
     if has_stage:

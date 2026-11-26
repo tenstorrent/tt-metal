@@ -55,10 +55,40 @@ CASES = {
     "mid_16384x320_tile": ((1, 1, 16384, 320), 32, None, TL, 1e-5, False),
     "unet_tile_ip_1024x1280": ((1, 1, 1024, 1280), 32, G88, TL, 1e-6, True),
     "unet_rm_oop_1024x1280": ((1, 1, 1024, 1280), 32, G88, RM, 1e-5, False),
+    # Refinement 3: ragged shard geometries (grid = (grid_x, grid_y) as in the golden "bsXxY" ids)
+    "r3_tile_4096x960_padcol": ((1, 1, 4096, 960), 32, G88, TL, 1e-6, False),
+    "r3_tile_1024x1920_padcol": ((1, 1, 1024, 1920), 32, G88, TL, 1e-6, False),
+    "r3_tile_4096x1152_padcol": ((1, 1, 4096, 1152), 32, G88, TL, 1e-6, False),
+    "r3_rm_ip_4096x320_8x7_padrow": ((1, 1, 4096, 320), 32, (8, 7), RM, 1e-5, True),
+    "r3_tile_1024x1280_8x7_padrow": ((1, 1, 1024, 1280), 32, (8, 7), TL, 1e-6, False),
+    "r3_tile_2x256x1280_8x3_straddle": ((2, 1, 256, 1280), 32, (8, 3), TL, 1e-6, False),
+    "r3_rm_ip_2x256x1280_8x3_straddle": ((2, 1, 256, 1280), 32, (8, 3), RM, 1e-5, True),
+    "r3_tile_1024x1280_7x8_grpcol": ((1, 1, 1024, 1280), 32, (7, 8), TL, 1e-6, False),
+    "r3_rm_ip_1024x1280_7x8_grpcol": ((1, 1, 1024, 1280), 32, (7, 8), RM, 1e-5, True),
+    "r3_rm_ip_4096x640_6x8_padcol": ((1, 1, 4096, 640), 32, (6, 8), RM, 1e-5, True),
+    # the same ragged shapes on the DRAM interleaved path (the only route they had before R3)
+    "r3_dram_tile_4096x960": ((1, 1, 4096, 960), 32, None, TL, 1e-6, False),
+    "r3_dram_tile_1024x1920": ((1, 1, 1024, 1920), 32, None, TL, 1e-6, False),
+    "r3_dram_tile_4096x1152": ((1, 1, 4096, 1152), 32, None, TL, 1e-6, False),
+    "r3_dram_rm_4096x320": ((1, 1, 4096, 320), 32, None, RM, 1e-5, False),
+    "r3_dram_tile_2x256x1280": ((2, 1, 256, 1280), 32, None, TL, 1e-6, False),
+    "r3_dram_rm_1024x1280": ((1, 1, 1024, 1280), 32, None, RM, 1e-5, False),
+    "r3_dram_rm_4096x640": ((1, 1, 4096, 640), 32, None, RM, 1e-5, False),
 }
 GROUPS = {
-    "focus_sh": [k for k, v in CASES.items() if v[2] is not None and not k.startswith(("unet_tile_ip", "unet_rm_oop"))],
+    "focus_sh": [
+        k for k, v in CASES.items() if v[2] is not None and not k.startswith(("unet_tile_ip", "unet_rm_oop", "r3_"))
+    ],
     "focus_dram": [k for k, v in CASES.items() if k.split("_")[1] == "dram" or k.startswith("mochi")],
+    "r3": [k for k in CASES if k.startswith("r3_")],
+    "sh_all": [k for k, v in CASES.items() if v[2] is not None and not k.startswith("r3_")],
+    "dram_small": [
+        "flux1_dram_16384x256",
+        "refiner_dram_16384x1152",
+        "vae_dram_65536x512",
+        "mid_4096x640_rm",
+        "mid_16384x320_tile",
+    ],
     "all": list(CASES),
 }
 

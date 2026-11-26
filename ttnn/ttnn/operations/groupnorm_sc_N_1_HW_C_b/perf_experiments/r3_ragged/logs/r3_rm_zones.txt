@@ -1,0 +1,4 @@
+case                                      op
+r3_tile_1024x1280_7x8_grpcol   10,927
+r3_rm_ip_1024x1280_7x8_grpcol   21,977
+r3_rm_ip_2x256x1280_8x3_straddle   21,839

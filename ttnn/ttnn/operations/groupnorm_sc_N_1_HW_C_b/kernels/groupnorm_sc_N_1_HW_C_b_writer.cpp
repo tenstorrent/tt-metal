@@ -94,9 +94,13 @@ void kernel_main() {
     const uint32_t root_x = get_arg_val<uint32_t>(arg++);
     const uint32_t root_y = get_arg_val<uint32_t>(arg++);
     const uint32_t cpi = get_arg_val<uint32_t>(arg++);
-    const uint32_t n_img = get_arg_val<uint32_t>(arg++);     // images of this core's unit (<= NU)
-    const uint32_t n_seg = get_arg_val<uint32_t>(arg++);     // this core's image segments (local partial pairs)
-    const uint32_t seg_img0 = get_arg_val<uint32_t>(arg++);  // unit image of its first segment
+    // NU == 1 (every unit holds one image: all even shards, DRAM) folds the per-image loops to their constant trip.
+    const uint32_t n_img_rt = get_arg_val<uint32_t>(arg++);     // images of this core's unit (<= NU)
+    const uint32_t n_seg_rt = get_arg_val<uint32_t>(arg++);     // this core's image segments (local partial pairs)
+    const uint32_t seg_img0_rt = get_arg_val<uint32_t>(arg++);  // unit image of its first segment
+    const uint32_t n_img = NU == 1 ? 1 : n_img_rt;
+    const uint32_t n_seg = NU == 1 ? 1 : n_seg_rt;
+    const uint32_t seg_img0 = NU == 1 ? 0 : seg_img0_rt;
     const uint32_t rm_credit_pages = get_arg_val<uint32_t>(arg++);
     const uint32_t n_staged = get_arg_val<uint32_t>(arg++);  // RM staged rows: (shard stick, position, sticks)
     const uint32_t staged_arg = arg;

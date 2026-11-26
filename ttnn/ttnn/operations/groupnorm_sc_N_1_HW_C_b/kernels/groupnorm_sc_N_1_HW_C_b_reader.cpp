@@ -65,7 +65,7 @@ constexpr uint32_t BF16_ONE = 0x3F80;
 constexpr uint32_t TILE_SEGMENT_BYTES = 64;  // 32 bf16 channels of one stick
 constexpr uint32_t ALIGN = 64;               // DRAM read alignment (BH)
 constexpr uint32_t MAX_LANES = 32;           // group lanes in one tile row
-constexpr uint32_t PILOT_SLOT_BYTES = 16;    // sharded pilot: one 16 B read per group lane
+constexpr uint32_t PILOT_SLOT_BYTES = 16;    // sharded TILE pilot: one 16 B read per group lane
 
 // Element offset of tile-row-0 lane l (0..31) inside a tile: faces 0 / 1 hold lanes 0..15 / 16..31.
 FORCE_INLINE uint32_t row0_lane(uint32_t l) { return (l >> 4) * 256 + (l & 15); }
@@ -387,6 +387,60 @@ void kernel_main() {
 
     if constexpr (SHARDED) {
         // ================= Sharded: one block, the core's own shard =================
+        // ---------------- Pilot: k of each group lane, x[band row 0, first channel of the group] ----------------
+        // Read from the unit core holding the group's first channel (the band's first core row, whose shard row 0 is
+        // an image's row 0). Lane l's first channel is l * CG past the unit's first column. The unit root reads
+        // every lane (its group shift), others only their own. RM: one read per source column of the 16 B-aligned
+        // span of stick 0 holding its lanes' channels (packed from the staging base); TILE: one 16 B slot per lane
+        // (tile row 0 of faces 0/1: not contiguous across tiles). kv[l] = the lane's halfword in the staging until
+        // the barrier. The pilot gates pass 1's moments (the unpacker waits on it right after its tilize), so the
+        // reads go out first and the pass-1 credit push below covers their flight (measured: perf_experiments/
+        // r3_ragged: per-lane RM reads cost ~200 ns of issue on a 4-lane core).
+        const uint32_t n_own = (sh_off0 + sh_vc + CG - 1) / CG;
+        const uint32_t la = is_root ? 0 : sh_l0;
+        const uint32_t lb = is_root ? g_unit : sh_l0 + n_own;
+        {
+            MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_pilot_issue");
+            uint32_t l = la, c = la * CG;
+            if constexpr (IS_RM) {
+                uint32_t pos = 0;
+                while (l < lb) {
+                    const uint32_t col = c / P;  // (a group wider than a column skips columns)
+                    const uint32_t col_base = col * P;
+                    const uint32_t lc = l;
+                    for (; l < lb && c < col_base + P; ++l, c += CG) {
+                        kv[l] = c - col_base;  // local channel in the source stick
+                    }
+                    const uint32_t b0 = (kv[lc] * 2) & ~15u;
+                    const uint32_t b1 = (kv[l - 1] * 2 + 2 + 15) & ~15u;
+                    const uint32_t src_x = get_arg_val<uint32_t>(cols_arg + col);
+                    noc_async_read(get_noc_addr(src_x, root_y, in_addr + b0), staging + pos, b1 - b0);
+                    for (uint32_t j = lc; j < l; ++j) {
+                        kv[j] = (pos + kv[j] * 2 - b0) >> 1;
+                    }
+                    pos += b1 - b0;
+                }
+            } else {
+                uint32_t col = c / P, col_end = (col + 1) * P, state_col = ~0u;
+                for (; l < lb; ++l, c += CG) {
+                    while (c >= col_end) {
+                        ++col;
+                        col_end += P;
+                    }
+                    const uint32_t cl = c - (col_end - P);  // local channel in the source shard
+                    const uint32_t off =
+                        (cl >> 5) * BF16_TILE_BYTES + ((cl >> 4) & 1) * BF16_FACE_BYTES + (cl & 15) * 2;
+                    kv[l] = l * (PILOT_SLOT_BYTES / 2) + ((off & 15) >> 1);
+                    if (col != state_col) {
+                        noc_async_read_one_packet_set_state(
+                            get_noc_addr(get_arg_val<uint32_t>(cols_arg + col), root_y, in_addr), PILOT_SLOT_BYTES);
+                        state_col = col;
+                    }
+                    noc_async_read_one_packet_with_state(in_addr + (off & ~15u), staging + l * PILOT_SLOT_BYTES);
+                }
+            }
+        }
+
         // Pass-1 credits: the chunks are resident in this core's shard, so a credit push is all compute needs.
         if constexpr (!IS_RM) {
             cb_reserve_back(cb_input_tiles, num_chunks * T);
@@ -399,34 +453,12 @@ void kernel_main() {
             cb_push_back(cb_input_rm, pages);
         }
 
-        // ---------------- Pilot: k of each group lane, x[band row 0, first channel of the group] ----------------
-        // One 16 B read per lane from the unit core holding the group's first channel (the band's first core row,
-        // whose shard row 0 is an image's row 0). Lane l's first channel is l * CG past the unit's first column.
-        // The unit root reads every lane (its group shift), others only their own.
         {
-            const uint32_t n_own = (sh_off0 + sh_vc + CG - 1) / CG;
-            const uint32_t la = is_root ? 0 : sh_l0;
-            const uint32_t lb = is_root ? g_unit : sh_l0 + n_own;
-            uint32_t c = 0, col = 0, col_end = P;
-            for (uint32_t l = 0; l < lb; ++l, c += CG) {
-                while (c >= col_end) {
-                    ++col;
-                    col_end += P;
-                }
-                const uint32_t cl = c - (col_end - P);  // local channel in the source shard
-                const uint32_t off =
-                    IS_RM ? cl * 2 : (cl >> 5) * BF16_TILE_BYTES + ((cl >> 4) & 1) * BF16_FACE_BYTES + (cl & 15) * 2;
-                kv[l] = (off & 15) >> 1;  // element of the lane's 16 B slot (the value replaces it below)
-                if (l >= la) {
-                    const uint32_t src_x = get_arg_val<uint32_t>(cols_arg + col);
-                    noc_async_read(
-                        get_noc_addr(src_x, root_y, in_addr + (off & ~15u)), staging + l * PILOT_SLOT_BYTES, 16);
-                }
-            }
+            MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_pilot_wait");
             noc_async_read_barrier();
-            for (uint32_t l = la; l < lb; ++l) {
-                kv[l] = sv[l * (PILOT_SLOT_BYTES / 2) + kv[l]];
-            }
+        }
+        for (uint32_t l = la; l < lb; ++l) {
+            kv[l] = sv[kv[l]];
         }
         build_shift_rows(sh_l0, sh_off0, sh_vc, g_unit, 0);
 

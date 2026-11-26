@@ -767,3 +767,85 @@ Perf 1's `reduce`/`Accumulate` moments row and its `eltwise_chain` normalize row
 - 1.04–1.15× on DRAM wherever the change is outside noise (vae 1048576x256 −2.3% and mochi −0.5% are flat).
 
 Mid cells are 3–6% faster. Sharded guards are 17–22% faster and DRAM guards 3–5% (the DRAM RM pair sits at the noise edge). No cell regressed, and golden is green.
+
+## Refinement 3 — ragged shard geometries (padded last row/column, shards straddling images, groups straddling core columns)
+- Date: 2026-11-26
+- What was done:
+  - **Registry.** `SUPPORTED["shard_fit"]` = `["none", "even", "ragged"]`, both `in_place` values. The remaining sharded refusals are geometric and raised by the planner (`NotImplementedError`): a core without data, image bands of unequal height, more than 32 group lanes in one statistic unit, a non-rectangular or non-ROW_MAJOR shard grid.
+  - **Statistic unit = column cluster × image band** (`_plan_sharded`). Columns cluster into the whole grid width when a group straddles a core-column boundary (`sw % Cg ≠ 0`), else single columns. Grid rows split into bands only where a core-row boundary is an image boundary. A unit holds `NU` images, a core's shard `NSEG` image segments. The unit root gathers `R = ceil(unit cores / 32)` slot rows per image, finalizes `NU` images and multicasts `[rstd_i, mean_i·rstd_i]·NU + e`. Whole-width units multicast to the RowMajor band rectangle.
+  - **Padded edges (knob-turn).**
+    - TILE contributes whole valid tiles only (`vrows`, `vc/32`).
+    - RM masks the padded lanes after the column collapse (`col_mask`: an SFPU lane mask, `(32c + col) mod P ≥ vc`). It stages a partial last tile row k-filled: every stick that is not the row's own is the pilot `k` stick, so `x − k = 0` and `x·(x − k) = 0` add nothing to either moment.
+  - **Straddled images (scheme-change).** Each segment of a core collapses to its own partial pair, sent to its image's slot block at the unit root. Pass 2 expands each image's stats pair and applies it to that segment's rows. RM tile rows mixing two images are staged like partial rows; pass 2 untilizes them into `cb_rm_stage_out` and the writer copies the valid sticks back into the shard.
+    - Deviation from the verifier sketch (two combine rounds with different roots): one root per unit with per-image slots is one gather / mcast round, not two serialized ones.
+  - **Straddled groups (`cross_column_group_combine`, scheme-change).** Each core's collapse already emits partials in the unit's lane space (from lane `l0` of its first channel, padded lanes zero). The unit root's existing sum over gathered slot rows therefore combines column neighbours with no extra exchange: a one-level 2-D fan-in, not the sketched row exchange + column gather. The pilot `k` of a lane is read from the core column holding the group's first channel, in the band's first core row (an image's row 0).
+  - **Sharded RM ops path (single-source chunking).** Every fully resident sharded RM core, even shards included, walks its shard as op words: whole tile-row runs of up to `h` rows, `OP_STAGED` rows, `OP_SEG_END` segment ends, and `OP_SKIP` over a staged position. Even and ragged shards share one path; the legacy chunked path remains for DRAM and partial residency.
+  - **Perf repairs on the even-shard path**, so R1/R2 cells don't regress (measured: `perf_experiments/r3_ragged/`):
+    - `normalize_untilize_rows` takes its output CB as a template argument. A runtime CB id makes the packer's per-CB descriptor tables (4 × 64 B) live `.data`, which `do_crt1` copies on every launch: +234 ns on the pack thread's kernel start.
+    - `NU == 1` folds the writer's and compute's per-image loops to constant trips (−~150 ns).
+    - The RM pilot issues one span read of stick 0 per source column instead of one 16 B read per group lane: ~200 ns of NCRISC issue on a 4-lane core, now hidden by pass 1.
+  - **Docs.** `l1_ledger.md`: rows for CBs 15/16/19/20 (`NSEG` / `NU`), 21 (`staging_bytes()` incl. the per-column pilot spans), new 25/26 (alias group F), the ring and shard-CB `total_size` notes, deviations, footprint formula, a ragged-geometry table from the planner, and the DM budget. `op_design.md`: the `block_sharded_shard_resident`, `cross_column_group_combine` and `shard_fit=ragged` rows are built, with their realizations.
+- Reused: the R1/R2 shard-backed CBs, collapse / gather / finalize / mcast / expand chain, map channel bound, the pilot shift, the RM tilize / untilize helpers and the `K = B` residency plan.
+- Added: per-image / per-segment slot blocks and stats (`NU`, `NSEG`), the column-cluster × band unit planner, RM staged rows (alias group F, CBs 25/26), the RM padded-lane mask, op words for sharded RM, and the per-column pilot.
+- Accuracy achieved (bf16, γ+β, bench `perf_experiments/r3_ragged/bench_ab.py`): every ragged case PCC 0.999998, relative RMS 0.00180–0.00198; the even sharded A/B cases PCC 0.999998, RMS 0.00176–0.00193 (unchanged from base).
+- Golden test progress:
+  - **66/66** `BLOCK_SHARDED, shard_fit=ragged` cells (33 out of place + 33 in place), under `--dev` and plain;
+  - plus 234 even sharded cells and a 60-cell interleaved sample (360/360 `--dev`, 360/360 plain);
+  - `test_regression.py` 43/43 (`--dev`);
+  - unit directory (`test_groupnorm_sc_N_1_HW_C_b.py` 44, `_sharded.py` + `_ragged.py` 48) green `--dev` and plain (452/452 plain, golden slice included).
+- Issues encountered:
+  - **"Runtime args size mismatch: cached 11 vs new 12"** (`max_resident_chunks = 1`). The generic-op program hash covers CT args, CBs, core ranges and the core count, but not per-core RT lengths. The override branch recomputed `h` with the global chunk target: the same CT args as the default plan, a different op-word count. Fixed: the override uses `h_l` (the largest divisor of `rows_core` ≤ cap) and takes the legacy path only when `override < rows_core / h_l`.
+  - **Hang:** `test_sharded_rm_partial_residency[max_resident=0]`. The writer waited for more pages than the shard CB holds. Fixed with per-chunk draining (`IS_RM && !OPS`).
+  - **Watcher NoC error under `--dev`** ("unicast write ... overflows a circular buffer", RM 4096×320 8×7). The shard CB's `total_size` is floored to whole 2 KB pages (ragged RM shards are not page multiples), and the staged-row copy sourced bytes past it from local L1. The sanitizer checks the local address of a NoC transaction against the CBs containing it. Fixed by issuing the copy as a NoC read of the core's own L1 (91dbc589f6b).
+  - **A `--dev` "device timeout"** with every TRISC at init: stale device state after a watcher-aborted run. A clean re-run passed, with no code change.
+  - **The `.data` / runtime-CB-id regression** above, found by zone timelines (`perf_experiments/_tools/zone_timeline.py`) when the even-shard A/B showed +300–400 ns.
+- Findings (not deferred work; recorded for the perf refinements):
+  - **Residual on small even RM shards:** +0.1–1.4% (≤ ~110 ns) vs base, inside the noise band. The zones place it in the ops path's pass-2 prologue / op-word walk on the pack thread (~40–60 ns, part of it zone overhead) plus ~20 ns of per-row normalize. That is the price of one chunking path for even and ragged RM shards. The pilot's remaining +70 ns on NCRISC is absorbed by pass 1 (`c_p1_moments` ends at the same time).
+  - **RM whole-width units with `sw % 32 ≠ 0` are W-bound.** 7×8 RM 1024×1280: `k = 4` sticks per virtual row make `W = 23` in one tile row, and moments (7.9 µs) and expand (6.5 µs) scale with `W` amortized over a single tile row: 21.8 µs vs the TILE twin's 10.9 µs. The reader's map / affine build (~10 µs) stays off the critical path.
+  - **RM image-straddle 8×3:** the root waits 4.2 µs on the unit's slowest pass-1 member (the image-mixed core row, with staged rows and two segments), and pass 2 costs ~170 ns/tile of untilize vs ~65 for TILE.
+- Tests added:
+  - `tests/.../test_groupnorm_sc_N_1_HW_C_b_ragged.py`: 11 geometries (padded column TILE × 3; padded row TILE 8×7, RM 8×7, RM 8×7 `k = 4`; image straddle TILE / RM 8×3; group straddle TILE 7×8, RM 7×8, RM 6×8) × out of place / in place.
+  - `perf_experiments/_round2/bench.py`: the `r3_*` sharded cases and their DRAM equivalents (groups `r3`, `sh_all`, `dram_small`).
+  - `perf_experiments/r3_ragged/`: `bench_ab.py` (same-session A/B against a frozen pre-R3 copy, `base_pkg/` = 8db3a5fa93d), `run.sh`, logs.
+  - `perf_experiments/_tools/zone_timeline.py`: first start / last end per (RISC, zone), p50 over cores.
+
+### Device kernel duration — Refinement 3 (Blackhole, DEVICE KERNEL DURATION [ns], one fresh-cache profiled run per case, bf16 γ+β)
+
+Even shards and DRAM, same-session A/B against the pre-R3 op (`base_pkg` = 8db3a5fa93d, Perf 2 final). R1/R2 cells do not regress beyond noise:
+
+| Case | Base (ns) | R3 (ns) | Δ |
+|---|---|---|---|
+| unet_rm_ip_1024x1280 | 10 827 | 10 841 | +0.1% |
+| unet_rm_ip_16384x320 | 23 499 | 23 588 | +0.4% |
+| unet_rm_ip_4096x320 | 10 741 | 10 853 | +1.0% |
+| unet_rm_ip_4096x640 | 15 051 | 15 171 | +0.8% |
+| unet_rm_ip_1024x640 | 8 560 | 8 676 | +1.4% |
+| refiner_rm_ip_256x1536 | 7 687 | 7 793 | +1.4% |
+| refiner_rm_ip_16384x384 | 20 587 | 20 637 | +0.2% |
+| unet_rm_ip_16384x640 | 40 407 | 40 509 | +0.3% |
+| unet_rm_ip_16384x960 | 47 468 | 47 623 | +0.3% |
+| unet_rm_oop_1024x1280 | 10 826 | 10 846 | +0.2% |
+| unet_tile_1024x1280 | 9 001 | 8 813 | −2.1% |
+| unet_tile_4096x640_4x8 | 15 719 | 15 744 | +0.2% |
+| vae_tile_16384x512 | 18 759 | 18 867 | +0.6% |
+| unet_tile_ip_1024x1280 | 9 000 | 8 791 | −2.3% |
+| flux1_dram_16384x256 | 50 338 | 50 908 | +1.1% |
+| refiner_dram_16384x1152 | 198 021 | 198 704 | +0.3% |
+| vae_dram_65536x512 | 334 484 | 333 905 | −0.2% |
+| mid_4096x640_rm | 44 613 | 44 112 | −1.1% |
+| mid_16384x320_tile | 65 443 | 65 067 | −0.6% |
+
+Ragged shards (newly supported; the base op refuses them) vs the same tensor through this op's DRAM-interleaved path:
+
+| Case | Ragged sharded (ns) | DRAM path (ns) | vs DRAM |
+|---|---|---|---|
+| TILE 4096×960 8×8 (padded column, groups straddle) | 14 249 | 62 798 | 4.41× faster |
+| TILE 1024×1920 8×8 (padded column, groups straddle) | 12 550 | 40 215 | 3.20× faster |
+| TILE 4096×1152 8×8 (padded column, groups straddle) | 16 676 | 63 441 | 3.80× faster |
+| RM in place 4096×320 8×7 (padded row, `k = 4`) | 13 813 | 26 862 | 1.94× faster |
+| TILE 1024×1280 8×7 (padded row) | 9 279 | — | — |
+| TILE 2×256×1280 8×3 (images straddle) | 13 356 | 15 021 | 1.12× faster |
+| RM in place 2×256×1280 8×3 (images straddle) | 21 590 | — | — |
+| TILE 1024×1280 7×8 (groups straddle) | 10 819 | — | — |
+| RM in place 1024×1280 7×8 (groups straddle, `W = 23`) | 21 802 | 25 699 | 1.18× faster |
+| RM in place 4096×640 6×8 (padded column, groups straddle) | 20 056 | 45 206 | 2.25× faster |

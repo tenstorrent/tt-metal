@@ -664,7 +664,11 @@ constexpr uint32_t UB_RT = CHAIN_BLOCK / UB_CT;
 constexpr uint32_t UB_NB = W / UB_CT;
 
 // rows tile rows of x_cb from ring tile row x_row0 -> out_cb, untilized (rows x W pages). The caller waits x, a, b'.
-ALWI void normalize_untilize_rows(uint32_t x_cb, uint32_t x_row0, uint32_t rows, uint32_t out_cb) {
+// out_cb is a template argument on purpose: a runtime CB id makes the packer's per-CB descriptor tables (formats,
+// faces, face rows: 4 x 64 B) live data, which the firmware copies into local memory on every launch (+~230 ns on
+// the pack thread's kernel start, measured: perf_experiments/r3_ragged).
+template <uint32_t out_cb>
+ALWI void normalize_untilize_rows(uint32_t x_cb, uint32_t x_row0, uint32_t rows) {
     p2_init(x_cb);
     pack_untilize_dest_init<UB_CT, W>(out_cb);
     for (uint32_t r0 = 0; r0 < rows; r0 += UB_RT) {
@@ -698,7 +702,7 @@ ALWI void normalize_untilize_chunk(uint32_t rows_valid) {
     MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_normalize");
     cb_wait_front(cb_chan_scale, W);
     cb_wait_front(cb_bprime, W);
-    normalize_untilize_rows(x_cb, 0, rows_valid, cb_output_rm);
+    normalize_untilize_rows<cb_output_rm>(x_cb, 0, rows_valid);
     cb_pop_front(x_cb, T);
 }
 
@@ -866,8 +870,11 @@ void kernel_main() {
     const uint32_t resident_chunks = get_arg_val<uint32_t>(arg++);
     const uint32_t inv_n_bits = get_arg_val<uint32_t>(arg++);
     const uint32_t eps_bits = get_arg_val<uint32_t>(arg++);
-    const uint32_t n_img = get_arg_val<uint32_t>(arg++);     // images of the unit (root: statistic sets to finalize)
-    const uint32_t seg_img0 = get_arg_val<uint32_t>(arg++);  // unit image of this core's first segment
+    // NU == 1 (every unit holds one image: all even shards, DRAM) folds the per-image loops to their constant trip.
+    const uint32_t n_img_rt = get_arg_val<uint32_t>(arg++);     // images of the unit (root: statistic sets to finalize)
+    const uint32_t seg_img0_rt = get_arg_val<uint32_t>(arg++);  // unit image of this core's first segment
+    const uint32_t n_img = NU == 1 ? 1 : n_img_rt;
+    const uint32_t seg_img0 = NU == 1 ? 0 : seg_img0_rt;
     const uint32_t w_valid = get_arg_val<uint32_t>(arg++);   // TILE: channel tiles holding data
     const uint32_t vc_arg = get_arg_val<uint32_t>(arg++);    // sharded: valid channels of the slice
     const uint32_t n_ops = get_arg_val<uint32_t>(arg++);
@@ -986,7 +993,11 @@ void kernel_main() {
             }
             const uint32_t rows = op & OP_ROWS;
             if constexpr (IS_RM) {
-                normalize_untilize_rows(x_cb, xrow, rows, (op & OP_STAGED) ? cb_rm_stage_out : cb_output_rm);
+                if (HAS_STAGE && (op & OP_STAGED)) {
+                    normalize_untilize_rows<cb_rm_stage_out>(x_cb, xrow, rows);
+                } else {
+                    normalize_untilize_rows<cb_output_rm>(x_cb, xrow, rows);
+                }
             } else {
                 normalize_tiles(x_cb, xrow * W, rows * W, cb_output_tiles);
             }
