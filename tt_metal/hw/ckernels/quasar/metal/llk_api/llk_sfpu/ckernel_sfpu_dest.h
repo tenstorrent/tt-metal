@@ -8,68 +8,43 @@
 
 #include "ckernel_sfpu_operand.h"
 #include "ckernel_trisc_common.h"
-#include "llk_assert.h"
 #include "llk_defs.h"
-#include "llk_math_eltwise_binary_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "sfpi.h"
 
-// Dest op types, the Dest twin of ckernel_sfpu_srcs.h: an op supplies calculate() and optionally init_op().
+// Dest op types, the Dest twin of ckernel_sfpu_srcs.h: an op supplies calculate().
 
 namespace ckernel {
 namespace sfpu {
 
-namespace detail {
-
-// Dest bounds check; only metal builds define the kernel-wide sync mode.
-template <trisc::DstTileShape SLOT>
-inline void check_dest_index([[maybe_unused]] const std::uint32_t dst_index) {
-#ifdef DST_SYNC_MODE
-    LLK_ASSERT(
-        (dst_index < trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, SLOT>()),
-        "dst_index exceeds max dest tiles");
-#endif
-}
-
-}  // namespace detail
-
-/** @brief CRTP base for unary Dest ops; Op supplies calculate() and optionally init_op(). */
+/** @brief CRTP base for unary Dest ops; Op supplies calculate(). */
 template <typename Op>
 struct SfpuDestUnaryOp {
-    static void init_op() {}
-
-    static void init() {
-        _llk_math_eltwise_sfpu_init_();
-        Op::init_op();
-    }
-
-    /** @brief Run Op on one Dest tile; vector_mode selects the faces. */
-    template <trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+    /**
+     * @brief Check the Dest index and vector mode, then run Op on one Dest tile; vector_mode selects the faces.
+     *
+     * @tparam DST_SYNC: Dest sync mode; with DST_ACCUM it bounds the tile index.
+     * @tparam DST_ACCUM: True for a 32-bit Dest.
+     */
+    template <DstSync DST_SYNC, bool DST_ACCUM, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
     static void run(const std::uint32_t dst_index, const VectorMode vector_mode = VectorMode::RC) {
-        detail::check_dest_index<SLOT>(dst_index);
+        _sfpu_check_<DST_SYNC, DST_ACCUM, SLOT>(dst_index, vector_mode);
         _llk_math_eltwise_unary_sfpu_params_<SLOT>(Op::calculate, dst_index, vector_mode);
     }
 };
 
-/** @brief CRTP base for binary Dest ops; Op supplies calculate(in0, in1, out) and optionally init_op(). */
+/** @brief CRTP base for binary Dest ops; Op supplies calculate(in0, in1, out). */
 template <typename Op>
 struct SfpuDestBinaryOp {
-    static void init_op() {}
-
-    static void init() {
-        _llk_math_eltwise_sfpu_init_();
-        Op::init_op();
-    }
-
-    template <trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+    /** @brief The two-input form of @ref SfpuDestUnaryOp::run. */
+    template <DstSync DST_SYNC, bool DST_ACCUM, trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
     static void run(
         const std::uint32_t dst_index_in0,
         const std::uint32_t dst_index_in1,
         const std::uint32_t dst_index_out,
         const VectorMode vector_mode = VectorMode::RC) {
-        detail::check_dest_index<SLOT>(dst_index_in0);
-        detail::check_dest_index<SLOT>(dst_index_in1);
-        detail::check_dest_index<SLOT>(dst_index_out);
+        _sfpu_binary_check_<DST_SYNC, DST_ACCUM, SLOT>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
         _llk_math_eltwise_binary_sfpu_params_<SLOT>(
             Op::calculate, dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }

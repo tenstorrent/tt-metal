@@ -846,12 +846,14 @@ void call_unary_sfpu_operation_quasar(
         }
         else
         {
-            ::ckernel::_sfpu_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
             // sfpu_format is the Dest family; pick the explicit SFPLOAD/SFPSTORE layout for it.
             dispatch_dest_float_layout<is_fp32_dest_acc_en>(
                 sfpu_format,
                 [&](auto l)
-                { ckernel::sfpu::ExpDest<APPROX, is_fp32_dest_acc_en, decltype(l)::value, ITERATIONS>::template run<TILE_SHAPE>(dst_index, vector_mode); });
+                {
+                    ckernel::sfpu::ExpDest<APPROX, is_fp32_dest_acc_en, decltype(l)::value, ITERATIONS>::
+                        template run<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
+                });
         }
     }
     else if constexpr (OPERATION == SfpuType::gelu)
@@ -919,9 +921,10 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        ::ckernel::_sfpu_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
         dispatch_dest_float_layout<is_fp32_dest_acc_en>(
-            sfpu_format, [&](auto l) { ckernel::sfpu::SquareDest<decltype(l)::value, ITERATIONS>::template run<TILE_SHAPE>(dst_index, vector_mode); });
+            sfpu_format,
+            [&](auto l)
+            { ckernel::sfpu::SquareDest<decltype(l)::value, ITERATIONS>::template run<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode); });
     }
     else if constexpr (is_trig_op(OPERATION))
     {
@@ -1864,8 +1867,8 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     {
         if (math_format == DataFormat::Int32)
         {
-            ::ckernel::_sfpu_binary_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
-            ckernel::sfpu::AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>::template run<TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
+            ckernel::sfpu::AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>::template run<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(
+                src0_tile, src1_tile, dst_tile, vector_mode);
         }
         else if constexpr (kComputeApiKernels)
         {
@@ -1882,13 +1885,12 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         }
         else
         {
-            ::ckernel::_sfpu_binary_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
             dispatch_dest_float_layout<is_fp32_dest_acc_en>(
                 math_format,
                 [&](auto l)
                 {
-                    ckernel::sfpu::AddDest<is_fp32_dest_acc_en, dst_rounding_mode, decltype(l)::value, ITERATIONS, TILE_SHAPE>::template run<TILE_SHAPE>(
-                        src0_tile, src1_tile, dst_tile, vector_mode);
+                    ckernel::sfpu::AddDest<is_fp32_dest_acc_en, dst_rounding_mode, decltype(l)::value, ITERATIONS, TILE_SHAPE>::
+                        template run<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
                 });
         }
     }

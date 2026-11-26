@@ -57,7 +57,6 @@ inline void calculate_square() {
 /** @brief Dest square op type: keeps the ADDR_MOD_6 store loop of @ref calculate_square. */
 template <sfpi::DataLayout LAYOUT, int ITERATIONS = SFPU_ITERATIONS>
 struct SquareDest : SfpuDestUnaryOp<SquareDest<LAYOUT, ITERATIONS>> {
-    static void init_op() { init_square(); }
     static void calculate() { calculate_square<ITERATIONS, LAYOUT>(); }
 };
 
