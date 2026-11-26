@@ -578,7 +578,9 @@ FlatProgramHandles add_flat_routed_expert_program(
                         {"x_primary_data_sem", k ? 7u : 4u},
                         {"x_helper_credit_sem", 5}})));
         }
-        const uint32_t sbb = MT * p.super_block_tiles * x_tile;
+        // (a super-block as the x path ships it: XR row tiles - the primary places helper k's ring at k landing rings
+        // of these, x_injector_writer.cpp)
+        const uint32_t sbb = XR * p.super_block_tiles * x_tile;
         for (uint32_t idx = 0; idx < p.relay_cores.size(); ++idx) {
             const CoreCoord rl = p.relay_cores[idx];
             const uint32_t k = idx % NR;
