@@ -228,7 +228,7 @@ void record_to_command_list(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
     std::span<const CmdListProgramBindings> programs,
-    std::span<const std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors) {
+    std::span<const std::shared_ptr<const void>> op_owned_resources) {
     auto* builder = t_recording;
     TT_FATAL(builder != nullptr, "{}: no CommandListBuilder is recording on this thread", operation_name);
     TT_FATAL(
@@ -236,7 +236,7 @@ void record_to_command_list(
         "{} runs on a different MeshDevice than the recording CommandListBuilder",
         operation_name);
     try {
-        builder->record(ttnn::get_current_command_queue_id_for_thread(), workload, programs, op_owned_tensors);
+        builder->record(ttnn::get_current_command_queue_id_for_thread(), workload, programs, op_owned_resources);
     } catch (const std::exception& e) {
         TT_THROW("{} cannot be recorded into a command list: {}", operation_name, e.what());
     }
@@ -492,21 +492,21 @@ CommandList CommandListBuilder::build(std::optional<QueueId> cq_id) const {
     return CommandList(
         metal_builder_.build(device().mesh_command_queue(queue.get())),
         layout_,
-        detail::CmdListOpOwnedTensors(op_owned_tensors_.begin(), op_owned_tensors_.end()));
+        detail::CmdListOpOwnedResources(op_owned_resources_.begin(), op_owned_resources_.end()));
 }
 
 void CommandListBuilder::clear() {
     TT_FATAL(!recording_, "Cannot clear a recording CommandListBuilder");
     metal_builder_.clear();
     layout_.clear();
-    op_owned_tensors_.clear();
+    op_owned_resources_.clear();
 }
 
 void CommandListBuilder::deallocate() {
     TT_FATAL(!recording_, "Cannot deallocate a recording CommandListBuilder");
     metal_builder_.deallocate();
     layout_.clear();
-    op_owned_tensors_.clear();
+    op_owned_resources_.clear();
 }
 
 tt::tt_metal::distributed::MeshDevice& CommandListBuilder::device() const { return metal_builder_.device(); }
@@ -515,7 +515,7 @@ void CommandListBuilder::record(
     QueueId binary_upload_cq_id,
     tt::tt_metal::distributed::MeshWorkload& workload,
     std::span<const device_operation::detail::CmdListProgramBindings> programs,
-    std::span<const std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors) {
+    std::span<const std::shared_ptr<const void>> op_owned_resources) {
     detail::RecordedParameters parameters;
     std::vector<ActiveBind*> matched;
     for (const auto& program : programs) {
@@ -559,7 +559,7 @@ void CommandListBuilder::record(
     }
     metal_builder_.add(device().mesh_command_queue(binary_upload_cq_id.get()), workload, metal_parameters);
     layout_ = std::move(layout);
-    op_owned_tensors_.insert(op_owned_tensors.begin(), op_owned_tensors.end());
+    op_owned_resources_.insert(op_owned_resources.begin(), op_owned_resources.end());
     for (ActiveBind* active : matched) {
         active->claimed = true;
     }
@@ -609,11 +609,13 @@ void CommandListBuilder::pop_binds(bool warn) {
 bool CommandListBuilder::has_binds() const { return !binds_.empty(); }
 
 CommandList::CommandList(
-    metal::CommandList metal_list, detail::CmdListLayout layout, detail::CmdListOpOwnedTensors op_owned_tensors) :
-    metal_list_(std::move(metal_list)), layout_(std::move(layout)), op_owned_tensors_(std::move(op_owned_tensors)) {}
+    metal::CommandList metal_list, detail::CmdListLayout layout, detail::CmdListOpOwnedResources op_owned_resources) :
+    metal_list_(std::move(metal_list)),
+    layout_(std::move(layout)),
+    op_owned_resources_(std::move(op_owned_resources)) {}
 
 CommandList::~CommandList() {
-    // Destroying the Metal list drains its replays; do it while op_owned_tensors_ still holds what they read.
+    // Destroying the Metal list drains its replays; do it while op_owned_resources_ still holds what they read.
     [[maybe_unused]] const auto drained = std::move(metal_list_);
 }
 
@@ -654,7 +656,7 @@ void CommandList::update_args(const std::unordered_map<std::string, CmdListValue
 
 void CommandList::deallocate() {
     metal_list_.deallocate();
-    op_owned_tensors_.clear();
+    op_owned_resources_.clear();
 }
 
 tt::tt_metal::distributed::MeshDevice& CommandList::device() const { return metal_list_.device(); }

@@ -74,8 +74,9 @@ _TARGETS_MS = {
     },
     "Galaxy 4x4": {
         "kimi_k3_1": (3.21, 3.05, 7.21, 6.98),
-        "glm_5_3": (2.91, 2.69, 6.81, 6.53),
-        "glm_5_3-no_indexer": (2.29, 2.23, 4.72, 4.56),
+        # GLM-5.3: re-centred on CI run 45551006453 (1 run); deltas under 1% left as is.
+        "glm_5_3": (2.85, 2.60, 6.81, 6.45),
+        "glm_5_3-no_indexer": (2.22, 2.23, 4.63, 4.50),
     },
     "Galaxy 4x4 subtorus": {
         "kimi_k3_1": (2.97, 2.80, 6.62, 6.37),

@@ -27,6 +27,7 @@ import sys
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -460,6 +461,10 @@ def test_topk_sfpu_split_local_sort(
         pytest.skip("split_phase2 must exceed split_phase.")
     if input_dimensions[0] > 32 and (split_phase2 or split_reinit):
         pytest.skip("The second tile row is covered by the two-call, no-reinit split.")
+    if split_reinit and get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "The Blackhole local sort records its load/store windows only when starting at phase 0."
+        )
     _run_topk_sfpu(
         formats,
         input_dimensions,

@@ -5,8 +5,8 @@
 // Blackhole silicon L1 ECC halt. The tests come in three kinds:
 // 1. Emulated halt: Blackhole has no L1 error injection, so the host writes the halt record the BRISC handler would
 //    write. These cover the host side: Finish and EventSynchronize report the halt, and the message names the cause.
-// 2. Real ECC errors: a NoC read past the end of L1 raises real DBEs from the unpopulated rows. The handler must
-//    return without halting.
+// 2. Real ECC errors: a NoC read or a load past the end of L1 raises real SBEs and DBEs from the unpopulated rows.
+//    Every DBE must interrupt, and the handler must return without halting.
 // 3. Real interrupt: the watchdog's software interrupt raises IRQ 3, and the real handler halts the core. Reopening
 //    the device must then release the BRISC from the handler.
 
@@ -18,6 +18,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <tt-metalium/mesh/allocator.hpp>
@@ -43,10 +44,9 @@ namespace {
 constexpr const char* hang_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_halt_hang.cpp";
 constexpr const char* overread_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_overread.cpp";
 constexpr const char* mret_btb_alias_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_mret_btb_alias.cpp";
+constexpr const char* sbe_then_dbe_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_sbe_then_dbe.cpp";
 const CoreCoord test_core{0, 0};
 constexpr auto report_deadline = std::chrono::seconds(30);
-// ECC_CTRL after firmware arms the halt.
-constexpr uint32_t armed_ecc_ctrl = static_cast<uint32_t>(EccView::L1_COUNTS) | ECC_CTRL_L1_DBE_IRQ_EN;
 
 }  // namespace
 
@@ -165,8 +165,8 @@ TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnored) {
     ctx.get_cluster().read_reg(&ctrl, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::L1_ECC_CTRL));
     ctx.get_cluster().read_reg(&int_no, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO));
     ctx.get_cluster().read_reg(&irq3, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::PIC_HW_INT_3));
-    // Firmware arms the L1 DBE interrupt and leaves view 2 selected.
-    EXPECT_EQ(ctrl, armed_ecc_ctrl) << "ECC interrupts not armed, ECC_CTRL 0x" << std::hex << ctrl;
+    // Firmware arms the L1 DBE interrupt on every error and leaves view 2 selected.
+    EXPECT_EQ(ctrl, l1_ecc_ctrl_armed) << "ECC interrupts not armed, ECC_CTRL 0x" << std::hex << ctrl;
     EXPECT_EQ(int_no, 0u) << "BRISC interrupt left latched";
     // The DBEs raised IRQ 3, and only the handler's clear drops it.
     EXPECT_EQ(irq3, 0u) << "IRQ 3 still raised: the handler did not run";
@@ -261,6 +261,58 @@ TEST_F(L1EccHaltTest, MretWithAliasedBranchReturns) {
     EXPECT_FALSE(ctx.l1_ecc_halt_detected());
 }
 
+// A DBE in the word of the last logged SBE must interrupt (#63755). False errors from the unpopulated rows change type
+// from load to load, so NCRISC loads the first unpopulated word until the core's counts show only an SBE, and checks
+// that the very next load clears them through BRISC's handler. Without that interrupt the counts stay stuck on the SBE.
+// The scrubber can raise a DBE elsewhere in those rows, which interrupts either way, so the test wants several of these
+// in a row.
+TEST_F(L1EccHaltTest, DbeInWordOfLoggedSbeInterrupts) {
+    auto& ctx = MetalContext::instance();
+    const auto& hal = ctx.hal();
+    auto& cluster = ctx.get_cluster();
+    constexpr uint32_t handler_wait = 2000;
+    constexpr uint32_t wanted = 3;
+    constexpr auto timeout = std::chrono::seconds(30);
+    const uint32_t l1_end = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    const auto status_addr = static_cast<uint32_t>(hal.get_tensix_debug_reg_addr(TensixDebugReg::L1_ECC_STATUS));
+    distributed::DeviceLocalBufferConfig local_config{.page_size = 32, .buffer_type = BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = 32};
+    auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, devices_[0].get());
+    const uint32_t stop_addr = buffer->address(), result_addr = stop_addr + 16;
+    std::vector<uint32_t> zeros(8, 0);
+    cluster.write_core(zeros.data(), zeros.size() * sizeof(uint32_t), test_target_, stop_addr);
+
+    Program program = CreateProgram();
+    KernelHandle kernel = CreateKernel(
+        program,
+        sbe_then_dbe_kernel,
+        test_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    SetRuntimeArgs(program, kernel, test_core, {l1_end, handler_wait, status_addr, wanted, stop_addr, result_addr});
+    distributed::MeshWorkload workload;
+    auto zero = distributed::MeshCoordinate(0, 0);
+    workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    auto& cq = devices_[0]->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    std::vector<uint32_t> result(2, 0);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (result[0] < wanted && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        cluster.read_core(result.data(), result.size() * sizeof(uint32_t), test_target_, result_addr);
+    }
+    const uint32_t stop = 1;
+    cluster.write_core(&stop, sizeof(stop), test_target_, stop_addr);
+    distributed::Finish(cq);
+    cluster.read_core(result.data(), result.size() * sizeof(uint32_t), test_target_, result_addr);
+    log_info(tt::LogTest, "SBE then DBE: longest run {} of {} after {} loads", result[0], wanted, result[1]);
+    EXPECT_EQ(result[0], wanted) << "at most " << result[0] << " of " << wanted
+                                 << " DBEs in a row in the word of a logged SBE interrupted in " << result[1]
+                                 << " loads";
+    EXPECT_NO_THROW(internal::L1EccHaltWatch(devices_[0].get()).check_now());
+    EXPECT_FALSE(ctx.l1_ecc_halt_detected());
+}
+
 TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
     auto& ctx = MetalContext::instance();
     auto workload = single_core_workload(hang_kernel, {1});  // raises IRQ 3
@@ -281,7 +333,7 @@ TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
     ctx.get_cluster().read_core(record_.data(), record_.size(), test_target_, halt_record_addr());
     EXPECT_EQ(record_.view().reason(), L1_ECC_HALT_REASON_UNEXPECTED);
     // The handler selects other views before it halts, so only the interrupt enables are checked.
-    EXPECT_EQ(record_.view().ecc_ctrl() & ~ECC_CTRL_VIEW_MASK, ECC_CTRL_L1_DBE_IRQ_EN);
+    EXPECT_EQ(record_.view().ecc_ctrl() & ~ECC_CTRL_VIEW_MASK, l1_ecc_ctrl_irq_enables);
 
     // Reopening must release the BRISC from its handler without a chip reset.
     destroy_shared_devices();

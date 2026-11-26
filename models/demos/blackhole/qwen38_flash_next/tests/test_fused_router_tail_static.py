@@ -29,15 +29,19 @@ def test_masked_sort_is_the_llk_sort_with_a_pass_guard():
     )
     declaration = next(i for i, l in enumerate(llk) if "inline void _bitonic_topk_phases_steps(" in l)
     start = max(i for i in range(declaration) if llk[i].startswith("template <"))
-    end = next(i for i in range(start, len(llk)) if llk[i].startswith("}") and "topk_replay_init = -1;" in llk[i - 1])
+    replay_reset = next(i for i in range(start, len(llk)) if llk[i].strip() == "topk_replay_init = -1;")
+    end = next(i for i in range(replay_reset, len(llk)) if llk[i].startswith("}"))
     body = llk[start : end + 1]
     signature = declaration - start
-    body[signature] = (
-        body[signature]
+    # Rename and add the pass_mask arg on the joined text: the signature can span several lines.
+    body = (
+        "\n".join(body)
         .replace("_bitonic_topk_phases_steps(", "_bitonic_topk_phases_steps_lanes(")
         .replace("const int i_start_step)", "const int i_start_step, const std::uint32_t pass_mask)")
+        .splitlines()
     )
-    col_open = next(i for i, l in enumerate(body) if l == "        for (int col = 0; col < 2; col++)") + 1
+    # The col loop opens on its own line, so the guard starts right after it.
+    col_open = next(i for i, l in enumerate(body) if l == "        for (int col = 0; col < 2; col++) {")
     close = next(i for i, l in enumerate(body) if l == "            dst_addr_offset += 2;")
     inner = ["    " + l if l.strip() else l for l in body[col_open + 1 : close]]
     guard = ["            if (pass_mask & (1u << (face * 2 + col)))", "            {"]
