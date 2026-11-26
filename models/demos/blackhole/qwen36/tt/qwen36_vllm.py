@@ -676,6 +676,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # A prefill may run while one verify it returned unread awaits its read and propose: prefill_forward first
         # settles what that propose needs from the device (MTPBlockEngine.prefill_over_pending).
         "supports_prefill_over_pending_spec": True,
+        # An argmax_ids verify sent spec_num_logprobs also returns, for each row and column, the raw logprob and rank
+        # of its id and the top-20 ids and logprobs (spec_logprobs, from the verify's own logits on the device).
+        "supports_spec_device_logprobs": True,
         "output_tokens_per_step": 1,
         "supports_sample_on_device": True,
         "spec_ids_are_sampled": True,
@@ -903,6 +906,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         num_valid_drafts = kwargs.pop("num_valid_drafts")
         accepted_counts = kwargs.pop("accepted_counts")
         spec_mode = kwargs.pop("spec_mode")
+        asked = kwargs.pop("spec_num_logprobs", None)
+        logprobs = asked is not None and bool((torch.as_tensor(asked) >= 0).any())
         check_spec_side_tensors(num_valid_drafts, accepted_counts, int(tokens.shape[0]), self._SPEC_K)
         predecessor = kwargs.pop("spec_predecessor", None)
         if predecessor is not None:
@@ -923,25 +928,46 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             sampling=kwargs.get("sampling_params"),
             defer=defer,
             predecessor=predecessor,
+            logprobs=logprobs,
         )
         logits = res.logits if spec_mode == "logits" else None
+        if logprobs and not defer:
+            # The engine returns a verify with logprobs unread; the runner asked for host ids.
+            ids, payload = self._read_verify(res.argmax_ids)
+            return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=ids, hidden=None, logprobs=payload)
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
+
+    @staticmethod
+    def _read_verify(pending):
+        """A PendingVerify's host ids [B, 1+K] int32 and its logprobs payload as vllm_tt_plugin.spec_decode.SpecLogprobs
+        (None for a verify without logprobs)."""
+        ids, payload = pending.result(), pending.logprobs_result()
+        if payload is None:
+            return ids, None
+        from vllm_tt_plugin.spec_decode import SpecLogprobs
+
+        return ids, SpecLogprobs(*payload)
 
     def read_decode_output(self, tt_out, async_read=False, **kwargs):
         """A deferred verify's ids (PendingVerify): with ``async_read``, the handle and its read event, which
-        process_decode_output_host turns into host ids; else the host ids. Host outputs (an ordinary decode, a logits
-        verify) pass through with no event."""
+        process_decode_output_host turns into host ids; else the host ids (with its logprobs payload, as
+        process_decode_output_host returns them). Host outputs (an ordinary decode, a logits verify) pass through with
+        no event."""
         from models.demos.blackhole.qwen36.tt.spec_engine import PendingVerify
 
         if isinstance(tt_out, PendingVerify):
-            return (tt_out, [tt_out.event]) if async_read else tt_out.result()
+            return (tt_out, [tt_out.event]) if async_read else self.process_decode_output_host(tt_out)
         return (tt_out, []) if async_read else tt_out
 
     def process_decode_output_host(self, tt_out, is_tokens=False, **kwargs):
-        """The host ids [B, 1+K] int32 of a deferred verify (columns past a row's valid drafts -1)."""
+        """The host ids [B, 1+K] int32 of a deferred verify (columns past a row's valid drafts -1); for a verify sent
+        spec_num_logprobs, (ids, SpecLogprobs)."""
         from models.demos.blackhole.qwen36.tt.spec_engine import PendingVerify
 
-        return tt_out.result() if isinstance(tt_out, PendingVerify) else tt_out
+        if not isinstance(tt_out, PendingVerify):
+            return tt_out
+        ids, payload = self._read_verify(tt_out)
+        return ids if payload is None else (ids, payload)
 
     def _decode_narrow(self, tokens, start_pos, page_table, kwargs, remap, mamba_state):
         """Ordinary [B, 1] decode step (no drafts) run as a verify whose drafts are all padding: column 0's state goes
