@@ -493,6 +493,7 @@ def launch_instances_server(
     prefill: bool = False,
     image_bias: bool = False,
     blocks: bool | None = None,
+    block_rows: int = 4,
 ) -> "PersistentMoE":
     """Launch one persistent MoE for ``num_instances`` independent model instances: layers ``0 .. num_layers - 1``
     (plus, with ``dspark``, the drafter's stages as layers :data:`DSPARK_LAYER_BASE` + s) at TP12 on the 3x4 MoE
@@ -515,7 +516,8 @@ def launch_instances_server(
     ``image_bias`` adds the target layers' image twins (:class:`PersistentMoE`), for instances that take images.
 
     ``blocks`` (default: ``dspark``) launches for 4-row blocks with one-row requests on the same launch, as ``dspark``
-    does, without the drafter's layers: for B=4 batch steps (``DeepSeekV41Model(batch_block=True)``)."""
+    does, without the drafter's layers: for B=4 batch steps (``DeepSeekV41Model(batch_block=True)``). ``block_rows``
+    (4, or 2 for B=2 batch steps without ``dspark``) is the blocks' row count."""
     if tuple(full_device.shape) != GALAXY_MESH:
         raise ValueError(f"the instances' layout needs the {GALAXY_MESH} mesh, got {tuple(full_device.shape)}")
     if not 1 <= num_instances <= len(INSTANCE_ROWS):
@@ -528,6 +530,10 @@ def launch_instances_server(
         raise ValueError(
             "independent instances mix one-row and block requests on one launch: DEEPSEEK_V41_MOE_MIXED_ROWS=1"
         )
+    if blocks and block_rows not in (2, 4):
+        raise ValueError(f"a block request takes 2 or 4 rows, got {block_rows}")
+    if dspark and block_rows != 4:
+        raise ValueError(f"DSpark's verify blocks and drafts are 4 rows, got block_rows={block_rows}")
     rows = list(INSTANCE_ROWS[:num_instances])
     cols = MOE_MESH_SHAPE[1]
     moe_mesh = full_device.create_submesh(ttnn.MeshShape(*MOE_MESH_SHAPE), ttnn.MeshCoordinate(*MOE_MESH_OFFSET))
@@ -548,7 +554,7 @@ def launch_instances_server(
             moes,
             single_senders=single_senders(rows),
             rows=1,
-            block_rows=4 if blocks else 0,
+            block_rows=block_rows if blocks else 0,
             image_bias=image_bias,
         )
     finally:

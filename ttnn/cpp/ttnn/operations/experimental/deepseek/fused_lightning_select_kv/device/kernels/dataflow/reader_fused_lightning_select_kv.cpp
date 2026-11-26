@@ -40,6 +40,8 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t page_row_indexed = get_arg(args::page_row_indexed);
     // cur_pos (or num_keys) arrives at byte 0 and part_index (or query_row) at byte 128; the counts go to the
     // writer at kMaxKeysWord (the most keys of any query row), kPartWord and kRowKeysWord + j (query row j).
+    // QUERY_ROW_PARTS (a row split with a key split too): query_row at byte 128 and part_index at byte 192
+    // (kMaxKeysWord, read out before that word is written).
     constexpr uint32_t kPosReadBytes = (num_rows_in * sizeof(uint32_t) + 63) / 64 * 64;
     static_assert(kPosReadBytes <= 128, "per-row positions must fit below part_index");
     constexpr uint32_t kPartIndexWord = 32;
@@ -59,7 +61,7 @@ void kernel_main() {
     const auto page_table = TensorAccessor(tensor::page_table);
     [[maybe_unused]] const auto cur_pos = TensorAccessor(tensor::cur_pos);
     [[maybe_unused]] const auto output = TensorAccessor(tensor::output);
-#if defined(PARTIAL_OUTPUT) && !defined(QUERY_ROW)
+#if defined(PARTIAL_OUTPUT) && (!defined(QUERY_ROW) || defined(QUERY_ROW_PARTS))
     const auto part_index = TensorAccessor(tensor::part_index);
 #endif
 #ifdef QUERY_ROW
@@ -97,6 +99,9 @@ void kernel_main() {
 #ifdef QUERY_ROW
     noc.async_read(
         query_row_index, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = kPartIndexWord * sizeof(uint32_t)});
+#ifdef QUERY_ROW_PARTS
+    noc.async_read(part_index, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = kMaxKeysWord * sizeof(uint32_t)});
+#endif
 #elif defined(PARTIAL_OUTPUT)
     noc.async_read(part_index, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = kPartIndexWord * sizeof(uint32_t)});
 #endif
@@ -126,7 +131,9 @@ void kernel_main() {
         max_keys = std::max(max_keys, row_keys);
     }
     const uint32_t num_keys = max_keys;
-#if defined(PARTIAL_OUTPUT) && !defined(QUERY_ROW)
+#if defined(QUERY_ROW_PARTS)
+    const uint32_t part = key_count[kMaxKeysWord];
+#elif defined(PARTIAL_OUTPUT) && !defined(QUERY_ROW)
     const uint32_t part = key_count[kPartIndexWord];
 #else
     const uint32_t part = 0;

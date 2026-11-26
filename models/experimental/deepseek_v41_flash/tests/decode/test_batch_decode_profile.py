@@ -56,11 +56,13 @@ except ImportError:  # pragma: no cover - tracy is optional
         pass
 
 
-_ROWS = 4
+# DEEPSEEK_V41_BATCH_ROWS=2: B=2 batch steps (2-row blocks) instead of B=4.
+_ROWS = int(os.environ.get("DEEPSEEK_V41_BATCH_ROWS", "4"))
+assert _ROWS in (2, 4), f"DEEPSEEK_V41_BATCH_ROWS takes 2 or 4, got {_ROWS}"
 _POSITIONS = tuple(int(p) for p in os.environ.get("DEEPSEEK_V41_BATCH_PROFILE_POSITIONS", "256,2048").split(","))
 _STEPS = int(os.environ.get("DEEPSEEK_V41_BATCH_PROFILE_STEPS", "8"))
 _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
-_BATCH_L1_SMALL_SIZE = max(_L1_SMALL_SIZE, 12288)
+_BATCH_L1_SMALL_SIZE = max(_L1_SMALL_SIZE, 16384)  # as demo/server.py under --persistent-moe (B=2 needs past 12 KB)
 
 
 def _flush(device) -> None:

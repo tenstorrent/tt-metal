@@ -58,12 +58,16 @@ void BuildCandidatePoolDeviceOperation::validate_on_program_cache_miss(
         blocks.logical_shape().rank() == 2 && blocks.logical_shape()[0] >= 1 && blocks.logical_shape()[0] <= 15,
         "build_candidate_pool: candidate_blocks must be [Sq, candidate_topk_blocks] with 1 <= Sq <= 15, got {}",
         blocks.logical_shape());
-    const uint32_t num_rows = blocks.logical_shape()[0];
+    // With query_row_tensor, candidate_blocks / pool_count may hold Sq rows of which entry query_row_tensor[0] is
+    // read (a row split with a key split: merge_select_kv wrote every row's blocks); the pool is that one row's.
+    const uint32_t blocks_rows = blocks.logical_shape()[0];
+    const bool pick_row = tensor_args.query_row_tensor.has_value() && blocks_rows > 1;
+    const uint32_t num_rows = pick_row ? 1 : blocks_rows;
     require_int32_rm_interleaved(tensor_args.pool_count, "pool_count");
     TT_FATAL(
-        tensor_args.pool_count.logical_shape().volume() == num_rows,
+        tensor_args.pool_count.logical_shape().volume() == blocks_rows,
         "build_candidate_pool: pool_count must hold one count per row ({}), got {}",
-        num_rows,
+        blocks_rows,
         tensor_args.pool_count.logical_shape());
     TT_FATAL(
         num_rows > 1 || (!tensor_args.pool_masks_output.has_value() && !tensor_args.pool_counts_output.has_value()),
@@ -78,8 +82,9 @@ void BuildCandidatePoolDeviceOperation::validate_on_program_cache_miss(
         page_table.logical_shape());
     if (tensor_args.query_row_tensor.has_value()) {
         TT_FATAL(
-            tensor_args.page_table_row_tensor.has_value() && tensor_args.candidate_blocks.logical_shape()[0] == 1,
-            "build_candidate_pool: query_row_tensor picks an entry of page_table_row_tensor for a one-row pool");
+            tensor_args.page_table_row_tensor.has_value() && blocks_rows <= 16,
+            "build_candidate_pool: query_row_tensor picks an entry of page_table_row_tensor (and of at most 16 rows "
+            "of candidate_blocks / pool_count) for a one-row pool");
         require_int32_rm_interleaved(tensor_args.query_row_tensor.value(), "query_row_tensor");
         TT_FATAL(
             tensor_args.query_row_tensor->logical_shape().volume() == 1 &&
@@ -150,7 +155,9 @@ BuildCandidatePoolDeviceOperation::spec_return_value_t BuildCandidatePoolDeviceO
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& key_shape = tensor_args.key_cache.logical_shape();
     const uint32_t page_block_size = key_shape[-2];
-    const uint32_t num_rows = tensor_args.candidate_blocks.logical_shape()[0];
+    // A query row picked out of several rows' blocks builds a one-row pool.
+    const uint32_t num_rows =
+        tensor_args.query_row_tensor.has_value() ? 1 : tensor_args.candidate_blocks.logical_shape()[0];
     const uint32_t pool_keys = num_rows * tensor_args.candidate_blocks.logical_shape()[-1] * args.candidate_block_size;
     spec_return_value_t specs = {
         TensorSpec(

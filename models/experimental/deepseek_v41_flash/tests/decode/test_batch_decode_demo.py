@@ -45,12 +45,14 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_multi_session_deco
 from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, load_config
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
-_ROWS = 4
+# DEEPSEEK_V41_BATCH_ROWS=2: B=2 batch steps (2-row blocks) instead of B=4.
+_ROWS = int(os.environ.get("DEEPSEEK_V41_BATCH_ROWS", "4"))
+assert _ROWS in (2, 4), f"DEEPSEEK_V41_BATCH_ROWS takes 2 or 4, got {_ROWS}"
 _MAX_NEW_TOKENS = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "128"))
 _TEMPERATURE = float(os.environ.get("DEEPSEEK_V4_TEMPERATURE", "0"))
 _PROMPTS_FILE = os.environ.get("DEEPSEEK_V41_BATCH_PROMPTS")
 # As test_batch_decode: the batch step's programs need L1_SMALL past test_full_model_decode_demo's.
-_BATCH_L1_SMALL_SIZE = max(_L1_SMALL_SIZE, 12288)
+_BATCH_L1_SMALL_SIZE = max(_L1_SMALL_SIZE, 16384)  # as demo/server.py under --persistent-moe (B=2 needs past 12 KB)
 
 
 def _prompts() -> list[str]:

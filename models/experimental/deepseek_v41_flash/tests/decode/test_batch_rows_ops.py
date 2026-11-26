@@ -21,7 +21,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 
-R = 4
+# Rows of a batch block: each test runs B=4 and B=2 (``R``, the first R entries of every case).
+BATCH_ROWS = (4, 2)
 HEADS = 16
 HEAD_DIM = 512
 WINDOW = 128
@@ -77,8 +78,9 @@ _FLASH_CASES = {
 @pytest.mark.parametrize("dense", (False, True), ids=("selected_rows", "dense_kv"))
 @pytest.mark.parametrize("case", list(_FLASH_CASES))
 @pytest.mark.parametrize("use_sink", (True, False))
-def test_flash_mqa_decode_independent_rows(device, reset_seeds, dense, case, use_sink):
-    positions, slots, counts = _FLASH_CASES[case]
+@pytest.mark.parametrize("R", BATCH_ROWS, ids=lambda r: f"B{r}")
+def test_flash_mqa_decode_independent_rows(device, reset_seeds, dense, case, use_sink, R):
+    positions, slots, counts = (v[:R] for v in _FLASH_CASES[case])
     torch.manual_seed(11)
     q = torch.randn(R, HEADS, HEAD_DIM).bfloat16().float()
     ring = torch.randn(SLOTS * WINDOW, HEAD_DIM).bfloat16().float()
@@ -209,8 +211,9 @@ _CPD_CASES = {
 @pytest.mark.parametrize("ratio", (2, 1))
 @pytest.mark.parametrize("case", list(_CPD_CASES))
 @pytest.mark.parametrize("interleave", (0, 128), ids=("separate", "kv_gate_interleave"))
-def test_compress_pool_decode_independent_rows(device, reset_seeds, ratio, case, interleave):
-    positions, slots = _CPD_CASES[case]
+@pytest.mark.parametrize("R", BATCH_ROWS, ids=lambda r: f"B{r}")
+def test_compress_pool_decode_independent_rows(device, reset_seeds, ratio, case, interleave, R):
+    positions, slots = (v[:R] for v in _CPD_CASES[case])
     if ratio == 1 and case == "none_close":
         pytest.skip("every row closes a group at ratio 1")
     if ratio == 1 and interleave:

@@ -34,6 +34,7 @@ pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="fused_li
 
 HEADS = 32  # V4.1's index heads
 ROWS = 4
+TP = 4  # ranks: B=4 is one rank a row, B=2 a pair of ranks a row
 BLOCK = 64
 
 
@@ -41,8 +42,9 @@ def _int(values, device) -> ttnn.Tensor:
     return _rm(torch.tensor(values, dtype=torch.int32), device, ttnn.int32)
 
 
-def _inputs(device, num_keys: list[int], seed: int):
-    """Four sessions of one shared block pool, each with its own key count; the rows' queries and weights."""
+def _inputs(device, num_keys: list[int], seed: int, rows: int = ROWS):
+    """``rows`` sessions of one shared block pool, each with its own key count; the rows' queries and weights."""
+    ROWS = rows  # noqa: N806 (the batch rows of this call)
     torch.manual_seed(seed)
     blocks_per_session = max(-(-n // BLOCK) for n in num_keys)
     tables = _session_tables(ROWS + 1, blocks_per_session, seed=seed)
@@ -65,6 +67,7 @@ def _inputs(device, num_keys: list[int], seed: int):
         page_rows4=_int(sessions, device),
         page_row=[_int([s], device) for s in sessions],
         query_row=[_int([j], device) for j in range(ROWS)],
+        part=[_int([p], device) for p in range(TP)],
     )
 
 
@@ -259,3 +262,168 @@ def _merge_tiled(pages: list[ttnn.Tensor], kv: ttnn.Tensor, k: int) -> torch.Ten
 
 def _merge_one(page: ttnn.Tensor, kv: ttnn.Tensor, k: int) -> torch.Tensor:
     return ttnn.to_torch(ttnn.experimental.deepseek.merge_select_kv(page, kv, k, num_queries=1)).reshape(k, -1)
+
+
+# ---- B=2: a pair of ranks a row (rank r scores part r // 2 of row r % 2's keys) ----
+
+PAIR_ROWS = 2
+PAIR_PARTS = TP // PAIR_ROWS
+
+
+def _pair_merge(pages, kv, k, **candidates) -> torch.Tensor:
+    """The four ranks' pages all-gathered in rank order (part-major: page p * 2 + j) and merged, two parts a row."""
+    gathered = ttnn.concat(pages, dim=2)
+    merged = ttnn.experimental.deepseek.merge_select_kv(gathered, kv, k, num_queries=PAIR_ROWS, **candidates)
+    return ttnn.to_torch(merged).reshape(PAIR_ROWS, k, -1)
+
+
+@pytest.mark.parametrize("num_keys", [[1, 700], [8192, 6000], [32768 - 3, 20000]], ids=["short", "8k", "32k"])
+def test_pair_split_matches_one_row_selects(device, num_keys) -> None:
+    k = V4_INDEX_TOPK
+    t = _inputs(device, num_keys, seed=31, rows=PAIR_ROWS)
+    expected = []
+    for j in range(PAIR_ROWS):
+        rows, _ = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            t["query"][j],
+            t["keys"],
+            t["weights"][j],
+            t["kv"],
+            t["tables"],
+            t["pos"][j],
+            k,
+            page_table_row_tensor=t["page_row"][j],
+        )
+        expected.append(ttnn.to_torch(rows).reshape(k, -1))
+    pages = []
+    for r in range(TP):
+        page, _ = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            t["query4"],
+            t["keys"],
+            t["weights4"],
+            t["kv"],
+            t["tables"],
+            t["pos4"],
+            k,
+            page_table_row_tensor=t["page_rows4"],
+            query_row_tensor=t["query_row"][r % PAIR_ROWS],
+            num_parts=PAIR_PARTS,
+            part_index_tensor=t["part"][r // PAIR_ROWS],
+        )
+        assert list(page.shape) == [1, 1, 1, 2 * k + 16], list(page.shape)
+        pages.append(page)
+    got = _pair_merge(pages, t["kv"], k)
+    for j in range(PAIR_ROWS):
+        n = min(k, num_keys[j])
+        assert torch.equal(got[j, :n], expected[j][:n]), f"row {j}: the pair split gathered different rows"
+
+
+def test_pair_split_candidate_pool_chain(device) -> None:
+    """B=2 two-level: the source's pair split and merge write both rows' blocks and counts, each rank's consumer
+    builds its row's pool from them (``query_row_tensor`` picking the row) and key-splits it over its pair."""
+    k, cbs, topk_blocks = V4_INDEX_TOPK, 8, 256
+    num_keys = [8189, 3000]
+    t = _inputs(device, num_keys, seed=33, rows=PAIR_ROWS)
+    pool_blocks = topk_blocks * cbs // BLOCK
+    identity = _int([list(range(pool_blocks))], device)
+    source = dict(candidate_topk_blocks=topk_blocks, candidate_block_size=cbs)
+    torch.manual_seed(34)
+    dst_query = torch.randn(1, PAIR_ROWS * HEADS, 1, V4_INDEX_HEAD_DIM)
+    dst_query2 = _replicated_rm_hs(dst_query, device)
+    dst_query1 = [_replicated_rm_hs(dst_query[:, j * HEADS : (j + 1) * HEADS], device) for j in range(PAIR_ROWS)]
+
+    ref_blocks, ref_counts, ref_rows, ref_cons = [], [], [], []
+    for j in range(PAIR_ROWS):
+        rows_1, _, blocks_1, count_1 = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            t["query"][j],
+            t["keys"],
+            t["weights"][j],
+            t["kv"],
+            t["tables"],
+            t["pos"][j],
+            k,
+            page_table_row_tensor=t["page_row"][j],
+            **source,
+        )
+        keys_1, prows_1 = ttnn.experimental.deepseek.build_candidate_pool(
+            blocks_1, count_1, t["keys"], t["tables"], cbs, page_table_row_tensor=t["page_row"][j]
+        )
+        cons_1, _ = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            dst_query1[j],
+            keys_1,
+            t["weights"][j],
+            t["kv"],
+            identity,
+            t["pos"][j],
+            k,
+            num_keys_tensor=count_1,
+            row_table=prows_1,
+        )
+        ref_rows.append(ttnn.to_torch(rows_1).reshape(k, -1))
+        ref_blocks.append(ttnn.to_torch(blocks_1).reshape(-1))
+        ref_counts.append(int(ttnn.to_torch(count_1).reshape(-1)[0]))
+        ref_cons.append((ttnn.to_torch(cons_1).reshape(k, -1), ttnn.to_torch(prows_1).reshape(-1)))
+
+    # Source: the four ranks' pages, merged with the rows' candidate blocks and counts.
+    pages = []
+    for r in range(TP):
+        page, _ = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            t["query4"],
+            t["keys"],
+            t["weights4"],
+            t["kv"],
+            t["tables"],
+            t["pos4"],
+            k,
+            page_table_row_tensor=t["page_rows4"],
+            query_row_tensor=t["query_row"][r % PAIR_ROWS],
+            num_parts=PAIR_PARTS,
+            part_index_tensor=t["part"][r // PAIR_ROWS],
+            **source,
+        )
+        pages.append(page)
+    blocks = _int([[0] * topk_blocks] * PAIR_ROWS, device)
+    counts = _int([0] * PAIR_ROWS, device)
+    got = _pair_merge(pages, t["kv"], k, candidate_blocks_output=blocks, pool_count_output=counts, **source)
+    got_blocks, got_counts = ttnn.to_torch(blocks), ttnn.to_torch(counts).reshape(-1)
+    for j in range(PAIR_ROWS):
+        n = min(k, num_keys[j])
+        assert torch.equal(got[j, :n], ref_rows[j][:n]), f"row {j}: source rows differ"
+        assert int(got_counts[j]) == ref_counts[j], f"row {j}: pool count differs"
+        assert torch.equal(got_blocks[j], ref_blocks[j]), f"row {j}: candidate blocks differ"
+
+    # Consumers: rank r builds row r % 2's pool and scores part r // 2 of it.
+    cpages = []
+    for r in range(TP):
+        j = r % PAIR_ROWS
+        pool_keys, pool_rows = ttnn.experimental.deepseek.build_candidate_pool(
+            blocks,
+            counts,
+            t["keys"],
+            t["tables"],
+            cbs,
+            page_table_row_tensor=t["page_rows4"],
+            query_row_tensor=t["query_row"][j],
+        )
+        n_pool = ref_counts[j]
+        assert torch.equal(
+            ttnn.to_torch(pool_rows).reshape(-1)[:n_pool], ref_cons[j][1][:n_pool]
+        ), f"rank {r}: pool rows differ"
+        cpage, _ = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            dst_query2,
+            pool_keys,
+            t["weights4"],
+            t["kv"],
+            identity,
+            t["pos4"],
+            k,
+            num_keys_tensor=counts,
+            row_table=pool_rows,
+            query_row_tensor=t["query_row"][j],
+            num_parts=PAIR_PARTS,
+            part_index_tensor=t["part"][r // PAIR_ROWS],
+        )
+        cpages.append(cpage)
+    got = _pair_merge(cpages, t["kv"], k)
+    for j in range(PAIR_ROWS):
+        n = min(k, ref_counts[j])
+        assert torch.equal(got[j, :n], ref_cons[j][0][:n]), f"row {j}: consumer rows differ"

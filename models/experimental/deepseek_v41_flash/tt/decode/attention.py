@@ -583,11 +583,12 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         own session, which selects from that session's index keys. Row ``j``'s top-k goes into ``scache.sel_kv_rows``
         at ``j * output_row_stride`` (default ``index_topk``).
 
-        With ``R`` equal to the TP ranks, :data:`ROW_SPLIT_SELECT` and ``compress_pos_rows`` / ``page_rows_tensor``
-        (the rows' positions and page-table rows as INT32 ``[R]``), rank ``r`` selects row ``r`` only
-        (:meth:`_select_rows_split`) instead of every rank selecting every row; ``split_keys`` is then moot. The
-        row split writes ``scache.sel_tile_rows`` (TILE) directly and returns True; otherwise the rows land in
-        ``scache.sel_kv_rows`` (ROW_MAJOR) for the caller to tilize, and it returns False.
+        With ``R`` dividing the TP ranks, :data:`ROW_SPLIT_SELECT` and ``compress_pos_rows`` / ``page_rows_tensor``
+        (the rows' positions and page-table rows as INT32 ``[R]``), each row is selected by its own ranks only
+        (:meth:`_select_rows_split`: rank ``r`` row ``r`` at ``R`` = TP, a pair of ranks a row at ``R`` = TP / 2)
+        instead of every rank selecting every row; ``split_keys`` is then moot. With one rank a row it writes
+        ``scache.sel_tile_rows`` (TILE) directly and returns True; otherwise the rows land in ``scache.sel_kv_rows``
+        (ROW_MAJOR) for the caller to tilize, and it returns False.
 
         ``compress_pos`` and ``page_rows`` are ``R`` INT32 ``[1]`` tensors: row ``j``'s select position (``4 * keys
         - 1``) and its session's row of ``idx_page_table``. The projections run once for all rows; each row then
@@ -597,9 +598,9 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         """
         rows = _packed_users(tokens)
         assert len(compress_pos) == rows and len(page_rows) == rows, (rows, len(compress_pos), len(page_rows))
-        row_split = (
-            ROW_SPLIT_SELECT and rows == self.tp_size and compress_pos_rows is not None and page_rows_tensor is not None
-        )
+        # The ranks per row: 1 at B=4 (rank r selects row r), 2 at B=2 (each row's keys over a pair of ranks).
+        parts = self.tp_size // rows if rows > 1 and self.tp_size % rows == 0 else 0
+        row_split = ROW_SPLIT_SELECT and parts >= 1 and compress_pos_rows is not None and page_rows_tensor is not None
         split = (self.split_keys if split_keys is None else split_keys) and not row_split
         assert not split or self.tp_size > 1, "a key split needs TP ranks to split over"
         assert not candidates or self.is_candidate_source or self.uses_candidates
@@ -639,7 +640,8 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             self._select_rows_split(
                 query, weights, scache, compress_pos_rows, page_rows_tensor, candidates, build_pool, stride
             )
-            return True
+            # One rank per row merges straight into the tiled rows; a pair's merge (two parts) writes sel_kv_rows.
+            return parts == 1
         q_dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
         if q_dram.buffer_address() != q.buffer_address():
             ttnn.deallocate(q)
@@ -671,6 +673,29 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         ttnn.deallocate(w_dram)
         return False
 
+    def _row_split_index(self, rows: int) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """Rank ``r``'s query row and key part in a row split of ``rows`` rows: ``r % rows`` and ``r // rows``
+        (INT32 ``[1]`` per rank; no part with one rank a row). Rows vary fastest, so the ranks' pages all-gather
+        part-major, as merge_select_kv reads them (page ``p * rows + j``)."""
+        if rows == self.tp_size:
+            return self.part_index, None
+        cached = getattr(self, "_row_split_tensors", {}).get(rows)
+        if cached is None:
+            ranks = torch.arange(self.tp_size, dtype=torch.int32)
+            cached = tuple(
+                ttnn.from_torch(
+                    t,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+                )
+                for t in (ranks % rows, ranks // rows)
+            )
+            self._row_split_tensors = {**getattr(self, "_row_split_tensors", {}), rows: cached}
+        return cached
+
     def _select_rows_split(
         self,
         query: ttnn.Tensor,
@@ -682,45 +707,63 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         build_pool: bool,
         stride: int,
     ) -> None:
-        """:meth:`select_kv_batch`'s row split: rank ``r`` selects row ``r`` (``query`` / ``weights``: every row's
-        replicas, consumed; ``cur_pos`` / ``page_rows``: INT32 ``[R]``) over its session's keys and returns the
-        row's candidates page; ``all_gather`` gives every rank every row's page and ``merge_select_kv`` (one part per
-        row) gathers row ``j``'s rows, tilized, into ``scache.sel_tile_rows`` at ``j * stride``.
+        """:meth:`select_kv_batch`'s row split: each row is selected by its own ranks (``query`` / ``weights``: every
+        row's replicas, consumed; ``cur_pos`` / ``page_rows``: INT32 ``[R]``) over its session's keys, each rank
+        returning a candidates page; ``all_gather`` gives every rank every page and ``merge_select_kv`` gathers row
+        ``j``'s rows at ``j * stride``.
 
-        Two-level: the candidate source writes rank ``r``'s row's blocks and pool count into
-        ``scache.batch_candidates[0]`` on rank ``r``, and the consumers build and select from that row's pool
-        there, so no rank needs another row's blocks."""
+        One rank a row (``R`` = TP): rank ``r`` selects row ``r`` whole, and the merge (one part a row) writes the
+        rows tilized into ``scache.sel_tile_rows``. Two-level: the candidate source writes rank ``r``'s row's blocks
+        and pool count into ``scache.batch_candidates[0]`` on rank ``r``, and the consumers build and select from
+        that row's pool there, so no rank needs another row's blocks.
+
+        A pair of ranks a row (``R`` = TP / 2, B=2): rank ``r`` scores part ``r // R`` of row ``r % R``'s keys, and
+        the merge (two parts a row) writes ``scache.sel_kv_rows`` (ROW_MAJOR). Two-level: the source's merge writes
+        every row's candidate blocks and pool count (``cand_blocks_rows`` / ``pool_count_rows`` of
+        ``batch_candidates[0]``) on every rank; a consumer builds its row's pool from its row's entries
+        (``build_candidate_pool``'s ``query_row_tensor``) and key-splits it over the pair the same way."""
         rows = page_rows.shape[-1]
+        parts = self.tp_size // rows
+        query_row, part = self._row_split_index(rows)
         cand = scache.batch_candidates[0] if candidates else None
-        extra = {"page_table_row_tensor": page_rows, "query_row_tensor": self.part_index}
+        split = {} if parts == 1 else {"num_parts": parts, "part_index_tensor": part}
+        extra = {"page_table_row_tensor": page_rows, "query_row_tensor": query_row, **split}
+        merge_candidates = {}
         key_cache, page_table = scache.idx_key_cache, scache.idx_page_table
         if cand is not None and self.is_candidate_source:
-            extra.update(
-                candidate_topk_blocks=self.candidate_topk_blocks,
-                candidate_block_size=self.candidate_block_size,
-                candidate_blocks_output=cand["cand_blocks"],
-                pool_count_output=cand["pool_count"],
+            sizes = dict(
+                candidate_topk_blocks=self.candidate_topk_blocks, candidate_block_size=self.candidate_block_size
             )
+            extra.update(sizes)
+            if parts == 1:
+                extra.update(candidate_blocks_output=cand["cand_blocks"], pool_count_output=cand["pool_count"])
+            else:
+                merge_candidates = dict(
+                    sizes,
+                    candidate_blocks_output=cand["cand_blocks_rows"],
+                    pool_count_output=cand["pool_count_rows"],
+                )
         elif cand is not None:
+            blocks, count = (
+                (cand["cand_blocks"], cand["pool_count"])
+                if parts == 1
+                else (cand["cand_blocks_rows"], cand["pool_count_rows"])
+            )
             if build_pool:
                 ttnn.experimental.deepseek.build_candidate_pool(
-                    cand["cand_blocks"],
-                    cand["pool_count"],
+                    blocks,
+                    count,
                     scache.idx_key_cache,
                     scache.idx_page_table,
                     self.candidate_block_size,
                     pool_keys_output=cand["pool_keys"],
                     pool_rows_output=cand["pool_rows"],
                     page_table_row_tensor=page_rows,
-                    query_row_tensor=self.part_index,
+                    query_row_tensor=query_row,
                 )
             # The pool's identity page table maps its blocks; its rows name comp_kv rows directly.
             key_cache, page_table = cand["pool_keys"], cand["pool_page_table"]
-            extra = {
-                "num_keys_tensor": cand["pool_count"],
-                "row_table": cand["pool_rows"],
-                "query_row_tensor": self.part_index,
-            }
+            extra = {"num_keys_tensor": count, "row_table": cand["pool_rows"], "query_row_tensor": query_row, **split}
         page, scores, *_ = ttnn.experimental.deepseek.fused_lightning_select_kv(
             query,
             key_cache,
@@ -740,10 +783,11 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             gathered,
             scache.comp_kv,
             self.index_topk,
-            output_tensor=scache.sel_tile_rows,
+            output_tensor=scache.sel_tile_rows if parts == 1 else scache.sel_kv_rows,
             output_row_offset=0,
             output_row_stride=stride,
             num_queries=rows,
+            **merge_candidates,
         )
         ttnn.deallocate(gathered)
 

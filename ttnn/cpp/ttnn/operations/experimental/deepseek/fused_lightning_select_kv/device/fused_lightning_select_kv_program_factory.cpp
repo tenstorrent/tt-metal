@@ -82,7 +82,9 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     // mode it writes the row's candidate blocks locally (no merge of blocks across devices).
     const bool is_partial = args.num_parts > 1 || row_split;
     const bool local_candidates = is_candidate_source && args.num_parts == 1;
-    const uint32_t page_blocks = row_split ? 0 : args.candidate_topk_blocks;
+    // A row split with a key split too (num_parts > 1: row query_row's keys over num_parts devices) returns its
+    // part's candidates page with the candidate blocks, as a key split does.
+    const uint32_t page_blocks = row_split && args.num_parts == 1 ? 0 : args.candidate_topk_blocks;
     const bool has_row_table = tensor_args.row_table.has_value();
     const bool has_page_table_row = tensor_args.page_table_row_tensor.has_value();
     const bool has_kv_page_table = tensor_args.kv_page_table.has_value();
@@ -513,6 +515,9 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     if (row_split) {
         reader_compiler_options.defines.emplace("QUERY_ROW", "1");
         compute_compiler_options.defines.emplace("QUERY_ROW", "1");
+        if (args.num_parts > 1) {
+            reader_compiler_options.defines.emplace("QUERY_ROW_PARTS", "1");
+        }
     }
     // A row split's per-row inputs hold Sq entries (index by the row) or one (this device's own).
     const uint32_t counts_volume = static_cast<uint32_t>(

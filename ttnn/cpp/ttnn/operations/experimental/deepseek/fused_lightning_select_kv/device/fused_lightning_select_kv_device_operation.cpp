@@ -87,10 +87,10 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
     if (row_split) {
         require_int32_rm_interleaved(tensor_args.query_row_tensor.value(), ttnn::Shape({1}), "query_row_tensor");
         TT_FATAL(
-            args.num_parts == 1 && !tensor_args.output_tensor.has_value() && !tensor_args.new_kv_row.has_value() &&
+            !tensor_args.output_tensor.has_value() && !tensor_args.new_kv_row.has_value() &&
                 !tensor_args.row_mask_table.has_value() && !tensor_args.valid_length_tensor.has_value(),
-            "fused_lightning_select_kv: a row split (query_row_tensor) takes no num_parts > 1, output_tensor, "
-            "new_kv_row, row_mask_table or valid_length_tensor");
+            "fused_lightning_select_kv: a row split (query_row_tensor) takes no output_tensor, new_kv_row, "
+            "row_mask_table or valid_length_tensor");
     }
     // Per-row inputs: Sq entries, or with a row split also one (this device's own).
     const auto per_row_ok = [&](uint32_t volume) { return volume == num_rows_in || (row_split && volume == 1); };
@@ -492,11 +492,12 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
     const auto& kv_shape = kv.logical_shape();
     const auto& pt_shape = tensor_args.page_table_tensor.logical_shape();
     // One user (B == 1): its Sq query rows take the batch axis of the kv rows. A row split selects one row, and
-    // returns its candidates page without candidate blocks (it writes those locally).
+    // returns its candidates page; alone (num_parts == 1) without candidate blocks (it writes those locally), with
+    // a key split too (each row's keys over num_parts devices) with them, for merge_select_kv.
     const bool row_split = tensor_args.query_row_tensor.has_value();
     const uint32_t num_queries = row_split ? 1 : tensor_args.head_weights.logical_shape()[-2];
     const uint32_t max_keys = pt_shape[1] * tensor_args.key_cache.logical_shape()[-2];
-    const uint32_t page_blocks = row_split ? 0 : args.candidate_topk_blocks;
+    const uint32_t page_blocks = row_split && args.num_parts == 1 ? 0 : args.candidate_topk_blocks;
     spec_return_value_t specs = {
         args.num_parts > 1 || row_split
             ? tt::tt_metal::TensorSpec(

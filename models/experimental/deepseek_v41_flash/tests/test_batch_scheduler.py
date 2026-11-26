@@ -278,3 +278,13 @@ def test_one_row_replies_interleave(monkeypatch) -> None:
     finally:
         sched._reader.close()
         engine._stop_packet_writer()
+
+
+def test_batch_min_users_by_batch_size(monkeypatch):
+    """B=4 takes batch steps from 3 seated replies, B=2 from both rows; DEEPSEEK_V41_BATCH_MIN_USERS sets either."""
+    monkeypatch.setattr(srv, "_BATCH_MIN_USERS_ENV", None)
+    monkeypatch.setattr(srv, "_BATCH_MIN_USERS", 3)
+    assert srv._batch_min_users(4) == 3
+    assert srv._batch_min_users(2) == 2
+    monkeypatch.setattr(srv, "_BATCH_MIN_USERS_ENV", "1")
+    assert srv._batch_min_users(4) == 1 and srv._batch_min_users(2) == 1

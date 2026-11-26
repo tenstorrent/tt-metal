@@ -412,7 +412,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
     ):
         self.config = config
         self.drafter_on_stage = drafter_on_stage
-        # The verify_rows-row block steps are B=4 batch steps: row j one token of its own session (decode_batch_block).
+        # The verify_rows-row block steps are B=2 or B=4 batch steps: row j one token of its own session
+        # (decode_batch_block).
         self.batch_block = batch_block
         if batch_block and (not (persistent_moe or moe_server is not None) or verify_rows not in (2, 4)):
             raise ValueError(
@@ -442,8 +443,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     f"persistent_moe serves one requester stage (its requests go in strict turn), got {num_stages}"
                 )
             unsupported = {
-                # A verify block runs every layer as (verify_rows, 32)-tiled block ops (decode_verify).
-                "verify_rows other than 1 or 4": verify_rows not in (1, 4),
+                # A verify block runs every layer as (verify_rows, 32)-tiled block ops (decode_verify); a B=2 batch
+                # step (batch_block) is a 2-row one.
+                "verify_rows other than 1 or 4 (or 2 with batch_block)": verify_rows
+                not in ((1, 2, 4) if batch_block else (1, 4)),
                 # The one stage holds the embedding table, so an image tower goes there too (vision_stage 0).
                 "vision_stage other than 0": vision_stage not in (None, 0),
                 "prefill_layer_submesh_ids": prefill_layer_submesh_ids is not None,
@@ -5203,6 +5206,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 for cand in per_row[1:]:
                     ttnn.deallocate(cand["pool_page_table"])
                     cand["pool_page_table"] = per_row[0]["pool_page_table"]
+            # Fewer rows than TP ranks (B=2): each row's keys split over a pair of ranks, and merge_select_kv writes
+            # every row's candidate blocks and pool count ([t, blocks], [t]) on every rank (_select_rows_split).
+            per_row[0].update(candidate_buffers(device, cfg, with_pool=False, rows=t))
             for li in sm["layers"]:
                 if cfg.compress_ratios[li] and self._kv_source_of[li] == self._candidate_group:
                     sm["scaches"][li].batch_candidates = per_row

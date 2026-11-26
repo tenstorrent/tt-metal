@@ -449,10 +449,17 @@ void kernel_main() {
 #else
     lookup_dfb.reserve_back(1);
     const uint32_t lookup_addr = lookup_dfb.get_write_ptr();
+#ifdef PICK_ROW
+    // candidate_blocks / pool_count hold several rows' (a row split with a key split): this device's row's.
+    const uint32_t cand_row =
+        read_query_row(noc, lookup_dfb, reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lookup_addr + chunk_offset));
+#else
+    constexpr uint32_t cand_row = 0;
+#endif
     noc.async_read(pool_count, lookup_dfb, 64, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     invalidate_l1_cache();
-    const uint32_t count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lookup_addr)[0];
+    const uint32_t count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lookup_addr)[cand_row];
 
     // Only blocks holding the pool's count keys are used, split evenly over the cores.
     const uint32_t num_used = tt::data_movement::common::div_up(count, cbs);
@@ -472,7 +479,7 @@ void kernel_main() {
         candidate_blocks,
         lookup_dfb,
         last_byte - first_byte,
-        {.page_id = 0, .offset_bytes = first_byte},
+        {.page_id = cand_row, .offset_bytes = first_byte},
         {.offset_bytes = list_offset});
     noc.async_read_barrier();
     invalidate_l1_cache();

@@ -364,8 +364,22 @@ _NUM_USERS_PERSISTENT = 8
 # alone takes a 4-row batch step in 13.7 ms (rows padded by the scratch session cost the same) against ~6.8 ms for a
 # one-row step, so two replies break even; with five instances on the shared MoE (one-row steps: ~515 tok/s in all
 # at 1-4 replies an instance) batch steps gave 478 / 546 / 668 tok/s at 2 / 3 / 4 replies an instance.
+# --decode-batch 2 takes 2-row batch steps instead (B=2: a 2-row block on the same server).
 _DECODE_BATCH_ROWS = 4
-_BATCH_MIN_USERS = int(os.environ.get("DEEPSEEK_V41_BATCH_MIN_USERS", "3"))
+_DECODE_BATCH_SIZES = (2, 4)
+# From how many seated replies an instance takes batch steps: 3 at B=4 (above), both rows at B=2. The env var
+# (DEEPSEEK_V41_BATCH_MIN_USERS) sets it for either.
+_BATCH_MIN_USERS_ENV = os.environ.get("DEEPSEEK_V41_BATCH_MIN_USERS")
+_BATCH_MIN_USERS = int(_BATCH_MIN_USERS_ENV or 3)
+
+
+def _batch_min_users(rows: int) -> int:
+    """Seated replies from which a B=``rows`` instance takes batch steps (fewer decode one row a step)."""
+    if _BATCH_MIN_USERS_ENV:
+        return int(_BATCH_MIN_USERS_ENV)
+    return _BATCH_MIN_USERS if rows >= 4 else rows
+
+
 # _PrefillFirst._admit trims a remote prefill back to an uncached history boundary (so the decode-side prefix cache
 # captures it) only when the tokens it then leaves to decode replay in at most this long. It was a fixed 2048 tokens
 # (~10 s of 4-row block replay before the first token).
@@ -2681,8 +2695,8 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
 
 
 class _BatchScheduler(_SlotReuse, _PrefillFirst):
-    """:class:`_PrefillFirst` (with :class:`_SlotReuse`'s in-place rewinds) that decodes up to ``verify_rows`` (4)
-    seated replies together, one token each per B=4 batch step (``--decode-batch``,
+    """:class:`_PrefillFirst` (with :class:`_SlotReuse`'s in-place rewinds) that decodes up to ``verify_rows`` (4, or 2)
+    seated replies together, one token each per B=4 (B=2) batch step (``--decode-batch``,
     :meth:`~..tt.model.DeepSeekV41Model.decode_batch_block`): row ``j`` of the step is reply ``j``'s next token at its
     own position in its own session, and the step's per-row device picks are each reply's next token.
 
@@ -2690,7 +2704,7 @@ class _BatchScheduler(_SlotReuse, _PrefillFirst):
     batch as soon as its prompt is in (its last prompt token's pick is its first reply token) and leaves it when its
     reply ends, both between steps. Prompts stay one session at a time between steps, as :class:`_PrefillFirst` runs
     them: the remote KV load, and the prompt's tail replayed through decode in one-row steps (a batch row cannot take
-    consecutive tokens of one session); decode waits meanwhile. While fewer than :data:`_BATCH_MIN_USERS` (3) replies
+    consecutive tokens of one session); decode waits meanwhile. While fewer than :func:`_batch_min_users` (3; 2 at B=2) replies
     are seated they decode a step at a time as without batches (one-row steps posted ahead, ~6.8 ms against a batch
     step's ~13.7 ms on a lone instance; under five instances' load two replies in batch steps lose to one-row steps),
     and the next step after the third is seated is a batch step. The batch step is synchronous: every one-row step in
@@ -2699,6 +2713,7 @@ class _BatchScheduler(_SlotReuse, _PrefillFirst):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.rows = int(getattr(self.engine.model, "verify_rows", 1))
+        self.min_users = _batch_min_users(self.rows)
         self._batching = False  # this round's seated replies take a batch step (_round_turns)
         # Batch steps, the rows they carried and their seconds (host and device), for stats() and the periodic log.
         self.batch_steps = self.batch_rows = 0
@@ -2749,7 +2764,7 @@ class _BatchScheduler(_SlotReuse, _PrefillFirst):
             for turn in waiting:
                 if turn in self._active:
                     self._capture_due(turn, self.engine.users[turn.slot])
-        self._batching = self.decoding_users() >= _BATCH_MIN_USERS and not self._prefill_waiting()
+        self._batching = self.decoding_users() >= self.min_users and not self._prefill_waiting()
         super()._round_turns()
         # A prompt that came in (or whose KV came back) this round goes first, as _PrefillFirst runs them.
         if self._batching and self._broken is None and not self._prefill_waiting():
@@ -3536,6 +3551,7 @@ def _serve_instances(args) -> int:
                 prefill=args.prefill,
                 image_bias=args.vision,
                 blocks=args.dspark or args.decode_batch > 1,
+                block_rows=args.decode_batch if args.decode_batch > 1 else 4,
             )
             stack.callback(server.stop)
             logger.info(f"persistent MoE up in {time.perf_counter() - t0:.0f}s")
@@ -5092,11 +5108,11 @@ def parse_args(argv: list[str] | None = None):
         "--decode-batch",
         type=int,
         default=int(os.environ.get("DEEPSEEK_V41_DECODE_BATCH", "0") or 0),
-        help=f"with --persistent-moe, decode up to {_DECODE_BATCH_ROWS} replies per instance together, one token each "
-        f"in one B={_DECODE_BATCH_ROWS} batch step (DeepSeekV41Model(batch_block=True)) once {_BATCH_MIN_USERS} decode "
-        "(DEEPSEEK_V41_BATCH_MIN_USERS); fewer decode a step at a time. Takes the 4-row blocks DSpark would (no --dspark), runs on Python host threads (no "
-        f"--rust-host), and seats {_DECODE_BATCH_ROWS} replies per instance (--max-running), --num-users then "
-        f"defaulting to {_DECODE_BATCH_ROWS}. 0 or 1 turns it off (default: DEEPSEEK_V41_DECODE_BATCH, else 0)",
+        help=f"with --persistent-moe, decode up to B (4 or 2) replies per instance together, one token each "
+        f"in one B-row batch step (DeepSeekV41Model(batch_block=True)) once {_BATCH_MIN_USERS} (B=4) or 2 (B=2) decode "
+        "(DEEPSEEK_V41_BATCH_MIN_USERS); fewer decode a step at a time. Takes the block rows DSpark would (no --dspark), "
+        "runs on Python host threads (no --rust-host), and seats B replies per instance (--max-running), --num-users "
+        "then defaulting to B. 0 or 1 turns it off (default: DEEPSEEK_V41_DECODE_BATCH, else 0)",
     )
     p.add_argument(
         "--rust-host",
@@ -5160,8 +5176,8 @@ def parse_args(argv: list[str] | None = None):
         p.error(f"--dspark-drafts takes 0 to {_DSPARK_MAX_DRAFTS} drafts per entry, got {args.dspark_drafts}")
     if args.decode_batch in (0, 1):
         args.decode_batch = 0
-    elif args.decode_batch != _DECODE_BATCH_ROWS:
-        p.error(f"--decode-batch takes {_DECODE_BATCH_ROWS} (or 0 / 1: off), got {args.decode_batch}")
+    elif args.decode_batch not in _DECODE_BATCH_SIZES:
+        p.error(f"--decode-batch takes one of {_DECODE_BATCH_SIZES} (or 0 / 1: off), got {args.decode_batch}")
     else:
         if not args.persistent_moe:
             p.error("--decode-batch steps the persistent-MoE instances: it needs --persistent-moe")
