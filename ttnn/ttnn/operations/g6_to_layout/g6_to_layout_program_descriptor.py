@@ -1,233 +1,317 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_to_layout program descriptor — regime R1 `interleaved_untilize_2d` (+ R1a live-face reads).
+"""Plan and ProgramDescriptor for g6_to_layout, regime R1 `untilize_interleaved`.
 
-Single source of truth for every block knob is `plan_blocking()`; the CB page counts, loop trip
-counts and the core grid are all derived from its result (op_design.md, Blocking Model).
+Work unit: a segment = one tile-row x `segment_width` consecutive tile-columns. Segments are
+spread over the full compute grid in contiguous ranges; each core streams its range through
+reader -> cb_tiles -> untilize -> cb_rows -> writer in blocks of `block_segments` segments.
+Both CBs are declared UInt16 so MOVA2D moves the bf16 bits without flushing zero-exponent
+datums (subnormals, -0.0).
 """
 
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-# ---- Blocking-model knobs (host constants, op_design.md "Knobs that are not per-axis") ----
-BLOCK_TILES_TARGET = 32  # tiles per block (amortizes per-block barrier / flush / CB handshake)
-DEPTH_IN = 2  # cb_input_tiles depth in blocks (double buffering)
-DEPTH_OUT = 2  # cb_output_rows depth in blocks (double buffering)
-L1_OP_BOUND = 1347776  # spec bound on per-core L1 for this op (BB-05)
-DEST_TILES = 8  # pack_untilize capacity, 16-bit DEST half-sync (pack_untilize.h:102)
+TILE_DIM = 32
 
-TILE_HW = 32
-FACE_HW = 16
+# The model leaves this much L1 per core to the op (an L1 output's own pages count inside it).
+L1_BUDGET_BYTES = 1347776
+# One 64-B base alignment per CB: Blackhole DRAM reads need local == NoC address mod 64.
+CB_BASE_ALIGN_BYTES = 64
 
-# CB slots (semantic names)
-CB_INPUT_TILES = 0  # reader -> compute, TILE pages (opaque UInt16)
-CB_OUTPUT_ROWS = 1  # compute -> writer, row-major rows of a unit in tile-sized pages (opaque UInt16)
+TILES_DEPTH = 2
+ROWS_DEPTH = 2
+BALANCE_SLACK = Fraction(1, 8)
 
-_PLAN_CACHE: dict = {}
+CB_TILES = 0  # input tile pages (bit view of bf16), reader -> compute
+CB_ROWS = 1  # untilized rows of one segment, compute -> writer
+NUM_CBS = 2
 
+# Kernel order inside the descriptor; the entry point patches the buffer address of these two.
+READER_KERNEL_INDEX = 0
+WRITER_KERNEL_INDEX = 1
+COMPUTE_KERNEL_INDEX = 2
 
-def _cdiv(a, b):
-    return -(-a // b)
-
-
-def _align_up(a, b):
-    return _cdiv(a, b) * b
+REGIME_UNTILIZE_INTERLEAVED = "untilize_interleaved"
 
 
-def _floor_dest(x):
-    return x if x <= DEST_TILES else DEST_TILES * (x // DEST_TILES)
+@dataclass(frozen=True)
+class Plan:
+    regime: str
+    grid: tuple  # (x, y) of the compute grid
+    # Geometry
+    shape: tuple
+    tensor_n: int
+    height: int
+    width: int
+    tensor_h_tiles: int
+    tensor_w_tiles: int
+    tensor_tile_rows: int
+    # Block knobs
+    num_col_chunks: int
+    segment_width: int
+    num_segments: int
+    block_segments: int
+    tiles_depth: int
+    rows_depth: int
+    balance_slack: Fraction
+    # Formats / budget
+    input_dtype: object
+    output_dtype: object
+    output_memory_config: object
+    tile_bytes_in: int
+    tile_bytes_rows: int
+    out_l1_bank_bytes: int
+    cb_budget_bytes: int
+    # Work split
+    cores_used: int
+    group_1: tuple  # ((x, y), ...) in assignment order
+    group_1_segments: int
+    group_2: tuple
+    group_2_segments: int
+    core_assignment: tuple  # ((x, y), start_segment, num_segments) per used core
+    core_roles: tuple  # ((x, y), "reader/compute/writer" | "idle") over the whole grid
+
+    @property
+    def cb_tiles_pages(self) -> int:
+        return self.tiles_depth * self.block_segments * self.segment_width
+
+    @property
+    def cb_rows_pages(self) -> int:
+        return self.rows_depth * self.block_segments * self.segment_width
+
+    @property
+    def l1_footprint_bytes(self) -> int:
+        return (
+            self.cb_tiles_pages * self.tile_bytes_in
+            + self.cb_rows_pages * self.tile_bytes_rows
+            + self.out_l1_bank_bytes
+            + NUM_CBS * CB_BASE_ALIGN_BYTES
+        )
 
 
-def _num_l1_banks(device):
-    try:
-        return ttnn.device.GetMemoryView(device, ttnn.BufferType.L1).num_banks
-    except Exception:  # noqa: BLE001 — conservative fallback: one bank per worker core
-        grid = device.compute_with_storage_grid_size()
-        return grid.x * grid.y
-
-
-def _grid_key(grid):
-    return (grid.x, grid.y)
-
-
-def plan_blocking(device, shape, out_buffer_type, *, tile_bytes=2048, elem_bytes=2):
-    """The R1 work split (op_design.md, Work-split formula). Memoized per key (BB-07)."""
-    grid = device.compute_with_storage_grid_size()
-    key = (tuple(shape), out_buffer_type, _grid_key(grid), tile_bytes, elem_bytes)
-    cached = _PLAN_CACHE.get(key)
-    if cached is not None:
-        return cached
-
-    H, W = shape[-2], shape[-1]
-    N = 1
-    for d in shape[:-2]:
-        N *= d
-    tiles_per_image_h = _cdiv(H, TILE_HW)
-    tensor_tile_rows = N * tiles_per_image_h
-    tensor_tile_cols = _cdiv(W, TILE_HW)
-    num_cores = grid.x * grid.y
-
-    if out_buffer_type == ttnn.BufferType.L1:
-        num_out_pages = N * H
-        out_aligned_page_bytes = _align_up(W * elem_bytes, ttnn.get_l1_alignment())
-        out_l1_bytes_per_core = _cdiv(num_out_pages, _num_l1_banks(device)) * out_aligned_page_bytes
-    else:
-        out_l1_bytes_per_core = 0
-    op_l1_budget = L1_OP_BOUND - out_l1_bytes_per_core
-    depth_sum = DEPTH_IN + DEPTH_OUT
-    max_block_cols = _floor_dest(op_l1_budget // (depth_sum * tile_bytes))
-    assert max_block_cols >= 1, "g6_to_layout: no L1 left for one tile per buffer"
-
-    occupancy_chunks = _cdiv(num_cores, tensor_tile_rows) if tensor_tile_rows < num_cores else 1
-    chunks0 = max(_cdiv(tensor_tile_cols, max_block_cols), min(tensor_tile_cols, occupancy_chunks))
-    block_tile_cols = _cdiv(tensor_tile_cols, chunks0)
-    if block_tile_cols > DEST_TILES:
-        block_tile_cols = min(_align_up(block_tile_cols, DEST_TILES), max_block_cols)
-    num_col_chunks = _cdiv(tensor_tile_cols, block_tile_cols)
-    max_rows_fit = op_l1_budget // (depth_sum * block_tile_cols * tile_bytes)
-    block_tile_rows = max(1, min(BLOCK_TILES_TARGET // block_tile_cols, max_rows_fit))
-    num_units = tensor_tile_rows * num_col_chunks
-
-    cb_bytes = depth_sum * block_tile_rows * block_tile_cols * tile_bytes
-    assert cb_bytes <= op_l1_budget, f"g6_to_layout: CB total {cb_bytes} B exceeds op L1 budget {op_l1_budget} B"
-
-    (_, all_cores, core_group_1, core_group_2, units_g1, units_g2) = ttnn.split_work_to_cores(
-        grid, num_units, row_wise=True
-    )
-    assignment = []  # (core, start_unit, units_this_core)
-    start = 0
-    for group, per_core in ((core_group_1, units_g1), (core_group_2, units_g2)):
-        if per_core == 0:
+def _choose_segment_width(tensor_tile_rows, tensor_w_tiles, grid_cores, seg_width_max, balance_slack):
+    """Smallest column-chunk count whose per-core load is within balance_slack of ideal."""
+    ideal = math.ceil(tensor_tile_rows * tensor_w_tiles / grid_cores)
+    limit = ideal * (1 + balance_slack)
+    for col_chunks in range(1, tensor_w_tiles + 1):
+        width = math.ceil(tensor_w_tiles / col_chunks)
+        if width > seg_width_max:
             continue
-        for core in ttnn.corerange_to_cores(group, None, True):
-            assignment.append((core, start, per_core))
-            start += per_core
-    assert start == num_units
-
-    plan = {
-        "regime": "interleaved_untilize_2d",
-        "N": N,
-        "H": H,
-        "W": W,
-        "tiles_per_image_h": tiles_per_image_h,
-        "tensor_tile_rows": tensor_tile_rows,
-        "tensor_tile_cols": tensor_tile_cols,
-        "tile_bytes": tile_bytes,
-        "elem_bytes": elem_bytes,
-        "op_l1_budget": op_l1_budget,
-        "max_block_cols": max_block_cols,
-        "block_tile_cols": block_tile_cols,
-        "block_tile_rows": block_tile_rows,
-        "num_col_chunks": num_col_chunks,
-        "num_units": num_units,
-        "depth_in": DEPTH_IN,
-        "depth_out": DEPTH_OUT,
-        "w_tail_half": 1 if 1 <= W % TILE_HW <= FACE_HW else 0,
-        "h_tail_half": 1 if 1 <= H % TILE_HW <= FACE_HW else 0,
-        "all_cores": all_cores,
-        "assignment": assignment,
-        "num_cores_used": len(assignment),
-    }
-    _PLAN_CACHE[key] = plan
-    return plan
+        chunks = math.ceil(tensor_w_tiles / width)
+        num_segments = tensor_tile_rows * chunks
+        if math.ceil(num_segments / grid_cores) * width <= limit:
+            return width, chunks, num_segments
+    raise AssertionError("unreachable: one tile per segment always balances")
 
 
-def create_program_descriptor(input_tensor, output_tensor) -> ttnn.ProgramDescriptor:
-    device = input_tensor.device()
-    shape = tuple(input_tensor.shape)
-    out_buffer_type = output_tensor.memory_config().buffer_type
-    plan = plan_blocking(device, shape, out_buffer_type)
+def compute_plan(
+    shape,
+    input_dtype,
+    output_dtype,
+    output_memory_config,
+    grid_x,
+    grid_y,
+    num_l1_banks,
+    l1_alignment,
+) -> Plan:
+    """Pure function of shape, dtypes, placements and grid (never of measured free L1)."""
+    shape = tuple(int(d) for d in shape)
+    height, width = shape[-2], shape[-1]
+    tensor_n = math.prod(shape[:-2]) if len(shape) > 2 else 1
+    tensor_h_tiles = math.ceil(height / TILE_DIM)
+    tensor_w_tiles = math.ceil(width / TILE_DIM)
+    tensor_tile_rows = tensor_n * tensor_h_tiles
 
-    all_cores = plan["all_cores"]
-    btc = plan["block_tile_cols"]
-    btr = plan["block_tile_rows"]
-    tile_bytes = plan["tile_bytes"]
+    tile_bytes_in = ttnn.tile_size(input_dtype)
+    tile_bytes_rows = ttnn.tile_size(output_dtype)
 
-    # ---- CBs: opaque 16-bit (UInt16) so bfloat16 bits pass the engines unchanged ----
-    cb_input_tiles = ttnn.CBDescriptor(
-        total_size=DEPTH_IN * btr * btc * tile_bytes,
+    if output_memory_config.buffer_type == ttnn.BufferType.L1:
+        out_row_stride = math.ceil(width * 2 / l1_alignment) * l1_alignment
+        out_l1_bank_bytes = math.ceil(tensor_n * height / num_l1_banks) * out_row_stride
+    else:
+        out_l1_bank_bytes = 0
+    cb_budget = L1_BUDGET_BYTES - out_l1_bank_bytes - NUM_CBS * CB_BASE_ALIGN_BYTES
+    bytes_per_tile_column = TILES_DEPTH * tile_bytes_in + ROWS_DEPTH * tile_bytes_rows
+    if cb_budget < bytes_per_tile_column:
+        raise RuntimeError(
+            f"g6_to_layout: output occupies {out_l1_bank_bytes} B of L1 per bank, leaving {cb_budget} B "
+            f"for buffers; one segment of one tile needs {bytes_per_tile_column} B"
+        )
+    seg_width_max = cb_budget // bytes_per_tile_column
+
+    grid_cores = grid_x * grid_y
+    segment_width, num_col_chunks, num_segments = _choose_segment_width(
+        tensor_tile_rows, tensor_w_tiles, grid_cores, seg_width_max, BALANCE_SLACK
+    )
+    max_segments_per_core = math.ceil(num_segments / min(grid_cores, num_segments))
+    block_segments = max(1, min(max_segments_per_core, cb_budget // (segment_width * bytes_per_tile_column)))
+
+    (
+        cores_used,
+        _all_cores,
+        core_group_1,
+        core_group_2,
+        group_1_segments,
+        group_2_segments,
+    ) = ttnn.split_work_to_cores(ttnn.CoreCoord(grid_x, grid_y), num_segments, row_wise=True)
+    group_1 = tuple((c.x, c.y) for c in ttnn.corerange_to_cores(core_group_1, row_wise=True))
+    group_2 = tuple((c.x, c.y) for c in ttnn.corerange_to_cores(core_group_2, row_wise=True))
+
+    assignment = []
+    start = 0
+    for cores, count in ((group_1, group_1_segments), (group_2, group_2_segments)):
+        for core in cores:
+            assignment.append((core, start, count))
+            start += count
+    assert start == num_segments, f"g6_to_layout: split covers {start} of {num_segments} segments"
+
+    used = {core for core, _, _ in assignment}
+    roles = tuple(
+        ((x, y), "reader/compute/writer" if (x, y) in used else "idle") for y in range(grid_y) for x in range(grid_x)
+    )
+
+    return Plan(
+        regime=REGIME_UNTILIZE_INTERLEAVED,
+        grid=(grid_x, grid_y),
+        shape=shape,
+        tensor_n=tensor_n,
+        height=height,
+        width=width,
+        tensor_h_tiles=tensor_h_tiles,
+        tensor_w_tiles=tensor_w_tiles,
+        tensor_tile_rows=tensor_tile_rows,
+        num_col_chunks=num_col_chunks,
+        segment_width=segment_width,
+        num_segments=num_segments,
+        block_segments=block_segments,
+        tiles_depth=TILES_DEPTH,
+        rows_depth=ROWS_DEPTH,
+        balance_slack=BALANCE_SLACK,
+        input_dtype=input_dtype,
+        output_dtype=output_dtype,
+        output_memory_config=output_memory_config,
+        tile_bytes_in=tile_bytes_in,
+        tile_bytes_rows=tile_bytes_rows,
+        out_l1_bank_bytes=out_l1_bank_bytes,
+        cb_budget_bytes=cb_budget,
+        cores_used=cores_used,
+        group_1=group_1,
+        group_1_segments=group_1_segments,
+        group_2=group_2,
+        group_2_segments=group_2_segments,
+        core_assignment=tuple(assignment),
+        core_roles=roles,
+    )
+
+
+def _core_range_set(plan: Plan) -> ttnn.CoreRangeSet:
+    _, all_cores, _, _, _, _ = ttnn.split_work_to_cores(ttnn.CoreCoord(*plan.grid), plan.num_segments, row_wise=True)
+    return all_cores
+
+
+def create_program_descriptor(plan: Plan, input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor):
+    """Descriptor for `plan`; buffer addresses live in each data-movement kernel's common runtime args."""
+    all_cores = _core_range_set(plan)
+
+    # Both CBs are UInt16: the bf16 bits are moved, never interpreted (see module docstring).
+    cb_tiles = ttnn.CBDescriptor(
+        total_size=plan.cb_tiles_pages * plan.tile_bytes_in,
         core_ranges=all_cores,
         format_descriptors=[
-            ttnn.CBFormatDescriptor(buffer_index=CB_INPUT_TILES, data_format=ttnn.uint16, page_size=tile_bytes)
+            ttnn.CBFormatDescriptor(buffer_index=CB_TILES, data_format=ttnn.uint16, page_size=plan.tile_bytes_in)
         ],
     )
-    cb_output_rows = ttnn.CBDescriptor(
-        total_size=DEPTH_OUT * btr * btc * tile_bytes,
+    cb_rows = ttnn.CBDescriptor(
+        total_size=plan.cb_rows_pages * plan.tile_bytes_rows,
         core_ranges=all_cores,
         format_descriptors=[
-            ttnn.CBFormatDescriptor(buffer_index=CB_OUTPUT_ROWS, data_format=ttnn.uint16, page_size=tile_bytes)
+            ttnn.CBFormatDescriptor(buffer_index=CB_ROWS, data_format=ttnn.uint16, page_size=plan.tile_bytes_rows)
         ],
     )
 
-    # ---- Reader ----
-    reader_ct = [
-        CB_INPUT_TILES,
-        btc,
-        btr,
-        plan["tensor_tile_cols"],
-        plan["num_col_chunks"],
-        plan["tiles_per_image_h"],
-        tile_bytes,
-        plan["w_tail_half"],
-        plan["h_tail_half"],
+    reader_ct_args = [
+        CB_TILES,
+        plan.segment_width,
+        plan.block_segments,
+        plan.num_col_chunks,
+        plan.tensor_h_tiles,
+        plan.tensor_w_tiles,
+        plan.height,
+        plan.width,
+        plan.tile_bytes_in,
     ]
-    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
-    # ---- Writer ----
-    writer_ct = [
-        CB_OUTPUT_ROWS,
-        btc,
-        btr,
-        plan["num_col_chunks"],
-        plan["tiles_per_image_h"],
-        plan["H"],
-        plan["W"] * plan["elem_bytes"],  # bytes per logical output row
-        tile_bytes,
-        ttnn.get_l1_alignment() if out_buffer_type == ttnn.BufferType.L1 else 16,  # write length granule
+    writer_ct_args = [
+        CB_ROWS,
+        plan.segment_width,
+        plan.block_segments,
+        plan.num_col_chunks,
+        plan.tensor_h_tiles,
+        plan.height,
+        plan.width,
+        plan.tile_bytes_rows,
+        output_tensor.buffer_page_size(),
     ]
-    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+
+    compute_ct_args = [CB_TILES, CB_ROWS, plan.segment_width]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
-    in_addr = input_tensor.buffer_address()
-    out_addr = output_tensor.buffer_address()
-    for core, start_unit, units in plan["assignment"]:
-        reader_rt[core.x][core.y] = [in_addr, start_unit, units]
-        writer_rt[core.x][core.y] = [out_addr, start_unit, units]
-        compute_rt[core.x][core.y] = [units]
+    for (x, y), start, count in plan.core_assignment:
+        reader_rt[x][y] = [start, count]
+        writer_rt[x][y] = [start, count]
+        compute_rt[x][y] = [count]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_to_layout_reader.cpp"),
         core_ranges=all_cores,
-        compile_time_args=reader_ct,
+        compile_time_args=reader_ct_args,
         runtime_args=reader_rt,
+        common_runtime_args=[input_tensor.buffer_address()],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_to_layout_writer.cpp"),
         core_ranges=all_cores,
-        compile_time_args=writer_ct,
+        compile_time_args=writer_ct_args,
         runtime_args=writer_rt,
+        common_runtime_args=[output_tensor.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
     )
     compute_config = ttnn.ComputeConfigDescriptor()
     compute_config.fp32_dest_acc_en = False
+    compute_config.dst_full_sync_en = False
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_to_layout_compute.cpp"),
         core_ranges=all_cores,
-        compile_time_args=[CB_INPUT_TILES, CB_OUTPUT_ROWS, btc],
+        compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
         config=compute_config,
     )
-    return ttnn.ProgramDescriptor(
-        kernels=[reader, writer, compute],
-        semaphores=[],
-        cbs=[cb_input_tiles, cb_output_rows],
-    )
+
+    kernels = [None] * 3
+    kernels[READER_KERNEL_INDEX] = reader
+    kernels[WRITER_KERNEL_INDEX] = writer
+    kernels[COMPUTE_KERNEL_INDEX] = compute
+    descriptor = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb_tiles, cb_rows])
+    # Buffer addresses are runtime args, so the structural hash is fixed per plan; memoize it.
+    descriptor.custom_program_hash = ttnn.compute_program_descriptor_hash(descriptor)
+    return descriptor
+
+
+def patch_buffer_addresses(descriptor, input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor) -> None:
+    descriptor.kernels[READER_KERNEL_INDEX].common_runtime_args = [input_tensor.buffer_address()]
+    descriptor.kernels[WRITER_KERNEL_INDEX].common_runtime_args = [output_tensor.buffer_address()]
