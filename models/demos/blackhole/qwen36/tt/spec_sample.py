@@ -130,10 +130,13 @@ def drawn_users(plan, B, T):
     return [bool(plan is not None and plan.sampled[u * T]) for u in range(B)]
 
 
-def sampling_plan(sampling_params, positions, T, fresh_seed=_fresh_seed):
+def sampling_plan(sampling_params, positions, T, fresh_seed=_fresh_seed, masked=None):
     """The plan of a verify of ``len(positions)`` users by T columns. ``positions[u]`` is the input position of user
     u's column 0, negative for a padding row. Every column of a row draws when the row's temperature is above 0 and
-    its top-k above 1; the columns past a row's valid drafts are masked afterwards like its argmax ids."""
+    its top-k above 1; the columns past a row's valid drafts are masked afterwards like its argmax ids.
+    ``masked[u]`` (spec_mask): user u's columns are drawn from masked logits, so a greedy or top-k 1 user draws too,
+    with top-k 1: its draw is the masked argmax (the first candidate, lowest id among ties, as ttnn.argmax), and its
+    core's random state stays untouched (SKIP_SEED)."""
     B = len(positions)
     R = B * T
     if R > SAMPLER_ROWS:
@@ -146,6 +149,10 @@ def sampling_plan(sampling_params, positions, T, fresh_seed=_fresh_seed):
     for u in range(B):
         position = int(positions[u])
         temp, k, p, seed = row_sampling(sampling_params, u)
+        if position >= 0 and masked is not None and masked[u] and (temp <= 0.0 or k == 1):
+            for j in range(T):
+                sampled[u * T + j] = True  # temperature 0 encodes as top-k 1 (format_sampling_params)
+            continue
         if position < 0 or temp <= 0.0 or k == 1:
             continue
         if not 1 <= k <= SAMPLER_TOP_K:
