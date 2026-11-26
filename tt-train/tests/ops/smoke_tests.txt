@@ -20,7 +20,7 @@ UnaryOpsTest.Clip
 UnaryOpsTest.Gelu
 UnaryOpsTest.GeluTanh
 UnaryOpsTest.Silu
-SiLUOpTest.SiLU_Compare_Small
+SiLUOpTest.SiLU_Backward_WideRange_vs_Reference
 AutogradTest.BroadCastBatchTest
 
 # Losses
