@@ -19,9 +19,6 @@ constexpr uint32_t cb_gate = tt::CBIndex::c_1;     // up branch
 constexpr uint32_t cb_dL_dprod = tt::CBIndex::c_2;
 constexpr uint32_t cb_dL_dlinear1 = tt::CBIndex::c_3;
 constexpr uint32_t cb_dL_dgate = tt::CBIndex::c_4;
-constexpr uint32_t cb_sigmoid = tt::CBIndex::c_5;
-constexpr uint32_t cb_scratch = tt::CBIndex::c_6;
-constexpr uint32_t cb_silu_grad = tt::CBIndex::c_7;
 
 void kernel_main() {
     compute_kernel_hw_startup(cb_linear1, cb_gate, cb_dL_dlinear1);
@@ -34,16 +31,7 @@ void kernel_main() {
             cb_wait_front(cb_dL_dprod, block_size);
 
             // linear1 is the silu'd (gate) branch; cb_gate here is the up branch.
-            swiglu_gate_bw_block<
-                cb_linear1,
-                cb_gate,
-                cb_dL_dprod,
-                cb_dL_dlinear1,
-                cb_dL_dgate,
-                cb_sigmoid,
-                cb_scratch,
-                cb_silu_grad,
-                block_size>();
+            swiglu_gate_bw_block<cb_linear1, cb_gate, cb_dL_dprod, cb_dL_dlinear1, cb_dL_dgate, block_size>();
 
             cb_pop_front(cb_linear1, block_size);
             cb_pop_front(cb_gate, block_size);

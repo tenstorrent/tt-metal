@@ -39,9 +39,6 @@ constexpr auto kGateCbIndex = tt::CBIndex::c_1;
 constexpr auto kDLProdCbIndex = tt::CBIndex::c_2;
 constexpr auto kDLLinear1CbIndex = tt::CBIndex::c_3;
 constexpr auto kDLGateCbIndex = tt::CBIndex::c_4;
-constexpr auto kSigmoidCbIndex = tt::CBIndex::c_5;
-constexpr auto kScratchCbIndex = tt::CBIndex::c_6;
-constexpr auto kSiluGradCbIndex = tt::CBIndex::c_7;
 
 }  // namespace
 
@@ -77,9 +74,6 @@ tt::tt_metal::ProgramDescriptor SwigluElemwiseBwProgramFactory::create_descripto
     program.cbs.push_back(make_cb_descriptor(all_cores, kDLProdCbIndex, data_format, tile_size_bytes, twice_block));
     program.cbs.push_back(make_cb_descriptor(all_cores, kDLLinear1CbIndex, data_format, tile_size_bytes, twice_block));
     program.cbs.push_back(make_cb_descriptor(all_cores, kDLGateCbIndex, data_format, tile_size_bytes, twice_block));
-    program.cbs.push_back(make_cb_descriptor(all_cores, kSigmoidCbIndex, data_format, tile_size_bytes, twice_block));
-    program.cbs.push_back(make_cb_descriptor(all_cores, kScratchCbIndex, data_format, tile_size_bytes, twice_block));
-    program.cbs.push_back(make_cb_descriptor(all_cores, kSiluGradCbIndex, data_format, tile_size_bytes, twice_block));
 
     auto* const linear1_buf = linear1.buffer();
     auto* const gate_buf = gate.buffer();

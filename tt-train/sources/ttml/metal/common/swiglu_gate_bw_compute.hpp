@@ -27,16 +27,13 @@
 
 // Compute one block of the SwiGLU-gating backward. The caller must have already
 // waited `block_size` tiles on cb_gate / cb_up / cb_dh; this function leaves cb_grad_gate / cb_grad_up pushed.
-// Input CBs are popped by the caller. cb_sigmoid / cb_scratch / cb_silu_grad are no longer used.
+// Input CBs are popped by the caller.
 template <
     uint32_t cb_gate,       // gate branch (silu'd)
     uint32_t cb_up,         // up branch
     uint32_t cb_dh,         // upstream grad dL/dh
     uint32_t cb_grad_gate,  // out: grad wrt gate branch
     uint32_t cb_grad_up,    // out: grad wrt up branch
-    uint32_t cb_sigmoid,
-    uint32_t cb_scratch,
-    uint32_t cb_silu_grad,
     uint32_t block_size>
 inline void swiglu_gate_bw_block() {
     // gate, dL/dh and up of one tile take DEST tiles 3k, 3k + 1 and 3k + 2.
