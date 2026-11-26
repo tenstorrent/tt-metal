@@ -5,7 +5,7 @@
 #include "stripe_layout.hpp"
 
 #include <algorithm>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt_stl/assert.hpp>
 #include <utility>
 

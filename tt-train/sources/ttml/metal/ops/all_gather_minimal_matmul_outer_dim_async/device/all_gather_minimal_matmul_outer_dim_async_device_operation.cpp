@@ -4,8 +4,8 @@
 
 #include "all_gather_minimal_matmul_outer_dim_async_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "kernels/all_gather_minimal_matmul_outer_dim_async_utils.hpp"
 #include "metal/common/tensor_validation.hpp"

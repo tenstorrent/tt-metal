@@ -11,12 +11,12 @@
 #include <optional>
 #include <set>
 #include <string>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <utility>
 #include <vector>
 
@@ -641,12 +641,13 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
             // The sender of this link and direction on the next device, which forwards what we send it.
             const ttnn::CoreCoord peer_virtual_core =
                 device->worker_core_from_logical_core(sender_cores_at(neighbour.value())[sender_index]);
-            create_circular_buffer_bytes(
+            tt::tt_metal::create_cb(
+                tt::CBIndex::c_4,
                 program,
                 tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(send_core)),
-                tt::CBIndex::c_4,
-                tt::DataFormat::UInt32,
-                send_slots_bytes);
+                send_slots_bytes,
+                1,
+                tt::DataFormat::UInt32);
             std::vector<uint32_t> send_ct = {
                 in1_tile_size,
                 tiles_per_packet,

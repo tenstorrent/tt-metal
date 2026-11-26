@@ -10,8 +10,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <optional>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-umd-workload/cluster.hpp>
 #include <variant>
 #include <vector>
