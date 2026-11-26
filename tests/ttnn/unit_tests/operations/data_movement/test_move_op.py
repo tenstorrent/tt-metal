@@ -142,8 +142,7 @@ def test_move_docstring_blackhole_inputs(dtype, layout, buffer_type, device):
     def read(tensor):
         return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
 
-    torch.manual_seed(0)
-    x = torch.randn(SHARDED_SHAPE, dtype=torch.float32)
+    x = full_range_input(SHARDED_SHAPE, dtype)
     other_buffer_type = ttnn.BufferType.L1 if buffer_type == ttnn.BufferType.DRAM else ttnn.BufferType.DRAM
     for free in (None, "part", "all"):
         for move_memory_config in (interleaved_memory_config(other_buffer_type), None):
