@@ -1,0 +1,4 @@
+  base unet_tile_1024x1280            25194 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0
+  both unet_tile_1024x1280            21903 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0
+  base unet_rm_ip_1024x1280           27118 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0
+  both unet_rm_ip_1024x1280           24260 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0

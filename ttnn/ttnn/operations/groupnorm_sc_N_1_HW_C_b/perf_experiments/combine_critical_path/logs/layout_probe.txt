@@ -1,0 +1,6 @@
+  both unet_rm_ip_16384x640           89306 ns  pcc 0.999998 rms 0.00197  ndiff_vs_both 0  | collapse 782/823  wait_gather 426/433  finalize 1193/1195  wait_stats 2316/2480  expand 4925/5090  pass1 48281/49039  pass2 28570/34367
+both_n1 unet_rm_ip_16384x640           88014 ns  pcc 0.999998 rms 0.00197  ndiff_vs_both 0  | collapse 782/830  wait_gather 427/433  finalize 1213/1221  wait_stats 2228/2319  expand 4836/4925  pass1 48281/48933  pass2 28570/33124
+both_n2 unet_rm_ip_16384x640           88234 ns  pcc 0.999998 rms 0.00197  ndiff_vs_both 0  | collapse 782/826  wait_gather 427/428  finalize 1211/1214  wait_stats 2201/2330  expand 4807/4939  pass1 48283/48901  pass2 28570/33412
+both_n4 unet_rm_ip_16384x640           88136 ns  pcc 0.999998 rms 0.00197  ndiff_vs_both 0  | collapse 782/829  wait_gather 427/428  finalize 1202/1204  wait_stats 2212/2280  expand 4817/4886  pass1 48279/48922  pass2 28570/33286
+both_n8 unet_rm_ip_16384x640           88141 ns  pcc 0.999998 rms 0.00197  ndiff_vs_both 0  | collapse 782/827  wait_gather 428/436  finalize 1210/1215  wait_stats 2202/2284  expand 4810/4890  pass1 48276/48899  pass2 28570/33340
+   all unet_rm_ip_16384x640           84344 ns  pcc 0.999998 rms 0.00197  ndiff_vs_both 0  | collapse 531/539  wait_gather 399/413  finalize 1431/1445  wait_stats 2018/2107  expand 4825/4911  pass1 48278/48813  pass2 28599/29661

@@ -9,8 +9,8 @@
 //                         Q += x*(x - k) over every tile row of the window, one SFPU column collapse at the end
 //                         (moments_rows, raw LLK) -> S1' = Sigma (x - k), T2 = Sigma x*(x - k) in the chan CBs
 //   collapse            : matmul(chan row [1 x W], map [W x 1]) -> 2 local partial tiles (row 0 = group lanes)
-//   combine (root)      : matmul(ones [1 x R], gathered [R x 2]) -> [S1', T2] replicated rows;
-//                         finalize chain (+ the group shift k) -> [rstd, mean]
+//   combine (root)      : matmul(ones [1 x R], gathered [R x 2]) -> [S1', T2] replicated rows, finalized in the
+//                         same DEST window (raw SFPU PostComputeFn, + the group shift k) -> [rstd, mean]
 //   expand              : matmul<transpose>(stats, map) -> per-channel rstd / mean (rows replicated);
 //                         a = rstd*gamma, m = mean*a, b' = m - beta
 //   normalize           : per chunk y = a*x - b', resident chunks first
@@ -50,6 +50,11 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_sqrt.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+#endif
 
 using namespace compute_kernel_lib;
 
@@ -73,7 +78,6 @@ constexpr uint32_t cb_beta_rows = 14;
 constexpr uint32_t cb_local_partials = 15;
 constexpr uint32_t cb_gathered_partials = 16;
 constexpr uint32_t cb_ones_tiles = 17;
-constexpr uint32_t cb_group_sums = 18;
 constexpr uint32_t cb_stats_out = 19;
 constexpr uint32_t cb_group_stats = 20;
 constexpr uint32_t cb_pilot_rows = 22;   // -k per channel (row 0), held for pass 1
@@ -312,6 +316,81 @@ ALWI void matmul_with_map(
         InputPolicy::NoWaitNoPop>(in0, map, out, out, shape);
 }
 
+#ifdef TRISC_MATH
+// One row-group-0 vector of the finalize (face F in {0, 1}, column parity P), then its results stored to every
+// vector of the same parity in faces F and F + 2 (row-groups 0..3) of the two output tiles. DEST in: tile 0 = S1',
+// tile 1 = T2 (the sender-sum matmul's rows are identical), tile 2 = k (the reader replicates its rows). DEST out:
+// tile 0 = rstd, tile 1 = mean, every row. sfpi index = 8*face + 2*row_group + parity; a tile is 32 indices.
+// Each step is the stock op's arithmetic in the stock order; the intermediates go through DEST like the stock
+// chain (store, reload) so the compiler cannot contract a mul + add into one SFPMAD (a different rounding).
+// The stock chain's ops round to bf16 when DEST is 16-bit; this path reproduces them for the op's fp32 DEST only.
+static_assert(DST_ACCUM_MODE, "gn_finalize_sfpu matches the stock finalize chain for fp32_dest_acc_en=True only");
+// Register budget: the exact sqrt body needs most LREGs, so only `var` is live into it - inv_n / eps are loaded
+// (SFPLOADI) where used and mean is parked in tile 2's slot (k is dead by then) until rstd is stored.
+template <int F, int P>
+sfpi_inline void gn_finalize_vector(const uint32_t inv_n_bits, const uint32_t eps_bits) {
+    constexpr int i = 8 * F + P;
+    {
+        const sfpi::vFloat inv_n = ckernel::sfpu::Converter::as_float(inv_n_bits);
+        sfpi::dst_reg[i] = sfpi::vFloat(sfpi::dst_reg[i]) * inv_n;            // mean' = S1' * inv_n   (MulUnary)
+        sfpi::dst_reg[32 + i] = sfpi::vFloat(sfpi::dst_reg[32 + i]) * inv_n;  // T2 * inv_n           (MulUnary)
+    }
+    {
+        const sfpi::vFloat mp = sfpi::dst_reg[i];
+        const sfpi::vFloat mean = sfpi::vFloat(sfpi::dst_reg[64 + i]) + mp;  // mean = k + mean'      (AddBinary)
+        sfpi::dst_reg[64 + i] = mean;
+        sfpi::dst_reg[i] = mp * mean;  // mean' * mean         (MulBinary)
+    }
+    sfpi::vFloat var = sfpi::vFloat(sfpi::dst_reg[32 + i]) - sfpi::vFloat(sfpi::dst_reg[i]);  //    (SubBinary)
+    v_if(var < 0.0f) { var = 0.0f; }  //                      (Relu)
+    v_endif;
+    var = var + sfpi::vFloat(ckernel::sfpu::Converter::as_float(eps_bits));  // (AddUnary)
+    sfpi::dst_reg[i] = var;
+    const sfpi::vFloat rstd = ckernel::sfpu::_calculate_sqrt_body_<false, true, false>(sfpi::dst_reg[i]);  // (Rsqrt)
+#pragma GCC unroll 4
+    for (int rg = 0; rg < 4; ++rg) {
+        sfpi::dst_reg[8 * F + 2 * rg + P] = rstd;
+        sfpi::dst_reg[8 * (F + 2) + 2 * rg + P] = rstd;
+    }
+    const sfpi::vFloat mean = sfpi::dst_reg[64 + i];
+#pragma GCC unroll 4
+    for (int rg = 0; rg < 4; ++rg) {
+        sfpi::dst_reg[32 + 8 * F + 2 * rg + P] = mean;
+        sfpi::dst_reg[32 + 8 * (F + 2) + 2 * rg + P] = mean;
+    }
+}
+
+// The 4 row-group-0 vectors (faces 0/1 x parities). A vector only writes its own parity in faces F and F + 2 (and
+// its own tile-2 slot), and reads only its own row-group-0 slots, so no vector clobbers another's unread input.
+sfpi_inline void gn_finalize_sfpu(const uint32_t inv_n_bits, const uint32_t eps_bits) {
+    gn_finalize_vector<0, 0>(inv_n_bits, eps_bits);
+    gn_finalize_vector<0, 1>(inv_n_bits, eps_bits);
+    gn_finalize_vector<1, 0>(inv_n_bits, eps_bits);
+    gn_finalize_vector<1, 1>(inv_n_bits, eps_bits);
+}
+#endif
+
+// matmul_block PostComputeFn of the sender sum: DST 0/1 hold [S1', T2] (rows replicated); k joins as DST 2 (exact
+// UnpackToDestFp32 copy), then the scoped finalize leaves [rstd, mean] in DST 0/1 for the helper's pack.
+// RAW SFPU: bypasses the eltwise_chain finalize (CopyTile x3 + 8 full-tile SFPU ops + 2 PackTile, each SFPU op over
+// all 32 vectors) - the chain has no vector scope and cannot run inside the matmul's DEST window. Measured (root
+// finalize zone, perf_experiments/combine_critical_path): unet_rm_ip_1024x1280 whole op 27.1 -> 24.3 us with the
+// publish hand-off; see changelog Perf 1 "Helper bypasses".
+struct FinalizeStats {
+    uint32_t inv_n_bits;
+    uint32_t eps_bits;
+    ALWI void operator()(uint32_t /*out_subblock_num_tiles*/) const {
+        cb_wait_front(cb_group_shift, 1);
+        reconfig_data_format_srca(cb_group_shift);
+        copy_init(cb_group_shift);
+        copy_tile(cb_group_shift, 0, 2);
+        rsqrt_tile_init();  // SFPU config + the exact rsqrt constants (vConstIntPrgm0, vConstFloatPrgm1/2)
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            gn_finalize_sfpu, 0, ckernel::VectorMode::None, inv_n_bits, eps_bits)));
+        cb_pop_front(cb_group_shift, 1);
+    }
+};
+
 }  // namespace
 
 void kernel_main() {
@@ -328,17 +407,14 @@ void kernel_main() {
     CircularBuffer local_partials_cb(cb_local_partials);
     CircularBuffer ones_cb(cb_ones_tiles);
     CircularBuffer gathered_cb(cb_gathered_partials);
-    CircularBuffer group_sums_cb(cb_group_sums);
     CircularBuffer group_stats_cb(cb_group_stats);
+    CircularBuffer stats_out_cb(cb_stats_out);
 
     DataflowBuffer chan_scale_dfb(cb_chan_scale);
     DataflowBuffer chan_work_dfb(cb_chan_work);
     DataflowBuffer chan_shift_dfb(cb_chan_shift);
     DataflowBuffer gamma_dfb(cb_gamma_rows);
     DataflowBuffer beta_dfb(cb_beta_rows);
-    DataflowBuffer group_sums_dfb(cb_group_sums);
-    DataflowBuffer stats_out_dfb(cb_stats_out);
-    DataflowBuffer group_shift_dfb(cb_group_shift);
 
     compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(cb_chan_scale, cb_group_map, cb_local_partials);
 
@@ -426,7 +502,8 @@ void kernel_main() {
                 cb_wait_front(cb_gathered_partials, 2 * R);
             }
             MaybeDeviceZoneScope("c_finalize");
-            // Sum the cpi sender rows: ones [1 x R] x gathered [R x 2] -> [S1, S2], every row = the total.
+            // Sum the cpi sender rows: ones [1 x R] x gathered [R x 2] -> [S1', T2] in DST 0/1 (every row = the
+            // total), finalized in the same DEST window (FinalizeStats) and packed as [rstd, mean] (rows replicated).
             matmul_block<
                 false,
                 false,
@@ -434,60 +511,14 @@ void kernel_main() {
                 OutputCBLayout::SubblockMajor,
                 matmul_config::InitMode::Short,
                 InputPolicy::WaitAndPopPerKBlock,
-                InputPolicy::WaitAndPopPerKBlock>(
-                ones_cb, gathered_cb, group_sums_cb, group_sums_cb, MatmulBlockShape::of(1, 1, 1, 2, R, 1));
-
-            // Finalize: mean' = S1'/n, mean = mean' + k, var = max(T2/n - mean'*mean, 0), rstd = rsqrt(var + eps)
-            // -> [rstd, mean].
-            cb_wait_front(cb_group_sums, 2);
-            cb_reserve_back(cb_stats_out, 2);
-            eltwise_chain(
-                IterationShape::one_tile(),
-                CopyTile<
-                    input(
-                        cb_group_sums,
-                        WaitPolicy::None,
-                        PopPolicy::None,
-                        InputTileMapping::Scalar,
-                        DataFormatReconfig::Enabled,
-                        TileAddressing::Offset),
-                    Dst::D0>{group_sums_dfb, 0},
-                CopyTile<
-                    input(
-                        cb_group_sums,
-                        WaitPolicy::None,
-                        PopPolicy::None,
-                        InputTileMapping::Scalar,
-                        DataFormatReconfig::Enabled,
-                        TileAddressing::Offset),
-                    Dst::D1>{group_sums_dfb, 1},
-                CopyTile<input(cb_group_shift), Dst::D2>{group_shift_dfb},
-                MulUnary<Dst::D0>{inv_n_bits},
-                MulUnary<Dst::D1>{inv_n_bits},
-                AddBinary<Dst::D2, Dst::D0, Dst::D2>{},
-                MulBinary<Dst::D0, Dst::D2, Dst::D0>{},
-                SubBinary<Dst::D1, Dst::D0, Dst::D1>{},
-                Relu<Dst::D1>{},
-                AddUnary<Dst::D1>{eps_bits},
-                Rsqrt<Approx::Exact, Dst::D1>{},
-                PackTile<
-                    output(
-                        cb_stats_out,
-                        ReservePolicy::None,
-                        PushPolicy::None,
-                        DataFormatReconfig::Enabled,
-                        TileAddressing::Offset),
-                    Dst::D1>{stats_out_dfb, 0},
-                PackTile<
-                    output(
-                        cb_stats_out,
-                        ReservePolicy::None,
-                        PushPolicy::None,
-                        DataFormatReconfig::Enabled,
-                        TileAddressing::Offset),
-                    Dst::D2>{stats_out_dfb, 1});
-            cb_push_back(cb_stats_out, 2);
-            cb_pop_front(cb_group_sums, 2);
+                InputPolicy::WaitAndPopPerKBlock,
+                FinalizeStats>(
+                ones_cb,
+                gathered_cb,
+                stats_out_cb,
+                stats_out_cb,
+                MatmulBlockShape::of(1, 1, 1, 2, R, 1),
+                FinalizeStats{inv_n_bits, eps_bits});
         }
 
         // ---------------- expand_stats_to_channels ----------------

@@ -1,0 +1,6 @@
+  grad unet_rm_ip_1024x1280           24267 ns  pcc 0.999998 rms 0.00197  ndiff_vs_grad 0
+  base unet_rm_ip_1024x1280           27079 ns  pcc 0.999998 rms 0.00197  ndiff_vs_grad 0
+  grad unet_tile_1024x1280            21895 ns  pcc 0.999998 rms 0.00197  ndiff_vs_grad 0
+  base unet_tile_1024x1280            25184 ns  pcc 0.999998 rms 0.00197  ndiff_vs_grad 0
+  grad unet_rm_ip_16384x960          164696 ns  pcc 0.999998 rms 0.00202  ndiff_vs_grad 0
+  base unet_rm_ip_16384x960          167819 ns  pcc 0.999998 rms 0.00202  ndiff_vs_grad 0

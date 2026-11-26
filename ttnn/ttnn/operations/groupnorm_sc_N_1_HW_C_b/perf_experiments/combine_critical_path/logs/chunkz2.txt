@@ -1,0 +1,3 @@
+  base unet_rm_ip_1024x640            23777 ns  pcc 0.999998 rms 0.00200  ndiff_vs_base 0
+  both unet_rm_ip_1024x640            20143 ns  pcc 0.999998 rms 0.00200  ndiff_vs_base 0
+   all unet_rm_ip_1024x640            20081 ns  pcc 0.999998 rms 0.00200  ndiff_vs_base 0

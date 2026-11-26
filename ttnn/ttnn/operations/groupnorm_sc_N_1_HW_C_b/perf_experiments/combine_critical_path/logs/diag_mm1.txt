@@ -1,0 +1,4 @@
+  both unet_rm_ip_16384x640           89376 ns  pcc 0.999998 rms 0.00197  ndiff_vs_both 0  | collapse 779/825  wait_gather 428/433  finalize 1193/1193  wait_stats 2322/2460  expand 4930/5064  pass1 48285/49104  pass2 28570/34370
+   all unet_rm_ip_16384x640           84325 ns  pcc 0.999998 rms 0.00197  ndiff_vs_both 0  | collapse 531/539  wait_gather 400/408  finalize 1431/1439  wait_stats 2008/2075  expand 4816/4882  pass1 48281/48807  pass2 28597/29664
+  both unet_rm_ip_16384x320           52815 ns  pcc 0.999998 rms 0.00197  ndiff_vs_both 0  | collapse 787/827  wait_gather 427/430  finalize 1188/1192  wait_stats 2079/2216  expand 4693/4828  pass1 28812/29423  pass2 14593/17502
+   all unet_rm_ip_16384x320           50189 ns  pcc 0.999998 rms 0.00197  ndiff_vs_both 0  | collapse 533/539  wait_gather 400/452  finalize 1432/1479  wait_stats 1852/1936  expand 4660/4745  pass1 28831/29199  pass2 14611/15135

@@ -1,0 +1,2 @@
+ bothz unet_tile_1024x1280            22153 ns  pcc 0.999998 rms 0.00197  ndiff_vs_bothz 0  | collapse 876/892  publish 15/15  collapse_mm 797/819  wait_gather 427/430  finalize 1199/1203  wait_stats 1959/2044  expand 4483/4573  pass1 12708/13139  pass2 3144/3255
+  allz unet_tile_1024x1280            22081 ns  pcc 0.999998 rms 0.00197  ndiff_vs_bothz 0  | collapse 602/611  publish 15/16  collapse_mm 525/538  wait_gather 409/413  finalize 1438/1441  wait_stats 2015/2161  expand 4829/4975  pass1 12545/13073  pass2 2907/3238

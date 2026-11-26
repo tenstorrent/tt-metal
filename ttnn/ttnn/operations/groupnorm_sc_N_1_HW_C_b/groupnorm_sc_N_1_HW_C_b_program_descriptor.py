@@ -83,7 +83,6 @@ CB_BETA_ROWS = 14
 CB_LOCAL_PARTIALS = 15
 CB_GATHERED_PARTIALS = 16
 CB_ONES_TILES = 17
-CB_GROUP_SUMS = 18
 CB_STATS_OUT = 19
 CB_GROUP_STATS = 20
 CB_AFFINE_STAGING = 21  # reader-only staging: pilot row (step 0) / affine slices (step B), disjoint in time
@@ -170,7 +169,7 @@ def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map
     # Sharded TILE: the output tiles are the output shard.
     out_ring = 0 if tile_shard else output_ring_bytes(T)
     # 2W: alias groups E (sum acc / chan scale) and C (sumsq acc / chan work / chan shift).
-    # 2R + 7: gathered partials, group D (2), stats out (2), group stats (2), group shift (1).
+    # 2R + 7: gathered partials, local partials (2), stats out (2), group stats (2), group shift (1).
     f32_bytes = out_ring + F32_TILE_BYTES * (2 * W + 2 * R + 7)
     staging = staging_bytes(W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb)
     return BF16_TILE_BYTES * bf16_pages + f32_bytes + staging
@@ -701,14 +700,8 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
     if hb:
         cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_BETA_ROWS, bf16, BF16_TILE_BYTES)]))
-    # Alias group D: local partials (collapse -> gather) / group sums (root), disjoint lifetimes.
-    cbs.append(
-        _cb(
-            2 * F32_TILE_BYTES,
-            cores,
-            [(CB_LOCAL_PARTIALS, f32, F32_TILE_BYTES), (CB_GROUP_SUMS, f32, F32_TILE_BYTES)],
-        )
-    )
+    # Local partials (collapse -> gather).
+    cbs.append(_cb(2 * F32_TILE_BYTES, cores, [(CB_LOCAL_PARTIALS, f32, F32_TILE_BYTES)]))
     # Remote-written landing zones (allocated on every used core so the base address is identical).
     cbs.append(_cb(2 * R * F32_TILE_BYTES, cores, [(CB_GATHERED_PARTIALS, f32, F32_TILE_BYTES)]))
     cbs.append(_cb(R * BF16_TILE_BYTES, cores, [(CB_ONES_TILES, bf16, BF16_TILE_BYTES)]))
@@ -853,7 +846,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         dst_full_sync_en=False,
     )
     unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CB_SLOTS
-    for idx in (CB_SUM_ACC, CB_SUMSQ_ACC, CB_GROUP_SUMS, CB_GROUP_SHIFT):
+    for idx in (CB_SUM_ACC, CB_SUMSQ_ACC, CB_GROUP_SHIFT):
         unpack_modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_config.unpack_to_dest_mode = unpack_modes
     compute_kernels = [

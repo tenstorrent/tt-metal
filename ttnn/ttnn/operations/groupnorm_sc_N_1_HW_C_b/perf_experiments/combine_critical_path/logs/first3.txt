@@ -1,0 +1,4 @@
+  base unet_tile_1024x1280            25190 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0  | collapse 2403/2423  wait_gather 550/576  finalize 3100/3132  wait_stats 3717/3816  expand 6234/6328  pass1 12673/13004  pass2 3058/3080
+   fin unet_tile_1024x1280            23457 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0  | collapse 2406/2427  wait_gather 599/661  finalize 1297/1356  wait_stats 1863/1941  expand 4384/4462  pass1 12677/12938  pass2 3054/3201
+  both unet_tile_1024x1280            21897 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0  | collapse 789/800  wait_gather 566/618  finalize 1265/1314  wait_stats 1829/1921  expand 4357/4450  pass1 12763/12973  pass2 3210/3218
+   all unet_tile_1024x1280            22130 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0  | collapse 533/549  wait_gather 413/414  finalize 1410/1412  wait_stats 2101/2202  expand 4929/5030  pass1 12511/13133  pass2 2911/3327

@@ -1,0 +1,1 @@
+  base unet_tile_1024x1280            25190 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0  | collapse 2401/2433  wait_gather 556/620  finalize 3106/3167  wait_stats 3709/3800  expand 6227/6317  pass1 12677/12947  pass2 3059/3076

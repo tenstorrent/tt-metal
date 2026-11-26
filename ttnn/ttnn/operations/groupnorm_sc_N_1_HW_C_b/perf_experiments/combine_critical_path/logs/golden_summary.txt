@@ -1,0 +1,4 @@
+golden_both.log: passed=632 failed=0 skipped=42345
+golden_both_reg.log: passed=43 failed=0 skipped=0 SAFE_PYTEST_RESULT: PASS
+golden_both_mochi.log: passed=1 failed=0 skipped=0 SAFE_PYTEST_RESULT: PASS
+golden_both.log was cut by the 590 s timeout inside the last loose case (8x1x407040x128); that case ran alone in golden_both_mochi.log

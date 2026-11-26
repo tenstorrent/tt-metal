@@ -1,0 +1,15 @@
+   all unet_rm_ip_1024x1280           23586 ns  pcc 0.999998 rms 0.00197  ndiff_vs_all 0
+  both unet_rm_ip_1024x1280           24290 ns  pcc 0.999998 rms 0.00197  ndiff_vs_all 0
+   fin unet_rm_ip_1024x1280           25606 ns  pcc 0.999998 rms 0.00197  ndiff_vs_all 0
+  vpub unet_rm_ip_1024x1280           25808 ns  pcc 0.999998 rms 0.00197  ndiff_vs_all 0
+  base unet_rm_ip_1024x1280           27115 ns  pcc 0.999998 rms 0.00197  ndiff_vs_all 0
+   all unet_tile_1024x1280            22092 ns  pcc 0.999998 rms 0.00197  ndiff_vs_all 0
+  both unet_tile_1024x1280            21893 ns  pcc 0.999998 rms 0.00197  ndiff_vs_all 0
+   fin unet_tile_1024x1280            23516 ns  pcc 0.999998 rms 0.00197  ndiff_vs_all 0
+  vpub unet_tile_1024x1280            23742 ns  pcc 0.999998 rms 0.00197  ndiff_vs_all 0
+  base unet_tile_1024x1280            25185 ns  pcc 0.999998 rms 0.00197  ndiff_vs_all 0
+   all unet_rm_ip_16384x960          161292 ns  pcc 0.999998 rms 0.00202  ndiff_vs_all 0
+  both unet_rm_ip_16384x960          164646 ns  pcc 0.999998 rms 0.00202  ndiff_vs_all 0
+   fin unet_rm_ip_16384x960          168904 ns  pcc 0.999998 rms 0.00202  ndiff_vs_all 0
+  vpub unet_rm_ip_16384x960          164487 ns  pcc 0.999998 rms 0.00202  ndiff_vs_all 0
+  base unet_rm_ip_16384x960          167928 ns  pcc 0.999998 rms 0.00202  ndiff_vs_all 0

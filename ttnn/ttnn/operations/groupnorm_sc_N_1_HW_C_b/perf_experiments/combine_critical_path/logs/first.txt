@@ -1,0 +1,2 @@
+  base unet_tile_1024x1280            25181 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0  | collapse 2404/2431  wait_gather 566/607  finalize 3111/3156  wait_stats 3711/3805  expand 6233/6321  pass1 12670/12964  pass2 3059/3077
+  vpub unet_tile_1024x1280            23756 ns  pcc 0.999998 rms 0.00197  ndiff_vs_base 0  | collapse 793/829  wait_gather 601/654  finalize 3137/3204  wait_stats 3703/3812  expand 6233/6341  pass1 12756/12953  pass2 3216/3223

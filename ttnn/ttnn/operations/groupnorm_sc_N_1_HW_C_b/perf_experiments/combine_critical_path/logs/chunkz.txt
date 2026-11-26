@@ -1,0 +1,3 @@
+  base unet_rm_ip_1024x640            23147 ns  pcc 0.999998 rms 0.00200  ndiff_vs_base 0  | collapse 2405/2413  wait_gather 707/764  finalize 3313/3368  wait_stats 3680/3762  expand 6257/6345  pass1 11018/11242  pass2 2435/2461
+  both unet_rm_ip_1024x640            19948 ns  pcc 0.999998 rms 0.00200  ndiff_vs_base 0  | collapse 858/919  wait_gather 485/528  finalize 1267/1298  wait_stats 1874/1961  expand 4468/4548  pass1 11013/11223  pass2 2356/2725
+   all unet_rm_ip_1024x640            19822 ns  pcc 0.999998 rms 0.00200  ndiff_vs_base 0  | collapse 614/623  wait_gather 579/606  finalize 1604/1634  wait_stats 1840/1955  expand 4670/4779  pass1 10976/11176  pass2 2351/2520

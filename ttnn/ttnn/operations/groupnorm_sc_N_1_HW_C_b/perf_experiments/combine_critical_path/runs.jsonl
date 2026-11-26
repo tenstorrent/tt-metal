@@ -1,0 +1,6 @@
+{"variant": "grad", "case": "unet_rm_ip_1024x1280", "pcc": 0.999998063375786, "rms": 0.001971834019078591, "vs": "grad", "ndiff": 0}
+{"variant": "base", "case": "unet_rm_ip_1024x1280", "pcc": 0.999998063375786, "rms": 0.001971834019078591, "vs": "grad", "ndiff": 0}
+{"variant": "grad", "case": "unet_tile_1024x1280", "pcc": 0.9999980639640311, "rms": 0.0019711739058973095, "vs": "grad", "ndiff": 0}
+{"variant": "base", "case": "unet_tile_1024x1280", "pcc": 0.9999980639640311, "rms": 0.0019711739058973095, "vs": "grad", "ndiff": 0}
+{"variant": "grad", "case": "unet_rm_ip_16384x960", "pcc": 0.9999979603815323, "rms": 0.002021163142612375, "vs": "grad", "ndiff": 0}
+{"variant": "base", "case": "unet_rm_ip_16384x960", "pcc": 0.9999979603815323, "rms": 0.002021163142612375, "vs": "grad", "ndiff": 0}
