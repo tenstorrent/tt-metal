@@ -46,7 +46,7 @@ import json
 import os
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -2272,10 +2272,15 @@ class MiniMaxH3Pipeline:
         num_inference_steps: int = 50,
         seed: int = 0,
         on_event: PipelineEventCallback | None = None,
+        on_video_frames: Callable[[np.ndarray], None] | None = None,
     ) -> MiniMaxH3Output:
         """`image` and/or `last_image` select `fl2va`; `references` selects `ref2va`; neither `t2va`.
 
         `reference_resize_mode` applies to ref2va image references; only `match` is served.
+
+        `on_video_frames` (yuv420 output only) gets the decoded planar frames in order, as read-only
+        views of the returned `video`, each run as soon as its VAE chunk is decoded, so an encoder can
+        consume them while the rest of the video and the audio decode. It runs on a background thread.
 
         Note that `fl2va` at a given seed does **not** reproduce `t2va` at that seed, even with a
         keyframe that contributes nothing: the conditioning noise is the first draw off the request
@@ -2283,6 +2288,8 @@ class MiniMaxH3Pipeline:
         order.
         """
         on_event = on_event if on_event is not None else null_callback
+        if on_video_frames is not None and self.vae_output_type != "yuv420":
+            raise ValueError("on_video_frames needs vae_output_type='yuv420'")
         self.last_program_cache_misses = {}
         validate_request(
             image=image,
@@ -2307,6 +2314,7 @@ class MiniMaxH3Pipeline:
                 num_inference_steps=num_inference_steps,
                 seed=seed,
                 on_event=on_event,
+                on_video_frames=on_video_frames,
             )
         if num_frames is None:
             raise ValueError("num_frames may only be left to the references, and only for ref2va")
@@ -2417,6 +2425,7 @@ class MiniMaxH3Pipeline:
             latent_width=latent_width,
             num_audio_latents=num_audio_latents,
             on_event=on_event,
+            on_video_frames=on_video_frames,
         )
 
     @torch.no_grad()
@@ -2433,6 +2442,7 @@ class MiniMaxH3Pipeline:
         num_inference_steps: int,
         seed: int,
         on_event: PipelineEventCallback,
+        on_video_frames: Callable[[np.ndarray], None] | None = None,
     ) -> MiniMaxH3Output:
         """`ref2va`: an ordered list of references in, a video and its soundtrack out.
 
@@ -2573,6 +2583,7 @@ class MiniMaxH3Pipeline:
             num_audio_latents=num_audio_latents,
             on_event=on_event,
             condition_spec=condition_spec,
+            on_video_frames=on_video_frames,
         )
 
     def _build_schedulers(self, num_inference_steps: int) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
@@ -2615,6 +2626,7 @@ class MiniMaxH3Pipeline:
         num_audio_latents: int,
         on_event: PipelineEventCallback,
         condition_spec: Sequence[tuple[str, int]] | None = None,
+        on_video_frames: Callable[[np.ndarray], None] | None = None,
     ) -> MiniMaxH3Output:
         """The half every task shares: denoise the packed sequence, then decode both modalities.
 
@@ -2647,7 +2659,13 @@ class MiniMaxH3Pipeline:
 
         with self._track_cache_misses(on_event, "vae"):
             video = self._decode_video(
-                self._vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
+                self._vae,
+                video_rows,
+                num_latent_frames,
+                latent_height,
+                latent_width,
+                layout.num_condition_video_rows,
+                on_frames=on_video_frames,
             )
 
         with self._track_cache_misses(on_event, "audio"):
@@ -3775,9 +3793,10 @@ class MiniMaxH3Pipeline:
         latent_height: int,
         latent_width: int,
         num_condition_video_rows: int,
+        on_frames: Callable[[np.ndarray], None] | None = None,
     ) -> torch.Tensor:
         """Decode the *target* rows. `fl2va`'s leading condition rows are dropped, not decoded --- they
-        are the keyframe, which the caller already has.
+        are the keyframe, which the caller already has. `on_frames` streams the yuv420 frames out.
         """
         latents = unpatchify_video_tokens(
             rows[num_condition_video_rows:],
@@ -3789,10 +3808,10 @@ class MiniMaxH3Pipeline:
         )
         latents = self._denormalize(latents, self.vae_config.latents_mean, self.vae_config.latents_std)
         vae.log_profile = self._log_generation
-        video = vae.decode(latents, output_type="yuv420" if self.vae_output_type == "yuv420" else "float")
         if self.vae_output_type == "yuv420":
             # De-normalized, clamped and colour-converted on device; nothing left to do on host.
-            return video
+            return vae.decode(latents, output_type="yuv420", on_frames=on_frames)
+        video = vae.decode(latents, output_type="float")
         if self.vae_output_type == "uint8":
             # `float_to_uint8` already applied *both* halves of the mapping on device: `proj_out`'s
             # fold put pixels in [-1, 1], and the cast then took [-1, 1] -> [0, 255]. So the decode
