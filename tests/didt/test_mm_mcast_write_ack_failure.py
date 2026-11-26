@@ -24,7 +24,8 @@ Run this. Reset first, always -- and note the sweep is always a cold-cache run:
     TT_METAL_HOME=$PWD python_env/bin/python tests/didt/test_mm_mcast_write_ack_failure.py
 
 Exits 1 if any chip hangs. Logs: /tmp/mm_mcast_write_ack_failure/chip<N>/pytest.log, or under
-$MCAST_ACK_WORK_DIR when set. Chips report as they finish, so output is in completion order. Reset
+$MCAST_ACK_WORK_DIR when set. Kernel caches: kmd<minor>/ per chip under the work dir, or under
+$MCAST_ACK_CACHE_DIR when set (keep it on local disk: 32 concurrent JIT builds fail on NFS). Chips report as they finish, so output is in completion order. Reset
 between runs too: this gate detects a hang but cannot clear it, so a still-wedged chip makes its
 neighbours fail and look faulty.
 
@@ -47,7 +48,7 @@ Knobs:
 
     iters     MATMUL_ITERS per chip, default 20 (~25ms each, so more soak is nearly free)
     watchdog  TT_METAL_OPERATION_TIMEOUT_SECONDS per chip in seconds, default 30
-    work_dir  holds each chip's cache and pytest.log
+    work_dir  holds each chip's pytest.log, and its kernel cache unless MCAST_ACK_CACHE_DIR is set
 
 These env vars override the shape and grid: MATMUL_HEADS (default 64), MATMUL_SEQ (default 5120),
 MATMUL_GRID (default is the compute grid less its dispatch column, so 11x10 on a Blackhole galaxy).
@@ -334,14 +335,19 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None, workload=None):
     workload = workload or os.environ.get("MATMUL_WORKLOAD", "wkv_b1")
     work_dir = Path(work_dir or Path(tempfile.gettempdir()) / "mm_mcast_write_ack_failure")
     shutil.rmtree(work_dir, ignore_errors=True)
-    chips = sorted(chip_identity())
+    # Keyed by /dev/tenstorrent minor: tt-kmd derives it from the bus number on a galaxy, so a chip keeps its cache
+    # dir when another chip drops off the bus, unlike the sorted chip id.
+    cache_root = Path(os.environ.get("MCAST_ACK_CACHE_DIR") or work_dir)
+    shutil.rmtree(cache_root, ignore_errors=True)
+    identity = chip_identity()
+    chips = sorted(identity)
     running = {}
     for chip in chips:
         out = work_dir / f"chip{chip}"
         out.mkdir(parents=True)
         env = os.environ | {
             "TT_VISIBLE_DEVICES": str(chip),
-            "TT_METAL_CACHE": str(out / "cache"),
+            "TT_METAL_CACHE": str(cache_root / f"kmd{identity[chip][1]}"),
             "OUT_DIR": str(out),
             WATCHDOG_ENV: str(watchdog),
             TRIAGE_ENV: "true",
