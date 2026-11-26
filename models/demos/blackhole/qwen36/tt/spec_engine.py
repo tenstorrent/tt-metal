@@ -31,6 +31,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.spec_accept import StepAccept, greedy_counts
 from models.demos.blackhole.qwen36.tt.spec_chain import ChainInputs, chain_overlay
+from models.demos.blackhole.qwen36.tt.spec_penalties import reconcile, step_penalties, token_row
 from models.demos.blackhole.qwen36.tt.spec_sample import chained_sampling_plan, drawn_users, sampling_plan, with_draws
 from models.demos.blackhole.qwen36.tt.spec_step import (
     DRAFT_PENDING,
@@ -639,6 +640,8 @@ class MTPSpecEngine:
         self._no_draft = set()  # slots whose drafts the runner withholds: propose skips them
         self._speculated = set()  # slots that verified with n > 0 since prefill (never marked)
         self._withheld_streak = {}  # slot -> consecutive offers answered with n == 0
+        # slot -> spec_penalties.PenaltyRow: what the verify penalties' device counts row of the slot's request holds
+        self._pen_rows = [None] * self.B
         self.no_draft_streak = NO_DRAFT_STREAK
         self.skipped_propose_calls = 0  # proposes skipped because every row was marked
 
@@ -1021,6 +1024,7 @@ class MTPSpecEngine:
         self._prompts.pop(slot, None)
         self._fresh_dirty.discard(slot)
         self._rope_deltas[slot] = 0
+        self._pen_rows[slot] = None
         reset_draft_skip(self, slot)
         # the leaving request may be why other rows' drafts were withheld: offer them again
         self._no_draft.clear()
@@ -1038,6 +1042,8 @@ class MTPSpecEngine:
         new_of = {old: new for new, old in enumerate(idx)}
         self._last_hidden = [self._last_hidden[j] for j in idx]
         self._rope_deltas = [self._rope_deltas[j] for j in idx]
+        # A record keeps the device row it was written to: a moved request's counts are rewritten before they are read.
+        self._pen_rows = [self._pen_rows[j] for j in idx]
         self._fresh = {new_of[u]: n for u, n in self._fresh.items()}
         self._withheld_streak = {new_of[u]: n for u, n in self._withheld_streak.items()}
         self._parked = {new_of[u]: v for u, v in self._parked.items()}
@@ -1327,6 +1333,9 @@ class MTPSpecEngine:
         defer=False,
         predecessor=None,
         keep_pending=False,
+        prompt_tokens=None,
+        output_tokens=None,
+        penalty_outputs=None,
     ):
         """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block); slot_remap is applied after
         validation. ``defer`` (MTPBlockEngine, argmax_ids): return the verify unread, as a PendingVerify in
@@ -1336,6 +1345,9 @@ class MTPSpecEngine:
         returns the device sampler's draws in place of its argmax ids (spec_sample). ``one_enqueue``: an argmax_ids
         verify may also run the device acceptance and the drafter (MTPBlockEngine); a narrow decode step, which the
         runner follows with a propose over positions it derives from its own request state, passes False.
+        ``prompt_tokens`` and ``output_tokens`` (the plugin's -1 padded [rows, n] ids, sent with ``sampling`` when a row
+        has a penalty): each row's prompt and committed output, which the verify penalties apply
+        (spec_penalties); ``penalty_outputs`` {row: int64 ids} replaces a row of ``output_tokens``.
         Returns VerifyResult."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
@@ -1343,7 +1355,14 @@ class MTPSpecEngine:
             if spec_mode != "argmax_ids" or not defer:
                 raise ValueError("a chained verify is an argmax_ids verify read later (defer)")
             return self._decode_chained(
-                predecessor, start_pos, num_valid_drafts, page_table, slot_remap, mamba_state, sampling
+                predecessor,
+                start_pos,
+                num_valid_drafts,
+                page_table,
+                slot_remap,
+                mamba_state,
+                sampling,
+                (prompt_tokens, output_tokens),
             )
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
         if clean.shape[0] != self.B:
@@ -1359,8 +1378,13 @@ class MTPSpecEngine:
                 "a verify of a device-sampled step needs the verify sampler, which the engine prepares only after "
                 "warmup_model_decode(can_sample_on_device=True)"
             )
+        penalties = step_penalties(sampling, active)
+        if penalties is not None and spec_mode != "argmax_ids":
+            raise ValueError("verify penalties apply to an argmax_ids verify; a logits verify returns raw logits")
         if slot_remap is not None:
             self.remap_slots(slot_remap)
+        if penalties is not None:
+            self._stage_penalties(penalties, plan, prompt_tokens, output_tokens, penalty_outputs)
         self._no_draft = note_withheld_drafts(
             self._offered,
             self._no_draft,
@@ -1379,6 +1403,7 @@ class MTPSpecEngine:
             num_valid_drafts=num_valid_drafts,
             **({} if mamba_state is None else {"mamba_state": mamba_state}),
             **({} if plan is None else {"sample_plan": plan}),
+            **({} if penalties is None else {"penalties": penalties}),
             **(
                 {"one_enqueue": True} if one_enqueue and spec_mode == "argmax_ids" and self._one_enqueue_ready() else {}
             ),
@@ -1393,7 +1418,54 @@ class MTPSpecEngine:
         """Whether a verify can also run the device acceptance and the drafter (MTPBlockEngine once captured)."""
         return False
 
-    def _decode_chained(self, predecessor, start_pos, num_valid_drafts, page_table, slot_remap, mamba_state, sampling):
+    def _verify_penalties(self):
+        """The model's verify penalties (spec_penalties.VerifyPenalties), or ValueError when the launch has none."""
+        pen = getattr(self.model, "_vfy_penalties", None)
+        if pen is None or not self.captured:
+            raise ValueError(
+                "a verify with penalties needs the verify penalties, which a device-sampling launch prepares on the "
+                "vocab-sharded verify logits"
+            )
+        return pen
+
+    def _stage_penalties(self, penalties, plan, prompt_tokens, output_tokens, outputs=None):
+        """Bring the device counts of every penalty row of a host-staged verify to its request's prompt and committed
+        output, and stage the step's parameters: a row whose record holds a prefix of its output gets the missing
+        tokens added, any other row is rewritten (spec_penalties.reconcile). A row the plan does not draw (greedy, or
+        top-k 1) takes the penalized argmax in place of its ids. ``outputs`` {row: ids} replaces rows of
+        ``output_tokens``."""
+        pen = self._verify_penalties()
+        users, T = penalties.users, self.T
+        outputs = outputs or {}
+        if prompt_tokens is None or (output_tokens is None and any(u not in outputs for u in users)):
+            raise ValueError("a verify with penalties needs each row's prompt_tokens and output_tokens")
+        prompts = {u: token_row(prompt_tokens, u) for u in users}
+        history = {u: outputs[u] if u in outputs else token_row(output_tokens, u) for u in users}
+        for u in users:
+            if self._pen_rows[u] is not None:
+                self._pen_rows[u].resolve(T)
+        rebuild, add = reconcile(self._pen_rows, users, prompts, history)
+        pen.rebuild(rebuild)
+        pen.add(add)
+        pen.stage(penalties, self._greedy_penalty_rows(penalties, plan))
+
+    def _greedy_penalty_rows(self, penalties, plan):
+        """Per verify row, 1 for the rows of a penalty user the ``plan`` does not draw."""
+        drawn = drawn_users(plan, self.B, self.T)
+        live = penalties.live.tolist()
+        return [int(live[r // self.T] and not drawn[r // self.T]) for r in range(self.B * self.T)]
+
+    def _decode_chained(
+        self,
+        predecessor,
+        start_pos,
+        num_valid_drafts,
+        page_table,
+        slot_remap,
+        mamba_state,
+        sampling,
+        tokens=(None, None),
+    ):
         raise NotImplementedError(f"{type(self).__name__} builds no chained verify")
 
     def _verify_split(self, tokens, positions, mi_prev, **kw):
@@ -1955,6 +2027,7 @@ class MTPBlockEngine(MTPSpecEngine):
         self.one_enqueue_host_proposes = 0  # one-enqueue verifies whose propose drafted again on the host
         self._chain = None  # spec_chain.ChainInputs, once prepared
         self._chain_trace = None  # the chain program's trace
+        self._pen_commit_trace = None  # the verify penalties' commit trace (spec_penalties), with the chain trace
         self.chained_steps = 0  # chained verifies whose inputs the chain program built
         self.materialized_steps = 0  # chained verifies the engine built from a read predecessor instead
         self.prefills_over_pending = 0  # verifies a prefill ran behind before their propose
@@ -2002,14 +2075,17 @@ class MTPBlockEngine(MTPSpecEngine):
             buckets=verify_buckets(self.B),
         )
 
-    def _verify_bucket(self, active, read_logits=False, sample_plan=None):
+    def _verify_bucket(self, active, read_logits=False, sample_plan=None, penalties=False):
         """The verify row bucket a step over ``active`` rows replays (verify_bucket over the captured ones; with
-        ``sample_plan`` over those with a sampler trace), or None for the B-user trace; counts the step in
-        verify_bucket_steps."""
+        ``sample_plan`` over those with a sampler trace, with ``penalties`` over those with a penalty trace), or None
+        for the B-user trace; counts the step in verify_bucket_steps."""
         traces = getattr(self.model, "_vfy_bucket_traces", None) or {}
         if sample_plan is not None:
             sampled = getattr(self.model, "_vfy_bucket_sample_traces", None) or {}
             traces = {b: t for b, t in traces.items() if b in sampled}
+        if penalties:
+            penalized = getattr(self.model, "_vfy_bucket_pen_traces", None) or {}
+            traces = {b: t for b, t in traces.items() if b in penalized}
         users = self.B
         if traces and not read_logits:
             users = verify_bucket(traces, active.tolist(), self.B)
@@ -2063,6 +2139,12 @@ class MTPBlockEngine(MTPSpecEngine):
         blocks.clear_verify_blocks()  # the warm pass wrote the ctrl pages
         if sampler is not None:
             sampler.seeds_written()
+        pen = getattr(model, "_vfy_penalties", None)
+        if pen is not None:
+            pen.bind(pack=self._dr_pack)
+            pen.commit_body()
+            ttnn.synchronize_device(self.mesh)
+            pen.reset()
 
     def _capture_step(self):
         """The step trace, over the verify trace's ids output (which exists from the verify capture on)."""
@@ -2081,6 +2163,12 @@ class MTPBlockEngine(MTPSpecEngine):
             ttnn.end_trace_capture(self.mesh, self._chain_trace, cq_id=0)
             ttnn.synchronize_device(self.mesh)
             logger.info("[spec_engine] chain trace captured: chained verifies on")
+            pen = getattr(self.model, "_vfy_penalties", None)
+            if pen is not None:
+                self._pen_commit_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                pen.commit_body()
+                ttnn.end_trace_capture(self.mesh, self._pen_commit_trace, cq_id=0)
+                ttnn.synchronize_device(self.mesh)
 
     def _one_enqueue_ready(self):
         return self._acc_trace is not None and not self._timing
@@ -2108,6 +2196,10 @@ class MTPBlockEngine(MTPSpecEngine):
         if self._chain is not None:
             self._chain.release()
             self._chain = None
+        if self._pen_commit_trace is not None:
+            ttnn.release_trace(self.mesh, self._pen_commit_trace)
+            self._pen_commit_trace = None
+        self._pen_rows = [None] * self.B
         self._acc_pt_staged = None
         self._pending.clear()
         super().shutdown()
@@ -2191,6 +2283,7 @@ class MTPBlockEngine(MTPSpecEngine):
         reset_draft_skip(self, slot)
         self._fresh.pop(slot, None)
         self._active.discard(slot)
+        self._pen_rows[slot] = None
         if final:
             self._fresh[slot] = int(end)
             self._active.add(slot)
@@ -2209,6 +2302,7 @@ class MTPBlockEngine(MTPSpecEngine):
         one_enqueue=False,
         defer=False,
         keep_pending=False,
+        penalties=None,
     ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j, every GDN layer on the blocks of
         ``mamba_state``. A row's first verify after its prompt also writes the drafter KV of the prompt's last position
@@ -2220,7 +2314,8 @@ class MTPBlockEngine(MTPSpecEngine):
         its argmax ids. ``one_enqueue`` (argmax_ids only): run the step as a one-enqueue step when its next propose is
         decided before the verify (_one_enqueue_plan). ``defer`` (argmax_ids only): enqueue the reads without waiting
         and return a PendingVerify in place of the ids. ``keep_pending``: the verify continues an unread one whose
-        propose is still to come (_materialize)."""
+        propose is still to come (_materialize). ``penalties`` (spec_penalties.StepPenalties, staged by the caller):
+        replay the penalty trace too."""
         assert self.captured, "verify before capture"
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
@@ -2266,7 +2361,9 @@ class MTPBlockEngine(MTPSpecEngine):
         )
         if sample_plan is not None:
             kw["sample_plan"] = sample_plan
-        bucket = self._verify_bucket(active, read_logits, sample_plan)
+        if penalties is not None:
+            kw["penalties"] = True
+        bucket = self._verify_bucket(active, read_logits, sample_plan, penalties is not None)
         if bucket is not None:
             kw["bucket"] = bucket
         plan = None
@@ -2507,7 +2604,17 @@ class MTPBlockEngine(MTPSpecEngine):
     # --------------------------------------------------------------------- #
     # Chained verify (vllm-tt-plugin supports_chained_spec_verify)
     # --------------------------------------------------------------------- #
-    def _decode_chained(self, predecessor, start_pos, num_valid_drafts, page_table, slot_remap, mamba_state, sampling):
+    def _decode_chained(
+        self,
+        predecessor,
+        start_pos,
+        num_valid_drafts,
+        page_table,
+        slot_remap,
+        mamba_state,
+        sampling,
+        tokens=(None, None),
+    ):
         """A verify that continues the unread ``predecessor``: each live row u of the block (placeholders from the
         runner) continues the predecessor's row ``slot_remap[u]`` (row u without a slot_remap): that row's last
         committed token at the device's count, then up to ``num_valid_drafts[u]`` of the drafts its drafter made, from
@@ -2516,7 +2623,10 @@ class MTPBlockEngine(MTPSpecEngine):
         with the seeds of the positions that count gives. Built on the device by the chain program when the
         predecessor ran the device acceptance and drafter and this verify's propose is decided for every count; else
         from the engine's own read and walk of the predecessor (_materialize). The slot_remap moves the per-slot state
-        once, after every check. Returns VerifyResult with a PendingVerify."""
+        once, after every check. ``tokens``: the step's (prompt_tokens, output_tokens), whose output lacks the
+        predecessor's commit; a penalty row chains when its device counts hold exactly that output, and the commit
+        trace adds the predecessor's commit to them (_chain_penalty_refusal). Returns VerifyResult with a
+        PendingVerify."""
         B, K, T = self.B, self.K, self.T
         if not self._pending or predecessor is not self._pending[-1] or predecessor.successor is not None:
             raise ValueError("spec_predecessor is not the engine's last verify still to propose")
@@ -2553,7 +2663,10 @@ class MTPBlockEngine(MTPSpecEngine):
             )
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
+        penalties = step_penalties(sampling, active)
         reason = self._chain_refusal(predecessor, src, active, hint, start_pos, page_table)
+        if reason is None and penalties is not None:
+            reason = self._chain_penalty_refusal(penalties, src, *tokens)
         if reason is None:
             upper = torch.where(active, start_pos[:, 0], 0)
             if int(upper.max()) + T > table_capacity(int(torch.as_tensor(page_table).shape[-1]), self.block_size):
@@ -2562,12 +2675,31 @@ class MTPBlockEngine(MTPSpecEngine):
             return VerifyResult(
                 "argmax_ids",
                 self._verify_chained(
-                    predecessor, src, active, hint, start_pos, page_table, mamba_state, plan, seed_cand
+                    predecessor, src, active, hint, start_pos, page_table, mamba_state, plan, seed_cand, penalties
                 ),
             )
         logger.debug(f"[spec_engine] chained verify built from a read predecessor: {reason}")
         self.materialized_steps += 1
-        return self._materialize(predecessor, src, active, hint, page_table, mamba_state, sampling)
+        return self._materialize(predecessor, src, active, hint, page_table, mamba_state, sampling, tokens)
+
+    def _chain_penalty_refusal(self, penalties, src, prompt_tokens, output_tokens):
+        """Why the commit trace cannot keep the penalty rows' counts of this chained verify, or None. It adds the
+        predecessor's commit in place, so every penalty row must stay on its row, and its record must hold exactly the
+        step's prompt and output (the output before the predecessor's commit)."""
+        if self._pen_commit_trace is None:
+            return "no penalty commit trace"
+        if prompt_tokens is None or output_tokens is None:
+            return "no penalty history"
+        for u in penalties.users:
+            rec = self._pen_rows[u]
+            if src[u] != u:
+                return "a penalty row moved"
+            if rec is None:
+                return "a penalty row has no device counts"
+            rec.resolve(self.T)
+            if not rec.matches(token_row(prompt_tokens, u), token_row(output_tokens, u), u):
+                return "a penalty row's device counts are not its output"
+        return None
 
     def _chain_nv(self, predecessor, src, active, hint):
         """Valid drafts of each chained row: the runner's cap, 0 where the predecessor's propose declines the row it
@@ -2645,13 +2777,25 @@ class MTPBlockEngine(MTPSpecEngine):
         return True
 
     def _verify_chained(
-        self, predecessor, src, active, hint, start_pos, page_table, mamba_state, sample_plan=None, seed_cand=None
+        self,
+        predecessor,
+        src,
+        active,
+        hint,
+        start_pos,
+        page_table,
+        mamba_state,
+        sample_plan=None,
+        seed_cand=None,
+        penalties=None,
     ):
         """Stage the host rows, the ctrl candidates and the seed candidates, replay the chain trace, then the verify,
         [sampler,] step and drafter traces, and enqueue the reads. Runs after remap_slots(``src``): the per-slot state
         is in this verify's rows, the predecessor's is read at row src[u]. ``sample_plan``
         (spec_sample.chained_sampling_plan, or None): the drawing rows and their parameters; the chain program writes
-        their seeds from ``seed_cand``. The predecessor's propose fills the block's tokens and positions."""
+        their seeds from ``seed_cand``. ``penalties`` (spec_penalties.StepPenalties, or None): the commit trace adds the
+        predecessor's commit to the penalty rows' counts (no row moved, _chain_penalty_refusal) before the verify,
+        which applies the penalties. The predecessor's propose fills the block's tokens and positions."""
         B, T, model = self.B, self.T, self.model
         if self.verify_steps % ONE_ENQUEUE_LOG_EVERY == 0:
             self._log_one_enqueue_counts()
@@ -2690,7 +2834,18 @@ class MTPBlockEngine(MTPSpecEngine):
         if self._acc_pt_staged is None or not torch.equal(self._acc_pt_staged, pt_rows):
             self._accept.stage_pt_rows(pt_rows)
             self._acc_pt_staged = pt_rows
-        bucket = self._verify_bucket(active, sample_plan=sample_plan)
+        bucket = self._verify_bucket(active, sample_plan=sample_plan, penalties=penalties is not None)
+        if penalties is not None:
+            pen = self._verify_penalties()
+            pen.stage(
+                penalties,
+                self._greedy_penalty_rows(penalties, sample_plan),
+                track=penalties.live.tolist(),
+                drawn=[drawn_prev[s] for s in src],
+            )
+            ttnn.execute_trace(self.mesh, self._pen_commit_trace, cq_id=0, blocking=False)
+            for u in penalties.users:
+                self._pen_rows[u].pending.append((predecessor, u))
         ttnn.execute_trace(self.mesh, self._chain_trace, cq_id=0, blocking=False)
         blocks.ctrl_written()
         sampler = getattr(model, "_vfy_sampler", None)
@@ -2704,6 +2859,7 @@ class MTPBlockEngine(MTPSpecEngine):
             inactive=(~active).tolist(),
             rope_deltas=list(self._rope_deltas),
             step_staged=True,
+            penalties=penalties is not None,
             **({} if sample_plan is None else {"sample_plan": sample_plan}),
             **({} if bucket is None else {"bucket": bucket}),
         )
@@ -2771,10 +2927,14 @@ class MTPBlockEngine(MTPSpecEngine):
         self._offered &= self._active  # a released slot leaves the offer, as the release after the propose does
         return m, acc, ctok, result
 
-    def _materialize(self, predecessor, src, active, hint, page_table, mamba_state, sampling):
+    def _materialize(
+        self, predecessor, src, active, hint, page_table, mamba_state, sampling, penalty_tokens=(None, None)
+    ):
         """Build a chained verify from the engine's own read of its predecessor (_propose_from_read), then verify the
         block on the host path: remap_slots(``src``) moves the per-slot state after the predecessor's propose, as in
-        the drained order, and row u of the block continues the predecessor's row src[u]."""
+        the drained order, and row u of the block continues the predecessor's row src[u]. ``penalty_tokens``: the
+        step's (prompt_tokens, output_tokens); a row's output for the penalties is its output_tokens plus the
+        predecessor's commit of row src[u], which the plugin has not applied yet."""
         B, T = self.B, self.T
         pred = predecessor
         _, acc, ctok, result = self._propose_from_read(pred)
@@ -2784,11 +2944,15 @@ class MTPBlockEngine(MTPSpecEngine):
         nv = torch.zeros(B, dtype=torch.int32)
         counts = torch.ones(B, dtype=torch.int64)
         starts = torch.zeros(B, dtype=torch.int64)
+        prompt_tokens, output_tokens = penalty_tokens
+        outputs = {}
         for u in range(B):
             if not bool(active[u]):
                 continue
             s = src[u]
             c, n = int(acc[s]), min(int(hint[u]), int(result.num_valid[s]))
+            if output_tokens is not None:
+                outputs[u] = torch.cat([token_row(output_tokens, u), ctok[s, :c].to(torch.int64)])
             tokens[u, 0] = ctok[s, c - 1]
             tokens[u, 1 : n + 1] = result.draft_token_ids[s, :n].to(torch.int64)
             positions[u, : n + 1] = int(pred.p0[s]) + c + torch.arange(n + 1)
@@ -2804,6 +2968,9 @@ class MTPBlockEngine(MTPSpecEngine):
             sampling=sampling,
             defer=True,
             keep_pending=True,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            penalty_outputs=outputs,
         )
 
 

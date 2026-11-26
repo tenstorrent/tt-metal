@@ -680,7 +680,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_sample_on_device": True,
         "spec_ids_are_sampled": True,
         "max_device_top_k": SAMPLER_TOP_K,
-        # The verify sampler applies no penalties and no grammar mask: such a step is sampled on the host.
+        # A verify applies presence, frequency and repetition penalties to every column it draws or argmaxes, from
+        # device counts the engine keeps per state slot (spec_penalties). An ordinary decode is sampled on the host
+        # when a row has a penalty, and the verify sampler applies no grammar mask.
+        "supports_spec_device_penalties": True,
         "supports_device_penalties": False,
         "supports_device_grammar": False,
         # vllm-tt-plugin adds these to its ttnn.set_fabric_config arguments before it opens the mesh. No "config" key:
@@ -832,6 +835,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             # A device-sampling launch also prepares the verify sampler (spec_sample.VerifySampler).
             eng.sample_on_device = bool(kwargs.get("can_sample_on_device", False))
             eng.prepare_decode()
+            if eng.sample_on_device and getattr(self.model[0], "_vfy_penalties", None) is None:
+                # This mesh's verify has no vocab-sharded logits for the penalties: penalty rows go to the host.
+                self.model_capabilities = {**type(self).model_capabilities, "supports_spec_device_penalties": False}
 
     def _ensure_ready(self, kv_cache=None):
         eng = self._engine()
@@ -923,6 +929,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             sampling=kwargs.get("sampling_params"),
             defer=defer,
             predecessor=predecessor,
+            prompt_tokens=kwargs.get("prompt_tokens"),
+            output_tokens=kwargs.get("output_tokens"),
         )
         logits = res.logits if spec_mode == "logits" else None
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
@@ -979,6 +987,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             mamba_state=mamba_state,
             sampling=sampling,
             one_enqueue=False,
+            prompt_tokens=kwargs.get("prompt_tokens"),
+            output_tokens=kwargs.get("output_tokens"),
         )
         if sampling is None:
             return res.logits[:, :1].float()
