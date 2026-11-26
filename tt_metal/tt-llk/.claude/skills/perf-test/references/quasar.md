@@ -125,9 +125,7 @@ from `max_dest_tiles(dest_acc, dest_sync)`, which halves when `dest_acc=Yes`, so
 - `UNPACK_ISOLATE` with unpack-to-dest takes each section's DEST bank the way
   production does: unpack borrows and returns it (`_llk_tile_regs_borrow_` /
   `_llk_tile_regs_return_`) from a math stand-in that only lends it, ends the
-  section and takes `MATH_PACK` back (pack is idle). Kernels without a
-  production pairing yet still move the bank with
-  `_llk_unpack_dest_section_advance_` after each SyncHalf section.
+  section and takes `MATH_PACK` back (pack is idle).
 
 ## Stand-ins
 
