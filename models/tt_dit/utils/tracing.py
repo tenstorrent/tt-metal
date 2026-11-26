@@ -453,7 +453,11 @@ def _force_copy_compile(value: Any, *, path_label: str) -> None:
     """Compile the copy that replay uses to refresh a device input; capture itself never runs it."""
     del path_label
     if isinstance(value, ttnn.Tensor):
-        ttnn.copy(value, value)
+        # Replay copies a different tensor into this slot. The program cache keys copy on whether input and output
+        # alias, so ttnn.copy(value, value) would compile a program replay never uses.
+        scratch = ttnn.allocate_tensor_on_device(value.spec, value.device())
+        ttnn.copy(value, scratch)
+        ttnn.deallocate(scratch)
 
 
 def _clone_tensor(value: Any, *, path_label: str) -> Any:
