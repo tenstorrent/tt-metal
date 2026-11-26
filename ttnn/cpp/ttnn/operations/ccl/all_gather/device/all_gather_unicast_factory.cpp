@@ -224,10 +224,10 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                     : (packet_cap < geo.max_packet_bytes && busiest_link_packets >= three_worker_packets ? 3 : 2);
             mux_in_middle = false;
             mux_buffers_per_channel = 2;
-            // One link: a ring fills at least 4 slots per worker iteration, so a short one still pipelines; a line
+            // One link: a ring fills more slots per worker iteration, so a short one still pipelines; a line
             // keeps 2. From two links: one packet per slot.
             max_packets_per_slot = multi_link ? 1 : kMaxPacketsPerSlot;
-            min_slots = is_ring ? 4 : all_gather_walk::kNumSlots;
+            min_slots = is_ring ? 8 : all_gather_walk::kNumSlots;
             // The writer is on NOC0 on a one-link ring. From two links, a NOC0 writer shares NOC0 with the 2 * links
             // mux forwarders and holds the ring back.
             writer_on_noc0 = is_ring && !multi_link;
