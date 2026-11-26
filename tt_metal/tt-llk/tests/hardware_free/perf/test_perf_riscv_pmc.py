@@ -4,7 +4,6 @@
 
 """Hardware-free checks of the RISC-V performance monitor tables and decoder in tt_llk_perf."""
 
-import re
 from pathlib import Path
 
 import pytest
