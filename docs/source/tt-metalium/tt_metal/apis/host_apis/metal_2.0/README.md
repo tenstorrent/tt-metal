@@ -45,6 +45,7 @@ The `ai/` recipes are organized by **porting phase** — audit → port → post
       bindings, the spec / run-params split). Currently AI-facing; a trimmed human version is planned.
     - `port_patterns.md` — patterns & anti-patterns catalog (referenced throughout the recipe and audit).
     - `ttnn_factory.md` — TTNN factory-concept specifics for the port.
+    - `ccl_port.md` — what a port adds for CCL ops: fabric connections and `GlobalSemaphore`s.
     - `workspace_setup.md` — environment / workspace setup.
     - `cb_dfb_api_whitelist.md` — the CB→DFB API-swap whitelist.
 - **[`human/`](human/)** — human-facing material.

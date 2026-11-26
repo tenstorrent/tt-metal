@@ -506,6 +506,7 @@ WorkUnitSpec wu_halo{
  - Kernel runtime arguments
  - Kernel common runtime arguments
  - Tensor arguments (`tensor_args`) — one `MeshTensor` per declared `TensorParameter`. See [TensorParameter](#tensorparameter). Borrowed-memory DFBs draw their backing L1 address from the corresponding `tensor_args` entry automatically; they don't require a separate `dfb_run_overrides` entry.
+ - GlobalSemaphore arguments (`global_semaphore_args`) — one `GlobalSemaphore` per declared `GlobalSemaphoreParameter`. See [Porting CCL ops](ccl_port.md#globalsemaphores).
 
 All kernel arguments are named arguments in Metal 2.0. For the rare arguments a kernel reaches *by index rather than by name* — a variable-count loop, or a data-computed index — the API additionally provides a **varargs** mechanism.
 
@@ -902,7 +903,7 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
 }
 ```
 
-`ProgramArtifacts` has three fields — `spec`, `run_params`, and `op_owned_tensors` (default-empty). Most ports leave `op_owned_tensors` defaulted; a factory that carries op-owned `MeshTensor`s (config / index-table / workspace tensors it builds beyond the op's io) returns them there, and the framework keeps them alive at a stable address for the cached `Program`'s lifetime. (Op-owned `GlobalSemaphore`s are not supported — the artifact carries only `MeshTensor`s.)
+`ProgramArtifacts` has three fields — `spec`, `run_params`, and `op_owned_tensors` (default-empty). Most ports leave `op_owned_tensors` defaulted; a factory that carries op-owned `MeshTensor`s (config / index-table / workspace tensors it builds beyond the op's io) returns them there, and the framework keeps them alive at a stable address for the cached `Program`'s lifetime. (`ProgramArtifacts` carries only `MeshTensor`s; op-owned `GlobalSemaphore`s go in `MeshWorkloadArtifacts::global_semaphores` — see [Porting CCL ops](ccl_port.md#op-allocated-globalsemaphores).)
 
 > **Tensor types in a ProgramFactory.** A factory sits between two tensor-type universes; you'll see three names but only two real types:
 > - **`ttnn::Tensor`** — TTNN's PyTorch-like tensor wrapper. Can in general represent either a host-resident or device-resident tensor, but **is always device-resident in a ProgramFactory.** This is what `tensor_args` and `tensor_return_value` carry into `create_program_artifacts`.
@@ -933,7 +934,7 @@ A Metal 2.0 factory **does not** construct the `Program` itself, nor does it cal
 The framework manages two distinct execution paths:
 
 - **Cache miss** (first execution, or a new op-args key): the framework calls `create_program_artifacts`, then internally builds the `Program` from `spec` (via the `MeshWorkload` constructor), then calls `program.set_program_run_args(run_params)` to apply the per-execution values, resolving each `TensorArgument` against the op's io tensors and any `op_owned_tensors`. The full spec is realized once; op-owned tensors are parked in the cache entry at a stable address.
-- **Cache hit** (subsequent executions with a still-valid cached `Program`): the framework **does not re-run the factory**. It refreshes the tensor bindings — the io tensors plus the parked op-owned ones — via `Program::update_tensor_args`, and skips the build. Only the tensor bindings are refreshed; other run-arg values keep the values they were given at cache-miss.
+- **Cache hit** (subsequent executions with a still-valid cached `Program`): the framework **does not re-run the factory**. It refreshes the tensor bindings — the io tensors plus the parked op-owned ones — via `Program::update_tensor_args`, and skips the build. Only the tensor bindings are refreshed (plus PrefetcherPipes and GlobalSemaphores the op holds in `operation_attributes_t`); other run-arg values keep the values they were given at cache-miss.
 
 The cache key is the op itself — its type, attributes, and tensor args (the framework's automatic hash), combined with the target mesh coordinates; a custom `compute_program_hash`, if present, replaces that default. A factory satisfying `ProgramSpecFactoryConcept` is routed through `ProgramSpecMeshWorkloadFactoryAdapter`, which handles both paths.
 

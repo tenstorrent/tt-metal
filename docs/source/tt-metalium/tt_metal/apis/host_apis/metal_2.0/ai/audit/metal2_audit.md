@@ -73,7 +73,7 @@ For the op in scope, work through the audit in twelve subjects. The three **prer
   - **Gate-bearing subjects always run in full, even after a RED.** These are the six that can produce a GATE: **Device 2.0**, **Feature compatibility**, **TTNN factory concept**, **Offset base pointers**, **TensorParameter analysis** (Case 2), and **TensorAccessor 3rd argument**. Surfacing *every* simultaneous blocker lets the owning teams fix them in parallel — otherwise the user clears one, re-audits, and only then discovers the next, serializing work that could have run at once.
   - **Purely-informational subjects run only when a port is still ahead to consume them.** These six never gate — they are porter-/team-facing detail: **TTNN porting shape**, **TensorParameter relaxations**, **CB endpoints**, **RTA varargs**, **Out-of-directory coupling**, **Incidental anomalies**. On a **whole-op RED with no portable subset**, **skip them**: no brief will be issued, and the op is re-audited against possibly-changed code once the blockers clear, so producing the detail now is unread and likely stale effort. When a **clean factory subset survives** (a config-scoped gate — see [Code-path scope](#output-the-two-documents)), run them **for that subset** — its brief needs them. **Record each skipped subject** with a one-line note (e.g. `skipped — whole-op RED, no portable subset; re-audit on unblock`) so the omission is never mistaken for a clean result.
 
-    **Exception — a RED that clears without touching the op's code: run them anyway.** The skip is justified by *staleness*, not by the absence of a brief, so it only holds when re-audit will read different code. Ask which side the blocker is cleared on. **Op-code side → skip** (a Device 2.0 migration, an ops-team offset split or page-size fix, a `ProgramDescriptor` migration — all rewrite the very code the seven subjects describe). **Elsewhere → run them**: an unattributed or held readiness verdict, an Appendix A feature landing, any framework capability not yet released. Those clear with the op untouched, so re-audit reads the *same* code and today's detail survives intact — deferring costs a second full pass and saves nothing. Say in the report which case you judged it to be.
+    **Exception — a RED that clears without touching the op's code: run them anyway.** The skip is justified by *staleness*, not by the absence of a brief, so it only holds when re-audit will read different code. Ask which side the blocker is cleared on. **Op-code side → skip** (a Device 2.0 migration, an ops-team offset split or page-size fix, a `ProgramDescriptor` migration — all rewrite the very code the six subjects describe). **Elsewhere → run them**: an unattributed or held readiness verdict, an Appendix A feature landing, any framework capability not yet released. Those clear with the op untouched, so re-audit reads the *same* code and today's detail survives intact — deferring costs a second full pass and saves nothing. Say in the report which case you judged it to be. **Judge it per factory, and when a factory has blockers on both sides, the op-code side wins: skip.** Any rewrite of the code makes today's detail stale.
 
   (A grounded RED-no-subset verdict, with every gate surfaced, *is* the complete deliverable — not a truncated audit. The informational census is deferred, not owed.)
 
@@ -109,7 +109,7 @@ For the op in scope, work through the audit in twelve subjects. The three **prer
 | Incidental code anomalies — dead RTAs, dead-but-hashed attributes, suspicious constants | **FYI-U** | team only |
 
 **The four roles:**
-- **GATE** — blocks the port (an unmet prereq or an UNSUPPORTED feature). On PASS, the porter brief carries a one-line "cleared"; on FAIL, *no brief is issued* (there is no port) and the detail routes to the owning team. (A *config-scoped* GATE — e.g. GlobalCircularBuffer confined to one factory — still issues a brief for the clean subset; see [Code-path scope](#output-the-two-documents).) Always complete every *gate-bearing* check even after a GATE fails (so the user sees all blockers at once); the seven purely-informational subjects are skipped when the op is whole-op RED with no portable subset — see the **Red** outcome scoping rule at the top of the [Feasibility audit](#feasibility-audit).
+- **GATE** — blocks the port (an unmet prereq or an UNSUPPORTED feature). On PASS, the porter brief carries a one-line "cleared"; on FAIL, *no brief is issued* (there is no port) and the detail routes to the owning team. (A *config-scoped* GATE — e.g. GlobalCircularBuffer confined to one factory — still issues a brief for the clean subset; see [Code-path scope](#output-the-two-documents).) Always complete every *gate-bearing* check even after a GATE fails (so the user sees all blockers at once); the six purely-informational subjects are skipped when the op is whole-op RED with no portable subset — see the **Red** outcome scoping rule at the top of the [Feasibility audit](#feasibility-audit).
 - **PORT WORK** — the porter must *act* on it during the port.
 - **FYI-P** — informational, surfaced *to the porter* (and recorded for the team).
 - **FYI-U** — informational, *team-only* (feeds other workstreams; never reaches the porter).
@@ -127,6 +127,13 @@ Metal 2.0 migration sits at the end of a chain of prior modernizations. The firs
 Confirm **every kernel this op exercises** is Device 2.0 compliant — **regardless of where the kernel file lives**. The op's own kernels, shared kernel-library code, in-family shared kernels, and borrowed/donor kernels from other families all count equally; location does not change the gate. What matters is whether the op's program factory instantiates or calls into the kernel. (An op may own *no* kernels of its own and file-path-instantiate all of them from a shared pool — those instantiated kernels are still fully subject to this gate; treat them as the op's effective kernels here.) See the [Device 2.0 Data Movement migration guide](../../../../kernel_apis/data_movement/device_api_migration_guide.md) for what compliance entails. The *coupling* that borrowing induces is inventoried under [Out-of-directory coupling](#out-of-directory-coupling); the *gating* judgment lives here.
 
 - **Green**: every kernel the op uses — wherever it lives — is Device 2.0 compliant. A **sanctioned** CB-index free function is *not* a violation and does not knock the op out of Green: some free functions taking a `uint32_t` CB index are kept by Device 2.0 itself — its own migrated code uses them — so **if Device 2.0 allows the free function, so do we.** Currently sanctioned (do **not** flag): `get_tile_size(cb_id)` and `get_local_cb_interface(cb_id)`. Each is grounded in the Device 2.0 surface itself — the [migration guide](../../../../kernel_apis/data_movement/device_api_migration_guide.md) keeps `get_tile_size(cb_id)` as a free function inside its own *migrated* example, and the Device 2.0 `CircularBuffer` wrapper implements `get_write_ptr()` / `get_read_ptr()` *by calling* `get_local_cb_interface` (`tt_metal/hw/inc/api/dataflow/circular_buffer.h`).
+
+  Three more kinds of call are sanctioned on the same grounds, and matter most for CCL kernels:
+  - **A call the Device 2.0 migration kept on purpose**, marked `// Device 2.0 migration: legacy primitive retained: <reason>` or `// Device 2.0: legacy primitive retained, <reason>` (most often a precomposed `uint64_t` NoC address). The migration left it because Device 2.0 has no form for it. **Except a program semaphore by raw address** (`get_semaphore(id)` read or written through a pointer): marked or not, that is Device 1.0, because the Metal 2.0 port has no form for it either.
+  - **Raw `GlobalSemaphore` primitives** (`noc_semaphore_wait` / `_wait_min` / `_set` / `_inc`, a read through the pointer, `noc_semaphore_set_multicast(_loopback_src)` / `noc_semaphore_inc_multicast`, on an address the host fed from a `GlobalSemaphore`). The Metal 2.0 port converts them to the device `GlobalSemaphore` object ([Porting CCL ops](../shared/ccl_port.md#kernel-side-the-device-object)); whether every use converts is the [Appendix A](#globalsemaphore-address-used-outside-the-device-object--unsupported) question, not this gate's.
+  - **The fabric's device API**: packet headers, `fabric_*` sends, `WorkerToFabricEdmSender`, `FabricConnectionManager`, `RoutingPlaneConnectionManager`, and the helpers under `tt_metal/fabric/hw/inc/` such as `safe_get_noc_addr`. It is not Device 2.0 surface.
+
+  Each sanction covers the call, not its arguments: an address generator, a CB-index free function or a raw program-semaphore address passed into a sanctioned call is still judged on its own.
 
   **The list is the whole test, and it does not turn on what object is in scope.** Both names stay sanctioned whether the call site holds a `CircularBuffer`, a `DataflowBuffer`, or no buffer object at all. So the holdover cue in the Red bullet below — *wrapper in scope **and** a wrapper-method replacement exists* — does **not** override the list: for these two, a replacement existing is not a violation. Kernels already on `DataflowBuffer` are where that cue misfires hardest, since the DFB does expose its own `get_tile_size()`; sanctioned still means sanctioned. What would actually unseat either name is the **Device 2.0 surface** changing — check that, not the shape of the call site. *Breadcrumb:* the Metal 2.0 `DataflowBuffer` exposes a full tile/format metadata accessor set (`tt_metal/hw/inc/api/dataflow/dataflow_buffer.h`), so a Metal 2.0 **port** moves these lookups onto the object ([kernel-side whitelist rule 7](../port/metal2_port.md#kernel-side-whitelist)) — a port-stage change that does not move the Device 2.0 boundary here.
 - **Red (GATE)**: any kernel the op uses — own, shared-library, in-family shared, or cross-family donor — is not fully Device 2.0 compliant. **The port is blocked** until that kernel's Device 2.0 migration lands; route the exact violations to the team that owns Device 2.0 migration, naming the kernel file (and, for a borrowed/donor kernel, its owning family) so the dependency is schedulable. The op is re-audited once the cleanup lands — there is no partial pass. **Note the scope of the incompleteness so the Device 2.0 team can size the work**, since it spans a wide range:
@@ -168,7 +175,7 @@ The second hard prerequisite is the op's **TTNN-side shape**: is it on a factory
 | `Runtime-args update (get_dynamic_runtime_args)` == `yes`, or a **smuggled RTA pointer** | The op is *broken*, not merely unported (it reads as such in `Op Classification`). Neither ports as-is. | **TTNN**, who fix the op first |
 | Any entry in **`Known op issues`** | A free-text column reserved for problems that must be cleared before a port. Usually an ops-team fix; occasionally a Metal 2.0 feature. | Read the cell and route to whoever it names |
 | **`TensorParameter relaxation`** neither `none` nor `… (see analysis)` | The op needs a relaxation whose analysis is still queued or in flight. | **Ops team** (see [TensorParameter relaxations](#tensorparameter-relaxations)) |
-| `Concept` == `legacy device-op` or `legacy (MeshWorkload)` (the cell reads `yes (with PD step)`) | Not on the `ProgramDescriptor` API yet. The op needs a `ProgramDescriptor` port first, under a separate recipe these docs don't cover. | **Out of scope: RED.** Telling the user about the PD port is optional |
+| `Concept` == `legacy device-op` or `legacy (MeshWorkload)` (the cell reads `yes (with PD step)`) | Not on the `ProgramDescriptor` API yet. The op needs a `ProgramDescriptor` port first, under a separate recipe these docs don't cover. **Except a WRAP** (below), whose PD step is done. | **Out of scope: RED.** Telling the user about the PD port is optional |
 
 **Three columns you will check that do *not* block.** All are worth recording, and none is a reason to RED an op:
 
@@ -195,9 +202,10 @@ The two are enforced mutually exclusive at the device-op level (a device-op defi
 
 Also check **cross-column invariants** — a violated one means the sheet is internally inconsistent: e.g. `Runtime-args update (get_dynamic_runtime_args) == "yes"` is only possible on `descriptor` / `descriptor (per-coord)` / `WorkloadDescriptor` concepts, never `legacy device-op`; and `Op-owned tensors? == "yes"` is only possible on `WorkloadDescriptor` (the `descriptor` concept can't carry op-owned tensors, so a `descriptor` row with op-owned tensors is a broken sheet). **The list above is the whole cross-check** — every other column is either derived (read it, don't vet it) or has no code-visible counterpart. **Do not fetch or cross-check in a subagent** — the Drive connector authorizes only in the main session, and the cross-check needs the op's code in hand.
 
-**Routing.**
+**Routing.** Run the cross-check above first. **A primary-column conflict, a violated invariant, or a missing or phantom row supersedes every routing below** (the last bullet): if the sheet is wrong about the op's concept, its `yes (with PD step)` verdict says nothing about the code, and the legacy short-circuit does not apply.
 
 - **`Is able to port?` == `yes (with PD step)`** → GATE, not a clearance: a legacy op ([blocking table](#ttnn-factory-concept-prerequisite)). Apply the [legacy-API short-circuit](#red-short-circuit-the-op-is-still-on-the-legacy-imperative-api).
+  - **Except a WRAP: read it as `yes`.** A `legacy (MeshWorkload)` factory — a struct that itself defines `create_mesh_workload` (a `DescriptorMeshWorkloadAdapter` named only in a `static_assert` is not one) — whose `create_mesh_workload` only delegates to `DescriptorMeshWorkloadAdapter<Inner>` over a `create_workload_descriptor` / `create_descriptor` factory, and whose `override_runtime_arguments` only re-applies values on a cache hit (typically caller `GlobalSemaphore` addresses), is already on `ProgramDescriptor`. The sheet's `Concept` is correct for it; the PD step it implies is not owed. Port the inner factory and fold the wrapper's patch into the Metal 2.0 override ([Porting CCL ops — the WRAP shape](../shared/ccl_port.md#caller-supplied-rebind-it-in-the-override)). Every other column of the row still applies, and if the sheet has a row for the inner factory, its verdict governs too. Name the wrapper and the inner factory `file:line`, and note the WRAP in *Recipe notes* so the sheet owner can classify it.
 - **`Is able to port?` == exactly `yes`** → TTNN gate cleared; carry the factory forward (its target concept is recorded in [TTNN porting shape](#ttnn-porting-shape)).
 - **`no`, explained by a blocking column** → GATE. Attribute it with the [blocking table above](#ttnn-factory-concept-prerequisite) and route it to that owner. **Name the column that blocked**, quote its value verbatim, and give the path forward the table names. If more than one column would block, report them all — the reader is planning work, not just reading a verdict. This is the common case.
 - **`no` that none of those columns explains** → still a GATE, and **not** a defect report. Per the visibility rule above, a verdict you can't attribute is an ordinary outcome, not a broken sheet. Quote the cell verbatim, record that the primary cross-check came back clean, and say plainly that the block is **unattributed** — that is a complete finding. Route it to the **readiness-sheet owner** as a question, not an allegation. **Don't go hunting for the cause in other ops' rows**; cross-row analysis is not part of this audit, and the answer usually isn't in the sheet at all.
@@ -212,11 +220,11 @@ Once the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite)
 
 - **`ProgramSpecFactoryConcept`** — one spec across the mesh; the framework refreshes tensor bindings on a cache hit.
 - **`CustomProgramSpecFactoryConcept`** — one spec across the mesh; on a cache hit the op's translated `override_runtime_arguments` replaces the binding refresh. Name its `file:line` in the brief.
-- **`MeshWorkloadSpecFactoryConcept`** — a spec per mesh coordinate or range (`Execution Model` is `MPMD` or `SPMD (+ per-device args)`). Name the ported-from per-coordinate entry point's `file:line`, what varies per coordinate, and the `override_runtime_arguments` if there is one. This concept has no slot for op-owned tensors: an op with `Op-owned tensors? == "yes"` is RED ([ttnn_factory — Feasibility gate](../shared/ttnn_factory.md#feasibility-gate)).
+- **`MeshWorkloadSpecFactoryConcept`** — a spec per mesh coordinate or range (`Execution Model` is `MPMD` or `SPMD (+ per-device args)`). Name the ported-from per-coordinate entry point's `file:line`, what varies per coordinate, and the `override_runtime_arguments` if there is one. This concept has no slot for op-owned tensors: an op with `Op-owned tensors? == "yes"` is RED ([ttnn_factory — Feasibility gate](../shared/ttnn_factory.md#feasibility-gate)). Op-owned `GlobalSemaphore`s are fine here. For an op that talks to the fabric or binds `GlobalSemaphore`s, read [Porting CCL ops](../shared/ccl_port.md) before writing the brief, and say in it which of its constructs the op uses.
 
 Any other value on a cleared row is a **recipe gap**, not a broken sheet: record it in *Recipe notes*, quote the cell, and raise it with the readiness-sheet owner as a question.
 
-**Op-owned tensors force `WorkloadDescriptor`.** The `descriptor` form — a `create_descriptor` returning a `ProgramDescriptor` — can't carry op-owned tensors, so an op that needs them must define `create_workload_descriptor` instead, where it is expressed as an SPMD workload *purely* to unlock the op-owned-tensor feature. So **`Op-owned tensors? == "yes"` always co-occurs with `Concept == WorkloadDescriptor` (and SPMD)**; a `descriptor` op with op-owned tensors is not a real state. (A quirky design: every op that needs op-owned tensors is morally single-program, yet has to wear the SPMD-workload shape to get them.)
+**Op-owned tensors force `WorkloadDescriptor`.** The `descriptor` form — a `create_descriptor` returning a `ProgramDescriptor` — can't carry op-owned tensors, so an op that needs them must define `create_workload_descriptor` instead, where it is expressed as an SPMD workload *purely* to unlock the op-owned-tensor feature. So **`Op-owned tensors? == "yes"` always co-occurs with `Concept == WorkloadDescriptor` (and SPMD)**; a `descriptor` op with op-owned tensors is not a real state. (A quirky design: every op that needs op-owned tensors is morally single-program, yet has to wear the SPMD-workload shape to get them.) The converse does not hold: CCL ops use `WorkloadDescriptor` for genuinely per-device programs (`Execution Model` MPMD), with no op-owned tensors.
 
 Both descriptor forms live under the *same* umbrella concept, `ProgramDescriptorFactoryConcept` — it is satisfied by either a `create_descriptor` or a `create_workload_descriptor` (the latter via `WorkloadDescriptorConcept`). There is no separate workload-descriptor *factory* concept, so the move above is a change of entry point, not a change of concept; don't go looking for a `WorkloadDescriptorFactoryConcept` in the code.
 
@@ -338,6 +346,8 @@ For each `TensorParameter`, cross-check: does the same buffer also appear in an 
 
 **False-positive guards — do NOT flag.**
 
+- A binding the kernel reaches through a legacy address generator (`InterleavedAddrGen`, `ShardedAddrGen`, …) is a Device 2.0 finding, already RED there; don't also classify it Case 2. Classify it when the op comes back after its Device 2.0 migration.
+
 - `get_arg_val<uint32_t>` for shape / count / index / control values. Those uint32s aren't addresses.
 - `accessor.get_noc_addr(page_id)` outputs — that's the `TensorAccessor` path (Case 1), not a raw-pointer Case 2; don't flag it.
 - Host-side `set_globally_allocated_address(buffer)` — the borrowed-memory pattern (a mechanical porting-recipe translation via `borrowed_from`); clean via the causal-link gate.
@@ -441,6 +451,8 @@ Metal 2.0 enforces single-producer / single-consumer per node (SPSC) as a spec-v
 **Op-level roll-up:** `✓ legal`, else the per-CB dispositions — `self-loop`, `1P+1C` (assign roles across two touchers), `multi-binding flag` (with configs), `dead-CB drop`, `conditional DFB` (dead in some configs, live in others) — with the per-`(CB, config)` inventory in the report.
 
 ### Out-of-directory coupling
+
+**Also look the other way: who borrows from this op.** Grep outside the op directory for its kernel paths and for the host builder functions its factories export (CCL factories often build programs for other ops, e.g. `ccl/reduce_scatter` and `matmul_reduce_scatter_async` call `reduce_scatter_minimal_async`'s builders). Each hit is a consumer an in-place port would break; record it (FYI-P), because the port treats those kernels as shared ([Caution: Porting a shared kernel](../shared/port_patterns.md#caution-porting-a-shared-kernel)).
 
 **The findings here are informational (FYI).** The one place donor coupling *gates* the port — a donor kernel still on pre-Device-2.0 idioms — is judged and named in [the Device 2.0 prerequisite](#device-20-prerequisite) (which always runs); this subject inventories the coupling in full so that gate is well-scoped and any future multi-op coordination is visible. Because that full inventory is porter/planning detail, it follows the **Red** outcome scoping rule: run it when a port or a clean subset is ahead; **skip it on a whole-op RED with no portable subset** — the Device 2.0 gate has already named any donor blocker, so nothing gate-relevant is lost by deferring the inventory to re-audit. This is a substantial subject; budget time accordingly. It covers **two distinct escape types**: *function-call escape* (the kernel `#include`s and calls another op's helper function) and *file-path kernel instantiation* (the program factory `CreateKernel`s a kernel `.cpp` owned by another op). The bulk of the machinery addresses function-call escape; file-path escape is surfaced separately at the end as a coupling signal.
 
@@ -603,10 +615,17 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
   |---|---|---|
   | GlobalCircularBuffer | RED / N/A | config-scoped — RED the offending factory, name the clean subset |
   | CBDescriptor `address_offset` (non-zero) | RED / N/A | runtime-team consultation (verbatim message) |
-  | GlobalSemaphore | RED / N/A | |
+  | GlobalSemaphore address outside the device object | RED / N/A | name what the address reaches @ `file:line` |
+  | GlobalSemaphore in a compute kernel | RED / N/A | |
+  | Caller GlobalSemaphore not re-applied on a cache hit | RED / N/A | routed to the op owner |
+  | Fabric mux | RED / N/A | a mux-or-direct factory is RED whole |
+  | RPCM with per-route or auto-selected links | RED / N/A | |
+  | MeshSocket | RED / N/A | |
+  | Fused CCL op signalers | RED / N/A | |
 
 - **CB endpoints (GATE-free):** <every CB is either legal (1 producer, 1 consumer) or carries a port-time disposition — **self-loop** (one toucher: single-ended / sync-free, legal on Gen1 for compute *and* DM), **1P+1C assignment** (two touchers, e.g. a dual-instance work-split — bind one PRODUCER, one CONSUMER, no flag) with its `(CB, config)` list, **multi-binding advanced-option flag** (genuine ≥2 of a role the census can't relabel — ≥3 touchers or FIFO-doubling; hidden-2nd-writer or multi-reader face) with its `(CB, config)` list, a **dead-CB drop** (zero endpoints in *every* config) @ `file:line`, or a **conditional DFB** (zero endpoints in some configs, live in others — name both). Nothing here blocks a Gen1 port. **Deferred** (re-evaluate post–Device 2.0) if the Device 2.0 gate is RED.>
 - **Offset base pointers:** <GREEN — no address RTA folds a host-side offset into its base, or every fold has already been split out by the ops team (→ clean base, handled as ordinary tensor-binding port work) — or — RED: Type 1 (raw offset arg) / Type 2 (accessor-fed offset arg → flag early, ops team + framework) @ `file:line` by kernel + role. Factory-scoped: an RM slice-family RED names the tiled factories as a clean subset. Type 3 (`address_offset`) is the Appendix A entry; Type 4 (`narrow`) ports as-is. Cross-references the offset-base-pointer triage analysis (a dated prior).>
+- **TensorParameter analysis (Case 2):** <GREEN — no binding is Case 2 — or — RED: each Case 2 binding @ `file:line`, what the raw arithmetic does (own shard, another core's or bank's region), routed to the device-API owner.>
 - **TensorAccessor 3rd argument:** <N/A — no accessor in the op passes a 3rd argument, so the subject never fires. Say that, rather than "every site is Class 2": *no sites* and *sites found and classified redundant* are different findings, and this is the usual outcome. — or — GREEN — every site Class 1/2 (redundant → drop; Class 1 also sets `dynamic_tensor_shape`) — or — RED: Class 3/4 (wrong-magnitude page size @ `file:line` → the ops team fixes it first) / Special (an override the binding model can't express @ `file:line` → the ops team ports by hand). Cross-references the 3rd-arg triage analysis (a dated prior).>
 
 ## Port-work summary  *(mirrors the brief)*
@@ -655,7 +674,7 @@ Ordered by the porter's workflow: plan → construct → watch-for. Issued only 
 
 > Audit cleared all gates. This is your actionable input; the full record is in `METAL2_PREPORT_AUDIT.md`.
 
-**Gates cleared:** Device 2.0 ✓ · Features ✓ · TTNN factory concept ✓ · Offset base pointers ✓ · TensorAccessor 3rd arg ✓
+**Gates cleared:** Device 2.0 ✓ · Features ✓ · TTNN factory concept ✓ · Offset base pointers ✓ · TensorParameter Case 2 ✓ · TensorAccessor 3rd arg ✓
 
 **Recipe docs:** `<hash> <date> <subject>` *(carry this line into the port report's Provenance section)*
 
@@ -692,7 +711,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`). 
 
 Every Appendix A entry is UNSUPPORTED, so a per-row status is one of two — there is no `GREEN` row:
 
-- **`N/A`** — the feature is absent from the op (the op uses no `GlobalSemaphore`, so that entry cannot fire; no `CBDescriptor` sets a non-zero `address_offset`, so that entry cannot fire; etc.). Since every entry is a gate-feature, an absent one is `N/A` — the gate didn't fire because the feature is *absent*, so there is nothing to "pass."
+- **`N/A`** — the feature is absent from the op (the op uses no fabric mux, so that entry cannot fire; no `CBDescriptor` sets a non-zero `address_offset`, so that entry cannot fire; etc.). Since every entry is a gate-feature, an absent one is `N/A` — the gate didn't fire because the feature is *absent*, so there is nothing to "pass."
 - **`RED`** — an UNSUPPORTED feature is present → the port is gated.
 
 A clean feature scan is therefore all-`N/A`. (The *subject's* overall roll-up may still read "GREEN — no gate fired"; that's the subject verdict, distinct from these per-row labels.)
@@ -701,7 +720,7 @@ For UNSUPPORTED feature-detail blocks, the **Expected resolution** is usually a 
 
 #### RED short-circuit: the op is still on the legacy imperative API
 
-When the [TTNN factory concept gate](#ttnn-factory-concept-prerequisite) fails because the op isn't on the `ProgramDescriptor` API yet (a `legacy device-op` or `legacy (MeshWorkload)` concept; the sheet reads `yes (with PD step)`), it is a **whole-op RED with no portable subset**, so the **Red** outcome scoping rule (top of [Feasibility audit](#feasibility-audit)) governs — apply it, don't improvise. **Run every gate-bearing subject in full** (Device 2.0, Feature compatibility, Offset base pointers, TensorAccessor 3rd argument): the user needs to see *all* the blockers they will have to clear alongside the ProgramDescriptor migration, not just the concept gate, so they can be worked in parallel. **Skip the seven purely-informational subjects** — the re-audit produces them fresh (and correctly) once the migration lands and the code has settled; producing them now against soon-to-change legacy code is unread, stale effort. Record each skip with the one-line disclosure so the omission never reads as clean. The Result and Gate detail emphasize the concept gate as the primary blocker. (This is the legacy-API case specifically. A concept-gate failure on a *`descriptor`* op — e.g. a custom hash — often leaves a portable subset or is nearly portable, so it is *not* automatically no-subset: apply the scoping rule to that op's actual subset scope, which usually means auditing it in full.)
+When the [TTNN factory concept gate](#ttnn-factory-concept-prerequisite) fails because the op isn't on the `ProgramDescriptor` API yet (a `legacy device-op` or `legacy (MeshWorkload)` concept; the sheet reads `yes (with PD step)`), it is a **whole-op RED with no portable subset**, so the **Red** outcome scoping rule (top of [Feasibility audit](#feasibility-audit)) governs — apply it, don't improvise. **Run every gate-bearing subject in full** (Device 2.0, Feature compatibility, Offset base pointers, TensorParameter analysis for its Case 2 gate, TensorAccessor 3rd argument): the user needs to see *all* the blockers they will have to clear alongside the ProgramDescriptor migration, not just the concept gate, so they can be worked in parallel. **Skip the six purely-informational subjects** — the re-audit produces them fresh (and correctly) once the migration lands and the code has settled; producing them now against soon-to-change legacy code is unread, stale effort. Record each skip with the one-line disclosure so the omission never reads as clean. The Result and Gate detail emphasize the concept gate as the primary blocker. (This is the legacy-API case specifically. A concept-gate failure on a *`descriptor`* op — e.g. a custom hash — often leaves a portable subset or is nearly portable, so it is *not* automatically no-subset: apply the scoping rule to that op's actual subset scope, which usually means auditing it in full.)
 
 Save the file(s) and surface the path(s) with the Result line. **Stop here.** The audit file(s) are the complete deliverable of this document.
 
@@ -805,25 +824,87 @@ Do not invent a workaround. Do not propose an alternative implementation. Do not
 
 If you find no concrete non-zero usage in the op being ported, this rule is green — that is the expected outcome for most ops today.
 
-### GlobalSemaphore — UNSUPPORTED
+### GlobalSemaphore address used outside the device object — UNSUPPORTED
 
-**Status**: Not yet supported in Metal 2.0. The `KernelSpec` source confirms it: `GlobalSemaphore bindings` is listed under *"Additional program parameter binding types (coming soon)"* in `tt_metal/api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp`, alongside the not-yet-implemented `GlobalDataflowBuffer` and `MeshBuffer` bindings.
+**Status**: Not yet supported. A `GlobalSemaphore` itself ports (see [Porting CCL ops](../shared/ccl_port.md#globalsemaphores)): the kernel binds it and uses the device object's methods, which cover the local and same-chip `noc_semaphore_*` primitives exactly. The device object has **no address accessor**, so a kernel that hands the semaphore's address, or a NoC address built from it, to anything else has no Metal 2.0 form. It would clear with a NoC-address getter on the device object (the analog of `TensorAccessor::get_noc_addr`), which does not exist today.
 
-**Recognition — definitely this feature** (refuse and report):
+**Recognition — definitely this feature** (refuse and report): in any kernel the factory binds, the GlobalSemaphore's address (the runtime arg fed from the host's `semaphore.address()`), or a NoC address built from it with `get_noc_addr` / `safe_get_noc_addr`, reaches:
+- a fabric packet header: `to_noc_unicast_atomic_inc(...)`, a `NocUnicastAtomicIncCommandHeader{...}` or `NocUnicastAtomicIncFusedCommandHeader{...}`, a scatter-write header;
+- a `fabric_*` call (`fabric_unicast_noc_unicast_atomic_inc`, `fabric_multicast_*_atomic_inc*`, `*_set_state`, `*_with_state`, `*_fused_*`);
+- a helper, in the op directory or outside it, e.g. `perform_atomic_fabric_write`, `fused_write_atomic_and_advance_local_read_address_for_fabric_write` (`ccl/common/kernels/minimal_ccl_common.hpp`);
+- arithmetic, a struct field, a comparison, or any call not in the [device-object table](../shared/ccl_port.md#kernel-side-the-device-object).
 
-- Any reference to the type `tt::tt_metal::GlobalSemaphore` (qualified or via a `using` alias). Note: the type lives in plain `tt::tt_metal::`, not `experimental::`.
-- Calls to `experimental::CreateGlobalSemaphore(...)`. Note: the factory *is* in `experimental::` even though the type is not.
-- `#include <tt-metalium/global_semaphore.hpp>`.
-- Op factory function signatures with parameter type `const GlobalSemaphore&` or `std::optional<GlobalSemaphore>` (commonly named `semaphore`, `global_semaphore`, `multi_device_global_semaphore`).
+**Recognition — false-positive guard**: the primitives in the device-object table (`noc_semaphore_wait` / `_wait_min` / `_set`, a read through the pointer, `noc_semaphore_inc` to another core on the same chip, the multicast set/inc with the semaphore as its own source) port. A **program** semaphore's address (`get_semaphore(id)`) in a packet header is a different construct and not this entry.
 
-**Recognition — false-positive guard**:
+**Action**: STOP at ProgramFactory granularity. Name each site `file:line` and say what the address reaches. Nearly every CCL writer kernel matches, so expect this to be the gate that fires.
 
-Plain `Semaphore` / `CreateSemaphore(program, core_spec, initial_value)` is the regular semaphore path → supported in Metal 2.0 as `SemaphoreSpec`. Do not refuse these. The disambiguator is the literal token `Global` in the type name; if it is not there, this rule does not apply.
+**Examples in the wild**: `experimental/ccl/all_to_all_async/device/kernels/interleaved_all_to_all_writer.cpp` (packet header and `perform_atomic_fabric_write`), `experimental/ccl/slice_reshard_async/device/kernels/minimal_default_writer.cpp`, `experimental/ccl/neighbor_pad_async/device/kernels/minimal_default_writer.cpp` (`*_with_state`).
 
-**Action**: STOP. Report to the user that this op uses `GlobalSemaphore`, which is not yet supported in Metal 2.0. Do not invent a workaround.
+### GlobalSemaphore in a compute kernel — UNSUPPORTED
 
-**Examples in the wild** (for ground-truthing your match):
-- Most CCL ops under `ttnn/cpp/ttnn/operations/experimental/ccl/`, e.g. `llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp`, `all_gather_concat_heads_fused/device/`, `llama_all_gather_matmul_async/device/`.
+**Status**: Not yet supported. Only data-movement kernels bind a `GlobalSemaphore`; the device header refuses to compile for TRISC.
+
+**Recognition — definitely this feature**: a compute kernel's runtime or compile-time arg carries a `GlobalSemaphore`'s `address()`, and the kernel reads or writes it.
+
+**Action**: STOP at ProgramFactory granularity.
+
+**Examples in the wild**: `experimental/ccl/reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.cpp` (a counter kept across calls in the compute kernel).
+
+### Caller GlobalSemaphore not re-applied on a cache hit — UNSUPPORTED
+
+**Status**: Not portable as-is; an **op-owner pre-port fix**. A caller-supplied `GlobalSemaphore` ports by having the translated `override_runtime_arguments` supply it on every cache hit ([Porting CCL ops](../shared/ccl_port.md#caller-supplied-rebind-it-in-the-override)). When the legacy factory doesn't re-apply it, a hit with a different semaphore keeps the old address today. The Metal 2.0 adapter refuses that binding at the cache miss, so the port would have to change behaviour.
+
+**Recognition — definitely this feature**: a `GlobalSemaphore` from `operation_attributes_t` (or the tensor args) has its `address()` written into a kernel arg, the cache hit takes the fast path (the factory pushes `Buffer*` runtime args, or is a `WorkloadDescriptor`), and the factory has no `override_runtime_arguments`, or has one that doesn't write that address. A wrapper `MeshWorkloadFactory` whose override patches it counts as re-applying it.
+
+**Recognition — false-positive guard**: a semaphore the factory allocates itself (`ttnn::global_semaphore::create_global_semaphore` in its body, parked on `WorkloadDescriptor::semaphores`) is op-allocated and ports. A `descriptor` / `descriptor (per-coord)` factory with no override and no `Buffer*` runtime-arg bindings re-runs `create_descriptor` on every hit, so it does re-apply the semaphore: the op is correct, but the port would have to add an override, which the recipe doesn't cover. RED it as a **recipe gap** (route to the recipe owner), not as an op bug. A device op whose `operation_attributes_t` already has `std::vector<GlobalSemaphore> global_semaphores`, with the semaphore in it, is rebound by the adapter and ports.
+
+**Action**: RED, routed to the op owner: re-apply the semaphore in `override_runtime_arguments`, or hold it in `operation_attributes_t::global_semaphores`. Both are functional changes and stay out of the port.
+
+**Examples in the wild**: `experimental/transformer/all_reduce_create_qkv_heads/` (excluded from the hash, never re-applied).
+
+### Fabric mux — UNSUPPORTED
+
+**Status**: Not yet supported. Metal 2.0 fabric connections cover direct worker-to-router connections; the mux, which adds a fabric-owned kernel and its buffers to the program, has no Metal 2.0 form yet.
+
+**Recognition — definitely this feature**: `FabricMuxConfig`, `FabricMuxV2Config`, `fabric_mux_connection_rt_args`, `append_fabric_mux_connection_rt_args`, `add_fabric_mux_v2_to_program`, a kernel source path containing `tt_fabric_mux`; kernel-side `WorkerToFabricMuxSender`, `FabricMuxV2Sender`, `build_connection_to_fabric_endpoint`.
+
+**Recognition — false-positive guard**: a mux type that appears only in an included header's functions the op never calls (`minimal_ccl_common.hpp` has some) is not use. Match the code paths the factory and its kernels actually execute.
+
+**Action**: STOP at ProgramFactory granularity. **A factory that chooses the mux or a direct connection at run time is RED as a whole**, even if the tested configuration takes the direct path: the port unit is one factory, and splitting it is a device-op change.
+
+**Examples in the wild**: `ccl/reduce_to_root/device/reduce_to_root_program.cpp`, `experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_program.cpp`; mux-or-direct: `experimental/ccl/all_gather_async/device/all_gather_async_default_program_factory.cpp`, the Ring factory in `experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp` (its Line factory always uses the mux).
+
+### RoutingPlaneConnectionManager with per-route or auto-selected links — UNSUPPORTED
+
+**Status**: Not yet supported. A Metal 2.0 `FabricConnectionsSpec` gives each worker core one link for all its targets, and a `RoutingPlaneConnectionManager` builds from one binding.
+
+**Recognition — definitely this feature**: `append_routing_plane_connection_manager_rt_args` with a `connection_link_indices` argument that is empty (auto-select per route) or lists different links for different routes.
+
+**Recognition — false-positive guard**: `{link}` or the same link for every route ports. A `FabricConnectionManager`'s forward and backward sides on different links port (one spec per side). So does `append_fabric_connection_rt_args` called per destination.
+
+**Action**: STOP at ProgramFactory granularity.
+
+### MeshSocket — UNSUPPORTED
+
+**Status**: Not yet supported. A socket's config buffer address reaches the kernel as a runtime arg, and Metal 2.0 has no parameter type for a socket.
+
+**Recognition — definitely this feature**: `MeshSocket` (or an H2D / D2H socket) in the factory or attributes, `get_config_buffer()` / `get_config_buffer_address()`; kernel-side `SocketSenderInterface`, `SocketReceiverInterface`, `create_sender_socket_interface`.
+
+**Action**: STOP at ProgramFactory granularity.
+
+**Examples in the wild**: `experimental/ccl/send_recv_async/` (all six send/recv ops, including `recv_async_h2d` and `send_async_d2h`).
+
+### Fused CCL op signalers — UNSUPPORTED
+
+**Status**: Not yet supported. A fused matmul-plus-CCL op passes a `*FusedOpSignaler` into the matmul factory, whose kernels then read runtime args across ops by position. The Metal 2.0 matmul forks reject a fused op on purpose (`matmul_multicore_reuse_mcast_1d_program_factory.cpp`: "the Metal 2.0 path does not support fused CCL ops").
+
+**Recognition — definitely this feature**: `MatmulFusedOpSignaler`, `AllGatherFusedOpSignaler`, `ReduceScatterFusedOpSignaler` or any `*FusedOpSignaler` in the factory; a `fused_op_signaler` argument to another op's factory.
+
+**Recognition — false-positive guard**: a standalone factory that passes an empty `std::optional<…FusedOpSignaler>` (always `std::nullopt` on its own path) to a builder it shares with a fused op is not this feature. Name the call site that proves it's always empty.
+
+**Action**: STOP at ProgramFactory granularity.
+
+**Examples in the wild**: `experimental/ccl/all_gather_matmul_async/`, `experimental/ccl/matmul_reduce_scatter_async/`, `experimental/ccl/llama_reduce_scatter_matmul/`.
 
 ---
 

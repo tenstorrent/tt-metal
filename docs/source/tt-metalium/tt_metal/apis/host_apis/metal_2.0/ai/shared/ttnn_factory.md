@@ -20,7 +20,7 @@ Both are built on the same method, `create_program_artifacts`, and both build th
 
 | Concept | On a cache hit, what gets refreshed | Written by |
 |---|---|---|
-| **`ProgramSpecFactoryConcept`** (base) | the tensor bindings, and nothing else | the framework |
+| **`ProgramSpecFactoryConcept`** (base) | the tensor bindings, plus any PrefetcherPipes and GlobalSemaphores the op holds in `operation_attributes_t` | the framework |
 | **`CustomProgramSpecFactoryConcept`** | exactly what the op's `override_runtime_arguments` returns | the op author |
 
 **One question decides which one this op targets: does the ported-from factory have an `override_runtime_arguments`?** No → the base concept. Yes → the custom concept, and the port's job is to *translate* that method rather than delete it. The audit records the target concept; the porter inherits it and does not re-decide.
@@ -73,7 +73,7 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
 The op author writes only `create_program_artifacts`. The framework adapter does the rest:
 
 - **Cache miss**: the adapter calls `create_program_artifacts`, builds one `Program` per mesh coordinate range from the spec, applies the initial `ProgramRunArgs`, and resolves each `TensorArgument` against the tensors enumerated from `tensor_args` / `tensor_return_value` followed by the factory's `op_owned_tensors` (matched by `MeshTensor` identity within the call). The op-owned tensors are parked in the cache entry so their allocation outlives the miss and stays at a stable address across dispatches.
-- **Cache hit**: the adapter enumerates fresh tensors (io tensors plus the parked op-owned ones) and patches their `TensorArgument`s into the cached `Program` in place — **only the tensor arguments are refreshed**, nothing else in the run-args — no `Program` rebuild, no factory re-run.
+- **Cache hit**: the adapter enumerates fresh tensors (io tensors plus the parked op-owned ones) and patches their `TensorArgument`s into the cached `Program` in place — **only the tensor arguments are refreshed** (plus PrefetcherPipes and GlobalSemaphores held in `operation_attributes_t::prefetcher_pipes` / `::global_semaphores`, which no ported-from descriptor op has), nothing else in the run-args — no `Program` rebuild, no factory re-run.
 
 The cache key is the op itself — its type, attributes, and tensor args (the framework's automatic hash), combined with the target mesh coordinates and which `tensor_args` slots hold the same tensor; a custom `compute_program_hash`, if present, replaces that default. Two dispatches with matching op-args share a cache entry, and only the tensor bindings are refreshed between them. The porter doesn't write any of this — it falls out of returning a correct `ProgramArtifacts`.
 
@@ -164,7 +164,7 @@ ProgramRunArgs MyProgramFactory::override_runtime_arguments(
 
 ## Per-coordinate programs: `MeshWorkloadSpecFactoryConcept`
 
-The target when the ported-from factory builds a different program per mesh coordinate: an MPMD op, or an SPMD op whose args vary by device (the sheet's `Execution Model`). A `MeshWorkload` holds one `Program` per coordinate range, so per-device values need per-device `Program`s in every API. The ported-from op already builds them, so the port loses nothing.
+The target when the ported-from factory builds a different program per mesh coordinate: an MPMD op, or an SPMD op whose args vary by device (the sheet's `Execution Model`). A `MeshWorkload` holds one `Program` per coordinate range; devices of one range that differ only in named kernel run-arg values can share it through per-device run args (below). The ported-from op already builds per-device programs, so the port loses nothing.
 
 ```cpp
 struct MyMeshWorkloadFactory {
@@ -188,9 +188,12 @@ struct MyMeshWorkloadFactory {
 - From a per-coordinate `create_descriptor(…, coord)`: one entry per coordinate. Iterate `tensor_coords.coords()` and set `range = ttnn::MeshCoordinateRange(coord)`.
 - From a `WorkloadDescriptor`: one entry per `programs` entry, with the same range.
 
-Build each entry's spec and run-args the way the [port recipe](../port/metal2_port.md) builds the single-program artifact, using that coordinate's values. Ranges must lie inside `tensor_coords` and must not overlap, and there must be at least one entry; violations fail at runtime. A coordinate where the ported-from op built an empty program gets no entry. Worked example on main: `experimental/dropout`'s `DropoutMeshWorkloadFactory`, one entry per coordinate, each with its own seed.
+Build each entry's spec and run-args the way the [port recipe](../port/metal2_port.md) builds the single-program artifact, using that coordinate's values. Ranges must lie inside `tensor_coords` and must not overlap, and there must be at least one entry; violations fail at runtime. A coordinate where the ported-from op built an empty program gets no entry. Worked example on main: `experimental/paged_cache`'s `paged_update_cache_program_factory.cpp`, one entry per coordinate.
+
+**Per-device run args — only where the ported-from factory merged.** A `WorkloadDescriptor` factory that sets `static constexpr bool merge_per_device_programs = true` already runs each range as one program with per-device runtime args. Keep that: declare `static constexpr bool uses_per_device_run_args = true`, return one entry per range the legacy merge covered, put the values every device shares (and a base value for each per-device arg) in `run_params`, and each device's differing values in `per_device_run_params`. On a cache hit, declare `static constexpr bool fixed_per_device_run_args = true` when the ported-from factory patched nothing per hit. Otherwise write the `RangeRunArgs override_runtime_arguments(attrs, args, ret, range)` (also required to bind a caller `GlobalSemaphore`), and note that it is not a translation of the legacy patch alone: **every hit returns the full base run args plus every device's per-device values**, because a per-device value it leaves out falls back to the base. A legacy wrapper that patched only values shared by all devices (a semaphore address) becomes an override that rebuilds everything. A fabric op can only merge devices whose fabric connections resolve from one spec: see [Porting CCL ops](ccl_port.md#read-this-first). A ported-from factory that also defines `idle_runtime_args` (kernels on different cores per device) has no per-device form: stop. Without `merge_per_device_programs`, keep one entry per program as above; merging is an optimization, not port work. Worked example: `experimental/dropout`'s `DropoutMeshWorkloadFactory`. Contract: the `MeshWorkloadSpecFactoryAdapter` comment in `ttnn/api/ttnn/mesh_device_operation_adapter.hpp`.
 
 - **No op-owned tensors.** `MeshWorkloadArtifacts` has no `op_owned_tensors` field.
+- **Op-owned `GlobalSemaphore`s** go in `MeshWorkloadArtifacts::global_semaphores`, where the cache entry keeps them; see [Porting CCL ops](ccl_port.md#op-allocated-globalsemaphores).
 - **Cache hit, no override:** the framework refreshes tensor bindings per range, as on the base concept.
 - **Cache hit, with an override:** the framework calls it once per range and applies the result to that range's `Program`. As on the custom concept, the override owns the tensor bindings, and [the cache-hit contract](#the-cache-hit-contract) applies unchanged. The ported-from override received each range's start coordinate; here that is `range.start_coord()`.
 
@@ -202,7 +205,7 @@ The audit's job here is one question: **does the op fit the concept the sheet's 
 
 - **`ProgramSpecFactoryConcept` / `CustomProgramSpecFactoryConcept`** → proceed. Op-owned tensors are fine.
 - **`MeshWorkloadSpecFactoryConcept`** → proceed, unless the op has op-owned tensors. This concept has no slot for them, so record RED.
-- **Op-owned `GlobalSemaphore`s**, on any concept. The factory allocates its own in its body, and no artifact has a slot for them. Not porter-resolvable: record RED and stop.
+- **Op-owned `GlobalSemaphore`s** → `MeshWorkloadSpecFactoryConcept` (`MeshWorkloadArtifacts::global_semaphores`). They only occur on `WorkloadDescriptor` factories, which target that concept anyway. Caller-supplied `GlobalSemaphore`s port on any concept whose cache hit re-applies them; see [Porting CCL ops](ccl_port.md#globalsemaphores) and the audit's Appendix A for the cases that don't.
 
 ### Tensor-arg matching — keep strict
 
@@ -303,7 +306,7 @@ The auditor adds the following to `METAL2_PREPORT_AUDIT.md`. The decision is rec
 
 ### Fit
 - Execution model: [the sheet's `Execution Model`; for MPMD or per-device args, what varies per coordinate]
-- Op-owned device resources: [none / op-owned tensors (supported, except on MeshWorkloadSpecFactoryConcept) / op-owned GlobalSemaphores — BLOCKED, list them]
+- Op-owned device resources: [none / op-owned tensors (supported, except on MeshWorkloadSpecFactoryConcept — BLOCKED there) / op-owned GlobalSemaphores (MeshWorkloadSpecFactoryConcept only)]
 - Tensor-arg matching: strict [default; deviation requires a paragraph and is not a port-time call]
 - Ported-from shape: [1:1 — or — collapsing to one spec: a `WorkloadDescriptor` that exists only to carry op-owned tensors, or a `descriptor (per-coord)` whose coordinate is unused]
 
@@ -312,7 +315,7 @@ The auditor adds the following to `METAL2_PREPORT_AUDIT.md`. The decision is rec
 [Recorded so the porter knows it is there and leaves it alone; the port never edits it.]
 
 ### Stop signals
-[If BLOCKED: which framework capability is missing (op-owned GlobalSemaphores, or op-owned tensors on MeshWorkloadSpecFactoryConcept), and confirm the overall audit result is RED. Otherwise: "None."]
+[If BLOCKED: which framework capability is missing (op-owned tensors on MeshWorkloadSpecFactoryConcept), and confirm the overall audit result is RED. Otherwise: "None."]
 ```
 
 ## Port plan deliverable (porter-facing)
@@ -347,7 +350,7 @@ On MeshWorkloadSpecFactoryConcept, confirm `create_mesh_workload_artifacts` emit
 ### Open items
 [Anything noticed about the factory layer during the port:
 - Relaxation candidates (kernels that would tolerate relaxed tensor matching — not applied during port).
-- Reasons the op would benefit from a capability not yet on this concept (op-owned GlobalSemaphores, caching-strategy control).
+- Reasons the op would benefit from a capability not yet on this concept (caching-strategy control).
 - Friction with the concept fit or the entry-point wiring.]
 ```
 

@@ -15,7 +15,7 @@
 - **Device 2.0** is a *separate, earlier* overhaul of the **kernel-side** data-movement APIs (safer, more object-oriented wrappers — `Noc`, kernel-side `CircularBuffer` wrappers, etc.). It's a **bundled prereq** to Metal 2.0 — the audit checks that ops are already on it — not part of Metal 2.0 itself.
 - **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `GlobalCB` = GlobalCircularBuffer (a *separate*, user-managed buffer — **not** a plain CB, and not portable yet; see [rule 1](#kernel-side-whitelist)); `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `CRTA` = common runtime args (values broadcast to all nodes); `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric).
 
-For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-args split — see [`migration_guide.md`](../shared/migration_guide.md). The recipe below assumes you've at least skimmed it.
+For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-args split — see [`migration_guide.md`](../shared/migration_guide.md). The recipe below assumes you've at least skimmed it. **An op that talks to the fabric or binds a `GlobalSemaphore`** (CCL ops) also needs [`ccl_port.md`](../shared/ccl_port.md), which adds the fabric-connection and `GlobalSemaphore` mappings to this recipe.
 
 **Precondition — non-negotiable**: You may only invoke this document if:
 
@@ -407,7 +407,7 @@ This change is wrong in context: INT32 support is Quasar-only, and this op doesn
 
 ### Kernel-side whitelist
 
-The following are the *only* changes you should be making to kernel code during a Metal 2.0 port. In `#include` terms, the port **adds exactly two headers**: `experimental/kernel_args.h` (the argument accessors `get_arg` / `args::` and the binding tokens `dfb::`, `sem::`, `tensor::`) and `api/dataflow/dataflow_buffer.h` (the `DataflowBuffer` type that replaces the legacy `CircularBuffer` — rule 1; the now-unused `CircularBuffer` include drops with rule 1's sweep). **Nothing else changes.** Types the kernel keeps using unchanged across the port — `TensorAccessor`, `Semaphore` — come from the same headers before *and* after, so you neither add nor touch their includes (don't go hunting for them). The *generated* headers (`kernel_args_generated.h`, `kernel_bindings_generated.h`) are auto-included by the build system — do **not** `#include` those yourself.
+The following are the *only* changes you should be making to kernel code during a Metal 2.0 port. In `#include` terms, the port **adds exactly two headers**: `experimental/kernel_args.h` (the argument accessors `get_arg` / `args::` and the binding tokens `dfb::`, `sem::`, `tensor::`) and `api/dataflow/dataflow_buffer.h` (the `DataflowBuffer` type that replaces the legacy `CircularBuffer` — rule 1; the now-unused `CircularBuffer` include drops with rule 1's sweep). A kernel that binds a `GlobalSemaphore` also adds `api/dataflow/global_semaphore.h` ([CCL ops](../shared/ccl_port.md#kernel-side-the-device-object)); fabric kernels keep their fabric includes, and the `global_sem::` / `fabric::` tokens come from the generated headers like the others. **Nothing else changes.** Types the kernel keeps using unchanged across the port — `TensorAccessor`, `Semaphore` — come from the same headers before *and* after, so you neither add nor touch their includes (don't go hunting for them). The *generated* headers (`kernel_args_generated.h`, `kernel_bindings_generated.h`) are auto-included by the build system — do **not** `#include` those yourself.
 
 **1. CircularBuffer → DataflowBuffer.** The object-type swap. The canonical FIFO methods (`reserve_back` / `push_back` / `wait_front` / `pop_front`) map **1:1**, names unchanged. Variable-name updates are limited to following the API rename (`cb_*` → `dfb_*`), to keep the kernel readable — don't rename for any other reason.
 
@@ -463,7 +463,11 @@ pack_tile(0, dfb::out);
 DataflowBuffer  dfb_in(dfb::in);
 TensorAccessor  input(tensor::input);
 Semaphore       done(sem::done);
+GlobalSemaphore out_ready(global_sem::out_ready);   // CCL ops
+auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_binding(fabric::forward);   // CCL ops
 ```
+
+The `GlobalSemaphore` and fabric constructions, and the legacy idioms they replace, are in [Porting CCL ops](../shared/ccl_port.md).
 
 For `TensorAccessor` specifically, this *replaces* the legacy multi-step construction dance. The host-side binding mechanism now packs the layout metadata into the kernel's compile-time args at program creation and auto-injects the per-enqueue base address — work the kernel used to do explicitly via `TensorAccessorArgs<N>()` (with manual offset chaining) and a buffer-address RTA read. The kernel-side rewrite collapses to the one-line construction:
 
@@ -485,7 +489,7 @@ If positional RTAs survive after the buffer-address RTA goes away (uncommon — 
 
 > *Third (page-size) argument drops.* Some legacy accessors pass an explicit page size as a **third** constructor argument — `TensorAccessor(args, addr, page_size)`, where `page_size` is a CTA or RTA value. The Metal 2.0 form takes no such argument: the binding token supplies the correct aligned page size automatically, so the third argument simply falls away in the collapse to `TensorAccessor(tensor::name)` (its host-side CTA/RTA emission drops with it — see [Dropped Plumbing](#dropped-plumbing)). **Don't preserve or re-thread it** — carrying the page size forward as a named arg recreates exactly the plumbing the binding model removes. The audit has already confirmed that every third-argument site reaching you is safe to drop, and lists the sites in the brief; a site whose page size could *not* be dropped never arrives (the audit gates it). A listed site may *additionally* carry a `TensorParameter` relaxation — the brief flags that separately; it is distinct port work, not part of the third-argument drop.
 
-> *Boundary note:* `dfb::name` implicitly converts to `uint32_t`; `sem::name` and `tensor::name` do not. The recipe assumes no out-of-op call site requires passing a `sem::` or `tensor::` handle — see [§Read this first](#read-this-first). If you encounter one, that's an assumption violation; stop and document per the off-ramp below.
+> *Boundary note:* `dfb::name` implicitly converts to `uint32_t`; `sem::name`, `tensor::name`, `global_sem::name` and `fabric::name` do not. The recipe assumes no out-of-op call site requires passing one of those handles (or a `GlobalSemaphore`'s address) — see [§Read this first](#read-this-first). If you encounter one, that's an assumption violation; stop and document per the off-ramp below.
 
 **4. Named arguments throughout.** Compile-time, runtime, and common runtime arguments all become named via `get_arg(args::<name>)`. The CTA / RTA / CRTA distinction is a host-only concern; the kernel uses one uniform retrieval syntax. Pick names that match the variables they were going to be assigned to.
 
@@ -1080,6 +1084,8 @@ Written during the inventory and planning steps; committed alongside the port fo
 | 0 | ... | ... | ... |
 
 (or "none")
+
+GlobalSemaphores (CCL ops): name, source (caller attribute / op-allocated), the kernels that read it, and how each kernel uses it (device-object method per [ccl_port.md](../shared/ccl_port.md#kernel-side-the-device-object)). Fabric connections: per worker kernel, the legacy helper (`append_fabric_connection_rt_args`, RPCM), the sides or routes, and the core → link assignment. (or "none")
 
 ### Tensor accessors
 | host site (file:line) | originating Tensor | RTA slot (host) |
