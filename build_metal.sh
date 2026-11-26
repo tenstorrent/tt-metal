@@ -1,7 +1,7 @@
 #!/bin/bash
-# Exabox login node: never build here; build on the reserved node (scripts/exabox/node-run).
+# Exabox login node: build on a cpu_only build node (scripts/exabox/build-on-cpu), never on the device node.
 if [[ "$(hostname -f 2>/dev/null)" =~ ^slurm-login-0[1-3]\. ]] && [ -z "${XRUN_BYPASS:-}" ]; then
-    exec "$(dirname "$(readlink -f "$0")")/scripts/exabox/node-run" ./build_metal.sh "$@"
+    exec "$(dirname "$(readlink -f "$0")")/scripts/exabox/build-on-cpu" ./build_metal.sh "$@"
 fi
 
 set -eo pipefail

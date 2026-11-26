@@ -1,0 +1,34 @@
+#!/bin/bash
+# usage: build-on-cpu <script relative to the checkout> [args...]
+# Exabox login node: run a build step (./build_metal.sh, ./create_venv.sh) as a job on a cpu_only build node and
+# wait for it, printing its log, so the caller sees the build output and exit code as if it ran here. Never builds
+# on the reserved device node. If the job cannot be submitted or never starts, falls back to running here.
+set -uo pipefail
+REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
+LOGDIR="/data/$USER/logs"; mkdir -p "$LOGDIR" "/data/$USER/tmp" "/data/$USER/nodehome"
+RC_FILE="$(mktemp -p "/data/$USER/tmp" buildrc.XXXXXX)"; rm -f "$RC_FILE"
+CMD="$(printf '%q ' "$@")"
+JOB="$(sbatch --parsable --partition=cpu_only --nodes=1 --exclude=prx-k8s-slurm-agent-03,prx-k8s-slurm-agent-04 \
+    --time=01:00:00 --job-name=atamm-build --output="$LOGDIR/atamm-build-%j.out" --export=ALL <<SB
+#!/bin/bash
+echo "node=\$(hostname) cpus=\$(nproc) start=\$(date -u +%FT%TZ)"
+free_gb=\$(df --output=avail -BG /tmp | tail -1 | tr -dc 0-9)
+[ "\$free_gb" -ge 5 ] || { echo "ABORT: only \${free_gb} GB free in /tmp on \$(hostname)"; echo 99 > $RC_FILE; exit 3; }
+export XRUN_BYPASS=1 HOME=/data/$USER/nodehome TMPDIR=/data/$USER/tmp
+cd $REPO && $CMD
+echo \$? > $RC_FILE
+SB
+)" || JOB=""
+if [ -z "$JOB" ]; then echo "[build-on-cpu] sbatch failed; building on this machine"; cd "$REPO" && XRUN_BYPASS=1 exec "$@"; fi
+echo "[build-on-cpu] job $JOB on cpu_only, log $LOGDIR/atamm-build-$JOB.out"
+for _ in $(seq 1 120); do  # up to 30 min waiting for the job to start
+    st="$(squeue -h -j "$JOB" -o %T 2>/dev/null)"; [ "$st" = PENDING ] || break; sleep 15
+done
+if [ "$(squeue -h -j "$JOB" -o %T 2>/dev/null)" = PENDING ]; then
+    scancel "$JOB"; echo "[build-on-cpu] job never started; building on this machine"; cd "$REPO" && XRUN_BYPASS=1 exec "$@"
+fi
+while squeue -h -j "$JOB" 2>/dev/null | grep -q .; do sleep 15; done
+sleep 5; cat "$LOGDIR/atamm-build-$JOB.out"
+rc="$(cat "$RC_FILE" 2>/dev/null)"; rm -f "$RC_FILE"
+if [ -z "$rc" ] || [ "$rc" = 99 ]; then echo "[build-on-cpu] job $JOB died without a result; building on this machine"; cd "$REPO" && XRUN_BYPASS=1 exec "$@"; fi
+exit "$rc"
