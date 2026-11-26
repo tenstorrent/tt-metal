@@ -1166,13 +1166,16 @@ def test_agk_launch_matches_rev65(lanes, tl, case):
             assert r["got"][0]["k_rem"] > 0 and not r["got"][0]["done"]  # a real tie round on every token
 
 
-def test_agk_count_is_the_local_select_count():
+def test_agk_count_is_the_local_select_count(monkeypatch):
     """the AGK count (min(512, n_closed_local(p, q))) = the local top-512's record count on every chip at every lane
     count, across pool-page / unit boundaries, below / at / above 512 local pools (the key page carries no count); and
     the same DSA state under speculative verify + rollback (SP.spec_ring_emulate: ix_dm1.cpp MLA_DSA_ONE_SLOT /
     MLA_DSA_GROUP_ROWS ring rows + pooled keys, spec_ctl.cpp ACCEPT's per-group ring move, plain steps between verifies)
     == sequential decode of the committed tokens; Zoe Carver's regen trap (a rejected row closing a pool reused a stale
-    open-pool record) is the "save_if_open" control, ACCEPT without the move the "no_move" one -- both must fail"""
+    open-pool record) is the "save_if_open" control, ACCEPT without the move the "no_move" one -- both must fail.
+    GLM53_ACCEPT_BATCH (spec_ctl.cpp SPEC_ACCEPT_BATCH: every read of a batch before its first write) moves the same
+    rows: no ring piece's source overlaps a destination at any base / accepted count (K <= 7); the knob, SpecCtl's
+    scratch and the kernel's offsets agree"""
     for K, G in ((1, 1), (1, 4), (1, 8), (2, 1), (3, 1), (3, 4)):
         r = SP.spec_ring_emulate(K, G, 300, seed=10 * K + G, plain_p=0.05)
         assert r["checks"] > 1500 and not r["mismatches"], (K, G, r["mismatches"][:5])
@@ -1184,6 +1187,38 @@ def test_agk_count_is_the_local_select_count():
     assert not SP.spec_ring_emulate(1, 1, 3, **trap)["mismatches"]
     bad = SP.spec_ring_emulate(1, 1, 3, variant="save_if_open", **trap)["mismatches"]
     assert (0, 0, "open_row", 6) in bad and (1, 0, "scored_pool", 1) in bad, bad
+    disjoint = lambda ps: all(s + b <= d or d + bd <= s for s, _, b in ps for _, d, bd in ps)  # noqa: E731
+    for c in range(-1, 64):
+        for n in range(8):
+            pieces = SP.accept_ring_pieces(c, n)
+            assert (pieces == []) == (c < 0 or c % 4 + n + 1 < 4) and len(pieces) in (0, 2), (c, n)
+            assert disjoint(pieces), (c, n, pieces)
+            assert all(s % 64 == 0 and s + b <= 1024 and d in (0, 512) for s, d, b in pieces), (c, n, pieces)
+    # RING (SPEC_MODE 4): the move rows 4 grp -> 0..3, the save 0..3 -> 8..11, the restore 8..11 -> 0..3, each batched
+    # over the 8 tiles; the save reads the move's rows, so ring_rows ends with a write barrier
+    for src, dst in [(4, 0), (8, 0), (0, SP.SPEC_RING_SAVE_ROW), (SP.SPEC_RING_SAVE_ROW, 0)]:
+        assert disjoint(SP.ring_row_pieces(src, dst)), (src, dst)
+    assert SP.spec_ctl_scratch("accept", 8, 11, False) == (2048, None)
+    assert SP.spec_ctl_scratch("gather", 0, 0, True) == (1024, None)  # BOOT / GATHER never take the define
+    assert SP.spec_ctl_scratch("accept", 8, 11, True) == (2048 + 1024 + 11 * 2048, 11)
+    assert SP.spec_ctl_scratch("ring", 0, 1, True) == (1024 + 2048, 1)
+    with open(os.path.join(SP.KDIR, "spec", "spec_ctl.cpp")) as f:
+        src = f.read()
+    for line in ("constexpr uint32_t BATCH_OFF = 2048;", "constexpr uint32_t BATCH_OFF = 1024;",
+                 "constexpr uint32_t TB_BYTES = 1024;", "s_tb = scr + BATCH_OFF, s_rb = scr + BATCH_OFF + TB_BYTES;",
+                 "static_assert(2 * K + 1 <= 16,", "const uint32_t b = buf + (l * RING_TILES + i) * 256;",
+                 "noc_async_write(b, a, 128);", "noc_async_write(b + 128, a + 512, 128);",
+                 f"constexpr uint32_t RING_SAVE_ROW = {SP.SPEC_RING_SAVE_ROW};"):  # fmt: skip
+        assert line in src, line
+    monkeypatch.delenv("GLM53_ACCEPT_BATCH", raising=False)
+    assert not SP.accept_batch()
+    monkeypatch.setenv("GLM53_ACCEPT_BATCH", "0")
+    assert not SP.accept_batch()
+    monkeypatch.setenv("GLM53_ACCEPT_BATCH", "1")
+    assert SP.accept_batch()
+    monkeypatch.setenv("GLM53_ACCEPT_BATCH", "2")
+    with expect_error(ValueError, "GLM53_ACCEPT_BATCH=2: 0 or 1"):
+        SP.accept_batch()
     gen = torch.Generator().manual_seed(66)
     for p in (2051, 2052, 4095, 4096 + 127, 4096 + 128 + 3, 32767, 65535 - 128, 65535, 65535 + 129, 262143):
         keys = torch.randint(1, 1 << 31, ((p + 1) // 4,), generator=gen, dtype=torch.int64)

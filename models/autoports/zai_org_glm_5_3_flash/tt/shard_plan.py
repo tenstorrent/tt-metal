@@ -2644,6 +2644,49 @@ def audit_rs_blocks(geo, t: int, rsb: bool = False, rs1_early: bool = False, pla
                     raise ValueError(f"chip {(r, c)} stream {name}: blocks {got} differ from the plan {want}")
 
 
+SPEC_CTL_BATCH_TOK = 1024  # spec_ctl.cpp SPEC_ACCEPT_BATCH: one user's token rows (64 B each; 2 K + 1 <= 16)
+SPEC_CTL_RING_PIECES = 2048  # ... and per ring tensor the 4-row pieces of a slot's 8 tiles (8 x 256 B)
+SPEC_RING_SAVE_ROW = 8  # spec_ctl.cpp RING_SAVE_ROW: RING's copy of the canonical rows across the MTP chain
+
+
+def accept_batch() -> bool:
+    """GLM53_ACCEPT_BATCH (default 0): kernels/spec/spec_ctl.cpp SPEC_ACCEPT_BATCH on ACCEPT and RING (tt/spec_mtp.py
+    SpecCtl) -- a user's token reads behind one barrier, its DSA ring move in one round trip, RING's row moves in one.
+    Not a GLM53_SPEC_* name: apply_spec takes any GLM53_SPEC_* variable as an explicit speculation config"""
+    return _flag("GLM53_ACCEPT_BATCH")
+
+
+def spec_ctl_scratch(mode: str, groups: int, rings: int, batch: bool) -> tuple:
+    """SpecCtl's CB 0 scratch bytes (before its 64-B alignment slack) and the SPEC_ACCEPT_BATCH value (None: no define):
+    1 KB of single-user slots (2 KB with SPEC_GROUPS); with the batch, ACCEPT + 1 KB of token rows + 2 KB of ring pieces
+    per ring tensor (all R in one round trip: B = R), RING + the 2 KB of one tensor's pieces (it moves one tensor at a
+    time: B 1)"""
+    scr = 2048 if groups else 1024
+    if not (batch and mode in ("accept", "ring")):
+        return scr, None
+    if mode == "ring":
+        return scr + SPEC_CTL_RING_PIECES, 1
+    nb = max(1, int(rings))
+    assert nb <= 16, ("at most 16 ring tensors", nb)
+    return scr + SPEC_CTL_BATCH_TOK + SPEC_CTL_RING_PIECES * nb, nb
+
+
+def ring_row_pieces(src: int, dst: int) -> list:
+    """one ring tile's 4-row move rows src .. src + 3 -> rows dst .. dst + 3 (spec_ctl.cpp ring_rows / ACCEPT's move):
+    [(src byte, dst byte, bytes)] for faces 0 / 1 (kernels/mla/mla_common.hpp row_off; 4-row groups stay in one face
+    row band)"""
+    off = lambda r: (r >> 4) * 1024 + (r & 15) * 32  # noqa: E731
+    return [(off(src), off(dst), 128), (off(src) + 512, off(dst) + 512, 128)]
+
+
+def accept_ring_pieces(c: int, n: int) -> list:
+    """ACCEPT's ring move in one ring tile: rows 4 grp .. 4 grp + 3 -> rows 0..3, grp = (c + n + 1) / 4 - c / 4; [] = no
+    move. A batch reads every piece before its first write: the per-tile order's result iff no source overlaps a
+    destination"""
+    grp = 0 if c < 0 else (c + n + 1) // 4 - c // 4
+    return ring_row_pieces(4 * grp, 0) if grp > 0 else []
+
+
 def spec_ring_emulate(K: int, G: int, steps: int, *, seed: int = 0, variant: str = "ours", plain_p: float = 0.0,
                       starts=None, forced=None) -> dict:  # fmt: skip
     """Host model of the DSA indexer's open-pool record under speculative verify + rollback (Zoe Carver's regen trap,
