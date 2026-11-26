@@ -3,3 +3,12 @@ Real logs the unit tests parse, cut to the lines they need. Runs live on /data/m
 write_ack_duty_hang.log
   galaxy-workload-deployment-test/LOG_2026_11_21_13_27_bh-glx-110-a06u02_734b76a2caa/matmul/mcast-ack-duty/log_01
   (lines from __main__:scan_all_chips only)
+
+crash_triage_hang.csv
+  galaxy-workload-deployment-test/LOG_2026_11_21_13_27_bh-glx-110-a06u02_734b76a2caa/matmul/minimal/crash_triage_01.csv
+  (dump_op_mesh.py and dump_running_operations.py sections, lines 1-16). Device 27 = T3:N4 hung in
+  MinimalMatmulDeviceOperation on 120 cores. Cells hold literal \n, quoted cells hold commas.
+
+nd_report.log
+  Built from the f-strings in tt_py_test_utils_common/op_test_base.py log_nd_cores/log_nd_core_summary
+  (no real failing run with core mapping on /data yet). Devices 19 and 26 fail; device 18 passes.
