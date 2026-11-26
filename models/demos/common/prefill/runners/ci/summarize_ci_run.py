@@ -12,6 +12,13 @@ _CHUNK_RETIRE = re.compile(
     r"\[producer\] CHUNK_RETIRE slot=(\d+) start=(\d+) end=(\d+) first=([\d.]+) retire=([\d.]+) warmup=([01])"
     r"(?: acks=(\d+))?"
 )
+# Each runner rank's start-up line (prefill_runner.py): its stage mesh, layers, chunking, packing, slots and layout.
+_RANK_SETUP = re.compile(
+    r"\[pp rank (?P<rank>\d+)/(?P<ranks>\d+)\] mesh=\((?P<rows>\d+), (?P<cols>\d+)\) "
+    r"layers=\[(?P<lo>\d+), (?P<hi>\d+)\) .*?chunk_size=(?P<chunk>\d+) forward_chunks=(?P<cpf>\d+) "
+    r"max_seq_len=\d+ num_users=(?P<users>\d+)"
+    r"(?: sp=(?P<sp>\d+) tp=(?P<tp>\d+) sp_axis=(?P<axis>\d+) traced=(?P<traced>[01]))?"
+)
 
 # Chunks spanned by a throughput probe. A single chunk can run half again as long as its neighbours,
 # so one interval is too noisy to be a rate; eight is still under 5% of the shortest measured request.
@@ -130,7 +137,33 @@ def _spans_from_logs(root, real_chunks):
     return spans[-real_chunks:] if real_chunks > 0 else spans
 
 
-def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None, chunks_per_forward=1):
+def _setup_from_logs(root):
+    """What ran, from the runner ranks' start-up lines: stages x stage mesh, the SP axis, each stage's layers, slots,
+    chunking and packing, tracing. Empty when no rank printed one."""
+    ranks = {}
+    for line in _iter_lines(root):
+        m = _RANK_SETUP.search(line)
+        if m:
+            ranks[int(m["rank"])] = m.groupdict()
+    if not ranks:
+        return ""
+    g = ranks[min(ranks)]
+    stages = f"{g['ranks']} stage{'s' if g['ranks'] != '1' else ''} x [{g['rows']},{g['cols']}]"
+    if g["sp"] is not None:
+        stages += f" (SP{g['sp']} on mesh axis {g['axis']}, TP{g['tp']})"
+    counts = [int(r["hi"]) - int(r["lo"]) for _, r in sorted(ranks.items())]
+    layers = f"{sum(counts)} layers" + (f" as {'+'.join(map(str, counts))}" if len(counts) > 1 else "")
+    if len(ranks) < int(g["ranks"]):
+        layers += f" ({len(ranks)} of {g['ranks']} ranks reported)"
+    cpf = int(g["cpf"])
+    packing = f"{cpf} per forward (packed)" if cpf > 1 else "1 per forward"
+    parts = [stages, layers, f"{g['users']} slots", f"{g['chunk']}-token chunks, {packing}"]
+    if g["traced"] is not None:
+        parts.append("traced" if g["traced"] == "1" else "eager")
+    return ", ".join(parts)
+
+
+def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None, chunks_per_forward=1, setup=""):
     n = len(spans)
     if n == 0 or chunk_size <= 0:
         return [], {}
@@ -139,6 +172,7 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None, chunks_p
     end = [span[1] for span in spans]
     whole_chunk_acks = all(span[2] == 1 for span in spans)
     rec = {
+        "setup": setup,
         "chunk_size": chunk_size,
         "num_chunks": n,
         "max_seq": max_seq,
@@ -165,6 +199,8 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None, chunks_p
         return list(zip(labels, picked))
 
     out = ["==================== perf metrics (measured request, warmup excluded) ===================="]
+    if setup:
+        out.append(f"run: {setup}")
     cpf = max(1, chunks_per_forward)
     packing = f"packed, {cpf} chunks per forward" if cpf > 1 else "unpacked, one chunk per forward"
     out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size}; {packing})")
@@ -248,7 +284,14 @@ def main():
     if not spans:
         print("no producer CHUNK_RETIRE lines found (the producer's completion drain did not run)")
         return
-    lines, rec = _perf_metrics(spans, args.chunk_size, args.pipeline_ranks, probe_chunks, args.chunks_per_forward)
+    lines, rec = _perf_metrics(
+        spans,
+        args.chunk_size,
+        args.pipeline_ranks,
+        probe_chunks,
+        args.chunks_per_forward,
+        _setup_from_logs(args.ranklogs),
+    )
     if lines:
         _publish(lines, args.summary_name)
     _publish_json(rec, args.summary_name)
