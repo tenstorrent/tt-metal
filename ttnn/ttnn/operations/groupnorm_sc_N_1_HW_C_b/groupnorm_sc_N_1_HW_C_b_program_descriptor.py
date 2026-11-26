@@ -406,6 +406,13 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta, in_place=Fal
     W, T, R, h = best["W"], best["T"], best["R"], best["h"]
     B_max = _ceil_div(best["rows_core_max"], h)
     K_max = (l1_budget - best["f_fixed"]) // (BF16_TILE_BYTES * T)
+    # f_fixed carries the streaming depth; a fully resident ring (K = B) streams nothing, so solve K = B against
+    # the stream-free footprint too (flux1 1048576x64: K 17 -> 19 = B, no pass-2 re-reads).
+    f_resident = footprint_bytes(
+        W=W, T=T, R=R, K_alloc=0, stream=False, is_rm=is_rm, has_gamma=has_gamma, has_beta=has_beta
+    )
+    if (l1_budget - f_resident) // (BF16_TILE_BYTES * T) >= B_max:
+        K_max = max(K_max, B_max)
     override = tuning.get("max_resident_chunks")
     if override is None:
         K_alloc = min(B_max, K_max)
@@ -788,16 +795,27 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     inv_n_bits = _f32_bits(1.0 / (plan.HW * plan.Cg))
     eps_bits = _f32_bits(eps)
 
-    reader_rt = ttnn.RuntimeArgs()
+    # NoC pairing per core. Every core reads on one NoC and writes on the other; DRAM interleaved, the odd grid
+    # columns take the swapped pairing (read NOC1 / write NOC0), so both NoCs carry half of every phase's DRAM
+    # stream (pass-1 reads, pass-2 reads + writes) instead of all reads on NOC0 and all writes on NOC1. Unit roots
+    # keep (NOC0, NOC1): the mcast sender's NoC must be the McastConfig NoC. Sharded inputs stream nothing.
+    def swapped(wk):
+        return int(not sharded and not wk.is_root and wk.core.x % 2 == 1)
+
+    reader_rt = {0: ttnn.RuntimeArgs(), 1: ttnn.RuntimeArgs()}
+    reader_cores = {0: [], 1: []}
     compute_rt = {1: ttnn.RuntimeArgs(), 0: ttnn.RuntimeArgs()}
-    writer_rt = {1: ttnn.RuntimeArgs(), 0: ttnn.RuntimeArgs()}
+    writer_rt = {(r, sw): ttnn.RuntimeArgs() for r in (1, 0) for sw in (0, 1)}
     writer_cores = {1: [], 0: []}
+    writer_cores_sw = {(r, sw): [] for r in (1, 0) for sw in (0, 1)}
     for wk in plan.work:
         x, y = wk.core.x, wk.core.y
+        sw = swapped(wk)
         B_core = _ceil_div(wk.rows_core, h)
         K_core = min(plan.K_alloc, B_core)
         root_virt = device.worker_core_from_logical_core(wk.root)
-        reader_rt[x][y] = [
+        reader_cores[sw].append(wk.core)
+        reader_rt[sw][x][y] = [
             input_tensor.buffer_address(),
             gamma_addr,
             beta_addr,
@@ -812,7 +830,8 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         ]
         compute_rt[wk.is_root][x][y] = [wk.num_blocks, wk.rows_core, K_core, inv_n_bits, eps_bits]
         writer_cores[wk.is_root].append(wk.core)
-        writer_rt[wk.is_root][x][y] = [
+        writer_cores_sw[(wk.is_root, sw)].append(wk.core)
+        writer_rt[(wk.is_root, sw)][x][y] = [
             output_tensor.buffer_address(),
             wk.unit_start,
             wk.num_blocks,
@@ -825,23 +844,34 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             plan.cpi,
         ]
 
-    reader_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_b_reader.cpp"),
-        core_ranges=cores,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
-        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
-    )
+    reader_kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_b_reader.cpp"),
+            core_ranges=(
+                cores if not reader_cores[1] else ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reader_cores[sw]])
+            ),
+            compile_time_args=reader_ct,
+            runtime_args=reader_rt[sw],
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1 if sw else ttnn.NOC.NOC_0
+            ),
+        )
+        for sw in (0, 1)
+        if reader_cores[sw]
+    ]
     writer_kernels = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_b_writer.cpp"),
-            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in writer_cores[role]]),
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in writer_cores_sw[(role, sw)]]),
             compile_time_args=writer_ct(role),
-            runtime_args=writer_rt[role],
-            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
+            runtime_args=writer_rt[(role, sw)],
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0 if sw else ttnn.NOC.NOC_1
+            ),
         )
         for role in (1, 0)
-        if writer_cores[role]
+        for sw in (0, 1)
+        if writer_cores_sw[(role, sw)]
     ]
     compute_config = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi3,
@@ -880,5 +910,5 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         ttnn.McastCoreOrder.ColumnMajor if sharded else ttnn.McastCoreOrder.RowMajor,
     )
     mcast.attach(descriptor, "mcast", writer_kernels, MCAST_FIRST_SEMAPHORE_ID)
-    descriptor.kernels = [reader_kernel, *writer_kernels, *compute_kernels]
+    descriptor.kernels = [*reader_kernels, *writer_kernels, *compute_kernels]
     return descriptor
