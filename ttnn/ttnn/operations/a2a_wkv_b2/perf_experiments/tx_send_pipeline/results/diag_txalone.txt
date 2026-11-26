@@ -1,0 +1,35 @@
+TXP=diag A2A_ABLATE=NO_READ,NO_COMPUTE
+PASSED
+SAFE_PYTEST_RESULT: PASS
+chip 0: 71.5 46.3(+27290.7) 46.3(+7.6) 43.6(+7.6) 46.5(+7.5) 43.4(+7.6) 46.8(+7.6)
+chip 1: 42.1 48.8(+27292.6) 44.0(+7.5) 46.3(+7.5) 43.7(+7.5) 46.6(+7.5) 43.5(+7.5)
+chip 2: 76.7 46.4(+27310.7) 43.6(+7.6) 46.4(+7.6) 43.4(+7.6) 46.7(+7.6) 43.2(+7.6)
+chip 3: 120.0 44.1(+27292.9) 46.4(+7.5) 43.6(+7.5) 46.6(+7.5) 43.4(+7.5) 46.9(+7.5)
+chip 4: 73.3 46.1(+27398.9) 45.9(+7.6) 44.0(+7.6) 46.0(+7.6) 43.8(+7.6) 46.2(+7.5)
+chip 5: 42.0 48.5(+27400.9) 44.1(+7.5) 46.0(+7.5) 44.0(+7.5) 46.2(+7.6) 44.0(+7.5)
+chip 6: 111.6 46.0(+27419.0) 44.1(+7.6) 46.1(+7.6) 43.9(+7.5) 46.2(+7.5) 43.9(+7.5)
+chip 7: 99.6 44.2(+27401.1) 46.0(+7.5) 43.9(+7.6) 46.2(+7.4) 44.0(+7.5) 46.0(+7.6)
+span per chip (us): 0:46.8 1:43.5 2:43.2 3:46.9 4:46.2 5:44.0 6:43.9 7:46.0
+zone                     risc    cores    mean     max  end_max
+tx_writer_await_done     BRISC      32     4.2     6.5     46.9
+tx_writer_close          BRISC      32     0.8     1.2     42.1
+tx_writer_stream         BRISC      32    23.7    28.2     41.2
+tx_reader_reset          NCRISC     32     1.2     1.6     39.9
+tx_reader_stream         NCRISC     32    31.2    37.6     38.2
+tx_writer_await_ready    BRISC      32     0.0     0.0     10.7
+tx_writer_addr_table     BRISC      32     7.1     9.4     10.6
+writer_local_write       BRISC     192     2.4     2.6      3.5
+writer_wait_block        BRISC     768     0.3     0.3      3.0
+compute_matmul           TRISC_0   768     0.1     0.1      1.4
+compute_tilize           TRISC_0   768     0.4     0.5      1.4
+reader_attn_block        NCRISC    768     0.6     0.7      1.4
+compute_matmul           TRISC_2   768     0.2     0.2      1.1
+compute_tilize           TRISC_2   768     0.1     0.1      1.1
+compute_matmul           TRISC_1   768     0.1     0.1      0.9
+compute_tilize           TRISC_1   768     0.1     0.1      0.9
+reader_w_issue           NCRISC    768     0.0     0.1      0.6
+max markers per (core, RISC) in this instance: 20 (cap 250 per program run)
+MEAN TXD_ link0: BATCHES=15 FLUSH=0.19us(2cyc/pkt) ISSUE=9.60us(108cyc/pkt) NBUF=17 PACKETS=120 SLOT=2.88us(32cyc/pkt) SLOTSTALLS=5 WAIT=0.37us(4cyc/pkt)
+MEAN TXD_ link1: BATCHES=8 FLUSH=0.10us(2cyc/pkt) ISSUE=4.79us(108cyc/pkt) NBUF=17 PACKETS=60 SLOT=6.87us(154cyc/pkt) SLOTSTALLS=6 WAIT=0.20us(4cyc/pkt)
+MEAN TXR_ link0: BATCHES=15 PKTS=120 POLL=1.47us(17cyc/pkt) POLLS=1 PULLBAR=3.77us(42cyc/pkt) RESERVE=21.47us(242cyc/pkt)
+MEAN TXR_ link1: BATCHES=8 PKTS=60 POLL=0.81us(18cyc/pkt) POLLS=1 PULLBAR=1.74us(39cyc/pkt) RESERVE=16.68us(375cyc/pkt)

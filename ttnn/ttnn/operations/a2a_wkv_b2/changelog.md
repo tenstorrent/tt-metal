@@ -348,3 +348,151 @@ Each idea was run by its own `perf-part-optimizer` in `perf_experiments/<slug>/`
 ### Tests and artifacts
 - `perf_experiments/{launch_gap,reader_issue,tx_send_rate,tx_rebalance_direct,tx_startup}/` hold each idea's variant op, kernels, tests, probes and parsers. Profile CSVs were deleted.
 - The experiment tests need `-o addopts= --import-mode=prepend`. Their `import torch` lines are function-local, as the ttnn torch-import hook requires.
+
+## Perf 2 — perf tournament round 2 (perf-flagged focus case)
+- **Date**: 2026-11-26
+- **Focus case**: the same, and only, cell as Perf 1.
+  - Per chip: attn [1,96,160,512] bf16 ROW_MAJOR DRAM, W [1,96,512,128] bf8_b TILE DRAM → out [1,24,640,128] bf8_b L1.
+  - HiFi2, fp32_dest_acc_en=False, 2x4 LoudBox, FABRIC_2D_TORUS_X.
+  - The cell is in SUPPORTED, so there is no generality gap.
+  - SOL 43.8 µs; roofline (op_design Bounds) ≈ 49.5 µs.
+- **Result**: trace replay, `test_a2a_wkv_b2_trace_timing.py`, µs per call:
+  - **72.8 → 62.8 µs (−13.7%)**. The final runs measured 62.7 / 62.9, and 63.0–63.7 right after graduation.
+  - 5 ideas: 2 WIN, both graduated as the op's only path; 3 NULL.
+  - Golden 7/7. Acceptance 10/10, also under `--dev`.
+
+### Measured breakdown (before, on the Perf 1 op)
+- **Profile**: trace replay (`perf/p2/prof.sh` = `probes/probe_trace_profile.py` + `perf/stage_zones.py` + `perf/trace_gaps.py`). New `perf/p2/tail.py` gives per-row worker read/matmul end times and a per-tx-core timeline (ready, stream start/end, close, done).
+- **Ablation** (`A2A_ABLATE`; µs per call, including the ~7.4 µs launch gap; spans from the profile):
+
+| Part (cumulative peel) | µs per call | Span µs | Part SOL µs | Part roofline µs | (alone − floor) / roofline |
+|---|---|---|---|---|---|
+| Full op | 72.8 | 61.5–65.9 (+ gap 7.4) | 43.8 | 49.5 | — |
+| − sends | 65.2 | | | | |
+| − sends − pulls | 63.3 | | | | |
+| **reads alone** (− compute) | 58.3 | **~50.5** | 43.8 (DRAM 512 GB/s) | 46.2–49.5 | 14% (≈440 GB/s, the DRAM ceiling measured in Perf 1) |
+| **tx path alone** (reads + compute stubbed) | 53.2 | **~45** (stream 120 pkts at 0.25 µs/pkt) | 10.4 (fabric) | 13.5 | 260% |
+| **fixed** (all stubbed) | 27.2 | **18.9** (address table up to 10.8, stub stream, close, done) | — | 3.1 | 510% (hidden under the reads in the full op) |
+| compute (matmul zone) | 29.0 alone | 8.8 per core (1.76 per block) | 7.6 | — | hidden; drain after the last read 3.8 µs |
+| launch gap | 7.4 | | | ≈ 1.4 | |
+| Overlap loss | | full span ~64 − slowest part ~50.5 ≈ 14 | | | |
+
+- **Timeline in the full op** (the profile, not ablation): worker reads finish strongly **by physical row**:
+
+  | Physical row | 9 | 8 | 7 | 6 | 5 | 4 | 3 / 2 |
+  |---|---|---|---|---|---|---|---|
+  | Read end µs | ~20 | 24 | 29–33 | 37–41 | 44–48 | 47–49.5 | 48–52 |
+
+  - `by_stream` placed the antipode heads on rows 4–5, so the antipode streams (x13/x15) were publish-bound and ended 53–59 µs.
+  - The +1 neighbour (x12) ended ~54 µs; the −1 neighbour (x14) ~46 µs, send-bound from its 13 µs start.
+  - `await_done` ran to 65.8 µs: cross-chip launch skew plus the slowest stream.
+- **Ranked bottlenecks:**
+  1. **The tail.** Fabric-bound heads published late relative to the local heads.
+  2. The tx per-packet rate.
+  3. The launch gap.
+  4. The compute drain after the last read.
+  5. The reads, at the DRAM ceiling.
+- **Data-movement search** (`estimate.py sweep --phase "Perf 2"`; attn sweep `9187fdd7`, W sweep `9cc814e9`):
+  - The current schedule (split NoC, attn batch 32, W batch 64) is still tied for rank 1, so no schedule entry was fanned out. The read lever was ordering, not schedule.
+  - Fabric and L1-to-L1 ideas are refused by the tool and went out unranked.
+  - `pipeline_spec.py` still refuses the ring, and `op_model.py` does not apply to this fused multi-chip op.
+
+### Portfolio and verdicts
+Each idea was run by its own `perf-part-optimizer` in `perf_experiments/<slug>/`. µs per call, alternating runs.
+
+| Idea | Stage | Verdict | Baseline → candidate | Domain |
+|---|---|---|---|---|
+| `read_order`: re-shape when each head finishes (placement + local-head read gate) | worker reader / head placement | **WIN** | 73.8 → 65.0; spread alone 67.0; max span 69.0 → 57.2 | everywhere |
+| `launch_gap2`: merge the worker NoC-split kernel pairs, tx args into common tables, fewer CB ranges | dispatch / program structure | **WIN** (merge) | 72.7 → 70.5; gap 7.45 → 5.5 | everywhere |
+| `tx_early_start`: arm headers before `await_ready`, lazy/bank-walk address table | tx writer start-up | NULL | 72.7 → 72.85 | — |
+| `tx_send_pipeline`: per-packet rate of the worker → router path | tx writer / reader | NULL | 73.1 → 72.3 (`hdrtab`); tx-alone stream 27.7 → 27.6 | — |
+| `compute_drain`: shorten tilize → matmul → pack after the last read | compute | NULL (whole op) | 73.1 → 72.2 (chunkpush); re-tested on the graduated op, 62.7 / 63.4 → 63.1 / 63.9 | — |
+
+**`read_order`.**
+- The per-row finish order is set by DRAM bandwidth plus NoC arbitration, which favours the low rows. The local rows got almost no bandwidth before ~38 µs, so delaying them by 20 µs changed nothing.
+- **Spread placement**: local heads stay on the first (slowest) rows. Every stream's heads are spread evenly over the remaining cores in proportion to its head count, so each stream is fed over the whole read stream. 73.8 → 67.0.
+- **Local-head read gate**: local cores poll a semaphore counter on the first local core. They start reading after K = 7/12 × 72 = 42 remote cores have bumped it after their last read. 67.0 → 65.0; the gate opened at 33.6–35 µs.
+- Menu (max span over chips, µs):
+
+  | Variant | Max span |
+  |---|---|
+  | baseline | 69.0 |
+  | locals delayed 20 µs | 67.0 |
+  | uniform / graded row mixes | 59.6–60.5 |
+  | delayed start 25 / 30 / 34 / 38 µs | 58.9 / 57.9 / 57.3 / 60.4 |
+  | gate K = 36 / 42 / 48 | 58.8 / **57.1** / 58.0 |
+
+- A placement model (`ro_sim.py`) predicted that antipode heads on the fastest rows would back up link 1 (64–66 µs), so that variant was not built.
+
+**`launch_gap2`.**
+- Since Perf 1 the worker reader picks the NoC per page in `DM_DYNAMIC_NOC` mode, so the two kernel groups were only a dispatch cost.
+- Merged to one reader and one writer over the whole worker rectangle: gap 7.45 → 5.5 µs, per call 72.7 → 70.4–70.8. The writer takes its NoC from bit 16 of its table word, the same NoC its group used before.
+- Tx args moved into common tables: gap −0.2 µs, flat per call. It also needs an `rta_l1_base` overwrite because `DirectConn` has no common-arg entry point, so it was not graduated.
+- CBs on the bounding box: gap +0.5 µs, a regression.
+
+**`tx_early_start`.**
+- The streams start 5–8 µs earlier (the gap between ready and stream 2.3 → 0.1 µs), but their ends do not move: they are publish-bound.
+- The bank-walk address fill is 14% cheaper (6.2 vs 7.2 µs mean).
+- Peer launch skew is now visible: on some chips ready lands at 10–16 µs. Before, the address-table fill hid that wait.
+
+**`tx_send_pipeline`.**
+- A synthetic back-to-back sender measured the router channel ceiling at a per-packet cost of ~0.2 µs, whatever the size: 4-chunk scatter 0.232, 2-chunk 0.195, unicast 4352 B 0.200, unicast 1088 B 0.198 µs per packet.
+- The real link-0 stream (27.7 µs for 120 packets) already equals the synthetic ceiling (27.9). So the fabric part's gap to its 13.5 µs roofline is the router's per-packet cost on this box, not the worker.
+- `hdrtab` (full headers prebuilt in a table) is correct, also under `--dev`, but flat. Cycle counters show the full-op streams are publish-bound.
+
+**`compute_drain`.**
+- Per row: tilize 0.6, matmul 1.46 (at its 1.52 µs SOL) and pack 0.33 µs; the compute runs behind the reads at 2.41 µs per row vs rows landing every ~1.9 µs.
+- `chunkpush` (the tilize pushes 4-tile chunks, the matmul K loop waits per chunk; bit-identical output) cuts the critical-core drain 4.73 → 4.13 µs. The whole op is flat both before and after the read_order graduation, so it was not graduated.
+- Tilize inside the matmul's in0 unpack: BLOCKED. The 16-bit SrcB tilize mode does not reorder rows into faces on Blackhole (PCC 0.06).
+- K-split of the last row only helps when compute is idle.
+
+### What graduated (each the op's only path; the code it replaced is deleted)
+
+| Step | Commit | µs per call | Change |
+|---|---|---|---|
+| 0 | — | 72.8 / 72.9 | Perf 1 op |
+| 1 | `read_order` + `launch_gap2` (one commit, same descriptor) | **63.2 / 63.0 / 63.7 / 62.8 / 63.4 / 63.2**, final 62.7 / 62.9 | see below |
+
+- **`HEAD_PLACEMENT = "spread"`.** It replaces `by_stream`; `by_stream` and `interleaved` were deleted, and `rowmajor` was kept as the explicit alternative.
+  - With more than one head per core the spread order is not consecutive per core, and `_place_heads` falls back to row-major. That is the existing correctness fallback, not a new guard.
+- **Local-head read gate** (`READ_GATE_FRACTION = 7/12`, `A2A_READ_GATE_*` in `kernels/a2a_wkv_b2_reader.cpp`, new zone `reader_gate`).
+  - It cannot deadlock on any grid: remote cores never wait, and K ≤ the number of remote cores.
+  - **Carve-out (feasibility only):** it is off when a chip has no local core or no remote core, where the gate has no meaning.
+  - A core is "local" if its first head is local.
+  - The gate counter is a single-core program semaphore. It costs ~0.55 µs of launch gap (5.7 with the gate off vs 6.25 with it on): below the noise band, so it was left as is.
+- **One worker reader + one worker writer kernel** over `worker_set` (`DM_DYNAMIC_NOC`). The writer issues every write, barrier and inc on `noc = (core_word >> 16) & 1`. The per-group kernel loop is deleted.
+- **After** (profile `perf/p2/g1.csv`; the CSV was deleted):
+  - span per chip 56.2–58.6 µs, launch gap 6.0–6.3;
+  - worker reads end by row 9 at ~20 µs … row 4 at 48, local rows 2/3 at 53.6;
+  - neighbour streams end 52.4–54.5 and antipode streams 48.3–51.6;
+  - the local tail (matmul 56.2, local write 56.8) now sets the end.
+- **Bottleneck now** (round 3): the local-head tail. The reads at the DRAM ceiling (~51–53.6 µs) plus the 3–4 µs drain; then the launch gap (~6.3) and the neighbour streams at the router's per-packet ceiling (0.25–0.37 µs/packet).
+
+### Guard set
+- The op has one cell (layout × placement × kernel path), and it is the focus case.
+- Every step was re-measured on it:
+  - golden 7/7 (`EVAL_CAPTURE_L1=0`) after graduation and again on the committed (black-formatted) tree;
+  - acceptance 10/10, plus `--dev` 10/10.
+- No measured regression anywhere, so there is no carve-out beyond the gate's feasibility case.
+
+### Data-movement estimates (`estimate.py report`)
+- Perf 2 sweeps `9187fdd7` (attn) and `9cc814e9` (W): 12 candidates each, 6 shortlisted.
+  - The predicted best is attn batch 16 split / W batch 64 split; the built schedule (attn batch 32 split / W batch 64 split) is tied with it at rank 1–2.
+  - 1 measurement recorded (`9187fdd7`, the current group): reads-alone span 50.5 µs for the attn + W streams together, against the attn + W estimate of 32.4 + 13.9 = 46.3 µs (9% slow). This is the ~440 GB/s DRAM ceiling found in Perf 1.
+- `read_order` changed only the per-core finish order, not the aggregate read rate. Fabric ideas were refused by the tool and went out unranked.
+- `pipeline_spec.json` is unchanged: its pipeline has no field for head placement or the read gate, and `pipeline_spec.py` refuses the ring anyway. The graduated design is recorded in op_design.md (Perf lamps, worker grid placement).
+
+### Helper bypasses — none
+No raw-LLK path graduated this round:
+- The gate uses the standard dataflow API (`noc_async_read`, `noc_semaphore_inc`) inside the worker reader, whose Perf 1 bypass of `read_sticks_for_tilize` (capability, see Perf 1) is unchanged.
+- The writer only switched to explicit-NoC overloads of the same calls.
+
+Gaps exposed by the nulls (not graduated, so not in the table):
+- `compute_drain`'s chunkpush would bypass `tilize` and `matmul_block`. The helpers have no per-chunk push / per-K-chunk wait, so a matmul cannot start on a partly tilized row.
+- `tx_send_pipeline`'s `hdrtab` would extend the existing `FabricStream` capability bypass: there is no way to send a packet whose header is prebuilt at a fixed L1 address.
+- `launch_gap2`'s tx_common found that `ccl::DirectConn` has no common-runtime-arg entry point.
+- `tx_early_start`'s bank walk found that `TensorAccessor` lacks a step iterator over interleaved pages, as in Perf 1.
+
+### Tests and artifacts
+- `perf_experiments/{read_order,launch_gap2,tx_early_start,tx_send_pipeline,compute_drain}/` hold each idea's variant op, kernels, tests, probes and parsers. `perf/p2/` holds `prof.sh` and `tail.py`. Profile CSVs were deleted.
+- The experiment tests need `-o addopts= --import-mode=prepend`.
