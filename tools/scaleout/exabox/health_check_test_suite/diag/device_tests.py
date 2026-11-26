@@ -96,7 +96,7 @@ PYTESTS = {
         "target": "tests/dram_stress/test_dram_act_patterns.py::test_dram_act_c3_screen",
         "args": ["-s"],
     },
-    # Superset of gddr_act_c3: all 8 ctrls, then 3, 1, 7, 0 alone, 300 s each (~25.5 min).
+    # Superset of gddr_act_c3: all 8 ctrls, then corner ctrls 7, 3, 4, 0 alone, 300 s each (~25.5 min).
     "gddr_act_all": {
         "target": "tests/dram_stress/test_dram_act_patterns.py::test_dram_act_all_ctrls_screen",
         "args": ["-s"],

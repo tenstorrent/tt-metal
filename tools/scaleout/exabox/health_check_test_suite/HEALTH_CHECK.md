@@ -164,7 +164,7 @@ GDDR ACT screen (pytest, `tests/dram_stress/test_dram_act_patterns.py`):
 - Targets the lane-3 64 MB alias (address bit 26) that the DramDeployment patterns miss.
 - SDPA-like read stream (row 0x200, GDDR bank 3) on every chip, matmul load on, 300 s per pass.
 - `gddr_act_c3` (`weekly`): controller 3, then all 8 controllers at once.
-- `gddr_act_all` (`full`): all 8 at once, then 3, 1, 7, 0 alone. Superset of `gddr_act_c3`.
+- `gddr_act_all` (`full`): all 8 at once, then the corner controllers 7, 3, 4, 0 alone. Superset of `gddr_act_c3`.
 - A hit skips the remaining passes. A self-test plants the alias first, so a decode bug fails.
 - The alias is boot-dependent: a pass clears one boot. So a passing ACT test gets a `retest`:
   `tt-smi -glx_reset`, snapshot validation, rerun as `<check>_after_reset`. The retest snapshot is the

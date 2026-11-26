@@ -999,8 +999,8 @@ def test_dram_act_c3_screen():
     run_act(chips, cfg)
 
 
-# Superset: all 8 ctrls, then 3, 1, 7, 0 alone (ctrls with seen faults), 300 s each.
-SCREEN_ALL_ORDER = ("all", 3, 1, 7, 0)
+# Superset: all 8 ctrls, then the corner ctrls 7, 3, 4, 0 alone, 300 s each.
+SCREEN_ALL_ORDER = ("all", 7, 3, 4, 0)
 SCREEN_ALL_CFG = {
     **SCREEN_CFG,
     "v2_plan": [(c, "orig_bank3", "sdpa") for c in SCREEN_ALL_ORDER],
