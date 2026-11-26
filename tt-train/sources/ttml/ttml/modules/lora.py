@@ -48,8 +48,9 @@ class LoraConfig:
             is useful for keeping specific non-LoRA parameters trainable
             (e.g. layer norms).
         lora_dropout: Dropout probability applied to the LoRA input during
-            training. Refused where that input is replicated across one mesh axis
-            and sharded across another.
+            training. If that input is replicated on one mesh axis and sharded
+            on another, all devices share one mask and a warning is logged
+            once (#55947).
     """
 
     rank: int = 8

@@ -117,7 +117,11 @@ std::optional<int> shard_dim(const tt::tt_metal::distributed::MeshMapperConfig::
 
 void set_placements_per_axis(
     ttnn::Tensor& value, const ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements) {
-    const auto mesh_shape = value.device()->shape();
+    const auto* device = value.device();
+    TT_FATAL(
+        device != nullptr,
+        "set_placements_per_axis: the tensor is not allocated on a device mesh (a host or deallocated tensor)");
+    const auto mesh_shape = device->shape();
     TT_FATAL(
         placements.size() == mesh_shape.dims(),
         "set_placements_per_axis: {} placements for the {} device mesh",

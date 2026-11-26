@@ -92,8 +92,9 @@ def cross_entropy_loss(
 
     Vocab-sharded logits (from a column-parallel head that does not gather its output) go to
     ``ttml.ops.distributed.vocab_parallel_cross_entropy_loss``. Logits that hold the whole vocab on every device go to
-    ``ttml.ops.loss.cross_entropy_loss``, as do logits on a device no mesh was opened on. The layout is read from the
-    logits' label. Logits sharded along any other dim are refused by the vocab-parallel loss.
+    ``ttml.ops.loss.cross_entropy_loss``. The layout is read from the logits' label. Logits sharded along any other dim
+    are refused by the vocab-parallel loss. Logits sharded along the vocab on any other axis, or on a mesh not opened
+    with ``ttml.open_device_mesh``, raise ``ValueError``.
     """
     mesh = ttml.maybe_mesh()
     if mesh is not None and mesh.has_axis(axis_name) and mesh.axis_size(axis_name) > 1:
@@ -101,5 +102,14 @@ def cross_entropy_loss(
         if ttml.sharding.shard_dim(logits, axis) is not None:
             return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
                 logits, targets, cluster_axis=axis, reduce=reduce
+            )
+    vocab_dim = len(logits.get_value(ttml.autograd.PreferredPrecision.NATIVE).shape) - 1
+    mesh_shape = ttml.autograd.AutoContext.get_instance().get_device().shape
+    for axis, size in enumerate(mesh_shape):
+        if size > 1 and ttml.sharding.shard_dim(logits, axis) == vocab_dim:
+            raise ValueError(
+                f"cross_entropy_loss: the logits are vocab-sharded on mesh axis {axis}, not on a {axis_name!r} axis "
+                f"of a mesh from ttml.open_device_mesh. Use ttml.ops.distributed.vocab_parallel_cross_entropy_loss "
+                f"with cluster_axis={axis}."
             )
     return ttml.ops.loss.cross_entropy_loss(logits, targets, reduce)

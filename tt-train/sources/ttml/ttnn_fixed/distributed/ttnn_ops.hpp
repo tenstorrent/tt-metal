@@ -17,7 +17,7 @@ ttnn::Tensor reduce_scatter(
 // Each device slices out its own `size(dim) / axis_size` partition based on its mesh
 // coordinate — the inverse of all_gather with NO collective. Only correct/meaningful
 // when the input is replicated across `cluster_axis`; requires `dim` divisible by the
-// axis size and tile-aligned in TILE layout.
+// axis size. A share that ends inside a tile is cut in ROW_MAJOR (ttnn issue #64626).
 ttnn::Tensor mesh_partition(
     const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 

@@ -9,6 +9,9 @@ axes the module structure implies, and after ``synchronize_gradients`` each grad
 axis, keeps its Shard elsewhere and holds the mean of the per-device gradients. The tests call the explicit-axes
 overload, which runs the same loop as the ParallelismContext one without a context to set up per mesh.
 
+The Llama tests check which gradients ``ttml.sync_gradients`` reduces, and over which axes, under TP, SP (each with
+and without LoRA) and FSDP.
+
 Each mesh fixture is module-scoped and reopens the device, so each mesh has its own class, in fixture order. DP x TP
 and HSDP on a ``[2, 2]`` are in test_sync_gradients_placements_2x2.py.
 """
@@ -22,8 +25,12 @@ import ttnn
 import ttml
 from ttml.modules import ColumnParallelLinear, LinearLayer, RowParallelLinear
 from sync_gradients_placements_common import (
+    COLUMN_LORA_A,
     DIM,
+    FSDP_REPLICATED_NORMS,
     NATIVE,
+    NORMS,
+    ROW_LORA_B,
     TP_SHARDED_SUFFIXES,
     Model,
     _assert_mean_over_axis,
@@ -35,9 +42,14 @@ from sync_gradients_placements_common import (
     _placements,
     _reduce_set,
     _shards,
+    assert_sync_reduces_exactly,
     is_sharded_on_axis,
+    llama_backward,
+    reductions_by_rule,
+    tiny_llama,
 )
 from tp_block import TPBlock
+from ttml.parallel import TPStrategy
 
 pytestmark = [
     pytest.mark.requires_device,
@@ -54,6 +66,25 @@ def ddp_mesh(fresh_device_mesh):
     """``[1, 2]`` with axes ``("tp", "dp")``: TP of size 1, the data-parallel axis on the two devices."""
     with fresh_device_mesh((1, 2), ("tp", "dp"), what="DDP placements tests") as mesh:
         yield mesh
+
+
+# (strategy, LoRA, gradients summed over tp).
+# Under TP, replicated parameters see the whole sequence, so their gradients are complete. The exception is the
+# column-parallel lora_A, which sees only its rank's columns. Under SP, the norms and the row-parallel lora_B see only
+# their rank's tokens.
+LLAMA_TP_CASES = {
+    "tp": (TPStrategy.TENSOR, False, []),
+    "tp-lora": (TPStrategy.TENSOR, True, [COLUMN_LORA_A]),
+    "sp": (TPStrategy.TENSOR_SEQUENCE, False, [NORMS]),
+    "sp-lora": (TPStrategy.TENSOR_SEQUENCE, True, [NORMS, COLUMN_LORA_A, ROW_LORA_B]),
+}
+
+# (FSDP replicate= patterns, gradients averaged over fsdp).
+# FSDP reduce-scatters the gradients of the parameters it shards, so the sync averages only the replicated ones.
+LLAMA_FSDP_CASES = {
+    "fsdp": ([], []),
+    "fsdp-replicated-norms": (FSDP_REPLICATED_NORMS, [NORMS]),
+}
 
 
 # --- TP on [1, 2] ("dp", "tp") ----------------------------------------------------------------------------------
@@ -97,6 +128,13 @@ class TestTP:
         forged.update_tensor_topology(ttnn.TensorTopology(ttnn.MeshShape([1]), [ttnn.PlacementShard(0)], coords[:1]))
         with expect_error(RuntimeError, "cannot read the tensor's placement per mesh axis"):
             is_sharded_on_axis(forged, tp)
+
+    def test_a_host_tensor_has_no_label_to_read_or_write(self, tp_mesh, expect_error):
+        host = _input((1, 1, DIM, DIM)).get_value(NATIVE).cpu()
+        with expect_error(RuntimeError, "not allocated on a device mesh"):
+            ttml.core.distributed.placements_per_axis(host)
+        with expect_error(RuntimeError, "not allocated on a device mesh"):
+            ttml.core.distributed.set_placements_per_axis(host, [ttnn.PlacementReplicate()] * 2)
 
     def test_constant_inits_are_labelled_per_axis(self, tp_mesh):
         """Eager ``ttml.init.ones / zeros / constant`` (norm weights, zero-init biases) replicate with one Replicate
@@ -163,6 +201,15 @@ class TestTP:
                     np.testing.assert_array_equal(a, b, err_msg=f"{name}: device {device}'s piece was averaged on tp")
             else:
                 _assert_mean_over_axis(before[name], after, tp_mesh.shape, tp, name)
+
+    @pytest.mark.parametrize("case", list(LLAMA_TP_CASES))
+    def test_sync_sums_exactly_the_partial_gradients(self, tp_mesh, case):
+        """The sums follow the ``mark_partial`` marks, not the gradients' labels."""
+        strategy, lora, summed = LLAMA_TP_CASES[case]
+        model = tiny_llama(strategy, lora=lora)
+        params = model.parameters()
+        llama_backward(model, ())
+        assert_sync_reduces_exactly(params, reductions_by_rule(params, [("tp", "sum", p) for p in summed]))
 
 
 # --- FSDP on [1, 2] ("dp", "fsdp") ------------------------------------------------------------------------------
@@ -231,6 +278,14 @@ class TestFSDP:
         replace_lazy_mapper(lazy.weight, ttml.core.distributed.shard_tensor_to_mesh_mapper(_device(), 2, None))
         with expect_error(RuntimeError, "already sharded on mesh axis"):
             ttml.fsdp.fully_shard(lazy)
+
+    @pytest.mark.parametrize("case", list(LLAMA_FSDP_CASES))
+    def test_sync_averages_exactly_the_replicated_gradients(self, fsdp_mesh, case):
+        replicate, averaged = LLAMA_FSDP_CASES[case]
+        model = tiny_llama(TPStrategy.NONE, fsdp_replicate=replicate)
+        params = model.parameters()
+        llama_backward(model, ("fsdp",))
+        assert_sync_reduces_exactly(params, reductions_by_rule(params, [("fsdp", "mean", p) for p in averaged]))
 
 
 # --- DDP on [1, 2] ("tp", "dp") ---------------------------------------------------------------------------------

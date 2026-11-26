@@ -38,23 +38,27 @@ def reset_graph():
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
-@pytest.mark.parametrize(
-    "placement", [ttnn.PlacementShard(3), ttnn.PlacementReplicate()], ids=["vocab_sharded", "replicated"]
-)
-def test_the_loss_does_not_depend_on_how_the_logits_are_laid_out(placement):
+def _logits_and_targets(placement) -> tuple[ttml.autograd.Tensor, np.ndarray]:
     rng = np.random.default_rng(3)
     values = rng.uniform(-3.0, 3.0, (BATCH, 1, SEQ_LEN, VOCAB)).astype(np.float32)
     targets = rng.integers(0, VOCAB, (BATCH, SEQ_LEN)).astype(np.uint32)
     device = ttml.autograd.AutoContext.get_instance().get_device()
     mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), placement]))
     value = ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper).get_value()
-    logits = ttml.autograd.create_tensor(value, True)
+    return ttml.autograd.create_tensor(value, True), targets
 
-    loss = ttml.parallel.cross_entropy_loss(
-        logits,
-        ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
-        ttml.ops.ReduceType.MEAN,
-    )
+
+def _upload_targets(targets: np.ndarray) -> ttml.autograd.Tensor:
+    return ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+
+
+@pytest.mark.parametrize(
+    "placement", [ttnn.PlacementShard(3), ttnn.PlacementReplicate()], ids=["vocab_sharded", "replicated"]
+)
+def test_the_loss_does_not_depend_on_how_the_logits_are_laid_out(placement):
+    logits, targets = _logits_and_targets(placement)
+
+    loss = ttml.parallel.cross_entropy_loss(logits, _upload_targets(targets), ttml.ops.ReduceType.MEAN)
     loss.backward(False)
     assert logits.is_grad_initialized()
     grad = gather_like(logits.get_grad(), logits)
@@ -64,3 +68,17 @@ def test_the_loss_does_not_depend_on_how_the_logits_are_laid_out(placement):
     assert abs(actual_loss - expected_loss) <= LOSS_TOLERANCE, f"loss {actual_loss}, expected {expected_loss}"
     error = np.linalg.norm(grad - expected_grad) / np.linalg.norm(expected_grad)
     assert error <= MAX_REL_ERROR, f"gradient: relative error {error:.3g}"
+
+
+@pytest.mark.parametrize("unnamed", ["no_named_mesh", "another_axis_name"])
+def test_vocab_sharded_logits_on_an_axis_it_cannot_name_are_refused(monkeypatch, expect_error, unnamed):
+    """Plain cross-entropy would softmax each vocab shard on its own."""
+    if unnamed == "no_named_mesh":
+        monkeypatch.setattr(ttml, "maybe_mesh", lambda: None)
+    axis_name = "tp" if unnamed == "no_named_mesh" else "cp"
+    logits, targets = _logits_and_targets(ttnn.PlacementShard(3))
+
+    with expect_error(ValueError, "vocab-sharded on mesh axis 1"):
+        ttml.parallel.cross_entropy_loss(
+            logits, _upload_targets(targets), ttml.ops.ReduceType.MEAN, axis_name=axis_name
+        )
