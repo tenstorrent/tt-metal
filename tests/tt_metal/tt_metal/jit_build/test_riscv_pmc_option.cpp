@@ -78,6 +78,14 @@ TEST_F(RiscvPmcOptionTest, InvalidValuesRejected) {
     EXPECT_ANY_THROW(with("0x1,"));
 }
 
+TEST_F(RiscvPmcOptionTest, SameSelectOnTwoCountersRejected) {
+    EXPECT_ANY_THROW(with("0x10,0x10"));
+    setenv(kEnvDm, "0x201,0x801,0x201", 1);
+    EXPECT_ANY_THROW(with("0x1"));
+    setenv(kEnvDm, "0x201,0,0,0x402", 1);
+    EXPECT_NO_THROW(with("0x1"));
+}
+
 TEST_F(RiscvPmcOptionTest, TraceOnlyProfilingRejected) {
     setenv(kEnvTrace, "1", 1);
     EXPECT_ANY_THROW(with("0x1"));
