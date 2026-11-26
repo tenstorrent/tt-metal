@@ -145,9 +145,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_matmul.h"
 #include "sfpu_operations.h"
 
-// Accurate EXP_OP on a bf16 Dest records its body into the replay buffer; it runs between two K
-// steps of one matmul, as a fused activation runs between matmul_block calls. K step j > 0 runs it
-// on spare Dest tile EXP_SPARE_DEST_TILE - (j - 1), seeded with A tile j - 1.
+// EXP_OP records into the replay buffer between matmul K steps; step j > 0 runs it on spare
+// Dest tile EXP_SPARE_DEST_TILE - (j - 1), seeded with A tile j - 1.
 constexpr std::uint32_t EXP_SPARE_DEST_TILE = MAX_TILES_DEST - 1;
 
 void run_kernel(RUNTIME_PARAMETERS params)

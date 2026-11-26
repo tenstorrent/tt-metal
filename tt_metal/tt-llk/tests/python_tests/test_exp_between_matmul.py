@@ -15,7 +15,9 @@ which selects the exp body's MM_THROTTLE dest-advance path.
 
 from dataclasses import dataclass
 
+import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
@@ -51,13 +53,13 @@ from helpers.utils import passed_test
 class EXP_VARIANT(TemplateParameter):
     """SfpuType run between the K steps, and its CLAMP_NEGATIVE."""
 
-    op: str = "exponential"
-    clamp_negative: bool = True
+    exp_op: str = "exponential"
+    exp_clamp_negative: bool = True
 
     def convert_to_cpp(self) -> str:
         return (
-            f"constexpr SfpuType EXP_OP = SfpuType::{self.op};\n"
-            f"constexpr bool EXP_CLAMP_NEGATIVE = {str(self.clamp_negative).lower()};"
+            f"constexpr SfpuType EXP_OP = SfpuType::{self.exp_op};\n"
+            f"constexpr bool EXP_CLAMP_NEGATIVE = {str(self.exp_clamp_negative).lower()};"
         )
 
 
@@ -92,6 +94,15 @@ class MM_THROTTLE_DEFINE(TemplateParameter):
     throttle=[0, 3, 5],
 )
 def test_exp_between_matmul(formats, math_fidelity, dims, variant, throttle):
+    # Blackhole's bf16 exp body with the scale is 17 instructions; its record overruns the
+    # SFPU replay slots [0, 16) into the matmul's MVMUL sequence.
+    if (
+        variant[0] == "exp_with_base"
+        and get_chip_architecture() == ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip(
+            "Blackhole exp_with_base bf16 record overruns the SFPU replay slots"
+        )
     input_A_dimensions, input_B_dimensions = dims
     spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
