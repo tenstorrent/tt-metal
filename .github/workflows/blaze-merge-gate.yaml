@@ -24,6 +24,13 @@ name: Blaze Merge Gate
 #           ci gate passed, once per run, and does not wait for the uplift, so
 #           this job ends a few minutes after the relay starts it.
 #
+# The tt-blaze run: the relay marks the tt-blaze run it started with an
+# artifact named tt-blaze-run-<tt-blaze run id>. The wait below reads only
+# that name (with its relay read token) and shows the tt-blaze run link in the
+# log, as a notice and in the job summary. The link is built here from
+# BLAZE_REPO and a checked number; tt-blaze is private, so it opens only for
+# members.
+#
 # tt-blaze cannot build tt-metal itself: its CI consumes the prebuilt tarball and
 # wheel that `build-artifact-profiler` published in this run. The relay passes
 # this run's id and commit to tt-blaze, so tt-blaze downloads exactly those
@@ -60,8 +67,9 @@ jobs:
     name: ${{ inputs.target == 'uplift' && 'tt-blaze uplift (through the relay)' || 'tt-blaze CI (full merge gate)' }}
     runs-on: ubuntu-latest
     # The wait (GATE_WAIT_MINUTES), a few minutes for the dispatch and the
-    # cancel path, and slack. The relay's own deadline (175 minutes) comes
-    # first, so normally the relay reports the result or the timeout.
+    # cancel path, and slack. The relay waits as long (190 minutes) but from
+    # its own, later start, so on a slow tt-blaze run this job's deadline
+    # comes first: it fails and cancels the relay run, which cancels tt-blaze.
     timeout-minutes: 205
     # The role binds this environment. Deployment branch rule: main only.
     environment: tt-blaze-dispatch
@@ -73,6 +81,8 @@ jobs:
       RELAY_REPO: tenstorrent/tt-blaze-relay
       RELAY_WORKFLOW: relay.yaml
       RELAY_REF: main
+      # Only to build the link to the tt-blaze run; no token is on tt-blaze.
+      BLAZE_REPO: tenstorrent/tt-blaze
       # REST API version for the dispatch call only: with it GitHub answers
       # 200 with workflow_run_id (the exact relay run); the default
       # (2022-11-28) answers 204 with no body.
@@ -241,6 +251,23 @@ jobs:
               return 0
             }
 
+            # show_blaze_run: once per job, when the relay run RELAY_RUN_ID has its
+            # tt-blaze-run-<id> artifact, prints the link to that tt-blaze run and sets
+            # BLAZE_RUN_URL in GITHUB_ENV. Reads only the artifact name. Always
+            # returns 0: a missing marker never fails the gate.
+            show_blaze_run() {
+              local id
+              [ -z "${BLAZE_RUN_URL:-}" ] || return 0
+              id=$(gh api "repos/${RELAY_REPO}/actions/runs/${RELAY_RUN_ID}/artifacts?per_page=100" 2>/dev/null |
+                jq -r '[.artifacts[].name | capture("^tt-blaze-run-(?<id>[1-9][0-9]{0,19})$").id] | .[0] // empty' 2>/dev/null) || id=""
+              [[ "$id" =~ ^[1-9][0-9]{0,19}$ ]] || return 0
+              BLAZE_RUN_URL="https://github.com/${BLAZE_REPO}/actions/runs/${id}"
+              echo "BLAZE_RUN_URL=${BLAZE_RUN_URL}" >>"$GITHUB_ENV"
+              echo "::notice title=tt-blaze run::${BLAZE_RUN_URL}"
+              echo "- tt-blaze run: [${id}](${BLAZE_RUN_URL})" >>"$GITHUB_STEP_SUMMARY"
+              return 0
+            }
+
             # poll_segment: watches the relay run for at most SEGMENT_MINUTES with the
             # read token in RELAY_READ_TOKEN, and revokes that token at the end.
             # Writes RELAY_DONE=1 and RELAY_CONCLUSION to GITHUB_ENV when the run ended.
@@ -270,6 +297,8 @@ jobs:
                     echo "::error::run ${RELAY_RUN_ID} is not the relay run this job started"
                     exit 1
                   fi
+                  # Before the end check: the relay uploads the marker before it ends.
+                  show_blaze_run
                   if [ "$status" = completed ]; then
                     { echo "RELAY_DONE=1"; echo "RELAY_CONCLUSION=${conclusion}"; } >>"$GITHUB_ENV"
                     echo "relay run ${RELAY_RUN_ID} ended: ${conclusion} (${url})"
@@ -808,4 +837,17 @@ jobs:
             sudo tailscale logout || { echo "::warning::tailscale logout failed; taking the interface down"; sudo tailscale down || true; }
           else
             echo "not on the tailnet"
+          fi
+
+      # The links again at the end of the log, also when the job failed or was
+      # cancelled. BLAZE_RUN_URL is set only from a checked artifact name.
+      - name: Show the relay and tt-blaze run links
+        if: ${{ always() && env.RELAY_RUN_ID != '' }}
+        shell: bash
+        run: |
+          echo "relay run: https://github.com/${RELAY_REPO}/actions/runs/${RELAY_RUN_ID}"
+          if [ -n "${BLAZE_RUN_URL:-}" ]; then
+            echo "tt-blaze run: ${BLAZE_RUN_URL}"
+          else
+            echo "tt-blaze run: not known (the relay did not report it); see the relay run"
           fi
