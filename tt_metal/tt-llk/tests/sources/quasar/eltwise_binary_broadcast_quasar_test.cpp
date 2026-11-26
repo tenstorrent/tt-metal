@@ -47,7 +47,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
-        _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(bfd_a, bfd_b, tensor_shape, INPUT_NUM_TILES_IN_BLOCK);
+        _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(bfd_a, bfd_b, tensor_shape, 1 /*num_tiles*/);
         PROFILER_SYNC();
     }
     {
@@ -76,8 +76,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    const std::uint32_t start_l1_tile_idx = block * INPUT_NUM_TILES_IN_BLOCK;
-                    _llk_unpack_binary_broadcast_operands_(start_l1_tile_idx /*start_l1_tile_idx_0*/, start_l1_tile_idx /*start_l1_tile_idx_1*/, tensor_shape);
+                    // The *_tiles_bcast calls unpack one tile per call.
+                    for (std::uint32_t tile = 0; tile < INPUT_NUM_TILES_IN_BLOCK; tile++)
+                    {
+                        const std::uint32_t l1_tile_idx = block * INPUT_NUM_TILES_IN_BLOCK + tile;
+                        _llk_unpack_binary_broadcast_operands_(l1_tile_idx /*start_l1_tile_idx_0*/, l1_tile_idx /*start_l1_tile_idx_1*/, tensor_shape);
+                    }
                 }
             }
         }
