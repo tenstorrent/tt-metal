@@ -25,6 +25,7 @@ COLS = [
     ("TRISC_1", "c_expand"),
     ("TRISC_1", "c_p2_normalize"),
     ("TRISC_1", "c_pass2"),
+    ("NCRISC", "r_affine"),
     ("NCRISC", "r_ones_shift_affine"),
     ("NCRISC", "r_block"),
 ]

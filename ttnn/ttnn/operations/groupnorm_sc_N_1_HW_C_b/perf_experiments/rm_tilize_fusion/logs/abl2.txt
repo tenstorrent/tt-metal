@@ -1,0 +1,14 @@
+case                          kernels@tzcopy  kernels@tzslow         kernels
+unet_rm_ip_16384x960           71,752          74,248  +3.5%   68,860  -4.0%
+unet_rm_ip_16384x320           31,022          31,918  +2.9%   30,487  -1.7%
+unet_rm_ip_1024x1280           13,105          13,277  +1.3%   13,207  +0.8%
+refiner_rm_ip_16384x384        30,449          31,456  +3.3%   29,703  -2.4%
+
+  unet_rm_ip_16384x960         kernels@tzslow                           pcc=0.999998 rms=0.00182 md5=2d6993851d08 plan=h16/B1/K1/W15
+  unet_rm_ip_16384x960         kernels                                  pcc=0.999998 rms=0.00182 md5=2d6993851d08 plan=h16/B1/K1/W15
+  unet_rm_ip_16384x320         kernels@tzslow                           pcc=0.999998 rms=0.00186 md5=2d1cce76e0e8 plan=h16/B1/K1/W5
+  unet_rm_ip_16384x320         kernels                                  pcc=0.999998 rms=0.00186 md5=2d1cce76e0e8 plan=h16/B1/K1/W5
+  unet_rm_ip_1024x1280         kernels@tzslow                           pcc=0.999998 rms=0.00191 md5=ad2c4f222728 plan=h4/B1/K1/W5
+  unet_rm_ip_1024x1280         kernels                                  pcc=0.999998 rms=0.00191 md5=ad2c4f222728 plan=h4/B1/K1/W5
+  refiner_rm_ip_16384x384      kernels@tzslow                           pcc=0.999998 rms=0.00191 md5=9e7ab3fe3979 plan=h32/B1/K1/W3
+  refiner_rm_ip_16384x384      kernels                                  pcc=0.999998 rms=0.00191 md5=9e7ab3fe3979 plan=h32/B1/K1/W3

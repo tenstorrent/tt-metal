@@ -1,0 +1,122 @@
+[
+ {
+  "variant": "ablation/src",
+  "case": "unet_rm_ip_1024x1280",
+  "ns": 13188
+ },
+ {
+  "variant": "ablation/src@peer",
+  "case": "unet_rm_ip_1024x1280",
+  "ns": 12139
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb",
+  "case": "unet_rm_ip_1024x1280",
+  "ns": 7232
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb_peer",
+  "case": "unet_rm_ip_1024x1280",
+  "ns": 7270
+ },
+ {
+  "variant": "ablation/src",
+  "case": "unet_rm_ip_16384x960",
+  "ns": 68884
+ },
+ {
+  "variant": "ablation/src@peer",
+  "case": "unet_rm_ip_16384x960",
+  "ns": 67708
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb",
+  "case": "unet_rm_ip_16384x960",
+  "ns": 16510
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb_peer",
+  "case": "unet_rm_ip_16384x960",
+  "ns": 16689
+ },
+ {
+  "variant": "ablation/src",
+  "case": "vae_tile_16384x512",
+  "ns": 33150
+ },
+ {
+  "variant": "ablation/src@peer",
+  "case": "vae_tile_16384x512",
+  "ns": 31942
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb",
+  "case": "vae_tile_16384x512",
+  "ns": 4955
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb_peer",
+  "case": "vae_tile_16384x512",
+  "ns": 4969
+ },
+ {
+  "variant": "ablation/src",
+  "case": "unet_tile_1024x1280",
+  "ns": 11590
+ },
+ {
+  "variant": "ablation/src@peer",
+  "case": "unet_tile_1024x1280",
+  "ns": 10759
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb",
+  "case": "unet_tile_1024x1280",
+  "ns": 7718
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb_peer",
+  "case": "unet_tile_1024x1280",
+  "ns": 7807
+ },
+ {
+  "variant": "ablation/src",
+  "case": "refiner_rm_ip_256x1536",
+  "ns": 9894
+ },
+ {
+  "variant": "ablation/src@peer",
+  "case": "refiner_rm_ip_256x1536",
+  "ns": 9981
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb",
+  "case": "refiner_rm_ip_256x1536",
+  "ns": 7923
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb_peer",
+  "case": "refiner_rm_ip_256x1536",
+  "ns": 7913
+ },
+ {
+  "variant": "ablation/src",
+  "case": "unet_rm_ip_16384x320",
+  "ns": 30475
+ },
+ {
+  "variant": "ablation/src@peer",
+  "case": "unet_rm_ip_16384x320",
+  "ns": 29344
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb",
+  "case": "unet_rm_ip_16384x320",
+  "ns": 8014
+ },
+ {
+  "variant": "ablation/src@p2_p1_tz_cmb_peer",
+  "case": "unet_rm_ip_16384x320",
+  "ns": 8035
+ }
+]

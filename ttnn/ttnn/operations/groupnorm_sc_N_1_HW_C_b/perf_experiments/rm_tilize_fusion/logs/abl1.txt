@@ -1,0 +1,18 @@
+case                                 kernels      kernels@tz   kernels@tzraw  rnels@tznopack  kernels@tzslow
+unet_rm_ip_16384x960           68,894          63,993  -7.1%   68,910  +0.0%   66,718  -3.2%   74,240  +7.8%
+unet_rm_ip_16384x320           30,491          28,416  -6.8%   30,490  -0.0%   30,093  -1.3%   31,889  +4.6%
+unet_rm_ip_1024x1280           13,181          12,230  -7.2%   13,189  +0.1%   13,079  -0.8%   13,254  +0.6%
+refiner_rm_ip_16384x384        29,720          26,850  -9.7%   29,724  +0.0%   29,173  -1.8%   31,459  +5.9%
+
+  unet_rm_ip_16384x960         kernels                                  pcc=0.999998 rms=0.00182 md5=2d6993851d08 plan=h16/B1/K1/W15
+  unet_rm_ip_16384x960         kernels@tzraw                            pcc=0.999998 rms=0.00182 md5=2d6993851d08 plan=h16/B1/K1/W15
+  unet_rm_ip_16384x960         kernels@tzslow                           pcc=0.999998 rms=0.00182 md5=2d6993851d08 plan=h16/B1/K1/W15
+  unet_rm_ip_16384x320         kernels                                  pcc=0.999998 rms=0.00186 md5=2d1cce76e0e8 plan=h16/B1/K1/W5
+  unet_rm_ip_16384x320         kernels@tzraw                            pcc=0.999998 rms=0.00186 md5=2d1cce76e0e8 plan=h16/B1/K1/W5
+  unet_rm_ip_16384x320         kernels@tzslow                           pcc=0.999998 rms=0.00186 md5=2d1cce76e0e8 plan=h16/B1/K1/W5
+  unet_rm_ip_1024x1280         kernels                                  pcc=0.999998 rms=0.00191 md5=ad2c4f222728 plan=h4/B1/K1/W5
+  unet_rm_ip_1024x1280         kernels@tzraw                            pcc=0.999998 rms=0.00191 md5=ad2c4f222728 plan=h4/B1/K1/W5
+  unet_rm_ip_1024x1280         kernels@tzslow                           pcc=0.999998 rms=0.00191 md5=ad2c4f222728 plan=h4/B1/K1/W5
+  refiner_rm_ip_16384x384      kernels                                  pcc=0.999998 rms=0.00191 md5=9e7ab3fe3979 plan=h32/B1/K1/W3
+  refiner_rm_ip_16384x384      kernels@tzraw                            pcc=0.999998 rms=0.00191 md5=9e7ab3fe3979 plan=h32/B1/K1/W3
+  refiner_rm_ip_16384x384      kernels@tzslow                           pcc=0.999998 rms=0.00191 md5=9e7ab3fe3979 plan=h32/B1/K1/W3

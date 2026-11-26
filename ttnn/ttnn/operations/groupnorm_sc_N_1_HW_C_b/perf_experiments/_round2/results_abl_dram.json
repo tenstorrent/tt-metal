@@ -1,0 +1,127 @@
+[
+ {
+  "variant": "ablation/src",
+  "case": "vae_dram_1048576x256",
+  "ns": 3760067
+ },
+ {
+  "variant": "ablation/src@dm",
+  "case": "vae_dram_1048576x256",
+  "ns": 620143
+ },
+ {
+  "variant": "ablation/src@p1_p2",
+  "case": "vae_dram_1048576x256",
+  "ns": 3749536
+ },
+ {
+  "variant": "ablation/src@dm_p1_p2",
+  "case": "vae_dram_1048576x256",
+  "ns": 119413
+ },
+ {
+  "variant": "ablation/src@dm_p1_p2_tz_cmb_peer",
+  "case": "vae_dram_1048576x256",
+  "ns": 116256
+ },
+ {
+  "variant": "ablation/src",
+  "case": "vae_dram_65536x512",
+  "ns": 373796
+ },
+ {
+  "variant": "ablation/src@dm",
+  "case": "vae_dram_65536x512",
+  "ns": 98481
+ },
+ {
+  "variant": "ablation/src@p1_p2",
+  "case": "vae_dram_65536x512",
+  "ns": 360063
+ },
+ {
+  "variant": "ablation/src@dm_p1_p2",
+  "case": "vae_dram_65536x512",
+  "ns": 32361
+ },
+ {
+  "variant": "ablation/src@dm_p1_p2_tz_cmb_peer",
+  "case": "vae_dram_65536x512",
+  "ns": 28716
+ },
+ {
+  "variant": "ablation/src",
+  "case": "flux1_dram_16384x256",
+  "ns": 53130
+ },
+ {
+  "variant": "ablation/src@dm",
+  "case": "flux1_dram_16384x256",
+  "ns": 16186
+ },
+ {
+  "variant": "ablation/src@p1_p2",
+  "case": "flux1_dram_16384x256",
+  "ns": 48795
+ },
+ {
+  "variant": "ablation/src@dm_p1_p2",
+  "case": "flux1_dram_16384x256",
+  "ns": 7905
+ },
+ {
+  "variant": "ablation/src@dm_p1_p2_tz_cmb_peer",
+  "case": "flux1_dram_16384x256",
+  "ns": 5295
+ },
+ {
+  "variant": "ablation/src",
+  "case": "refiner_dram_16384x1152",
+  "ns": 214584
+ },
+ {
+  "variant": "ablation/src@dm",
+  "case": "refiner_dram_16384x1152",
+  "ns": 67810
+ },
+ {
+  "variant": "ablation/src@p1_p2",
+  "case": "refiner_dram_16384x1152",
+  "ns": 204012
+ },
+ {
+  "variant": "ablation/src@dm_p1_p2",
+  "case": "refiner_dram_16384x1152",
+  "ns": 26892
+ },
+ {
+  "variant": "ablation/src@dm_p1_p2_tz_cmb_peer",
+  "case": "refiner_dram_16384x1152",
+  "ns": 22964
+ },
+ {
+  "variant": "ablation/src",
+  "case": "mochi_dram_8x407040x128",
+  "ns": 5909156
+ },
+ {
+  "variant": "ablation/src@dm",
+  "case": "mochi_dram_8x407040x128",
+  "ns": 1013992
+ },
+ {
+  "variant": "ablation/src@p1_p2",
+  "case": "mochi_dram_8x407040x128",
+  "ns": 5938276
+ },
+ {
+  "variant": "ablation/src@dm_p1_p2",
+  "case": "mochi_dram_8x407040x128",
+  "ns": 192796
+ },
+ {
+  "variant": "ablation/src@dm_p1_p2_tz_cmb_peer",
+  "case": "mochi_dram_8x407040x128",
+  "ns": 189013
+ }
+]

@@ -411,3 +411,359 @@ Every compute bypass site carries a kernel-head comment with the measured win th
 - **Helper gap to file.** The Mcast sender does not compile under `DM_DYNAMIC_NOC` (`noc.h:789` `static_assert`), which blocks dynamic-NoC DRAM splitting.
 
 **Summary:** six ideas floated and measured; six graduated (each with its losing options recorded); 9 options null, rejected or blocked. On the focus shapes the op is 1.65–2.44× faster on sharded in place, 1.66–2.30× on sharded out of place, and 1.07–1.19× on DRAM (mid shapes 1.28–1.48×). No regression on the focus, mid or guard cells; golden green.
+
+## Perf 2 — perf tournament round 2: six ideas fanned out, five graduated, one null (single unified paths; no measurement-earned carve-outs)
+- Date: 2026-11-26
+- Contract (fixed, never a lever): bf16, HiFi3, `fp32_dest_acc_en=True`, `math_approx_mode=False`, `dst_full_sync_en=False`. `SUPPORTED` untouched.
+- Focus: the same 21 `attention: PERF FOCUS` LOOSE_CASES as Perf 1 (9 RM sharded in place, 3 TILE sharded out of place, 9 DRAM TILE), γ+β bf16 RM, `PERF_TOLERANCE`. Only cells larger than 32 tiles were measured; every measured cell is ≥ 384 tiles.
+- Measurement: Blackhole, `DEVICE KERNEL DURATION [ns]`, one fresh-cache profiled run per case (`perf_experiments/_round2/bench.py` via `run_safe_pytest.sh --profile --no-py-zones`). Noise band ±2–3%: a delta inside it is reported as flat, never as a win.
+- Baseline: `02a76783017` (the Perf 1 record; kernels as of `f5942fd11a1`).
+
+### Step 1 — measured breakdown (re-run on the Perf-1 op)
+
+**Instrumentation.** The Perf 1 permanent zones were reused. The ablation kit was rebuilt for the Perf-1 kernels with hand stubs (`perf_experiments/_round2/ablation/make_variants.py`):
+- `P1` stubs `moments_rows`;
+- `P2` stubs the normalize;
+- `TZ` stubs the RM tilize;
+- `CMB` stubs the collapse, finalize and expand;
+- `PEER` stubs the gather, semaphores and stats mcast;
+- `DM` stubs the DRAM payload reads and writes.
+
+Every stub keeps its CB and semaphore scaffolding. The stages were peeled cumulatively, and each was also removed on its own.
+
+**Sharded focus — cumulative peel (ns).**
+
+| case | full | −P2 | −P2 −P1 | … −TZ | … −CMB | … −PEER (floor) | −P1 only | −P2 only | −TZ only | −CMB only | −PEER only |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| unet_rm_ip 1024x1280 | 13,188 | 10,075 | 8,513 | 8,432 | 7,244 | 7,270 | 11,581 | 10,087 | 12,239 | 11,010 | 12,139 |
+| unet_rm_ip 16384x960 | 68,876 | 48,198 | 19,486 | 19,630 | 16,468 | 16,689 | 40,174 | 48,202 | 63,980 | 64,953 | 67,708 |
+| unet_rm_ip 16384x320 | 30,469 | 19,529 | 9,459 | 9,492 | 8,037 | 8,035 | 20,401 | 19,529 | 28,404 | 28,281 | 29,344 |
+| refiner_rm_ip 256x1536 | 9,936 | 9,220 | 9,160 | 9,024 | 7,880 | 7,913 | 9,899 | 9,090 | 9,964 | 8,708 | 9,981 |
+| vae_tile 16384x512 (oop) | 33,166 | 22,869 | 6,690 | — | 4,951 | 4,969 | 16,923 | 22,882 | — | 31,872 | 31,942 |
+| unet_tile 1024x1280 (oop) | 11,556 | 9,757 | 8,953 | — | 7,775 | 7,807 | 10,783 | 9,725 | — | 9,644 | 10,759 |
+
+**DRAM focus — cumulative peel (ns).**
+
+| case | full | −P1 −P2 | −DM | −DM −P1 −P2 | −DM −P1 −P2 −TZ −CMB −PEER |
+|---|---:|---:|---:|---:|---:|
+| vae 1048576x256 | 3,760,067 | 3,749,536 | 620,143 | 119,413 | 116,256 |
+| vae 65536x512 | 373,796 | 360,063 | 98,481 | 32,361 | 28,716 |
+| refiner 16384x1152 | 214,584 | 204,012 | 67,810 | 26,892 | 22,964 |
+| flux1 16384x256 | 53,130 | 48,795 | 16,186 | 7,905 | 5,295 |
+| mochi 8x407040x128 | 5,909,156 | 5,938,276 | 1,013,992 | 192,796 | 189,013 |
+
+**Ranked bottlenecks (roofline-gated).**
+1. **Large sharded: pass-1 moments, then the pass-2 normalize.** These are compute-bound; no NoC payload moves per chunk, so the DM ceiling does not bind.
+   - P1, measured after P2 was peeled: 28.7 µs (42%) on 16384x960, 16.2 µs (49%) on vae_tile 16384x512, 10.1 µs (33%) on 16384x320.
+   - P2: 20.7 µs (30%), 10.3 µs (31%) and 10.9 µs (36%) on the same three.
+2. **Small sharded: the combine plus the peer.** CMB costs a fixed ~1.1–1.7 µs once the passes are peeled (3.2 µs on 16384x960), and 1.2–2.2 µs (12–17%) removed on its own. PEER costs ~0.8–1.0 µs on its own on the 1024x1280 cells (7–8%) and is hidden once the passes are gone.
+3. **The reader is the hidden floor.** With every compute stage and the peer stubbed, the op still runs 5.0–16.7 µs. That is the reader: `r_block` 5.8–6.5 µs and `r_ones_shift_affine` 3.7–4.2 µs on the small shapes. The TILE `c_wait_pilot` of 1.2–1.4 µs sits on the critical path.
+4. **TZ (RM tilize) is overlap-hidden, not free.** Removed on its own it costs 4.9 µs (−7.1%) on 16384x960. After the P1 + P2 peel it is ~0, because the reader floor then holds the wall.
+5. **DRAM is DM-bound.** Stubbing DM leaves 16–32% of full (vae 1048576x256: 3.76 → 0.62 ms). Stubbing compute alone leaves 92–100%.
+   - Throughput is 312–405 GB/s, against a ~396–448 GB/s ceiling (`/perf-ceiling-dm`, `noc_latencies.yaml`).
+   - The headroom left is per-core imbalance: the slowest core runs 1.34× the p50 core's time, and the unit waits on its slowest member. It is not bandwidth.
+   - DRAM compute ideas were therefore not floated; only a DM balance idea was.
+
+### Step 2 — portfolio
+
+| idea | stage targeted | why (measured) | overlaps |
+|---|---|---|---|
+| I1 `moments_fpu_stream` | pass-1 `moments_rows` (C2: ELWADD S, MOVD2B + ELWMUL Q per row block) | rank 1 | the RM tilize fusion would also rewrite pass 1 |
+| I2 `normalize_bcast_srcb` | pass-2 normalize (n1u: (−1)·b′ + x·a, two HiFi3 ELWMULs per tile) | rank 1 | `cb_neg_one` is shared with the combine's finalize |
+| I3 `rm_tilize_fusion` | RM tilize folded into pass 1 / pass 2 | rank 4 (overlap-hidden) | I1, I2 |
+| I4 `combine_tail` | collapse → gather → finalize → stats mcast → expand, including an all-reduce option | rank 2 | I2 (`cb_neg_one`), I5 (ones tiles and the group-shift fill) |
+| I5 `reader_prologue` | γ/β read issue, map and affine build, zero fills, pilot → shift rows | rank 3 | I4 |
+| I6 `dram_dynamic_balance` | DRAM per-core imbalance: dynamic chunk stealing and residency, a reader/writer output split | rank 5 | the I2 normalize (output CB choice) |
+
+Not floated:
+- **Round-1 ideas** (re-floating them is barred).
+- **Reuse-shared broadcast:** the pilot-row mcast was measured flat in Perf 1 (cand3). The γ/β single-bank read was folded into I5's early issue.
+- **Precision knobs.**
+
+### Step 3 — verdicts (isolated `perf-part-optimizer` benches; ns base → option)
+
+**I1 `moments_fpu_stream` — WIN.** Graduated option: `fused_tile`.
+- **Mechanism:**
+  - one whole-tile srcA unpack per x tile feeds ELWADD D, ELWADD S and MOVD2B + ELWMUL Q;
+  - the HiFi3 fidelity loop runs outside the 8 row blocks (an accumulating ELWMUL needs ≥ 5 distinct 8-row blocks, or it stalls on DEST every phase);
+  - the sequence is replayed from the replay buffer (entries 0–15, addr-mod slots 0–5).
+
+| case | base | `fused` | `fused_b1` | `fused_tile` |
+|---|---:|---:|---:|---:|
+| unet_rm_ip 16384x960 | 68,905 | 61,353 (−11.0%) | 61,383 | 50,556 (−26.6%) |
+| vae_tile 16384x512 | 33,162 | 28,863 (−13.0%) | 28,839 | 23,014 (−30.5%) |
+| unet_rm_ip 16384x320 | 30,498 | 27,854 (−8.7%) | 27,876 | 24,281 (−20.4%) |
+| unet_rm_ip 1024x1280 | 13,193 | 12,491 (−5.3%) | 12,524 | 11,679 (−11.5%) |
+
+`fused_tile` comes from a separate run, whose bases agree with this one within 0.1%.
+
+- **Options:**
+  - `fused` shares one srcA unpack across the three ops per 8-row block, with the fidelity loop inside each block.
+  - `fused_b1` is `fused` with one block per MOP; it is the same as `fused`.
+  - Probes on `fused`: `NOSTALL` (DEST stall removed, wrong output) 28,091 / 59,965 and `NOMATH` 19,758 / 43,323. They showed the per-phase DEST stall and the math floor, which motivated `fused_tile`.
+- **Sweep, graduated path vs base:**
+  - unet_tile 4096x640 4x8 24,598 → 18,473 (−24.9%); guards −1.9% (DRAM RM, flat) to −13.0%;
+  - DRAM flat (vae 65536x512 −0.3%, flux1 16k −2.6%), as expected for a DM-bound plan.
+- **Precision:** bit-identical. **Domain:** everywhere, no exceptions.
+
+**I2 `normalize_bcast_srcb` — WIN.** Graduated option: `zsub_raw_wseed`.
+- **Mechanism:**
+  - DEST is seeded with ELWSUB(0, b′ row broadcast); srcA is zeroed by UNPACR_NOP ZEROSRC, so there is no L1 read and no −1 tile.
+  - One unpacker context covers each DEST window, with the b′ tiles addressed by the ch0 Z counter.
+  - Then DEST += x·a (ELWMUL, ROW broadcast, HiFi3).
+
+| case | base | `rowb` | `zsub` | `zsub_raw` | `zsub_raw_wseed` |
+|---|---:|---:|---:|---:|---:|
+| unet_rm_ip 16384x960 | 68,868 | 68,879 | 66,636 | 66,566 | 66,486 (−3.5%) |
+| vae_tile 16384x512 | 33,150 | 33,183 | 31,917 | 31,759 | 29,498 (−11.0%) |
+| unet_rm_ip 16384x320 | 30,490 | 30,387 | 30,351 | 30,270 | 30,119 (−1.2%, flat) |
+| unet_rm_ip 1024x1280 | 13,179 | 13,116 | 13,046 | 12,951 | 12,870 (−2.3%, flat) |
+| unet_tile 1024x1280 | 11,530 | 11,679 | 11,416 | 11,389 | 11,066 (−4.0%) |
+
+- **`rowb`** (stock row-broadcast srcB for a and b′): flat.
+- **`zsub_raw_seed2`** (two tiles per seed call): 31,259 on vae_tile; superseded.
+- **`zsub_raw_wseed_wmul`** (windowed multiply as well): equal to wseed (29,499 vs 29,536). It is not graduated: more raw code for no gain.
+- **Ablation on vae_tile:** `zsub_raw` 31,746; with no seed 27,695; with no seed and no multiply 24,827. The seed's cost was the per-call unpacker context, not its data, and that pointed to the window seed.
+- **Rejected:**
+  - MOVB2D writes only the high 16 bits under fp32 DEST, so it cannot seed;
+  - an SFPU MAD was analysed as slower and not built;
+  - more tiles per window is impossible without `dst_full_sync_en`, which is part of the contract.
+- **Sweep:** unet_tile 4096x640 4x8 24,623 → 22,404 (−9.0%). DRAM and the guards are flat to −4.6%, e.g. g_dram_rm γ-only +1.3% (noise).
+- **Precision:** bit-identical. 0 − tf32(b′) equals HiFi3 (−1)·tf32(b′) bit for bit. **Domain:** everywhere, no exceptions.
+
+**I3 `rm_tilize_fusion` — NULL.** Benched on the Perf-1 kernels.
+
+| case | base | `tz` (bound) | `tzraw` | `tznopack` | `tzslow` | `tzcopy` | `ux2m` | `ux2n` |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| unet_rm_ip 16384x960 | 68,894 | −7.1% | +0.0% | −3.2% | +7.8% | +4.2% | +5.4% | +0.0% |
+| unet_rm_ip 16384x320 | 30,491 | −6.8% | +0.0% | −1.3% | +4.6% | +1.8% | +4.1% | +0.0% |
+| unet_rm_ip 1024x1280 | 13,181 | −7.2% | +0.1% | −0.8% | +0.6% | −0.8% | +2.6% | +0.0% |
+| refiner_rm_ip 16384x384 | 29,720 | −9.7% | +0.0% | −1.8% | +5.9% | +2.5% | +4.9% | +0.0% |
+
+- **`tz`** stubs the tilize entirely, so its output is wrong. It is the upper bound on what any tilize fusion could win.
+- **`tzraw`**, the helper's fast-tilize loop inlined, is flat: the helper already is the fast path.
+- **`tznopack`** drops the packer's row-chunk pack. The tilize is not pack-bound.
+- **`tzslow`** (the non-fast tilize) and **`tzcopy`** (a datacopy tilize) are slower.
+- **`ux2m` / `ux2n`** double the srcA unpack in pass 1 / pass 2:
+  - pass 1 is partly srcA-unpack-bound (+2.6 to +5.4%), so a tilize-mode srcA premium would not hide there;
+  - pass 2 has slack (flat).
+- **Fused unpack-tilize** (estimated ≈ −6%) was not built. It needs the raw-LLK moments and normalize, which I1 and I2 were rewriting in parallel. It is a round-3 candidate on top of them.
+
+**I4 `combine_tail` — WIN.** Graduated option: `mr+fraw`.
+- **`fraw`:** a raw finalize stages the matmul init and −k = (−1 tile) × [k row; zeros] into DEST 2 before the gather wait.
+- **`mr`:** the finalize emits mean·rstd. The group stats are 3 pages, [rstd, mean·rstd, e], with e = 1.0 written once by the writer. This removes:
+  - the ones tiles (CB 17);
+  - the `cb_mr_e` (18) chain;
+  - the group-shift row replication and its UnpackToDestFp32.
+
+| case | base | `mr` | `fraw` | `mr+fraw` | `au+mr+fraw` |
+|---|---:|---:|---:|---:|---:|
+| unet_rm_ip 1024x1280 | 13,176 | 12,787 | 12,827 | 12,558 (−4.7%) | 12,944 |
+| unet_tile 1024x1280 | 11,576 | 11,288 | 11,221 | 11,016 (−4.8%) | 11,547 |
+| refiner_rm_ip 256x1536 | 9,947 | 9,708 | 9,781 | 9,719 (−2.3%) | 10,133 |
+| unet_rm_ip 1024x640 | 10,359 | 10,186 | 10,264 | 10,053 (−3.0%) | 10,507 |
+| unet_tile 4096x640 4x8 | 24,590 | 24,339 | 24,311 | 24,129 (−1.9%) | 24,678 |
+
+- **Nulls:**
+  - `ar`, an mcast all-gather with every core finalizing: 13,202 → 32,144 (+143%); `ar+mr` +116%; `ar+mr+fraw` +187%.
+  - `au`, a unicast all-gather, is slower than `mr+fraw` everywhere.
+- **Graduation re-bench:** 13,156 → 12,550, 11,546 → 11,025, 9,919 → 9,669, 10,391 → 10,055, 24,583 → 24,137.
+- **Large and DRAM cells:** flat (vae_dram 65536x512 +0.5%).
+- **Cg = 3 guard:** a +3.4% in the first sweep was re-run twice, giving −0.4% and +1.2%. That is noise, not a regression.
+- **Precision:**
+  - `fraw` is bit-identical;
+  - `mr` gives 1-ulp differences, with rel-RMS equal or lower against the reference on every case.
+- **Domain:** everywhere, no exceptions.
+
+**I5 `reader_prologue` — WIN.** Graduated options: OB + OZ + OE + OS + OP.
+- **OB:** 8-word load-then-store runs for the affine maps.
+- **OZ:** MEM_ZEROS stateful NoC writes plus whole-tile self-copies for the zero fills. They replace `Noc::async_write_zeros`, whose loopback reads shared the read barrier with the in-flight γ/β read.
+- **OE:** the γ/β DRAM read is issued at step `num_chunks − 1`, before `build_map`.
+- **OS:** straight-line shift-row stores.
+- **OP:** stateful pilot reads.
+
+OR (the ones-tile and group-shift fill) was superseded by I4, which deleted both. OM (straight-line map one-hot stores) was flat and dropped.
+
+| case | base | OB alone | +OZ +OE | +OS | +OP | floor (P1 P2 TZ CMB PEER stubbed) base → graduated |
+|---|---:|---:|---:|---:|---:|---:|
+| refiner_rm_ip 256x1536 | 10,043 | 8,904 (−11.3%) | 8,893 | 8,886 | 8,874 | 7,913 → 4,968 |
+| unet_tile 1024x1280 | 11,594 | 11,579 | 11,678 | 11,430 | 11,421 | 7,696 → 5,132 |
+| unet_rm_ip 1024x1280 | 13,191 | 13,183 | 13,114 | 13,203 | 13,194 | 7,247 → 4,979 |
+| unet_tile 4096x640 4x8 | 24,644 | — | — | 24,579 | 24,604 | 7,597 → 6,096 |
+
+- **What it buys:** the reader floor drops 1.5–2.9 µs (−20 to −37%). On the Perf-1 compute this showed on the whole op only where the reader was critical: refiner 256x1536 9,939 → 8,890 (−10.6%), unet_tile 1024x1280 −1.2%, the rest flat.
+- **Why it still graduated:** a flat cell keeps the unified path, and I1 and I4 shrink the compute in front of the floor. The final whole-op numbers below show the floor reduction surfacing.
+- **Zones:**
+  - the zero fills went from ~1.5 µs to ~0.59 µs;
+  - the map / affine build went from 2.55 µs to 1.12 µs;
+  - OP was flat (kept: same code size, one NoC state).
+- **Sweep:** DRAM and guards flat (within ±1.1%). **Precision:** bit-identical. **Domain:** everywhere, no exceptions.
+
+**I6 `dram_dynamic_balance` — WIN.** Graduated option: `split:d+da:auto`.
+- On DRAM plans the packer puts each pass-2 chunk in whichever output CB has a free chunk slot: `cb_output_tiles` (5, the writer's share) or `cb_output_b` (27, the reader's share). It announces the chunk index on `cb_out_seq_a` (28) / `cb_out_seq_b` (29), and `0xFFFFFFFF` closes the block.
+- The reader drains its share while it waits for input-ring room.
+- `out_writer_chunks` is 2 when L1 has a chunk to spare.
+
+| case | base | D6 `dyn` (tickets) | `split` 0.5 static | `split:d` | `split:d+da:2` | `split:d+da:auto` (grad.) |
+|---|---:|---:|---:|---:|---:|---:|
+| vae_dram 65536x512 | 374,024 | 389,871 (+4.2%) | 389,651 | 335,610 | 339,293 | 340,548 (−9.0%) |
+| vae_dram 262144x256 | 783,727 | 766,781 | 802,788 | 706,127 | — | 711,263 (−8.8%) |
+| refiner_dram 16384x1152 | 215,685 | 213,224 | 227,344 | 200,092 | 201,698 | 203,003 (−5.7%) |
+| flux1_dram 16384x256 | 53,194 | 59,179 (+11.3%) | 55,130 | 55,415 (+4.2%) | 53,354 | 53,205 (flat) |
+| vae_dram 1048576x256 | 3,754,261 | 3,947,893 (+5.2%) | — | — | — | 3,687,368 (−1.7%, flat) |
+
+Each option's % is against its own run's base. The graduated column is the graduation re-bench (bases 374,204 / 780,065 / 215,289 / 53,097 / 3,750,676, within 0.5% of the bases shown).
+
+- **D6 dynamic tickets** (NoC atomic fetch-add work stealing across a unit): a REGRESSION. vae_dram 1048576x128 +6.0% and mochi +1.6% as well.
+- **Static splits are unstable:**
+  - the oracle-tuned static shares win one shape and lose another (`static:p12`: refiner −8.1% but vae 262144x256 +4.4%, mochi +3.0%);
+  - `split:1` (the reader writes everything) is +10 to +15%.
+- **`split:d`** (the writer keeps one chunk) regressed flux1 16k by 4.2%. `da:auto` fixes that, and the `tau` thresholds added nothing.
+- **Sweep:** flux1 1048576x64 −12.9%; vae 1048576x128 −4.1%; vae 262144x512 −3.3%; mochi +0.3% and the mid / guard cells within ±1.4% (flat).
+- **Sharded:** unchanged. Its output is the zero-copy shard, so there is no stream to split.
+- **Precision:** bit-identical. **Domain:** every DRAM plan.
+
+### Step 4 — aggregation
+Five WINs, and no win superseded another. Three conflicts were resolved at merge:
+- **I2 vs I4 (`cb_neg_one`).** I2 deleted the −1 tile (CB 6), but I4's finalize uses it as in0, for −k and for the −S sender sum. The CB was kept, and its fill now runs only on unit roots (`if constexpr (IS_ROOT)`); the normalize no longer reads it.
+- **I5 OR vs I4.** OR sped up the ones-tile and group-shift fill, which I4 deletes. I4 wins, and the group shift is now one NoC MEM_ZEROS fill (block 0) plus row 0 per block.
+- **I6 vs I2.** I6's output-CB choice was merged onto I2's seeded normalize (`normalize_chunk(rows_valid, q)`).
+
+The merge order was I1 → I5 → I4 → I2 → I6, each re-gated on golden before the next.
+
+### Step 5 — graduations (in commit order; each one a single unified path that deletes the code it replaced)
+
+| # | commit | graduation | code deleted | domain / carve-outs |
+|---|---|---|---|---|
+| 1 | `d9d9df8e02a` | I1: pass-1 moments as one whole-tile FPU program per x tile | C2's `add_bcast_rows_acc_init`, `math_mul_acc_from_dest_tile`, `mul_x_by_dest_tile_acc` and the per-row-block stock eltwise loop | everywhere, no carve-outs |
+| 2 | `499c233744f` | I5: early γ/β issue, NoC MEM_ZEROS fills, run-copy map build, straight-line shift rows, stateful pilot reads | the `Noc::async_write_zeros` fills, the per-word map / affine store loops, the late γ/β issue | everywhere, no carve-outs |
+| 3 | `5b79ab6d6cb` | I4: raw finalize staged before the gather wait; mean·rstd in the finalize; 3-page group stats; shared-init expand | the `matmul_block` + PostComputeFn sender sum, the ones tiles (CB 17) and their reader fill, the `cb_mr_e` (18) chain, the group-shift row replication and its UnpackToDestFp32 copy | everywhere, no carve-outs |
+| 4 | `8ab37ff4bda` | I2: normalize seed 0 − b′ in one unpacker context per DEST window, x·a row broadcast | the (−1)·b′ `mul_tiles` seed (per-tile unpacker context, 3 fidelity phases); the normalize's read of `cb_neg_one` | everywhere, no carve-outs |
+| 5 | `9416ccba748` | I6: DRAM pass-2 output split across both DM RISCs by free slot | the writer-only, single-consumer output stream | Every DRAM interleaved plan. **Feasibility carve-out** (not measurement-earned): sharded plans pack into their own output shard (`if SHARDED {shard} else {split}`), with no stream to split. |
+
+Instrumentation follows the new paths:
+- `r_ones_shift_affine` became `r_affine` (the ones and shift fills are gone; `zone_table.py` reads both names);
+- inside `finalize_raw`, `c_wait_gather` times only the gather wait (the init and the −k product are staged before it), and `c_finalize` times the sums, the SFPU finalize and the pack after it;
+- the reader's output drain runs under the opt-in `r_reserve` chunk zone;
+- the writer's output loop runs under `w_wait_out` / `w_issue`.
+
+All six experiment dirs, including the null `rm_tilize_fusion`, are committed as artifacts.
+
+### Whole op, before (`02a76783017`) → after (`9416ccba748`)
+
+**Sharded in place (9 RM PERF FOCUS + 3 TILE)**
+
+| case | before ns | after ns | Δ | speedup |
+|---|---:|---:|---:|---:|
+| `unet_rm_ip_1024x1280` | 13,207 | 10,851 | -17.8% | 1.22× |
+| `unet_rm_ip_16384x320` | 30,705 | 23,544 | -23.3% | 1.30× |
+| `unet_rm_ip_4096x320` | 13,260 | 10,809 | -18.5% | 1.23× |
+| `unet_rm_ip_4096x640` | 18,934 | 15,077 | -20.4% | 1.26× |
+| `unet_rm_ip_1024x640` | 10,572 | 8,599 | -18.7% | 1.23× |
+| `refiner_rm_ip_256x1536` | 9,840 | 7,658 | -22.2% | 1.28× |
+| `refiner_rm_ip_16384x384` | 30,124 | 20,646 | -31.5% | 1.46× |
+| `unet_rm_ip_16384x640` | 54,040 | 40,431 | -25.2% | 1.34× |
+| `unet_rm_ip_16384x960` | 69,026 | 47,573 | -31.1% | 1.45× |
+| `unet_tile_ip_1024x1280` | 11,683 | 8,971 | -23.2% | 1.30× |
+| `unet_tile_ip_4096x640_4x8` | 24,754 | 15,696 | -36.6% | 1.58× |
+| `vae_tile_ip_16384x512` | 33,257 | 18,747 | -43.6% | 1.77× |
+
+**Sharded out of place (3 TILE PERF FOCUS + 7 RM)**
+
+| case | before ns | after ns | Δ | speedup |
+|---|---:|---:|---:|---:|
+| `unet_tile_1024x1280` | 11,636 | 9,020 | -22.5% | 1.29× |
+| `unet_tile_4096x640_4x8` | 24,847 | 15,690 | -36.9% | 1.58× |
+| `vae_tile_16384x512` | 33,216 | 18,755 | -43.5% | 1.77× |
+| `unet_rm_oop_1024x1280` | 13,360 | 10,916 | -18.3% | 1.22× |
+| `unet_rm_oop_16384x320` | 30,681 | 23,478 | -23.5% | 1.31× |
+| `unet_rm_oop_4096x320` | 13,244 | 10,818 | -18.3% | 1.22× |
+| `unet_rm_oop_4096x640` | 18,887 | 15,087 | -20.1% | 1.25× |
+| `unet_rm_oop_1024x640` | 10,489 | 8,601 | -18.0% | 1.22× |
+| `refiner_rm_oop_256x1536` | 9,858 | 7,675 | -22.1% | 1.28× |
+| `refiner_rm_oop_16384x384` | 30,109 | 20,629 | -31.5% | 1.46× |
+
+**DRAM interleaved (9 PERF FOCUS + 4 mid)**
+
+| case | before ns | after ns | Δ | speedup |
+|---|---:|---:|---:|---:|
+| `vae_dram_1048576x128` | 1,759,737 | 1,677,164 | -4.7% | 1.05× |
+| `vae_dram_65536x512` | 374,656 | 333,369 | -11.0% | 1.12× |
+| `vae_dram_262144x256` | 780,447 | 703,718 | -9.8% | 1.11× |
+| `vae_dram_262144x512` | 1,765,779 | 1,695,393 | -4.0% | 1.04× |
+| `vae_dram_1048576x256` | 3,762,345 | 3,675,407 | -2.3% | 1.02× |
+| `refiner_dram_16384x1152` | 214,630 | 197,230 | -8.1% | 1.09× |
+| `flux1_dram_16384x256` | 53,757 | 51,525 | -4.2% | 1.04× |
+| `flux1_dram_1048576x64` | 725,887 | 630,667 | -13.1% | 1.15× |
+| `mochi_dram_8x407040x128` | 5,908,341 | 5,879,519 | -0.5% | 1.00× |
+| `mid_4096x640_tile` | 37,865 | 36,623 | -3.3% | 1.03× |
+| `mid_4096x640_rm` | 46,261 | 44,779 | -3.2% | 1.03× |
+| `mid_16384x320_tile` | 68,240 | 65,719 | -3.7% | 1.04× |
+| `mid_16384x320_rm` | 82,461 | 77,749 | -5.7% | 1.06× |
+
+Results by placement:
+- **Sharded:** every focus cell is 1.22–1.77× faster.
+- **DRAM:**
+  - The real wins are on the mid-size plans, where the per-core imbalance dominated: vae 65536x512 −11.0%, vae 262144x256 −9.8%, refiner −8.1%, flux1 1048576x64 −13.1%.
+  - The giant plans move by less: vae 1048576x256 −2.3% is inside the noise band; mochi −0.5% is flat.
+  - Against the 92%-of-512 GB/s floor: vae 1048576x256 is now 1.16× (Perf 1: 1.18×); mochi 1.16× (unchanged); vae 262144x256 1.14× (was 1.27×).
+- **Mid cells:** −3.2 to −5.7%. The −3.2% / −3.3% pair is at the noise edge.
+
+### Guard set (no regression)
+One representative per kernel path × layout × placement for the affine modes the focus benches do not run, plus the odd channels-per-group case (Cg = 3; the reader's halfword map path). Same base and after builds as above.
+
+| guard case | before ns | after ns | Δ |
+|---|---:|---:|---:|
+| rm in place 1024x1280, γ only | 12,872 | 10,569 | -17.9% |
+| rm in place 1024x1280, no affine | 12,673 | 10,499 | -17.2% |
+| tile oop 1024x1280, γ only | 11,272 | 8,756 | -22.3% |
+| tile oop 1024x1280, no affine | 11,011 | 8,607 | -21.8% |
+| DRAM tile 4096x640, γ only | 37,698 | 36,023 | -4.4% |
+| DRAM tile 4096x640, no affine | 37,684 | 35,939 | -4.6% |
+| DRAM RM 4096x640, γ only | 45,310 | 44,121 | -2.6% |
+| DRAM RM 4096x640, no affine | 45,099 | 43,740 | -3.0% |
+| DRAM tile 16384x96, γ+β, Cg = 3 | 27,000 | 26,113 | -3.3% |
+
+No cell is slower: every focus, mid and guard cell is faster or flat. The two DRAM RM guards (−2.6%, −3.0%) are noise-band flat, so no carve-out was earned by measurement.
+
+### Correctness
+- Full golden directory (`eval/golden_tests/groupnorm_sc_N_1_HW_C_b/`): **676 passed, 0 failed** after every graduation. The rest are xfail (unsupported cells) or skip (invalid cells).
+- Loose + regression: **64/64 under `--dev`** (watcher, LLK asserts) on the final tree, and after graduations 3–5. The I1 and I5 subagents ran `--dev` on their graduation candidates. Every kernel binary fits the 70,688 B `--dev` kernel-config ring.
+- Precision:
+  - I1, I2, I5 and I6 are bit-identical on every benched case;
+  - I4's `mr` (mean·rstd computed once in the finalize, in fp32) differs by 1 ulp in places, with rel-RMS equal or lower against the reference;
+  - no precision-trading option was graduated.
+
+### Helper bypasses
+Every raw-LLK path in the op today, with the round that measured it. Each site carries a kernel-head comment stating the measured win.
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `reduce<SUM, REDUCE_COL>` + `Accumulate`, `eltwise_chain`, `mul_reuse_dest_tiles`, stock `add_tiles_bcast<ROW>` + `mul_reuse_dest_init` (Perf 2, I1) | capability | No API keeps one unpacked srcA bank live across ELWADD, MOVD2B and ELWMUL; every helper re-unpacks x per op. The stock eltwise MOP runs the fidelity phases inside a 2-block face, so an accumulating ELWMUL stalls on DEST every phase. Hiding it needs the fidelity loop outside ≥ 5 distinct 8-row blocks, and no helper exposes that loop order. | 68,881 (rm_ip 16384x960) / 33,130 (vae_tile 16384x512), C2 | 50,567 / 23,033 | `groupnorm_sc_N_1_HW_C_b_compute.cpp:175` (`moments_rows` :342) |
+| `mul_tiles` / `mul_init` seed and `llk_unpack_A` / the binary MOP (Perf 2, I2) | capability | No op seeds DEST with 0 − B (row broadcast) with srcA zeroed by the unpacker (no L1 read). No helper runs several tiles in one unpacker context, addressing them by the Z counter: each call pays a base-address write and a semaphore round trip, which was the seed's whole cost. | 33,136 (vae_tile 16384x512) / 68,868 (rm_ip 16384x960) | 29,505 / 66,506 | `groupnorm_sc_N_1_HW_C_b_compute.cpp:384` (`p2_seed_window` :476) |
+| `compute_kernel_lib::matmul_block` + a finalize `PostComputeFn` (Perf 2, I4) | capability | The helper acquires DEST only after its input waits, so the init and the −k product cannot be staged before the gather arrives. There is no "pre-wait" hook. Carrying k in its PostComputeFn forced a row-replicated UnpackToDestFp32 group-shift tile. | 13,176 (rm_ip 1024x1280) / 11,576 (tile 1024x1280) | 12,827 / 11,221 (fraw alone) | `groupnorm_sc_N_1_HW_C_b_compute.cpp:694` (`finalize_raw` :699) |
+| `cb_reserve_back` / `cb_push_back` single-consumer output pattern (Perf 2, I6) | capability | There is no producer-side non-blocking "free pages" probe on the packer, and no way for one producer to choose between two consumers' CBs per chunk. Raw `tiles_received` / `tiles_acked` reads and a sequence word stored into the reserved page. | 374,204 (dram 65536x512) / 780,065 (dram 262144x256) | 340,548 / 711,263 | `groupnorm_sc_N_1_HW_C_b_compute.cpp:495` (`pack_free_pages`), `:510` (`output_cb_for`) |
+| `Noc::async_write_zeros` + `write_zeros_l1_barrier` (Perf 2, I5) | capability | It zeroes by loopback *reads*, so its barrier also waits for the γ/β DRAM read in flight. Overlapping the two needs stateful NoC writes from `MEM_ZEROS`, which retire on the write counter. | zero-fill zone ~1,500 | ~590 | `groupnorm_sc_N_1_HW_C_b_reader.cpp:209` (`build_map`), `:497` (group shift) |
+| no helper covers this (`l1_helpers` strided word-run copy; supersedes Perf 1's map-scatter row) (Perf 2, I5) | capability | No helper copies a strided L1 word run into tile-face layout at a computed row (the gamma map's `gamma[c]` at row `g(c)`, the beta map's row 0). `fill_tile_column` writes all 32 rows, and `generate_index_tile` writes a ramp. 8-word load-then-store runs let the in-order core overlap the L1 load latencies. | map / affine zone 2,550 | 1,120 | `groupnorm_sc_N_1_HW_C_b_reader.cpp:281` (`r_affine` :279) |
+| `eltwise_chain` finalize (CopyTile ×3, 8 SFPU ops, PackTile ×2) (Perf 1, now inside `finalize_raw`) | capability | The chain has no vector scope: every SFPU op covers all 32 vectors though only row 0 is needed. It cannot run inside a matmul's DEST window. | 27,125 (rm_ip 1024x1280, Perf 1) | 25,603 (Perf 1) | `groupnorm_sc_N_1_HW_C_b_compute.cpp:686` (`gn_finalize_sfpu` :675) |
+| `matmul_block` (expand products only) (Perf 1) | capability | It has no partial-subblock pack, and under fp32 DEST it re-issues `pack_reconfig_data_format` per subblock. In Perf 2 the two products also share one init (the helper issues `matmul_block_init` on every call), and in0 is read at a page offset of the 3-page group stats (the helper has an in1 base-offset hook but none for in0). | 25,973 (rm_ip 1024x1280, Perf 1) | 25,433 (Perf 1) | `groupnorm_sc_N_1_HW_C_b_compute.cpp:730` (`expand_matmul` :740) |
+| `untilize<>` after PackTile → CB (Perf 1) | capability | No untilize helper takes a block already in DEST (`pack_untilize_dest`); the helper round-trips through a tile ring. | 161,601 (rm_ip 16384x960, Perf 1) | 153,853 (Perf 1) | `groupnorm_sc_N_1_HW_C_b_compute.cpp:581` (`normalize_untilize_chunk`) |
+
+Perf 1's `reduce`/`Accumulate` moments row and its `eltwise_chain` normalize row are superseded by the I1 and I2 rows above: the same sites, now with Perf 2's code and numbers.
+
+### Notes for round 3 (re-run Step 1 first)
+- **Where the time sits now** (`zone_table.py` on `_round2/logs/final_full.device.csv`, TRISC_1 p50 over cores; the math-thread zones include their own unpacker waits):
+  - unet_rm_ip_1024x1280, span 9.7 µs: pass 1 3.9; `c_wait_stats` 1.6; finalize 1.0; expand 2.3; pass 2 2.5.
+  - unet_rm_ip_16384x960, span 46.9 µs: pass 1 22.3, pass 2 19.6, `r_affine` 4.6.
+  - vae_tile_16384x512, span 18.3 µs: pass 1 7.7, pass 2 9.5. Pass 2 now leads on TILE.
+- **Exposed on small TILE:** the pilot wait, `c_wait_pilot` ≈ 1.06 µs on unet_tile 1024x1280.
+- **Fused unpack-tilize (I3)** is now buildable on top of the raw-LLK moments and normalize. `ux2m` showed pass 1 is partly srcA-unpack-bound, so the tilize-mode unpack premium has to be measured there, not assumed hidden.
+- **DRAM** is at 1.14–1.16× the 92% floor. Pass-2 writes are now balanced across both DM RISCs, but pass-1 reads are still reader-only: a writer-side share of the pass-1 reads is the remaining DM lever.
+- **`--dev` kernel-config ring:** every graduation still fits, but check the margin before adding root-side code.
+
+**Summary:** six ideas floated and measured; five graduated (each as one unified path with the replaced code deleted, and the losing options recorded) and one null (`rm_tilize_fusion`). On the focus shapes the op is now:
+- 1.22–1.77× faster on sharded in place;
+- 1.22–1.77× on sharded out of place;
+- 1.04–1.15× on DRAM wherever the change is outside noise (vae 1048576x256 −2.3% and mochi −0.5% are flat).
+
+Mid cells are 3–6% faster. Sharded guards are 17–22% faster and DRAM guards 3–5% (the DRAM RM pair sits at the noise edge). No cell regressed, and golden is green.

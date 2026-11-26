@@ -1,0 +1,12 @@
+{"variant": "kernels@ux2m", "case": "unet_rm_ip_16384x960", "h": 16, "W": 15, "B": 1, "K": 1, "rows": 16, "pcc": 0.9999983561466974, "rms": 0.0018205763463145675, "digest": "2d6993851d08"}
+{"variant": "kernels", "case": "unet_rm_ip_16384x960", "h": 16, "W": 15, "B": 1, "K": 1, "rows": 16, "pcc": 0.9999983561466974, "rms": 0.0018205763463145675, "digest": "2d6993851d08"}
+{"variant": "kernels@ux2n", "case": "unet_rm_ip_16384x960", "h": 16, "W": 15, "B": 1, "K": 1, "rows": 16, "pcc": 0.9999983561466974, "rms": 0.0018205763463145675, "digest": "2d6993851d08"}
+{"variant": "kernels@ux2m", "case": "unet_rm_ip_16384x320", "h": 16, "W": 5, "B": 1, "K": 1, "rows": 16, "pcc": 0.9999982783526176, "rms": 0.0018560235583032095, "digest": "2d1cce76e0e8"}
+{"variant": "kernels", "case": "unet_rm_ip_16384x320", "h": 16, "W": 5, "B": 1, "K": 1, "rows": 16, "pcc": 0.9999982783526176, "rms": 0.0018560235583032095, "digest": "2d1cce76e0e8"}
+{"variant": "kernels@ux2n", "case": "unet_rm_ip_16384x320", "h": 16, "W": 5, "B": 1, "K": 1, "rows": 16, "pcc": 0.9999982783526176, "rms": 0.0018560235583032095, "digest": "2d1cce76e0e8"}
+{"variant": "kernels@ux2m", "case": "unet_rm_ip_1024x1280", "h": 4, "W": 5, "B": 1, "K": 1, "rows": 4, "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "digest": "ad2c4f222728"}
+{"variant": "kernels", "case": "unet_rm_ip_1024x1280", "h": 4, "W": 5, "B": 1, "K": 1, "rows": 4, "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "digest": "ad2c4f222728"}
+{"variant": "kernels@ux2n", "case": "unet_rm_ip_1024x1280", "h": 4, "W": 5, "B": 1, "K": 1, "rows": 4, "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "digest": "ad2c4f222728"}
+{"variant": "kernels@ux2m", "case": "refiner_rm_ip_16384x384", "h": 32, "W": 3, "B": 1, "K": 1, "rows": 32, "pcc": 0.9999981976532226, "rms": 0.0019122639450568713, "digest": "9e7ab3fe3979"}
+{"variant": "kernels", "case": "refiner_rm_ip_16384x384", "h": 32, "W": 3, "B": 1, "K": 1, "rows": 32, "pcc": 0.9999981976532226, "rms": 0.0019122639450568713, "digest": "9e7ab3fe3979"}
+{"variant": "kernels@ux2n", "case": "refiner_rm_ip_16384x384", "h": 32, "W": 3, "B": 1, "K": 1, "rows": 32, "pcc": 0.9999981976532226, "rms": 0.0019122639450568713, "digest": "9e7ab3fe3979"}

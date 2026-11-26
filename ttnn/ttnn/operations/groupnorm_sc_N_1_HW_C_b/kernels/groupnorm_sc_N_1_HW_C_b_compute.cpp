@@ -680,12 +680,13 @@ sfpi_inline void gn_finalize_sfpu(const uint32_t inv_n_bits, const uint32_t eps_
 }
 #endif
 
-// matmul_block PostComputeFn of the sender sum: DST 0/1 hold [S1', T2] (rows replicated); k joins as DST 2 (exact
-// UnpackToDestFp32 copy), then the scoped finalize leaves [rstd, mean] in DST 0/1 for the helper's pack.
+// gn_finalize_sfpu runs inside finalize_raw's DEST window (below): DST 0/1 hold [-S1', -T2] (the -1 tile x the
+// gathered sums, rows replicated) and DST 2 holds -k; with -inv_n the scoped finalize leaves [rstd, mean*rstd] in
+// DST 0/1 (rows replicated) for the pack.
 // RAW SFPU: bypasses the eltwise_chain finalize (CopyTile x3 + 8 full-tile SFPU ops + 2 PackTile, each SFPU op over
-// all 32 vectors) - the chain has no vector scope and cannot run inside the matmul's DEST window. Measured (root
+// all 32 vectors) - the chain has no vector scope and cannot run inside a matmul's DEST window. Measured (root
 // finalize zone, perf_experiments/combine_critical_path): unet_rm_ip_1024x1280 whole op 27.1 -> 24.3 us with the
-// publish hand-off; see changelog Perf 1 "Helper bypasses".
+// publish hand-off (changelog Perf 1); mean*rstd joined it in Perf 2 (perf_experiments/combine_tail "mr").
 
 constexpr uint32_t cb_fin_out = cb_stats_out;  // the root's writer multicasts it into cb_group_stats
 constexpr uint32_t N_STATS = 3;                // cb_group_stats pages: [rstd, mean*rstd, e]

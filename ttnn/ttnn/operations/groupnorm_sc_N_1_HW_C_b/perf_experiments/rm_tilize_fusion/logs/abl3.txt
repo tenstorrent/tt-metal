@@ -1,0 +1,18 @@
+case                            kernels@ux2m         kernels    kernels@ux2n
+unet_rm_ip_16384x960           72,576          68,869  -5.1%   68,876  -5.1%
+unet_rm_ip_16384x320           31,741          30,497  -3.9%   30,504  -3.9%
+unet_rm_ip_1024x1280           13,515          13,178  -2.5%   13,179  -2.5%
+refiner_rm_ip_16384x384        31,158          29,714  -4.6%   29,710  -4.6%
+
+  unet_rm_ip_16384x960         kernels@ux2m                             pcc=0.999998 rms=0.00182 md5=2d6993851d08 plan=h16/B1/K1/W15
+  unet_rm_ip_16384x960         kernels                                  pcc=0.999998 rms=0.00182 md5=2d6993851d08 plan=h16/B1/K1/W15
+  unet_rm_ip_16384x960         kernels@ux2n                             pcc=0.999998 rms=0.00182 md5=2d6993851d08 plan=h16/B1/K1/W15
+  unet_rm_ip_16384x320         kernels@ux2m                             pcc=0.999998 rms=0.00186 md5=2d1cce76e0e8 plan=h16/B1/K1/W5
+  unet_rm_ip_16384x320         kernels                                  pcc=0.999998 rms=0.00186 md5=2d1cce76e0e8 plan=h16/B1/K1/W5
+  unet_rm_ip_16384x320         kernels@ux2n                             pcc=0.999998 rms=0.00186 md5=2d1cce76e0e8 plan=h16/B1/K1/W5
+  unet_rm_ip_1024x1280         kernels@ux2m                             pcc=0.999998 rms=0.00191 md5=ad2c4f222728 plan=h4/B1/K1/W5
+  unet_rm_ip_1024x1280         kernels                                  pcc=0.999998 rms=0.00191 md5=ad2c4f222728 plan=h4/B1/K1/W5
+  unet_rm_ip_1024x1280         kernels@ux2n                             pcc=0.999998 rms=0.00191 md5=ad2c4f222728 plan=h4/B1/K1/W5
+  refiner_rm_ip_16384x384      kernels@ux2m                             pcc=0.999998 rms=0.00191 md5=9e7ab3fe3979 plan=h32/B1/K1/W3
+  refiner_rm_ip_16384x384      kernels                                  pcc=0.999998 rms=0.00191 md5=9e7ab3fe3979 plan=h32/B1/K1/W3
+  refiner_rm_ip_16384x384      kernels@ux2n                             pcc=0.999998 rms=0.00191 md5=9e7ab3fe3979 plan=h32/B1/K1/W3
