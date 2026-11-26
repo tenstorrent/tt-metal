@@ -162,7 +162,7 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::fi
 
 // True if a mock descriptor was provided or live hardware is a Blackhole Galaxy; else the caller skips.
 bool express_link_cluster_available() {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().has_mock_cluster_desc()) {
         return true;
     }
     return tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==

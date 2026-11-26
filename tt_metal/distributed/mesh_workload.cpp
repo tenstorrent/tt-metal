@@ -703,12 +703,7 @@ const PerDeviceRuntimeArgs* MeshWorkloadImpl::per_device_runtime_args(const Mesh
 }
 
 namespace {
-// Emulated devices launch each program through the slow-dispatch path (tt-emule's queue), as slow dispatch does,
-// so their workloads carry per-program configs rather than the FD workload finalization.
-bool uses_fd_program_configs(MetalEnvImpl& env) {
-    return env.get_rtoptions().get_fast_dispatch() &&
-           env.get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
-}
+bool uses_fd_program_configs(MetalEnvImpl& env) { return env.get_rtoptions().get_fast_dispatch(); }
 }  // namespace
 
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {

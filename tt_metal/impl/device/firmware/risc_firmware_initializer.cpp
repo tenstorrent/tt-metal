@@ -4,6 +4,10 @@
 
 #include "risc_firmware_initializer.hpp"
 
+#ifdef TT_METAL_USE_EMULE
+#include "emulated_program_runner.hpp"
+#endif
+
 #include <algorithm>
 #include <cstdint>
 #include <chrono>
@@ -266,6 +270,10 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                 throw;
             }
         }
+    } else if (cluster_.get_target_device_type() == tt::TargetDevice::Emule) {
+        for (tt::ChipId device_id : device_ids) {
+            initialize_emulated_firmware_state(device_id);
+        }
     }
     initialized_ = true;
 }
@@ -326,6 +334,13 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             }
         }
     }
+
+#ifdef TT_METAL_USE_EMULE
+    if (cluster_.get_target_device_type() == tt::TargetDevice::Emule) {
+        // Resets the emulated cores, stopping the firmware boot_core_firmware started.
+        emule::reset_core_firmware(std::vector<int>(all_devices.begin(), all_devices.end()));
+    }
+#endif
 
     // Keep simulator routing firmware alive until all cleanup that may access remote chips is done.
     teardown_simulator_ethernet_cores();
@@ -1499,6 +1514,33 @@ void RiscFirmwareInitializer::initialize_firmware(
             TT_THROW(
                 "Unsupported programable core type {} to initialize build states", enchantum::to_string(core_type));
     }
+}
+
+void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId device_id) {
+#ifdef TT_METAL_USE_EMULE
+    // Each core's core_info message and the reset jump word at the firmware launch address, as
+    // initialize_and_launch_firmware writes them; the watcher and kernels read both.
+    auto write_core_state = [&](HalProgrammableCoreType core_type, const CoreCoord& logical_core,
+                                const CoreCoord& virtual_core) {
+        auto core_info = populate_core_info_msg(device_id, core_type);
+        core_info.view().absolute_logical_x() = logical_core.x;
+        core_info.view().absolute_logical_y() = logical_core.y;
+        cluster_.write_core_immediate(
+            core_info.data(),
+            core_info.size(),
+            {static_cast<size_t>(device_id), virtual_core},
+            hal_.get_dev_addr(core_type, HalL1MemAddrType::CORE_INFO));
+        const auto jit_build_config = hal_.get_jit_build_config(hal_.get_programmable_core_type_index(core_type), 0, 0);
+        cluster_.write_core_immediate(
+            &jit_build_config.fw_launch_addr_value,
+            sizeof(uint32_t),
+            {static_cast<size_t>(device_id), virtual_core},
+            jit_build_config.fw_launch_addr);
+    };
+    emule::initialize_firmware_state(device_id, *descriptor_->metal_context().get_context_id(), write_core_state);
+#else
+    TT_THROW("Device {} is an emulated device, but tt-metal was built without TT_METAL_USE_EMULE", device_id);
+#endif
 }
 
 void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_id) {

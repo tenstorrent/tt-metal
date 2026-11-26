@@ -57,7 +57,7 @@ inline std::string get_core_descriptor_file(
             arch, dispatch_core_config, soc_desc, env.get_rtoptions().get_use_quasar_tensix_dispatch_cores()) ==
             CoreType::WORKER;
 
-    if (env.get_rtoptions().get_simulator_enabled()) {
+    if (env.get_rtoptions().is_simulator_or_emulated()) {
         const tt_xy_pair& grid_size = soc_desc.grid_size;
         if (grid_size.y <= 2 || grid_size.x <= 2) {  // small simulation grids (any dimension <= 2)
             switch (arch) {

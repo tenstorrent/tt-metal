@@ -88,6 +88,7 @@ public:
 
 public:
     virtual void LoadImage() = 0;
+    virtual void LoadSections() = 0;
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) = 0;
     virtual void ObjectifyExecutable() = 0;
     virtual void XIPify() = 0;
@@ -125,6 +126,15 @@ public:
     virtual ~Elf() override = default;
 
     virtual void LoadImage() override;
+    virtual void LoadSections() override {
+        auto& hdr = GetHeader();
+        TT_ASSERT(hdr.e_type == ET_DYN, "{}: an emulated kernel's binary is a shared object", path_);
+        if (!hdr.e_shoff || hdr.e_shentsize != sizeof(Shdr) ||
+            (hdr.e_shoff + hdr.e_shnum * sizeof(Shdr) > GetContents().size()) || hdr.e_shstrndx >= hdr.e_shnum) {
+            TT_THROW("{}: sections are missing or malformed", path_);
+        }
+        shdrs_ = std::span(ByteOffset<Shdr>(GetContents().data(), hdr.e_shoff), hdr.e_shnum);
+    }
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;
     virtual void ObjectifyExecutable() override;
     virtual void XIPify() override;
@@ -285,6 +295,11 @@ void ElfFile::ReleaseImpl() {
 void ElfFile::ReadImage(const std::string& path) {
     pimpl_ = Impl::Make(*this, path);
     pimpl_->LoadImage();
+}
+
+void ElfFile::ReadSections(const std::string& path) {
+    pimpl_ = Impl::Make(*this, path);
+    pimpl_->LoadSections();
 }
 
 ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
