@@ -54,8 +54,7 @@ on:
         default: false
         description: >-
           Skip the CPack package step and run `cmake --install` into a temporary
-          prefix instead, to keep install-rule coverage. Ignored when
-          publish-package is true. For CI builds that do not upload packages.
+          prefix. Ignored when publish-package is true.
       use-system-sfpi:
         required: false
         type: boolean
