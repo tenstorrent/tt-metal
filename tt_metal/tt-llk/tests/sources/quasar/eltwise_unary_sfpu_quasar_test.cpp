@@ -153,6 +153,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const DataFormat src_format     = static_cast<DataFormat>(formats.math);
     const DataFormat sfpu_in_format = static_cast<DataFormat>(formats.sfpu_src);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
 
@@ -168,10 +173,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_sfpu_init_();
         test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
-        {
-            _llk_math_pack_sync_init_<dest_sync>();
-        }
         if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             // CFG wait masks persist across run types. MATH_ISOLATE runs without
@@ -283,6 +284,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
     const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
@@ -292,19 +298,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
-        }
-        else
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             // PACK_ISOLATE packs independently. UNPACK_ISOLATE /
             // MATH_ISOLATE do not pack. None may inherit the L1_TO_L1 wait mask.
             set_up_zero_dest_dvalid_handshake_for_pack();
-            if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
-            {
-                _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
-            }
         }
         PROFILER_SYNC();
     }
