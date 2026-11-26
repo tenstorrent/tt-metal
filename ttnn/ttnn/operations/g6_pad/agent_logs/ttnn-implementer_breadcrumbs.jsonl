@@ -1,0 +1,2 @@
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-26T23:01:02+00:00"}
+{"event":"test_run","result":"34 pass / 1 fail (dev and prod)","classification":"numerical mismatch outside op","details":"test_g6_pad_special_values[E 1x1x8x62080]: ttnn.fill_implicit_tile_padding (FillPad compute kernel) flushes -0.0 and bf16 subnormals in padded tiles before g6_pad runs; probe_002/003 show input already differs at [0],[4],[5]","ts":"2026-11-26T23:07:58+00:00"}
