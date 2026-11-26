@@ -23,6 +23,29 @@ Python host path). The estimates further below predate this and still need phase
   (one real row and three pads, whose selects still run).
 * **L1_SMALL**: the batch programs need more than the demo's 10 KB (the 4-row sampler's all_gather ran out last);
   12 KB is enough, and `demo/server.py` already reserves 16 KB under `--persistent-moe`.
+* **Profile, one-row vs batch step** (`tests/decode/test_batch_decode_profile.py`, `tools/batch_profile_report.py`,
+  device 27, per step, without the one-row step's H2D receive, which waits for the host's packet):
+
+  | | 256 one-row | 256 batch | 2048 one-row | 2048 batch |
+  |---|---|---|---|---|
+  | host wall, no profiler | 7.15 ms | 10.72 ms | 7.93 ms | 13.50 ms |
+  | device kernel time | 6.84 ms | 10.20 ms | 7.55 ms | 12.78 ms |
+  | MoE requests (40) | 2727 us | 4133 (1.52x) | 2724 | 4119 (1.51x) |
+  | `fused_lightning_select_kv` | - (dense) | - | 283 (8 calls) | 1148 (32 calls, **4.05x**) |
+  | select's per-row setup (repeat, slice, reshard, norm) | 41 | 35 | 118 | 1135 (9.6x) |
+  | `flash_mqa_decode` (40) | 458 | 960 (2.09x) | 539 | 1132 (2.10x) |
+  | width-sharded all-reduce (42) | 589 | 1065 (1.81x) | 596 | 1063 (1.78x) |
+  | `fused_single_user` HC (80) | 1108 | 1487 (1.34x) | 1111 | 1492 (1.34x) |
+  | `attention_qkv_decode` (40) | 525 | 781 (1.49x) | 513 | 724 (1.41x) |
+  | ring commit (`paged_update_cache`) | 56 | 334 (40 calls) | 48 | 334 |
+  | `compress_pool_decode` | 12 | 110 (4 calls) | 12 | 104 |
+  | weight matmuls | 981 | 943 (0.96x) | 1209 | 1128 (0.93x) |
+
+  The one op that scales linearly with the rows is the select: one one-row `fused_lightning_select_kv` per row per
+  index layer, 35.5 us a call either way. It runs only once a ratio's select is scored (past position 512 / 1025),
+  and its key scan grows with the context, so it is the term that takes over the batch step at long context; its
+  per-row setup (head replication per row) costs as much again. Everything else is sublinear: the weight matmuls are
+  flat, the MoE 1.5x, attention and the all-reduces ~2x.
 * **Server, one instance** (`demo/server.py --instances 1 --decode-batch 4 --no-prefill --no-vision --temperature 0`,
   `demo/perf_client.py --decode-tokens 256`, GSM8K prompts; prompts replayed through decode):
 

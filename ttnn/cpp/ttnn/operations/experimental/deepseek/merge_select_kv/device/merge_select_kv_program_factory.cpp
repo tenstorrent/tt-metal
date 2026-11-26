@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -21,6 +22,10 @@ namespace {
 
 constexpr const char* kMergeSource =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/merge_select_kv/device/kernels/dataflow/merge_select_kv.cpp";
+constexpr const char* kTilizeSource =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/merge_select_kv/device/kernels/compute/tilize_rows.cpp";
+constexpr const char* kWriteTilesSource =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/merge_select_kv/device/kernels/dataflow/write_tiles.cpp";
 
 // Cores merging the keys and, in candidate source mode, the candidate blocks. Each splits the 256
 // histogram bins evenly, so both are powers of two of at most 64.
@@ -75,6 +80,25 @@ ttnn::device_operation::ProgramArtifacts MergeSelectKvDeviceOperation::ProgramFa
     const uint32_t blocks_per_core =
         is_candidate_source ? tt::round_up(tt::div_up(args.candidate_topk_blocks, num_block_cores), kAlignEntries) : 0;
     const uint32_t max_slice = std::max(key_slice_size, block_slice_size);
+    // A TILE output (one part per row, no candidate blocks): each core's slice is one 32-row block of the output,
+    // which it gathers row-major, tilizes and writes as one row of tiles.
+    const bool tiled_output = output.layout() == Layout::TILE;
+    const uint32_t kv_row_bytes = static_cast<uint32_t>(tensor_args.kv_cache.buffer()->page_size());
+    const uint32_t tiles_per_row = tensor_args.kv_cache.logical_shape()[-1] / tt::constants::TILE_WIDTH;
+    if (tiled_output) {
+        TT_FATAL(
+            num_parts == 1 && !is_candidate_source && rows_per_core == tt::constants::TILE_HEIGHT &&
+                key_slice_size == tt::constants::TILE_HEIGHT &&
+                args.output_row_offset % tt::constants::TILE_HEIGHT == 0 &&
+                args.output_row_stride % tt::constants::TILE_HEIGHT == 0,
+            "merge_select_kv: a TILE output needs one part per query row, no candidate blocks, k = 32 * {} (one tile "
+            "row per core) and tile-aligned output rows, got {} parts, k {}, offset {}, stride {}",
+            num_key_cores,
+            num_parts,
+            args.k,
+            args.output_row_offset,
+            args.output_row_stride);
+    }
     const uint32_t max_group = std::max(num_key_cores, num_block_cores);
     const uint32_t max_list = std::max(rows_per_core, blocks_per_core);
 
@@ -175,6 +199,9 @@ ttnn::device_operation::ProgramArtifacts MergeSelectKvDeviceOperation::ProgramFa
         TensorBinding{.tensor_parameter_name = KV_CACHE, .accessor_name = "kv_cache"},
         TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}};
     KernelSpec::CompilerOptions compiler_options;
+    if (tiled_output) {
+        compiler_options.defines.emplace("TILED_OUTPUT", "1");
+    }
     if (is_candidate_source) {
         tensor_parameters.push_back(
             TensorParameter{.unique_id = CANDIDATE_BLOCKS, .spec = tensor_args.candidate_blocks_output->tensor_spec()});
@@ -217,16 +244,66 @@ ttnn::device_operation::ProgramArtifacts MergeSelectKvDeviceOperation::ProgramFa
              {"cores_per_row", cores_per_row},
              {"output_row_stride", args.output_row_stride},
              {"candidate_topk_blocks", args.candidate_topk_blocks},
-             {"candidate_block_size", args.candidate_block_size}},
+             {"candidate_block_size", args.candidate_block_size},
+             {"kv_cache_row_bytes", kv_row_bytes},
+             {"tiles_per_row", tiles_per_row}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_index"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
         // NoC (x, y) of every core, in core_index order.
         .advanced_options = {.num_common_runtime_varargs = 2 * num_cores},
     };
 
+    // TILED_OUTPUT: merge (rows into rm) -> tilize_rows (rm -> tiled) -> write_tiles (tiled -> output).
+    const DFBSpecName RM_DFB{"rm"};
+    const DFBSpecName TILED_DFB{"tiled"};
+    const KernelSpecName TILIZE{"tilize"};
+    const KernelSpecName WRITE_TILES{"write_tiles"};
+    const tt::DataFormat kv_format = datatype_to_dataformat_converter(tensor_args.kv_cache.dtype());
+    const uint32_t tile_bytes = tt::tile_size(kv_format);
+    std::vector<KernelSpec> kernels = {merge};
+    std::vector<KernelSpecName> work_kernels = {MERGE};
+    if (tiled_output) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = RM_DFB,
+            .entry_size = tile_bytes,
+            .num_entries = tiles_per_row,
+            .data_format_metadata = kv_format,
+        });
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = TILED_DFB,
+            .entry_size = tile_bytes,
+            .num_entries = tiles_per_row,
+            .data_format_metadata = kv_format,
+        });
+        kernels[0].dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = RM_DFB, .accessor_name = "rm", .endpoint_type = DFBEndpointType::PRODUCER});
+        kernels.push_back(KernelSpec{
+            .unique_id = TILIZE,
+            .source = kTilizeSource,
+            .dfb_bindings =
+                {DFBBinding{.dfb_spec_name = RM_DFB, .accessor_name = "rm", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{
+                     .dfb_spec_name = TILED_DFB, .accessor_name = "tiled", .endpoint_type = DFBEndpointType::PRODUCER}},
+            .compile_time_args = {{"tiles_per_row", tiles_per_row}},
+            .hw_config = ComputeHardwareConfig{},
+        });
+        kernels.push_back(KernelSpec{
+            .unique_id = WRITE_TILES,
+            .source = kWriteTilesSource,
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = TILED_DFB, .accessor_name = "tiled", .endpoint_type = DFBEndpointType::CONSUMER}},
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+            .compile_time_args = {{"tiles_per_row", tiles_per_row}},
+            .runtime_arg_schema = {.runtime_arg_names = {"first_tile"}},
+            .hw_config = ttnn::create_writer_datamovement_config(),
+        });
+        work_kernels.push_back(TILIZE);
+        work_kernels.push_back(WRITE_TILES);
+    }
+
     ProgramSpec spec{
         .name = "merge_select_kv",
-        .kernels = {merge},
+        .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
         .semaphores =
             {SemaphoreSpec{.unique_id = SEM_HIST_IN, .target_nodes = all_cores},
@@ -234,7 +311,8 @@ ttnn::device_operation::ProgramArtifacts MergeSelectKvDeviceOperation::ProgramFa
              SemaphoreSpec{.unique_id = SEM_COUNTS_IN, .target_nodes = all_cores},
              SemaphoreSpec{.unique_id = SEM_TIES_IN, .target_nodes = all_cores}},
         .tensor_parameters = std::move(tensor_parameters),
-        .work_units = {WorkUnitSpec{.name = "merge_select_kv", .kernels = {MERGE}, .target_nodes = all_cores}},
+        .work_units = {WorkUnitSpec{
+            .name = "merge_select_kv", .kernels = std::move(work_kernels), .target_nodes = all_cores}},
     };
 
     KernelRunArgs merge_run_args{.kernel = MERGE};
@@ -247,6 +325,21 @@ ttnn::device_operation::ProgramArtifacts MergeSelectKvDeviceOperation::ProgramFa
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {std::move(merge_run_args)};
+    if (tiled_output) {
+        // Core i's tile row: query row i / cores_per_row, its member's 32-row block of that row's selection.
+        KernelRunArgs write_run_args{.kernel = WRITE_TILES};
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            const uint32_t row = i / cores_per_row;
+            const uint32_t member = i - (row * cores_per_row);
+            const uint32_t first_row =
+                args.output_row_offset + (row * args.output_row_stride) + (member * rows_per_core);
+            AddRuntimeArgsForNode(
+                write_run_args.runtime_arg_values,
+                cores[i],
+                {{"first_tile", first_row / tt::constants::TILE_HEIGHT * tiles_per_row}});
+        }
+        run_args.kernel_run_args.push_back(std::move(write_run_args));
+    }
     run_args.tensor_args = {
         {CANDIDATES, tensor_args.candidates.mesh_tensor()},
         {KV_CACHE, tensor_args.kv_cache.mesh_tensor()},

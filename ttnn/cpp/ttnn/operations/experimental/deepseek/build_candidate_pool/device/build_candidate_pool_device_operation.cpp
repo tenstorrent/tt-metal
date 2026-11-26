@@ -76,11 +76,23 @@ void BuildCandidatePoolDeviceOperation::validate_on_program_cache_miss(
         "build_candidate_pool: page_table_tensor must be [1, max_blocks_per_user] (or [num_sessions, "
         "max_blocks_per_user] with page_table_row_tensor), got {}",
         page_table.logical_shape());
+    if (tensor_args.query_row_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.page_table_row_tensor.has_value() && tensor_args.candidate_blocks.logical_shape()[0] == 1,
+            "build_candidate_pool: query_row_tensor picks an entry of page_table_row_tensor for a one-row pool");
+        require_int32_rm_interleaved(tensor_args.query_row_tensor.value(), "query_row_tensor");
+        TT_FATAL(
+            tensor_args.query_row_tensor->logical_shape().volume() == 1 &&
+                tensor_args.page_table_row_tensor->logical_shape().volume() <= 16,
+            "build_candidate_pool: query_row_tensor must be [1] and page_table_row_tensor at most 16 rows");
+    }
     if (tensor_args.page_table_row_tensor.has_value()) {
         require_int32_rm_interleaved(tensor_args.page_table_row_tensor.value(), "page_table_row_tensor");
         TT_FATAL(
-            tensor_args.page_table_row_tensor->logical_shape().volume() == 1,
-            "build_candidate_pool: page_table_row_tensor must hold one row, got {}",
+            tensor_args.page_table_row_tensor->logical_shape().volume() == 1 ||
+                tensor_args.query_row_tensor.has_value(),
+            "build_candidate_pool: page_table_row_tensor must hold one row (or one per row with query_row_tensor), "
+            "got {}",
             tensor_args.page_table_row_tensor->logical_shape());
     }
 
@@ -191,7 +203,8 @@ std::vector<ttnn::Tensor> build_candidate_pool(
     const std::optional<ttnn::Tensor>& pool_rows_output,
     const std::optional<ttnn::Tensor>& page_table_row_tensor,
     const std::optional<ttnn::Tensor>& pool_masks_output,
-    const std::optional<ttnn::Tensor>& pool_counts_output) {
+    const std::optional<ttnn::Tensor>& pool_counts_output,
+    const std::optional<ttnn::Tensor>& query_row_tensor) {
     using OperationType =
         ttnn::operations::experimental::deepseek::build_candidate_pool::BuildCandidatePoolDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{.candidate_block_size = candidate_block_size};
@@ -203,6 +216,7 @@ std::vector<ttnn::Tensor> build_candidate_pool(
         .pool_keys_output = pool_keys_output,
         .pool_rows_output = pool_rows_output,
         .page_table_row_tensor = page_table_row_tensor,
+        .query_row_tensor = query_row_tensor,
         .pool_masks_output = pool_masks_output,
         .pool_counts_output = pool_counts_output,
     };

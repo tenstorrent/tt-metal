@@ -83,6 +83,7 @@ void kernel_main() {
     constexpr uint32_t rows_per_core = get_arg(args::rows_per_core);
     constexpr uint32_t blocks_per_core = get_arg(args::blocks_per_core);
     constexpr uint32_t kv_stage_rows = get_arg(args::kv_stage_rows);
+    [[maybe_unused]] constexpr uint32_t kv_cache_row_bytes = get_arg(args::kv_cache_row_bytes);
     constexpr uint32_t output_row_offset = get_arg(args::output_row_offset);
     // Query rows: each merges its own candidates (part p's page p * num_queries + row) on its own
     // cores_per_row cores, into output rows [output_row_offset + row * output_row_stride, ... + k).
@@ -216,6 +217,53 @@ void kernel_main() {
     noc.async_read_barrier();
     invalidate_l1_cache();
     auto count_of = [header, count_word](uint32_t p) { return header[p * kHeaderWords + count_word]; };
+
+#ifndef CANDIDATE_SOURCE
+    if constexpr (num_parts == 1) {
+        // One part per query row (a row split, each device selecting one row): its candidates are that row's
+        // selection already, in key order, so each core gathers its slice's valid entries to the same output
+        // positions; no radix select.
+        const uint32_t end = std::min(slice_end, count_of(0));
+#ifdef TILED_OUTPUT
+        // This core's slice is one 32-row block of the output: its rows go to rm row-major, tilize_rows tilizes
+        // them and write_tiles stores the tiles. Rows past the selection are written as zeros.
+        {
+            DeviceZoneScopedN("MERGE-GATHER");
+            DataflowBuffer rm_dfb(dfb::rm);
+            constexpr uint32_t tiles_per_row = get_arg(args::tiles_per_row);
+            const uint32_t row_bytes = kv_cache_row_bytes;
+            rm_dfb.reserve_back(tiles_per_row);
+            const uint32_t* ids = reinterpret_cast<const uint32_t*>(slice_addr);
+            const uint32_t num_valid = end > slice_first ? end - slice_first : 0;
+            if (num_valid < 32) {
+                // Rows past the selection are zeroed: attention skips them by length, but a weight of zero still
+                // turns a NaN left in L1 into NaN.
+                noc.async_write_zeros(rm_dfb, (32 - num_valid) * row_bytes, {.offset_bytes = num_valid * row_bytes});
+                noc.write_zeros_l1_barrier();
+            }
+            for (uint32_t i = 0; i < num_valid; ++i) {
+                noc.async_read(kv_cache, rm_dfb, row_bytes, {.page_id = ids[i]}, {.offset_bytes = i * row_bytes});
+            }
+            noc.async_read_barrier();
+            rm_dfb.push_back(tiles_per_row);
+        }
+        return;
+#endif
+        if (end > slice_first) {
+            DeviceZoneScopedN("MERGE-GATHER");
+            gather_kv_rows<kv_stage_rows>(
+                noc,
+                kv_cache,
+                output,
+                stage_dfb,
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slice_addr),
+                0,
+                end - slice_first,
+                output_row_offset + row * output_row_stride + slice_first);
+        }
+        return;
+    }
+#endif
 
     // Calls fn(first, n) for each run [first, first + n) of slice c's valid entries, in key order, with
     // first counted from the slice's start; stops once fn returns false.

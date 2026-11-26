@@ -2236,6 +2236,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for ratio in sm["kv_ratios"]:
             if ratio > 1:
                 ctx["win_slot"][ratio] = self._win_slot(pos_f, win_rows or ratio, base_f=win_base_f)
+                if win_base_f is not None:
+                    # The session's window slot of pos - 1, which compress_pool_decode pairs with.
+                    rows_r = win_rows or ratio
+                    ctx.setdefault("prev_slot", {})[ratio] = self._win_slot(
+                        ttnn.add(pos_f, float(rows_r - 1)), rows_r, base_f=win_base_f
+                    )
             if ratio > 1 and win_rows and r2_pool:
                 prev = ttnn.add(pos_f, float(win_rows - 1))
                 prev = ttnn.subtract(
@@ -2324,9 +2330,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     [1],
                     [term(2, mode="mod", div=win_rows or ratio, add_field=5 if win_base else -1)],
                 )
-                if win_rows and not win_base:
-                    # The speculative window's slot of pos - 1, which compress_pool_decode pairs with.
-                    sb.add_int(("prev_slot", ratio), [1], [term(2, pre_add=win_rows - 1, mode="mod", div=win_rows)])
+                if win_rows or win_base:
+                    # The window slot of pos - 1 (a speculative window's, or in the session's slot), which
+                    # compress_pool_decode pairs with.
+                    rows_r = win_rows or ratio
+                    sb.add_int(
+                        ("prev_slot", ratio),
+                        [1],
+                        [term(2, pre_add=rows_r - 1, mode="mod", div=rows_r, add_field=5 if win_base else -1)],
+                    )
             if ratio > 1 and win_rows and r2_pool and win_base:
                 win_prev_ratios.append(ratio)
             if ratio == 1 or (ratio == 2 and r2_pool):
@@ -5299,6 +5311,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for ratio in sparse_ratios:
             for j in range(t):
                 sb.add_int(("index_pos", ratio, j), [1], [term(f[f"index_pos{ratio}"] + j)])
+            # The same positions as one [t] tensor, for the row-split select (rank r reads entry r).
+            sb.add_int(("index_pos_rows", ratio), [t], [term(f[f"index_pos{ratio}"] + j) for j in range(t)])
         if sparse_ratios:
             for j in range(t):
                 sb.add_int(("page_row", j), [1], [term(slot0 + j)])
@@ -5325,6 +5339,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "page_rows": out["page_rows"],
             "page_row": [out[("page_row", j)] for j in range(t)] if sparse_ratios else None,
             "index_pos": {r: [out[("index_pos", r, j)] for j in range(t)] for r in sparse_ratios},
+            "index_pos_rows": {r: out[("index_pos_rows", r)] for r in sparse_ratios},
             "cos_row": cos_row,
             "sin_row": sin_row,
             "dense": dense,
@@ -5363,6 +5378,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 sin_row=ctx["sin_row"],
                 select_pos=ctx["index_pos"][r],
                 select_page_rows=ctx["page_row"],
+                select_pos_rows=ctx["index_pos_rows"][r],
+                select_page_rows_tensor=ctx["page_rows"],
                 split_keys=attn.layer_idx in ctx["split"],
             )
             if ctx["two_level"] and attn.layer_idx in self._candidate_layers:

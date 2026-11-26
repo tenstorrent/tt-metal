@@ -26,6 +26,8 @@ void kernel_main() {
     // ---- Compile-time args ----
     [[maybe_unused]] constexpr uint32_t k = get_arg(args::k);
     constexpr uint32_t num_queries = get_arg(args::num_queries);            // Sq
+    // QUERY_ROW: the borrowed query / weights replicas hold num_rows_in rows; the reader names the one scored.
+    [[maybe_unused]] constexpr uint32_t num_rows_in = get_arg(args::num_rows_in);
     constexpr uint32_t num_heads = get_arg(args::num_heads);                // Hi
     constexpr uint32_t d_tiles = get_arg(args::d_tiles);                    // D / 32
     constexpr uint32_t num_weight_tiles = get_arg(args::num_weight_tiles);  // Sq * Hi / 32
@@ -51,6 +53,22 @@ void kernel_main() {
     // Configure for tilize first: tilize_init does not reprogram the packer output format, so the
     // packer must already target query_tiled's bf16 rather than the fp32 scores.
     compute_kernel_hw_startup(query_rm_dfb.get_id(), query_tiled_dfb.get_id());
+
+#ifdef QUERY_ROW
+    // A row split scores one row of the replicas, named by the reader with the block count: skip the strips
+    // of the rows before it.
+    ctrl_dfb.wait_front(1);
+    const uint32_t num_blocks = ctrl_dfb.read_tile_value(0, 0);
+    const uint32_t query_row = ctrl_dfb.read_tile_value(0, 1);
+    ctrl_dfb.pop_front(1);
+    const uint32_t skip_strip_tiles = query_row * num_head_groups * d_tiles;
+    if (skip_strip_tiles != 0) {
+        query_rm_dfb.wait_front(skip_strip_tiles);
+        query_rm_dfb.pop_front(skip_strip_tiles);
+    }
+#else
+    constexpr uint32_t query_row = 0;
+#endif
 
     // Tilize the row-major query into 8x32 tiles, one strip of 8 heads at a time: tile
     // (j * num_head_groups + g) * d_tiles + i holds query row j's heads [8g, 8g + 8) x D columns
@@ -82,16 +100,18 @@ void kernel_main() {
     // program's lines at these addresses.
     invalidate_l1_cache();
 
+#ifndef QUERY_ROW
     ctrl_dfb.wait_front(1);
     const uint32_t num_blocks = ctrl_dfb.read_tile_value(0, 0);
     ctrl_dfb.pop_front(1);
+#endif
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         key_dfb.wait_front(key_tiles_per_block);
         for (uint32_t chunk = 0; chunk < chunks_per_block; ++chunk) {
             for (uint32_t row = 0; row < num_queries; ++row) {
                 const uint32_t first_group_tile = row * num_head_groups * d_tiles;
-                [[maybe_unused]] const volatile uint16_t* row_weights = weights + row * num_heads;
+                [[maybe_unused]] const volatile uint16_t* row_weights = weights + (query_row + row) * num_heads;
                 scores_dfb.reserve_back(1);
                 tile_regs_acquire();
                 for (uint32_t g = 0; g < num_head_groups; ++g) {
@@ -128,4 +148,12 @@ void kernel_main() {
 
     query_tiled_dfb.pop_front(num_query_group_tiles);
     weights_dfb.pop_front(num_weight_tiles);
+#ifdef QUERY_ROW
+    // The strips of the rows after the scored one.
+    const uint32_t rest_strip_tiles = (num_rows_in - 1 - query_row) * num_head_groups * d_tiles;
+    if (rest_strip_tiles != 0) {
+        query_rm_dfb.wait_front(rest_strip_tiles);
+        query_rm_dfb.pop_front(rest_strip_tiles);
+    }
+#endif
 }

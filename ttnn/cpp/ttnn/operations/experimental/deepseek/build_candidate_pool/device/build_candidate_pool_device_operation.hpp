@@ -31,6 +31,8 @@ struct BuildCandidatePoolDeviceOperation {
         std::optional<Tensor> pool_rows_output;
         // ``[1]`` INT32 row of a ``[num_sessions, max_blocks_per_user]`` page table to read.
         std::optional<Tensor> page_table_row_tensor;
+        // ``[1]`` INT32 entry of a ``[Sq]`` ``page_table_row_tensor`` to read (a row split: one row per device).
+        std::optional<Tensor> query_row_tensor;
         // With several query rows (candidate_blocks [Sq, topk_blocks]): ``[1, Sq * topk_blocks * cbs]`` INT32
         // mask of the rows whose blocks hold each pool key, and ``[Sq]`` INT32 keys of the pool each row selects
         // from (a pool prefix).
@@ -72,6 +74,7 @@ std::vector<ttnn::Tensor> build_candidate_pool(
     const std::optional<ttnn::Tensor>& pool_rows_output = std::nullopt,
     const std::optional<ttnn::Tensor>& page_table_row_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& pool_masks_output = std::nullopt,
-    const std::optional<ttnn::Tensor>& pool_counts_output = std::nullopt);
+    const std::optional<ttnn::Tensor>& pool_counts_output = std::nullopt,
+    const std::optional<ttnn::Tensor>& query_row_tensor = std::nullopt);
 
 }  // namespace ttnn::prim
