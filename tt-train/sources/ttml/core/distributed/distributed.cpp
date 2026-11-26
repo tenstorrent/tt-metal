@@ -25,7 +25,8 @@ namespace {
 
 using Placements = ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>;
 
-// `label` read per axis of `mesh_shape`, by ttnn's rule for collapsed labels. `whose` names the label in the error.
+// Reads `label` as one placement per axis of `mesh_shape`, expanding a collapsed label by ttnn's rule. `whose` names
+// the label in the error message.
 Placements read_per_axis(
     const tt::tt_metal::TensorTopology& label,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,
@@ -106,8 +107,8 @@ Placements placements_per_axis(const ttnn::Tensor& value) {
 
 Placements placements_per_axis(
     const tt::tt_metal::distributed::MeshMapperConfig& config, const tt::tt_metal::distributed::MeshShape& mesh_shape) {
-    // The label a tensor mapped with `config` gets. Its coordinates only matter when it covers the whole mesh, which a
-    // mapper then lists in row-major order.
+    // The label a mapper with `config` gives a tensor. Its device coordinates matter only when the label covers the
+    // whole mesh, and then a mapper lists them in row-major order.
     const ttnn::MeshCoordinateRange whole_mesh(mesh_shape);
     const tt::tt_metal::TensorTopology label(
         config.mesh_shape_override.value_or(mesh_shape),

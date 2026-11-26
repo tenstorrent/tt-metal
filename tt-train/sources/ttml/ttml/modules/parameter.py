@@ -56,8 +56,7 @@ def replace_lazy_mapper(parameter: "Parameter", new_mapper: Any) -> None:
     inner = parameter.peek_tensor()
     if not isinstance(inner, TensorMetadata):
         raise RuntimeError(
-            "replace_lazy_mapper called on a materialized Parameter; only lazy "
-            "parameters can have their mapper rewritten, a materialized one is partitioned on device."
+            "replace_lazy_mapper needs a lazy Parameter; partition a materialized one on device instead."
         )
     new_meta = replace(inner, mapper=new_mapper)
     object.__setattr__(parameter, "tensor", new_meta)

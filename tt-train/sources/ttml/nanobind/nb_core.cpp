@@ -321,8 +321,8 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
-            "Raw mesh_partition (each device keeps its own slice of `dim` along `cluster_axis`, no collective). "
-            "Returns a new ttnn::Tensor.");
+            "Raw mesh_partition without autograd tracking: each device keeps its own slice of `dim` along "
+            "`cluster_axis`, with no collective. Returns a new ttnn::Tensor.");
 
         py_distributed.def(
             "placements_per_axis",
@@ -338,8 +338,7 @@ void py_module(nb::module_& m) {
                     ttml::core::distributed::placements_per_axis(config, ttml::autograd::ctx().get_device().shape()));
             },
             nb::arg("config"),
-            "The placement on each axis of the current mesh that a mapper with `config` gives a tensor, read as the "
-            "tensor's label would be.");
+            "The placement on each axis of the current mesh that a mapper with `config` would give a tensor.");
         py_distributed.def(
             "set_placements_per_axis",
             [](ttnn::Tensor& tensor,

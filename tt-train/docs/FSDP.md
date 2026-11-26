@@ -276,11 +276,13 @@ step.
 
 ### Initial sharding (`fully_shard` time)
 
-Each replicated parameter is replaced with its local shard, keeping its
-placement on every other axis, so a TP-sharded weight stays TP-sharded. A
-materialized parameter is partitioned on device (`ttml.core.distributed.mesh_partition`). A
-lazy one gets a mapper with `Shard{shard_dim}` on the FSDP axis instead, so
-`ttml.materialize_module` allocates it already sharded.
+Each replicated parameter is replaced with its local shard. It keeps its
+placement on every other axis, so a TP-sharded weight stays TP-sharded.
+
+- A materialized parameter is partitioned on device
+  (`ttml.core.distributed.mesh_partition`): each device keeps its own slice.
+- A lazy parameter gets a mapper with `Shard{shard_dim}` on the FSDP axis,
+  so `ttml.materialize_module` allocates it already sharded.
 
 ---
 

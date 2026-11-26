@@ -612,8 +612,8 @@ def fully_shard(
     module._fsdp_state = state
 
     # Walk Python ``Parameter`` wrappers (one collector for both eager and
-    # lazy models — see ``_collect_root_param_wrappers``). For each, decide
-    # the shard dim from shape + existing placements, then ``_shard_param``.
+    # lazy models — see ``_collect_root_param_wrappers``). For each, pick
+    # the shard dim from its shape and placements, then ``_shard_param`` it.
     for names, parameter in _collect_root_param_wrappers(module):
         rel_name = names[0]
         # Already claimed by another wrapper (e.g. tied weight sharded or
