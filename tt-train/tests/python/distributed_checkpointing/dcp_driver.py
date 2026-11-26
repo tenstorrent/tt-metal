@@ -222,17 +222,15 @@ def train(
     if start == 0:
         set_seed(seed)
         advance_generators()  # a checkpoint then holds the generators mid-stream, not as seeding left them
-    mesh = ttml.mesh()
-    needs_sync = any(mesh.axis_size(name) > 1 for name in mesh.axis_names if name != "tp")
     for step in range(start, start + steps):
         tokens, mask, targets = inputs(config, seed + step)
         optimizer.zero_grad()
         loss = loss_of(model, config, tokens, mask, targets)
         loss.backward(False)
         mark(f"step {step}: forward and backward done")
-        if needs_sync:
-            ttml.sync_gradients(params)
-            mark(f"step {step}: gradients synced over the non-TP axes")
+        # Averages over the data axes and sums the gradients marked partial across tp, such as LoRA's lora_A.
+        ttml.sync_gradients(params)
+        mark(f"step {step}: gradients synced")
         optimizer.step()
         scheduler.step()
         loader.advance()

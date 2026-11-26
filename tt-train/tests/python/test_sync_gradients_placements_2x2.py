@@ -220,10 +220,13 @@ BLOCKS = {
 }
 STAGES = ("weights", "step 1 gradient", "step 2 gradient", "update")
 # Measured with and without FSDP: the linears, the fused SwiGLU and the sequence-parallel Llama block (under either
-# runner) agree bit for bit, LoRA within 4e-4 (relative Frobenius error). At this rate a stale gather would score 0.14
-# (SwiGLU) to 0.91 (LoRA) at step 2.
+# runner) agree bit for bit. LoRA's gradients are bit for bit the same on each device before they are reduced, but its
+# small tensors are summed by the composite all-reduce without FSDP and by a reduce-scatter with it, and the two round
+# some elements of the bf16 sum differently: 0.0024 (relative Frobenius error) at step 2, and 0.0104 in the update, the
+# difference of two bf16 weights. At this rate a stale gather would score 0.14 (SwiGLU) to 0.91 (LoRA) at step 2.
 FSDP_TP_LR = 10.0
-FSDP_TP_TOL = 0.005
+FSDP_TP_TOL = {"lora": 0.02}
+FSDP_TP_TOL_BIT_FOR_BIT = 0.005
 
 
 def _train(model, x, weighting) -> list[dict]:
@@ -269,16 +272,17 @@ class TestFSDPxTP:
             runs.append(_train(model, x, weighting))
 
         reference, sharded = runs
+        tol = FSDP_TP_TOL.get(block, FSDP_TP_TOL_BIT_FOR_BIT)
         # A second forward on stale shards repeats step 1's gradients; this is the error they would score at step 2.
         stale = _relative_error(reference[1], reference[2])
-        assert stale > 10 * FSDP_TP_TOL, f"step 1's gradients are within {stale:.3g} of step 2's: a stale gather passes"
+        assert stale > 10 * tol, f"step 1's gradients are within {stale:.3g} of step 2's: a stale gather passes"
         for stage, expected, actual in zip(STAGES, reference, sharded):
             assert actual.keys() == expected.keys(), stage
             for name, e in expected.items():
                 scale = np.linalg.norm(e)
                 assert scale > 0 or stage == "weights", f"{stage} of {name}: all zero, agreement would prove nothing"
                 error = np.linalg.norm(actual[name] - e)
-                assert error <= FSDP_TP_TOL * scale, f"{stage} of {name}: relative error {error / scale:.3g}"
+                assert error <= tol * scale, f"{stage} of {name}: relative error {error / scale:.3g}"
 
 
 # --- HSDP on [2, 2] ("dp", "fsdp") ------------------------------------------------------------------------------
