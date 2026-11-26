@@ -136,14 +136,16 @@ from `max_dest_tiles(dest_acc, dest_sync)`, which halves when `dest_acc=Yes`, so
   fills up. Unpack-to-dest kernels whose math has no other work run only the
   section done per section.
 - `MATH_ISOLATE` runs math without any other Dest hand-over. `UNPACK_ISOLATE`
-  unpacks to Dest without a loan, and `MATH_ISOLATE` must not emit source
+  unpacks to Dest as described below, and `MATH_ISOLATE` must not emit source
   dvalids with no math consumer. When math is compiled out, `MATH_ISOLATE`
   measures an empty run: its metric is missing or is only zone overhead.
   Exclude it from analysis and say so; it is not a math cost.
-- `UNPACK_ISOLATE` with unpack-to-dest runs no loan (math is idle), but in
-  SyncHalf moves to the other DEST bank after each section
-  (`_llk_unpack_dest_section_advance_`): the bank switch production's unpack
-  gets from the loan.
+- `UNPACK_ISOLATE` with unpack-to-dest takes each section's DEST bank the way
+  production does: unpack borrows and returns it (`_llk_tile_regs_borrow_` /
+  `_llk_tile_regs_return_`) from a math stand-in that only lends it, ends the
+  section and takes `MATH_PACK` back (pack is idle). Kernels without a
+  production pairing yet still move the bank with
+  `_llk_unpack_dest_section_advance_` after each SyncHalf section.
 
 ## Stand-ins
 
