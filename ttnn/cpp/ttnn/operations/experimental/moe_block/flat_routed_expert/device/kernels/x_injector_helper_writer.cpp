@@ -22,6 +22,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "flat_options.hpp"
 #include "zz_probes.hpp"
 #include "expert_schedule.hpp"
@@ -71,6 +72,7 @@ void kernel_main() {
         // (row tile major: a short last sub-block's rows are the super-block's first bytes - only those go)
         const uint32_t g = x2k + (place + b * round_) * x2s;
         const uint32_t bytes = sub_block_row_tiles(schedule, g / nsb) * sbt * tb;
+        ASSERT(bytes <= sb_bytes);  // (within its landing slot: the schedule and mt are both the x path's)
         noc_async_write(get_read_ptr(sb_cb), prim_land + (b % land_slots) * sb_bytes, bytes);
         noc_async_write(get_read_ptr(sb_cb), prim2_land + (b % land_slots) * sb_bytes, bytes);
         ZZ_WAIT(zz_wbar, noc_async_write_barrier());

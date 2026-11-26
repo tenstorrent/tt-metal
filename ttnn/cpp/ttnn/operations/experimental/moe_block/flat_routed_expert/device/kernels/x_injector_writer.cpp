@@ -26,6 +26,7 @@
 #include <stdint.h>
 constexpr uint32_t kXnh = 2;  // the helper relays feeding a primary
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "flat_options.hpp"
 #include "zz_probes.hpp"
 #include "expert_schedule.hpp"
@@ -168,7 +169,8 @@ void kernel_main() {
         // along the snake, gate_up_core_reader.cpp
         chain_retire(kChainDepth - 1);  // (room for this batch's id)
         // (a short last sub-block: only its row tiles holding tokens go; the head's XARR still counts every piece)
-        const uint32_t lr = sub_block_row_tiles<flat_options::x_rows_per_sub_block>(schedule, b / nsb);
+        const uint32_t lr = sub_block_row_tiles(schedule, b / nsb);
+        ASSERT(lr >= 1 && lr <= mt);  // (the pieces stay within the block's ring slot)
         [[maybe_unused]] const uint32_t zz_i0 = ZZ_NOW();
         for (uint32_t k = 0; k < per_sb; ++k) {
             const uint32_t dst = ring + ((sent + k) % x_slots) * blk_bytes;
