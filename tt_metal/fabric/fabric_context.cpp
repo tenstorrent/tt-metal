@@ -239,7 +239,10 @@ FabricContext::FabricContext(
                 }
             }
         }
-        this->inter_domain_mesh_ = make_inter_domain_mesh(mesh_graph, physical);
+        const auto reserved = mesh_graph.has_mesh_graph_descriptor()
+                                  ? mesh_graph.get_mesh_graph_descriptor().get_inter_domain_shape()
+                                  : std::nullopt;
+        this->inter_domain_mesh_ = make_inter_domain_mesh(mesh_graph, physical, reserved);
     }
 
     // Step 5: Compute packet specifications (depends on: routing flags)

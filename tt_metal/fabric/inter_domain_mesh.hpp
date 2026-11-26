@@ -39,8 +39,12 @@ struct InterDomainMesh {
 
 // The squarest grid over the workload's chips: its one mesh if that is as square, else the first grid, squarest first,
 // that the workload's links embed, or failing those its physical links (`physical`: every link between two of its
-// chips, the workload's or not).
-InterDomainMesh make_inter_domain_mesh(const MeshGraph& workload, const std::vector<DomainLink>& physical = {});
+// chips, the workload's or not). With a `reserved` shape (the MGD's inter_domain), that grid instead, over the
+// workload's chips and reserved ones: `physical` then also links to chips no workload mesh holds.
+InterDomainMesh make_inter_domain_mesh(
+    const MeshGraph& workload,
+    const std::vector<DomainLink>& physical = {},
+    const std::optional<MeshShape>& reserved = std::nullopt);
 
 // The squarest grid over these chips that these links embed.
 InterDomainMesh embed_inter_domain_mesh(const std::map<FabricNodeId, std::set<FabricNodeId>>& links);

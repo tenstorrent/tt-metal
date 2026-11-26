@@ -97,6 +97,51 @@ void expect_embedded(const InterDomainMesh& domain, const Links& links) {
     }
 }
 
+// two stacked 1x4 meshes on rows 0-1 of a physical 4x4, rows 2-3 reserved (mesh 9): `physical` is every grid link
+std::vector<DomainLink> half_reserved_4x4() {
+    auto node = [](uint32_t r, uint32_t c) {
+        return r < 2 ? FabricNodeId(MeshId{r}, c) : FabricNodeId(MeshId{9}, (r - 2) * 4 + c);
+    };
+    std::vector<DomainLink> physical;
+    for (uint32_t r = 0; r < 4; ++r) {
+        for (uint32_t c = 0; c < 4; ++c) {
+            if (c + 1 < 4) {
+                physical.push_back(DomainLink{.a = node(r, c), .b = node(r, c + 1)});
+            }
+            if (r + 1 < 4) {
+                physical.push_back(DomainLink{.a = node(r, c), .b = node(r + 1, c)});
+            }
+        }
+    }
+    return physical;
+}
+
+TEST(InterDomainMesh, ReservedGridTakesUnusedChips) {
+    const auto workload = stacked(2, 1, 4);
+    const auto domain = make_inter_domain_mesh(workload, half_reserved_4x4(), MeshShape(4, 4));
+    EXPECT_EQ(domain.shape(), MeshShape(4, 4));
+    EXPECT_EQ(domain.domain_chip.size(), 16u);
+    for (uint32_t m = 0; m < 2; ++m) {
+        for (ChipId c = 0; c < 4; ++c) {
+            EXPECT_TRUE(domain.domain_chip.contains(FabricNodeId(MeshId{m}, c)));
+        }
+    }
+    // every grid edge the workload has no link on is VC2's, the reserved rows' included
+    EXPECT_EQ(
+        domain.vc2_links.size(),
+        24u - 6u);  // all but the meshes' rows (the mesh graph leaves the cables to the control plane)
+    for (const auto& l : domain.vc2_links) {
+        EXPECT_TRUE(domain.direction(l.a, l.b).has_value());
+    }
+}
+
+TEST(InterDomainMesh, ReservedGridWithoutEnoughChipsFails) {
+    const auto workload = stacked(2, 1, 4);
+    auto physical = half_reserved_4x4();
+    std::erase_if(physical, [](const DomainLink& l) { return *l.a.mesh_id == 9 || *l.b.mesh_id == 9; });
+    EXPECT_ANY_THROW(make_inter_domain_mesh(workload, physical, MeshShape(4, 4)));
+}
+
 TEST(InterDomainMesh, OneMeshIsTheWorkloads) {
     const auto workload = stacked(1, 4, 4);
     const auto domain = make_inter_domain_mesh(workload);

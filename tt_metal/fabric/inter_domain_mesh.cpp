@@ -77,6 +77,7 @@ std::vector<uint32_t> squarest_first(uint32_t chips) {
 std::optional<InterDomainMesh> embed(
     const std::map<FabricNodeId, std::set<FabricNodeId>>& links,
     uint32_t rows,
+    uint32_t cols,
     size_t tries,
     const std::function<bool(const InterDomainMesh&)>& accept) {
     // by index: the solver needs default-constructible ids
@@ -94,8 +95,8 @@ std::optional<InterDomainMesh> embed(
         }
     }
     const AdjacencyGraph<uint32_t> graph(std::move(adjacency));
-    const auto chips = static_cast<uint32_t>(nodes.size());
-    auto grid = line_mesh_graph(rows, chips / rows);
+    const uint32_t chips = rows * cols;
+    auto grid = line_mesh_graph(rows, cols);
     const auto target = build_adjacency_graph_logical(*grid).at(MeshId{0});
     for (const auto& result : solve_topology_mapping_n(
              target,
@@ -110,15 +111,58 @@ std::optional<InterDomainMesh> embed(
         }
         if (accept(domain)) {
             log_info(
-                tt::LogFabric,
-                "inter-domain: VC2 spans the domain's {} chips as one {}x{} mesh",
-                chips,
-                rows,
-                chips / rows);
+                tt::LogFabric, "inter-domain: VC2 spans the domain's {} chips as one {}x{} mesh", chips, rows, cols);
             return domain;
         }
     }
     return std::nullopt;
+}
+
+// The reserved grid over the workload's chips and reserved ones (`physical` links to chips no workload mesh holds): the
+// first embedding that holds every workload chip and leaves each chip a direction for each of its links.
+InterDomainMesh reserved_inter_domain_mesh(
+    const MeshGraph& workload, const std::vector<DomainLink>& physical, const MeshShape& reserved) {
+    const auto workload_link = workload_links(workload);
+    const auto used = [&](const FabricNodeId& n) {
+        const auto it = workload_link.find(n);
+        return it == workload_link.end() ? size_t{0} : it->second.size();
+    };
+    auto links = workload_link;
+    for (const auto& l : physical) {
+        if (used(l.a) < 4 && used(l.b) < 4) {
+            links[l.a].insert(l.b);
+            links[l.b].insert(l.a);
+        }
+    }
+    std::vector<DomainLink> vc2_links;
+    const auto accept = [&](const InterDomainMesh& domain) {
+        if (!std::all_of(workload_link.begin(), workload_link.end(), [&](const auto& w) {
+                return domain.domain_chip.contains(w.first);
+            })) {
+            return false;
+        }
+        vc2_links.clear();
+        std::map<FabricNodeId, size_t> extra;
+        for (const auto& l : physical) {
+            const bool workload_has = workload_link.contains(l.a) && workload_link.at(l.a).contains(l.b);
+            if (!workload_has && domain.direction(l.a, l.b)) {
+                vc2_links.push_back(l);
+                extra[l.a]++;
+                extra[l.b]++;
+            }
+        }
+        return std::all_of(extra.begin(), extra.end(), [&](const auto& e) { return used(e.first) + e.second <= 4; });
+    };
+    auto domain = embed(links, reserved[0], reserved[1], 16, accept);
+    TT_FATAL(
+        domain.has_value(),
+        "inter-domain: the reserved {}x{} grid embeds on none of the {} chips' links with all {} workload chips",
+        reserved[0],
+        reserved[1],
+        links.size(),
+        workload_link.size());
+    domain->vc2_links = vc2_links;
+    return std::move(*domain);
 }
 
 }  // namespace
@@ -140,8 +184,12 @@ std::optional<RoutingDirection> InterDomainMesh::direction(const FabricNodeId& a
     return it == edges.end() ? std::nullopt : std::optional(it->second.port_direction);
 }
 
-InterDomainMesh make_inter_domain_mesh(const MeshGraph& workload, const std::vector<DomainLink>& physical) {
+InterDomainMesh make_inter_domain_mesh(
+    const MeshGraph& workload, const std::vector<DomainLink>& physical, const std::optional<MeshShape>& reserved) {
     const auto meshes = workload.get_mesh_ids();
+    if (reserved) {
+        return reserved_inter_domain_mesh(workload, physical, *reserved);
+    }
     // one mesh already as square as any grid over its chips: it is the domain's mesh, chip for chip
     if (meshes.size() == 1) {
         const auto shape = workload.get_mesh_shape(meshes.front());
@@ -181,9 +229,12 @@ InterDomainMesh make_inter_domain_mesh(const MeshGraph& workload, const std::vec
     };
     // each shape, squarest first: on the workload's links if they embed it, else on every link
     for (uint32_t rows : squarest_first(static_cast<uint32_t>(links.size()))) {
-        auto domain = embed(workload_link, rows, 1, [](const InterDomainMesh&) { return true; });
+        auto domain =
+            embed(workload_link, rows, static_cast<uint32_t>(links.size()) / rows, 1, [](const InterDomainMesh&) {
+                return true;
+            });
         if (!domain && !physical.empty()) {
-            domain = embed(links, rows, 16, fits);
+            domain = embed(links, rows, static_cast<uint32_t>(links.size()) / rows, 16, fits);
         }
         if (domain) {
             fits(*domain);
@@ -196,7 +247,9 @@ InterDomainMesh make_inter_domain_mesh(const MeshGraph& workload, const std::vec
 
 InterDomainMesh embed_inter_domain_mesh(const std::map<FabricNodeId, std::set<FabricNodeId>>& links) {
     for (uint32_t rows : squarest_first(static_cast<uint32_t>(links.size()))) {
-        if (auto domain = embed(links, rows, 1, [](const InterDomainMesh&) { return true; })) {
+        if (auto domain = embed(links, rows, static_cast<uint32_t>(links.size()) / rows, 1, [](const InterDomainMesh&) {
+                return true;
+            })) {
             return std::move(*domain);
         }
     }
