@@ -371,20 +371,23 @@ def end_graph_capture_to_file(report_path):
 # every operation carries the summary, in the Python I/O sidecar and the report DB, so a tensor spread over a
 # 16x8 multi-host mesh would otherwise add 128 coordinates to each.
 _MAX_MESH_COORDS_LISTED = 8
-# The two shortened forms, kept fixed so tools reading the summaries (ttnn-visualizer's MCP tools among them) can parse
-# the count back out: the whole mesh, and the last entry after the first few coordinates.
+# The two shortened forms, kept fixed so a tool can parse the count back out: the whole mesh, and the last entry after
+# the first few coordinates. The marker counts every coordinate, where _safe_arg_str's "... +N more" counts the sequence
+# elements it dropped: a different thing, and a different spelling, so a tool that treats "+N more" as a cut operand
+# list (the Quasar graph-ops generator does) doesn't skip every argument of a tensor spread over a large mesh.
 _MESH_COORDS_WHOLE_MESH_FORMAT = "all {count}"
 _MESH_COORDS_COUNT_MARKER_FORMAT = "... {count} in all"
 
 
-def _mesh_coords_summary(mesh_coords, device):
-    """The tensor's mesh coordinates: each one for a few, ``all <n>`` when it spans the whole mesh, else the first few
-    and a ``... <n> in all`` count."""
+def _mesh_coords_summary(mesh_coords, device) -> list[str] | str:
+    """The tensor's mesh coordinates: a list of each one for a few; for more, the string ``all <n>`` when a device
+    tensor spans its whole mesh, else a list of the first few and a ``... <n> in all`` count. A host tensor has no mesh
+    to compare with, so it always gets the list form."""
+    listed = [str(c) for c in mesh_coords[:_MAX_MESH_COORDS_LISTED]]
     if len(mesh_coords) <= _MAX_MESH_COORDS_LISTED:
-        return [str(c) for c in mesh_coords]
+        return listed
     if device is not None and len(mesh_coords) == device.get_num_devices():
         return _MESH_COORDS_WHOLE_MESH_FORMAT.format(count=len(mesh_coords))
-    listed = [str(c) for c in mesh_coords[:_MAX_MESH_COORDS_LISTED]]
     return listed + [_MESH_COORDS_COUNT_MARKER_FORMAT.format(count=len(mesh_coords))]
 
 

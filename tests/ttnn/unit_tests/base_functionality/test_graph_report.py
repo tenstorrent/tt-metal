@@ -8544,47 +8544,58 @@ class TestGraphCaptureEndsWhenItsReportFails:
         assert not ttnn.graph.is_graph_capture_active()
 
 
+def _fake_mesh_coords(count):
+    """``count`` coordinates of a 16x8 mesh, row by row, as strings standing in for MeshCoordinate objects."""
+    return [f"MeshCoordinate([{i // 8}, {i % 8}])" for i in range(count)]
+
+
+def _listed_mesh_coords(count, marker=None):
+    """A summary's mesh_coords list text: the first ``count`` coordinates, then ``marker`` if given."""
+    return str(_fake_mesh_coords(count) + ([marker] if marker else []))
+
+
 class TestTensorSummaryMeshCoords:
     """A tensor argument's summary lists its mesh coordinates in full only for a few: every argument of every operation
     carries it, and a tensor on a 16x8 multi-host mesh spans 128."""
 
     @staticmethod
-    def _summary(num_coords, mesh_size):
-        coords = [f"MeshCoordinate([{i // 8}, {i % 8}])" for i in range(num_coords)]
+    def _summary(num_coords, mesh_size, on_device=True):
         device = SimpleNamespace(id=lambda: 0, shape="MeshShape([16, 8])", get_num_devices=lambda: mesh_size)
+        coords = _fake_mesh_coords(num_coords)
         topology = SimpleNamespace(mesh_coords=lambda: coords, distribution_shape=lambda: None, placements=lambda: [])
         tensor = SimpleNamespace(
             shape="Shape([32, 32])",
             dtype="DataType.BFLOAT16",
             layout="Layout.TILE",
             memory_config=lambda: "MemoryConfig(...)",
-            storage_type=lambda: "StorageType.DEVICE",
+            storage_type=lambda: "StorageType.DEVICE" if on_device else "StorageType.HOST",
             tensor_id=1,
             is_allocated=lambda: True,
-            device=lambda: device,
+            device=lambda: device if on_device else None,
             tensor_topology=lambda: topology,
         )
         return ttnn.graph._ttnn_tensor_summary(tensor)
 
-    def test_whole_mesh_is_summarized(self):
-        summary = self._summary(128, 128)
-        assert "mesh_coords=all 128" in summary
-        assert "MeshCoordinate" not in summary
+    # The shortened forms are written out rather than taken from graph.py's constants: tools may parse the count back
+    # out, so changing either spelling must mean changing this test too.
+    @pytest.mark.parametrize(
+        "num_coords, mesh_size, expected",
+        [
+            pytest.param(8, 8, _listed_mesh_coords(8), id="whole_mesh_of_8_listed"),
+            pytest.param(8, 128, _listed_mesh_coords(8), id="8_of_128_listed"),
+            pytest.param(9, 128, _listed_mesh_coords(8, "... 9 in all"), id="9_of_128_shortened"),
+            pytest.param(64, 128, _listed_mesh_coords(8, "... 64 in all"), id="64_of_128_shortened"),
+            pytest.param(9, 9, "all 9", id="whole_mesh_of_9"),
+            pytest.param(128, 128, "all 128", id="whole_mesh_of_128"),
+        ],
+    )
+    def test_mesh_coords_field(self, num_coords, mesh_size, expected):
+        assert self._summary(num_coords, mesh_size).endswith(f"mesh_coords={expected})")
 
-    def test_the_shortened_forms_are_pinned(self):
-        """Tools parse the count back out of these, so a change to either spelling must be deliberate."""
-        assert re.search(r"mesh_coords=all 128[,)]", self._summary(128, 128))
-        first_8 = ", ".join(f"'MeshCoordinate([0, {i}])'" for i in range(8))
-        assert f"mesh_coords=[{first_8}, '... 64 in all']" in self._summary(64, 128)
-
-    def test_part_of_a_large_mesh_lists_the_first_few_and_a_count(self):
-        summary = self._summary(64, 128)
-        assert "MeshCoordinate([0, 7])" in summary and "MeshCoordinate([1, 0])" not in summary
-        assert "... 64 in all" in summary
-
-    def test_a_few_coordinates_are_listed_in_full(self):
-        summary = self._summary(8, 8)
-        assert summary.count("MeshCoordinate(") == 8
+    def test_a_host_tensor_over_a_large_mesh_gets_the_list_form(self):
+        """A host tensor (from_torch with a mesh mapper and no device) has no mesh to compare with."""
+        summary = self._summary(128, 128, on_device=False)
+        assert summary.endswith(f"mesh_coords={_listed_mesh_coords(8, '... 128 in all')})")
 
 
 def test_tensor_summary_on_one_device_lists_its_coordinate(device):
@@ -8650,6 +8661,8 @@ def test_multihost_graph_report(request):
             op_counts[op_name] = dict(cursor.fetchall())
         cursor.execute("SELECT rank, COUNT(*) FROM devices GROUP BY rank")
         device_counts = dict(cursor.fetchall())
+        cursor.execute("SELECT value FROM operation_arguments WHERE value LIKE '%mesh_coords=%'")
+        tensor_arguments = [row[0] for row in cursor.fetchall()]
     finally:
         conn.close()
     # Exact counts rather than presence, so an op recorded more than once or a rank missing devices is caught.
@@ -8666,3 +8679,12 @@ def test_multihost_graph_report(request):
         f"device count per rank {device_counts}, expected {expected} "
         "(if the MeshDevice id collision is fixed, see tenstorrent/ttnn-visualizer#2225)"
     )
+    # A replicated tensor spans the whole mesh, so on a mesh too big to list in full its arguments are summarized as
+    # "all <n>". It also fails if a tensor's coordinates or get_num_devices() turn out to count only this host's devices.
+    # A T3K's 2x4 mesh is small enough to list, so this runs on larger meshes such as Galaxies.
+    num_devices = mesh_device.get_num_devices()
+    if num_devices > ttnn.graph._MAX_MESH_COORDS_LISTED:
+        assert any(f"mesh_coords=all {num_devices}" in value for value in tensor_arguments), (
+            f"no tensor argument summarized as mesh_coords=all {num_devices}; first one: "
+            f"{tensor_arguments[0] if tensor_arguments else None}"
+        )
