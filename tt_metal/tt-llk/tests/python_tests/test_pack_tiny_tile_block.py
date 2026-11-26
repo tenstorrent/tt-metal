@@ -13,42 +13,10 @@ sparse-to-dense packing into a contiguous L1 block.
 """
 
 from conftest import skip_for_wormhole
-from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import (
-    DestAccumulation,
-    L1Accumulation,
-    format_dict,
-    format_tile_sizes,
-)
-from helpers.param_config import max_dest_tiles, parametrize
-from helpers.perf.blaze import execute_llk
-from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
-from helpers.test_variant_parameters import (
-    DEST_INDEX,
-    IN_TILE_DIMS,
-    L1_ACC,
-    NUM_BLOCKS,
-    NUM_FACES,
-    NUM_TILES_IN_BLOCK,
-    TEST_FACE_DIMS,
-    TILE_COUNT,
-)
-from helpers.tile_constants import calculate_tile_size_bytes, get_tile_params
+from helpers.llk_params import DestAccumulation
+from helpers.pack_tiny_tile import FORMATS, TILE_DIMS, make_pack_tiny_tile_config
+from helpers.param_config import parametrize
 from helpers.utils import passed_test, result_tensor
-
-FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-
-TILE_DIMS = [
-    (1, 32),
-    (2, 32),
-    (4, 32),
-    (8, 32),
-    (16, 32),
-    (16, 16),
-    (32, 32),
-]
-RECONFIG_TILE_DIMS = TILE_DIMS[:-1]
 
 PACK_TINY_TILE_BLOCK_SWEEP = dict(
     formats=FORMATS,
@@ -56,108 +24,6 @@ PACK_TINY_TILE_BLOCK_SWEEP = dict(
     tile_dims=TILE_DIMS,
     num_tiles=[1, 2, 4, 8],
 )
-PACK_TINY_TILE_RECONFIG_SWEEP = dict(
-    formats=FORMATS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    tile_dims=RECONFIG_TILE_DIMS,
-    num_tiles=[2, 4, 8],
-)
-
-
-def _make_config(
-    tile_dims,
-    num_tiles,
-    formats,
-    dest_acc,
-    *,
-    test_name,
-    is_perf=False,
-    perf_report=None,
-    run_types=None,
-    loop_factor=1,
-):
-    """Execute the LLK test for a given tile shape and tile count."""
-    tile_r, tile_c = tile_dims
-    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
-    num_faces = num_faces_r_dim * num_faces_c_dim
-
-    # Stack tiles vertically so input_dimensions = (num_tiles * tile_r, tile_c)
-    input_dimensions = [tile_r * num_tiles, tile_c]
-
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        tile_dimensions=list(tile_dims),
-    )
-
-    # Golden: input round-tripped through the output format
-    torch_format = format_dict[formats.output_format]
-    golden_tensor = src_A.to(torch_format)
-
-    # Determine DEST capacity (SyncHalf: 8 tiles FP16, 4 tiles FP32)
-    max_tiles_in_dest = max_dest_tiles(
-        dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit()
-    )
-
-    # For tiny tiles with fewer faces, more tiles fit in DEST
-    # Scale by the ratio of faces: a 2-face tile uses half the DEST of a 4-face tile
-    if num_faces < 4:
-        max_tiles_in_dest = max_tiles_in_dest * (4 // num_faces)
-
-    num_tiles_in_block = min(tile_cnt_A, max_tiles_in_dest)
-    num_blocks = tile_cnt_A // num_tiles_in_block
-
-    assert num_blocks * num_tiles_in_block == tile_cnt_A, (
-        f"Tile count {tile_cnt_A} not evenly divisible into "
-        f"{num_blocks} blocks of {num_tiles_in_block}"
-    )
-
-    outcome = execute_llk(
-        is_perf=is_perf,
-        perf_report=perf_report,
-        run_types=run_types,
-        loop_factor=loop_factor,
-        test_config_kwargs=dict(
-            test_name=test_name,
-            formats=formats,
-            templates=[],
-            runtimes=[
-                DEST_INDEX(0),
-                TILE_COUNT(tile_cnt_A),
-                NUM_FACES(num_faces),
-                TEST_FACE_DIMS(face_r_dim),
-                IN_TILE_DIMS(tile_r, tile_c),
-                L1_ACC(L1Accumulation.No),
-                NUM_BLOCKS(num_blocks),
-                NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            ],
-            variant_stimuli=StimuliConfig(
-                src_A,
-                formats.input_format,
-                src_B,
-                formats.input_format,
-                formats.output_format,
-                tile_count_A=tile_cnt_A,
-                tile_count_B=tile_cnt_B,
-                tile_count_res=tile_cnt_A,
-                num_faces=num_faces,
-                face_r_dim=face_r_dim,
-                tile_dimensions=list(tile_dims),
-                use_dense_tile_dimensions=True,
-                operand_res_tile_size=calculate_tile_size_bytes(
-                    formats.output_format, list(tile_dims), format_tile_sizes
-                ),
-            ),
-            dest_acc=dest_acc,
-        ),
-    )
-
-    return outcome, golden_tensor, torch_format
-
-
-# ── Main test ───────────────────────────────────────────────────────────────
 
 
 @skip_for_wormhole
@@ -173,48 +39,12 @@ def test_pack_tiny_tile_block(
     run_types=None,
     loop_factor=1,
 ):
-    outcome, golden_tensor, _ = _make_config(
+    outcome, golden_tensor = make_pack_tiny_tile_config(
         tile_dims,
         num_tiles,
         formats,
         dest_acc,
         test_name="sources/pack_tiny_tile_block_test.cpp",
-        is_perf=is_perf,
-        perf_report=perf_report,
-        run_types=run_types,
-        loop_factor=loop_factor,
-    )
-    if is_perf:
-        return
-
-    res_tensor = result_tensor(outcome.result, formats.output_format, golden_tensor)
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
-
-
-# ── Reconfig test: init 32x32 → reconfig to tiny → multi-tile MOP pack ─────
-
-
-@skip_for_wormhole
-@parametrize(**PACK_TINY_TILE_RECONFIG_SWEEP)
-def test_pack_tiny_tile_reconfig(
-    formats,
-    dest_acc,
-    tile_dims,
-    num_tiles,
-    *,
-    is_perf=False,
-    perf_report=None,
-    run_types=None,
-    loop_factor=1,
-):
-    """Init pack for 32x32, then full re-init for tiny tiles, then multi-tile
-    block-contiguous pack. Validates the transition between tile shapes."""
-    outcome, golden_tensor, _ = _make_config(
-        tile_dims,
-        num_tiles,
-        formats,
-        dest_acc,
-        test_name="sources/pack_tiny_tile_reconfig_test.cpp",
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,
