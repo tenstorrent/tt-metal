@@ -313,6 +313,8 @@ enum class DstRoundingMode : std::uint8_t
 enum class BinaryOp : std::uint8_t
 {
     ADD           = 0,
+    // silu_glu has a Blackhole kernel only: the harness dispatches it on Blackhole.
+    SILU_GLU = 64,
     SUB           = 1,
     MUL           = 2,
     DIV           = 3,

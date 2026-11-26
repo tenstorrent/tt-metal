@@ -19,6 +19,7 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "internal/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
+#include "internal/tt-2xx/machine_external_interrupts.h"
 #include "internal/tt-2xx/worker_go_signalling.h"
 // The TensorAccessor address-generator path (internal/tensor/generated_noc_addr.h) only exists with the ATT backend,
 // and ttsim doesn't model the address generators.
@@ -371,7 +372,6 @@ extern "C" uint32_t _start1() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     device_setup();
-    // NoC command-buffer state is private to each DM and persists across kernel launches.
     overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     if (hartid > 0) {
         signal_subordinate_completion();
@@ -381,6 +381,14 @@ extern "C" uint32_t _start1() {
         tensor_prefetcher_signal_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
 
+        // Reset all remapper pairs, in case they are in some invalid sticky state left from previous
+        // program runs.
+        for (uint32_t pair = 0; pair < REMAP_NUM_PAIRS; pair++) {
+            WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair), 0u);
+        }
+        // The writes are posted, read back the last one so every clear has fully completed.
+        (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(REMAP_NUM_PAIRS - 1));
+
         // Initialize wait for trisc FW
         for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
             mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
@@ -388,6 +396,10 @@ extern "C" uint32_t _start1() {
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
+#ifdef FDS_SIGNALLING
+        // FDS go groups are the only PLIC sources, and builds without FDS leave the PLIC untouched.
+        init_machine_external_interrupts();
+#endif
         init_go_signalling(mailboxes);
         trigger_sync_register_init();
 #if WATCHER_ASSERT_ENABLED
@@ -399,6 +411,10 @@ extern "C" uint32_t _start1() {
 
         DeviceProfilerInit();
         while (1) {
+            // The next launch does not rewrite these fields, and the previous completion atomic may still be
+            // outstanding.
+            while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+            overlay_cmd_buff_restore_launch_state(MEM_NOC_ATOMIC_RET_VAL_ADDR);
             WAYPOINT("GW");
             uint8_t go_message_signal = RUN_MSG_DONE;
             // kernel_configs.preload is last in the launch message. so other data is
@@ -562,6 +578,9 @@ extern "C" uint32_t _start1() {
             }
             asm("nop; nop; nop; nop; nop");
         }
+        // The next read, write, and atomic leave these fields as the previous kernel set them.
+        while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+        overlay_cmd_buff_restore_launch_state(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 

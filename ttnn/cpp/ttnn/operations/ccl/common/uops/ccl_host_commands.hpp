@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
 
 namespace ttnn::ccl::cmd {
 
