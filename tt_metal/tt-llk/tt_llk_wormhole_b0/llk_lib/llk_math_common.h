@@ -33,6 +33,12 @@ template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+
+    // perf trial: same size as the ADDR_MOD_7 write (3 x SETC16), no effect.
+    TTI_NOP;
+    TTI_NOP;
+    TTI_NOP;
+
     std::uint32_t int8_math_enabled     = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
     std::uint32_t config_data           = alu_src_format_cfg(srca_data_format, srcb_data_format) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
     constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;

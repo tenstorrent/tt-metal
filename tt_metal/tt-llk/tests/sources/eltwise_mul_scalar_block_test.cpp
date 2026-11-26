@@ -131,6 +131,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
+            if constexpr (ADDRMOD_SCOPE == AddrModScope::CallerScoped)
+            {
+                _llk_math_eltwise_mul_scalar_block_addrmod_set_();
+            }
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
@@ -139,12 +143,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_wait_for_dest_available_<dest_sync>();
                     }
-                    _llk_math_eltwise_mul_scalar_block_(DST_INDEX, NUM_TILES_IN_BLOCK);
+                    _llk_math_eltwise_mul_scalar_block_<ADDRMOD_SCOPE>(DST_INDEX, NUM_TILES_IN_BLOCK);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
+            }
+            if constexpr (ADDRMOD_SCOPE == AddrModScope::CallerScoped)
+            {
+                _llk_math_eltwise_mul_scalar_block_addrmod_restore_();
             }
         }
         PROFILER_SYNC();
