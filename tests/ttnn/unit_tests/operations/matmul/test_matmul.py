@@ -251,6 +251,68 @@ def test_matmul_tiny_tiles_throttled(device, tile_h, tile_w, math_fidelity, thro
         )
 
 
+# minimal_matmul runs the activation init on the math thread before matmul_init, which programs
+# ADDR_MOD_6 for the throttled MOP. MM_THROTTLE is only defined above 48 worker cores.
+@pytest.mark.parametrize(
+    "activation, torch_fn",
+    [
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0), torch.nn.functional.gelu),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 1.0), torch.tanh),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4.0, 1.0), torch.sigmoid),
+    ],
+    ids=["gelu_approx", "tanh_approx", "sigmoid_approx"],
+)
+@pytest.mark.parametrize(
+    "throttle_level",
+    [ttnn.ThrottleLevel.LEVEL_1, ttnn.ThrottleLevel.LEVEL_3, ttnn.ThrottleLevel.LEVEL_5],
+)
+def test_matmul_throttled_fused_lut_activation(device, activation, torch_fn, throttle_level, monkeypatch):
+    monkeypatch.delenv("TT_MM_THROTTLE_PERF", raising=False)
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    if grid.x * grid.y <= 48:
+        pytest.skip("matmul throttling needs more than 48 worker cores")
+    m, n, k = grid.y * 128, grid.x * 128, 256
+
+    torch_a = torch.randn((m, k), dtype=torch.bfloat16) / math.sqrt(k)
+    torch_b = torch.randn((k, n), dtype=torch.bfloat16)
+    golden = torch_fn(torch.matmul(torch_a.float(), torch_b.float()))
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=4,
+        K_block_size=4,
+        N_block_size=4,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=grid,
+    )
+
+    def run(level):
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+            throttle_level=level,
+        )
+        out = ttnn.experimental.minimal_matmul(
+            a,
+            b,
+            fused_activation=activation,
+            config=matmul_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        return ttnn.to_torch(out)
+
+    throttled = run(throttle_level)
+    unthrottled = run(ttnn.ThrottleLevel.NO_THROTTLE)
+    assert_with_pcc(golden, throttled, 0.99)
+    # Throttling only spaces out the matmul instructions, so the activation output must not change.
+    assert torch.equal(throttled, unthrottled)
+
+
 @pytest.mark.parametrize(
     "a_shape, b_shape, out_shape, raises",
     [
