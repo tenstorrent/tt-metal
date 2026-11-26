@@ -12,6 +12,7 @@ Tensor untilize_with_unpadding(
     const Shape& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     bool use_multicore = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool runtime_shapes = false);
 
 }  // namespace ttnn

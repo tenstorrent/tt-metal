@@ -35,7 +35,176 @@ const DFBSpecName MCI_OUT{"mci_out"};
 const TensorParamName MCI_INPUT{"mci_input"};
 const TensorParamName MCI_OUTPUT{"mci_output"};
 
+// A shape-free program gives every core of the grid this many writer varargs, five words per run of equal
+// BlockReps. A core's blocks are one contiguous range of the row pattern, which is a repeat of one BlockRep:
+// the shape-free check admits padding in the last two dims only, and at most 4D shapes (read as 4D, padded
+// with ones). So a core has at most two pieces of a split rep at either end, one run of whole reps between
+// them and the empty trailing pad entry, six runs; the cap leaves two runs of margin.
+constexpr uint32_t MCI_MAX_WRITER_RUNS = 8;
+constexpr uint32_t MCI_WORDS_PER_RUN = 5;
+
+uint32_t mci_num_blocks(const Tensor& input) {
+    const auto& input_shape = input.padded_shape();
+    return input_shape[-1] == 0 ? 0 : input.physical_volume() / input_shape[-1] / TILE_HEIGHT;
+}
+
+CoreRangeSet mci_available_grid(const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input) {
+    if (operation_attributes.sub_core_grids.has_value()) {
+        return operation_attributes.sub_core_grids.value();
+    }
+    const CoreCoord grid_size = input.device()->compute_with_storage_grid_size();
+    return CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+}
+
+struct MciRunArgs {
+    ProgramRunArgs run_args;
+    // The writer's vararg count per core, which the spec declares.
+    std::map<CoreCoord, uint32_t> writer_varargs_per_node;
+};
+
+// Every runtime arg of the program, which follows the shapes: each core's tile range, block count, first stick
+// and BlockRep runs. A shape-free program (untilize_with_unpadding_interleaved_is_shape_free) covers the whole
+// available grid, so cores past the split get no work, and gives every core the same vararg count.
+MciRunArgs mci_run_args(
+    const UntilizeWithUnpaddingParams& operation_attributes,
+    const Tensor& input,
+    const Tensor& output,
+    bool shape_free) {
+    const auto& input_shape = input.padded_shape();
+    const auto& output_shape = output.padded_shape();
+    const CoreRangeSet available_grid = mci_available_grid(operation_attributes, input);
+    const uint32_t num_blocks = mci_num_blocks(input);
+    const uint32_t num_tiles_per_row = input_shape[-1] / TILE_WIDTH;
+
+    auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
+        ttnn::split_blocks_for_tilize(available_grid, num_blocks);
+    const bool has_cliff = !core_range_cliff.empty();
+
+    const uint32_t element_size = input.dtype() == DataType::BFLOAT8_B ? output.element_size() : input.element_size();
+    const uint32_t padded_row_size_bytes = input_shape[-1] * element_size;
+
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
+    auto core_assignments = ttnn::distribute_work(
+        output_shape, input_shape, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff, tile_height);
+
+    MciRunArgs result;
+    KernelRunArgs reader_run_args{.kernel = MCI_READER};
+    KernelRunArgs writer_run_args{.kernel = MCI_WRITER};
+    KernelRunArgs compute_run_args{.kernel = MCI_COMPUTE};
+    // Each arg's per-core table, looked up once: a cache hit at another shape rebuilds them all.
+    auto& per_core_block_cnt = compute_run_args.runtime_arg_values["per_core_block_cnt"];
+    auto& num_pages = reader_run_args.runtime_arg_values["num_pages"];
+    auto& start_id = reader_run_args.runtime_arg_values["start_id"];
+    auto& padded_X_size = writer_run_args.runtime_arg_values["padded_X_size"];
+    auto& start_stick_id = writer_run_args.runtime_arg_values["start_stick_id"];
+    auto& n_block_reps_arg = writer_run_args.runtime_arg_values["n_block_reps"];
+    uint32_t tile_start_id = 0;
+    uint32_t row_start_id = 0;
+    const auto& cores = corerange_to_cores(available_grid);
+    const uint32_t num_program_cores = shape_free ? static_cast<uint32_t>(cores.size()) : ncores;
+    for (uint32_t i = 0; i < num_program_cores; ++i) {
+        const auto& core = cores[i];
+        AdvancedKernelRunArgs::Varargs writer_varargs;
+        const uint32_t core_row_start_id = row_start_id;
+        uint32_t nblocks_per_core_core = 0;
+        uint32_t n_block_reps = 0;
+        if (i < ncores) {
+            const std::vector<BlockRep>& assignment = core_assignments.at(i);
+            n_block_reps = static_cast<uint32_t>(assignment.size());
+            BlockRep ref_el = assignment[0];
+            uint32_t count_repeated = 0;  // will be incremented in first iteration of the loop
+            auto push_run = [&](const BlockRep& el, uint32_t repeated) {
+                writer_varargs.push_back(el.n_data);
+                writer_varargs.push_back(el.n_mixed);
+                writer_varargs.push_back(el.n_pads);
+                writer_varargs.push_back(el.times);
+                writer_varargs.push_back(repeated);
+            };
+            for (const auto& el : assignment) {
+                nblocks_per_core_core += el.block_count();
+                row_start_id += el.data_row_count();
+                if (compare_assignments(ref_el, el)) {
+                    count_repeated++;
+                } else {
+                    push_run(ref_el, count_repeated);
+                    ref_el = el;
+                    count_repeated = 1;
+                }
+            }
+            push_run(ref_el, count_repeated);
+        }
+        if (shape_free) {
+            TT_FATAL(
+                writer_varargs.size() <= MCI_MAX_WRITER_RUNS * MCI_WORDS_PER_RUN,
+                "untilize_with_unpadding: core {} needs {} BlockRep runs, more than the {} a shape-free program has",
+                i,
+                writer_varargs.size() / MCI_WORDS_PER_RUN,
+                MCI_MAX_WRITER_RUNS);
+            writer_varargs.resize(MCI_MAX_WRITER_RUNS * MCI_WORDS_PER_RUN, 0);
+        }
+
+        const uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_core;
+        per_core_block_cnt[core] = nblocks_per_core_core;
+        num_pages[core] = num_tiles_per_core;
+        start_id[core] = tile_start_id;
+        padded_X_size[core] = padded_row_size_bytes;
+        start_stick_id[core] = core_row_start_id;
+        n_block_reps_arg[core] = n_block_reps;
+        // Each core's BlockRep runs are a runtime-length payload, so they ride as runtime varargs.
+        result.writer_varargs_per_node[core] = static_cast<uint32_t>(writer_varargs.size());
+        writer_run_args.advanced_options.runtime_varargs[core] = std::move(writer_varargs);
+
+        tile_start_id += num_tiles_per_core;
+    }
+
+    result.run_args.kernel_run_args = {
+        std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    result.run_args.tensor_args = {
+        {MCI_INPUT, input.mesh_tensor()},
+        {MCI_OUTPUT, output.mesh_tensor()},
+    };
+    return result;
+}
+
 }  // namespace
+
+bool untilize_with_unpadding_interleaved_is_shape_free(
+    const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input) {
+    // The kernels take every count at run time and the buffers follow the row width alone, and the program spans
+    // the whole available grid, so it serves any shape with the same last dim. That costs host time on every hit
+    // (all cores' runtime args are rebuilt) and idle cores below one block per core, hence the opt-in.
+    // The writer's vararg count (MCI_MAX_WRITER_RUNS) holds only while the unpadding is in the last two dims.
+    const auto& padded_shape = input.padded_shape();
+    const auto& end = operation_attributes.output_tensor_end;
+    if (!operation_attributes.runtime_shapes || input.is_sharded() ||
+        operation_attributes.output_mem_config.is_sharded() || padded_shape.rank() > 4 ||
+        end.rank() != padded_shape.rank()) {
+        return false;
+    }
+    for (int i = 0; i + 2 < static_cast<int>(padded_shape.rank()); ++i) {
+        if (end[i] + 1 != padded_shape[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+ProgramRunArgs UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::override_runtime_arguments(
+    const UntilizeWithUnpaddingParams& operation_attributes,
+    const Tensor& input,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    if (!untilize_with_unpadding_interleaved_is_shape_free(operation_attributes, input)) {
+        // The key holds the full shapes, so only the tensors change.
+        ProgramRunArgs run_args;
+        run_args.tensor_args = {
+            {MCI_INPUT, input.mesh_tensor()},
+            {MCI_OUTPUT, output.mesh_tensor()},
+        };
+        return run_args;
+    }
+    return mci_run_args(operation_attributes, input, output, /*shape_free=*/true).run_args;
+}
 
 ttnn::device_operation::ProgramArtifacts
 UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifacts(
@@ -52,34 +221,16 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         get_untilize_with_unpadding_dfb_data_format(output.dtype(), a.device()->arch());
     uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
-    const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
-    const auto& sub_core_grids = operation_attributes.sub_core_grids;
-
-    MeshDevice* device = a.device();
-    CoreCoord grid_size = device->compute_with_storage_grid_size();
-    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    CoreRangeSet default_grid(default_cores);
-    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
-
-    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
+    const bool shape_free = untilize_with_unpadding_interleaved_is_shape_free(operation_attributes, input);
+    const CoreRangeSet available_grid = mci_available_grid(operation_attributes, input);
+    const uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(available_grid, num_blocks);
+        ttnn::split_blocks_for_tilize(available_grid, mci_num_blocks(input));
 
-    bool has_cliff = !core_range_cliff.empty();
-
-    uint32_t padded_row_size_bytes;
-    uint32_t unpadded_row_size_bytes;
-
-    if (a.dtype() == DataType::BFLOAT8_B) {
-        padded_row_size_bytes = input_shape[-1] * output.element_size();
-        unpadded_row_size_bytes = output_shape[-1] * output.element_size();
-    } else {
-        padded_row_size_bytes = input_shape[-1] * a.element_size();
-        unpadded_row_size_bytes = output_shape[-1] * a.element_size();
-    }
+    const uint32_t element_size = a.dtype() == DataType::BFLOAT8_B ? output.element_size() : a.element_size();
+    const uint32_t unpadded_row_size_bytes = output_shape[-1] * element_size;
 
     TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
@@ -187,115 +338,63 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
             .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
             .hw_config = compute_hw_config,
         }};
-    // The writer joins after the core loop below, which fills in its per-node vararg counts.
+    // A shape-free program runs on the whole available grid, the cores past the split with no work, so its
+    // core set does not follow the block count. One work unit serves both groups: the block count per core is a
+    // runtime arg.
     Group<WorkUnitSpec> work_units;
-    if (!core_range.empty()) {
+    if (shape_free) {
         work_units.push_back(WorkUnitSpec{
-            .name = "full",
+            .name = "all",
             .kernels = {MCI_READER, MCI_WRITER, MCI_COMPUTE},
-            .target_nodes = core_range,
+            .target_nodes = available_grid,
         });
-    }
-    if (has_cliff) {
-        work_units.push_back(WorkUnitSpec{
-            .name = "cliff",
-            .kernels = {MCI_READER, MCI_WRITER, MCI_COMPUTE},
-            .target_nodes = core_range_cliff,
-        });
-    }
-
-    uint32_t tile_height = input.tensor_spec().tile().get_height();
-    auto core_assignments = ttnn::distribute_work(
-        output_shape, input_shape, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff, tile_height);
-
-    uint32_t tile_start_id = 0;
-    uint32_t row_start_id = 0;
-
-    const auto& cores = corerange_to_cores(available_grid);
-    KernelRunArgs reader_run_args{.kernel = MCI_READER};
-    KernelRunArgs writer_run_args{.kernel = MCI_WRITER};
-    KernelRunArgs compute_run_args{.kernel = MCI_COMPUTE};
-    for (uint32_t i = 0; i < ncores; ++i) {
-        const auto& core = cores[i];
-        AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values,
-            core,
-            {{"per_core_block_cnt", core_range_cliff.contains(core) ? nblocks_per_core_cliff : nblocks_per_core}});
-        const std::vector<BlockRep>& assignment = core_assignments.at(i);
-
-        // writer runtime args. This core's first stick is the running total from the cores before
-        // it, so capture it before the loop below advances `row_start_id` past this core's blocks.
-        AdvancedKernelRunArgs::Varargs writer_varargs;
-        const uint32_t core_row_start_id = row_start_id;
-
-        uint32_t nblocks_per_core_core = 0;
-
-        BlockRep ref_el = assignment[0];
-        uint32_t count_repeated = 0;  // will be incremented in first iteration of the loop
-        for (const auto& el : assignment) {
-            nblocks_per_core_core += el.block_count();
-            row_start_id += el.data_row_count();
-            if (compare_assignments(ref_el, el)) {
-                count_repeated++;
-            } else {
-                // push back information for previous elements
-                writer_varargs.push_back(ref_el.n_data);
-                writer_varargs.push_back(ref_el.n_mixed);
-                writer_varargs.push_back(ref_el.n_pads);
-                writer_varargs.push_back(ref_el.times);
-                writer_varargs.push_back(count_repeated);
-                // Set up assignment for this element
-                ref_el = el;
-                count_repeated = 1;
-            }
+    } else {
+        if (!core_range.empty()) {
+            work_units.push_back(WorkUnitSpec{
+                .name = "full",
+                .kernels = {MCI_READER, MCI_WRITER, MCI_COMPUTE},
+                .target_nodes = core_range,
+            });
         }
-        writer_varargs.push_back(ref_el.n_data);
-        writer_varargs.push_back(ref_el.n_mixed);
-        writer_varargs.push_back(ref_el.n_pads);
-        writer_varargs.push_back(ref_el.times);
-        writer_varargs.push_back(count_repeated);
-
-        uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_core;
-
-        // reader runtime args
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"num_pages", num_tiles_per_core}, {"start_id", tile_start_id}});
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            core,
-            {{"padded_X_size", padded_row_size_bytes},
-             {"start_stick_id", core_row_start_id},
-             {"n_block_reps", static_cast<uint32_t>(assignment.size())}});
-        // Each core's BlockRep runs are a runtime-length payload, so they ride as runtime varargs.
-        // The run count differs per core, which is what the per-node vararg-count override says.
-        writer.advanced_options.num_runtime_varargs_per_node[core] = static_cast<uint32_t>(writer_varargs.size());
-        writer_run_args.advanced_options.runtime_varargs[core] = std::move(writer_varargs);
-
-        tile_start_id += num_tiles_per_core;
+        if (!core_range_cliff.empty()) {
+            work_units.push_back(WorkUnitSpec{
+                .name = "cliff",
+                .kernels = {MCI_READER, MCI_WRITER, MCI_COMPUTE},
+                .target_nodes = core_range_cliff,
+            });
+        }
     }
 
+    MciRunArgs run_args = mci_run_args(operation_attributes, input, output, shape_free);
+    // A shape-free program gives every core the same vararg count. Otherwise the run count differs per core,
+    // which is what the per-node vararg-count override says.
+    if (shape_free) {
+        writer.advanced_options.num_runtime_varargs = MCI_MAX_WRITER_RUNS * MCI_WORDS_PER_RUN;
+    } else {
+        for (const auto& [core, num_varargs] : run_args.writer_varargs_per_node) {
+            writer.advanced_options.num_runtime_varargs_per_node[core] = num_varargs;
+        }
+    }
     kernels.push_back(std::move(writer));
 
+    // A shape-free program serves other shapes with the same last dim, so its tensors may differ in shape.
+    TensorSpecRelaxations relaxations;
+    relaxations.dynamic_tensor_shape = shape_free;
     ProgramSpec spec{
         .name = "untilize_with_unpadding_multi_core_interleaved",
         .kernels = std::move(kernels),
         .dataflow_buffers = {std::move(in_dfb), std::move(out_dfb)},
         .tensor_parameters =
-            {TensorParameter{.unique_id = MCI_INPUT, .spec = input_mesh_tensor.tensor_spec()},
-             TensorParameter{.unique_id = MCI_OUTPUT, .spec = output_mesh_tensor.tensor_spec()}},
+            {TensorParameter{
+                 .unique_id = MCI_INPUT, .spec = input_mesh_tensor.tensor_spec(), .relaxations = relaxations},
+             TensorParameter{
+                 .unique_id = MCI_OUTPUT, .spec = output_mesh_tensor.tensor_spec(), .relaxations = relaxations}},
         .work_units = std::move(work_units),
-    };
-
-    ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
-    run_args.tensor_args = {
-        {MCI_INPUT, input_mesh_tensor},
-        {MCI_OUTPUT, output_mesh_tensor},
     };
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
-        .run_params = std::move(run_args),
+        .run_params = std::move(run_args.run_args),
     };
 }
 

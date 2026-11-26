@@ -1642,3 +1642,65 @@ def test_untilize_with_unpadding_rank_5_zero_volume(device, shape, ends):
 
     assert list(output.shape) == list(shape)
     assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        # FLUX.2's VAE decoder: [1, h*w/16, 128], [1, h/4, w/2, C] and [1, 2h, 4w, 3] over the latent sizes,
+        # whole tiles first, as the warm size is.
+        [(1, 1024, 128), (1, 1014, 128), (1, 1380, 128), (1, 2835, 128)],
+        [(1, 32, 64, 32), (1, 12, 169, 32), (1, 24, 115, 32), (1, 90, 45, 32)],
+        [(1, 32, 64, 512), (1, 12, 169, 512), (1, 24, 115, 512)],
+        [(1, 64, 128, 3), (1, 24, 338, 3), (1, 84, 270, 3)],
+        # Fewer tile rows than cores.
+        [(1, 1, 50, 64), (1, 1, 100, 64), (1, 2, 40, 64)],
+    ],
+)
+def test_untilize_with_unpadding_runtime_shapes_one_program(device, shapes):
+    # With runtime_shapes the multi-core interleaved program runs on the whole grid and takes every count at run
+    # time, so one program serves every shape with the same last dim, whole tiles or not.
+    entries = None
+    for shape in shapes:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+        end = [d - 1 for d in shape]
+        output = ttnn.to_torch(ttnn.untilize_with_unpadding(x, end, runtime_shapes=True))
+        assert torch.equal(output, torch_input), shape
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        assert device.num_program_cache_entries() == entries, shape
+
+
+def test_untilize_with_unpadding_without_runtime_shapes_keeps_one_program_per_shape(device):
+    entries = []
+    for shape in [(1, 24, 115, 32), (1, 42, 135, 32)]:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+        end = [d - 1 for d in shape]
+        assert torch.equal(ttnn.to_torch(ttnn.untilize_with_unpadding(x, end)), torch_input)
+        entries.append(device.num_program_cache_entries())
+    assert entries[1] == entries[0] + 1
+
+
+def test_untilize_with_unpadding_runtime_shapes_crops_outer_dims(device):
+    # A crop of an outer dim is outside the shape-free program, which keeps padding to the last two dims; with
+    # runtime_shapes such a call still runs, on a program of its own.
+    torch_input = torch.randn((64, 4, 32, 32), dtype=torch.bfloat16)
+    x = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn.untilize_with_unpadding(x, [63, 1, 20, 30], runtime_shapes=True))
+    assert torch.equal(output, torch_input[:, :2, :21, :31])
+
+
+def test_untilize_with_unpadding_runtime_shapes_sub_core_grids(device):
+    sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2))])
+    entries = None
+    for shape in [(1, 12, 169, 32), (1, 24, 115, 32), (1, 1, 50, 32)]:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+        end = [d - 1 for d in shape]
+        output = ttnn.untilize_with_unpadding(x, end, sub_core_grids=sub_core_grids, runtime_shapes=True)
+        assert torch.equal(ttnn.to_torch(output), torch_input), shape
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        assert device.num_program_cache_entries() == entries, shape

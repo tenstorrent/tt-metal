@@ -76,7 +76,8 @@ Tensor untilize_with_unpadding(
     const Shape& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool runtime_shapes) {
     // UInt8 needs 32-bit Dest on WH/BH.
     bool fp32_dest_acc_en = operations::data_movement::requires_32bit_dest(input_tensor.dtype());
 
@@ -205,7 +206,8 @@ Tensor untilize_with_unpadding(
             use_multicore,
             fp32_dest_acc_en,
             enough_space_height,
-            sub_core_grids);
+            sub_core_grids,
+            runtime_shapes);
     };
 
     return ttnn::operations::data_movement::build_ndiml_untilize_val(

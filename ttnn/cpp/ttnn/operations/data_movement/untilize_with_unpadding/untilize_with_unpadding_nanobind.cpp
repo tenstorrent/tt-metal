@@ -33,6 +33,11 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
+            runtime_shapes (bool, optional): One program serves every shape with the same last dim and rank, at
+                more host time per call, for an interleaved input and output of rank 4 or less unpadded only in
+                the last two dims, with use_multicore, rows of at most 32 tiles (wider rows can take the block
+                factory, depending on the shape) and enough L1 for a tile row. Other calls keep a program per
+                shape. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -47,7 +52,8 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("use_multicore") = true,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("runtime_shapes") = false);
 }
 
 }  // namespace ttnn::operations::data_movement::detail
