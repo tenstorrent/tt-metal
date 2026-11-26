@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.unpack_a import unpack_a_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource
+from fuser.operand import BfdId
 from helpers.llk_params import (
     DestAccumulation,
     EltwiseBinaryReuseDestType,
@@ -89,9 +89,9 @@ class UnpackerA(Unpacker):
         block: BlockData,
     ) -> str:
         engine = (
-            BfdResource.UNP1
+            BfdId.UNP1
             if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
-            else BfdResource.UNP0
+            else BfdId.UNP0
         )
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
@@ -111,7 +111,7 @@ class UnpackerA(Unpacker):
 
         return (
             "{\n"
-            + compute_unit.src_a.bfd_alloc_and_program(engine, result_name="bfd_id")
+            + compute_unit.src_a.program_bfd(engine, result_name="bfd_id")
             + init_call
             + "}\n"
         )

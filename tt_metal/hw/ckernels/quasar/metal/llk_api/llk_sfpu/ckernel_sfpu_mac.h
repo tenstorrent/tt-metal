@@ -6,14 +6,14 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_replay_bank1.h"
+#include "cmath_common.h"
 #include "llk_defs.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
 
 // Replay slot and length shared by mac_init() (which records) and calculate_mac()
-// (which replays).  lltt::record() captures exactly `length` instructions, so the two
+// (which replays).  TTI_REPLAY(, 0, 0, 0, 1) captures exactly `length` instructions, so the two
 // must agree: an under-count leaves the tail of the body out of the buffer, an
 // over-count swallows whatever the caller emits next - here that would be the
 // STALL_SFPU/MATH TTI_STALLWAIT from _llk_math_eltwise_ternary_sfpu_start_, which is
@@ -22,8 +22,7 @@ namespace ckernel::sfpu {
 //
 // The lengths below are the instructions sfpi emits for mac_init()'s two-row body:
 //   6x SFPLOAD, 2x SFPMAD, [2x SFPSTOCHRND for bf16,] 2x SFPSTORE
-// Two rows per record so the second row's SFPMAD and store sit between the first row's
-// dependent SFPMAD and store, which a one-row body issues back to back and stalls on.
+// Two rows per record, so each row's SFPMAD -> store chain fills the other's latency.
 // The count is therefore a property of what sfpi emits for this arch, not of the source
 // below - if mac_init()'s body changes, or sfpi changes how it schedules the block,
 // re-check these against the generated kernel's disassembly.
@@ -33,13 +32,11 @@ inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 10 : 12;
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
 inline void mac_init() {
-    // The common SFPU init only sets ADDR_MOD_7 (no increment). mac's replay sequence uses
-    // ADDR_MOD_6 on the second row's SFPSTORE to advance dest by the two rows the record just
-    // wrote (one sfpi row is two dest counter steps), so we must configure it explicitly here.
+    // The second row's SFPSTORE of the recorded body advances Dest past both rows.
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 4},
+        .dest = {.incr = 2 * ckernel::math::SFP_ROWS},
     }
         .set(ADDR_MOD_6);
 
@@ -57,14 +54,13 @@ inline void mac_init() {
     //
     // sfpi defaults the loads to the arch's no-increment addr_mod (ADDR_MOD_7 here), which
     // is what we want; only the second row's store overrides it, with the auto-advancing mod
-    // set above. Rows +0 and +1 are computed together so their dependent chains interleave.
+    // set above.
     constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
 
-    // The recording must fit the replay bank.
     static_assert(
         MAC_REPLAY_SLOT + mac_replay_len<is_fp32_dest_acc_en> <= static_cast<int>(SFPU_REPLAY_BANK_DEPTH),
         "mac replay overflows the SFPU replay bank");
-    lltt::record<lltt::NoExec>(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
+    TTI_REPLAY(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>, 0, 0, 0, 1);
     sfpi::vFloat a0 = sfpi::dst_reg[0].mode<dst_fmt>();
     sfpi::vFloat b0 = sfpi::dst_reg[32].mode<dst_fmt>();
     sfpi::vFloat c0 = sfpi::dst_reg[64].mode<dst_fmt>();
@@ -87,8 +83,8 @@ inline void mac_init() {
 //
 // The replay sequence is recorded once in mac_init (with fixed dest offsets 0, 64, 128
 // matching tile indices 0, 1, 2, two rows each) and replayed ITERATIONS / 2 times here.
-// ADDR_MOD_6 on the second row's SFPSTORE auto-advances the dest base register by 4
-// (two rows) per replay, so the next replay's SFPLOADs read the next row pair automatically.
+// ADDR_MOD_6 on the second row's SFPSTORE auto-advances the dest base register by two rows
+// per replay, so the next replay's SFPLOADs read the next row pair automatically.
 // This avoids the explicit sfpi::dst_reg++ used in a plain for-loop, which
 // only advances the write counter and not the read counter.
 //
@@ -113,7 +109,7 @@ inline void calculate_mac(
     static_assert(ITERATIONS % 2 == 0, "two rows per replay");
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d += 2) {
-        lltt::replay(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
+        TTI_REPLAY(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>, 0, 0, 0, 0);
     }
 }
 

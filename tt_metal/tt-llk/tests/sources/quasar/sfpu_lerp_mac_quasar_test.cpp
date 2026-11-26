@@ -3,14 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Drives the ternary SFPU kernels lerp and mac (SFPU_TERNARY_OPERATION) the way the Compute API does.
-// buffer_A holds TILE_CNT / 3 operand triples. Each triple is one Dest section: its three tiles are staged
-// into Dest tiles 0, 1 and 2, the op's init runs after the staging, the kernel runs over all four faces and
-// writes its result over tile 0, and PACK reads tile 0 into the section's tile of buffer_Res. Consecutive
-// sections land in alternating Dest banks.
+// buffer_A holds TILE_CNT / 3 operand triples, one Dest section each: staged into Dest tiles 0, 1 and 2,
+// result over tile 0, packed into the section's tile of buffer_Res.
 //
-// The init comes after the staging on purpose: mac_init records its body into replay bank 0, which the
-// FPU datacopy MOP also uses, so mac_tile is only valid immediately after mac_tile_init. The datacopy is
-// re-initialized per section for the same reason.
+// The op's init runs after the staging: mac_init records into replay bank 0, which the FPU datacopy MOP
+// also uses. The datacopy is re-initialized per section for the same reason.
 //
 // Two staging paths, selected by `unpack_to_dest`:
 //   * unpack_to_dest=true  — UNPACK writes Dest; SFPU reads/writes Dest; PACK reads Dest.
@@ -30,7 +27,7 @@ constexpr std::uint32_t TERNARY_OPERAND_TILES = 3;
 #ifdef LLK_TRISC_UNPACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -45,8 +42,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     LLK_ASSERT(params.TILE_CNT % TERNARY_OPERAND_TILES == 0, "buffer_A holds whole operand triples");
     const std::uint32_t num_sections = params.TILE_CNT / TERNARY_OPERAND_TILES;
 
-    const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
         ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
     if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
     {
@@ -162,7 +160,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -174,8 +172,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_sections = params.TILE_CNT / TERNARY_OPERAND_TILES;
 
-    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
         ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*only the SFPU result tile*/);

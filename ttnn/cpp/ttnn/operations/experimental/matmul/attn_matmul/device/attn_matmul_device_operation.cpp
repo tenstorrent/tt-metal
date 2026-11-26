@@ -7,7 +7,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 using namespace tt::tt_metal;
 

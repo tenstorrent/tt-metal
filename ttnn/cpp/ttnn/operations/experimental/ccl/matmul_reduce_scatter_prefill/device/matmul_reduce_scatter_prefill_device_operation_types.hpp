@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor.hpp"

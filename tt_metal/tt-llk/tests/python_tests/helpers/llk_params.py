@@ -101,6 +101,8 @@ class MathOperation(Enum):
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
     # log_base(x); dispatched with base_scale = fp16a(1/ln 2) -> log2(x).
     LogWithBase = OpSpec("log_with_base", MathOpType.SFPU_UNARY)
+    # log_with_base with the log10 scale; Quasar only.
+    Log10 = OpSpec("log10", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
@@ -139,6 +141,7 @@ class MathOperation(Enum):
     # round-half-to-even to integer (decimals = 0).
     Round = OpSpec("round", MathOpType.SFPU_UNARY)
     # Uniform [from, from + scale] generator from the per-lane PRNG; ignores its input.
+    QuickGelu = OpSpec("quick_gelu", MathOpType.SFPU_UNARY)
     Rand = OpSpec("rand", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
@@ -299,6 +302,7 @@ class MathOperation(Enum):
     # Fused GLU activations over (gate, up): silu(min(gate, limit)) * clamp(up, -limit, limit) and
     # SiTU-GLU (softcapped gate * sigmoid(gate) * softcapped up).
     SfpuClampedSiluGlu = OpSpec("CLAMPED_SILU_GLU", MathOpType.SFPU_BINARY)
+    SfpuSiluGlu = OpSpec("SILU_GLU", MathOpType.SFPU_BINARY)
     SfpuSituGlu = OpSpec("SITU_GLU", MathOpType.SFPU_BINARY)
     SfpuGcd = OpSpec("GCD", MathOpType.SFPU_BINARY)
     SfpuLcm = OpSpec("LCM", MathOpType.SFPU_BINARY)
@@ -307,6 +311,7 @@ class MathOperation(Enum):
     # The other two entry points of ckernel_sfpu_mask.h: calculate_mask_posinf fills +inf
     # where the float mask is zero, calculate_int_mask zeroes Int32 data where the mask is 0.
     SfpuMaskPosinf = OpSpec("MASK_POSINF", MathOpType.SFPU_BINARY)
+    SfpuGegluTanh = OpSpec("GEGLU_TANH", MathOpType.SFPU_BINARY)
     SfpuIntMask = OpSpec("INT_MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)

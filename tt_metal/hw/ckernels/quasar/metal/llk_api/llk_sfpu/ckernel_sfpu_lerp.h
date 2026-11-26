@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel.h"
+#include "cmath_common.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_binary.h"
@@ -13,11 +14,8 @@ namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE>
 inline void lerp_init() {
-    // calculate_lerp's second store walks dest through ADDR_MOD_6, advancing by the two rows the
-    // iteration just wrote (one sfpi row is two dest counter steps), so the loop body needs no
-    // separate increment. The same slot mac_init programs (dest.incr = 2 there, one row per
-    // replay); the common SFPU init only sets ADDR_MOD_7 (no increment).
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    // calculate_lerp's second store of a row pair advances Dest past both rows.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
@@ -48,13 +46,7 @@ inline void calculate_lerp(
     const uint off_in2 = dst_index_in2 * dst_tile_size_sfpi;
     const uint off_out = dst_index_out * dst_tile_size_sfpi;
     // lerp: out = input + weight * (end - input)
-    //
-    // Two rows per iteration, both differences computed before either row's second SFPMAD: the
-    // compiler interleaves the two rows' dependent chains (SFPADD -> SFPMAD -> store), which a
-    // one-row body issues back to back and the SFPU stalls on (the ckernel_sfpu_addcmul.h
-    // pattern). Identical instructions on identical operands, only the issue order changes, so
-    // the results are bit-identical to the one-row body. The second store advances dest (see
-    // lerp_init), so there is no TTINCRWC.
+    // Two rows per iteration, so each row's SFPADD -> SFPMAD -> store chain fills the other's latency.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat a_in0 = sfpi::dst_reg[off_in0];

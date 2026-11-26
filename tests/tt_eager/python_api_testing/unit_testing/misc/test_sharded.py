@@ -454,6 +454,67 @@ def test_interleaved_to_sharded_partial_program_cache_reuse(device, H, num_cores
         assert passing, f"slice {slice_index} returned wrong data on cache hit (stale starting_idx_h): {output}"
 
 
+# Two tiled inputs with the same padded shape but a different logical shape and Alignment share one program: the key
+# pins the padded shape and frees Alignment via relax_tensor_layout_alignment, matching Metal 2.0 (#59915).
+def test_interleaved_to_sharded_partial_same_padded_shape_different_alignment(device, function_level_defaults):
+    # Each slice is a single shard, so any grid works; take the device's so smaller grids run too.
+    compute_grid = device.compute_with_storage_grid_size()
+    grid_size = (compute_grid.x, compute_grid.y)
+    num_slices = 2
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+    torch.manual_seed(0)
+    # Padded to [1, 1, 64, 64] by the default 32x32 tile alignment.
+    tt_default = ttnn.from_torch(
+        torch.randn([1, 1, 64, 64]).bfloat16(),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
+    # Padded to the same [1, 1, 64, 64] explicitly, which gives it a different Alignment.
+    tt_explicit = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(
+            torch.randn([1, 1, 30, 64]).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=interleaved_mem_config,
+        ),
+        [1, 1, 64, 64],
+        0.0,
+        memory_config=interleaved_mem_config,
+    )
+    assert list(tt_default.padded_shape) == list(tt_explicit.padded_shape) == [1, 1, 64, 64]
+
+    def run(tt_input):
+        return ttnn.to_torch(
+            ttnn.interleaved_to_sharded_partial(
+                tt_input,
+                grid_size,
+                [32, 64],
+                num_slices,
+                0,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+        )
+
+    # The factory works only from the padded shape, so the two inputs share one program: the key frees
+    # Alignment via relax_tensor_layout_alignment (#59915). Each cache-hit output must match a freshly
+    # built program's output.
+    device.disable_and_clear_program_cache()
+    expected = [run(t) for t in (tt_default, tt_explicit)]
+    device.enable_program_cache()
+
+    entries_before = device.num_program_cache_entries()
+    outputs = [run(t) for t in (tt_default, tt_explicit)]
+    assert device.num_program_cache_entries() - entries_before == 1
+    for output, reference in zip(outputs, expected):
+        assert torch.equal(output, reference)
+
+
 @pytest.mark.parametrize("H, W, num_cores, num_slices", [[32 * 32, 16 * 32, 64, 2], [2816, 16 * 32, 64, 11]])
 @pytest.mark.parametrize(
     "activations_dtype",

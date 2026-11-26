@@ -65,9 +65,13 @@ def _program_config(spec, mesh):
         per_core_N=pn,
         fused_activation=_activation(act),
     )
+    # Quasar linear takes the experimental.quasar config types, not the mainline ones.
+    backend = ttnn.experimental.quasar if U.is_quasar() else ttnn
     if kind == "1d":
-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**common, fuse_batch=fuse_batch, mcast_in0=mcast_in0)
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**common, transpose_mcast=True)
+        return backend.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            **common, fuse_batch=fuse_batch, mcast_in0=mcast_in0
+        )
+    return backend.MatmulMultiCoreReuseMultiCastProgramConfig(**common, transpose_mcast=True)
 
 
 def _run_linear(
@@ -89,6 +93,14 @@ def _run_linear(
     act=None,
     w_mem="dram",
 ):
+    # Tolerance follows the model's dtypes, before the Quasar remap below.
+    low_precision = "bfp8" in (a_dt, out_dt) or fidelity == LOFI
+    # Quasar has no block-float DFB formats (its set is MX), so run the model's bfloat8_b tensors as bf16 there.
+    bias_dt = ttnn.bfloat8_b
+    if U.is_quasar():
+        a_dt, w_dt, out_dt = ("bf16" if d == "bfp8" else d for d in (a_dt, w_dt, out_dt))
+        bias_dt = ttnn.bfloat16
+
     k = a_shape[-1]
     a_torch = U.torch_rand(a_shape, dtype=torch.float32 if a_dt == "fp32" else torch.bfloat16)
     w_torch = U.torch_rand((k, n), std=k**-0.5)
@@ -96,7 +108,7 @@ def _run_linear(
 
     a = U.to_tt_mem(a_torch, mesh, a_mem, dtype=U.DTYPES[a_dt])
     w = U.to_tt_mem(w_torch, mesh, w_mem, dtype=U.DTYPES[w_dt])
-    b = U.to_tt(b_torch, mesh, dtype=ttnn.bfloat8_b) if bias else None
+    b = U.to_tt(b_torch, mesh, dtype=bias_dt) if bias else None
 
     kwargs = dict(bias=b, memory_config=U.resolve_memcfg(out_mem, mesh), dtype=U.DTYPES[out_dt])
     if pc is not None:
@@ -108,7 +120,7 @@ def _run_linear(
         kwargs["compute_kernel_config"] = ttnn.init_device_compute_kernel_config(
             mesh.arch(), math_fidelity=fidelity, math_approx_mode=approx, fp32_dest_acc_en=fp32, packer_l1_acc=l1_acc
         )
-    out = ttnn.linear(a, w, **kwargs)
+    out = U.op("linear")(a, w, **kwargs)
 
     # Reference on the (bfp8-quantized) values the device saw.
     a_seen = U.from_tt(a, mesh).reshape(-1)[: a_torch.numel()].reshape(a_shape)
@@ -121,7 +133,6 @@ def _run_linear(
     elif act == GELU:
         ref = torch.nn.functional.gelu(ref)
 
-    low_precision = "bfp8" in (a_dt, out_dt) or fidelity == LOFI
     U.assert_pcc(ref, out, pcc=0.99 if low_precision else 0.999, mesh_device=mesh)
 
 

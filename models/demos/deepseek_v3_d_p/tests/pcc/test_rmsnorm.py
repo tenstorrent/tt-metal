@@ -19,7 +19,11 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_y_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    torus_x_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -76,6 +80,13 @@ def _ci_unsupported_param_combos(**params):
             0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-tp0",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(),
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-tp0",
         ),
     ],
     indirect=["mesh_device", "device_params"],

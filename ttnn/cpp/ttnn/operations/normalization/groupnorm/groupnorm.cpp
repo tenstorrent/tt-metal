@@ -11,7 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -310,6 +310,16 @@ Tensor group_norm(
         "Invalid channel configuration: Number of channels ({}) must be divisible by the number of groups ({}).",
         input_shape[-1],
         num_groups);
+
+    // C must be a multiple of 32, except for ROW_MAJOR sharded input.
+    const bool channels_tile_aligned = input_shape[-1] % ttnn::types::TILE_SIZE == 0;
+    const bool row_major_sharded = input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.is_sharded();
+    TT_FATAL(
+        channels_tile_aligned || row_major_sharded,
+        "Invalid channel configuration: Number of channels ({}) must be a multiple of the tile width ({}) unless "
+        "the input is ROW_MAJOR and sharded.",
+        input_shape[-1],
+        ttnn::types::TILE_SIZE);
 
     const auto& input_padded_shape = input_tensor.padded_shape();
     const auto nhw = input_padded_shape[0] * input_padded_shape[1] * input_padded_shape[2];

@@ -25,7 +25,7 @@
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 #include "ops/binary_ops.hpp"
-#include "tt-metalium/distributed_context.hpp"
+#include "tt-metalium/mesh/multihost/distributed_context.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -110,6 +110,11 @@ void py_module(nb::module_& m) {
             "backward", &Tensor::backward, nb::arg("retain_graph"), "Call gradient function on graph nodes in reverse");
 
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized, "Check if gradient is initialized");
+        py_tensor.def(
+            "is_parameter",
+            &Tensor::is_parameter,
+            "Whether this tensor is a module parameter, the tensors whose gradients add up in fp32 under "
+            "precision.reduce_dtype: float32.");
         py_tensor.def(
             "assign",
             [](const TensorPtr& self, const TensorPtr& other) {
@@ -255,7 +260,10 @@ void py_module(nb::module_& m) {
         py_auto_context.def("get_gradient_mode", &AutoContext::get_gradient_mode, "Get gradient mode");
         py_auto_context.def(
             "open_device",
-            [](AutoContext& self, nb::object mesh_shape_obj, nb::object device_ids_obj) {
+            [](AutoContext& self,
+               nb::object mesh_shape_obj,
+               nb::object device_ids_obj,
+               std::size_t num_command_queues) {
                 tt::tt_metal::distributed::MeshShape mesh_shape(1, 1);
 
                 if (!mesh_shape_obj.is_none()) {
@@ -275,10 +283,11 @@ void py_module(nb::module_& m) {
                     device_ids = nb::cast<std::vector<int>>(device_ids_obj);
                 }
 
-                self.open_device(mesh_shape, device_ids);
+                self.open_device(mesh_shape, device_ids, num_command_queues);
             },
             nb::arg("mesh_shape") = nb::none(),
             nb::arg("device_ids") = nb::none(),
+            nb::arg("num_command_queues") = 1,
             "Open a mesh device");
         py_auto_context.def("close_device", &AutoContext::close_device, "Close mesh device");
         py_auto_context.def("get_device", &AutoContext::get_device, nb::rv_policy::reference, "Get mesh device");
@@ -340,6 +349,19 @@ void py_module(nb::module_& m) {
             "is_parallelism_context_initialized",
             &AutoContext::is_parallelism_context_initialized,
             "Check if parallelism context has been initialized");
+
+        // Gradient sync default (training_config.precision.reduce_dtype)
+        py_auto_context.def(
+            "set_gradient_reduce_dtype",
+            &AutoContext::set_gradient_reduce_dtype,
+            nb::arg("dtype").none(),
+            "Set the dtype the gradient syncs (ttml.sync_gradients, synchronize_gradients and FSDP's backward hook) "
+            "sum in when a call passes none: BFLOAT16, FLOAT32, or None for each gradient's own dtype. "
+            "apply_precision_config sets it from the config.");
+        py_auto_context.def(
+            "get_gradient_reduce_dtype",
+            &AutoContext::get_gradient_reduce_dtype,
+            "The dtype the gradient syncs sum in when a call passes none, or None.");
     }
 
     {

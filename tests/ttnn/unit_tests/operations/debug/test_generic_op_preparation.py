@@ -101,3 +101,46 @@ def test_program_exceeding_kernel_config_buffer_leaves_cache_unchanged(device, e
     with expect_error(RuntimeError, "too large for kernel config buffer"):
         ttnn.generic_op(io_tensors, program)
     assert device.num_program_cache_entries() == entries_before, "a failed launch must not change the cache"
+
+
+def test_prepare_generic_op_with_cb_bound_later(device, expect_error):
+    io_tensors = _io_tensors(device)
+    backing = ttnn.from_torch(
+        torch.zeros(SHAPE, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.create_sharded_memory_config(
+            shape=SHAPE[-2:],
+            core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+    bound_cb = ttnn.cb_descriptor_from_sharded_tensor(0, backing)
+    # The same CB, but its tensor is named by a later descriptor.
+    unbound_cb = ttnn.CBDescriptor(
+        total_size=bound_cb.total_size,
+        core_ranges=bound_cb.core_ranges,
+        format_descriptors=bound_cb.format_descriptors,
+    )
+    unbound_cb.globally_allocated_bound_later = True
+
+    def program(cb):
+        program = _single_core_program("// cb bound later\nvoid kernel_main() {}\n", "program")
+        program.cbs = [cb]
+        return program
+
+    entries_before = device.num_program_cache_entries()
+    ttnn.experimental.prepare_generic_op(io_tensors, program(unbound_cb))
+    assert device.num_program_cache_entries() == entries_before + 1
+
+    # A launch that names the tensor binds the CB on the prepared workload.
+    ttnn.generic_op(io_tensors, program(bound_cb))
+    ttnn.synchronize_device(device)
+
+    # A launch that names no tensor must fail, not run with the previous launch's tensor.
+    with expect_error(RuntimeError, "bound later but the descriptor names no buffer"):
+        ttnn.generic_op(io_tensors, program(unbound_cb))
+    assert device.num_program_cache_entries() == entries_before + 1, "every launch must reuse the prepared workload"

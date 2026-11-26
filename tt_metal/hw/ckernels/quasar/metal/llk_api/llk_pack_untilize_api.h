@@ -45,10 +45,12 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
         "Strided pack untilize does not support MX output formats");
 
     // Strided pack untilize (every tile shape but 32x32) needs a buffer descriptor that indexes L1 rows.
-    const std::uint8_t bfd_id = _llk_pack_untilize_is_strided_(tensor_shape)
-                                    ? llk_pack_program_bfd<ckernel::trisc::L1AccessMode::Strided>(output_id)
-                                    : llk_pack_program_bfd(output_id);
-    _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(bfd_id, tensor_shape);
+    if (_llk_pack_untilize_is_strided_(tensor_shape)) {
+        llk_pack_program_bfd<ckernel::trisc::L1AccessMode::Strided>(output_id);
+    } else {
+        llk_pack_program_bfd(output_id);
+    }
+    _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(ckernel::trisc::BFD_ID_PACK0, tensor_shape);
 }
 
 /**
@@ -77,7 +79,7 @@ inline void llk_pack_untilize(
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        pack_bfd_resource,
+        ckernel::trisc::BFD_ID_PACK0,
         pack_output,
         "pack_untilize pack_output DFB differs from the one llk_pack_untilize_init programmed");
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -89,6 +91,7 @@ inline void llk_pack_untilize(
 
     const std::uint32_t y_stride = full_ct_dim * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
+    LLK_DFB_ASSERT_MY_PRODUCER(local_dfb_interface, "pack_untilize");
 
     // Compute how many l1_index units fit in one DFB entry
     const std::uint32_t entry_size_16B = local_dfb_interface.entry_size;  // DFB entry size in 16B
@@ -97,7 +100,7 @@ inline void llk_pack_untilize(
     const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
         entry_size_16B / (face_row_16B * tensor_shape.num_faces_c_dim);
     const std::uint32_t base_l1 =
-        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx * l1_index_per_entry;
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx * l1_index_per_entry;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;

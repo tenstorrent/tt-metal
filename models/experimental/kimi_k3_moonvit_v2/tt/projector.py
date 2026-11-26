@@ -34,6 +34,8 @@ class TT_Projector(Module):
             eps=config.projector_norm_eps,
             mesh_device=mesh_device,
             compute_kernel_config=compute_kernel_config,
+            # bf16 out, so the host reads half the bytes of fp32 and casts nothing. A no-op when the input is bf16.
+            output_dtype=ttnn.bfloat16,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:

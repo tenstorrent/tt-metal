@@ -15,7 +15,7 @@ constexpr uint32_t TILE_SIZE_FP32 = TILE_ELEMS * 4;  // 4096 bytes
 constexpr uint32_t TILE_SIZE_BF16 = TILE_ELEMS * 2;  // 2048 bytes
 
 // Converts an fp32 bit pattern to bf16 with round-to-nearest-even, matching the host-side
-// bfloat16 constructor's default rounding (tt_metal/api/tt-metalium/bfloat16.hpp). Used by the
+// bfloat16 constructor's default rounding (tt_metal/api/tt-metalium/data_formats/bfloat16.hpp). Used by the
 // FFT writer kernels' bf16 output path in place of plain truncation (>> 16), which biases every
 // stored value toward zero (see issue #56532: 0.3-2.4% magnitude bias, 2-15x worse ulp error
 // than a single RNE rounding at the end of the fp32 pipeline).

@@ -7,9 +7,9 @@
 #include <cstdint>
 
 #include "ttnn/types.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/cluster.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 namespace ttnn {
 
