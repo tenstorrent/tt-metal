@@ -81,8 +81,9 @@ def _reads(lp):
 
 
 @_parametrize
-def test_the_payload_equals_vllms_logprobs_of_the_same_logits(mesh_device):
-    B, T = 8, 4
+@pytest.mark.parametrize("B, T, whole", [(8, 4, False), (1, 4, False), (1, 4, True)])
+def test_the_payload_equals_vllms_logprobs_of_the_same_logits(mesh_device, B, T, whole):
+    """``whole``: every device holds the whole vocabulary, as when the verify gathers its logits itself."""
     R = B * T
     lp = VerifyLogprobs(mesh_device, B, T, VOCAB, shards=_shards(mesh_device))
     bufs = {
@@ -91,9 +92,9 @@ def test_the_payload_equals_vllms_logprobs_of_the_same_logits(mesh_device):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=_mapper(mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if whole else _mapper(mesh_device),
         )  # fmt: skip
-        for rows in (R, 16, 8, 4)
+        for rows in sorted({R, min(R, 16), min(R, 8), 4}, reverse=True)
     }
     for buf in bufs.values():
         lp.body(buf)
@@ -109,7 +110,7 @@ def test_the_payload_equals_vllms_logprobs_of_the_same_logits(mesh_device):
                 x = _logits(kind, rows, seed=10 * i + rows)
                 h = ttnn.from_torch(
                     x.reshape(1, 1, rows, VOCAB), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=_mapper(mesh_device),
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if whole else _mapper(mesh_device),
                 )  # fmt: skip
                 ttnn.copy_host_to_device_tensor(h, buf)
                 ttnn.execute_trace(mesh_device, traces[rows], cq_id=0, blocking=False)

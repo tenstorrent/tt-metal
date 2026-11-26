@@ -306,6 +306,16 @@ class PluginRunner:
         top = payload.top_token_ids.shape[-1]
         err = (payload.sampled_logprobs[0, : n + 1].double() - lsm.gather(1, tok[:, None]).reshape(-1)).abs().max()
         top_err = (payload.top_logprobs[0, : n + 1].double() - lsm.gather(1, order[:, :top])).abs().max()
+        if err > LOGPROB_TOL or top_err > LOGPROB_TOL:
+            for t in range(n + 1):
+                logger.warning(
+                    f"[vllm_class] payload column {t}: token {int(tok[t])} lp {float(payload.sampled_logprobs[0, t]):.5f} "
+                    f"want {float(lsm[t, tok[t]]):.5f}; logits max {float(x[t].max()):.4f} lse "
+                    f"{float(torch.logsumexp(x[t].double(), -1)):.5f}; top ids {payload.top_token_ids[0, t, :6].tolist()} "
+                    f"want {order[t, :6].tolist()}; top lp {[round(float(v), 4) for v in payload.top_logprobs[0, t, :6]]} "
+                    f"want {[round(float(lsm[t, i]), 4) for i in order[t, :6]]}; rank "
+                    f"{int(payload.selected_token_ranks[0, t])}; logits dtype {logits.dtype} shape {tuple(logits.shape)}"
+                )
         assert err <= LOGPROB_TOL and top_err <= LOGPROB_TOL, f"logprobs off by {float(err):.2e} / {float(top_err):.2e}"
         assert torch.equal(payload.top_token_ids[0, : n + 1].to(torch.int64), order[:, :top])
         want_rank = (x >= x.gather(1, tok[:, None])).sum(dim=1)
